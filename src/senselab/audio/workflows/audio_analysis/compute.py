@@ -1,20 +1,26 @@
 """Public entry point for the three-axis comparator workflow.
 
-``compute_uncertainty_axes`` is the only function callers should typically need. It reads
-the in-memory ``passes`` summary produced by analyze_audio's per-task pipeline and returns
-the nine ``AxisResult`` objects (3 axes × 2 passes + 3 raw_vs_enhanced deltas) plus an
+``compute_uncertainty_axes`` is the only function callers should typically need. It reads the
+in-memory ``passes`` summary produced by analyze_audio's per-task pipeline and returns the L1
+per-signal results (one per ``(pass, signal)``) plus the three fused axes, plus an
 ``incomparable_reasons`` dict for the disagreements index.
 
-**Harvest / aggregate split** (spec ``20260723-225523-dynamic-uncertainty-workflow``
-research.md D8, FR-006): the expensive, model-touching phase lives in ``harvest_pass``
-(embedding extraction + clustering, frame posteriors, Brouhaha quality, sound sources,
-per-axis vote harvesting) and returns a :class:`~..votes.PassHarvest`; the cheap, pure
-fold into ``AxisResult`` rows lives in :func:`senselab.audio.workflows.audio_analysis.votes.aggregate_pass`.
-Re-scoring with a different aggregator therefore requires no model inference:
+**There is no per-pass axis.** An axis aggregates across signals *and* across passes: a pass is an
+input dimension to the fold, never an index on its output. So harvest and link are per pass, and
+the fold happens exactly once per axis, in ``fuse.fuse_axis``, with every pass in hand. The
+previous 9-cell ``(pass × axis)`` grid — six per-pass axes plus three ``raw_vs_enhanced`` deltas
+obtained by subtracting two of them — is gone; perturbation stability is measured per *signal* by
+``reliability.signal_stability``, which is what actually feeds the fusion weights.
+
+**Harvest / link split** (spec ``20260723-225523-dynamic-uncertainty-workflow`` research.md D8,
+FR-006): the expensive, model-touching phase lives in ``harvest_pass`` (embedding extraction +
+clustering, frame posteriors, Brouhaha quality, sound sources, per-axis vote harvesting) and
+returns a :class:`~..votes.PassHarvest`; the cheap, pure link into per-signal rows and belief
+buckets lives in :func:`senselab.audio.workflows.audio_analysis.votes.link_pass`. Re-scoring with a
+different aggregator therefore requires no model inference:
 
     harvests = {pl: harvest_pass(...)[0] for pl in passes}
-    axis_results = {(pl, ax): r for pl, h in harvests.items()
-                    for ax, r in aggregate_pass(h, aggregator="mean", params=params).items()}
+    linked = {pl: link_pass(h, params=params) for pl, h in harvests.items()}
 
 **Legacy mutation note**: with the default ``mutate_passes=True`` this function still
 injects the synthetic ``embedding_silhouette/...`` diar source into each pass's
@@ -36,6 +42,7 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
 )
+from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_top1_in_window,
@@ -45,6 +52,7 @@ from senselab.audio.workflows.audio_analysis.reliability import (
     measured_weights,
     reliability_from_stability,
     signal_stability,
+    stability_rows,
 )
 from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
@@ -61,14 +69,16 @@ from senselab.audio.workflows.audio_analysis.support import (
     signal_support,
 )
 from senselab.audio.workflows.audio_analysis.types import (
-    AxisResult,
+    FusedAxis,
+    SignalResult,
     UncertaintyAxis,
-    UncertaintyRow,
 )
 from senselab.audio.workflows.audio_analysis.votes import (
+    DEFAULT_UTTERANCE_SCENE_COUPLING,
     PassHarvest,
-    aggregate_pass,
-    compute_pass_deltas,
+    _coupling_weights,
+    link_pass,
+    scene_quality_coupling,
 )
 
 
@@ -399,14 +409,20 @@ def compute_uncertainty_axes(
     mutate_passes: bool = True,
     harvests_out: dict[str, Any] | None = None,
     weights_out: dict[str, Any] | None = None,
+    stability_out: dict[str, Any] | None = None,
+    linked_out: dict[str, Any] | None = None,
     calibration: dict[str, Any] | None = None,
-) -> tuple[dict[tuple[str, UncertaintyAxis], AxisResult], dict[str, str], dict[str, dict[str, list[WindowEmbedding]]]]:
-    """Compute per-pass and raw-vs-enhanced uncertainty rows for all three axes.
+) -> tuple[
+    dict[str, dict[str, SignalResult]],
+    dict[str, FusedAxis],
+    dict[str, str],
+    dict[str, dict[str, list[WindowEmbedding]]],
+]:
+    """Measure every signal on every pass, then fuse each axis once across all of them.
 
-    Thin wrapper over :func:`harvest_pass` (expensive, model-touching) +
-    :func:`~..votes.aggregate_pass` (pure). Behavior, outputs, and — with the default
-    ``mutate_passes=True`` — the legacy synthetic-diar-source injection into the
-    caller's ``passes`` dict are unchanged from the pre-split implementation.
+    Thin wrapper over :func:`harvest_pass` (expensive, model-touching) + :func:`~..votes.link_pass`
+    (pure) + :func:`~..fuse.fuse_axis` (pure). With the default ``mutate_passes=True`` the legacy
+    synthetic-diar-source injection into the caller's ``passes`` dict is unchanged.
 
     Args:
         passes: Mapping ``{pass_label → pass_summary}`` where each pass_summary is the
@@ -423,8 +439,15 @@ def compute_uncertainty_axes(
         aggregator: One of ``min`` / ``mean`` / ``harmonic_mean`` /
             ``disagreement_weighted`` (FR-004).
         weights_out: When given, receives ``{axis → {signal → measured weight}}`` — the
-            weights the per-pass fold applied, so level 2 can fuse with the same numbers
+            weights the fold applied, so level 2 can fuse with the same numbers
             rather than recomputing them and drifting apart silently.
+        linked_out: When given, receives ``{pass_label → LinkedPass}`` — the linked belief
+            buckets the fold consumed, including the synthetic cross-signal blocks. An
+            out-parameter so the return type stays the four products a consumer needs.
+        stability_out: When given, receives ``{"instability": {axis → {signal → mean |Δ|}},
+            "per_bucket": {axis → {signal → rows}}}`` — the perturbation evidence behind those
+            weights, so the number that discounted a signal is inspectable rather than only
+            recomputable.
         speech_presence_labels: AudioSet labels that count as "speech-present" for AST /
             YAMNet contributions to the speech_presence axis.
         asr_grid: Optional separate bucket grid for the asr axis (typically
@@ -473,9 +496,13 @@ def compute_uncertainty_axes(
             ``params["calibration"]``; pass the same dict in both places.
 
     Returns:
-        ``(axis_results, incomparable_reasons, per_window_embeddings_by_pass)`` where:
+        ``(signal_results_by_pass, fused_axes, incomparable_reasons, per_window_embeddings_by_pass)``
+        where:
 
-        - axis_results maps ``(pass_label, axis)`` → AxisResult.
+        - signal_results_by_pass maps ``pass_label → {signal → SignalResult}`` — the L1
+          evidence, in native units, with no axis anywhere.
+        - fused_axes maps ``axis → FusedAxis`` — round 0 of the single fold, with the pass
+          dimension appearing only as each row's ``contributing_passes`` list.
         - incomparable_reasons maps ``"<pass>/<axis>/<sub-signal>"`` → human-readable
           reason for surfacing in ``disagreements.json``.
         - per_window_embeddings_by_pass maps ``pass_label`` →
@@ -484,7 +511,6 @@ def compute_uncertainty_axes(
           across embedding models so adjacent-window cosine distance is a
           model-free indicator of speaker change — independent of any diarization.
     """
-    axis_results: dict[tuple[str, UncertaintyAxis], AxisResult] = {}
     incomparable_reasons: dict[str, str] = {}
     per_window_embeddings_by_pass: dict[str, dict[str, list[WindowEmbedding]]] = {}
     harvests_by_label: dict[str, PassHarvest] = {}
@@ -534,12 +560,24 @@ def compute_uncertainty_axes(
     # agrees with itself under a transform, physical support whether the audio carries what
     # it claimed. Support is measured once on the unmodified pass — a speaker claimed where
     # there is no speech is a fact about the recording, not about the transform.
-    support_source = harvests_by_label.get("raw_16k") or next(iter(harvests_by_label.values()), None)
-    # Support asks whether a claim is corroborated, so it needs verdicts — the harvest stores L1
-    # measurements, and the link has to run first. Same policy the aggregation will use, so the
-    # diagnostics and the reported rows cannot disagree about what each signal said.
+    # Linking first, once: stability compares *beliefs* across passes, and the presence harvest
+    # holds measurements. Deriving the weight from the same linked value the fold consumes is what
+    # stops the two being computed from different things.
+    linked_by_pass = {
+        pass_label: link_pass(harvest, params=params) for pass_label, harvest in sorted(harvests_by_label.items())
+    }
+    signal_results_by_pass = {label: dict(linked.signal_results) for label, linked in linked_by_pass.items()}
+    if linked_out is not None:
+        linked_out.clear()
+        linked_out.update(linked_by_pass)
+    buckets_by_axis_pass = {
+        axis: {label: linked.buckets_by_axis.get(axis, []) for label, linked in linked_by_pass.items()}
+        for axis in ("speech_presence", "speaker", "asr")
+    }
+
+    support_label = "raw_16k" if "raw_16k" in linked_by_pass else next(iter(linked_by_pass), None)
     speech_presence_buckets = (
-        votes_for_harvest(support_source, policy=policy_from_params(params)) if support_source else []
+        buckets_by_axis_pass["speech_presence"].get(support_label, []) if support_label is not None else []
     )
     support = signal_support(
         speech_presence_buckets,
@@ -549,23 +587,34 @@ def compute_uncertainty_axes(
     )
     if weights_out is not None:
         weights_out.clear()
+    instability_by_axis = {
+        axis: signal_stability(harvests_by_label, axis=axis, buckets_by_pass=buckets_by_axis_pass[axis])
+        for axis in ("speech_presence", "speaker", "asr")
+    }
     reliability_by_axis = {
         axis: measured_weights(
-            signal_stability(harvests_by_label, axis=axis),
+            instability_by_axis[axis],
             support,
             _signal_names(harvests_by_label, axis=axis),
         )
         for axis in ("speech_presence", "speaker", "asr")
     }
+    if stability_out is not None:
+        stability_out.clear()
+        stability_out.update(
+            {
+                "instability": {axis: dict(v) for axis, v in instability_by_axis.items()},
+                "per_bucket": {
+                    axis: stability_rows(buckets_by_axis_pass[axis]) for axis in ("speech_presence", "speaker", "asr")
+                },
+            }
+        )
     if weights_out is not None:
         # Exposed so level 2 can fuse with the same weights the diagnostics used; recomputing
         # them there would let the two drift apart silently. The per-factor basis rides
         # alongside under a reserved key so a discounted signal records *why*.
         weights_out.update(reliability_by_axis)
-        stability = {
-            axis: reliability_from_stability(signal_stability(harvests_by_label, axis=axis))
-            for axis in ("speech_presence", "speaker", "asr")
-        }
+        stability = {axis: reliability_from_stability(v) for axis, v in instability_by_axis.items()}
         weights_out["__basis__"] = {
             axis: {
                 signal: {
@@ -576,46 +625,172 @@ def compute_uncertainty_axes(
             }
             for axis in reliability_by_axis
         }
-    for pass_label, harvest in sorted(harvests_by_label.items()):
-        for axis, result in aggregate_pass(
-            harvest, aggregator=aggregator, params=params, signal_reliability=reliability_by_axis
-        ).items():
-            axis_results[(pass_label, axis)] = result  # type: ignore[index]
 
-    # ── raw_vs_enhanced deltas ──
-    # The current public delta is "raw_16k vs enhanced_16k". A 3rd pass (e.g. a
-    # second enhancement variant) is computed alongside but not delta'd here —
-    # extend by adding a generic pass-pair loop if multi-pass deltas are needed.
-    if "raw_16k" in passes and "enhanced_16k" in passes:
-        for axis in ("speech_presence", "speaker", "asr"):
-            raw_rows = axis_results[("raw_16k", axis)].rows  # type: ignore[index]
-            enh_rows = axis_results[("enhanced_16k", axis)].rows  # type: ignore[index]
-            delta_rows = compute_pass_deltas(raw_rows, enh_rows, axis, aggregator)
-            axis_results[("raw_vs_enhanced", axis)] = AxisResult(  # type: ignore[index]
-                pass_label="raw_vs_enhanced",
-                axis=axis,  # type: ignore[arg-type]
-                rows=delta_rows,
-                provenance={
-                    "axis": axis,
-                    "pass": "raw_vs_enhanced",
-                    "grid": {"win_length": grid.win_length, "hop_length": grid.hop_length},
-                    "comparator_params": params,
-                    "contributing_model_set": sorted({m for r in (raw_rows + enh_rows) for m in r.contributing_models}),
+    # One fold per axis, over every pass at once. ``fuse_axis`` averages a signal's readings
+    # across passes before weighting, so the passes are an input dimension here exactly as the
+    # signals are — and appear on the output only as the ``contributing_passes`` column.
+    basis = (weights_out or {}).get("__basis__") or {}
+    fused_axes: dict[str, FusedAxis] = {}
+    for axis in ("speech_presence", "speaker", "asr"):
+        rows = fuse_axis(
+            buckets_by_axis_pass[axis],
+            weights=reliability_by_axis.get(axis, {}),
+            aggregator=aggregator,
+            weight_basis=basis.get(axis, {}),
+            round_index=0,
+        )
+        fused_axes[axis] = FusedAxis(
+            axis=axis,  # type: ignore[arg-type]
+            rows=rows,
+            provenance={
+                "axis": axis,
+                "grid": {
+                    label: dict(linked.provenance.get("grids", {}).get(axis, {}))
+                    for label, linked in linked_by_pass.items()
                 },
-            )
+                "comparator_params": params,
+                "aggregator": aggregator,
+                "passes": sorted(linked_by_pass),
+                **(
+                    {
+                        "speech_presence_policy": next(iter(linked_by_pass.values())).provenance.get(
+                            "speech_presence_policy"
+                        )
+                    }
+                    if axis == "speech_presence" and linked_by_pass
+                    else {}
+                ),
+            },
+        )
 
-    return axis_results, incomparable_reasons, per_window_embeddings_by_pass
+    _attach_scene_measurements(fused_axes, linked_by_pass)
+    _apply_scene_coupling(fused_axes, params)
+    _attach_transcripts(fused_axes, buckets_by_axis_pass["asr"])
+
+    return signal_results_by_pass, fused_axes, incomparable_reasons, per_window_embeddings_by_pass
 
 
-# Backward-compatible alias — the delta math moved (verbatim) to votes.compute_pass_deltas.
-def _compute_raw_vs_enhanced_delta(
-    raw_rows: list[UncertaintyRow],
-    enh_rows: list[UncertaintyRow],
-    axis: str,
-    aggregator: str,
-) -> list[UncertaintyRow]:
-    """Deprecated alias for :func:`~..votes.compute_pass_deltas` (kept for importers)."""
-    return compute_pass_deltas(raw_rows, enh_rows, axis, aggregator)
+def _attach_scene_measurements(
+    fused_axes: dict[str, FusedAxis],
+    linked_by_pass: dict[str, Any],
+) -> None:
+    """Carry the per-bucket scene measurements and derived scores onto the fused presence rows.
+
+    The measurements are per pass and per signal (L1's business); the *scores* are anchored
+    against a calibration profile and are therefore L2's. Folding the two passes here — a mean,
+    named — is the same treatment every other signal gets, rather than picking a winning pass.
+    """
+    presence = fused_axes.get("speech_presence")
+    if presence is None:
+        return
+    measured: dict[tuple[float, float], dict[str, list[float]]] = {}
+    scored: dict[tuple[float, float], dict[str, list[float]]] = {}
+    labelled: dict[tuple[float, float], dict[str, Any]] = {}
+    dominant: dict[tuple[float, float], list[str]] = {}
+    for linked in linked_by_pass.values():
+        for result in linked.signal_results.values():
+            if result.signal not in ("scene_quality", "sound_sources"):
+                continue
+            for row in result.rows:
+                key = (round(row.start, 6), round(row.end, 6))
+                slot = measured.setdefault(key, {})
+                for name, value in row.measurement.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        slot.setdefault(str(name), []).append(float(value))
+                    elif name == "src_dominant" and isinstance(value, str):
+                        dominant.setdefault(key, []).append(value)
+        for key, scores in linked.quality_scores.items():
+            slot = scored.setdefault(key, {})
+            for name, value in scores.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    slot.setdefault(str(name), []).append(float(value))
+                else:
+                    # A non-numeric entry names *which* estimator produced the score. It is a
+                    # fact about the measurement, not a value to average, so it rides through.
+                    labelled.setdefault(key, {})[str(name)] = value
+    for row in presence.rows:
+        key = (round(float(row["start"]), 6), round(float(row["end"]), 6))
+        for name, values in (measured.get(key) or {}).items():
+            row[name] = sum(values) / len(values)
+        for name, values in (scored.get(key) or {}).items():
+            row[name] = sum(values) / len(values)
+        for name, label in (labelled.get(key) or {}).items():
+            row[name] = label
+        names = dominant.get(key)
+        if names:
+            row["src_dominant"] = max(sorted(set(names)), key=names.count)
+    presence.provenance["scene_measurement_fold"] = "mean over passes reporting the bucket"
+
+
+def _attach_transcripts(fused_axes: dict[str, FusedAxis], asr_buckets_by_pass: dict[str, Any]) -> None:
+    """Carry each model's transcript for the bucket onto the fused asr row.
+
+    Not a fold and not an estimate — it is what a reviewer needs in order to see *why* the axis
+    is unsure, keyed ``<pass>::<model>`` so the pass a transcript came from stays visible without
+    the axis acquiring a pass index.
+    """
+    asr = fused_axes.get("asr")
+    if asr is None:
+        return
+    by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
+    for pass_label, buckets in sorted(asr_buckets_by_pass.items()):
+        for bucket in buckets or []:
+            key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
+            for model, vote in (bucket.get("votes") or {}).items():
+                if str(model).startswith("__") or not isinstance(vote, dict) or not vote.get("text"):
+                    continue
+                by_bucket.setdefault(key, {})[f"{pass_label}::{model}"] = {"text": vote.get("text")}
+    for row in asr.rows:
+        key = (round(float(row["start"]), 6), round(float(row["end"]), 6))
+        row["consensus_votes"] = by_bucket.get(key, {})
+
+
+def _apply_scene_coupling(fused_axes: dict[str, FusedAxis], params: dict[str, Any]) -> None:
+    """Inflate the asr axis's *policy fold* where the scene degrades the evidence (FR-019).
+
+    Applied to ``triage_score`` only — the policy fold, which exists to rank where to spend
+    budget — and never to ``uncertainty``, which is the entropy measure and has no policy in it.
+    The multiplier, its weights and the pre-coupling value are written onto the row, so the
+    adjustment is re-decidable without re-running anything.
+    """
+    asr = fused_axes.get("asr")
+    presence = fused_axes.get("speech_presence")
+    if asr is None or presence is None:
+        return
+    weights = _coupling_weights(params)
+    quality_intervals = [
+        (float(r["start"]), float(r["end"]), float(r["quality_snr"]))
+        for r in presence.rows
+        if isinstance(r.get("quality_snr"), (int, float))
+    ]
+    competing_intervals = [
+        (
+            float(r["start"]),
+            float(r["end"]),
+            float(r.get("src_machine") or 0.0) + float(r.get("src_environment") or 0.0),
+        )
+        for r in presence.rows
+        if isinstance(r.get("src_machine"), (int, float)) or isinstance(r.get("src_environment"), (int, float))
+    ]
+    for row in asr.rows:
+        coupling = scene_quality_coupling(
+            float(row["start"]),
+            float(row["end"]),
+            quality_degradation=quality_intervals,
+            competing_source_mass=competing_intervals,
+            weights=weights,
+        )
+        row["scene_quality_coupling"] = coupling
+        row["triage_score_pre_coupling"] = row.get("triage_score")
+        if isinstance(row.get("triage_score"), (int, float)) and coupling != 1.0:
+            row["triage_score"] = max(0.0, min(1.0, float(row["triage_score"]) * coupling))
+        if coupling != 1.0:
+            row["coupled_from"] = sorted({*(row.get("coupled_from") or []), "scene_quality"})
+    asr.provenance["asr_scene_coupling"] = {
+        "weights": dict(weights),
+        "defaults": dict(DEFAULT_UTTERANCE_SCENE_COUPLING),
+        "applies_to": "triage_score",
+    }
 
 
 def _speech_window_mask(

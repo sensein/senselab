@@ -33,6 +33,7 @@ __all__ = [
     "MIN_RELIABILITY",
     "reliability_from_stability",
     "signal_stability",
+    "stability_rows",
 ]
 
 MIN_RELIABILITY = MIN_EVIDENCE_WEIGHT
@@ -42,65 +43,73 @@ number and its derivation live in
 
 _AXIS_SIGNALS: dict[str, tuple[str, str]] = {
     # (PassHarvest field, key holding the per-signal mapping). The speech-presence axis stores L1
-    # *measurements* under "evidence"; the other two still store votes. Both are read only for
-    # signal names and for the comparable uncertainty fields below, neither of which needs the
-    # verdict — so reliability can be measured before anything is interpreted.
+    # *measurements* under "evidence"; the other two still store votes. Used for enumerating
+    # signal names, which needs no verdict.
     "speech_presence": ("speech_presence_evidence", "evidence"),
     "speaker": ("speaker_votes", "votes"),
     "asr": ("asr_votes", "votes"),
 }
 
-# Sub-signal fields whose value is an uncertainty in [0, 1] and therefore comparable across
-# passes. Fields carrying raw measurements (cosine distances, transcripts) are excluded —
-# comparing those across passes measures the perturbation's effect on the audio rather than
-# the signal's stability of judgement.
-_COMPARABLE_FIELDS = (
-    "same_label_uncertainty",
-    "change_inconsistency_uncertainty",
-    "value",
-)
 
+def _bucket_beliefs(buckets: Any) -> dict[tuple[float, float], dict[str, float]]:  # noqa: ANN401
+    """``{(start, end) → {signal → linked belief in [0, 1]}}`` for one pass's linked buckets.
 
-def _bucket_values(buckets: Any, signal_key: str) -> dict[tuple[float, float], dict[str, float]]:  # noqa: ANN401
-    """``{(start, end) → {signal → uncertainty}}`` for one pass's harvested buckets."""
+    Measured on the *linked belief* — ``fuse.per_signal_uncertainty``, the exact quantity
+    ``fuse_axis`` consumes — so a signal's weight and its value can no longer be derived from
+    different things. The previous version matched a fixed tuple of vote field names, none of
+    which the presence harvest emits, so presence stability silently returned ``{}`` on every real
+    run and every presence signal kept weight 1.0: unmeasured, hence floored, hence never applied.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
+
     out: dict[tuple[float, float], dict[str, float]] = {}
     for bucket in buckets or []:
         if not isinstance(bucket, Mapping):
             continue
         key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
-        per_signal: dict[str, float] = {}
-        for name, entry in (bucket.get(signal_key) or {}).items():
-            if not isinstance(entry, Mapping):
-                continue
-            for field in _COMPARABLE_FIELDS:
-                v = entry.get(field)
-                if isinstance(v, (int, float)):
-                    per_signal[str(name)] = float(v)
-                    break
+        per_signal = per_signal_uncertainty(bucket)
         if per_signal:
             out[key] = per_signal
     return out
 
 
-def signal_stability(harvests: Mapping[str, Any], *, axis: str) -> dict[str, float]:
+def signal_stability(
+    harvests: Mapping[str, Any],
+    *,
+    axis: str,
+    buckets_by_pass: Mapping[str, Any] | None = None,
+) -> dict[str, float]:
     """Mean absolute disagreement of each signal with itself across passes.
 
     Args:
         harvests: ``{pass_label → PassHarvest}``. At least two passes are required for any
-            signal to be scored.
+            signal to be scored. Ignored when ``buckets_by_pass`` is given.
         axis: ``"speech_presence"``, ``"speaker"``, or ``"asr"``.
+        buckets_by_pass: ``{pass_label → linked buckets}``. Preferred: presence measurements have
+            to be *linked* before they can be compared as beliefs, and the caller has already done
+            that under the run's policy.
 
     Returns:
         ``{signal → instability in [0, 1]}``, empty when fewer than two passes are present or
         no signal appears in more than one of them. Only buckets a signal reported in *both*
         passes are compared — a signal that dropped out of one pass is silent there, which is
         different from disagreeing.
+
+    Raises:
+        ValueError: On an unknown ``axis``.
     """
     resolved = _AXIS_SIGNALS.get(str(axis))
     if resolved is None:
         raise ValueError(f"unknown axis {axis!r}; expected one of {sorted(_AXIS_SIGNALS)}")
-    field, signal_key = resolved
-    per_pass = {label: _bucket_values(getattr(h, field, None), signal_key) for label, h in sorted(harvests.items())}
+    if buckets_by_pass is None:
+        from senselab.audio.workflows.audio_analysis.speech_presence_link import votes_for_harvest
+
+        field, _ = resolved
+        buckets_by_pass = {
+            label: (votes_for_harvest(h) if axis == "speech_presence" else (getattr(h, field, []) or []))
+            for label, h in harvests.items()
+        }
+    per_pass = {label: _bucket_beliefs(buckets) for label, buckets in sorted(buckets_by_pass.items())}
     labels = [lab for lab, v in per_pass.items() if v]
     if len(labels) < 2:
         return {}
@@ -114,6 +123,37 @@ def signal_stability(harvests: Mapping[str, Any], *, axis: str) -> dict[str, flo
                 for signal in set(left) & set(right):
                     deltas.setdefault(signal, []).append(abs(left[signal] - right[signal]))
     return {s: sum(d) / len(d) for s, d in sorted(deltas.items()) if d}
+
+
+def stability_rows(
+    buckets_by_pass: Mapping[str, Any],
+) -> dict[str, list[dict[str, Any]]]:
+    """Per-bucket cross-pass ``|Δ|`` per signal — the evidence behind ``signal_stability``.
+
+    Returns ``{signal → [{start, end, signal, pass_a, pass_b, abs_delta, n_passes_present}]}``.
+    Written to ``L1/stability/<signal>.parquet`` so the number that set a signal's weight is
+    inspectable per bucket rather than only as a run-level mean.
+    """
+    per_pass = {label: _bucket_beliefs(buckets) for label, buckets in sorted(buckets_by_pass.items())}
+    labels = sorted(lab for lab, v in per_pass.items() if v)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for i, a in enumerate(labels):
+        for b in labels[i + 1 :]:
+            for bucket in sorted(set(per_pass[a]) & set(per_pass[b])):
+                left, right = per_pass[a][bucket], per_pass[b][bucket]
+                for signal in sorted(set(left) & set(right)):
+                    out.setdefault(signal, []).append(
+                        {
+                            "start": bucket[0],
+                            "end": bucket[1],
+                            "signal": signal,
+                            "pass_a": a,
+                            "pass_b": b,
+                            "abs_delta": abs(left[signal] - right[signal]),
+                            "n_passes_present": 2,
+                        }
+                    )
+    return out
 
 
 def reliability_from_stability(

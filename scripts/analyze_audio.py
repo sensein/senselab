@@ -198,7 +198,7 @@ from senselab.utils.tasks.cached_inference import (
 
 TARGET_SR = 16000
 ALL_TASKS = ("diarization", "ast", "yamnet", "features", "asr", "alignment", "comparisons")
-COMPARISON_AXES = ("raw_vs_enhanced", "within_stream", "cross_stream")
+COMPARISON_STAGES = ("within_stream", "cross_stream")
 UNCERTAINTY_AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
 DEFAULT_SPEECH_PRESENCE_LABELS = (
     "Speech",
@@ -601,9 +601,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-comparisons",
         nargs="+",
-        choices=COMPARISON_AXES,
+        choices=COMPARISON_STAGES,
         default=(),
-        help="Skip individual comparison axes. Pass --skip comparisons to skip everything new.",
+        help="Skip individual comparison stages. Pass --skip comparisons to skip everything new.",
+    )
+    parser.add_argument(
+        "--no-stability",
+        action="store_true",
+        help=(
+            "Skip the cross-pass perturbation-stability measurement (L1/stability/<signal>.parquet). "
+            "Signals then keep full weight, unmeasured — which floors correctly but means the fusion "
+            "weights carry no perturbation evidence."
+        ),
     )
     parser.add_argument(
         "--cross-stream-win-length",
@@ -1291,7 +1300,8 @@ def main(argv: list[str] | None = None) -> int:
             build_aligned_timeline_plot,
             build_disagreements_index,
             compute_uncertainty_axes,
-            write_axis_parquet,
+            write_signal_parquet,
+            write_signal_stability,
         )
 
         grid = BucketGrid(
@@ -1345,10 +1355,17 @@ def main(argv: list[str] | None = None) -> int:
         }
         speaker_embedding_models = list(args.embeddings_models)
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
+        stability_evidence: dict[str, Any] = {}
         try:
-            axis_results, incomparable_reasons, per_window_embeddings_by_pass = compute_uncertainty_axes(
+            (
+                signal_results_by_pass,
+                fused_axes,
+                incomparable_reasons,
+                per_window_embeddings_by_pass,
+            ) = compute_uncertainty_axes(
                 harvests_out=harvests_by_pass,
                 weights_out=reliability_by_axis,
+                stability_out=None if args.no_stability else stability_evidence,
                 passes=passes_for_compute,
                 grid=grid,
                 params=comparator_params,
@@ -1371,7 +1388,9 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: comparator workflow failed: {exc!r}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-            axis_results, incomparable_reasons = ({}, {"workflow": f"failed: {exc!r}"})
+            signal_results_by_pass = {}
+            fused_axes = {}
+            incomparable_reasons = {"workflow": f"failed: {exc!r}"}
             per_window_embeddings_by_pass = {}
 
         # Scene quality is a REQUIRED signal here unless explicitly disabled: the
@@ -1379,12 +1398,15 @@ def main(argv: list[str] | None = None) -> int:
         # must not silently ship a run missing its quality columns. If the model
         # was requested but unavailable on any pass, fail loudly with guidance.
         if not args.no_scene_quality:
+            # Straight off the harvest's provenance: whether the model loaded is a fact about the
+            # pass, and reaching for an axis result to find it needed a pseudo-pass guard.
             unavailable_passes = [
                 pl
-                for (pl, axis), result in axis_results.items()
-                if axis == "speech_presence"
-                and pl != "raw_vs_enhanced"
-                and (result.provenance.get("scene_quality") or {}).get("model", {}).get("available") is False
+                for pl, h in harvests_by_pass.items()
+                if ((getattr(h, "provenance_extras", {}) or {}).get("scene_quality") or {})
+                .get("model", {})
+                .get("available")
+                is False
             ]
             if unavailable_passes:
                 print(
@@ -1397,27 +1419,45 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 sys.exit(2)
 
-        # Persist 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas).
-        for (pass_label, axis), result in axis_results.items():
-            if pass_label == "raw_vs_enhanced":
-                dest = stability_dir(run_dir) / "raw_vs_enhanced" / f"{axis}.parquet"
-            else:
-                dest = pass_dir(run_dir, pass_label) / "uncertainty" / f"{axis}.parquet"
-            write_axis_parquet(
-                result,
-                dest,
-                provenance={
-                    "schema_version": _CACHE_SCHEMA_VERSION,
-                    "stage_versions": dict(STAGE_VERSIONS),
-                    "senselab_version": senselab_ver,
-                },
-            )
+        # L1 evidence: one parquet per (pass, signal), in native units. Nothing under L1/ is
+        # named for an axis — an axis is a fold across signals and passes, and the fused axes are
+        # written by the L2 block below to L2/round<N>/uncertainty/<axis>.parquet.
+        run_provenance = {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "stage_versions": dict(STAGE_VERSIONS),
+            "senselab_version": senselab_ver,
+        }
+        for pass_label, by_signal in signal_results_by_pass.items():
+            for signal, result in by_signal.items():
+                write_signal_parquet(
+                    result,
+                    pass_dir(run_dir, pass_label) / "signals" / f"{safe_model_id(signal)}.parquet",
+                    provenance=run_provenance,
+                )
+
+        # Perturbation stability, keyed by signal — the property it is a property of. The
+        # run-level number in signals.json is exactly what sets each signal's fusion weight.
+        per_bucket_stability: dict[str, list[dict[str, Any]]] = {}
+        if stability_evidence:
+            for _axis, by_signal_rows in (stability_evidence.get("per_bucket") or {}).items():
+                for signal, rows in by_signal_rows.items():
+                    per_bucket_stability.setdefault(signal, []).extend(rows)
+            for signal, rows in per_bucket_stability.items():
+                write_signal_stability(
+                    sorted(rows, key=lambda r: (r["start"], r["end"])),
+                    stability_dir(run_dir) / f"{safe_model_id(signal)}.parquet",
+                    provenance=run_provenance,
+                )
+            instability: dict[str, float] = {}
+            for _axis, by_signal_inst in (stability_evidence.get("instability") or {}).items():
+                instability.update({str(k): float(v) for k, v in by_signal_inst.items()})
+            write_json(stability_dir(run_dir) / "signals.json", instability)
 
         # PII detection per pass — scans each ASR transcript with regex layer
         # plus optional spaCy NER. Default-on; failures (e.g. spaCy not
         # installed) are surfaced via stderr + the report's failures dict.
         from senselab.audio.workflows.audio_analysis.global_summary import (
-            compute_pass_global_summary,
+            compute_run_global_summary,
         )
         from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
         from senselab.audio.workflows.audio_analysis.pii import detect_pii_in_pass, report_to_dict
@@ -1435,38 +1475,33 @@ def main(argv: list[str] | None = None) -> int:
             )
             write_json(pass_dir(run_dir, pl) / "pii.json", report_to_dict(pii_reports[pl]))
 
-        # Global per-pass summary: 4 claims (transcript / speaker / quality / PII)
-        # → 1 scalar each + a max() combined. Persist to summary.json.
-        global_pass_summaries: dict[str, Any] = {}
+        # Global run summary: 4 claims (transcript / speaker / quality / PII) → 1 scalar each
+        # + a max() combined. One block for the run, not one per pass: the axes it reads are
+        # already folded across passes, and the genuinely per-pass evidence stays visible under
+        # ``by_pass`` rather than being reduced to a winner.
+        asr_resolved_by_pass: dict[str, dict[str, Any]] = {}
         for pl, ps in passes_for_compute.items():
             align_by_model_g = (ps.get("alignment") or {}).get("by_model") or {}
-            asr_resolved_g: dict[str, Any] = {}
+            resolved_g: dict[str, Any] = {}
             for m, b in ((ps.get("asr") or {}).get("by_model") or {}).items():
                 if isinstance(b, dict) and b.get("status") == "ok":
-                    asr_resolved_g[m] = resolve_asr_result(b, align_by_model_g.get(m))
-            global_pass_summaries[pl] = compute_pass_global_summary(
-                pass_label=pl,
-                pass_summary=ps,
-                axis_results=axis_results,
-                asr_resolved=asr_resolved_g,
-                pii_report=pii_reports.get(pl),
-                expects_speech=True,
-            )
-        # Top-level: pick the lower-uncertainty pass (best of raw vs enhanced)
-        # so the bottom-line score reflects the cleaner interpretation.
-        best_pass: str | None = None
-        best_combined: float | None = None
-        for pl, gs in global_pass_summaries.items():
-            c = gs.get("combined_uncertainty")
-            if c is None:
-                continue
-            if best_combined is None or c < best_combined:
-                best_combined = c
-                best_pass = pl
+                    resolved_g[m] = resolve_asr_result(b, align_by_model_g.get(m))
+            asr_resolved_by_pass[pl] = resolved_g
         summaries["global_uncertainty"] = {
-            "combined_uncertainty": best_combined,
-            "best_pass": best_pass,
-            "by_pass": global_pass_summaries,
+            **compute_run_global_summary(
+                fused_axes=fused_axes,
+                passes=passes_for_compute,
+                asr_resolved_by_pass=asr_resolved_by_pass,
+                pii_reports=pii_reports,
+                expects_speech=True,
+            ),
+            # What enhancement bought, as evidence about each signal rather than as a choice
+            # between two answers.
+            "stability": {
+                signal: round(float(value), 6)
+                for axis_map in (stability_evidence.get("instability") or {}).values()
+                for signal, value in axis_map.items()
+            },
             "incomparable_reasons": incomparable_reasons,
         }
         # Re-persist summary.json — the original write at line 1782 happened
@@ -1496,18 +1531,134 @@ def main(argv: list[str] | None = None) -> int:
                 }
                 write_json(pass_dir(run_dir, pass_label) / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
 
-        # Attach per-axis Labels + asr TextArea tracks to the LS bundle.
-        if axis_results:
+        # ── Level 2: the fused uncertainty maps ───────────────────────
+        # L1 holds per-signal measurements in native units; these are the answer — one fold per
+        # axis, across every signal and every pass, each signal weighted by its measured
+        # stability and support. Runs *before* the LS bundle, the disagreements index and the
+        # timeline, because all three read an axis and an axis exists only here. The old order
+        # was possible only while L1 was producing one.
+        if harvests_by_pass:
+            try:
+                from senselab.audio.workflows.audio_analysis.fuse import write_final_uncertainty
+
+                # The reserved __basis__ key carries the per-factor breakdown; it is not an
+                # axis, so it is split off rather than fused.
+                basis = reliability_by_axis.get("__basis__") or {}
+                axis_weights = {k: v for k, v in reliability_by_axis.items() if k != "__basis__"}
+                # The mask and the speaker claims are what make the rounds able to *do* anything:
+                # without them the loop has no regional trust to withdraw and no fourth axis to
+                # emit, so it folds once and stops. They were previously left at their defaults,
+                # which silently reduced every run to a single round.
+                from senselab.audio.workflows.audio_analysis.fuse import (
+                    mask_regions_from_rows,
+                    speaker_claims_from_votes,
+                )
+
+                fusion_mask_rows: list[dict[str, Any]] = []
+                mask_path = pass_dir(run_dir, "raw_16k") / "background_mask.parquet"
+                if mask_path.exists():
+                    import pandas as _pd_mask
+
+                    fusion_mask_rows = _pd_mask.read_parquet(mask_path).to_dict("records")
+                # The mask governs fusion from the *raw* pass: whether a region is target-free is a
+                # fact about the recording, not about the enhancement transform.
+                mask_regions = mask_regions_from_rows(fusion_mask_rows)
+                reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
+                speaker_claims = speaker_claims_from_votes(getattr(reference, "speaker_votes", []) or [])
+                from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+                    policy_from_params as _policy_from_params,
+                )
+
+                final_maps = write_final_uncertainty(
+                    run_dir,
+                    harvests=harvests_by_pass,
+                    weights_by_axis=axis_weights,
+                    aggregator=args.uncertainty_aggregator,
+                    weight_basis_by_axis=basis,
+                    mask_regions=mask_regions,
+                    speaker_claims=speaker_claims,
+                    max_rounds=args.max_rounds,
+                    # The same policy the round-0 link used. Left at the packaged default it read
+                    # the presence measurements under different thresholds than
+                    # ``compute_uncertainty_axes`` did, so the two folds were not comparable.
+                    speech_presence_policy=_policy_from_params(comparator_params),
+                )
+                summaries["final_uncertainty"] = final_maps
+
+                # One timeline per round, drawn after that round's fusion.
+                import pandas as _pd_round
+
+                from senselab.audio.workflows.audio_analysis.l2_plot import build_round_timeline
+
+                by_round: dict[int, dict[str, list[dict[str, Any]]]] = {}
+                for key, path in final_maps.items():
+                    if "@round" not in key:
+                        continue
+                    axis_name, round_token = key.split("@round", 1)
+                    frame = _pd_round.read_parquet(path)
+                    by_round.setdefault(int(round_token), {})[axis_name] = frame.to_dict("records")
+                # Named for the round it belongs to: the run-summary block later in this same
+                # function binds its own ``axis_rows`` over the *final* axes, and one name for two
+                # different quantities in one scope is how the wrong one gets read.
+                for round_index, round_axis_rows in sorted(by_round.items()):
+                    build_round_timeline(
+                        run_dir,
+                        round_index=round_index,
+                        axis_rows=round_axis_rows,
+                        duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
+                        title=f"L2 round {round_index} — {args.audio.name}",
+                    )
+                # Name the directory the writer actually used. The maps live under
+                # L2/round<N>/uncertainty/, and pointing at final/uncertainty/ sent a reader to an
+                # empty path; the count also included @round aliases, so it overstated the axes.
+                axis_names = sorted({k.split("@")[0] for k in final_maps if k != "rounds"})
+                print(
+                    f"  [final uncertainty] {len(axis_names)} axis map(s) under L2/round<N>/uncertainty/: {', '.join(axis_names)}"
+                )
+                # Advance the in-memory axes to the last round the loop actually ran, so the LS
+                # bundle, the disagreements index and the timeline all show the same numbers the
+                # parquets do. The per-bucket scene measurements harvested at round 0 ride along
+                # unchanged — they are measurements, and no round re-measures them.
+                if by_round:
+                    last_round = max(by_round)
+                    for axis_name, axis_result in fused_axes.items():
+                        final_rows = {
+                            (round(float(r["start"]), 6), round(float(r["end"]), 6)): r
+                            for r in by_round[last_round].get(axis_name, [])
+                        }
+                        for row in axis_result.rows:
+                            fresh = final_rows.get((round(float(row["start"]), 6), round(float(row["end"]), 6)))
+                            if fresh is None:
+                                continue
+                            for key in (
+                                "uncertainty",
+                                "epistemic_uncertainty",
+                                "confidence",
+                                "variability",
+                                "triage_score",
+                                "round",
+                                "coupled_from",
+                            ):
+                                if key in fresh:
+                                    row[key] = fresh[key]
+            except Exception as exc:  # noqa: BLE001 — a derived artifact must not fail the run
+                logger.warning("final uncertainty maps could not be written: %s", exc)
+                summaries["final_uncertainty"] = {"status": "failed", "error": repr(exc)}
+
+        # One Labels track per fused axis + per-pass, per-signal evidence tracks.
+        if fused_axes:
             ls_tasks, config_xml = attach_uncertainty_tracks_to_ls(
                 ls_tasks=ls_tasks,
                 ls_config=config_xml,
-                axis_results=axis_results,
+                fused_axes=fused_axes,
+                signal_results_by_pass=signal_results_by_pass,
             )
 
         # Disagreements index — opt-out via --disagreements-top-n 0.
-        if axis_results and args.disagreements_top_n > 0:
+        if fused_axes and args.disagreements_top_n > 0:
             index = build_disagreements_index(
-                axis_results=axis_results,
+                fused_axes=fused_axes,
+                signal_results_by_pass=signal_results_by_pass,
                 top_n=args.disagreements_top_n,
                 run_dir=run_dir,
                 config={
@@ -1528,7 +1679,7 @@ def main(argv: list[str] | None = None) -> int:
             write_json(final_dir(run_dir) / "disagreements.json", index)
 
         # Timeline plot — best-effort sidecar.
-        if axis_results:
+        if fused_axes:
             try:
                 duration_s = float(next(iter(passes_for_compute.values())).get("duration_s", 0.0) or 0.0)
                 # Build per-pass detail bundles for the plot's per-source rows.
@@ -1576,7 +1727,8 @@ def main(argv: list[str] | None = None) -> int:
                 raw_sr = int(raw_pass_audio.sampling_rate) if raw_pass_audio is not None else 16000
                 timeline_path = build_aligned_timeline_plot(
                     run_dir=run_dir,
-                    axis_results=axis_results,
+                    fused_axes=fused_axes,
+                    stability_by_signal=per_bucket_stability,
                     duration_s=duration_s,
                     grid_hop=grid.hop_length,
                     asr_grid_hop=asr_grid.hop_length,
@@ -1589,85 +1741,6 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"Timeline plot: {timeline_path}")
             except Exception as exc:  # noqa: BLE001 — best-effort sidecar
                 print(f"warn: timeline plot failed: {exc!r}", file=sys.stderr)
-
-        # ── Level 2: the final uncertainty maps ───────────────────────
-        # The per-pass parquets under <pass>/uncertainty/ are level-1 diagnostics: they
-        # record what each signal said, and what one pass would have concluded on its own
-        # before anything was measured about the signals. These are the answer — fused across
-        # every signal and pass, each weighted by its measured stability and support.
-        if harvests_by_pass:
-            try:
-                from senselab.audio.workflows.audio_analysis.fuse import write_final_uncertainty
-
-                # The reserved __basis__ key carries the per-factor breakdown; it is not an
-                # axis, so it is split off rather than fused.
-                basis = reliability_by_axis.get("__basis__") or {}
-                axis_weights = {k: v for k, v in reliability_by_axis.items() if k != "__basis__"}
-                # The mask and the speaker claims are what make the rounds able to *do* anything:
-                # without them the loop has no regional trust to withdraw and no fourth axis to
-                # emit, so it folds once and stops. They were previously left at their defaults,
-                # which silently reduced every run to a single round.
-                from senselab.audio.workflows.audio_analysis.fuse import (
-                    mask_regions_from_rows,
-                    speaker_claims_from_votes,
-                )
-
-                fusion_mask_rows: list[dict[str, Any]] = []
-                mask_path = pass_dir(run_dir, "raw_16k") / "background_mask.parquet"
-                if mask_path.exists():
-                    import pandas as _pd_mask
-
-                    fusion_mask_rows = _pd_mask.read_parquet(mask_path).to_dict("records")
-                # The mask governs fusion from the *raw* pass: whether a region is target-free is a
-                # fact about the recording, not about the enhancement transform.
-                mask_regions = mask_regions_from_rows(fusion_mask_rows)
-                reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
-                speaker_claims = speaker_claims_from_votes(getattr(reference, "speaker_votes", []) or [])
-                final_maps = write_final_uncertainty(
-                    run_dir,
-                    harvests=harvests_by_pass,
-                    weights_by_axis=axis_weights,
-                    aggregator=args.uncertainty_aggregator,
-                    weight_basis_by_axis=basis,
-                    mask_regions=mask_regions,
-                    speaker_claims=speaker_claims,
-                    max_rounds=args.max_rounds,
-                )
-                summaries["final_uncertainty"] = final_maps
-
-                # One timeline per round, drawn after that round's fusion.
-                import pandas as _pd_round
-
-                from senselab.audio.workflows.audio_analysis.l2_plot import build_round_timeline
-
-                by_round: dict[int, dict[str, list[dict[str, Any]]]] = {}
-                for key, path in final_maps.items():
-                    if "@round" not in key:
-                        continue
-                    axis_name, round_token = key.split("@round", 1)
-                    frame = _pd_round.read_parquet(path)
-                    by_round.setdefault(int(round_token), {})[axis_name] = frame.to_dict("records")
-                # Named for the round it belongs to: the run-summary block later in this same
-                # function binds its own ``axis_rows`` over the *final* axes, and one name for two
-                # different quantities in one scope is how the wrong one gets read.
-                for round_index, round_axis_rows in sorted(by_round.items()):
-                    build_round_timeline(
-                        run_dir,
-                        round_index=round_index,
-                        axis_rows=round_axis_rows,
-                        duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
-                        title=f"L2 round {round_index} — {args.audio.name}",
-                    )
-                # Name the directory the writer actually used. The maps live under
-                # L2/round<N>/uncertainty/, and pointing at final/uncertainty/ sent a reader to an
-                # empty path; the count also included @round aliases, so it overstated the axes.
-                axis_names = sorted({k.split("@")[0] for k in final_maps if k != "rounds"})
-                print(
-                    f"  [final uncertainty] {len(axis_names)} axis map(s) under L2/round<N>/uncertainty/: {', '.join(axis_names)}"
-                )
-            except Exception as exc:  # noqa: BLE001 — a derived artifact must not fail the run
-                logger.warning("final uncertainty maps could not be written: %s", exc)
-                summaries["final_uncertainty"] = {"status": "failed", "error": repr(exc)}
 
         # ── Per-speaker speaker (US1) ────────────────────────────────
         # Derived from the completed passes rather than from a fresh inference: the raw

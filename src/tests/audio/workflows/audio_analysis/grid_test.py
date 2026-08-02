@@ -51,7 +51,7 @@ def test_per_axis_grids_coexist_and_are_recorded() -> None:
         "duration_s": 2.0,
         "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
     }
-    axis_results, _, _ = compute_uncertainty_axes(
+    _signals, fused_axes, _, _ = compute_uncertainty_axes(
         passes={"raw_16k": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         speech_presence_grid=BucketGrid(win_length=0.1, hop_length=0.02),
@@ -62,13 +62,15 @@ def test_per_axis_grids_coexist_and_are_recorded() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    speech_presence = axis_results[("raw_16k", "speech_presence")]
-    speaker = axis_results[("raw_16k", "speaker")]
+    speech_presence = fused_axes["speech_presence"]
+    speaker = fused_axes["speaker"]
     # Fine speech_presence grid → many more speech_presence rows than the 0.5 s speaker grid.
     assert len(speech_presence.rows) > len(speaker.rows)
-    assert speech_presence.provenance["grid"]["win_length"] == 0.1
-    assert speech_presence.provenance["grid"]["hop_length"] == 0.02
-    assert speaker.provenance["grid"]["win_length"] == 0.5
+    # The grid is recorded per pass, because the grid a signal was measured on is a fact about
+    # that measurement — and an axis spans every pass that reported.
+    assert speech_presence.provenance["grid"]["raw_16k"]["win_length"] == 0.1
+    assert speech_presence.provenance["grid"]["raw_16k"]["hop_length"] == 0.02
+    assert speaker.provenance["grid"]["raw_16k"]["win_length"] == 0.5
 
 
 def test_speech_presence_grid_defaults_to_shared_when_absent() -> None:
@@ -77,7 +79,7 @@ def test_speech_presence_grid_defaults_to_shared_when_absent() -> None:
         "duration_s": 2.0,
         "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
     }
-    axis_results, _, _ = compute_uncertainty_axes(
+    _signals, fused_axes, _, _ = compute_uncertainty_axes(
         passes={"raw_16k": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         params={},
@@ -86,5 +88,5 @@ def test_speech_presence_grid_defaults_to_shared_when_absent() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
-    speech_presence = axis_results[("raw_16k", "speech_presence")]
-    assert speech_presence.provenance["grid"]["win_length"] == 0.5
+    speech_presence = fused_axes["speech_presence"]
+    assert speech_presence.provenance["grid"]["raw_16k"]["win_length"] == 0.5

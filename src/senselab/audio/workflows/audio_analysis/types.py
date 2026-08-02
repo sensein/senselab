@@ -1,9 +1,14 @@
 """Typed dataclasses for the audio_analysis workflow.
 
-These match the public schema in ``contracts/uncertainty-row.parquet.md``. They live as
-plain dataclasses (not Pydantic) because they are workflow-internal — the parquet writer
-serializes them via pyarrow, not via Pydantic JSON, and we want zero overhead for the
-hot per-bucket aggregation loop.
+They live as plain dataclasses (not Pydantic) because they are workflow-internal — the parquet
+writer serializes them via pyarrow, not via Pydantic JSON, and we want zero overhead for the hot
+per-bucket loop.
+
+**An uncertainty axis is an aggregator.** It aggregates across signals *and* across passes, so
+there is no such thing as a per-pass axis: a pass is an input dimension to the fold, never an index
+on its output. That is why there is no ``(pass, axis)`` product type here — L1 emits
+:class:`SignalResult` (per pass, per signal, no axis) and L2 emits :class:`FusedAxis` (per axis, no
+pass). The pass dimension appears on a fused row only as the ``contributing_passes`` column.
 """
 
 from __future__ import annotations
@@ -20,101 +25,69 @@ punted fifth, but neither is harvested, so neither belongs in the type that desc
 produces. Widening it here would promise `compute.py` inputs that no harvester emits.
 """
 
-PassLabel = Literal["raw_16k", "enhanced_16k", "raw_vs_enhanced"]
-"""Pass identifier used for parquet pathing and the disagreements.json `pass` field."""
+PassLabel = Literal["raw_16k", "enhanced_16k"]
+"""A pass is the same recording under a transform — as recorded, or after speech enhancement.
 
-ComparisonStatus = Literal["ok", "incomparable", "unavailable", "one_sided"]
-"""Per-row status. ``one_sided`` only appears on raw_vs_enhanced parquets."""
+``raw_vs_enhanced`` used to be a member. It is not a pass; it was a perturbation-stability
+*measurement* wearing a pass label so that it could be an index on an axis. Stability is now keyed
+by signal (``L1/stability/<signal>.parquet``), which is what it is a property of.
+"""
+
+ComparisonStatus = Literal["ok", "incomparable", "unavailable"]
+"""Per-row status: did this signal produce a comparable measurement in this bucket?"""
 
 
 @dataclass(slots=True)
-class UncertaintyRow:
-    """One bucket on one (pass, axis) uncertainty parquet.
+class SignalRow:
+    """One signal's measurement in one bucket of one pass — the level-1 emission.
 
-    See ``contracts/uncertainty-row.parquet.md`` for the column-level schema.
+    No axis and no fold. ``measurement`` holds what the tool reported, in the tool's own units,
+    exactly as harvested; ``units``/``model_id``/``revision``/``native_window_s``/``resolution_s``
+    are the provenance a different lab would need to reproduce the number from the audio alone.
+
+    A signal that said nothing in a bucket has no row here rather than a zero-filled one: zero is a
+    confident claim, and imputing it would manufacture confidence nobody expressed.
     """
 
     start: float
     end: float
-    axis: UncertaintyAxis
-    within_pass_uncertainty: float | None
-    """What this pass alone would conclude, before anything is measured about the signals.
-
-    A **level-1 diagnostic**, not the answer. The answer is level 2's
-    ``final/uncertainty/<axis>.parquet``, which fuses across signals and passes with measured
-    weights. Named so it cannot be mistaken for a verdict — under its previous name,
-    ``within_pass_uncertainty``, every consumer read it as one, which is how a fold computed
-    before any weighting came to be reported as the run's belief."""
-
-    contributing_models: list[str]
-    model_votes: dict[str, dict[str, Any]]
-    comparison_status: ComparisonStatus = "ok"
-    signal_uncertainty: dict[str, float] = field(default_factory=dict)
-    """Each signal's *own* uncertainty in this bucket — the level-1 emission.
-
-    First-class rather than recoverable only by re-parsing ``model_votes``: level 2 has to
-    weight the signals, and a value already folded cannot be re-weighted. A signal that said
-    nothing is absent rather than zero-filled, since zero is a confident claim."""
-
-    # Audio-intensity weight in [0, 1]. Derived from per-bucket loudness
-    # (per-pass percentile-normalized openSMILE Loudness_sma3). Used to
-    # downweight uncertainty contributions from silent / background buckets
-    # so they don't artificially inflate the time-aggregated mean. The raw
-    # uncertainty is also stored multiplied by this weight in
-    # ``within_pass_uncertainty`` (see compute.py); ``intensity_weight`` here
-    # carries the unmasked weight for downstream re-weighting if desired.
-    intensity_weight: float | None = None
-    raw_within_pass_uncertainty: float | None = None  # pre-mask value
-
-    # ── Scene-aware speech_presence extensions (feature 20260722-175022) ────────────
-    # All default None and are populated only on the axis they belong to
-    # (speech_presence for the confidence/quality/source columns; asr for the
-    # token-entropy/coupling columns). They are additive: existing readers that
-    # project a fixed column set are unaffected, and ``within_pass_uncertainty``
-    # keeps its original meaning. See
-    # ``specs/20260722-175022-scene-quality-asr/data-model.md``.
-    #
-    # Presence confidence/uncertainty split (FR-013):
-    speech_presence_confidence: float | None = None  # calibrated mean P(speech) in [0,1]
-    speech_presence_uncertainty: float | None = None  # decisiveness uncertainty 1-|2p-1| in [0,1]
-    # L1 scene-quality measurements, in native units. Recorded alongside the derived scores so a
-    # consumer can always see what was measured, not only how it was scored — the previous version
-    # kept only the scores, which is why a column pinned at 0.0 by its anchor was
-    # indistinguishable from one measured at 0.0.
-    snr_brouhaha_db: float | None = None
-    c50_brouhaha_db: float | None = None
-    snr_spectral_gating_db: float | None = None
-    snr_peak_db: float | None = None
-    rolloff_95_hz: float | None = None
-    proportion_clipped: float | None = None
-    # L2 degradation scores derived from the above against calibrated anchors, 0 = clean,
-    # 1 = fully degraded (FR-001). See ``degradation.scene_degradation``.
-    quality_snr: float | None = None
-    quality_clip: float | None = None
-    quality_reverb: float | None = None
-    quality_bandwidth: float | None = None
-    # Background sound-source category masses, sum ~1 when present (FR-007):
-    src_speech: float | None = None
-    src_people: float | None = None
-    src_machine: float | None = None
-    src_environment: float | None = None
-    src_dominant: str | None = None  # argmax category name
-    # Utterance extensions (FR-017, FR-019):
-    token_entropy: float | None = None  # mean per-token ASR entropy over the bucket
-    scene_quality_coupling: float | None = None  # recorded coupling multiplier (>=1.0)
+    signal: str
+    measurement: dict[str, Any] = field(default_factory=dict)
+    units: str | None = None
+    native_window_s: float | None = None
+    resolution_s: float | None = None
+    model_id: str | None = None
+    revision: str | None = None
+    status: ComparisonStatus = "ok"
 
 
 @dataclass(slots=True)
-class AxisResult:
-    """All rows for one (pass, axis) plus the provenance recorded on the parquet.
+class SignalResult:
+    """All L1 rows for one ``(pass, signal)`` plus the provenance recorded on the parquet.
 
-    Held in memory by ``compute_uncertainty_axes``; serialized to disk by
-    ``write_axis_parquet``.
+    Held in memory by ``compute_uncertainty_axes``; serialized by ``io.write_signal_parquet`` to
+    ``L1/<pass>/signals/<signal>.parquet``.
     """
 
     pass_label: PassLabel
+    signal: str
+    rows: list[SignalRow] = field(default_factory=list)
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class FusedAxis:
+    """One axis, fused across every signal and every pass — the level-2 product.
+
+    Deliberately has no ``pass_label``. Each row is a plain dict as emitted by
+    :func:`~senselab.audio.workflows.audio_analysis.fuse.fuse_axis`: ``uncertainty``,
+    ``epistemic_uncertainty``, ``confidence``, ``variability``, ``triage_score``,
+    ``contributing_signals``, ``contributing_passes``, ``signal_weights``, ``weight_basis``,
+    ``round``.
+    """
+
     axis: UncertaintyAxis
-    rows: list[UncertaintyRow] = field(default_factory=list)
+    rows: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
 

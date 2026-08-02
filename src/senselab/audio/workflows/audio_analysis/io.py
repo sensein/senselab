@@ -1,106 +1,94 @@
-"""Parquet writer for ``UncertaintyRow``s.
+"""Parquet writers for the level-1 evidence artifacts.
 
-Writes one parquet per ``AxisResult`` with a stable schema: ``start``, ``end``, ``axis``,
-``within_pass_uncertainty``, ``contributing_models``, ``model_votes`` (JSON-encoded for
-heterogeneous-shape robustness — Arrow's strict struct typing fights us when different
-axes have different vote shapes), ``comparison_status``. The provenance dict goes into
-``schema.metadata`` under the ``comparator_provenance`` key per FR-014.
+``write_signal_parquet`` writes one file per ``(pass, signal)`` — long format, one row per
+bucket, the measurement carried as JSON in the tool's own units. Units, window, hop, model and
+revision travel in ``schema.metadata`` so a reader can interpret the number without knowing which
+module produced it.
+
+There is deliberately no axis writer here. An axis is a fold across signals *and* passes, so it
+cannot be indexed by pass; the fused axes are written by
+``fuse.write_final_uncertainty`` to ``L2/round<N>/uncertainty/<axis>.parquet``.
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from senselab.audio.workflows.audio_analysis.types import AxisResult
+from senselab.audio.workflows.audio_analysis.types import SignalResult
 
 
-def write_axis_parquet(
-    axis_result: AxisResult,
+def write_signal_parquet(
+    signal_result: SignalResult,
     dest: Path,
     provenance: dict[str, Any] | None = None,
 ) -> Path:
-    """Serialize an ``AxisResult`` to parquet at ``dest``.
+    """Serialize a ``SignalResult`` to parquet at ``dest``.
 
-    Returns the destination path. Creates parent directories. Always writes the file —
-    even when ``axis_result.rows`` is empty — so downstream consumers can rely on the
-    9-parquet output shape per SC-002.
+    Returns the destination path. Creates parent directories. Always writes the file — even when
+    ``signal_result.rows`` is empty — so "the signal ran and found nothing" stays distinguishable
+    from "the signal never ran".
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-
-    starts = [r.start for r in axis_result.rows]
-    ends = [r.end for r in axis_result.rows]
-    axes = [r.axis for r in axis_result.rows]
-    uncertainties = [r.within_pass_uncertainty for r in axis_result.rows]
-    raw_uncertainties = [r.raw_within_pass_uncertainty for r in axis_result.rows]
-    intensity_weights = [r.intensity_weight for r in axis_result.rows]
-    contributing = [list(r.contributing_models) for r in axis_result.rows]
-    votes_json = [json.dumps(r.model_votes, default=str, separators=(",", ":")) for r in axis_result.rows]
-    # The level-1 emission: each signal's own uncertainty, JSON-encoded like model_votes.
-    # Without this column L2 has to re-derive it from model_votes, and the two would drift.
-    signal_uncertainty_json = [
-        json.dumps(r.signal_uncertainty, default=str, separators=(",", ":")) for r in axis_result.rows
-    ]
-    statuses = [r.comparison_status for r in axis_result.rows]
-
-    # Scene-aware speech_presence + asr extension columns (feature 20260722-175022).
-    # Additive and all-nullable: rows on axes that don't populate a given column
-    # write null, keeping one uniform schema across the three parquets. Existing
-    # column-projecting readers ignore these.
-    float_extension_columns = (
-        "speech_presence_confidence",
-        "speech_presence_uncertainty",
-        # L1 measurements in native units, then the L2 scores derived from them. Both are written:
-        # the score alone cannot distinguish "measured clean" from "clamped by its anchor".
-        "snr_brouhaha_db",
-        "c50_brouhaha_db",
-        "snr_spectral_gating_db",
-        "snr_peak_db",
-        "rolloff_95_hz",
-        "proportion_clipped",
-        "quality_snr",
-        "quality_clip",
-        "quality_reverb",
-        "quality_bandwidth",
-        "src_speech",
-        "src_people",
-        "src_machine",
-        "src_environment",
-        "token_entropy",
-        "scene_quality_coupling",
-    )
+    rows = signal_result.rows
 
     columns: dict[str, pa.Array] = {
-        "start": pa.array(starts, type=pa.float64()),
-        "end": pa.array(ends, type=pa.float64()),
-        "axis": pa.array(axes, type=pa.string()),
-        "within_pass_uncertainty": pa.array(uncertainties, type=pa.float64()),
-        "raw_within_pass_uncertainty": pa.array(raw_uncertainties, type=pa.float64()),
-        "intensity_weight": pa.array(intensity_weights, type=pa.float64()),
-        "contributing_models": pa.array(contributing, type=pa.list_(pa.string())),
-        "model_votes": pa.array(votes_json, type=pa.string()),
-        "signal_uncertainty": pa.array(signal_uncertainty_json, type=pa.string()),
-        "comparison_status": pa.array(statuses, type=pa.string()),
+        "start": pa.array([r.start for r in rows], type=pa.float64()),
+        "end": pa.array([r.end for r in rows], type=pa.float64()),
+        "signal": pa.array([r.signal for r in rows], type=pa.string()),
+        # JSON rather than a struct: signals report different shapes, and Arrow's strict struct
+        # typing would force a union of every signal's fields onto every signal's file.
+        "measurement": pa.array(
+            [json.dumps(r.measurement, default=str, separators=(",", ":")) for r in rows], type=pa.string()
+        ),
+        "units": pa.array([r.units for r in rows], type=pa.string()),
+        "native_window_s": pa.array([r.native_window_s for r in rows], type=pa.float64()),
+        "resolution_s": pa.array([r.resolution_s for r in rows], type=pa.float64()),
+        "model_id": pa.array([r.model_id for r in rows], type=pa.string()),
+        "revision": pa.array([r.revision for r in rows], type=pa.string()),
+        "status": pa.array([r.status for r in rows], type=pa.string()),
     }
-    for col in float_extension_columns:
-        columns[col] = pa.array([getattr(r, col) for r in axis_result.rows], type=pa.float64())
-    columns["src_dominant"] = pa.array([r.src_dominant for r in axis_result.rows], type=pa.string())
-
     table = pa.table(columns)
 
-    metadata: dict[bytes, bytes] = {}
-    if axis_result.provenance or provenance:
-        merged = {**axis_result.provenance, **(provenance or {})}
-        metadata[b"comparator_provenance"] = json.dumps(merged, default=str).encode("utf-8")
+    merged = {**signal_result.provenance, **(provenance or {})}
+    merged.setdefault("pass", signal_result.pass_label)
+    merged.setdefault("signal", signal_result.signal)
+    table = table.replace_schema_metadata({b"signal_provenance": json.dumps(merged, default=str).encode("utf-8")})
 
-    if metadata:
-        table = table.replace_schema_metadata(metadata)
+    pq.write_table(table, dest)
+    return dest
 
+
+def write_signal_stability(
+    per_bucket: Sequence[Mapping[str, Any]],
+    dest: Path,
+    provenance: dict[str, Any] | None = None,
+) -> Path:
+    """Write ``L1/stability/<signal>.parquet`` — one signal's cross-pass disagreement per bucket.
+
+    Perturbation stability is a property of a *signal*, not of an axis: the two passes are the
+    same recording under a transform, so a signal that answers differently between them has not
+    earned its weight. Keyed by signal for that reason, rather than by a third pseudo-pass.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    columns: dict[str, pa.Array] = {
+        "start": pa.array([float(r["start"]) for r in per_bucket], type=pa.float64()),
+        "end": pa.array([float(r["end"]) for r in per_bucket], type=pa.float64()),
+        "signal": pa.array([str(r["signal"]) for r in per_bucket], type=pa.string()),
+        "pass_a": pa.array([str(r["pass_a"]) for r in per_bucket], type=pa.string()),
+        "pass_b": pa.array([str(r["pass_b"]) for r in per_bucket], type=pa.string()),
+        "abs_delta": pa.array([float(r["abs_delta"]) for r in per_bucket], type=pa.float64()),
+        "n_passes_present": pa.array([int(r["n_passes_present"]) for r in per_bucket], type=pa.int64()),
+    }
+    table = pa.table(columns)
+    if provenance:
+        table = table.replace_schema_metadata({b"stability_provenance": json.dumps(provenance, default=str).encode()})
     pq.write_table(table, dest)
     return dest
 
