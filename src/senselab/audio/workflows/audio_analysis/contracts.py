@@ -70,6 +70,7 @@ from pathlib import Path
 from typing import Final, Iterable, Iterator, Literal, Mapping, Sequence
 
 __all__ = [
+    "ENUMERABLE_DIMENSIONS",
     "KNOWN_DEVIATIONS",
     "MODULE_STAGE",
     "STAGE_CONTRACTS",
@@ -83,6 +84,7 @@ __all__ = [
     "dag_edges",
     "dead_artifact_deviations",
     "declared_artifacts",
+    "enumerated_members",
     "folding_stages",
     "matches",
     "overlap",
@@ -190,6 +192,50 @@ which made the whole content half of the declaration optional: the same rows wri
 size of every rule below."""
 
 
+ENUMERABLE_DIMENSIONS: Final[frozenset[str]] = frozenset({"round", "axis"})
+"""The dimensions whose members are knowable without opening a file, and therefore the only ones
+a declaration may require *every* member of.
+
+A wildcard is otherwise satisfied by a single match, which is the hole this closes: on a five-round
+run where two rounds wrote a ``summary.json``, ``L2/round/*/summary.json`` matched something and
+read as produced; on the same run the fourth axis stopped after round 2 and
+``L2/round/*/estimates/*.parquet`` matched three axes in five rounds and read as produced. Both are
+"a declaration nothing satisfies" wearing the one match that hides it.
+
+A round is enumerable because the tree names its rounds; an axis is enumerable because
+:data:`senselab.audio.workflows.audio_analysis.axes.AXIS_NAMES` declares them. A *perturbation* is
+deliberately not here: its set is open and lives in ``L1/perturbations.json``, so requiring every
+member would mean reading a run artifact to decide what the declaration says."""
+
+
+def _enumeration_slot(pattern: str, dimension: str) -> int | None:
+    """Which segment of ``pattern`` a member of ``dimension`` is substituted into.
+
+    Positional rather than token-based, because ``instantiate`` rewrites ``{n}`` to ``*`` before
+    any guard sees the pattern — a token check would pass on the declaration and fail on the
+    thing actually walked. A round is the segment after the literal ``round``; an axis is the
+    filename stem. ``None`` when the pattern has no such slot, which
+    :meth:`Artifact.__post_init__` refuses.
+    """
+    segments = _segments(pattern)
+    if dimension == "round":
+        for index, segment in enumerate(segments[:-1]):
+            if segment == "round" and {"*", "{"} & set(segments[index + 1]):
+                return index + 1
+        return None
+    if dimension == "axis":
+        return len(segments) - 1 if segments and segments[-1].startswith("*.") else None
+    return None
+
+
+def _substitute_segment(pattern: str, index: int, value: str) -> str:
+    """``pattern`` with segment ``index`` replaced — the stem only, where it has a suffix."""
+    segments = list(_segments(pattern))
+    suffix = _pattern_suffix(pattern)
+    segments[index] = f"{value}{suffix}" if index == len(segments) - 1 and suffix else value
+    return "/".join(segments)
+
+
 @dataclass(frozen=True)
 class Artifact:
     """One declared output: where it may be written, and what a row of it is indexed by.
@@ -229,6 +275,13 @@ class Artifact:
     ``suffixes`` pins the file kinds permitted at this pattern. It defaults to the extension the
     pattern itself names (``final/transcript.json`` permits ``.json`` and nothing else), and must
     be given explicitly wherever the pattern ends in ``**`` and therefore names none.
+
+    ``enumerated`` names the dimensions whose **every member** must appear. A wildcard is
+    otherwise satisfied by one match, which is how ``L2/round/{n}/summary.json`` read as produced
+    on a run where three of five rounds wrote none, and how ``L2/round/{n}/estimates/*.parquet``
+    read as produced on a run where the fourth axis stopped after round 2. Only two dimensions
+    are enumerable without opening a file — the rounds a run wrote and the axes the design
+    declares — so those are the two :data:`ENUMERATED_TOKENS` knows how to expand.
     """
 
     pattern: str
@@ -238,6 +291,7 @@ class Artifact:
     required: tuple[str, ...] | None = None
     folded: tuple[str, ...] = ()
     suffixes: tuple[str, ...] | None = None
+    enumerated: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Reject a declaration too broad to constrain anything, at the moment it is written.
@@ -270,6 +324,18 @@ class Artifact:
         )
         if unknown:
             raise ValueError(f"{self.pattern}: {sorted(unknown)} name no key dimension in DIMENSION_COLUMNS")
+        unexpandable = set(self.enumerated) - set(ENUMERABLE_DIMENSIONS)
+        if unexpandable:
+            raise ValueError(
+                f"{self.pattern}: enumerated={sorted(unexpandable)} names a dimension nothing can expand — "
+                f"only {sorted(ENUMERABLE_DIMENSIONS)} have a member set knowable without opening a file"
+            )
+        for dimension in self.enumerated:
+            if _enumeration_slot(self.pattern, dimension) is None:
+                raise ValueError(
+                    f"{self.pattern}: enumerated={self.enumerated} names {dimension!r}, but the pattern has no "
+                    f"wildcard in the place a {dimension} goes, so no member could be substituted into it"
+                )
         if not set(self.folded) <= set(self.key or ()):
             raise ValueError(f"{self.pattern}: folded={self.folded} names a dimension outside key={self.key}")
         if "**" not in _segments(self.pattern):
@@ -306,6 +372,38 @@ class Artifact:
             return frozenset(self.suffixes)
         named = _pattern_suffix(self.pattern)
         return frozenset({named}) if named else frozenset()
+
+    def slices_of_one_table(self) -> bool:
+        """Is every file matching this pattern the same table, sliced by its key?
+
+        **Derived, not declared**, from what the pattern's wildcards are: when every one of them
+        enumerates a dimension, the files beneath it differ only in the value of a key dimension
+        — which is the definition of a slice. ``L2/round/*/estimates/*.parquet`` varies in round
+        and axis and in nothing else, so a round-3 file with different columns than a round-0 one
+        is two artifacts sharing a name, and a reader cannot tell which producer wrote a round.
+        ``L1/signals/**`` varies in *which tool measured*, so its files are different tables by
+        construction and no such rule applies.
+
+        The consequence is one schema per artifact name. Where two producers genuinely emit
+        different things, the declaration has to say so by declaring two artifacts.
+        """
+        wildcards = sum(1 for segment in _segments(self.pattern) if {"*", "?", "{"} & set(segment))
+        return self.key is not None and wildcards > 0 and len(self.enumerated) == wildcards
+
+    def instances(self, members: Mapping[str, Sequence[str]]) -> tuple[str, ...]:
+        """Every concrete pattern this artifact owes, one per combination of enumerated members.
+
+        Empty when the artifact enumerates nothing — the pattern-level rule then stands alone,
+        which is all a non-enumerable wildcard can support.
+        """
+        if not self.enumerated:
+            return ()
+        patterns = [self.pattern]
+        for dimension in self.enumerated:
+            slot = _enumeration_slot(self.pattern, dimension)
+            assert slot is not None  # noqa: S101 — __post_init__ refuses the declaration otherwise
+            patterns = [_substitute_segment(p, slot, member) for p in patterns for member in members.get(dimension, ())]
+        return tuple(patterns)
 
 
 def _pattern_suffix(pattern: str) -> str | None:
@@ -357,7 +455,17 @@ class StageContract:
         # ``round-1``: "reads the previous round" and "reads nothing" are different contracts and
         # a negative index would quietly make them the same one.
         reads = tuple(_substitute(p, subs) for p in self.reads if not (round_index == 0 and "{prev}" in p))
-        writes = tuple(replace(a, pattern=_substitute(a.pattern, subs)) for a in self.writes)
+        # A concrete index leaves no slot for a round member to be substituted into, and the claim
+        # was never about this node anyway: "every round writes a summary" is a statement about the
+        # generic contract, and the unrolled node is one round.
+        writes = tuple(
+            replace(
+                artifact,
+                pattern=_substitute(artifact.pattern, subs),
+                enumerated=tuple(d for d in artifact.enumerated if d != "round"),
+            )
+            for artifact in self.writes
+        )
         return replace(self, stage=f"{self.stage}[{round_index}]", reads=reads, writes=writes)
 
 
@@ -425,6 +533,14 @@ L2_ROUND = StageContract(
         "order."
     ),
     reads=("L1/signals/**", "L2/round/{prev}/**"),
+    # What a round owes, and what it merely may leave. Three artifacts are owed by *every* round —
+    # its belief, its account of how it got there, and its view — because every round has all
+    # three; a round missing one is a round whose trajectory cannot be read. The four derivative
+    # families are not: ``votes/`` and ``stability/`` are the ingest round's, computed once from
+    # L1 and unchanged afterwards, and ``regions.json``/``votes_added.parquet`` belong to the
+    # rounds that ran interventions. Writing an empty one from a round that does no region
+    # proposal would be the claim "we looked and found none", which is not what happened —
+    # absent is not zero, and that distinction is exactly what ``enumerated`` is for.
     writes=(
         # The derivatives are named one family at a time rather than swept up by a ``**``. The
         # single broad pattern that used to stand here carried ``key=None``, so nothing beneath it
@@ -468,9 +584,18 @@ L2_ROUND = StageContract(
             # as contradiction.
             key=("axis", "bucket", "round"),
             keyed_in_path=("axis", "round"),
+            # Every active axis, every round. The fourth axis had estimates in rounds 0-2 and none
+            # in 3-4, and under a rule satisfied by one match that read as produced — while the
+            # convergence report, asked about an axis the loop carried no belief through, answered
+            # "0 buckets, residual mass 0.0", which is *settled* rather than *never asked*.
+            enumerated=("round", "axis"),
         ),
-        Artifact("L2/round/{n}/timeline.png", "the same figure the final timeline draws"),
-        Artifact("L2/round/{n}/summary.json", "what this round did, and what it now estimates"),
+        Artifact("L2/round/{n}/timeline.png", "the same figure the final timeline draws", enumerated=("round",)),
+        Artifact(
+            "L2/round/{n}/summary.json",
+            "what this round did, and what it now estimates",
+            enumerated=("round",),
+        ),
     ),
 )
 
@@ -1634,15 +1759,18 @@ def artifact_violations(run_dir: Path) -> list[str]:
     Static analysis cannot see a path handed to a helper as a parameter, nor a file emitted by a
     library the caller pointed somewhere unexpected. Walking what was actually written can.
 
-    Four questions per file, in the order a defeat gets past them: is it declared at all; did a
+    Five questions per file, in the order a defeat gets past them: is it declared at all; did a
     ``**`` admit it by admitting another stage's shape; is its *kind* one the declaring pattern
-    permits; and do its columns contradict the key. The third and fourth used to be one question
-    that only parquet could fail.
+    permits; do its columns contradict the key; and — across files rather than per file — do two
+    slices of one artifact carry different columns. The third and fourth used to be one question
+    that only parquet could fail; the fifth is a question about a *set* of files and so could not
+    be asked at all by a loop that looked at one at a time.
     """
     root = Path(run_dir)
     declared = _declared_artifacts()
     vocabulary = structural_vocabulary(declared)
     problems: list[str] = []
+    shapes: dict[str, dict[frozenset[str], list[str]]] = {}
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
@@ -1665,7 +1793,54 @@ def artifact_violations(run_dir: Path) -> list[str]:
             continue
         for artifact in owners:
             problems += _key_violations(relative, artifact, columns)
+            if artifact.slices_of_one_table():
+                shapes.setdefault(artifact.pattern, {}).setdefault(columns, []).append(relative)
+    return problems + _shape_violations(shapes)
+
+
+def _shape_violations(shapes: Mapping[str, Mapping[frozenset[str], Sequence[str]]]) -> list[str]:
+    """Where one artifact name covers two schemas.
+
+    Reported against the **majority** shape rather than against an arbitrary first file, so the
+    message names the odd producer instead of whichever slice the walk happened to reach first.
+    Columns present in one group and absent in the other are listed both ways: a reader of
+    ``L2/round/3/estimates/asr.parquet`` needs to know both what it gained and what it lost
+    relative to round 2's, because it is the same declared quantity and neither difference is
+    visible from the path.
+    """
+    problems: list[str] = []
+    for pattern, by_columns in sorted(shapes.items()):
+        if len(by_columns) < 2:
+            continue
+        groups = sorted(by_columns.items(), key=lambda item: (-len(item[1]), sorted(item[1])[0]))
+        majority, majority_files = groups[0]
+        for columns, files in groups[1:]:
+            problems.append(
+                f"{sorted(files)[0]}: two shapes under one artifact name — {pattern} is one table sliced by its "
+                f"key, but this slice carries {sorted(columns - majority)} which {sorted(majority_files)[0]} "
+                f"does not, and lacks {sorted(majority - columns)} which it does"
+            )
     return problems
+
+
+def enumerated_members(run_dir: Path) -> Mapping[str, tuple[str, ...]]:
+    """The member set of each enumerable dimension for one run.
+
+    Rounds come from the tree, because how many a run took is a property of that run. Axes come
+    from :mod:`~senselab.audio.workflows.audio_analysis.axes`, because which axes exist is a
+    property of the design — reading them off the tree instead would make "the fourth axis
+    stopped after round 2" self-justifying, since a tree that stopped producing it would also
+    stop declaring it.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+
+    rounds = Path(run_dir) / "L2" / "round"
+    present = (
+        sorted((p.name for p in rounds.iterdir() if p.is_dir() and p.name.isdigit()), key=int)
+        if (rounds.is_dir())
+        else []
+    )
+    return {"round": tuple(present), "axis": tuple(AXIS_NAMES)}
 
 
 def unproduced_declarations(run_dir: Path, declared: Sequence[tuple[str, Artifact]] | None = None) -> list[str]:
@@ -1676,6 +1851,13 @@ def unproduced_declarations(run_dir: Path, declared: Sequence[tuple[str, Artifac
     unanswerable, and the unproduced half is the more dangerous of the two, because it is what
     lets a fixture judge a fragment complete — every rule passes on a file that is not there.
 
+    Asked twice, because one match is not production. The pattern-level question ("did anything
+    match at all") is what a non-enumerable wildcard can support; where the wildcard enumerates a
+    dimension the members are known, and each is asked for separately. On the run that prompted
+    this, ``L2/round/*/summary.json`` matched three files out of five rounds and
+    ``L2/round/*/estimates/*.parquet`` matched three axes out of four — both reported produced,
+    both a declaration two thirds of the tree does not satisfy.
+
     Read against a run known to be complete. On a partial tree every declaration is unproduced
     and the answer says nothing, which is exactly why :func:`unproduced_declarations` is also
     what completeness is judged by: the two are the same question asked for different reasons.
@@ -1683,11 +1865,20 @@ def unproduced_declarations(run_dir: Path, declared: Sequence[tuple[str, Artifac
     root = Path(run_dir)
     artifacts = declared_artifacts() if declared is None else tuple(declared)
     produced = [path.relative_to(root).as_posix() for path in sorted(root.rglob("*")) if path.is_file()]
-    return [
-        f"{artifact.pattern}: declared by {stage} ({artifact.what}) and the run produced nothing matching it"
-        for stage, artifact in artifacts
-        if not any(matches(relative, artifact.pattern) for relative in produced)
-    ]
+    members = enumerated_members(root)
+    problems: list[str] = []
+    for stage, artifact in artifacts:
+        if not any(matches(relative, artifact.pattern) for relative in produced):
+            problems.append(
+                f"{artifact.pattern}: declared by {stage} ({artifact.what}) and the run produced nothing matching it"
+            )
+            continue
+        problems += [
+            f"{instance}: declared by {stage} ({artifact.pattern}) and the run produced nothing matching it"
+            for instance in artifact.instances(members)
+            if not any(matches(relative, instance) for relative in produced)
+        ]
+    return problems
 
 
 # ── the register's own arithmetic ────────────────────────────────────────────
