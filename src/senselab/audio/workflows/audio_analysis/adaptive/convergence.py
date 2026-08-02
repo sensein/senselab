@@ -19,54 +19,59 @@ __all__ = [
 def apply_convergence_marks(
     state: Any,  # noqa: ANN401 — BeliefState
     *,
-    passes: list[str],
     policy: dict[str, Any],
-    touch_counts: dict[tuple[str, str, tuple[float, float]], int],
+    touch_counts: dict[tuple[str, tuple[float, float]], int],
     budget_left: bool,
 ) -> dict[str, int]:
     """Update per-bucket status per FR-017; returns counts of status transitions.
 
     - ``converged``: uncertainty ≤ θ_low.
-    - ``irreducible``: touched ≥ max_region_rounds with < ε improvement AND the
-      aleatoric floor explains the residual (prototype floor = quality only;
-      reason ``snr_floor``) — or, without floor cover, marked
+    - ``irreducible``: touched ≥ max_region_rounds with < ε improvement AND a *measured* aleatoric
+      floor explains the residual (reason ``snr_floor``) — or, without floor cover, marked
       ``irreducible: no_reduction_under_available_interventions``.
     - ``budget_exhausted``: interventions still wanted but the ledger is empty.
+
+    A bucket has one status because it has one belief. While the state held one row per (pass,
+    axis) this loop could mark the same span converged on raw and budget-exhausted on enhanced,
+    and the report then counted both.
+
+    An **unmeasured** floor cannot explain anything: ``aleatoric_floor`` is ``None`` where nothing
+    about the scene was measured, and that case falls to
+    ``no_reduction_under_available_interventions`` rather than being read as a floor of zero.
     """
     th = policy["thresholds"]
     theta_low, epsilon = float(th["theta_low"]), float(th["epsilon"])
     max_touch = int(policy["regions"]["max_region_rounds"])
     transitions = {"converged": 0, "irreducible": 0, "budget_exhausted": 0}
-    for stream in passes:
-        for axis in AXES:
-            for row in state.axis_rows(stream, axis):
-                if row.get("status") != "open":
-                    continue
-                u = row.get("within_pass_uncertainty")
-                if u is None:
-                    continue
-                if u <= theta_low:
-                    row["status"] = "converged"
-                    transitions["converged"] += 1
-                    continue
-                touches = touch_counts.get((stream, axis, bucket_key(row["start"], row["end"])), 0)
-                hist = row.get("history") or []
-                improvement = None
-                if len(hist) >= 2:
-                    improvement = hist[-2]["within_pass_uncertainty"] - hist[-1]["within_pass_uncertainty"]
-                stalled = improvement is not None and improvement < epsilon
-                if touches >= max_touch and stalled:
-                    floor = float(row.get("aleatoric_floor") or 0.0)
-                    if u <= floor + epsilon:
-                        row["status"] = "irreducible"
-                        row["irreducible_reason"] = "snr_floor"
-                    else:
-                        row["status"] = "irreducible"
-                        row["irreducible_reason"] = "no_reduction_under_available_interventions"
-                    transitions["irreducible"] += 1
-                elif touches >= 1 and not budget_left:
-                    row["status"] = "budget_exhausted"
-                    transitions["budget_exhausted"] += 1
+    for axis in AXES:
+        for row in state.axis_rows(axis):
+            if row.get("status") != "open":
+                continue
+            u = row.get("uncertainty")
+            if u is None:
+                continue
+            if u <= theta_low:
+                row["status"] = "converged"
+                transitions["converged"] += 1
+                continue
+            touches = touch_counts.get((axis, bucket_key(row["start"], row["end"])), 0)
+            hist = row.get("history") or []
+            improvement = None
+            if len(hist) >= 2:
+                improvement = hist[-2]["uncertainty"] - hist[-1]["uncertainty"]
+            stalled = improvement is not None and improvement < epsilon
+            if touches >= max_touch and stalled:
+                floor = row.get("aleatoric_floor")
+                row["status"] = "irreducible"
+                row["irreducible_reason"] = (
+                    "snr_floor"
+                    if floor is not None and u <= float(floor) + epsilon
+                    else "no_reduction_under_available_interventions"
+                )
+                transitions["irreducible"] += 1
+            elif touches >= 1 and not budget_left:
+                row["status"] = "budget_exhausted"
+                transitions["budget_exhausted"] += 1
     return transitions
 
 
@@ -74,7 +79,6 @@ def round_summary(
     *,
     round_idx: int,
     state: Any,  # noqa: ANN401
-    passes: list[str],
     policy: dict[str, Any],
     fired: list[PlannedIntervention],
     not_admitted: list[PlannedIntervention],
@@ -83,12 +87,11 @@ def round_summary(
 ) -> dict[str, Any]:
     """One ``rounds/<k>/summary.json`` payload."""
     theta_low = float(policy["thresholds"]["theta_low"])
-    mass_after = {f"{s}/{a}": round(state.uncertainty_mass(s, a, theta_low), 6) for s in passes for a in AXES}
+    mass_after = {a: round(state.uncertainty_mass(a, theta_low), 6) for a in AXES}
     statuses: dict[str, int] = {}
-    for s in passes:
-        for a in AXES:
-            for row in state.axis_rows(s, a):
-                statuses[row.get("status", "open")] = statuses.get(row.get("status", "open"), 0) + 1
+    for a in AXES:
+        for row in state.axis_rows(a):
+            statuses[row.get("status", "open")] = statuses.get(row.get("status", "open"), 0) + 1
     return {
         "round": round_idx,
         "interventions": {
@@ -119,7 +122,6 @@ how a state nobody has thought about starts reading as one that was."""
 def build_convergence_report(
     *,
     state: Any,  # noqa: ANN401
-    passes: list[str],
     policy: dict[str, Any],
     rounds: list[dict[str, Any]],
     ledger: Any,  # noqa: ANN401
@@ -134,7 +136,6 @@ def build_convergence_report(
 
     Args:
         state: Belief state to summarise.
-        passes: Stream names.
         policy: Active policy.
         rounds: Per-round summaries for rounds 2..K.
         ledger: Budget ledger.
@@ -157,31 +158,28 @@ def build_convergence_report(
     """
     per_axis: dict[str, Any] = {}
     irreducible_regions: list[dict[str, Any]] = []
-    for stream in passes:
-        for axis in AXES:
-            rows = state.axis_rows(stream, axis)
-            counts: dict[str, int] = {}
-            for row in rows:
-                counts[row.get("status", "open")] = counts.get(row.get("status", "open"), 0) + 1
-                if row.get("status") == "irreducible":
-                    irreducible_regions.append(
-                        {
-                            "axis": axis,
-                            "stream": stream,
-                            "start": row["start"],
-                            "end": row["end"],
-                            "reason": row.get("irreducible_reason"),
-                            "residual": row.get("within_pass_uncertainty"),
-                            "floor": row.get("aleatoric_floor"),
-                        }
-                    )
-            per_axis[f"{stream}/{axis}"] = {
-                "buckets": len(rows),
-                **counts,
-                "residual_mass": round(
-                    state.uncertainty_mass(stream, axis, float(policy["thresholds"]["theta_low"])), 6
-                ),
-            }
+    for axis in AXES:
+        rows = state.axis_rows(axis)
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row.get("status", "open")] = counts.get(row.get("status", "open"), 0) + 1
+            if row.get("status") == "irreducible":
+                irreducible_regions.append(
+                    {
+                        "axis": axis,
+                        "start": row["start"],
+                        "end": row["end"],
+                        "reason": row.get("irreducible_reason"),
+                        "residual": row.get("uncertainty"),
+                        "floor": row.get("aleatoric_floor"),
+                        "floor_policy": row.get("aleatoric_floor_policy"),
+                    }
+                )
+        per_axis[axis] = {
+            "buckets": len(rows),
+            **counts,
+            "residual_mass": round(state.uncertainty_mass(axis, float(policy["thresholds"]["theta_low"])), 6),
+        }
     next_actions = [
         {
             "rule": e["rule"],

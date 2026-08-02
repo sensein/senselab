@@ -193,7 +193,11 @@ def build_adaptive_timeline(
         if not regions_file.exists():
             continue
         for reg in json.loads(regions_file.read_text()):
-            if reg["axis"] != "asr" or reg["stream"] != stream:
+            # No stream filter: a region is a span of the recording, proposed from an axis that
+            # already folds across passes. Filtering by one dropped every region on the run's
+            # other pass from the figure, which is the same collapse the store used to force on
+            # every reader — invisibly, because a missing overlay looks like a quiet stretch.
+            if reg["axis"] != "asr":
                 continue
             span = (round(reg["core_start"], 3), round(reg["core_end"], 3))
             if span in seen_regions:
