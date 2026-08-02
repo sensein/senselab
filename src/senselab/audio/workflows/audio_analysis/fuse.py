@@ -1078,6 +1078,8 @@ def write_final_uncertainty(
     speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
     max_rounds: int = 1,
     speech_presence_policy: Any = None,  # noqa: ANN401 — SpeechPresencePolicy, imported lazily
+    scene_rows: Sequence[Mapping[str, Any]] = (),
+    comparator_params: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write ``L2/round<N>/uncertainty/{speech_presence,speaker,asr}.parquet``.
 
@@ -1102,6 +1104,12 @@ def write_final_uncertainty(
         speech_presence_policy: Policy used to read L1 speech-presence measurements as beliefs.
             Defaults to the documented anchors. Fusion needs verdicts, and the harvest stores
             measurements, so the link has to happen here rather than being assumed done.
+        scene_rows: Presence rows carrying the scene measurements, for the scene→asr coupling
+            (FR-019). Empty disables it. It has to be applied *here*, per round: these rounds
+            re-fold every axis from the harvests, so a coupling applied by the caller beforehand
+            was overwritten before any row reached disk — leaving ``scene_quality_coupling`` on a
+            ``triage_score`` that did not contain it.
+        comparator_params: Comparator params, for the coupling weights.
 
     Returns:
         ``{axis → written path}`` as strings, for the run summary.
@@ -1174,6 +1182,8 @@ def write_final_uncertainty(
             "signal_weights",
             "weight_basis",
             "coupled_from",
+            "scene_quality_coupling",
+            "triage_score_pre_coupling",
         ]
         return pd.DataFrame(
             [
@@ -1194,6 +1204,10 @@ def write_final_uncertainty(
                     # Which other axes moved this value (D-11). Without it a coupled row is
                     # indistinguishable from one this axis reached on its own evidence.
                     "coupled_from": r.get("coupled_from") or [],
+                    # The scene→asr coupling and the value it multiplied, so the adjustment can be
+                    # undone or disagreed with from the parquet alone.
+                    "scene_quality_coupling": r.get("scene_quality_coupling"),
+                    "triage_score_pre_coupling": r.get("triage_score_pre_coupling"),
                 }
                 for r in rows
             ],
@@ -1204,6 +1218,13 @@ def write_final_uncertainty(
     # final rows N times would have produced N identical directories claiming to be a trajectory;
     # deriving the round set from the rows' own ``round`` field produced exactly one, because every
     # final row carries the final index. Neither shows what an iteration changed.
+    if scene_rows:
+        from senselab.audio.workflows.audio_analysis.votes import apply_scene_coupling
+
+        for rounds_for_axis in [per_round["asr"]] if "asr" in per_round else []:
+            for rows in rounds_for_axis.values():
+                apply_scene_coupling(rows, scene_rows, comparator_params or {})
+
     for axis, rounds_for_axis in per_round.items():
         for round_index in sorted(rounds_for_axis):
             round_dir = level2 / f"round{round_index}" / "uncertainty"

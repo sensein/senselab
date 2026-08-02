@@ -24,7 +24,7 @@ touches no model, no waveform and no file, so re-aggregation is still cheap and 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Mapping
+from typing import Any, Mapping, MutableMapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
 from senselab.audio.workflows.audio_analysis.speech_presence_link import (
@@ -195,6 +195,71 @@ def _quality_anchors(params: dict[str, Any]) -> dict[str, float] | None:
         if isinstance(calibration.get(key), (int, float))
     }
     return anchors or None
+
+
+def apply_scene_coupling(
+    asr_rows: Sequence[MutableMapping[str, Any]],
+    scene_rows: Sequence[Mapping[str, Any]],
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Inflate the asr rows' *policy fold* where the scene degrades the evidence (FR-019).
+
+    Applied to ``triage_score`` only — the policy fold, which exists to rank where to spend budget
+    — and never to ``uncertainty``, which is the entropy measure and has no policy in it. The
+    multiplier, its weights and the pre-coupling value go onto the row, so the adjustment is
+    re-decidable without re-running anything.
+
+    Lives here rather than in ``compute`` because both callers need it. It ran once, on
+    ``compute_uncertainty_axes``'s in-memory rows, and then ``write_final_uncertainty``'s rounds
+    re-folded every axis from the harvests and overwrote ``triage_score`` and ``coupled_from`` —
+    so no persisted row ever carried the coupling, while ``scene_quality_coupling`` and
+    ``triage_score_pre_coupling`` stayed behind on the in-memory row asserting an adjustment its
+    number did not contain.
+
+    Args:
+        asr_rows: The asr axis's rows, mutated in place.
+        scene_rows: Presence rows carrying the scene measurements (``quality_snr``,
+            ``src_machine``, ``src_environment``). Empty means nothing was measured, and every
+            multiplier is then 1.0 — which is the identity, not a claim that the scene is clean.
+        params: Comparator params; ``asr_scene_coupling`` overrides the default weights.
+
+    Returns:
+        The provenance block naming the weights, the defaults and what the coupling applies to.
+    """
+    weights = _coupling_weights(dict(params))
+    quality_intervals = [
+        (float(r["start"]), float(r["end"]), float(r["quality_snr"]))
+        for r in scene_rows
+        if isinstance(r.get("quality_snr"), (int, float))
+    ]
+    competing_intervals = [
+        (
+            float(r["start"]),
+            float(r["end"]),
+            float(r.get("src_machine") or 0.0) + float(r.get("src_environment") or 0.0),
+        )
+        for r in scene_rows
+        if isinstance(r.get("src_machine"), (int, float)) or isinstance(r.get("src_environment"), (int, float))
+    ]
+    for row in asr_rows:
+        coupling = scene_quality_coupling(
+            float(row["start"]),
+            float(row["end"]),
+            quality_degradation=quality_intervals,
+            competing_source_mass=competing_intervals,
+            weights=weights,
+        )
+        row["scene_quality_coupling"] = coupling
+        row["triage_score_pre_coupling"] = row.get("triage_score")
+        if isinstance(row.get("triage_score"), (int, float)) and coupling != 1.0:
+            row["triage_score"] = max(0.0, min(1.0, float(row["triage_score"]) * coupling))
+        if coupling != 1.0:
+            row["coupled_from"] = sorted({*(row.get("coupled_from") or []), "scene_quality"})
+    return {
+        "weights": dict(weights),
+        "defaults": dict(DEFAULT_UTTERANCE_SCENE_COUPLING),
+        "applies_to": "triage_score",
+    }
 
 
 def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:

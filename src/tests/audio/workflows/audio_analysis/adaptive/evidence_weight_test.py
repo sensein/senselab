@@ -86,9 +86,9 @@ def test_uncorroborated_vote_still_aggregates() -> None:
     reports confident silence — with nothing in the aggregate to appeal to.
     """
     store = _store_with_lone_asr_claim()
-    before = store.reaggregate_bucket(STREAM, "speech_presence", BK, aggregator="min")
+    before = store.reaggregate_bucket("speech_presence", BK, aggregator="min")
     _attenuate(store, 0.02)
-    after = store.reaggregate_bucket(STREAM, "speech_presence", BK, aggregator="min")
+    after = store.reaggregate_bucket("speech_presence", BK, aggregator="min")
 
     assert "openai/whisper-large-v3" in store.active_votes(STREAM, "speech_presence", BK)
     # The claim is still in the fold — p_voice must sit strictly above what the independent
@@ -186,7 +186,7 @@ def test_unmeasured_source_keeps_full_weight() -> None:
     votes = store.active_votes(STREAM, "speech_presence", BK)
     assert bucket_corroboration(votes, evidence_signals=[]) is None
     assert store.evidence_weights(STREAM, "speech_presence", BK) == {}
-    row = store.reaggregate_bucket(STREAM, "speech_presence", BK, aggregator="min")
+    row = store.reaggregate_bucket("speech_presence", BK, aggregator="min")
     assert row["p_voice"] == pytest.approx(speech_presence_p_voice(votes))
     assert row["attenuated_sources"] == {}
 
@@ -195,11 +195,11 @@ def test_attenuated_source_stays_in_contributing_sources() -> None:
     """The parquet must still show who spoke up, and by how much they were discounted."""
     store = _store_with_lone_asr_claim()
     _attenuate(store, 0.02)
-    row = store.reaggregate_bucket(STREAM, "speech_presence", BK, aggregator="min")
+    row = store.reaggregate_bucket("speech_presence", BK, aggregator="min")
     assert "openai/whisper-large-v3" in row["contributing_sources"]
     assert row["attenuated_sources"]["openai/whisper-large-v3"] == pytest.approx(MIN_EVIDENCE_WEIGHT)
-    state = BeliefState.from_store(store, [STREAM], aggregator="min")
-    belief_row = state.axis_rows(STREAM, "speech_presence")[0]
+    state = BeliefState.from_store(store, aggregator="min")
+    belief_row = state.axis_rows("speech_presence")[0]
     assert "openai/whisper-large-v3" in belief_row["attenuated_sources"]
 
 
@@ -377,7 +377,7 @@ def _p3_ctx() -> dict[str, Any]:
     ]
 
     class _State:
-        def axis_rows(self, stream: str, axis: str) -> list[dict[str, Any]]:
+        def axis_rows(self, axis: str) -> list[dict[str, Any]]:
             return rows if axis == "speech_presence" else []
 
     return {

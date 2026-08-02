@@ -427,7 +427,7 @@ def test_no_belief_api_takes_a_pass_to_produce_an_axis() -> None:
     from senselab.audio.workflows.audio_analysis.adaptive import regions as regions_module
     from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, VoteStore
 
-    axis_producing = [
+    axis_producing: list[Any] = [
         VoteStore.reaggregate_bucket,
         VoteStore.buckets,
         BeliefState.axis_rows,
