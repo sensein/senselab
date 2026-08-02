@@ -1378,3 +1378,77 @@ column and no fold-across-signals column, and looks like a measurement. The shap
 away is **its keyspace**: it is keyed by signal alone while every legitimate L1 artifact is keyed
 by `(pass, ...)`. A file under `L1/` that does not carry a pass, or that carries two, is a
 cross-pass evaluation whatever its columns are named.
+
+---
+
+## D-17. The pipeline is a DAG of workflows, each declaring its inputs and outputs
+
+Three rounds of guards were written against the violation last found and missed the next instance
+of the same class — a name list that omitted the fourth axis, a regex an alias slipped past, a glob
+that saw the workflow package but not `adaptive/`, three artifact rules that all pass on a genuine
+per-pass axis table. Enumerating what is forbidden cannot terminate. **Declaring what is permitted
+does.**
+
+### Each stage declares a contract, and the guard checks conformance
+
+L1, each L2 round, and final are each a **workflow**: a node with a declared set of inputs and a
+declared set of outputs. The guard reads the declaration and the code, and fails when a stage
+*reads* something outside its declared inputs or *writes* something outside its declared outputs.
+That is complete by construction — it needs no list of axis names, no list of forbidden columns, and
+it covers the fifth axis and the next perturbation before either is written.
+
+The stages compose as a **DAG**: L1 → L2 round 0 → L2 round 1 → … → final. No cycles, so no stage
+reads an artifact produced downstream of it. The two remaining contract violations are both cycle
+edges — `final/` read by the pipeline, and a round reading a sibling updated within the same round —
+and a DAG check names them as what they are rather than as separate defects.
+
+### L1 — perturbations, and the signals that accumulate across them
+
+A **perturbation** is a transform of the recording. `raw` is the identity perturbation and
+`enhanced` is one more; the set is open, and **a future L2 round may propose a new one** — which is
+why L1 must be re-enterable rather than a single up-front pass.
+
+```
+L1/
+  raw/                      the identity perturbation
+  perturbation/<k>/         each further transform, its parameters recorded
+  signals/                  cumulative across raw + every perturbation — the L2 input
+```
+
+`signals/` is the accumulating artifact and the only thing L2 reads from L1. That is what makes the
+"two passes" vocabulary a special case rather than the design: a pass was always a perturbation,
+and hard-coding two of them is why `raw_vs_enhanced` could masquerade as a third pass.
+
+Cross-perturbation evaluation stays out of L1 entirely — comparing two perturbations is a fold over
+an input dimension, which is L2's, exactly as an axis is.
+
+### L2 — one round tree, and what a round contains
+
+There are currently **two** round trees, `L2/round<N>/` and `L2/rounds/<N>/`, written by two
+producers with different numbering bases. One tree:
+
+```
+L2/round/<n>/
+  derivatives/     mask, speaker allocation, ASR consensus, scene components
+  estimates/       the axes — currently named "uncertainty", which names one of the four
+                   quantities on the row rather than the thing itself
+  timeline.png     the same figure the final timeline draws, so a round is comparable to the answer
+  summary.json     what this round did (actions, interventions) and what it now estimates
+```
+
+`derive` runs before `estimate` in every round including round 0, and both read only round *n−1*
+and L1's `signals/`.
+
+### final — an extraction, not a computation
+
+`final/` is the last round's estimates extracted, plus the summaries a human reads. It computes
+nothing and is read by nothing. If a number in `final/` is not present in the last round, it was
+computed at the wrong stage.
+
+### What this buys that a rule list does not
+
+- The guard question becomes "does this stage touch anything it did not declare", answerable from
+  signatures and the artifact tree, with no list to keep current.
+- A new axis, a new perturbation, or a new derivative needs no guard edit.
+- The two round trees, `L1/stability/`, the per-pass axis, and `final/` being read are one finding —
+  edges the DAG forbids — rather than four to be found separately.
