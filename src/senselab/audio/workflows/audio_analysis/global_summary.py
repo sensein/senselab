@@ -39,7 +39,7 @@ n_speakers semantics (per the user's clarification)
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -47,43 +47,64 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     seg_attr,
     whisper_chunk_confidence,
 )
-from senselab.audio.workflows.audio_analysis.types import AxisResult
+from senselab.audio.workflows.audio_analysis.types import FusedAxis
+
+PASS_FOLD = "mean over the passes that reported"
+"""How per-pass diagnostics are combined into one run-level number.
+
+Named because it is a choice. It is deliberately *not* a minimum: raw and enhanced are the same
+recording under a transform, so they are a perturbation sample whose disagreement is evidence —
+picking the lower-uncertainty one and reporting it as the run's bottom line discards exactly the
+information the second pass was run to obtain.
+"""
 
 
-def _mean_over_voice_buckets(
-    rows: list[Any],
-    speech_presence_rows: list[Any] | None = None,
+def _mean_over_speech(
+    axis_rows: Sequence[Mapping[str, Any]],
+    presence_rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> float | None:
-    """Intensity-weighted mean of ``within_pass_uncertainty`` over voice buckets.
+    """Speech-weighted mean of the fused ``uncertainty`` over an axis's buckets.
 
-    Uses the per-row ``intensity_weight`` (which already encodes "how much
-    confident-voice content is in this bucket" — derived from the speech_presence
-    p_voice during ``compute_uncertainty_axes``) as the weight. Buckets in
-    confident-silence regions have ``intensity_weight ≈ 0`` and contribute
-    nothing to the mean; voice buckets contribute fully.
+    Weighted by the fused presence axis's ``confidence`` at each bucket, projected onto this
+    axis's grid via the sanctioned coupling channel (``fuse.project_axis_onto``) rather than by a
+    stored ``intensity_weight`` column. Re-deriving it each time is what lets the weighting move
+    when the presence belief moves; the stored column froze one round's answer at harvest.
 
-    The ``speech_presence_rows`` argument is kept for backward compat / debugging
-    but is no longer used — the intensity_weight is per-row and pre-computed.
-
-    Returns ``None`` when total weight is 0 (e.g. all rows are confident silence).
+    Returns ``None`` when no bucket carries any weight.
     """
+    from senselab.audio.workflows.audio_analysis.fuse import project_axis_onto
+
+    rows = [r for r in axis_rows or () if isinstance(r.get("uncertainty"), (int, float))]
     if not rows:
         return None
+    spans = [(float(r["start"]), float(r["end"])) for r in rows]
+    confidence = project_axis_onto(
+        [
+            {"start": r["start"], "end": r["end"], "uncertainty": r["confidence"]}
+            for r in presence_rows or ()
+            if isinstance(r.get("confidence"), (int, float))
+        ],
+        spans,
+    )
     weighted_sum = 0.0
     weight_total = 0.0
-    for r in rows:
-        if r.within_pass_uncertainty is None:
-            continue
-        # Default to weight 1.0 when a row pre-dates the intensity_weight
-        # field (older parquets) — avoids retroactively zeroing those.
-        w = 1.0 if r.intensity_weight is None else float(r.intensity_weight)
+    for row, span in zip(rows, spans):
+        # A bucket with no presence measurement is unweighted, not zero-weighted: absent is not
+        # the same as "confidently silent", and treating it as silence would delete the bucket.
+        w = float(confidence.get(span, 1.0))
         if w <= 0:
             continue
-        weighted_sum += w * float(r.within_pass_uncertainty)
+        weighted_sum += w * float(row["uncertainty"])
         weight_total += w
     if weight_total <= 0:
         return None
     return weighted_sum / weight_total
+
+
+def _fold_over_passes(values: Sequence[float | None]) -> float | None:
+    """Combine one per-pass diagnostic into a run-level number under :data:`PASS_FOLD`."""
+    numeric = [float(v) for v in values if isinstance(v, (int, float))]
+    return sum(numeric) / len(numeric) if numeric else None
 
 
 def _detect_hallucinations(
@@ -202,41 +223,57 @@ def _aggregate_quality(pass_summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def compute_pass_global_summary(
+def compute_run_global_summary(
     *,
-    pass_label: str,
-    pass_summary: dict[str, Any],
-    axis_results: dict[tuple[str, Any], AxisResult],
-    asr_resolved: dict[str, Any],
-    pii_report: Any,  # noqa: ANN401 — PiiPassReport, optional
+    fused_axes: Mapping[str, FusedAxis],
+    passes: Mapping[str, dict[str, Any]],
+    asr_resolved_by_pass: Mapping[str, dict[str, Any]],
+    pii_reports: Mapping[str, Any],
     expects_speech: bool = True,
 ) -> dict[str, Any]:
-    """Aggregate one pass's per-bucket axes into the four-claim summary.
+    """Aggregate the fused axes plus the per-pass evidence into one run-level four-claim summary.
+
+    One summary per **run**, not per pass. The axes are already folded across passes — an axis has
+    no pass — so there is nothing per-pass left to summarise about them. The inputs that *are*
+    genuinely per-pass (hallucination scan, squim PESQ/STOI/SI-SDR, PII spans, ``n_speakers``) stay
+    per pass in ``by_pass`` and are folded under :data:`PASS_FOLD`.
 
     Args:
-        pass_label: ``"raw_16k"`` or ``"enhanced_16k"``.
-        pass_summary: The pass's full per-task summary (used for quality + hallu).
-        axis_results: ``{(pass_label, axis) → AxisResult}`` from compute.
-        asr_resolved: ``{asr_model_id → resolved_asr_result}`` for hallucination scan.
-        pii_report: Optional PiiPassReport for this pass; ``None`` to skip.
+        fused_axes: ``{axis → FusedAxis}`` — the L2 answer.
+        passes: ``{pass_label → pass_summary}``, for the per-pass quality and diarization blocks.
+        asr_resolved_by_pass: ``{pass_label → {asr_model_id → resolved}}`` for the hallucination
+            scan.
+        pii_reports: ``{pass_label → PiiPassReport | None}``.
         expects_speech: When ``True`` (default), n_speakers=0 → uncertainty 1.0
             (no-speech recording violates the "single speaker" claim). Set
             ``False`` when the caller wants n=0 to count as compliant.
 
     Returns:
-        Dict with the four sub-uncertainties plus a ``combined`` max() and
-        per-criterion diagnostics.
+        Dict with the four sub-uncertainties plus a ``combined`` max() and per-criterion
+        diagnostics, with the per-pass inputs kept visible under ``by_pass``.
     """
-    duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
+    presence_rows = fused_axes["speech_presence"].rows if "speech_presence" in fused_axes else []
+    utt_mean = _mean_over_speech(fused_axes["asr"].rows if "asr" in fused_axes else [], presence_rows)
+    identity_mean = _mean_over_speech(fused_axes["speaker"].rows if "speaker" in fused_axes else [], presence_rows)
 
-    # ─── transcript_accuracy ───
-    utt = axis_results.get((pass_label, "asr"))
-    speech_presence = axis_results.get((pass_label, "speech_presence"))
-    utt_mean = (
-        _mean_over_voice_buckets(utt.rows, speech_presence.rows if speech_presence else []) if utt is not None else None
-    )
-    hallu = _detect_hallucinations(asr_resolved, duration_s)
-    hallu_rate = hallu.get("pass_hallucination_rate")
+    by_pass: dict[str, dict[str, Any]] = {}
+    for pass_label, pass_summary in sorted(passes.items()):
+        duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
+        hallu = _detect_hallucinations(dict(asr_resolved_by_pass.get(pass_label) or {}), duration_s)
+        diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
+        n_speakers_pass: int | None = None
+        for _m, block in diar_blocks.items():
+            if isinstance(block, dict) and block.get("status") == "ok" and "n_speakers" in block:
+                n_speakers_pass = int(block["n_speakers"])
+                break
+        by_pass[pass_label] = {
+            "hallucination_rate": hallu.get("pass_hallucination_rate"),
+            "hallucination_per_model": hallu.get("per_model_rate"),
+            "n_speakers": n_speakers_pass,
+            "quality": _aggregate_quality(pass_summary),
+        }
+
+    hallu_rate = _fold_over_passes([b["hallucination_rate"] for b in by_pass.values()])
     # Combine: asr time-mean (already in [0,1]) + hallucination rate
     # (also [0,1]). max() is the right combiner — either one indicates a
     # transcript problem.
@@ -248,14 +285,8 @@ def compute_pass_global_summary(
     transcript_uncertainty: float | None = max(transcript_components) if transcript_components else None
 
     # ─── single_speaker ───
-    diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
-    n_speakers: int | None = None
-    for m, block in diar_blocks.items():
-        if not (isinstance(block, dict) and block.get("status") == "ok"):
-            continue
-        if "n_speakers" in block:  # the synthetic embedding-derived diar carries it
-            n_speakers = int(block["n_speakers"])
-            break
+    counts = [b["n_speakers"] for b in by_pass.values() if b["n_speakers"] is not None]
+    n_speakers: int | None = max(counts) if counts else None
     if n_speakers is None:
         single_speaker_uncertainty: float | None = None
     elif n_speakers == 1:
@@ -267,22 +298,27 @@ def compute_pass_global_summary(
         single_speaker_uncertainty = 1.0 if expects_speech else 0.0
     else:
         single_speaker_uncertainty = 1.0
-    speaker = axis_results.get((pass_label, "speaker"))
-    identity_mean = (
-        _mean_over_voice_buckets(speaker.rows, speech_presence.rows if speech_presence else [])
-        if speaker is not None
-        else None
-    )
     if single_speaker_uncertainty is not None and identity_mean is not None:
         # Even when n_speakers == 1, speaker uncertainty over time can flag
-        # within-track inconsistencies. Combine via max so speaker drift on
-        # a "single-speaker" pass still surfaces.
+        # within-track inconsistencies. Combine via max so speaker drift still surfaces.
         single_speaker_uncertainty = max(single_speaker_uncertainty, identity_mean)
 
     # ─── quality ───
-    quality_block = _aggregate_quality(pass_summary)
+    quality_block = {
+        key: _fold_over_passes([b["quality"].get(key) for b in by_pass.values()])
+        for key in (
+            "uncertainty",
+            "pesq_mean",
+            "stoi_mean",
+            "sisdr_mean",
+            "pesq_uncertainty",
+            "stoi_uncertainty",
+            "sisdr_uncertainty",
+        )
+    }
 
     # ─── no_pii ───
+    pii_report = next((pii_reports.get(label) for label in sorted(pii_reports) if pii_reports.get(label)), None)
     # Surface the actual detected PII spans (text + category + detector + ASR
     # source + confidence) so the consumer can audit. The continuous
     # ``detection_confidence`` (per-span score × cross-detector agreement ×
@@ -360,13 +396,13 @@ def compute_pass_global_summary(
     combined = max(components) if components else None
 
     return {
-        "pass_label": pass_label,
         "combined_uncertainty": combined,
+        "pass_fold": PASS_FOLD,
+        "by_pass": by_pass,
         "transcript_accuracy": {
             "uncertainty": transcript_uncertainty,
             "asr_axis_mean": utt_mean,
             "hallucination_rate": hallu_rate,
-            "hallucination_per_model": hallu.get("per_model_rate"),
         },
         "single_speaker": {
             "uncertainty": single_speaker_uncertainty,

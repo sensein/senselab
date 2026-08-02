@@ -8,19 +8,29 @@ import pytest
 
 from senselab.audio.workflows.audio_analysis.layout import evidence_dir, final_dir
 from senselab.audio.workflows.audio_analysis.plot import build_aligned_timeline_plot
-from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
+from senselab.audio.workflows.audio_analysis.types import FusedAxis
 
 
-def _row(start: float, axis: str, u: float) -> UncertaintyRow:
-    return UncertaintyRow(
-        start=start,
-        end=start + 0.5,
-        axis=axis,  # type: ignore[arg-type]
-        within_pass_uncertainty=u,
-        contributing_models=["m"],
-        model_votes={"m": {"speaks": True}},
-        comparison_status="ok",
-    )
+def _row(start: float, axis: str, u: float) -> dict:
+    """One fused-axis row. There is no pass on it — an axis is a fold across passes."""
+    return {
+        "start": start,
+        "end": start + 0.5,
+        "uncertainty": u,
+        "epistemic_uncertainty": u * 0.5,
+        "confidence": 1.0 - u,
+        "variability": 0.0,
+        "triage_score": u,
+        "contributing_signals": ["m"],
+        "contributing_passes": ["raw_16k", "enhanced_16k"],
+        "signal_weights": {"m": 1.0},
+        "weight_basis": {"m": {}},
+        "round": 0,
+    }
+
+
+def _axes(**by_axis: list) -> dict:
+    return {axis: FusedAxis(axis=axis, rows=rows) for axis, rows in by_axis.items()}  # type: ignore[arg-type]
 
 
 def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
@@ -29,19 +39,12 @@ def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
 
     import numpy as np
 
-    axis_results = {}
-    for pass_label in ("raw_16k", "enhanced_16k", "raw_vs_enhanced"):
-        for axis in ("speech_presence", "speaker", "asr"):
-            axis_results[(pass_label, axis)] = AxisResult(
-                pass_label=pass_label,  # type: ignore[arg-type]
-                axis=axis,  # type: ignore[arg-type]
-                rows=[
-                    _row(0.0, axis, 0.2),
-                    _row(0.5, axis, 0.7),
-                    _row(1.0, axis, 0.4),
-                    _row(1.5, axis, 0.9),
-                ],
-            )
+    fused_axes = _axes(
+        **{
+            axis: [_row(0.0, axis, 0.2), _row(0.5, axis, 0.7), _row(1.0, axis, 0.4), _row(1.5, axis, 0.9)]
+            for axis in ("speech_presence", "speaker", "asr")
+        }
+    )
 
     # Per-pass detail bundles drive the 3 detail rows.
     diar_segs = [
@@ -73,7 +76,7 @@ def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
 
     out = build_aligned_timeline_plot(
         run_dir=tmp_path,
-        axis_results=axis_results,
+        fused_axes=fused_axes,
         duration_s=4.0,
         grid_hop=0.5,
         detail_by_pass=detail_by_pass,
@@ -86,14 +89,10 @@ def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
 
 def test_build_aligned_timeline_plot_minimal_no_detail(tmp_path: Path) -> None:
     """When detail_by_pass is None, the plot still renders the 3 uncertainty rows."""
-    axis_results = {
-        ("raw_16k", "speech_presence"): AxisResult(
-            pass_label="raw_16k", axis="speech_presence", rows=[_row(0.0, "speech_presence", 0.5)]
-        ),
-    }
+    fused_axes = _axes(speech_presence=[_row(0.0, "speech_presence", 0.5)])
     out = build_aligned_timeline_plot(
         run_dir=tmp_path,
-        axis_results=axis_results,
+        fused_axes=fused_axes,
         duration_s=2.0,
         grid_hop=0.5,
         detail_by_pass=None,
@@ -106,7 +105,7 @@ def test_build_aligned_timeline_plot_returns_none_for_zero_duration(tmp_path: Pa
     """Zero-duration audio → no plot."""
     out = build_aligned_timeline_plot(
         run_dir=tmp_path,
-        axis_results={},
+        fused_axes={},
         duration_s=0.0,
         grid_hop=0.5,
     )
@@ -120,14 +119,10 @@ def test_build_aligned_timeline_plot_renders_spectrogram_top_row(tmp_path: Path)
     sr = 16000
     t = np.linspace(0, 4.0, sr * 4, endpoint=False)
     wf = (0.3 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
-    axis_results = {
-        ("raw_16k", "speech_presence"): AxisResult(
-            pass_label="raw_16k", axis="speech_presence", rows=[_row(0.0, "speech_presence", 0.5)]
-        ),
-    }
+    fused_axes = _axes(speech_presence=[_row(0.0, "speech_presence", 0.5)])
     out = build_aligned_timeline_plot(
         run_dir=tmp_path,
-        axis_results=axis_results,
+        fused_axes=fused_axes,
         duration_s=4.0,
         grid_hop=0.5,
         audio_waveform=wf,
@@ -146,16 +141,10 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
     sr = 16000
     duration_s = 50.0  # 50s @ default chunk_duration_s=20 → 3 chunks
     wf = (0.2 * np.random.RandomState(0).randn(int(sr * duration_s))).astype(np.float32)
-    axis_results = {
-        ("raw_16k", "speech_presence"): AxisResult(
-            pass_label="raw_16k",
-            axis="speech_presence",
-            rows=[_row(i * 0.5, "speech_presence", 0.5) for i in range(int(duration_s * 2))],
-        ),
-    }
+    fused_axes = _axes(speech_presence=[_row(i * 0.5, "speech_presence", 0.5) for i in range(int(duration_s * 2))])
     first = build_aligned_timeline_plot(
         run_dir=tmp_path,
-        axis_results=axis_results,
+        fused_axes=fused_axes,
         duration_s=duration_s,
         grid_hop=0.5,
         audio_waveform=wf,
@@ -179,27 +168,27 @@ def test_scene_quality_and_source_rows_render(tmp_path: Path) -> None:
     rows = []
     for i in range(8):
         r = _row(i * 0.5, "speech_presence", 0.3)
-        r.quality_snr = 0.2
-        r.quality_clip = 0.05
-        r.quality_reverb = 0.15
-        r.quality_bandwidth = 0.1
-        r.snr_brouhaha_db = 18.0
-        r.src_speech = 0.6
-        r.src_people = 0.15
-        r.src_machine = 0.15
-        r.src_environment = 0.10
-        r.src_dominant = "speech"
+        r.update(
+            {
+                "quality_snr": 0.2,
+                "quality_clip": 0.05,
+                "quality_reverb": 0.15,
+                "quality_bandwidth": 0.1,
+                "snr_brouhaha_db": 18.0,
+                "src_speech": 0.6,
+                "src_people": 0.15,
+                "src_machine": 0.15,
+                "src_environment": 0.10,
+                "src_dominant": "speech",
+            }
+        )
         rows.append(r)
-    axis_results = {
-        ("raw_16k", "speech_presence"): AxisResult(pass_label="raw_16k", axis="speech_presence", rows=rows),  # type: ignore[arg-type]
-        ("raw_16k", "speaker"): AxisResult(
-            pass_label="raw_16k", axis="speaker", rows=[_row(i * 0.5, "speaker", 0.3) for i in range(8)]
-        ),  # type: ignore[arg-type]
-        ("raw_16k", "asr"): AxisResult(
-            pass_label="raw_16k", axis="asr", rows=[_row(i * 0.5, "asr", 0.3) for i in range(8)]
-        ),  # type: ignore[arg-type]
-    }
+    fused_axes = _axes(
+        speech_presence=rows,
+        speaker=[_row(i * 0.5, "speaker", 0.3) for i in range(8)],
+        asr=[_row(i * 0.5, "asr", 0.3) for i in range(8)],
+    )
     out = build_aligned_timeline_plot(
-        run_dir=tmp_path, axis_results=axis_results, duration_s=4.0, grid_hop=0.5, detail_by_pass=None
+        run_dir=tmp_path, fused_axes=fused_axes, duration_s=4.0, grid_hop=0.5, detail_by_pass=None
     )
     assert out is not None and out.exists() and out.stat().st_size > 0

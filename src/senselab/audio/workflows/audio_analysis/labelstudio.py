@@ -1,11 +1,15 @@
 """Label Studio bundle integration for the three uncertainty axes.
 
-Per FR-005 the bundle exposes:
-    - 6 Labels tracks per pass (3 axes × 2 passes), named ``<pass>__uncertainty__<axis>``.
-    - 3 raw_vs_enhanced delta tracks named ``pass_pair__uncertainty__<axis>``.
-    - 3 asr TextArea sibling tracks (one per pass + one for pass_pair), named
-      ``<pass>__uncertainty__asr__text``, carrying the per-bucket transcript
+The bundle exposes:
+    - 3 Labels tracks, named ``uncertainty__<axis>``, from the fused L2 axes. No pass token:
+      an axis is a fold across passes, so there is no per-pass axis to draw.
+    - 1 asr TextArea sibling, ``uncertainty__asr__text``, carrying the per-bucket transcript
       consensus + dissenting model transcripts.
+    - per-pass, per-signal evidence tracks ``<pass>__signal__<signal>`` straight from the L1
+      signal rows. That is where "what did each model say on each pass" is legitimately served —
+      per pass without being an axis.
+    - the scene tracks ``<pass>__presence__{quality,sources}``, which are per-pass
+      *measurements* and stay per-pass.
 """
 
 from __future__ import annotations
@@ -26,7 +30,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
-from senselab.audio.workflows.audio_analysis.types import AxisResult, ComparisonStatus
+from senselab.audio.workflows.audio_analysis.types import ComparisonStatus, FusedAxis, SignalResult
 from senselab.utils.data_structures import safe_model_id
 
 
@@ -75,9 +79,22 @@ LOW_THRESHOLD = 0.33
 HIGH_THRESHOLD = 0.66
 
 
+BIN_POLICY = {
+    "policy": "labelstudio.uncertainty_to_label_bin",
+    "low_threshold": LOW_THRESHOLD,
+    "high_threshold": HIGH_THRESHOLD,
+}
+"""The binning thresholds, named so a rendered label can be traced to the rule that produced it.
+
+Recorded on the bundle (``data.uncertainty_bin_policy``) rather than living only as two module
+constants: a track that says "high" is a thresholded value, and L2's one-line test is that every
+threshold which shaped a value is named in a policy recorded alongside it.
+"""
+
+
 def uncertainty_to_label_bin(value: float | None, status: ComparisonStatus | str) -> str:
-    """Map ``within_pass_uncertainty`` to one of the LS label values per FR-005."""
-    if status in ("incomparable", "unavailable", "one_sided"):
+    """Bin a fused axis value into one of the LS label values."""
+    if status in ("incomparable", "unavailable"):
         return "unavailable" if status == "unavailable" else "incomparable"
     if value is None:
         return "incomparable"
@@ -88,9 +105,14 @@ def uncertainty_to_label_bin(value: float | None, status: ComparisonStatus | str
     return "high"
 
 
-def _track_name(pass_label: str, axis: str) -> str:
-    pass_token = "pass_pair" if pass_label == "raw_vs_enhanced" else pass_label
-    return f"{pass_token}__uncertainty__{axis}"
+def _track_name(axis: str) -> str:
+    """Track carrying one fused axis. No pass token — an axis has no pass."""
+    return f"uncertainty__{axis}"
+
+
+def _signal_track_name(pass_label: str, signal: str) -> str:
+    """Per-pass, per-signal evidence track: ``<pass>__signal__<signal>``."""
+    return f"{pass_label}__signal__{re.sub(r'[^A-Za-z0-9_.-]+', '_', signal)}"
 
 
 SOURCE_LABEL_VALUES = ("speech", "people", "machine", "environment", "unavailable")
@@ -107,17 +129,32 @@ def _build_source_labels_xml(track_name: str) -> str:
 
 
 def _scene_track_name(pass_label: str, kind: str) -> str:
-    """FR-024 scene tracks: ``<pass>__speech_presence__quality`` / ``<pass>__speech_presence__sources``."""
-    pass_token = "pass_pair" if pass_label == "raw_vs_enhanced" else pass_label
-    return f"{pass_token}__speech_presence__{kind}"
+    """Scene tracks: ``<pass>__presence__quality`` / ``<pass>__presence__sources``.
+
+    Per pass because they carry per-pass *measurements*, not an axis fold.
+    """
+    return f"{pass_label}__presence__{kind}"
 
 
-def _quality_degradation(row: Any) -> float | None:  # noqa: ANN401 — UncertaintyRow duck-typed
+QUALITY_DISPLAY_FOLD = {
+    "policy": "labelstudio._quality_degradation",
+    "rule": "max over quality_snr / quality_clip / quality_reverb / quality_bandwidth",
+    "purpose": "display only — one stripe cannot show four differently-anchored scores",
+}
+"""The rendering fold behind the quality track, named because it *is* a reduction.
+
+It is a display choice, not a measurement: four scores anchored against four different references
+collapse to one stripe so a reviewer can see where to look. The four remain separately on the
+fused presence row.
+"""
+
+
+def _quality_degradation(row: Mapping[str, Any]) -> float | None:
     """Overall degradation for the quality track: max over the four quality columns."""
     values = [
-        v
-        for v in (row.quality_snr, row.quality_clip, row.quality_reverb, row.quality_bandwidth)
-        if v is not None and not (isinstance(v, float) and v != v)
+        float(row[k])
+        for k in ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
+        if isinstance(row.get(k), (int, float)) and row[k] == row[k]
     ]
     return max(values) if values else None
 
@@ -129,10 +166,12 @@ def _build_textarea_xml(track_name: str) -> str:
     )
 
 
-def _utterance_text_payload(model_votes: dict[str, dict[str, Any]]) -> str:
+def _utterance_text_payload(model_votes: Mapping[str, Any]) -> str:
     """Build the consensus + dissenting-models string for the asr TextArea."""
     transcripts = [
-        (m, str(v.get("text") or "").strip()) for m, v in model_votes.items() if str(v.get("text") or "").strip()
+        (m, str(v.get("text") or "").strip())
+        for m, v in model_votes.items()
+        if isinstance(v, Mapping) and str(v.get("text") or "").strip()
     ]
     if not transcripts:
         return "(no transcripts on this bucket)"
@@ -151,125 +190,185 @@ def attach_uncertainty_tracks_to_ls(
     *,
     ls_tasks: Any,  # noqa: ANN401 — list[dict] or dict, matches build_labelstudio_task variants
     ls_config: str,
-    axis_results: dict[tuple[Any, Any], AxisResult],
+    fused_axes: Mapping[str, FusedAxis],
+    signal_results_by_pass: Mapping[str, Mapping[str, SignalResult]] | None = None,
 ) -> tuple[Any, str]:
-    """Append uncertainty Labels + TextArea tracks to the LS config and tasks payloads.
+    """Append the fused-axis Labels + TextArea tracks, and the per-pass signal evidence tracks.
 
     Args:
         ls_tasks: Existing LS tasks payload (single dict or list of dicts) — typically
             produced by ``scripts/analyze_audio.py``'s ``build_labelstudio_task``.
         ls_config: Existing LS config XML string.
-        axis_results: ``{(pass_label, axis) → AxisResult}`` from ``compute_uncertainty_axes``.
+        fused_axes: ``{axis → FusedAxis}`` — the L2 answer. One track per axis, attached once.
+        signal_results_by_pass: ``{pass → {signal → SignalResult}}`` — the L1 evidence. One
+            track per ``(pass, signal)``, which is the reviewer's "what did each model say on
+            each pass" question, answered without inventing a per-pass axis.
 
     Returns:
         Updated ``(ls_tasks, ls_config)``.
     """
-    # ── Build the new XML blocks ──
-    blocks: list[str] = []
-    for (pass_label, axis), result in axis_results.items():
-        track = _track_name(str(pass_label), str(axis))
-        blocks.append(_build_labels_xml(track))
-        if axis == "asr":
-            blocks.append(_build_textarea_xml(track))
-        # FR-024 (T040): additive scene tracks on per-pass speech_presence results —
-        # emitted only when the pass actually carries the corresponding columns
-        # (delta rows never do), so legacy bundles are byte-identical.
-        if str(axis) == "speech_presence" and str(pass_label) != "raw_vs_enhanced":
-            if any(_quality_degradation(r) is not None for r in result.rows):
-                blocks.append(_build_labels_xml(_scene_track_name(str(pass_label), "quality")))
-            if any(r.src_dominant is not None for r in result.rows):
-                blocks.append(_build_source_labels_xml(_scene_track_name(str(pass_label), "sources")))
-
-    # Inject before the closing </View> tag.
-    if "</View>" in ls_config:
-        ls_config = ls_config.replace("</View>", "\n".join(blocks) + "\n</View>", 1)
-    else:
-        ls_config = ls_config + "\n" + "\n".join(blocks)
-
-    # ── Build per-row LS regions and attach to the matching task ──
     tasks_list = ls_tasks if isinstance(ls_tasks, list) else [ls_tasks]
     by_pass_task: dict[str, dict[str, Any]] = {}
     for t in tasks_list:
         pass_label = (t.get("data") or {}).get("pass") or "raw_16k"
         by_pass_task[pass_label] = t
+    # An axis belongs to the recording, not to a transform of it, so its regions attach once —
+    # to the as-recorded task.
+    axis_task = by_pass_task.get("raw_16k") or (tasks_list[0] if tasks_list else None)
 
-    # raw_vs_enhanced regions ride on the raw_16k task by convention.
-    fallback_task = by_pass_task.get("raw_16k") or (tasks_list[0] if tasks_list else None)
+    blocks: list[str] = []
+    presence_rows = fused_axes["speech_presence"].rows if "speech_presence" in fused_axes else []
+    for axis in sorted(fused_axes):
+        blocks.append(_build_labels_xml(_track_name(axis)))
+        if axis == "asr":
+            blocks.append(_build_textarea_xml(_track_name(axis)))
+    for pass_label, by_signal in sorted((signal_results_by_pass or {}).items()):
+        for signal in sorted(by_signal):
+            blocks.append(_build_labels_xml(_signal_track_name(pass_label, signal)))
+        if any(_quality_degradation(m) is not None for _s, _e, m in _scene_rows(by_signal, presence_rows)):
+            blocks.append(_build_labels_xml(_scene_track_name(pass_label, "quality")))
+        if "sound_sources" in by_signal:
+            blocks.append(_build_source_labels_xml(_scene_track_name(pass_label, "sources")))
 
-    for (pass_label, axis), result in axis_results.items():
-        pass_label = str(pass_label)
-        axis = str(axis)
-        track = _track_name(pass_label, axis)
-        target_task = by_pass_task.get(pass_label) or fallback_task
-        if target_task is None or not target_task.get("predictions"):
-            continue
-        result_list = target_task["predictions"][0].setdefault("result", [])
-        for row_idx, row in enumerate(result.rows):
-            label_value = uncertainty_to_label_bin(row.within_pass_uncertainty, row.comparison_status)
-            region_id = f"{track}__{row_idx}"
-            result_list.append(
-                {
-                    "id": region_id,
-                    "from_name": track,
-                    "to_name": "audio",
-                    "type": "labels",
-                    "value": {
-                        "start": float(row.start),
-                        "end": float(row.end),
-                        "labels": [label_value],
-                    },
-                }
-            )
-            if axis == "asr":
+    if "</View>" in ls_config:
+        ls_config = ls_config.replace("</View>", "\n".join(blocks) + "\n</View>", 1)
+    else:
+        ls_config = ls_config + "\n" + "\n".join(blocks)
+
+    for t in tasks_list:
+        # The thresholds that turned a number into "high" travel with the bundle, so a label can
+        # be traced to the rule that produced it without reading this module.
+        (t.setdefault("data", {}))["uncertainty_bin_policy"] = dict(BIN_POLICY)
+
+    if axis_task is not None and axis_task.get("predictions"):
+        result_list = axis_task["predictions"][0].setdefault("result", [])
+        for axis in sorted(fused_axes):
+            track = _track_name(axis)
+            for row_idx, row in enumerate(fused_axes[axis].rows):
+                value = row.get("uncertainty")
+                region_id = f"{track}__{row_idx}"
                 result_list.append(
                     {
-                        "id": f"{region_id}__text",
-                        "from_name": f"{track}__text",
+                        "id": region_id,
+                        "from_name": track,
                         "to_name": "audio",
-                        "type": "textarea",
+                        "type": "labels",
                         "value": {
-                            "start": float(row.start),
-                            "end": float(row.end),
-                            "text": [_utterance_text_payload(row.model_votes)],
+                            "start": float(row["start"]),
+                            "end": float(row["end"]),
+                            "labels": [uncertainty_to_label_bin(value, "ok" if value is not None else "incomparable")],
                         },
                     }
                 )
-            # FR-024 (T040): scene tracks ride the same speech_presence rows.
-            if axis == "speech_presence" and pass_label != "raw_vs_enhanced":
-                degradation = _quality_degradation(row)
-                if degradation is not None:
-                    q_track = _scene_track_name(pass_label, "quality")
+                if axis == "asr":
                     result_list.append(
                         {
-                            "id": f"{q_track}__{row_idx}",
-                            "from_name": q_track,
+                            "id": f"{region_id}__text",
+                            "from_name": f"{track}__text",
                             "to_name": "audio",
-                            "type": "labels",
+                            "type": "textarea",
                             "value": {
-                                "start": float(row.start),
-                                "end": float(row.end),
-                                "labels": [uncertainty_to_label_bin(degradation, "ok")],
-                            },
-                        }
-                    )
-                if row.src_dominant is not None:
-                    s_track = _scene_track_name(pass_label, "sources")
-                    label = str(row.src_dominant)
-                    result_list.append(
-                        {
-                            "id": f"{s_track}__{row_idx}",
-                            "from_name": s_track,
-                            "to_name": "audio",
-                            "type": "labels",
-                            "value": {
-                                "start": float(row.start),
-                                "end": float(row.end),
-                                "labels": [label if label in SOURCE_LABEL_VALUES else "unavailable"],
+                                "start": float(row["start"]),
+                                "end": float(row["end"]),
+                                "text": [_utterance_text_payload(row.get("consensus_votes") or {})],
                             },
                         }
                     )
 
+    for pass_label, by_signal in sorted((signal_results_by_pass or {}).items()):
+        target_task = by_pass_task.get(pass_label)
+        if target_task is None or not target_task.get("predictions"):
+            continue
+        result_list = target_task["predictions"][0].setdefault("result", [])
+        for signal in sorted(by_signal):
+            track = _signal_track_name(pass_label, signal)
+            for row_idx, signal_row in enumerate(by_signal[signal].rows):
+                result_list.append(
+                    {
+                        "id": f"{track}__{row_idx}",
+                        "from_name": track,
+                        "to_name": "audio",
+                        "type": "labels",
+                        "value": {
+                            "start": float(signal_row.start),
+                            "end": float(signal_row.end),
+                            "labels": [signal_row.status if signal_row.status != "ok" else "low"],
+                        },
+                    }
+                )
+        _attach_scene_rows(result_list, pass_label, by_signal, presence_rows)
+
     return ls_tasks, ls_config
+
+
+def _scene_rows(
+    by_signal: Mapping[str, SignalResult], presence_rows: Sequence[Mapping[str, Any]]
+) -> list[tuple[float, float, dict[str, Any]]]:
+    """``(start, end, measurement+scores)`` per bucket: L1 scene measurements, L2 scores joined on.
+
+    The join is what keeps the two apart on disk. The dB readings come from
+    ``L1/<pass>/signals/scene_quality.parquet``; the anchored ``quality_*`` scores come from the
+    fused presence rows, where the calibration profile that produced them is recorded.
+    """
+    result = by_signal.get("scene_quality")
+    if result is None:
+        return []
+    scores = {(round(float(r["start"]), 6), round(float(r["end"]), 6)): dict(r) for r in presence_rows}
+    joined: list[tuple[float, float, dict[str, Any]]] = []
+    for signal_row in result.rows:
+        merged = dict(signal_row.measurement)
+        merged.update(scores.get((round(signal_row.start, 6), round(signal_row.end, 6))) or {})
+        joined.append((signal_row.start, signal_row.end, merged))
+    return joined
+
+
+def _attach_scene_rows(
+    result_list: list[dict[str, Any]],
+    pass_label: str,
+    by_signal: Mapping[str, SignalResult],
+    presence_rows: Sequence[Mapping[str, Any]],
+) -> None:
+    """Attach the per-pass quality + source stripes from L1 scene rows."""
+    q_track = _scene_track_name(pass_label, "quality")
+    for row_idx, (start, end, merged) in enumerate(_scene_rows(by_signal, presence_rows)):
+        degradation = _quality_degradation(merged)
+        if degradation is None:
+            continue
+        result_list.append(
+            {
+                "id": f"{q_track}__{row_idx}",
+                "from_name": q_track,
+                "to_name": "audio",
+                "type": "labels",
+                "value": {
+                    "start": float(start),
+                    "end": float(end),
+                    "labels": [uncertainty_to_label_bin(degradation, "ok")],
+                    "fold": dict(QUALITY_DISPLAY_FOLD),
+                },
+            }
+        )
+    sources = by_signal.get("sound_sources")
+    if sources is None:
+        return
+    s_track = _scene_track_name(pass_label, "sources")
+    for row_idx, source_row in enumerate(sources.rows):
+        label = source_row.measurement.get("src_dominant") or source_row.measurement.get("dominant")
+        if not isinstance(label, str):
+            continue
+        result_list.append(
+            {
+                "id": f"{s_track}__{row_idx}",
+                "from_name": s_track,
+                "to_name": "audio",
+                "type": "labels",
+                "value": {
+                    "start": float(source_row.start),
+                    "end": float(source_row.end),
+                    "labels": [label if label in SOURCE_LABEL_VALUES else "unavailable"],
+                },
+            }
+        )
 
 
 # ── Per-task export builders (moved from scripts/analyze_audio.py, T051b) ──

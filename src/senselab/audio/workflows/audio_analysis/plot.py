@@ -27,17 +27,19 @@ Rows top-to-bottom:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
 from senselab.audio.workflows.audio_analysis.layout import evidence_dir, final_dir
-from senselab.audio.workflows.audio_analysis.types import AxisResult
+from senselab.audio.workflows.audio_analysis.types import FusedAxis
 from senselab.utils.data_structures.logging import logger
 
 
-def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(centers, values)`` for plotting one (pass, axis) line in [0, 1].
+def _series_for(
+    rows: Sequence[Mapping[str, Any]], duration_s: float, hop_s: float, key: str = "uncertainty"
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(centers, values)`` for plotting one fused axis line in [0, 1].
 
     Plots one point per row at the row's own midpoint — this matches whatever
     bucket grid ``BucketGrid.iter_buckets`` actually produced (handling
@@ -47,9 +49,9 @@ def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray
     """
     if duration_s <= 0 or not rows:
         return np.array([]), np.array([])
-    centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
+    centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
     values = np.array(
-        [float(r.within_pass_uncertainty) if r.within_pass_uncertainty is not None else np.nan for r in rows],
+        [float(r[key]) if isinstance(r.get(key), (int, float)) else np.nan for r in rows],
         dtype=np.float64,
     )
     # Sort by center so plotting doesn't draw a zigzag if rows arrive out of order.
@@ -57,33 +59,29 @@ def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray
     return centers[order], values[order]
 
 
-def _attr_series(rows: list, attr: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return sorted ``(centers, values)`` for an arbitrary numeric row attribute.
+def _attr_series(rows: Sequence[Mapping[str, Any]], attr: str) -> tuple[np.ndarray, np.ndarray]:
+    """Return sorted ``(centers, values)`` for an arbitrary numeric row field.
 
-    Used for the scene-quality / sound-source rows, whose values live on the
-    speech_presence rows' additive columns (``quality_*`` / ``src_*``). ``None`` values
-    become ``nan`` so gaps don't draw as zeros.
+    Used for the scene-quality / sound-source rows, whose measurements ride the fused presence
+    rows (``quality_*`` / ``src_*``). Missing values become ``nan`` so gaps don't draw as zeros.
     """
     if not rows:
         return np.array([]), np.array([])
-    centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
+    centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
     values = np.array(
-        [float(v) if (v := getattr(r, attr, None)) is not None else np.nan for r in rows],
+        [float(r[attr]) if isinstance(r.get(attr), (int, float)) else np.nan for r in rows],
         dtype=np.float64,
     )
     order = np.argsort(centers)
     return centers[order], values[order]
 
 
-def _speech_presence_has_attr(axis_results: dict, attrs: tuple[str, ...]) -> bool:
-    """True if any speech_presence row across passes carries a non-null value for any of ``attrs``."""
-    for (_pl, axis), result in axis_results.items():
-        if axis != "speech_presence":
-            continue
-        for r in result.rows:
-            if any(getattr(r, a, None) is not None for a in attrs):
-                return True
-    return False
+def _speech_presence_has_attr(fused_axes: Mapping[str, FusedAxis], attrs: tuple[str, ...]) -> bool:
+    """True if any fused speech_presence row carries a value for any of ``attrs``."""
+    presence = fused_axes.get("speech_presence")
+    if presence is None:
+        return False
+    return any(isinstance(r.get(a), (int, float)) for r in presence.rows for a in attrs)
 
 
 def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
@@ -315,10 +313,11 @@ def _draw_background_mask_row(ax: Any, rows: list[dict[str, Any]], duration_s: f
 def build_aligned_timeline_plot(
     *,
     run_dir: Path,
-    axis_results: dict[tuple[Any, Any], AxisResult],
+    fused_axes: Mapping[str, FusedAxis],
     duration_s: float,
     grid_hop: float,
     asr_grid_hop: float | None = None,
+    stability_by_signal: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     detail_by_pass: dict[str, dict[str, Any]] | None = None,
     save_path: Path | None = None,
     title: str | None = None,
@@ -344,12 +343,17 @@ def build_aligned_timeline_plot(
 
     Args:
         run_dir: Run directory; the figure lands in ``final/`` with the other deliverables.
-        axis_results: ``{(pass_label, axis) → AxisResult}`` from ``compute_uncertainty_axes``.
+        fused_axes: ``{axis → FusedAxis}`` — one line per axis, fused across passes. There is
+            no raw/enhanced overlay any more: the two passes are a perturbation sample, and what
+            they bought is drawn as the stability strip instead.
         duration_s: Audio duration in seconds — drives the x-axis extent.
         grid_hop: Bucket hop length (seconds) — matches the comparator grid.
         asr_grid_hop: Hop length for the asr grid (typically wider than
             ``grid_hop``, e.g. 0.5 s with a 1.0 s window). When ``None``, falls back
             to ``grid_hop`` for the asr row.
+        stability_by_signal: ``{signal → per-bucket stability rows}`` from
+            ``L1/stability/<signal>.parquet``. Drawn as its own strip — that is what the two
+            passes actually bought, in the form the weights actually use it.
         detail_by_pass: ``{pass_label → {"diar_by_model": {..}, "asr_by_model": {..},
             "per_window_embeddings": {emb_model → [WindowEmbedding, ...]},
             "ppg": {"per_frame_phonemes": [..], "frame_hop": float}}}``.
@@ -401,11 +405,9 @@ def build_aligned_timeline_plot(
     # Optional scene rows (feature 20260722-175022) — only when the speech_presence
     # axis actually carries the additive columns.
     has_quality = _speech_presence_has_attr(
-        axis_results, ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
+        fused_axes, ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
     )
-    has_sources = _speech_presence_has_attr(
-        axis_results, ("src_speech", "src_people", "src_machine", "src_environment")
-    )
+    has_sources = _speech_presence_has_attr(fused_axes, ("src_speech", "src_people", "src_machine", "src_environment"))
 
     # Build the row-index map with a running counter so inserting rows never
     # requires re-deriving fragile offsets.
@@ -428,6 +430,8 @@ def build_aligned_timeline_plot(
     _add_row("speech_presence", 1.4)
     _add_row("speaker", 1.4)
     _add_row("asr", 1.4)
+    if stability_by_signal:
+        _add_row("stability", 1.2)
     if has_quality:
         _add_row("quality", 1.2)
     if has_sources:
@@ -448,6 +452,7 @@ def build_aligned_timeline_plot(
     speech_presence_row = row_idx["speech_presence"]
     speaker_row = row_idx["speaker"]
     asr_row = row_idx["asr"]
+    stability_row = row_idx.get("stability")
     quality_row = row_idx.get("quality")
     sources_row = row_idx.get("sources")
     diar_row = row_idx.get("diar")
@@ -516,26 +521,54 @@ def build_aligned_timeline_plot(
         ax_spec.set_ylabel("freq (Hz)\nbroadband", fontsize=8)
         ax_spec.set_xlim(0, duration_s)
 
-    # Rows 1–3: per-axis raw + enhanced overlay.
+    # Rows 1–3: one line per axis, from the single fused fold, with its reducible part shaded
+    # beneath. The old raw/enhanced overlay drew the category error — two per-pass axis lines
+    # competing — on the artifact a human actually looks at.
     for axis, row_i in (("speech_presence", speech_presence_row), ("speaker", speaker_row), ("asr", asr_row)):
         ax = axes[row_i]
         # Utterance has its own (possibly wider+overlapping) grid.
         axis_hop = utt_hop if axis == "asr" else grid_hop
-        for pass_label in pass_order:
-            result = axis_results.get((pass_label, axis))
-            if result is None:
-                continue
+        result = fused_axes.get(axis)
+        if result is not None:
             centers, values = _series_for(result.rows, duration_s, axis_hop)
-            if centers.size == 0:
-                continue
-            alpha, style = _pass_color_alpha(pass_label)
-            label = f"{'raw' if pass_label == 'raw_16k' else 'enhanced'} {axis}"
-            ax.plot(centers, values, linestyle=style, color=axis_color[axis], linewidth=1.0, alpha=alpha, label=label)
+            if centers.size:
+                ax.plot(
+                    centers, values, linestyle="-", color=axis_color[axis], linewidth=1.2, label=f"{axis} uncertainty"
+                )
+                _, epistemic = _series_for(result.rows, duration_s, axis_hop, key="epistemic_uncertainty")
+                if epistemic.size == centers.size and not np.all(np.isnan(epistemic)):
+                    ax.fill_between(
+                        centers,
+                        0.0,
+                        np.nan_to_num(epistemic, nan=0.0),
+                        color=axis_color[axis],
+                        alpha=0.22,
+                        linewidth=0,
+                        label="epistemic (reducible)",
+                    )
         ax.set_ylim(0, 1)
         ax.set_ylabel(f"{axis}\nuncertainty", fontsize=8)
         ax.grid(axis="x", alpha=0.2)
         if any(line.get_label() and not line.get_label().startswith("_") for line in ax.lines):
             ax.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
+
+    # Perturbation stability: what running the second pass actually bought, per signal, in the
+    # form the fusion weights consume it. Replaces the raw-vs-enhanced delta strip, which was the
+    # same idea computed by subtracting two per-pass axes.
+    if stability_row is not None and stability_by_signal:
+        ax = axes[stability_row]
+        for i, signal in enumerate(sorted(stability_by_signal)):
+            rows = sorted(stability_by_signal[signal], key=lambda r: float(r["start"]))
+            if not rows:
+                continue
+            centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
+            values = np.array([float(r["abs_delta"]) for r in rows], dtype=np.float64)
+            ax.plot(centers, values, linewidth=0.9, alpha=0.85, label=signal, color=f"C{i % 10}")
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("signal\ninstability", fontsize=8)
+        ax.grid(axis="x", alpha=0.2)
+        if any(line.get_label() and not line.get_label().startswith("_") for line in ax.lines):
+            ax.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.85)
 
     # Scene quality: the four [0,1] degradation scores over time (0 = clean).
     if quality_row is not None:
@@ -546,18 +579,20 @@ def build_aligned_timeline_plot(
             "quality_reverb": "#8c564b",
             "quality_bandwidth": "#e377c2",
         }
-        for pass_label in pass_order:
-            result = axis_results.get((pass_label, "speech_presence"))
-            if result is None:
-                continue
-            alpha, style = _pass_color_alpha(pass_label)
+        presence = fused_axes.get("speech_presence")
+        if presence is not None:
             for attr, color in q_colors.items():
-                centers, values = _attr_series(result.rows, attr)
+                centers, values = _attr_series(presence.rows, attr)
                 if centers.size == 0 or np.all(np.isnan(values)):
                     continue
-                suffix = "" if pass_label == "raw_16k" else " (enh)"
-                label = attr.removeprefix("quality_") + suffix
-                ax.plot(centers, values, linestyle=style, color=color, linewidth=1.0, alpha=alpha, label=label)
+                ax.plot(
+                    centers,
+                    values,
+                    linestyle="-",
+                    color=color,
+                    linewidth=1.0,
+                    label=attr.removeprefix("quality_"),
+                )
         ax.set_ylim(0, 1)
         ax.set_ylabel("scene quality\n(0=clean)", fontsize=8)
         ax.grid(axis="x", alpha=0.2)
@@ -574,21 +609,15 @@ def build_aligned_timeline_plot(
             "src_machine": "#7f7f7f",
             "src_environment": "#bcbd22",
         }
-        # Prefer the raw pass; fall back to the first speech_presence pass available.
-        result = axis_results.get(("raw_16k", "speech_presence"))
-        if result is None:
-            for pass_label in pass_order:
-                if (pass_label, "speech_presence") in axis_results:
-                    result = axis_results[(pass_label, "speech_presence")]
-                    break
+        result = fused_axes.get("speech_presence")
         if result is not None:
             rows = sorted(
-                (r for r in result.rows if getattr(r, "src_speech", None) is not None),
-                key=lambda r: r.start,
+                (r for r in result.rows if isinstance(r.get("src_speech"), (int, float))),
+                key=lambda r: float(r["start"]),
             )
             if rows:
-                centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
-                stacks = [np.array([float(getattr(r, c) or 0.0) for r in rows], dtype=np.float64) for c in src_cats]
+                centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
+                stacks = [np.array([float(r.get(c) or 0.0) for r in rows], dtype=np.float64) for c in src_cats]
                 ax.stackplot(
                     centers,
                     *stacks,
