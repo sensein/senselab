@@ -812,3 +812,93 @@ measurement. `unsupported` would name the observation; `hallucination` names a c
 passes. Either that quantity should not exist, or L2 should expose a per-pass view alongside the
 fused one. That choice decides whether unifying the two L2s is mechanical or a redesign, and it
 should be settled before any of items 25–27 is attempted.
+
+---
+
+## The sequence, written out
+
+What should happen, in order, with the invariant that makes each step checkable. Written because
+every defect found in this work was a step reading from the wrong place, and none of them failed
+loudly.
+
+### L1 — measure
+
+**In:** audio, once per *pass*. A pass is the same recording under a transform — `raw_16k` as
+recorded, `enhanced_16k` after speech enhancement. Both see identical content, so disagreement
+between them is attributable to the transform. That is what makes them a perturbation sample rather
+than two recordings.
+
+**Do:** run each signal. Report what the tool produced, in the tool's units, at the tool's
+resolution. A signal may report its own uncertainty — that is the signal's final measurement.
+
+**Out:** `L1/<pass>/signals/<signal>.parquet`, each value carrying units, model and revision,
+window and hop, and any reduction the tool itself performed.
+
+**Must not:** threshold, rescale to `[0,1]` against an anchor, reduce across a dimension the tool
+reported separately, select among estimators, invert, resample off native resolution — or emit an
+**axis**. An axis is a fold across signals, and a fold is an answer.
+
+*Checkable:* nothing under `L1/` is named for an axis. If it is, L2 has leaked downward.
+
+### L2 — fuse and iterate
+
+One belief state, per `(axis, bucket, source, pass, scope)`. This is the belief store's proper
+place: it is L2's state, not a subsystem's private copy.
+
+**Round 0 — in:** L1 measurements only.
+
+1. **Link** measurements to beliefs under a *named policy* (`SpeechPresencePolicy` and siblings).
+   Every threshold lives here, is recorded in the row's provenance, and can be changed without
+   re-running a model. This is the only place a threshold belongs.
+2. **Weight** each signal by what was *measured* about it — perturbation stability across passes,
+   physical support. Never by an assigned constant: a factor never measured must not act as a
+   discount.
+3. **Fuse** per-axis, keeping the four quantities distinct — `uncertainty` (normalised entropy),
+   `epistemic_uncertainty` (its reducible part), `confidence` (a probability), `variability` (a
+   dispersion in native units) — plus `triage_score`, the policy fold for ranking where to spend
+   budget.
+4. **Derive** the derivatives: mask, speaker allocation, ASR consensus, scene components. These are
+   round *outputs*, not fixed inputs.
+
+**Round N — in:** L1 measurements (unchanged), round N−1 axes, round N−1 derivatives.
+
+1. **Re-derive** the derivatives from the previous round's axes. Frozen derivatives make every later
+   round withdraw trust on a judgement the loop already improved on.
+2. **Re-estimate** each axis from its own signals, conditioned on the current derivatives and
+   informed by the other axes projected onto *its* lattice. Coupling informs a grid; it never
+   extends one. Exact-key matching is not projection — on real audio the axes share no keys.
+3. **Optionally re-measure** (D-10). This is the *only* arrow back to L1, and it must be explicit:
+   the round asks for a finer window or hop over a flagged region and receives new L1 measurements.
+   Re-measurement replaces a value, so the round records `overwrote_values` and C1 declines to
+   credit the resulting fall.
+
+**Stop when:** no axis changes, or the loop enters a periodic one. Judged on all four criteria —
+epistemic uncertainty stopped falling, the speaker↔channel assignment is stable, no bucket went
+unmeasured→measured, no region has an untried action — with unmeasured criteria *blocking* rather
+than passing.
+
+**Out:** `L2/round<N>/` — axes, derivatives, and the decision log naming which criteria blocked and
+why the loop stopped.
+
+*Checkable:* round N reads only round N−1 and L1. Two rounds that differ produce two directories.
+
+### final — the converged answer
+
+**In:** round N outputs, and L1 measurements where a deliverable needs raw evidence.
+
+**Out:** transcript, diarization, `speakers.json`, timeline, summary — the converged state, and the
+trajectory summarised in `decisions.json`.
+
+**Must not:** be read by any stage. A deliverable that something reads is an intermediate wearing
+the wrong name, and `final/summary.json` carrying 4.8 MB of L1 evidence that the pipeline reads back
+is the case in hand.
+
+*Checkable:* nothing in the pipeline opens a path under `final/`.
+
+### The invariant behind all three
+
+**Each layer reads only the layer below it, plus its own previous round.** No layer stores another
+layer's data. Where that was violated, nothing broke — two copies of the same bytes are
+indistinguishable to a reader, a glob that matches nothing looks like a stage that produced nothing,
+and coupling that matches zero keys looks like coupling that had nothing to say. Every one of those
+was found by looking at a real run, and none by a test.
