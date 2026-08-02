@@ -191,11 +191,15 @@ src/senselab/video/tasks/pose_estimation/models/
 tutorials/audio/tutorial_audio_files/
 tutorials/video/tutorial_images/
 tutorials/video/visualize/
-artifacts/stitch_validation/
 
 # Run outputs. Content-addressable inputs are reproducible from the cache; the runs
 # themselves are not source, and 142 MB of them were tracked while the default output
 # directory was not — one convention, and it is "not in git".
-artifacts/e2e_runs/
-artifacts/analyze_audio/
-artifacts/verify_clip/
+
+# Nothing in artifacts/ is source. Every file under it is a regenerable output — run
+# directories, the content-addressable cache, calibration profiles and probe results, all
+# reproducible from the scripts that write them. Four per-directory rules used to sit here and
+# each new output directory arrived untracked-by-accident or committed-by-accident depending on
+# which was added first; 142 MB of run output was tracked while the default output directory was
+# not. One rule, so the question never comes up again.
+artifacts/
