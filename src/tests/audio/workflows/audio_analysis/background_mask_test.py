@@ -324,7 +324,7 @@ def test_absent_target_label_is_low_score_evidence_not_missing_evidence() -> Non
     # Realistic top-k: the classifier reports several labels, so the smallest is a
     # genuinely informative bound on the absent target.
     summary = _yamnet(
-        [{"start": 0.0, "end": 4.0, "labels": ["Silence", "Inside, small room", "Hum"], "scores": [0.95, 0.04, 0.01]}]
+        [{"start": 0.0, "end": 4.0, "label_scores": [{"Silence": 0.95}, {"Inside, small room": 0.04}, {"Hum": 0.01}]}]
     )
     rows = target_confidence_by_bucket(summary, [(0.0, 0.5), (0.5, 1.0)], ["breath"])
     assert all(r["uncertainty"] < 1.0 for r in rows), "absence must not read as unexamined"
@@ -335,7 +335,7 @@ def test_present_target_label_drives_confidence_up() -> None:
     """A detected breath is target activity, evidenced by the label not by voice activity."""
     from senselab.audio.workflows.audio_analysis.background_mask import target_confidence_by_bucket
 
-    summary = _yamnet([{"start": 0.0, "end": 1.0, "labels": ["Breathing"], "scores": [0.88]}])
+    summary = _yamnet([{"start": 0.0, "end": 1.0, "label_scores": [{"Breathing": 0.88}]}])
     rows = target_confidence_by_bucket(summary, [(0.0, 0.5)], ["breath"])
     assert rows[0]["target_confidence"] == pytest.approx(0.88)
 
@@ -355,8 +355,8 @@ def test_breath_task_masks_the_quiet_stretch() -> None:
 
     summary = _yamnet(
         [
-            {"start": 0.0, "end": 2.0, "labels": ["Breathing"], "scores": [0.85]},
-            {"start": 2.0, "end": 20.0, "labels": ["Silence", "Inside, small room"], "scores": [0.95, 0.02]},
+            {"start": 0.0, "end": 2.0, "label_scores": [{"Breathing": 0.85}]},
+            {"start": 2.0, "end": 20.0, "label_scores": [{"Silence": 0.95}, {"Inside, small room": 0.02}]},
         ]
     )
     buckets = [(i * 0.5, (i + 1) * 0.5) for i in range(40)]
@@ -377,7 +377,7 @@ def test_uninformative_absent_label_bound_yields_cannot_tell() -> None:
     """
     from senselab.audio.workflows.audio_analysis.background_mask import target_confidence_by_bucket
 
-    summary = _yamnet([{"start": 0.0, "end": 4.0, "labels": ["Silence"], "scores": [0.95]}])
+    summary = _yamnet([{"start": 0.0, "end": 4.0, "label_scores": [{"Silence": 0.95}]}])
     rows = target_confidence_by_bucket(summary, [(0.0, 0.5)], ["breath"], active_threshold=0.6)
     assert rows[0]["uncertainty"] == pytest.approx(1.0)
     assert build_mask(rows, "breath", profile=PROFILE).regions[0].state == "indeterminate"

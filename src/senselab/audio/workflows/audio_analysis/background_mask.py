@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.audio_analysis.statistics import variability
 
 MaskState = Literal["target_free", "target_active", "nontarget_active", "indeterminate"]
@@ -513,9 +514,10 @@ def _label_score_by_bucket(
                 continue
             if not _overlaps(float(win.get("start", 0.0)), float(win.get("end", 0.0)), b_start, b_end):
                 continue
-            scores = [float(x) for x in (win.get("scores") or [])]
+            pairs = label_scores(win)
+            scores = [next(iter(d.values())) for d in pairs]
             hit = next(
-                (float(sc) for lb, sc in zip(win.get("labels") or [], scores) if str(lb) in wanted),
+                (float(sc) for d in pairs for lb, sc in d.items() if str(lb) in wanted),
                 None,
             )
             # A target label absent from a top-k window is bounded above by the smallest

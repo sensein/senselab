@@ -26,6 +26,8 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
+from senselab.audio.tasks.classification.label_scores import label_scores
+
 __all__ = [
     "classify_signal",
     "SIGNAL_GROUPS",
@@ -147,8 +149,9 @@ def scene_composition(
         cols = np.where((times + hop_s > w_start) & (times < w_end))[0]
         if cols.size == 0:
             continue
-        labels = window.get("labels")
-        scores = window.get("scores")
+        pairs = label_scores(window)
+        labels = [next(iter(d)) for d in pairs] or None
+        scores = [next(iter(d.values())) for d in pairs] or None
         if not isinstance(labels, Sequence) or not isinstance(scores, Sequence):
             continue
         for label, score in zip(labels, scores):

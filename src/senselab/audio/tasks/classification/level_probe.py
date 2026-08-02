@@ -39,6 +39,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping, Sequence
 
+from senselab.audio.tasks.classification.label_scores import label_scores
+
 __all__ = [
     "GAIN_RANGE_MIN_DB",
     "AmplitudeInvarianceVerdict",
@@ -75,7 +77,7 @@ def top_k_labels(window: Any, k: int) -> tuple[str, ...]:  # noqa: ANN401 — se
     """
     if not isinstance(window, dict):
         return ()
-    labels = window.get("labels") or []
+    labels = [next(iter(d)) for d in label_scores(window)]
     return tuple(str(label) for label in labels[:k])
 
 
@@ -83,8 +85,9 @@ def _scores_by_label(window: Any) -> dict[str, float]:  # noqa: ANN401
     """Map label → score for one window, tolerating malformed input."""
     if not isinstance(window, dict):
         return {}
-    labels = window.get("labels") or []
-    scores = window.get("scores") or []
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
     return {str(label): float(score) for label, score in zip(labels, scores)}
 
 

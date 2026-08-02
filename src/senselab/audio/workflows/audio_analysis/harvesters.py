@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Any
 
+from senselab.audio.tasks.classification.label_scores import label_scores
+
 if TYPE_CHECKING:
     import numpy as np
 
@@ -543,8 +545,9 @@ def classification_window_top1(window: Any) -> tuple[str | None, float | None, f
     """
     if not isinstance(window, dict):
         return None, None, None
-    labels = window.get("labels") or []
-    scores = window.get("scores") or []
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
     if not labels or not scores:
         return None, None, None
     label = str(labels[0])
