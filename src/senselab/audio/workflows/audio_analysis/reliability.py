@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
 __all__ = [
     "signal_names",
     "measured_weights",
@@ -33,8 +35,10 @@ __all__ = [
     "signal_stability",
 ]
 
-MIN_RELIABILITY = 0.05
-"""Floor on a signal's weight, so a maximally-unstable signal is attenuated, not silenced."""
+MIN_RELIABILITY = MIN_EVIDENCE_WEIGHT
+"""Floor on a signal's weight, so a maximally-unstable signal is attenuated, not silenced. The
+number and its derivation live in
+:data:`~senselab.audio.workflows.audio_analysis.floors.MIN_EVIDENCE_WEIGHT`."""
 
 _AXIS_SIGNALS: dict[str, tuple[str, str]] = {
     # (PassHarvest field, key holding the per-signal mapping). The speech-presence axis stores L1

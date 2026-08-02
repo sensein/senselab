@@ -22,8 +22,9 @@ The atom of evidence. One model's statement about one bucket on one axis.
 | `round` | int | Round that produced the vote |
 | `payload` | struct | Axis-specific: presence `{speaks, native_confidence, weight, coarse, hallucinated}`; identity `{cluster_id, cosine_to_prev, ...}`; utterance `{text, phoneme_sequence, avg_logprob, alignment_ctc_score}` — same shapes the aggregators consume today |
 | `shadowed_by` | str? | Vote id of the shadowing region-scope vote; shadowed votes are kept, not aggregated (D5) |
-| `status` | str | `active` \| `shadowed` \| `purged_hallucination` |
-| `provenance` | struct | cache_key, crop bounds (if region scope), intervention id, timestamp |
+| `status` | str | `active` \| `shadowed` — nothing else. No rule removes a vote from aggregation |
+| `evidence_weight` | f64 (0,1] | Floored product of every measured corroboration factor; `1.0` = *nothing measured*, never "measured as fully corroborated" |
+| `provenance` | struct | cache_key, crop bounds (if region scope), intervention id, timestamp, `evidence_weight_factors: [{reason, round, corroboration, corroboration_pooling, evidence_sources, measured_on, weight_map, floor, factor, evidence_weight_after}]` (appended, never overwritten — two rules may each have something to say about one vote) |
 
 Persisted: `rounds/<k>/belief/votes_<axis>.parquet` (append-only across rounds; each round file holds
 that round's new/updated rows).

@@ -3,8 +3,11 @@
 Implements the VoteStore / BeliefRow semantics of
 ``specs/20260723-225523-dynamic-uncertainty-workflow/contracts/belief-store.md``:
 
-- one *vote* per (axis, bucket, source, stream, scope) with status
-  ``active | shadowed | purged_hallucination``;
+- one *vote* per (axis, bucket, source, stream, scope) with status ``active | shadowed``;
+- a vote is never removed from aggregation; what a rule may withdraw is *weight*
+  (:meth:`VoteStore.attenuate_source_in_bucket`), floored so the claim stays visible and unable
+  to win. Statistical aggregation has no notion of exclusion — only of weight — and a status is
+  read as a filter, which is how "attenuate" turns back into "delete" one reader later;
 - region-scoped votes shadow file-scoped votes of the same (source, stream);
 - aggregation is a pure function of the active votes, delegated to the
   existing per-axis aggregators (``aggregate.py``) — the harvest/aggregate
@@ -22,7 +25,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import (
@@ -31,10 +34,30 @@ from senselab.audio.workflows.audio_analysis.aggregate import (
     aggregate_speech_presence,
     speech_presence_p_voice,
 )
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 from senselab.audio.workflows.audio_analysis.layout import pass_dir
+from senselab.audio.workflows.audio_analysis.support import (
+    CORROBORATION_POOLING,
+    EVIDENCE_WEIGHT_MAP,
+    evidence_weight_from_corroboration,
+)
 
 AXES: tuple[AxisName, ...] = ("speech_presence", "speaker", "asr")
 """The three uncertainty axes, typed so callers keep the narrowed literal."""
+
+ATTENUATED_AXES: tuple[str, ...] = ("speech_presence", "asr")
+"""Axes an uncorroborated speech claim may be attenuated on.
+
+The speaker axis is absent deliberately: evidence that no one spoke here is silent about *which*
+speaker it was, and carrying the discount across would be an unmeasured leap.
+"""
+
+UNCORROBORATED_SPEECH_CLAIM = "uncorroborated_speech_claim"
+"""Reason recorded when a speech claim is attenuated for want of independent corroboration.
+
+Names what was observed. "Hallucination" would name a cause no measurement in this chain can
+reach — a quiet, distant or overlapped speaker produces the identical signature.
+"""
 
 _META_COLUMNS = (
     "speech_presence_confidence",
@@ -78,8 +101,18 @@ class Vote:
     scope: str  # "file" | "region:<id>"
     round: int
     payload: dict[str, Any]
-    status: str = "active"  # active | shadowed | purged_hallucination
+    status: str = "active"  # active | shadowed
     shadowed_by: str | None = None
+    evidence_weight: float = 1.0
+    """How far this vote's assertion is carried by evidence measured about it.
+
+    ``1.0`` means *nothing was measured*, not "measured as fully corroborated" — a factor never
+    gathered must not act as a discount. The factors that produced any other value are listed
+    individually in ``provenance["evidence_weight_factors"]``; this field is their floored product.
+    Separate from ``payload["weight"]``, which is what the link layer concluded about the voter's
+    coarseness: multiplying them together in one field would make neither recoverable from the
+    round parquet.
+    """
     provenance: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -101,6 +134,7 @@ class Vote:
             "round": self.round,
             "status": self.status,
             "shadowed_by": self.shadowed_by,
+            "evidence_weight": self.evidence_weight,
             "payload": json.dumps(self.payload, default=str),
             "provenance": json.dumps(self.provenance, default=str),
         }
@@ -242,20 +276,94 @@ class VoteStore:
                         other.status = "shadowed"
                         other.shadowed_by = vid
 
-    def purge_source_in_bucket(
-        self, stream: str, bucket: tuple[float, float], source: str, *, reason: str, round_idx: int
-    ) -> int:
-        """Mark ``source``'s votes in ``bucket`` purged on speech_presence + asr axes (C10)."""
-        n = 0
-        for axis in ("speech_presence", "asr"):
+    def attenuate_source_in_bucket(
+        self,
+        stream: str,
+        bucket: tuple[float, float],
+        source: str,
+        *,
+        corroboration: float,
+        evidence_sources: Sequence[str],
+        reason: str,
+        round_idx: int,
+        measured_on: tuple[str, tuple[float, float]],
+        floor: float = MIN_EVIDENCE_WEIGHT,
+        axes: Sequence[str] = ATTENUATED_AXES,
+    ) -> list[dict[str, Any]]:
+        """Withdraw weight from ``source``'s active votes in ``bucket``, never remove them.
+
+        The withdrawal is proportional to what independent evidence measured there; the votes stay
+        active and keep aggregating.
+
+        The caller measures ``corroboration`` so that the quantity which triggered the withdrawal
+        and the quantity that sizes it are the same number; the store records where it was taken.
+        Because the evidence pool contains only signals that observe presence directly, the
+        claimant is never in it, so the measurement does not move when the vote is attenuated —
+        the fixed point is reached in one step and re-measuring in a later round returns the same
+        number.
+
+        The same evidence does contribute to the presence fold in its own right, so weighting a
+        claimant by it does pull that fold toward the evidence a second time. That double use is
+        bounded by the floor and by the trigger gate, and it is precisely why the map is the
+        identity rather than something sharper: an exponent here would compound a term that is
+        already counted twice.
+
+        Args:
+            stream: Pass label.
+            bucket: The bucket whose votes are attenuated.
+            source: The claimant.
+            corroboration: Independent evidence for the claim, in ``[0, 1]``.
+            evidence_sources: Which voters were asked. Empty means nothing was measured, and the
+                caller must not have called at all.
+            reason: What was observed — never a claimed cause.
+            round_idx: Round the withdrawal happened in.
+            measured_on: ``(axis, bucket)`` the corroboration was measured on. An asr vote is
+                weighed by a *presence* bucket, so this is not always ``bucket``.
+            floor: Minimum weight; see :func:`.support.evidence_weight_from_corroboration`.
+            axes: Axes to act on; defaults to :data:`ATTENUATED_AXES`.
+
+        Returns:
+            One record per attenuated vote, with ``axis``, ``bucket``, ``source``, ``vote_id``,
+            ``previous_weight``, ``evidence_weight`` and ``corroboration``.
+        """
+        factor = evidence_weight_from_corroboration(corroboration, floor=floor)
+        records: list[dict[str, Any]] = []
+        for axis in axes:
             for vid in self._index.get((stream, axis, bucket), []):
                 v = self._votes[vid]
-                if v.source == source and v.status == "active":
-                    v.status = "purged_hallucination"
-                    v.provenance["purge_reason"] = reason
-                    v.provenance["purge_round"] = round_idx
-                    n += 1
-        return n
+                if v.source != source or v.status != "active":
+                    continue
+                previous = float(v.evidence_weight)
+                # Floored *after* composing, because a product of floored factors is not itself
+                # floored: two rules each withdrawing to 0.05 would otherwise reach 0.0025 and,
+                # with a third, effectively zero.
+                v.evidence_weight = max(float(floor), previous * factor)
+                v.provenance.setdefault("evidence_weight_factors", []).append(
+                    {
+                        "reason": reason,
+                        "round": int(round_idx),
+                        "corroboration": float(corroboration),
+                        "corroboration_pooling": CORROBORATION_POOLING,
+                        "evidence_sources": sorted(str(s) for s in evidence_sources),
+                        "measured_on": {"axis": measured_on[0], "bucket": [measured_on[1][0], measured_on[1][1]]},
+                        "weight_map": EVIDENCE_WEIGHT_MAP,
+                        "floor": float(floor),
+                        "factor": float(factor),
+                        "evidence_weight_after": float(v.evidence_weight),
+                    }
+                )
+                records.append(
+                    {
+                        "axis": axis,
+                        "bucket": bucket,
+                        "source": source,
+                        "vote_id": vid,
+                        "previous_weight": previous,
+                        "evidence_weight": float(v.evidence_weight),
+                        "corroboration": float(corroboration),
+                    }
+                )
+        return records
 
     # ── reads ──────────────────────────────────────────────────────────
 
@@ -274,6 +382,38 @@ class VoteStore:
                 out[v.source] = v.payload
         return out
 
+    def evidence_weights(self, stream: str, axis: str, bucket: tuple[float, float]) -> dict[str, float]:
+        """``{source → evidence_weight}`` for active votes carrying at least one measured factor.
+
+        Sources with no factor are omitted rather than mapped to 1.0, so "unmeasured" stays
+        distinguishable from "measured and fully corroborated" at every consumer — including the
+        parquet, where an omission and a 1.0 would otherwise read the same.
+        """
+        out: dict[str, float] = {}
+        for vid in self._index.get((stream, axis, bucket), []):
+            v = self._votes[vid]
+            if v.status == "active" and v.provenance.get("evidence_weight_factors"):
+                out[v.source] = float(v.evidence_weight)
+        return out
+
+    def has_evidence_weight_factor(
+        self, stream: str, axis: str, bucket: tuple[float, float], source: str, *, reason: str
+    ) -> bool:
+        """Has ``reason`` already been recorded against ``source``'s active vote here?
+
+        The idempotence guard a rule needs now that attenuation no longer changes ``status``.
+        Attenuation moves neither the claim nor its corroboration, so without this a rule's
+        candidate set is stable across rounds: it re-fires forever for zero gain, ``epsilon``
+        never admits it, and convergence C4 (``untried_actions``) never settles.
+        """
+        for vid in self._index.get((stream, axis, bucket), []):
+            v = self._votes[vid]
+            if v.source != source or v.status != "active":
+                continue
+            if any(f.get("reason") == reason for f in v.provenance.get("evidence_weight_factors") or []):
+                return True
+        return False
+
     def votes_added_in_round(self, round_idx: int) -> list[Vote]:
         """Votes first added in ``round_idx`` (for the append-only round files)."""
         return [self._votes[vid] for vid in self._round_added.get(round_idx, [])]
@@ -283,22 +423,30 @@ class VoteStore:
     def reaggregate_bucket(
         self, stream: str, axis: str, bucket: tuple[float, float], *, aggregator: str
     ) -> dict[str, Any]:
-        """Aggregate one bucket's active votes via the existing pure aggregators."""
+        """Aggregate one bucket's active votes via the existing pure aggregators.
+
+        Attenuated sources stay in ``contributing_sources`` — the record has to show who spoke up,
+        and how far their claim was carried — with the withdrawn weights alongside in
+        ``attenuated_sources``. An empty weight map is byte-identical to no map, which is what
+        keeps :meth:`parity_check` comparing the same quantity it always did.
+        """
         votes = self.active_votes(stream, axis, bucket)
+        weights = self.evidence_weights(stream, axis, bucket)
         p_voice: float | None = None
         if axis == "speech_presence":
-            agg = aggregate_speech_presence(votes)
-            p_voice = speech_presence_p_voice(votes)
+            agg = aggregate_speech_presence(votes, weights=weights)
+            p_voice = speech_presence_p_voice(votes, weights=weights)
         elif axis == "speaker":
-            agg = aggregate_speaker(votes, raw_vs_enh=None, aggregator=aggregator)
+            agg = aggregate_speaker(votes, raw_vs_enh=None, aggregator=aggregator, evidence_weights=weights)
         else:
-            agg = aggregate_asr(votes, aggregator=aggregator)
+            agg = aggregate_asr(votes, aggregator=aggregator, weights=weights)
         return {
             "start": bucket[0],
             "end": bucket[1],
             "within_pass_uncertainty": agg,
             "p_voice": p_voice,
             "contributing_sources": sorted(votes.keys()),
+            "attenuated_sources": {k: round(v, 6) for k, v in sorted(weights.items())},
         }
 
     def parity_check(self, passes: list[str], *, aggregator: str, tol: float = 1e-9) -> dict[str, Any]:
@@ -387,6 +535,7 @@ class BeliefState:
             if new["p_voice"] is not None:
                 row["p_voice"] = new["p_voice"]
             row["contributing_sources"] = new["contributing_sources"]
+            row["attenuated_sources"] = new["attenuated_sources"]
             _decompose(row, row.get("meta") or {})
             row["round"] = round_idx
             row["history"].append({"round": round_idx, "within_pass_uncertainty": row["within_pass_uncertainty"]})

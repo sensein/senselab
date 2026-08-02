@@ -65,7 +65,7 @@ and formalized; *new* couplings are introduced by this feature. Round = where th
 | C7 | Segmentation-3.0 per-class (powerset) posteriors | Identity + utterance | Overlap posterior explains joint uncertainty as aleatoric; routes overlap handling | new | 2+ |
 | C8 | ASR consensus text | Forced alignment | Re-align consensus (not per-model) text ⇒ authoritative word timestamps | new | K |
 | C9 | ASR+PPG+CTC agreement in "silent" buckets | Presence | Missed-speech correction vote where VAD said silence but phonetic evidence is strong | new | 2+ |
-| C10 | Whisper no_speech/logprob + CTC + PPG + sources | Utterance + presence | Hallucination adjudication: purge hallucinated tokens from WER pairs and presence votes | new | 2+ |
+| C10 | Independent presence pool (frame posteriors / acoustic proxies willing to report absence) | Utterance + presence | Uncorroborated-claim attenuation: withdraw weight, floored, from an ASR's presence and utterance votes in proportion to measured corroboration. Never removes a vote | new | 2+ |
 | C11 | Diarization + overlap posterior | Utterance | Speaker-attributed re-ASR of overlap crops (v2, behind flag) | new (v2) | 3+ |
 | C12 | Embedding clustering silhouette | Presence + identity | Synthetic diarization voter (`compute.py:211-236`) | existing | 1 |
 | C13 | Per-pass empirical cosine calibration | Identity floors | `calibrate_cosine_uncertainty` band overrides CLI floors (`compute.py:441-456`) | existing | 1 |
@@ -148,9 +148,12 @@ identity disagreement decreases.
 
 **Acceptance Scenarios**:
 
-1. **Given** ASR tokens in buckets with p_voice < 0.2, **When** `P3_hallucination_adjudication` fires and
-   ≥ 2 independent indicators support hallucination, **Then** affected votes are flagged, excluded from
-   utterance pairing (C10), and the verdict + indicator values are logged.
+1. **Given** ASR tokens in buckets where measured corroboration from the independent presence pool is
+   < `adjudication.corroboration_low`, **When** `P3_uncorroborated_speech_attenuation` fires and ≥ 2
+   indicators agree, **Then** the affected votes keep aggregating at a weight equal to the measured
+   corroboration, floored at `MIN_EVIDENCE_WEIGHT`, and the measurement, the pool, the pooling rule,
+   the map and the floor are recorded per factor. Non-corroboration cannot distinguish a fabrication
+   from a quiet, distant or overlapped speaker, so it may reduce a claim's weight but never delete it.
 2. **Given** phonetically supported speech (PPG active, CTC score high, ≥2 ASR models agree) where frame
    posteriors were low, **Then** a `adjudicator/missed_speech` presence vote is added (C9) and presence
    uncertainty in those buckets increases or the belief flips — never silently.
@@ -325,8 +328,11 @@ verify the loop stops within budget, `convergence.json.budget` accounts for ever
   `iterations.json` and `final/convergence.json`.
 - **SC-005**: `--max-rounds 1 --enhancement always` output passes the existing regression suite with no
   changes to pre-existing artifacts (schema and values), verified by diffing a golden run.
-- **SC-006**: Hallucination adjudication removes ≥ 80% of ASR tokens injected into music-only spans of
-  the validation suite from utterance pairing, with ≤ 5% false-purge of true speech tokens.
+- **SC-006**: On the validation suite, ASR tokens injected into music-only spans carry a measurably
+  lower median `evidence_weight` than true speech tokens, and the two distributions separate. Stated
+  as a weight distribution rather than a removal rate because nothing is removed: the old "≤ 5%
+  false-purge" criterion had no meaning once the mechanism stopped deleting evidence, and a rate of
+  removal cannot be reported for a mechanism that only reweights.
 - **SC-007**: Fused word confidences are monotonically related to correctness on the synthetic suite
   (higher-confidence deciles have lower WER); with a calibration profile, ECE ≤ 0.10.
 - **SC-008**: Every intervention in `iterations.json` on the validation suite links to trigger values

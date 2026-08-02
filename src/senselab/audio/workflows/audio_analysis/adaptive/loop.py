@@ -289,13 +289,9 @@ def run_adaptive_loop(
                             )
                             if m2 is not None:
                                 align_by_model.setdefault(model, m2)
-    purged_spans = [
-        (p["bucket"][0], p["bucket"][1], p["source"])
-        for entry in iterations
-        if entry["rule"] == "P3_hallucination_adjudication" and entry["status"] == "fired"
-        for p in (entry.get("result") or {}).get("purged", [])
-    ]
-    word_streams = collect_word_streams(asr_by_model, align_by_model, purged_spans=purged_spans)
+    # P3 no longer hands fusion anything to delete: doubt about a claim is a weight on the vote,
+    # not a hole in the word stream. The word-level counterpart lands in the next commit.
+    word_streams = collect_word_streams(asr_by_model, align_by_model)
     # Live U1 words (already in file time) join the ensemble on their stream.
     for model, live_words in (ctx.get("live_asr_words", {}).get(fusion_stream) or {}).items():
         if live_words and model not in word_streams:

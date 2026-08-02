@@ -29,6 +29,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
 __all__ = [
     "RoundRecord",
     "assess_convergence",
@@ -40,10 +42,11 @@ __all__ = [
     "round_converged",
 ]
 
-MIN_REGIONAL_TRUST = 0.05
+MIN_REGIONAL_TRUST = MIN_EVIDENCE_WEIGHT
 """Floor on a regionally-withdrawn weight, so a signal is attenuated rather than erased. Same
 reasoning as the global reliability and support floors: the dissenter may be the only source
-that noticed something."""
+that noticed something. The name marks the *site*; the number and its derivation live in
+:data:`~senselab.audio.workflows.audio_analysis.floors.MIN_EVIDENCE_WEIGHT`."""
 
 # States that constitute evidence *against* a speaker claim. ``indeterminate`` is deliberately
 # absent — an unresolved region is not counter-evidence.

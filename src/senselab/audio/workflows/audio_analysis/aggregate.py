@@ -30,7 +30,24 @@ __all__ = [
 # ── speech_presence ──────────────────────────────────────────────────────────
 
 
-def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+def _evidence_factor(weights: Mapping[str, float] | None, source: str) -> float:
+    """Per-source evidence weight from ``weights``, or 1.0 when this source was never measured.
+
+    Absent means *unmeasured*, so it must not act as a discount: mapping a missing entry to
+    anything below 1.0 would let a factor nobody gathered decide the fold.
+    """
+    if not weights:
+        return 1.0
+    raw = weights.get(source)
+    if raw is None:
+        return 1.0
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _weighted_p_voice(votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None) -> float | None:
     """Weighted mean per-voter probability of voice for one bucket, or ``None``.
 
     Each voter maps ``(speaks, native_confidence)`` to a per-voter voice
@@ -45,10 +62,16 @@ def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
     per-segment no-speech probability, sentence-level ASR) on fine reporting
     grids without dropping them (FR-014). When every weight is 1.0 (the
     default) this is the plain mean, so existing outputs are unchanged.
+
+    ``weights`` is the *second*, independent factor: how far this source's claim was corroborated
+    by evidence measured about it (``belief.VoteStore.evidence_weights``). The two multiply and
+    stay separately recoverable — the payload keeps what the link layer decided about the voter's
+    coarseness, the map keeps what a later round measured about its corroboration. A source absent
+    from ``weights`` was not measured and keeps its payload weight untouched.
     """
     num = 0.0
     den = 0.0
-    for v in votes.values():
+    for source, v in votes.items():
         if not isinstance(v, dict) or "speaks" not in v:
             continue
         speak_val = v.get("speaks")
@@ -58,8 +81,12 @@ def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
             weight = float(v.get("weight", 1.0))
         except (TypeError, ValueError):
             weight = 1.0
+        # The payload weight may legitimately be zero — that is policy declaring a voter
+        # inapplicable on this grid. Attenuation cannot reach zero (its floor is > 0), so this
+        # guard never erases a corroboration-weighted vote.
         if weight <= 0:
             continue
+        weight *= _evidence_factor(weights, str(source))
         raw_nc = v.get("native_confidence")
         nc: float | None
         if raw_nc is None:
@@ -82,7 +109,9 @@ def _weighted_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
     return num / den
 
 
-def aggregate_speech_presence(votes: dict[str, dict[str, Any]]) -> float | None:
+def aggregate_speech_presence(
+    votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None
+) -> float | None:
     """Calibrated "is voice present?" uncertainty in ``[0, 1]``.
 
     The speech_presence question is binary, but the goal is *not* to measure
@@ -94,13 +123,15 @@ def aggregate_speech_presence(votes: dict[str, dict[str, Any]]) -> float | None:
     ``_weighted_p_voice`` for the per-voter math (weights default to 1.0, so
     this matches the historical unweighted behavior).
     """
-    p_voice = _weighted_p_voice(votes)
+    p_voice = _weighted_p_voice(votes, weights=weights)
     if p_voice is None:
         return None
     return max(0.0, min(1.0, 1.0 - abs(2.0 * p_voice - 1.0)))
 
 
-def speech_presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
+def speech_presence_p_voice(
+    votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None
+) -> float | None:
     """Return the calibrated probability of voice ``p_voice`` for one bucket.
 
     Same per-voter math as ``aggregate_speech_presence`` but returns the raw
@@ -108,7 +139,7 @@ def speech_presence_p_voice(votes: dict[str, dict[str, Any]]) -> float | None:
     speech_presence-axis ``speech_presence_confidence`` column and to MASK speaker /
     asr buckets where we are confident there is no speech.
     """
-    return _weighted_p_voice(votes)
+    return _weighted_p_voice(votes, weights=weights)
 
 
 # ── speaker ──────────────────────────────────────────────────────────
@@ -120,6 +151,7 @@ def aggregate_speaker(
     raw_vs_enh: bool | None,
     aggregator: str,
     reliability: Mapping[str, float] | None = None,
+    evidence_weights: Mapping[str, float] | None = None,
 ) -> float | None:
     """Combine speaker sub-signals into a single uncertainty in ``[0, 1]``.
 
@@ -139,14 +171,21 @@ def aggregate_speaker(
     Pairs / signals that are ``None`` (no prior to validate, both sides silent,
     same window dedup, etc.) drop out of the aggregator per FR-007 — never
     zero-imputed.
+
+    Two independent per-signal factors multiply into the aggregator weight: ``reliability``
+    (measured by perturbation across passes) and ``evidence_weights`` (measured by corroboration
+    in this bucket). They answer different questions — "does this signal agree with itself?" and
+    "does anything else support what it claims here?" — so they compose rather than replace one
+    another, and both floors keep the product visible.
     """
     sub_signals: list[float | None] = []
     weights: list[float] = []
     rel = dict(reliability or {})
+    ev = dict(evidence_weights or {})
 
     def _add(value: float, signal: str) -> None:
         sub_signals.append(float(value))
-        weights.append(float(rel.get(signal, 1.0)))
+        weights.append(float(rel.get(signal, 1.0)) * _evidence_factor(ev, signal))
 
     for name, v in votes.items():
         if not isinstance(v, dict):
@@ -169,7 +208,9 @@ def aggregate_speaker(
         # stability could be measured — it carries full weight by construction.
         _add(1.0 if raw_vs_enh else 0.0, "__raw_vs_enhanced__")
 
-    return apply_aggregator(sub_signals, aggregator, weights=weights if rel else None)
+    # Either map alone must reach the aggregator. Gating on `rel` only (as this did) silently
+    # discarded evidence weights on every run without a reliability measurement.
+    return apply_aggregator(sub_signals, aggregator, weights=weights if (rel or ev) else None)
 
 
 # ── asr ─────────────────────────────────────────────────────────
@@ -207,15 +248,21 @@ def _axis_temperature(calibration: dict[str, Any] | None, axis: str) -> float:
     return temperature if temperature > 0 else 1.0
 
 
-def mean_token_entropy(votes: dict[str, dict[str, Any]]) -> float | None:
-    """Mean per-model token entropy in nats, collapsing per-token lists to their mean."""
-    per_model: list[float] = []
+def mean_token_entropy(votes: dict[str, dict[str, Any]], *, weights: Mapping[str, float] | None = None) -> float | None:
+    """Mean per-model token entropy in nats, collapsing per-token lists to their mean.
+
+    ``weights`` supplies an optional per-source evidence weight (see
+    :func:`_weighted_p_voice`); sources absent from it contribute unweighted.
+    """
+    num = 0.0
+    den = 0.0
     for key, vote in votes.items():
         if key.startswith("__") or not isinstance(vote, dict):
             continue
         raw = vote.get("token_entropy")
         if raw is None:
             continue
+        value: float | None = None
         if isinstance(raw, (list, tuple)):
             values = []
             for item in raw:
@@ -224,15 +271,20 @@ def mean_token_entropy(votes: dict[str, dict[str, Any]]) -> float | None:
                 except (TypeError, ValueError):
                     continue
             if values:
-                per_model.append(sum(values) / len(values))
+                value = sum(values) / len(values)
+        else:
+            try:
+                value = float(raw)
+            except (TypeError, ValueError):
+                value = None
+        if value is None:
             continue
-        try:
-            per_model.append(float(raw))
-        except (TypeError, ValueError):
-            continue
-    if not per_model:
+        w = _evidence_factor(weights, str(key))
+        num += w * value
+        den += w
+    if den <= 0:
         return None
-    return sum(per_model) / len(per_model)
+    return num / den
 
 
 def aggregate_asr(
@@ -240,16 +292,28 @@ def aggregate_asr(
     *,
     aggregator: str,
     calibration: dict[str, Any] | None = None,
+    weights: Mapping[str, float] | None = None,
 ) -> float | None:
     """Combine asr sub-signals into a single uncertainty.
 
-    Per-signal reliability weighting is deliberately *not* applied here. The asr
-    sub-signals are already model-fused before they reach this point — a pairwise mean over
-    ASR sources, a mean log-probability across backends — so there is no per-model signal
-    left to weight. Weighting them would require harvesting the pairwise terms unfused,
-    which is a larger change than the defect it would address. The speaker axis, where
-    sub-signals stay per-model and where a single saturated signal was demonstrably
-    overriding unanimous agreement, is weighted (see ``aggregate_speaker``).
+    Per-*sub-signal* reliability weighting is deliberately not applied here, and that argument
+    still holds: the sub-signals below are already model-fused when they reach this function — a
+    pairwise mean over ASR sources, a mean log-probability across backends — so there is no
+    sub-signal left whose perturbation stability could be weighed. The speaker axis, where
+    sub-signals stay per-model and where a single saturated signal was demonstrably overriding
+    unanimous agreement, is weighted that way (see ``aggregate_speaker``).
+
+    ``weights`` is a different quantity and enters at a different place: a **per-source** evidence
+    weight, applied *inside* each per-model fold rather than to the fused result. It reaches the
+    pairwise family (via the pair weight), the log-probability mean and the token-entropy mean, so
+    a source whose claim independent evidence does not corroborate is attenuated everywhere it
+    speaks rather than in two places out of three. Sources absent from ``weights`` were never
+    measured and contribute unweighted.
+
+    A weighted mean over a *single* source is that source's own value, so attenuating the only
+    ASR in a bucket does not move this axis. That is the honest answer: with one witness there is
+    no disagreement to reweigh, and manufacturing one would be the unmeasured constant this
+    module exists to avoid.
 
     Three sub-signal families (the third added by FR-017):
 
@@ -280,6 +344,8 @@ def aggregate_asr(
         calibration: Optional calibration profile supplying ``temperature`` and
             ``token_entropy_reference_nats``. ``None`` ⇒ documented defaults, which
             preserve the pre-calibration numbers bit-for-bit.
+        weights: Optional per-source evidence weights (see the note above). ``None`` or an empty
+            map reproduces the unweighted fold exactly.
 
     Returns:
         The bucket's asr uncertainty in ``[0, 1]``, or ``None`` when no
@@ -329,19 +395,24 @@ def aggregate_asr(
                 src_a, src_b = pair_key.split("|", 1)
             except ValueError:
                 continue
-            w = _conf(src_a) * _conf(src_b)
+            w = _conf(src_a) * _conf(src_b) * _evidence_factor(weights, src_a) * _evidence_factor(weights, src_b)
             weighted_sum += w * d
             weight_total += w
         if weight_total > 0:
             sub_signals.append(weighted_sum / weight_total)
 
     # Whisper self-confidence (separate sub-signal class).
-    avg_logprobs = [
-        v["avg_logprob"] for v in votes.values() if isinstance(v, dict) and v.get("avg_logprob") is not None
-    ]
-    if avg_logprobs:
+    alp_num = 0.0
+    alp_den = 0.0
+    for src, v in votes.items():
+        if not isinstance(v, dict) or v.get("avg_logprob") is None:
+            continue
+        w = _evidence_factor(weights, str(src))
+        alp_num += w * float(v["avg_logprob"])
+        alp_den += w
+    if alp_den > 0:
         try:
-            mean_alp = sum(avg_logprobs) / len(avg_logprobs)
+            mean_alp = alp_num / alp_den
             # Temperature-scaled so backends with differently-sharp logprob
             # distributions land on a common [0,1] scale (FR-018). T=1 is the
             # historical mapping.
@@ -369,7 +440,7 @@ def aggregate_asr(
 
     # Token-level entropy (FR-017) — a single model's private doubt, which
     # transcript agreement cannot reveal.
-    mean_entropy = mean_token_entropy(votes)
+    mean_entropy = mean_token_entropy(votes, weights=weights)
     if mean_entropy is not None:
         reference = _DEFAULT_TOKEN_ENTROPY_REFERENCE_NATS
         if calibration:
