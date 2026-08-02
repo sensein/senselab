@@ -20,7 +20,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    derivatives_dir,
+    estimates_dir,
+    evidence_dir,
+    final_dir,
+    last_round,
+    rounds_present,
+)
 
 
 def build_adaptive_timeline(
@@ -56,15 +64,16 @@ def build_adaptive_timeline(
     iterations = json.loads((belief / "iterations.json").read_text())["entries"]
     convergence = json.loads((belief / "convergence.json").read_text())
 
-    rounds_dir = belief_dir(out_dir) / "rounds"
-    round_ids = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
+    # Numeric order, from the layout helper: the old ``sorted(glob("round*"))[-1]`` put
+    # ``round10`` before ``round2``, so the "last round" overlay read round 9 on any run past ten.
+    round_ids = list(rounds_present(out_dir))
     first_r, last_r = round_ids[0], round_ids[-1]
 
     def _belief(round_idx: int, axis: str) -> "pd.DataFrame":
-        # No stream filter: the belief file holds one row per bucket, already folded across
-        # passes by the writer under a recorded policy. Filtering here picked one pass's reading
-        # and called it the run's, which is a fold nobody wrote down.
-        return pd.read_parquet(rounds_dir / str(round_idx) / "belief" / f"{axis}.parquet").sort_values("start")
+        # No stream filter: the estimate holds one row per bucket, already folded across
+        # perturbations by the writer under a recorded policy. Filtering here picked one
+        # perturbation's reading and called it the run's, which is a fold nobody wrote down.
+        return pd.read_parquet(estimates_dir(out_dir, round_idx) / f"{axis}.parquet").sort_values("start")
 
     pres, ident_0, ident_k = _belief(last_r, "speech_presence"), _belief(first_r, "speaker"), _belief(last_r, "speaker")
     utt_0, utt_k = _belief(first_r, "asr"), _belief(last_r, "asr")
@@ -189,7 +198,7 @@ def build_adaptive_timeline(
             )
     seen_regions = set()
     for r_idx in round_ids:
-        regions_file = rounds_dir / str(r_idx) / "regions.json"
+        regions_file = derivatives_dir(out_dir, r_idx) / "regions.json"
         if not regions_file.exists():
             continue
         for reg in json.loads(regions_file.read_text()):
@@ -213,7 +222,7 @@ def build_adaptive_timeline(
             continue
         reg_delta = next(iter((e.get("delta") or {}).values()), None)
         d_txt = f" Δ{reg_delta['delta']:+.2f}" if reg_delta else ""
-        x = _region_mid(e, rounds_dir, axis="asr")
+        x = _region_mid(e, out_dir, axis="asr")
         if x is not None:
             ax_u.annotate(
                 f"{e['rule'].split('_')[0]} r{e['round']}{d_txt}",
@@ -575,9 +584,9 @@ def _step(ax: Any, df: Any, *, color: str, label: str) -> None:  # noqa: ANN401
     ax.plot(mids, df["uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5)
 
 
-def _region_mid(entry: dict[str, Any], rounds_dir: Path, *, axis: str | None = None) -> float | None:
+def _region_mid(entry: dict[str, Any], out_dir: Path, *, axis: str | None = None) -> float | None:
     """Midpoint of the region an iteration entry acted on; optionally filter by region axis."""
-    regions_file = rounds_dir / str(entry["round"]) / "regions.json"
+    regions_file = derivatives_dir(out_dir, int(entry["round"])) / "regions.json"
     if not regions_file.exists():
         return None
     for reg in json.loads(regions_file.read_text()):
@@ -609,12 +618,13 @@ def _fused_axis(out_dir: Path, axis: str) -> Any:  # noqa: ANN401 — pd.DataFra
     """
     import pandas as pd
 
-    from senselab.audio.workflows.audio_analysis.layout import belief_dir
-
-    found = sorted(belief_dir(out_dir).glob(f"round*/uncertainty/{axis}.parquet"))
-    if not found:
+    last = last_round(out_dir)
+    if last is None:
+        return None
+    path = estimates_dir(out_dir, last) / f"{axis}.parquet"
+    if not path.exists():
         return None
     try:
-        return pd.read_parquet(found[-1]).sort_values("start")
+        return pd.read_parquet(path).sort_values("start")
     except Exception:  # noqa: BLE001 — a plot must not fail a run
         return None

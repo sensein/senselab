@@ -26,6 +26,7 @@ import pytest
 from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, Vote, VoteStore, bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+from senselab.audio.workflows.audio_analysis.layout import estimates_dir
 from senselab.audio.workflows.audio_analysis.speech_presence_link import directed_presence_vote
 
 pytest.importorskip("pandas")
@@ -80,8 +81,8 @@ def _written_round_belief(tmp_path: Path) -> dict[tuple[float, float], dict[str,
 
     store = _attenuated_store()
     state = BeliefState.from_store(store, aggregator="min")
-    _write_round_belief(tmp_path, state)
-    return _rows_by_bucket(pd.read_parquet(tmp_path / "belief" / "speech_presence.parquet"))
+    _write_round_belief(tmp_path, 1, state)
+    return _rows_by_bucket(pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))
 
 
 def _written_final_presence(tmp_path: Path) -> dict[tuple[float, float], dict[str, Any]]:
@@ -176,8 +177,8 @@ def test_every_withdrawal_is_listed_not_only_the_last(tmp_path: Path) -> None:
         measured_on=("speech_presence", QUIET),
     )
     state = BeliefState.from_store(store, aggregator="min")
-    _write_round_belief(tmp_path, state)
-    rows = _rows_by_bucket(pd.read_parquet(tmp_path / "belief" / "speech_presence.parquet"))
+    _write_round_belief(tmp_path, 1, state)
+    rows = _rows_by_bucket(pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))
     reasons = [f["reason"] for f in json.loads(rows[QUIET]["attenuation"])]
     assert reasons == ["uncorroborated_speech_claim", "another_rule_with_something_to_say"]
 
@@ -195,7 +196,7 @@ def test_a_later_round_republishes_the_attenuation_it_inherited(tmp_path: Path) 
     store = _attenuated_store()
     state = BeliefState.from_store(store, aggregator="min")
     state.update_buckets(store, "speech_presence", {QUIET}, round_idx=3)
-    _write_round_belief(tmp_path, state)
-    rows = _rows_by_bucket(pd.read_parquet(tmp_path / "belief" / "speech_presence.parquet"))
+    _write_round_belief(tmp_path, 1, state)
+    rows = _rows_by_bucket(pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))
     assert rows[QUIET]["n_attenuated_sources"] == 1
     assert json.loads(rows[QUIET]["attenuation"])[0]["corroboration"] == pytest.approx(CORROBORATION)

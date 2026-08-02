@@ -19,7 +19,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import (
 )
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import Region
-from senselab.audio.workflows.audio_analysis.layout import belief_dir
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, round_dir
 
 BK = bucket_key(0.0, 0.5)
 
@@ -374,7 +374,7 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
         max_rounds=1,
         aggregator="min",
     )
-    assert (belief_dir(tmp_path) / "rounds" / "1").is_dir(), "round 1 artifacts must still be emitted"
+    assert round_dir(tmp_path, 0).is_dir(), "the baseline round's artifacts must still be emitted"
     assert isinstance(log, dict)
 
 
@@ -412,7 +412,7 @@ def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
         max_rounds=1,
         aggregator="min",
     )
-    round1 = _json.loads((belief_dir(tmp_path) / "rounds" / "1" / "summary.json").read_text())
+    round1 = _json.loads((round_dir(tmp_path, 0) / "summary.json").read_text())
     report = round1["replay_check"]
     assert report, "the in-process path must be checkable, not skipped"
     assert all(entry["mismatches"] == 0 for entry in report.values())
@@ -445,8 +445,9 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
         aggregator="min",
     )
     assert isinstance(log, dict)
-    belief = (belief_dir(tmp_path) / "rounds" / "1").glob("belief*")
-    assert any(belief), "round-1 belief artifacts should exist for the surviving pass"
+    assert (round_dir(tmp_path, 0) / "summary.json").exists(), (
+        "the baseline round's summary should exist for the surviving perturbation"
+    )
 
 
 # ── Policy override precedence (T040) ─────────────────────────────────

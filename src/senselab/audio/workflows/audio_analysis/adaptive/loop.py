@@ -36,7 +36,15 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    derivatives_dir,
+    estimates_dir,
+    evidence_dir,
+    final_dir,
+    last_round,
+    round_dir,
+)
 from senselab.audio.workflows.audio_analysis.perturbations import read_measurements, read_register
 
 
@@ -110,7 +118,7 @@ def run_adaptive_loop(
     if aggregator is None:
         aggregator = _aggregator_from_run(run_dir) or "min"
 
-    # ── round 1: ingest + replay proof (values are re-derivable) ────────
+    # ── the baseline round: ingest + replay proof (values are re-derivable) ────────
     t0 = time.time()
     parity: dict[str, Any]
     if harvests is not None:
@@ -123,20 +131,23 @@ def run_adaptive_loop(
     asr_grid = _grid_from_rows(state.axis_rows("asr"))
     theta_low = float(policy["thresholds"]["theta_low"])
 
-    rounds_dir = belief_dir(out_dir) / "rounds"
-    _write_round_belief(rounds_dir / "1", state)
-    (rounds_dir / "1" / "summary.json").write_text(
-        json.dumps(
-            {
-                "round": 1,
-                "ingested_from": str(run_dir),
-                "replay_check": parity,
-                "fused_parity": fused_parity,
-                "aggregator": aggregator,
-                "uncertainty_mass": {str(a): round(state.uncertainty_mass(a, theta_low), 6) for a in AXES},
-            },
-            indent=2,
-        )
+    # The baseline is not a round of the loop's own — it *is* the round fusion already wrote, and
+    # numbering it separately is what produced two trees whose "round 1" meant different things.
+    # So the loop adopts fusion's index, writes only what it can add there (the replay and parity
+    # proofs), and does not rewrite estimates it has just proven it agrees with.
+    baseline = _baseline_round(out_dir)
+    (round_dir(out_dir, baseline)).mkdir(parents=True, exist_ok=True)
+    _write_round_summary(
+        out_dir,
+        baseline,
+        {
+            "round": baseline,
+            "ingested_from": str(run_dir),
+            "replay_check": parity,
+            "fused_parity": fused_parity,
+            "aggregator": aggregator,
+            "uncertainty_mass": {str(a): round(state.uncertainty_mass(a, theta_low), 6) for a in AXES},
+        },
     )
 
     input_audio = _resolve_input_audio(summary.get("input_audio"), run_dir)
@@ -166,7 +177,7 @@ def run_adaptive_loop(
     run_state = "max_rounds"
 
     # ── rounds 2..K ──────────────────────────────────────────────────────
-    for round_idx in range(2, max_rounds + 1):
+    for round_idx in range(baseline + 1, baseline + max_rounds):
         ctx["round_idx"] = round_idx
         mass_before: dict[str, float] = {a: round(state.uncertainty_mass(a, theta_low), 6) for a in AXES}
         regions: list[Region] = []
@@ -245,11 +256,12 @@ def run_adaptive_loop(
                 **{f"status/{k}": v for k, v in sorted(rs["bucket_statuses"].items())},
             }
         )
-        rd = rounds_dir / str(round_idx)
-        _write_round_belief(rd, state)
-        (rd / "regions.json").write_text(json.dumps(regions, indent=2, default=str))
-        (rd / "summary.json").write_text(json.dumps(rs, indent=2, default=str))
-        _write_round_votes(rd, store, round_idx)
+        derivatives = derivatives_dir(out_dir, round_idx)
+        derivatives.mkdir(parents=True, exist_ok=True)
+        _write_round_belief(out_dir, round_idx, state)
+        (derivatives / "regions.json").write_text(json.dumps(regions, indent=2, default=str))
+        _write_round_summary(out_dir, round_idx, rs)
+        _write_round_votes(derivatives, store, round_idx)
 
         if not fired:
             run_state = "converged" if not not_admitted else "no_runnable_interventions"
@@ -554,7 +566,7 @@ def _fused_axes_from_run(run_dir: Path) -> dict[str, list[dict[str, Any]]]:
     """
     import pandas as pd
 
-    directory = belief_dir(run_dir) / "round0" / "uncertainty"
+    directory = estimates_dir(run_dir, 0)
     if not directory.is_dir():
         return {}
     return {
@@ -624,7 +636,24 @@ def _iteration_entry(cand: PlannedIntervention, round_idx: int) -> dict[str, Any
     }
 
 
-def _write_round_belief(round_dir: Path, state: BeliefState) -> None:
+def _baseline_round(out_dir: Path) -> int:
+    """The round the loop ingests: the last one fusion wrote, or 0 when it wrote none.
+
+    Adopted rather than assigned. The adaptive loop used to call its ingest "round 1" while the
+    fusion loop called the same iteration "round 0", so the two trees disagreed about what any
+    given number meant — and under one tree the collision is a round reading its own output.
+    """
+    return last_round(out_dir) or 0
+
+
+def _write_round_summary(out_dir: Path, round_index: int, payload: dict[str, Any]) -> None:
+    """Write ``L2/round/<n>/summary.json`` — what the round did, and what it now estimates."""
+    dest = round_dir(out_dir, round_index)
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "summary.json").write_text(json.dumps(payload, indent=2, default=str))
+
+
+def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> None:
     """Write one belief row per (axis, bucket) — the axis, which is already the fold.
 
     Nothing is collapsed here any more. The state holds one row per (axis, bucket) because that is
@@ -639,7 +668,7 @@ def _write_round_belief(round_dir: Path, state: BeliefState) -> None:
     """
     import pandas as pd
 
-    round_belief = round_dir / "belief"
+    round_belief = estimates_dir(out_dir, round_index)
     round_belief.mkdir(parents=True, exist_ok=True)
     for axis in AXES:
         rows = [
@@ -668,12 +697,13 @@ def _write_round_belief(round_dir: Path, state: BeliefState) -> None:
             pd.DataFrame(rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
 
 
-def _write_round_votes(round_dir: Path, store: VoteStore, round_idx: int) -> None:
+def _write_round_votes(derivatives: Path, store: VoteStore, round_idx: int) -> None:
+    """The votes this round *added*, beside the estimates they moved."""
     import pandas as pd
 
     votes = store.votes_added_in_round(round_idx)
     if votes:
-        pd.DataFrame([v.to_record() for v in votes]).to_parquet(round_dir / "votes_added.parquet", index=False)
+        pd.DataFrame([v.to_record() for v in votes]).to_parquet(derivatives / "votes_added.parquet", index=False)
 
 
 def _json_safe_result(result: dict[str, Any]) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""``L2/round<N>/timeline.png`` — one figure per round, showing only fused quantities."""
+"""``L2/round/<n>/timeline.png`` — one figure per round, showing only fused quantities."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def test_a_round_with_rows_gets_a_figure(tmp_path) -> None:  # noqa: ANN001
     """Per round, because a single end-state figure cannot show what the iteration did."""
     path = build_round_timeline(tmp_path, round_index=0, axis_rows={"speaker": _rows([0.1, 0.9])}, duration_s=1.0)
     assert path is not None and path.exists()
-    assert path.parent.name == "round0"
+    assert path.parent == tmp_path / "L2" / "round" / "0"
 
 
 def test_each_round_writes_its_own_file(tmp_path) -> None:  # noqa: ANN001

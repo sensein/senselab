@@ -1081,15 +1081,18 @@ def write_final_uncertainty(
     scene_rows: Sequence[Mapping[str, Any]] = (),
     comparator_params: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Write ``L2/round<N>/uncertainty/{speech_presence,speaker,asr}.parquet``.
+    """Write ``L2/round/<n>/estimates/<axis>.parquet`` for every round the fold ran.
 
     One directory per round, because a reader needs to see what each iteration changed and not
     only where it ended up — a single map cannot distinguish "settled immediately" from
     "moved a long way and then settled".
 
-    These are the maps a consumer should read. The per-pass parquets under ``L1/<pass>/`` are
-    level-1 diagnostics: what each signal said, and what one pass alone would have concluded
-    before anything was measured about the signals' reliability.
+    ``estimates`` rather than ``uncertainty``: each row carries uncertainty, epistemic
+    uncertainty, confidence and variability, so the old name named one column rather than the
+    thing itself.
+
+    These are the maps a consumer should read. ``L1/signals/`` is level-1 evidence: what each
+    signal said, in its own units, before anything was measured about its reliability.
 
     Args:
         out_dir: Run directory.
@@ -1147,8 +1150,7 @@ def write_final_uncertainty(
     if mask_votes:
         buckets_by_axis["background_mask"] = {"mask": mask_votes}
 
-    level2 = Path(out_dir) / "L2"
-    level2.mkdir(parents=True, exist_ok=True)
+    from senselab.audio.workflows.audio_analysis.layout import belief_dir, estimates_dir
 
     rows_by_axis, logs, per_round = fuse_axes(
         buckets_by_axis,
@@ -1227,9 +1229,9 @@ def write_final_uncertainty(
 
     for axis, rounds_for_axis in per_round.items():
         for round_index in sorted(rounds_for_axis):
-            round_dir = level2 / f"round{round_index}" / "uncertainty"
-            round_dir.mkdir(parents=True, exist_ok=True)
-            round_path = round_dir / f"{axis}.parquet"
+            dest = estimates_dir(out_dir, round_index)
+            dest.mkdir(parents=True, exist_ok=True)
+            round_path = dest / f"{axis}.parquet"
             _frame(axis, rounds_for_axis[round_index]).to_parquet(round_path, index=False)
             written[f"{axis}@round{round_index}"] = str(round_path)
             # The headline path is the last round the axis actually ran.
@@ -1237,6 +1239,8 @@ def write_final_uncertainty(
 
     # The round log distinguishes "converged" from "ran out of rounds", which the maps alone
     # cannot say and which call for different follow-up.
+    level2 = belief_dir(out_dir)
+    level2.mkdir(parents=True, exist_ok=True)
     (level2 / "rounds.json").write_text(json.dumps(logs, indent=2, sort_keys=True) + "\n")
     written["rounds"] = str(level2 / "rounds.json")
     return written

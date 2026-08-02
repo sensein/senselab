@@ -154,7 +154,9 @@ from senselab.audio.workflows.audio_analysis.labelstudio import (
 )
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
+    derivatives_dir,
     final_dir,
+    last_round,
     perturbation_dir,
     signals_dir,
 )
@@ -1496,7 +1498,7 @@ def main(argv: list[str] | None = None) -> int:
             for signal, rows in per_bucket_stability.items():
                 write_signal_stability(
                     sorted(rows, key=lambda r: (r["start"], r["end"])),
-                    belief_dir(run_dir, 0) / "stability" / f"{safe_model_id(signal)}.parquet",
+                    derivatives_dir(run_dir, 0) / "stability" / f"{safe_model_id(signal)}.parquet",
                     provenance=run_provenance,
                 )
 
@@ -1507,7 +1509,7 @@ def main(argv: list[str] | None = None) -> int:
             write_linked_votes(
                 {label: linked.buckets_by_axis.get(axis_name, []) for label, linked in linked_by_pass.items()},
                 axis_name,
-                belief_dir(run_dir, 0) / "votes" / f"{axis_name}.parquet",
+                derivatives_dir(run_dir, 0) / "votes" / f"{axis_name}.parquet",
                 provenance={
                     **run_provenance,
                     "speech_presence_policy": next(

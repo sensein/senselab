@@ -580,31 +580,32 @@ def _current_run_tree(root: Path) -> None:
         (belief / name).write_text("{}")
     _write_table(belief / "per_speaker_presence.parquet", {"start": [0.0], "end": [0.5], "speaker": ["S0"]})
     _write_table(belief / "speech_presence.parquet", {"start": [0.0], "end": [0.5], "round": [1]})
-    for index in (0, 1):
+    # One round tree, 0-based, shared by both producers. Round 0 is fusion's baseline, which the
+    # adaptive loop adopts rather than renumbering as its own "round 1".
+    for index in (0, 1, 2):
         for axis in ("speech_presence", "speaker", "asr", "background_mask"):
             _write_table(
-                belief / f"round{index}" / "uncertainty" / f"{axis}.parquet",
+                belief / "round" / str(index) / "estimates" / f"{axis}.parquet",
                 {"start": [0.0], "end": [0.5], "uncertainty": [0.3], "round": [index]},
             )
-        (belief / f"round{index}" / "timeline.png").write_bytes(b"")
+        (belief / "round" / str(index) / "timeline.png").write_bytes(b"")
+        (belief / "round" / str(index) / "summary.json").write_text("{}")
+    derivatives = belief / "round" / "0" / "derivatives"
     for axis in ("speech_presence", "speaker", "asr"):
         _write_table(
-            belief / "round0" / "votes" / f"{axis}.parquet",
+            derivatives / "votes" / f"{axis}.parquet",
             {"start": [0.0], "end": [0.5], "source": ["diar_a"], "stream": ["raw"]},
         )
-    # Cross-perturbation stability: a round derivative now, still in the 0-based fusion tree.
+    # Cross-perturbation stability: a round derivative, keyed by signal, carrying two
+    # perturbations per row — which is what a fold looks like and what no L1 artifact may be.
     _write_table(
-        belief / "round0" / "stability" / "diar_a.parquet",
+        derivatives / "stability" / "diar_a.parquet",
         {"start": [0.0], "end": [0.5], "signal": ["diar_a"], "pass_a": ["raw"], "pass_b": ["enhanced"]},
     )
     for index in (1, 2):
-        for axis in ("speech_presence", "speaker", "asr"):
-            _write_table(
-                belief / "rounds" / str(index) / "belief" / f"{axis}.parquet",
-                {"start": [0.0], "end": [0.5], "uncertainty": [0.3]},
-            )
-        (belief / "rounds" / str(index) / "summary.json").write_text("{}")
-        (belief / "rounds" / str(index) / "regions.json").write_text("[]")
+        regions = belief / "round" / str(index) / "derivatives" / "regions.json"
+        regions.parent.mkdir(parents=True, exist_ok=True)
+        regions.write_text("[]")
     final = root / "final"
     final.mkdir(parents=True, exist_ok=True)
     for name in (
@@ -631,10 +632,13 @@ def test_the_current_run_tree_is_flagged_and_fully_accounted_for(tmp_path: Path)
     """
     _current_run_tree(tmp_path)
     raw = artifact_violations(tmp_path)
-    assert len(raw) > 20, "the current layout is not D-17's, and the guard must say so"
-    assert any(p.startswith("L2/round0/") for p in raw)
-    assert any(p.startswith("L2/rounds/") for p in raw)
+    # What is left is one class: per-round quantities flattened to the ``L2/`` root with no round
+    # to belong to, plus the triage decision at the run root. Steps 1 and 2 took this list from
+    # 34 to 12 by *declaring* the perturbation tree and the round tree, not by waiving them.
+    assert len(raw) >= 10, "the L2 root is not D-17's, and the guard must say so"
+    assert all(p.startswith(("L2/", "triage.json")) for p in raw), raw
     assert any(p.startswith("triage.json") for p in raw)
+    assert any(p.startswith("L2/background_mask") for p in raw)
 
     # What step 1 closed: the perturbation tree, its register, and the accumulated signal files
     # are declared, so they no longer appear. ``L1/stability/`` is gone from the tree entirely —
@@ -644,6 +648,13 @@ def test_the_current_run_tree_is_flagged_and_fully_accounted_for(tmp_path: Path)
     assert not any(p.startswith("L1/perturbations.json") for p in raw)
     assert not any(p.startswith("L1/signals/") for p in raw)
     assert not any(p.startswith("L1/raw/asr") for p in raw)
+
+    # What step 2 closed: one round tree, so a round's timeline and summary are declared and the
+    # second tree (``L2/rounds/<N>/``, 1-based) does not exist to be flagged.
+    assert not any(p.startswith("L2/round/1/timeline.png") for p in raw)
+    assert not any(p.startswith("L2/round/2/summary.json") for p in raw)
+    assert not any(p.startswith("L2/round/0/derivatives/") for p in raw)
+    assert not any(p.startswith("L2/rounds/") for p in raw)
 
     assert unwaived_artifacts(raw) == []
 
