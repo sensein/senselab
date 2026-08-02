@@ -36,7 +36,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
 
 
 def run_adaptive_loop(
@@ -55,7 +55,7 @@ def run_adaptive_loop(
 
     Two ingest paths, same loop:
 
-    - **artifact-driven** (default): reads ``summary.json`` and the linked votes from
+    - **artifact-driven** (default): reads ``L1/passes.json`` and the linked votes from
       ``L2/round0/votes/<axis>.parquet``. This is what ``scripts/adaptive_loop.py``
       does over a finished run.
     - **in-process** (T040): the caller passes the ``PassHarvest`` objects it just
@@ -79,7 +79,8 @@ def run_adaptive_loop(
         aggregator: Sub-signal aggregator; inferred from the run when ``None``.
         harvests: Pass label → ``PassHarvest`` for the in-process path.
         policy_overrides: In-memory policy overrides (CLI flags), merged last.
-        summary: Pre-loaded ``summary.json`` content; read from disk when ``None``.
+        summary: Pre-loaded ``{"input_audio": ..., "passes": {...}}`` index; read from
+            ``L1/passes.json`` when ``None``.
 
     Returns:
         The loop's decision log.
@@ -92,10 +93,13 @@ def run_adaptive_loop(
     policy = load_policy(policy_path, policy_overrides)
 
     if summary is None:
-        summary = json.loads((final_dir(run_dir) / "summary.json").read_text())
+        # ``L1/passes.json``, not ``final/summary.json``. A deliverable that a later stage reads
+        # to rebuild state is an intermediate wearing the wrong name; the small index of what was
+        # measured on which pass belongs where the evidence is.
+        summary = json.loads((evidence_dir(run_dir) / "passes.json").read_text())
     passes = [pl for pl, ps in (summary.get("passes") or {}).items() if isinstance(ps, dict) and "duration_s" in ps]
     if not passes:
-        raise ValueError(f"no completed passes in {run_dir}/summary.json")
+        raise ValueError(f"no completed passes in {run_dir}/L1/passes.json")
     duration_s = float(summary["passes"][passes[0]]["duration_s"])
     pass_sigs = {pl: str(summary["passes"][pl].get("audio_signature") or "") for pl in passes}
     if aggregator is None:
@@ -378,7 +382,7 @@ def run_adaptive_loop(
             else:
                 timestamps_meta["reason"] = align_reason
     last_round = round_summaries[-1]["round"] if round_summaries else 1
-    transcript_doc = build_final_outputs(
+    transcript_doc, diarization_doc = build_final_outputs(
         out_dir=out_dir,
         words=words,
         store=store,
@@ -395,11 +399,8 @@ def run_adaptive_loop(
 
     # T032: LS final tracks + resolved-disagreements index (best-effort, additive).
     try:
-        import json as _json
-
         from senselab.audio.workflows.audio_analysis.adaptive.ls_final import build_final_ls_bundle
 
-        diarization_doc = _json.loads((out_dir / "final" / "diarization.json").read_text())
         build_final_ls_bundle(
             out_dir=out_dir,
             run_dir=run_dir,
@@ -449,7 +450,7 @@ def run_adaptive_loop(
     try:
         from senselab.audio.workflows.audio_analysis.adaptive.plot import build_adaptive_timeline
 
-        fig = build_adaptive_timeline(out_dir, title=run_dir.name)
+        fig = build_adaptive_timeline(out_dir, title=run_dir.name, transcript=transcript_doc)
         timeline_path = str(fig) if fig is not None else None
     except Exception as exc:  # noqa: BLE001 — sidecar
         print(f"warn: adaptive timeline plot failed: {exc!r}", file=sys.stderr)

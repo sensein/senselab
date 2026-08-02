@@ -154,6 +154,7 @@ from senselab.audio.workflows.audio_analysis.labelstudio import (
 )
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
+    evidence_dir,
     final_dir,
     pass_dir,
     stability_dir,
@@ -1105,6 +1106,37 @@ def _policy_overrides(args: argparse.Namespace) -> dict[str, Any]:
     return overrides
 
 
+def _write_run_summary(run_dir: Path, summaries: dict[str, Any]) -> None:
+    """Write ``final/summary.json`` (the deliverable) and ``L1/passes.json`` (the evidence index).
+
+    ``summaries["passes"]`` is 4.8 MB of per-pass model output that already exists on disk under
+    ``L1/<pass>/``. Inlining it made ``final/`` the copy the pipeline read back — the adaptive
+    loop and the timeline both reconstructed a finished run from it — which is a deliverable
+    being used as an intermediate. With two copies of the same bytes nothing enforced the
+    boundary: a consumer reaching into ``final/`` got exactly what one reading ``L1/`` would.
+
+    So the deliverable keeps only the converged state and the run provenance, and the small
+    index every later stage actually needs (duration, audio signature, input path) is written
+    where evidence lives.
+    """
+    passes = summaries.get("passes") or {}
+    write_json(
+        evidence_dir(run_dir) / "passes.json",
+        {
+            "input_audio": summaries.get("input_audio"),
+            "passes": {
+                label: {k: block.get(k) for k in ("duration_s", "audio_signature", "status") if k in block}
+                for label, block in passes.items()
+                if isinstance(block, dict)
+            },
+        },
+    )
+    write_json(
+        final_dir(run_dir) / "summary.json",
+        {k: v for k, v in summaries.items() if k != "passes"},
+    )
+
+
 def _stage_context(
     label: str,
     audio: Audio,
@@ -1258,7 +1290,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Enhancement failed: {exc!r}", file=sys.stderr)
             summaries["passes"]["enhanced_16k"] = {"status": "failed", "error": repr(exc)}
 
-    write_json(final_dir(run_dir) / "summary.json", summaries)
+    _write_run_summary(run_dir, summaries)
 
     # Hierarchical Label Studio export — one LS task per audio variant, each
     # carrying parallel timeline tracks (one per analyzer × model). AST and
@@ -1527,7 +1559,7 @@ def main(argv: list[str] | None = None) -> int:
         # before the comparator stage so it does not contain
         # ``global_uncertainty``. Overwriting here keeps the on-disk summary
         # in sync with the in-memory dict.
-        write_json(final_dir(run_dir) / "summary.json", summaries)
+        _write_run_summary(run_dir, summaries)
 
         # Persist per-pass windowed speaker embeddings — one JSON per (pass, model)
         # at ``<pass>/embeddings/<model>.json`` with the full window grid + vectors.
@@ -1933,10 +1965,10 @@ def main(argv: list[str] | None = None) -> int:
             except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
                 print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
                 summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
-            write_json(final_dir(run_dir) / "summary.json", summaries)
+            _write_run_summary(run_dir, summaries)
         elif args.no_adaptive_outputs:
             summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
-            write_json(final_dir(run_dir) / "summary.json", summaries)
+            _write_run_summary(run_dir, summaries)
 
     # Scene-context tracks attach last: they read artifacts written by the per-speaker and
     # mask stages above, and both are questions a reviewer cannot answer from the

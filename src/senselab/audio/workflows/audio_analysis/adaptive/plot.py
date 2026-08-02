@@ -23,7 +23,13 @@ from typing import Any
 from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
 
 
-def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title: str = "") -> Path | None:
+def build_adaptive_timeline(
+    out_dir: Path,
+    *,
+    gt_path: Path | None = None,
+    title: str = "",
+    transcript: dict | None = None,
+) -> Path | None:
     """Render ``<out_dir>/final/timeline.png``; returns the path (None on failure)."""
     import matplotlib
 
@@ -40,7 +46,11 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
     belief.mkdir(parents=True, exist_ok=True)
-    transcript = json.loads((final / "transcript.json").read_text())
+    # The figure renders the converged answer, so its caller — which has just produced that
+    # answer — hands it over. Re-reading ``final/transcript.json`` would make a deliverable an
+    # input to the stage that writes the deliverable next to it.
+    if transcript is None:
+        transcript = json.loads((final / "transcript.json").read_text())
     stream = transcript.get("stream", "raw_16k")
     iterations = json.loads((belief / "iterations.json").read_text())["entries"]
     convergence = json.loads((belief / "convergence.json").read_text())
@@ -494,7 +504,7 @@ def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
     """Render the run's input audio as a dB-scaled STFT on ``ax``.
 
     Best-effort and self-contained: the audio path comes from the run's
-    ``summary.json`` (``input_audio``), re-rooted if the run came from another
+    ``L1/passes.json`` (``input_audio``), re-rooted if the run came from another
     machine. Any failure leaves an annotated empty axis rather than losing the
     whole figure — the spectrogram is context, not the point of the plot.
     """
@@ -504,10 +514,11 @@ def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
 
         from senselab.audio.workflows.audio_analysis.adaptive.loop import _resolve_input_audio
 
-        summary = json.loads((final_dir(out_dir) / "summary.json").read_text())
+        # The input path is evidence about the run, not a deliverable.
+        summary = json.loads((evidence_dir(out_dir) / "passes.json").read_text())
         path = _resolve_input_audio(summary.get("input_audio"), out_dir)
         if not path:
-            raise FileNotFoundError("input_audio not recorded in summary.json")
+            raise FileNotFoundError("input_audio not recorded in L1/passes.json")
 
         from senselab.audio.data_structures import Audio
         from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
