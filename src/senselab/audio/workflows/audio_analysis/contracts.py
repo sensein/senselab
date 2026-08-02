@@ -23,9 +23,28 @@ Four things live here, in this order:
    ``adaptive/`` included, plus both CLI drivers), resolves local aliases to a fixpoint, and
    flags any read or write of a run-relative path outside the declaring stage's contract.
 4. :func:`artifact_violations` — walks a real run's artifact tree and flags any file that is in
-   no stage's declared outputs, plus any table whose key contradicts the artifact it was written
-   as. This catches what static analysis cannot: a writer reached through a helper, or a file
-   nobody meant to emit.
+   no stage's declared outputs, any file whose *kind* the declaring pattern does not permit, any
+   file the guard could not read, and any table whose key contradicts the artifact it was written
+   as. Its mirror :func:`unproduced_declarations` flags the opposite: a declared output a complete
+   run produces nothing for. Together they catch what static analysis cannot: a writer reached
+   through a helper, a file nobody meant to emit, and a declaration nobody satisfies.
+
+**A guard is defeated by the case it does not consider, and every one of those was found by
+constructing it rather than by reading the code.** Four were, and closing them is what the shape
+of this module is now for:
+
+- a declaration broad enough to permit anything. ``**`` used to be free; it now costs a pinned
+  set of ``suffixes``, a ``key`` that prohibits at least one dimension, and conformance to
+  :func:`structural_vocabulary` — and :meth:`Artifact.__post_init__` refuses the declaration
+  outright rather than leaving the guard to go quiet beneath it.
+- a content rule that falls to a file extension. The key rules read every format in
+  :data:`TABULAR_SUFFIXES`, the declaration pins which of them may appear where, and a file that
+  cannot be read is :class:`UnreadableArtifact` — a finding, never a pass.
+- a path bound in a way the resolver did not watch for. Assignment is one of seven binding forms
+  (:data:`_BINDING_NODES`); tuple targets, starred targets, ``/=``, walrus and ``for`` were the
+  six that were not.
+- a real-run fixture that passed on a fragment. Completeness is judged against the declaration,
+  by the same :func:`unproduced_declarations` that reports a declaration nothing satisfies.
 
 :data:`KNOWN_DEVIATIONS` records where the tree does not yet conform. Every entry names the
 D-17 clause it breaks and what closes it, and a live-ness check fails when an entry stops
@@ -42,7 +61,9 @@ either being a cheaper version of the other.
 from __future__ import annotations
 
 import ast
+import csv
 import graphlib
+import json
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -52,18 +73,24 @@ __all__ = [
     "KNOWN_DEVIATIONS",
     "MODULE_STAGE",
     "STAGE_CONTRACTS",
+    "TABULAR_SUFFIXES",
     "Artifact",
     "Deviation",
     "Finding",
     "StageContract",
+    "UnreadableArtifact",
     "artifact_violations",
     "dag_edges",
+    "dead_artifact_deviations",
     "matches",
     "overlap",
     "pipeline_sources",
     "static_violations",
+    "structural_vocabulary",
     "topological_order",
+    "unproduced_declarations",
     "unrolled_contracts",
+    "unwaived_unproduced",
 ]
 
 
@@ -132,7 +159,7 @@ DIMENSION_COLUMNS: Final[Mapping[str, frozenset[str]]] = {
     "perturbation": frozenset({"perturbation", "stream", "pass", "pass_label", "pass_a", "pass_b", "elected_stream"}),
     "axis": frozenset({"axis"}),
     "signal": frozenset({"signal", "source"}),
-    "bucket": frozenset({"start", "end"}),
+    "bucket": frozenset({"start", "end", "bucket_start", "bucket_end"}),
     "speaker": frozenset({"speaker", "speaker_id"}),
     "round": frozenset({"round"}),
 }
@@ -149,6 +176,16 @@ FOLD_COLUMNS: Final[frozenset[str]] = frozenset(
 )
 """Columns whose value is an aggregate across signals — an answer, not a measurement. Permitted
 only where ``axis`` is part of the key, because an axis *is* that aggregate."""
+
+
+TABULAR_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {".parquet", ".feather", ".arrow", ".csv", ".tsv", ".json", ".jsonl", ".ndjson"}
+)
+"""Every suffix this repo can write a table as, and therefore every suffix the key rules must be
+able to read. The guard used to read ``.parquet`` and return "not a table" for everything else,
+which made the whole content half of the declaration optional: the same rows written as
+``speaker.csv`` conformed. A format the repo can produce and the guard cannot read is a hole the
+size of every rule below."""
 
 
 @dataclass(frozen=True)
@@ -179,6 +216,17 @@ class Artifact:
     by — and, far more importantly, which they may not. Declaring ``required=()`` there says "any
     of these, none of them mandatory"; the prohibitions still bind, which is the half that
     matters, because the rule those files must never break is that an axis is L2's.
+
+    ``folded`` names dimensions this artifact **relates** rather than indexes, so a row may spell
+    one of them more than once: cross-perturbation stability carries ``pass_a`` beside ``pass_b``
+    because comparing two perturbations is the whole content of the file. It is a licence only a
+    deciding stage may take — an L1 artifact that declared it would be measuring and folding in
+    the same breath — and :func:`folding_stages` is where that is enforced, because an artifact
+    does not know which stage declares it.
+
+    ``suffixes`` pins the file kinds permitted at this pattern. It defaults to the extension the
+    pattern itself names (``final/transcript.json`` permits ``.json`` and nothing else), and must
+    be given explicitly wherever the pattern ends in ``**`` and therefore names none.
     """
 
     pattern: str
@@ -186,12 +234,88 @@ class Artifact:
     key: tuple[str, ...] | None = None
     keyed_in_path: tuple[str, ...] = ()
     required: tuple[str, ...] | None = None
+    folded: tuple[str, ...] = ()
+    suffixes: tuple[str, ...] | None = None
+
+    def __post_init__(self) -> None:
+        """Reject a declaration too broad to constrain anything, at the moment it is written.
+
+        **Breadth is refused rather than discouraged**, and refused *here* rather than in a test,
+        because of how a broad declaration fails: it does not raise, it goes quiet. A ``**`` with
+        no content rule makes every file beneath it conform, so the guard's report is
+        indistinguishable from a clean tree — and a rule enforced only by a test can be violated
+        by any caller that imports this module without running that test, which includes the guard
+        itself when it is called from a script. Refusing at construction converts a silent
+        weakening of the guard into a loud failure on the line that wrote it. The test suite still
+        proves the refusal fires; it cannot be the only thing that does.
+
+        Three things a ``**`` must pay for its breadth with:
+
+        - ``suffixes``, because ``**`` names no extension and the key rules can only check a file
+          they can read — an unpinned suffix is how ``L1/signals/speaker.csv`` conformed;
+        - ``key``, because ``key=None`` means "not a table" and beneath a ``**`` that is a claim
+          about a whole subtree rather than about one file;
+        - a proper subset of the dimensions, because a key naming all of them prohibits nothing.
+          ``L1/raw/**`` may not be indexed by an axis or a round; that prohibition is the reason
+          the pattern is allowed to be broad at all.
+
+        The fourth payment is not per-artifact and so is not checked here: a path matched only by
+        a ``**`` is also held to :func:`structural_vocabulary`, which is derived from every
+        declaration at once.
+        """
+        unknown = (set(self.key or ()) | set(self.keyed_in_path) | set(self.required or ()) | set(self.folded)) - set(
+            DIMENSION_COLUMNS
+        )
+        if unknown:
+            raise ValueError(f"{self.pattern}: {sorted(unknown)} name no key dimension in DIMENSION_COLUMNS")
+        if not set(self.folded) <= set(self.key or ()):
+            raise ValueError(f"{self.pattern}: folded={self.folded} names a dimension outside key={self.key}")
+        if "**" not in _segments(self.pattern):
+            if not self.permitted_suffixes():
+                raise ValueError(
+                    f"{self.pattern}: names no file extension and declares no suffixes, so any file kind conforms"
+                )
+            return
+        if not self.suffixes:
+            raise ValueError(
+                f"{self.pattern}: a '**' names no extension, so it must declare suffixes — otherwise the "
+                "same rows written as .csv or .feather fall outside every content rule"
+            )
+        if self.key is None:
+            raise ValueError(
+                f"{self.pattern}: a '**' with key=None applies no content rule to anything beneath it, "
+                "so every file under it conforms and the guard reports a clean tree"
+            )
+        if set(self.key) >= set(DIMENSION_COLUMNS):
+            raise ValueError(
+                f"{self.pattern}: key={self.key} names every dimension, so it prohibits none — "
+                "breadth of location has to be paid for with narrowness of content"
+            )
 
     def must_carry(self) -> frozenset[str]:
         """Dimensions a row has to spell out. Derived unless the artifact overrides it."""
         if self.required is not None:
             return frozenset(self.required)
         return frozenset(self.key or ()) - frozenset(self.keyed_in_path)
+
+    def permitted_suffixes(self) -> frozenset[str]:
+        """File kinds permitted here: what the pattern names, or what the artifact declares."""
+        if self.suffixes is not None:
+            return frozenset(self.suffixes)
+        named = _pattern_suffix(self.pattern)
+        return frozenset({named}) if named else frozenset()
+
+
+def _pattern_suffix(pattern: str) -> str | None:
+    """The extension a pattern names, or ``None`` when its last segment names none."""
+    segments = _segments(pattern)
+    if not segments:
+        return None
+    last = segments[-1]
+    if last == "**" or "." not in last:
+        return None
+    suffix = last[last.rindex(".") :]
+    return None if {"*", "?"} & set(suffix) else suffix
 
 
 @dataclass(frozen=True)
@@ -268,6 +392,7 @@ L1 = StageContract(
             key=("perturbation", "signal", "bucket", "speaker"),
             keyed_in_path=("perturbation",),
             required=(),
+            suffixes=(".json", ".parquet"),
         ),
         Artifact(
             "L1/perturbation/*/**",
@@ -275,11 +400,13 @@ L1 = StageContract(
             key=("perturbation", "signal", "bucket", "speaker"),
             keyed_in_path=("perturbation",),
             required=(),
+            suffixes=(".json", ".parquet"),
         ),
         Artifact(
             "L1/signals/**",
             "per-signal measurements accumulating across raw and every perturbation — L2's only input",
             key=("perturbation", "signal", "bucket"),
+            suffixes=(".parquet",),
         ),
         Artifact("L1/signals.png", "evidence view: what each signal measured, in its own units"),
         Artifact("L1/timeline*.png", "evidence view: the signals against the recording, optionally chunked"),
@@ -297,7 +424,38 @@ L2_ROUND = StageContract(
     ),
     reads=("L1/signals/**", "L2/round/{prev}/**"),
     writes=(
-        Artifact("L2/round/{n}/derivatives/**", "mask, speaker allocation, ASR consensus, scene components"),
+        # The derivatives are named one family at a time rather than swept up by a ``**``. The
+        # single broad pattern that used to stand here carried ``key=None``, so nothing beneath it
+        # was checked at all and ``derivatives/estimates/speaker.parquet`` — a per-perturbation
+        # axis table, the exact thing D-16 says cannot exist — sat inside the declaration without
+        # a finding. There are three families and they have three different keys; one pattern
+        # could only describe them by describing none of them.
+        Artifact(
+            "L2/round/{n}/derivatives/votes/*.parquet",
+            "one source's statement about one bucket of one perturbation, per axis",
+            key=("axis", "perturbation", "signal", "bucket"),
+            keyed_in_path=("axis",),
+        ),
+        Artifact(
+            "L2/round/{n}/derivatives/votes_added.parquet",
+            "the votes this round added, beside the estimates they moved",
+            key=("axis", "perturbation", "signal", "bucket", "round"),
+            keyed_in_path=("round",),
+        ),
+        Artifact(
+            "L2/round/{n}/derivatives/stability/*.parquet",
+            "one signal's cross-perturbation disagreement per bucket",
+            key=("perturbation", "signal", "bucket"),
+            # The fold this file *is*: a row relates two perturbations, which is why it is a round
+            # derivative and not evidence. Only a deciding stage may say this.
+            folded=("perturbation",),
+        ),
+        Artifact(
+            "L2/round/{n}/derivatives/regions.json",
+            "the high-uncertainty regions this round proposed",
+            key=("axis", "bucket"),
+            required=("axis",),
+        ),
         Artifact(
             "L2/round/{n}/estimates/*.parquet",
             "the axes: one row per (round, axis, bucket)",
@@ -440,7 +598,7 @@ class Deviation:
     """
 
     module: str
-    op: Literal["read", "write", "artifact", "key"]
+    op: Literal["read", "write", "artifact", "key", "unproduced"]
     pattern: str
     why: str
 
@@ -473,7 +631,6 @@ _TWO_PASS_TREE = (
     "The per-perturbation tree is still L1/<pass>/ with the two-pass vocabulary baked in. "
     "D-17: L1/raw/ and L1/perturbation/<k>/, with the set open."
 )
-
 KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ── the driver performs all three stages itself ─────────────────────────
     Deviation(_DRIVER, "write", "L1/signals/*.parquet", _INLINED),
@@ -659,8 +816,13 @@ genuinely keyed by ``(axis, bucket)``; what differs is below the key. All three 
 
 The ``artifact`` entries are matched as **patterns**, unlike the static ones, because a
 restructure moves a directory as a unit and one entry per file would be a file listing rather
-than a register. They carry no liveness check: run trees legitimately differ (``eval.json``
-appears only with ground truth), so an unmatched artifact entry is evidence of nothing.
+than a register. The ``unproduced`` entries are matched by **string equality** instead: their
+subject is a declared pattern rather than a path, so waiving ``final/speaker/*.parquet`` by glob
+would waive whatever else that glob happened to reach.
+
+Both are now live-checked, against the *recorded* complete tree rather than against whatever run
+is on the machine. The exemption they used to carry — run trees legitimately differ, so an
+unmatched entry is evidence of nothing — was true of an arbitrary run and false of a fixed one.
 """
 
 
@@ -838,20 +1000,11 @@ class _PathResolver(ast.NodeVisitor):
 
     def _scope(self, scope: ast.AST, inherited: Mapping[str, _Alternatives]) -> None:
         env = dict(inherited)
-        assignments = [n for n in _own_nodes(scope) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
-        for _ in range(len(assignments) + 1):
+        bindings = [n for n in _own_nodes(scope) if isinstance(n, _BINDING_NODES)]
+        for _ in range(len(bindings) + 1):
             before = dict(env)
-            for node in assignments:
-                value = node.value
-                if value is None:
-                    continue
-                resolved = self._eval(value, env)
-                if resolved is None:
-                    continue
-                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                for target in targets:
-                    if isinstance(target, ast.Name):
-                        env[target.id] = resolved
+            for node in bindings:
+                self._bind_node(node, env)
             if env == before:
                 break
 
@@ -860,6 +1013,129 @@ class _PathResolver(ast.NodeVisitor):
 
         for child in _nested_scopes(scope):
             self._scope(child, env)
+
+    # ── binding ──────────────────────────────────────────────────────────────
+    #
+    # A path is under contract wherever it is named, and Python has more ways to name one than
+    # ``x = expr``. Recording only ``ast.Name`` targets meant that
+    # ``speakers_path, presence_path = belief / "speakers.json", belief / "..."`` bound two run
+    # artifacts the guard could not see, and every use of either was silent afterwards. The
+    # binding form is not the rule; the path is.
+
+    def _bind_node(self, node: ast.AST, env: dict[str, _Alternatives]) -> None:
+        """Record whatever run-relative paths one binding statement puts into scope."""
+        if isinstance(node, ast.AugAssign):
+            # ``p /= "speakers.json"`` extends the path in place. Read as a plain rebinding it
+            # reported the *directory*, which is a finding naming the wrong artifact.
+            if not isinstance(node.op, ast.Div):
+                return
+            base = self._eval(node.target, env)
+            if base is None:
+                return
+            extra = _literal_segments(node.value)
+            self._bind(node.target, tuple(branch + extra for branch in base), env)
+            return
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            self._bind_iteration(node.target, node.iter, env)
+            return
+        if isinstance(node, ast.Assign):
+            targets: Sequence[ast.expr] = node.targets
+        else:
+            assert isinstance(node, (ast.AnnAssign, ast.NamedExpr))
+            targets = [node.target]
+        for target in targets:
+            self._bind_value(target, getattr(node, "value", None), env)
+
+    def _bind_value(self, target: ast.expr, value: ast.AST | None, env: dict[str, _Alternatives]) -> None:
+        """Bind one assignment target, unpacking element-wise when both sides are sequences."""
+        if value is None:
+            return
+        if isinstance(target, (ast.Tuple, ast.List)):
+            elements = self._eval_elements(value, env)
+            if elements is not None:
+                self._bind_sequence(target.elts, elements, env)
+                return
+            # ``a, b = f()`` — the call is one value the resolver cannot take apart, so each name
+            # gets every path it could have been. Over-broad by construction, and deliberately:
+            # an access the guard cannot prove conformant is not a permitted one.
+            whole = self._eval(value, env)
+            if whole is not None:
+                self._bind(target, whole, env)
+            return
+        resolved = self._eval(value, env)
+        if resolved is not None:
+            self._bind(target, resolved, env)
+
+    def _bind(self, target: ast.expr, resolved: _Alternatives, env: dict[str, _Alternatives]) -> None:
+        """Bind one target to one disjunction, descending through starred and nested targets."""
+        if isinstance(target, ast.Starred):
+            self._bind(target.value, resolved, env)
+        elif isinstance(target, ast.Name):
+            env[target.id] = resolved
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                self._bind(element, resolved, env)
+
+    def _bind_sequence(
+        self, targets: Sequence[ast.expr], elements: Sequence[_Alternatives | None], env: dict[str, _Alternatives]
+    ) -> None:
+        """Element-wise unpacking, with a starred target absorbing the middle as a disjunction."""
+        starred = [index for index, target in enumerate(targets) if isinstance(target, ast.Starred)]
+        if not starred:
+            if len(targets) != len(elements):
+                return
+            for target, resolved in zip(targets, elements):
+                if resolved is not None:
+                    self._bind(target, resolved, env)
+            return
+        at = starred[0]
+        after = len(targets) - at - 1
+        if len(elements) < len(targets) - 1:
+            return
+        for target, resolved in zip(targets[:at], elements[:at]):
+            if resolved is not None:
+                self._bind(target, resolved, env)
+        absorbed = _union(elements[at : len(elements) - after])
+        if absorbed:
+            self._bind(targets[at], absorbed, env)
+        if after:
+            for target, resolved in zip(targets[at + 1 :], elements[len(elements) - after :]):
+                if resolved is not None:
+                    self._bind(target, resolved, env)
+
+    def _bind_iteration(self, target: ast.expr, iterable: ast.AST, env: dict[str, _Alternatives]) -> None:
+        """Bind a ``for`` (or comprehension) target over a sequence the resolver can take apart."""
+        elements = self._eval_elements(iterable, env)
+        if elements is None:
+            # ``for path in signals_dir(run).glob("*.parquet")`` — the iterable is one expression
+            # naming every path it yields, so the loop variable is that same disjunction.
+            resolved = self._eval(iterable, env)
+            if resolved is not None:
+                self._bind(target, resolved, env)
+            return
+        if isinstance(target, (ast.Tuple, ast.List)) and isinstance(iterable, (ast.Tuple, ast.List, ast.Set)):
+            columns: list[list[_Alternatives]] = [[] for _ in target.elts]
+            for item in iterable.elts:
+                per_item = self._eval_elements(item, env)
+                if per_item is None or len(per_item) != len(target.elts):
+                    return
+                for index, resolved in enumerate(per_item):
+                    if resolved is not None:
+                        columns[index].append(resolved)
+            for element, branches in zip(target.elts, columns):
+                absorbed = _union(branches)
+                if absorbed:
+                    self._bind(element, absorbed, env)
+            return
+        absorbed = _union(elements)
+        if absorbed:
+            self._bind(target, absorbed, env)
+
+    def _eval_elements(self, node: ast.AST, env: Mapping[str, _Alternatives]) -> list[_Alternatives | None] | None:
+        """Per-element resolution of a literal sequence, or ``None`` when it is not one."""
+        if not isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            return None
+        return [self._eval(element, env) for element in node.elts]
 
     def _check_call(self, call: ast.Call, env: Mapping[str, _Alternatives]) -> None:
         func = call.func
@@ -918,6 +1194,10 @@ class _PathResolver(ast.NodeVisitor):
             if node.attr in _PASS_DIR_ATTRS:
                 return _PERTURBATION_DIRS
             return None
+        if isinstance(node, ast.NamedExpr):
+            # ``(p := belief / "x.json").exists()`` names the path in the same expression it
+            # reads it in, so the walrus has to resolve as a *value* and not only as a binding.
+            return self._eval(node.value, env)
         if isinstance(node, ast.Call):
             return self._eval_call(node, env)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
@@ -942,6 +1222,16 @@ class _PathResolver(ast.NodeVisitor):
             return (_ROUND_DIRS[str(name)],)
         if name == "Path" and node.args:
             return self._eval(node.args[0], env)
+        if isinstance(func, ast.Attribute) and name in {"glob", "rglob", "iterdir"}:
+            # What the call *yields*, so a ``for`` over it binds the paths rather than nothing.
+            base = self._eval(func.value, env)
+            if base is None:
+                return None
+            if name == "iterdir":
+                return tuple(branch + ("*",) for branch in base)
+            below: tuple[str, ...] = ("**",) if name == "rglob" else ()
+            below += _literal_segments(node.args[0]) if node.args else ("*",)
+            return tuple(branch + below for branch in base)
         if isinstance(func, ast.Attribute) and name == "joinpath":
             base = self._eval(func.value, env)
             if base is None:
@@ -979,6 +1269,32 @@ spells a filename through a constant is doing the right thing; a guard that coul
 string literals would punish it, and the workaround (inlining the literal beside the constant)
 is a second spelling of one location.
 """
+
+
+_BINDING_NODES: Final[tuple[type[ast.AST], ...]] = (
+    ast.Assign,
+    ast.AnnAssign,
+    ast.AugAssign,
+    ast.NamedExpr,
+    ast.For,
+    ast.AsyncFor,
+    ast.comprehension,
+)
+"""Every statement form that can put a run-relative path into scope.
+
+Enumerated because Python's binding forms are a closed set, unlike the violations they can hide.
+The list that preceded it held three of the seven, and the four it omitted were not exotic: a
+tuple assignment, a ``for``, an in-place ``/=`` and a comprehension are ordinary lines that
+happened to be invisible."""
+
+
+def _union(alternatives: Iterable[_Alternatives | None]) -> _Alternatives:
+    """One disjunction covering every branch of several, in first-seen order."""
+    seen: dict[tuple[str, ...], None] = {}
+    for resolved in alternatives:
+        for branch in resolved or ():
+            seen.setdefault(branch, None)
+    return tuple(seen)
 
 
 def _literal_segments(node: ast.AST) -> tuple[str, ...]:
@@ -1107,16 +1423,139 @@ def static_violations(repo_root: Path) -> list[Finding]:
 
 def _declared_artifacts() -> tuple[Artifact, ...]:
     """Every artifact any stage declares, with the round placeholders made generic."""
-    return tuple(artifact for stage in DAG_STAGES for artifact in STAGE_CONTRACTS[stage].instantiate().writes)
+    return tuple(artifact for stage, artifact in declared_artifacts())
+
+
+def declared_artifacts() -> tuple[tuple[str, Artifact], ...]:
+    """Every declared artifact paired with the stage that declares it."""
+    return tuple((stage, artifact) for stage in DAG_STAGES for artifact in STAGE_CONTRACTS[stage].instantiate().writes)
+
+
+def folding_stages() -> Mapping[str, tuple[str, ...]]:
+    """Which stage declares each artifact that takes the ``folded`` licence.
+
+    Separate from :class:`Artifact` because an artifact does not know who declares it, and the
+    rule is about the declarer: relating two values of an input dimension is a decision, so a
+    measuring stage may not take it.
+    """
+    taken: dict[str, list[str]] = {}
+    for stage, artifact in declared_artifacts():
+        if artifact.folded:
+            taken.setdefault(stage, []).append(artifact.pattern)
+    return {stage: tuple(patterns) for stage, patterns in taken.items()}
+
+
+def structural_vocabulary(artifacts: Sequence[Artifact] | None = None) -> Mapping[str, frozenset[int]]:
+    """Every literal *directory* segment the declaration uses, and the depths it uses it at.
+
+    This is the fourth thing a ``**`` is held to, and the only one that is not per-artifact: it is
+    derived from every declaration at once, so it grows and shrinks with the tree rather than
+    being a list of reserved words somebody has to remember to extend.
+
+    The rule it supports is short. A ``**`` may admit a segment the declaration never mentions —
+    that is what makes ``L1/raw/asr/whisper.json`` a legitimate tool output nobody had to
+    predict. What it may not admit is a segment the declaration *does* mention, at a depth the
+    declaration does not put it: ``L1/raw/final/transcript.json`` and
+    ``L1/raw/estimates/asr.parquet`` are another stage's shape smuggled inside L1's open tree,
+    and both used to conform. Filenames are excluded because a filename is not structure —
+    ``derivatives/votes/asr.parquet`` and ``final/asr.parquet`` are two files, not a collision.
+    """
+    places: dict[str, set[int]] = {}
+    for artifact in _declared_artifacts() if artifacts is None else artifacts:
+        segments = _segments(artifact.pattern)
+        for index, segment in enumerate(segments[:-1]):
+            if {"*", "?"} & set(segment):
+                continue
+            places.setdefault(segment, set()).add(index)
+    return {segment: frozenset(indices) for segment, indices in places.items()}
+
+
+class UnreadableArtifact(Exception):
+    """A file the guard could not read, and therefore could not check.
+
+    Raised rather than swallowed because the two used to be the same outcome: ``_table_columns``
+    returned ``None`` for anything that was not a parquet, and ``None`` meant "not a table, no
+    rules apply". A file the guard cannot open has not passed anything.
+    """
 
 
 def _table_columns(path: Path) -> frozenset[str] | None:
-    """A parquet's column names, or ``None`` when the file is not a table."""
-    if path.suffix != ".parquet":
-        return None
-    import pyarrow.parquet as pq
+    """Column names of a file written as a table, or ``None`` when it is not one.
 
-    return frozenset(pq.read_schema(path).names)
+    Every format the repo can write, not just parquet — see :data:`TABULAR_SUFFIXES`. A JSON
+    document is a table only when it is a non-empty list of objects: an object is a document, and
+    an empty list has no row that could contradict a key.
+    """
+    suffix = path.suffix.lower()
+    if suffix not in TABULAR_SUFFIXES:
+        return None
+    try:
+        if suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            return frozenset(pq.read_schema(path).names)
+        if suffix in {".feather", ".arrow"}:
+            import pyarrow.feather as feather
+
+            return frozenset(feather.read_table(path).schema.names)
+        if suffix in {".csv", ".tsv"}:
+            with path.open(newline="", encoding="utf-8") as handle:
+                header = next(csv.reader(handle, delimiter="\t" if suffix == ".tsv" else ","), None)
+            return frozenset(header) if header else None
+        return _json_record_columns(path, suffix)
+    except Exception as exc:  # noqa: BLE001 — every failure to read is the same finding
+        raise UnreadableArtifact(f"{type(exc).__name__}: {exc}") from exc
+
+
+def _json_record_columns(path: Path, suffix: str) -> frozenset[str] | None:
+    """Column names of a JSON document that is a list of records, else ``None``."""
+    text = path.read_text(encoding="utf-8")
+    if suffix in {".jsonl", ".ndjson"}:
+        records: list[object] = [json.loads(line) for line in text.splitlines() if line.strip()]
+    else:
+        parsed = json.loads(text)
+        if not isinstance(parsed, list):
+            return None
+        records = list(parsed)
+    rows = [record for record in records if isinstance(record, dict)]
+    if not rows or len(rows) != len(records):
+        return None
+    return frozenset().union(*(frozenset(row) for row in rows))
+
+
+def _suffix_violation(relative: str, suffix: str, owners: Sequence[Artifact]) -> str | None:
+    """Where a file's extension is not one the pattern that admitted it permits."""
+    if any(suffix in artifact.permitted_suffixes() for artifact in owners):
+        return None
+    permitted = sorted({s for artifact in owners for s in artifact.permitted_suffixes()})
+    return (
+        f"{relative}: {suffix or 'no extension'} is not a permitted file kind here — "
+        f"{', '.join(artifact.pattern for artifact in owners)} permits {permitted}"
+    )
+
+
+def _vocabulary_violations(
+    relative: str, owners: Sequence[Artifact], vocabulary: Mapping[str, frozenset[int]]
+) -> list[str]:
+    """Where a ``**`` admitted a segment the declaration places somewhere else.
+
+    Only for a path that *every* matching pattern reached through a ``**``: a bounded pattern
+    fixed each of its segments itself, so there is nothing it could have swallowed.
+    """
+    if any("**" not in _segments(artifact.pattern) for artifact in owners):
+        return []
+    segments = _segments(relative)
+    problems: list[str] = []
+    for index, segment in enumerate(segments[:-1]):
+        places = vocabulary.get(segment)
+        if places is None or index in places:
+            continue
+        problems.append(
+            f"{relative}: '{segment}' is the tree's own name for depth {sorted(places)}, and here it is at "
+            f"depth {index} under {', '.join(artifact.pattern for artifact in owners)} — "
+            f"a '**' does not license another stage's shape"
+        )
+    return problems
 
 
 def _key_violations(relative: str, artifact: Artifact, columns: frozenset[str]) -> list[str]:
@@ -1140,7 +1579,7 @@ def _key_violations(relative: str, artifact: Artifact, columns: frozenset[str]) 
                 f"{relative}: keyed {artifact.key} and the path does not fix {dimension}, "
                 f"so a row cannot say which one it came from"
             )
-        if len(present) > 1 and dimension not in INTERVAL_DIMENSIONS:
+        if len(present) > 1 and dimension not in INTERVAL_DIMENSIONS and dimension not in artifact.folded:
             problems.append(
                 f"{relative}: one {dimension} per row, but {present} names more than one — "
                 f"relating two values of an input dimension is a fold, which belongs to L2"
@@ -1156,9 +1595,15 @@ def artifact_violations(run_dir: Path) -> list[str]:
 
     Static analysis cannot see a path handed to a helper as a parameter, nor a file emitted by a
     library the caller pointed somewhere unexpected. Walking what was actually written can.
+
+    Four questions per file, in the order a defeat gets past them: is it declared at all; did a
+    ``**`` admit it by admitting another stage's shape; is its *kind* one the declaring pattern
+    permits; and do its columns contradict the key. The third and fourth used to be one question
+    that only parquet could fail.
     """
     root = Path(run_dir)
     declared = _declared_artifacts()
+    vocabulary = structural_vocabulary(declared)
     problems: list[str] = []
     for path in sorted(root.rglob("*")):
         if not path.is_file():
@@ -1168,12 +1613,43 @@ def artifact_violations(run_dir: Path) -> list[str]:
         if not owners:
             problems.append(f"{relative}: written by no declared stage output")
             continue
-        columns = _table_columns(path)
+        problems += _vocabulary_violations(relative, owners, vocabulary)
+        wrong_kind = _suffix_violation(relative, path.suffix.lower(), owners)
+        if wrong_kind is not None:
+            problems.append(wrong_kind)
+            continue
+        try:
+            columns = _table_columns(path)
+        except UnreadableArtifact as unreadable:
+            problems.append(f"{relative}: could not be read ({unreadable}), so nothing about it has been checked")
+            continue
         if columns is None:
             continue
         for artifact in owners:
             problems += _key_violations(relative, artifact, columns)
     return problems
+
+
+def unproduced_declarations(run_dir: Path, declared: Sequence[tuple[str, Artifact]] | None = None) -> list[str]:
+    """Declared outputs a **complete** run produced nothing for.
+
+    The guard nobody had written, and the mirror of the one above: a declaration nothing
+    satisfies is as wrong as an artifact nothing declares. Both make "which stage produces this"
+    unanswerable, and the unproduced half is the more dangerous of the two, because it is what
+    lets a fixture judge a fragment complete — every rule passes on a file that is not there.
+
+    Read against a run known to be complete. On a partial tree every declaration is unproduced
+    and the answer says nothing, which is exactly why :func:`unproduced_declarations` is also
+    what completeness is judged by: the two are the same question asked for different reasons.
+    """
+    root = Path(run_dir)
+    artifacts = declared_artifacts() if declared is None else tuple(declared)
+    produced = [path.relative_to(root).as_posix() for path in sorted(root.rglob("*")) if path.is_file()]
+    return [
+        f"{artifact.pattern}: declared by {stage} ({artifact.what}) and the run produced nothing matching it"
+        for stage, artifact in artifacts
+        if not any(matches(relative, artifact.pattern) for relative in produced)
+    ]
 
 
 # ── the register's own arithmetic ────────────────────────────────────────────
@@ -1200,3 +1676,32 @@ def unwaived_artifacts(problems: Iterable[str]) -> list[str]:
     """Artifact-tree problems no entry in :data:`KNOWN_DEVIATIONS` accounts for."""
     waived = tuple(d.pattern for d in KNOWN_DEVIATIONS if d.op in {"artifact", "key"})
     return [p for p in problems if not any(matches(p.split(":", 1)[0], pattern) for pattern in waived)]
+
+
+def unwaived_unproduced(problems: Iterable[str]) -> list[str]:
+    """Unproduced declarations no ``unproduced`` register entry accounts for.
+
+    Matched by string equality on the declared pattern rather than by :func:`matches`, because
+    the subject here is a *pattern* and not a path: waiving ``final/speaker/*.parquet`` by glob
+    would waive whatever else the glob happens to cover.
+    """
+    waived = {d.pattern for d in KNOWN_DEVIATIONS if d.op == "unproduced"}
+    return [p for p in problems if p.split(":", 1)[0] not in waived]
+
+
+def dead_artifact_deviations(problems: Iterable[str]) -> list[Deviation]:
+    """Artifact-side register entries that waive nothing in ``problems``.
+
+    The static register has had this check since it was written; the artifact register was
+    exempted from it on the grounds that run trees legitimately differ. They do — which is why
+    this is asked of the *recorded* complete tree rather than of whatever run happens to be on
+    the machine. Against a fixed tree the argument for the exemption disappears, and what is left
+    is the same rot: an entry that outlives its defect and then silently covers the next one.
+    """
+    subjects = [problem.split(":", 1)[0] for problem in problems]
+    return [
+        deviation
+        for deviation in KNOWN_DEVIATIONS
+        if deviation.op in {"artifact", "key", "unproduced"}
+        and not any(subject == deviation.pattern or matches(subject, deviation.pattern) for subject in subjects)
+    ]
