@@ -22,6 +22,8 @@ The driver is N-axis: the design names four (``speech_presence``, ``speaker``, `
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from senselab.audio.workflows.audio_analysis.fuse import (
@@ -601,7 +603,7 @@ def test_projection_ignores_source_buckets_that_measured_nothing() -> None:
     """`None` is the absence of a claim; averaging it in as zero would manufacture confidence."""
     from senselab.audio.workflows.audio_analysis.fuse import project_axis_onto
 
-    src = [
+    src: list[dict[str, Any]] = [
         {"start": 0.0, "end": 1.0, "uncertainty": None},
         {"start": 1.0, "end": 2.0, "uncertainty": 0.8},
     ]
