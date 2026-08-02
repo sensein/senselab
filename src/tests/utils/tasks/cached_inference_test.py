@@ -64,17 +64,29 @@ def test_transcript_signature_matches_pre_refactor_digest() -> None:
 
 
 def test_schema_version_is_pinned() -> None:
-    """Bumping this wipes every user's cache — it must be a deliberate, reviewed act.
+    """Bumping this wipes every user's cache, so every bump must carry its written reason.
 
-    Version 6 accompanies the axis rename (presence → speech_presence, identity → speaker,
-    utterance → asr): cached entries carry the old axis names in their keys and payloads, so
-    reusing them would mix two naming schemes in one run.
-
-    This pin had drifted — it read 4 while the constant was already 5, so it was failing silently
-    in a suite area that was not being exercised. A pin that can drift unnoticed cannot enforce
-    what it exists to enforce.
+    The pin is against the **documented history**, not a literal. Twice now a bare
+    ``assert CACHE_SCHEMA_VERSION == N`` has lagged the constant — it read 4 against 5, was
+    corrected to 7, and was sitting at 7 against 8 when this was rewritten — because a literal in
+    a test is a second copy of the number with nothing forcing it to agree. Deriving the expected
+    value from the ``Bumped N → M`` chain in the module docstring means a bump *cannot* pass
+    without a reason beside it, and the pin cannot silently lag: the reason and the constant are
+    one artifact.
     """
-    assert CACHE_SCHEMA_VERSION == 7
+    import inspect
+    import re
+
+    from senselab.utils.tasks import cached_inference
+
+    # The history lives in the constant's *attribute* docstring, which has no runtime object, so
+    # this reads the source. That is the point: the reason has to be written where the number is.
+    source = inspect.getsource(cached_inference)
+    bumps = [(int(a), int(b)) for a, b in re.findall(r"Bumped (\d+) → (\d+)", source)]
+    assert bumps, "every bump must be narrated in the module docstring"
+    for (_, landed), (departed, _) in zip(bumps, bumps[1:]):
+        assert landed == departed, f"the bump chain skips from {landed} to {departed}"
+    assert CACHE_SCHEMA_VERSION == bumps[-1][1], "the constant and its written history disagree"
 
 
 def test_param_order_does_not_change_the_key() -> None:

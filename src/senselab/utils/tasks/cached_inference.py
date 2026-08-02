@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 8
+CACHE_SCHEMA_VERSION = 9
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -96,6 +96,17 @@ linked evidence is written to ``L2/round0/votes/<axis>.parquet``, and ``final/su
 no longer inlines ``passes``. Nothing needs to read an old parquet — cache invalidation is
 the free lever, and a stale entry that *looks* readable is far more expensive than
 recomputing one.
+
+Bumped 8 → 9 for the D-17 restructure. The run tree changed shape three ways at once:
+a pass became a **perturbation**, so ``L1/raw/`` and ``L1/perturbation/<k>/`` replace
+``L1/raw_16k/`` and ``L1/enhanced_16k/`` and ``L1/perturbations.json`` replaces
+``L1/passes.json``; per-perturbation signal files collapsed into
+``L1/signals/<signal>.parquet`` carrying a ``perturbation`` column; and the two round
+trees became one, ``L2/round/<n>/{estimates,derivatives}``, with the adaptive loop
+adopting fusion's numbering instead of running its own 1-based one. A cached outcome
+still carries ``"pass": "raw_16k"`` in its provenance and joins on a directory that no
+longer exists, so it does not merely lack a column — it describes a run this pipeline
+cannot produce.
 """
 
 

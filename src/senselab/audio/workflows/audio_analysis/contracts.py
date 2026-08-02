@@ -502,15 +502,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
         "needs_enhancement — selects which perturbations the run creates, so it is an L2 "
         "decision taken before L1 has run, stored where no stage claims it.",
     ),
-    Deviation(
-        _DRIVER,
-        "read",
-        "final/labelstudio_tasks.json",
-        "The one surviving read of final/ in the driver: an existence probe that decides what "
-        "the run prints. A probe is a read — a stage branching on a deliverable is treating it "
-        "as state — and `exists` was absent from the previous guard's method list, which is why "
-        "this sat in the tree while the rule reported it held.",
-    ),
     # ── an L1 stage writes into L2, and round 0 reads it back ───────────────
     Deviation(
         _mod("stages.py"),

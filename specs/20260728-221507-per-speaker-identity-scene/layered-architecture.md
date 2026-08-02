@@ -903,16 +903,16 @@ was found by looking at a real run, and none by a test.
 
 ### What is present at the output of each stage
 
-Concretely, for a two-pass run. Marked **[is]** where this is what a run produces today and
-**[should]** where the target differs from current behaviour.
+Concretely, for a run with two perturbations. Marked **[is]** where this is what a run produces
+today and **[should]** where the target differs from current behaviour.
 
 #### After L1 — evidence
 
 ```
 L1/
-  <pass>/                        raw_16k, enhanced_16k
-    signals/<signal>.parquet     per-signal measurement, native units + resolution   [is]
-      + provenance.json          units, model id + revision, window/hop, tool-side reduction
+  perturbations.json             the open register: name, transform, parameters, measured   [is]
+  raw/                           the identity perturbation                                  [is]
+  perturbation/<k>/              every other transform of the recording                     [is]
     diarization/<model>.json     per-model speaker spans
     asr/<model>.json             ScriptLine tree: text, word chunks, avg_logprob,
                                  no_speech_prob, timestamp_source
@@ -923,29 +923,51 @@ L1/
     noise_floor.parquet          per-band floor + ECMA-74 prominence
     background_sources.parquet   per-band source candidates
     background_mask.{parquet,json}  regions + state + uncertainty
-  stability/<signal>.parquet     per-signal cross-pass |Δ| per bucket                [is]
-  stability/signals.json         {signal → instability} — what sets each fusion weight [is]
+  signals/<signal>.parquet       per-signal measurement across raw AND every perturbation,
+                                 one row per (perturbation, bucket), native units          [is]
   signals.png, timeline.png      evidence views, signals in native units
 ```
 
+`L1/signals/` is **L2's only input from L1**, and it accumulates: the perturbation is a column,
+not a directory, so a consumer that wants one perturbation's evidence has to say so on the data.
 Present per value: the number, its units, the model and revision that produced it, the window and
 hop it was measured over, and any reduction the *tool* performed. Absent: any axis, any threshold,
 anything in `[0, 1]` that was not natively a probability.
 
-*`L1/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet` and
-`L1/stability/raw_vs_enhanced/<axis>.parquet` are gone (register item 25, closed 2026-08-02).
-An axis cannot be produced by one pass, so it could not be stored under one.*
+*`L1/<pass>/uncertainty/<axis>.parquet` and `L1/stability/raw_vs_enhanced/<axis>.parquet` are gone
+(register item 25, closed 2026-08-02). `L1/stability/` and `L1/passes.json` are gone with the D-17
+restructure: the first is a fold over perturbations and belongs to a round; the second was
+rewritten by the run's last stage, a back-edge from the deliverable to the file defining L1's
+inputs, and its content now rides in `perturbations.json` beside the declaration it measures.*
 
 #### After each L2 round — belief
 
 ```
 L2/
-  round<N>/
-    uncertainty/<axis>.parquet   one row per bucket per axis                          [is]
-    votes/<axis>.parquet         linked evidence, (axis, bucket, source, pass, scope) [is, round0]
-    derivatives/                 mask, speaker allocation, ASR consensus, scene       [should]
-  rounds.json                    per-round decision log
+  round/<n>/
+    estimates/<axis>.parquet     one row per bucket per axis, four axes               [is]
+    derivatives/
+      votes/<axis>.parquet       linked evidence, (axis, bucket, source, pass, scope) [is, round 0]
+      stability/<signal>.parquet per-signal cross-perturbation |Δ| per bucket         [is, round 0]
+      regions.json               the spans this round proposed                        [is, rounds ≥ 1]
+      votes_added.parquet        what this round added to the store                   [is, rounds ≥ 1]
+      mask, speaker allocation, ASR consensus, scene components                       [should]
+    timeline.png                 the same figure the final timeline draws             [should]
+    summary.json                 what this round did, and what it now estimates       [is]
+  rounds.json                    per-round decision log                               [should: per round]
 ```
+
+**One tree, 0-based.** There were two — `L2/round<N>/` from fusion and `L2/rounds/<N>/` from the
+adaptive loop — so the fusion loop's round 0 and the adaptive loop's round 1 were the same
+iteration under two names. The loop now *adopts* fusion's index rather than assigning its own.
+
+`estimates/` rather than `uncertainty/`: a row carries uncertainty, epistemic uncertainty,
+confidence and variability, so the old name named one column rather than the thing itself.
+
+**[should], stated rather than papered over:** round 0's estimates are written by `fuse` and carry
+`signal_weights`/`weight_basis`; later rounds are written by the belief store and carry
+`p_voice`/`aleatoric_floor` instead. One artifact name, two schemas. Neither guard can see it —
+both are genuinely keyed `(axis, bucket)`, and what differs is below the key.
 
 Present per axis row: `start`, `end`, `uncertainty`, `epistemic_uncertainty`, `confidence`,
 `variability`, `triage_score`, `round`, `contributing_signals`, `contributing_passes`,
@@ -980,8 +1002,18 @@ final/
 ```
 
 Present: the converged state and how it was reached. Absent: anything another stage reads.
-`summary.json` no longer inlines the per-pass evidence (register item 26, closed 2026-08-02);
-the index later stages need is `L1/passes.json`.
+`summary.json` no longer inlines the per-perturbation evidence (register item 26, closed
+2026-08-02); the index later stages need is `L1/perturbations.json`.
+
+**Nothing reads `final/`.** The last surviving read was an `.exists()` probe of
+`final/labelstudio_tasks.json` that decided what the driver printed — a stage branching on a
+deliverable is treating it as state, and a probe is a read. The loop now returns what it produced.
+
+**[should]:** `final/` is not yet pure extraction. `speakers.json`, `per_speaker_presence.parquet`
+and `speech_presence.parquet` are still written at the `L2/` root by the fusion stage rather than
+being lifted from the last round, and `convergence.json` / `iterations.json` / `rounds.json` /
+`disagreements.json` sit there too, per-round quantities with no round to belong to. Those are the
+remaining entries in `contracts.KNOWN_DEVIATIONS`.
 
 #### The one-line test per stage
 
@@ -1344,9 +1376,24 @@ aliases generated from it; `background_mask` participating in region proposal, c
 convergence report on the same terms as the other three; and `ATTENUATED_AXES` either justified
 against it in writing or removed. Adding the fifth axis later must be one edit, not eleven.
 
+**Closed 2026-08-02.** `audio_analysis/axes.py` is the declaration. Each axis carries the
+properties consumers branch on — `harvested`, `attenuable`, `overlap_informed`, `calibrated`,
+`rank`, `active` — and every subset is computed from them, so the justification for an exclusion
+sits on the axis excluded. `AxisName` is `str` for the reason a perturbation name is: the set is
+open. `task` is declared with `active=False`, which makes "the fifth axis is missing" a checkable
+statement. The driver writes `background_mask` votes into the round's derivatives, so the belief
+store ingests four axes and the loop's existing `for axis in AXES` covers proposal, marking and
+reporting with no fourth branch anywhere. A source scan (`axes_test.py`) forbids writing the set
+out by hand; the two survivors it found were genuine subsets and became declared properties.
+
 ---
 
 ## `L1/stability/` violates the contract too — no cross-pass evaluation at L1
+
+*(Closed 2026-08-02. `L1/stability/<signal>.parquet` moved to the round's derivatives; the
+run-level `signals.json` was **deleted** rather than moved, because the number it held is already
+on every fused row as `weight_basis[signal]["stability"]` and one quantity in two places is one
+quantity that can disagree with itself. What follows is the argument that put it there.)*
 
 The per-pass axis was removed and stability was re-keyed by *signal*, which fixed the axis half of
 the error and left the other half in place. `L1/stability/<signal>.parquet` and
@@ -1424,7 +1471,8 @@ an input dimension, which is L2's, exactly as an axis is.
 
 ### L2 — one round tree, and what a round contains
 
-There are currently **two** round trees, `L2/round<N>/` and `L2/rounds/<N>/`, written by two
+*(Closed 2026-08-02 — this section records what was wrong and how it reads now.)* There were
+**two** round trees, `L2/round<N>/` and `L2/rounds/<N>/`, written by two
 producers with different numbering bases. One tree:
 
 ```

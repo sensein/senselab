@@ -2017,6 +2017,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             summaries["adaptive"] = {
                 "enabled": True,
+                # Whether the loop wrote the final bundle, from what the loop *returned*. The
+                # driver used to probe ``final/labelstudio_tasks.json`` with ``.exists()`` to
+                # decide what to print, which is a stage branching on a deliverable — and a
+                # probe is a read, so it was the one surviving read of final/ in the pipeline.
+                "final_bundle": bool((adaptive_log.get("labelstudio") or {}).get("ls_tracks_added")),
                 "max_rounds": args.max_rounds,
                 "policy": str(args.policy) if args.policy else "packaged default",
                 "policy_hash": adaptive_log.get("policy_hash"),
@@ -2185,11 +2190,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — a headline must not fail a completed run
         logger.warning("run summary could not be written: %s", exc)
 
-    # The bundle was written to L2 before the adaptive loop, which appends its consensus tracks
-    # and writes final/. Report whichever exists: the loop is opt-out, and on a run without it L2
-    # is the whole bundle. These three lines pointed at the pre-L1/L2 flat paths, so every run
-    # ended by printing three filenames that had not existed for as long as the layout had.
-    ls_home = final_dir(run_dir) if (final_dir(run_dir) / "labelstudio_tasks.json").exists() else belief_dir(run_dir)
+    # The bundle is written to L2 before the adaptive loop, which appends its consensus tracks and
+    # writes final/. Report whichever the *loop said* it produced: the loop is opt-out, and on a
+    # run without it L2 is the whole bundle. This used to be an ``.exists()`` probe of
+    # ``final/labelstudio_tasks.json`` — a stage branching on a deliverable, which is treating it
+    # as state, and the one surviving read of final/ in the pipeline.
+    ls_home = final_dir(run_dir) if (summaries.get("adaptive") or {}).get("final_bundle") else belief_dir(run_dir)
     print(f"\nDone. Summary: {final_dir(run_dir) / 'summary.json'}")
     print(f"Label Studio tasks:  {ls_home / 'labelstudio_tasks.json'}")
     print(f"Label Studio config: {ls_home / 'labelstudio_config.xml'}")
