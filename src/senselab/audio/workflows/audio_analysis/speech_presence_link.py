@@ -49,6 +49,7 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 
 __all__ = [
     "SpeechPresencePolicy",
+    "directed_presence_vote",
     "link_speech_presence",
     "policy_from_params",
     "votes_for_harvest",
@@ -169,6 +170,30 @@ def _directed(p_voice: float) -> tuple[bool, float]:
     return speaks, p_voice if speaks else 1.0 - p_voice
 
 
+def directed_presence_vote(p_speech: float, *, threshold: float = 0.5) -> dict[str, Any]:
+    """``P(speech)`` → the presence-vote payload, with the confidence read in the direction cast.
+
+    The one place a raw ``P(speech)`` becomes a vote, so that a producer outside this module cannot
+    reintroduce the inversion by hand-building the dict. Every hand-built payload found so far had
+    the same shape — ``{"speaks": p >= 0.5, "native_confidence": p}`` — which
+    :func:`~senselab.audio.workflows.audio_analysis.support.presence_probability` reads as
+    ``1 − p`` whenever the vote is a *no*, turning a 0.02 posterior into 0.98.
+
+    Args:
+        p_speech: The voter's probability of speech in this bucket, in ``[0, 1]``.
+        threshold: Cut separating a *yes* from a *no*. Passed through rather than fixed at 0.5 so a
+            moved policy cut moves the direction and the confidence together.
+
+    Returns:
+        ``{"speaks": bool, "native_confidence": float}`` — the confidence is ``p_speech`` for a
+        *yes* and its complement for a *no*, so ``presence_probability`` recovers ``p_speech``
+        exactly either way.
+    """
+    p = max(0.0, min(1.0, float(p_speech)))
+    speaks = p >= float(threshold)
+    return {"speaks": speaks, "native_confidence": p if speaks else 1.0 - p}
+
+
 def _pool_confidence(logprobs: Sequence[float], pooling: str) -> float | None:
     """Per-chunk log-probabilities → one bucket confidence under the named pooling."""
     values = [v for v in (_finite(x) for x in logprobs) if v is not None]
@@ -206,15 +231,33 @@ def _link_diar(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str,
 
 
 def _link_asr(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any]:
-    """Word coverage → claim, per-chunk logprobs → confidence, ``no_speech_prob`` → gate."""
+    """Word coverage → claim, per-chunk logprobs → confidence, ``no_speech_prob`` → gate.
+
+    The two *no* branches take their confidence from something other than the token scores, because
+    a pooled token confidence scores the **transcript** — it is confidence that these words were
+    said, so it is evidence *for* speech and can never be this voter's confidence in silence.
+    Reporting it undirected meant a hallucination flagged at token confidence 0.9 arrived as
+    ``P(speech) = 0.1`` while the *same* flag at 0.2 arrived as 0.8: the surer the model was of its
+    words, the more confidently this voter denied that anyone spoke.
+    """
     overlap = _finite(ev.get("word_overlap_s")) or 0.0
     said_something = overlap > policy.word_overlap_threshold_s
     nsp = _mean(ev.get("no_speech_probs") or [])
     hallucinated = bool(said_something and nsp is not None and nsp >= policy.no_speech_threshold)
     logprobs = ev.get("avg_logprobs") or []
+    speaks = said_something and not hallucinated
+    if speaks:
+        confidence = _pool_confidence(logprobs, policy.asr_confidence_pooling)
+    elif hallucinated:
+        # What this voter is confident about here is the silence head that overruled the words.
+        confidence = nsp
+    else:
+        # It placed no words in this bucket. There is no scored quantity for that, and inventing
+        # one from the words it placed elsewhere would be a magnitude nobody measured.
+        confidence = None
     out: dict[str, Any] = {
-        "speaks": said_something and not hallucinated,
-        "native_confidence": _pool_confidence(logprobs, policy.asr_confidence_pooling),
+        "speaks": speaks,
+        "native_confidence": confidence,
         "hallucinated": hallucinated,
         "confidence_pooling": policy.asr_confidence_pooling,
     }

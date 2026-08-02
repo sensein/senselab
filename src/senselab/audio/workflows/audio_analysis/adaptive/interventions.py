@@ -45,6 +45,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     whisper_bucket_avg_logprob,
 )
 from senselab.audio.workflows.audio_analysis.layout import pass_dir
+from senselab.audio.workflows.audio_analysis.speech_presence_link import directed_presence_vote
 from senselab.audio.workflows.audio_analysis.support import evidence_weight_from_corroboration
 
 # ── shared artifact/cache access ─────────────────────────────────────────
@@ -1052,8 +1053,14 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 scope=f"region:{region['region_id']}",
                 round=ctx["round_idx"],
                 payload={
-                    "speaks": p_speech >= 0.5,
-                    "native_confidence": round(p_speech, 6),
+                    # Directed through the shared builder rather than hand-shaped here. This vote
+                    # is the *finest* presence evidence the loop can buy, and it was the last
+                    # producer still reporting the raw posterior as its confidence: at p = 0.02
+                    # `presence_probability` read the payload as P(speech) = 0.98, so the round of
+                    # re-analysis bought to resolve a doubtful bucket asserted the opposite of what
+                    # the detector measured.
+                    **directed_presence_vote(p_speech),
+                    "frame_mean": round(p_speech, 6),
                     "frame_dispersion": _instability(row["start"], row["end"]),
                     "coarse": False,
                 },
