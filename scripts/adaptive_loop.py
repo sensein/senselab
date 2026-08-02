@@ -93,7 +93,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from senselab.audio.workflows.audio_analysis.adaptive.plot import build_adaptive_timeline
 
-        plot_path = build_adaptive_timeline(out_dir, gt_path=args.ground_truth, title=args.run_dir.name)
+        plot_path = build_adaptive_timeline(
+            out_dir,
+            transcript=result["transcript"],
+            gt_path=args.ground_truth,
+            title=args.run_dir.name,
+        )
         if plot_path is not None:
             print(f"timeline: {plot_path}")
     except Exception as exc:  # noqa: BLE001 — plotting must never fail the run

@@ -64,11 +64,14 @@ def build_final_ls_bundle(
     rounds_dir = belief_dir(out_dir) / "rounds"
     report: dict[str, Any] = {}
 
-    # The run bundle lives in ``final/`` and the rounds under ``L2/``. Both moved with the layout
-    # split and neither reader was re-pointed, so this stage silently produced nothing: an absent
-    # path returns "not found", which is indistinguishable from a run that had no bundle.
-    tasks_path = final_dir(run_dir) / "labelstudio_tasks.json"
-    config_path = final_dir(run_dir) / "labelstudio_config.xml"
+    # The run bundle is the belief rendered for an annotator — per-pass uncertainty and scene
+    # tracks — and it is *input* here: this stage appends the consensus tracks and writes the
+    # deliverable next to them. So it lives under ``L2/``. While it lived in ``final/`` this stage
+    # read it back out of the directory it was about to write, and in the integrated path the
+    # bundle was not written until after the loop had already run, so the read always missed and
+    # the stage silently produced nothing — "not found" being indistinguishable from "no bundle".
+    tasks_path = belief_dir(run_dir) / "labelstudio_tasks.json"
+    config_path = belief_dir(run_dir) / "labelstudio_config.xml"
     if tasks_path.exists() and config_path.exists():
         tasks = json.loads(tasks_path.read_text())
         config = config_path.read_text()
@@ -152,10 +155,13 @@ def build_final_ls_bundle(
         report["n_final_regions"] = len(regions)
     else:
         report["ls_tracks_added"] = []
-        report["reason"] = "run LS bundle not found"
+        report["reason"] = f"run LS bundle not found under {belief_dir(run_dir)}"
 
     # ── disagreements_resolved.json ──────────────────────────────────────
-    dis_path = final_dir(run_dir) / "disagreements.json"
+    # The ranked index of contested buckets is a belief artifact — it says where the fold was
+    # least sure — and this stage annotates it with what the loop did about each one. Input, so
+    # ``L2/``; the annotated form is the deliverable and stays in ``final/``.
+    dis_path = belief_dir(run_dir) / "disagreements.json"
     if dis_path.exists():
         dis = json.loads(dis_path.read_text())
         region_spans = _region_spans(rounds_dir)

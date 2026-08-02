@@ -1166,6 +1166,7 @@ def _stage_context(
         device=device,
         cache_dir=cache_dir,
         out_dir=pass_dir(out_dir, label),
+        run_dir=out_dir,
         audio_source=str(args.audio.resolve()),
         senselab_ver=senselab_ver,
     )
@@ -1609,7 +1610,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
                 fusion_mask_rows: list[dict[str, Any]] = []
-                mask_path = pass_dir(run_dir, "raw_16k") / "background_mask.parquet"
+                mask_path = belief_dir(run_dir) / "background_mask.parquet"
                 if mask_path.exists():
                     import pandas as _pd_mask
 
@@ -1730,7 +1731,10 @@ def main(argv: list[str] | None = None) -> int:
                 incomparable_reasons=incomparable_reasons,
                 models_without_native_signal=_models_without_native_signal(summaries),
             )
-            write_json(final_dir(run_dir) / "disagreements.json", index)
+            # L2: a ranked index of where the fold was least sure is a statement of belief, and
+            # the adaptive stage consumes it. ``final/disagreements_resolved.json`` — the same
+            # index annotated with what the loop did about each entry — is the deliverable.
+            write_json(belief_dir(run_dir) / "disagreements.json", index)
 
         # Timeline plot — best-effort sidecar.
         if fused_axes:
@@ -1924,64 +1928,15 @@ def main(argv: list[str] | None = None) -> int:
                 logger.warning("per-speaker speaker could not be derived: %s", exc)
                 summaries["speaker_identity"] = {"status": "failed", "error": repr(exc)}
 
-        # ── Adaptive loop, in-process (T040) ──────────────────────────
-        # Runs on the harvests the parquets were just built from, so the belief
-        # store needs no parquet round-trip. Gated on --no-adaptive-outputs; a
-        # --max-rounds 1 run still emits final/ from the round-1 belief.
-        if not args.no_adaptive_outputs and harvests_by_pass:
-            from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
-
-            try:
-                adaptive_log = run_adaptive_loop(
-                    run_dir,
-                    cache_dir=cache_dir,
-                    policy_path=args.policy,
-                    out_dir=run_dir,
-                    max_rounds=args.max_rounds,
-                    aggregator=args.uncertainty_aggregator,
-                    harvests=harvests_by_pass,
-                    summary=summaries,
-                    policy_overrides=_policy_overrides(args),
-                )
-                summaries["adaptive"] = {
-                    "enabled": True,
-                    "max_rounds": args.max_rounds,
-                    "policy": str(args.policy) if args.policy else "packaged default",
-                    "policy_hash": adaptive_log.get("policy_hash"),
-                    "rounds": adaptive_log.get("rounds"),
-                    "run_state": adaptive_log.get("run_state"),
-                    # `run_state` is the loop's own reason for stopping; `termination_reason` is
-                    # that reason after non-convergence detection has had its say, so a run that
-                    # ran out of moves while two interpretations traded places does not read as
-                    # agreement (FR-011e).
-                    "termination_reason": adaptive_log.get("termination_reason"),
-                    "converged": adaptive_log.get("converged"),
-                    "n_interventions_fired": adaptive_log.get("n_interventions_fired"),
-                    "n_words_fused": adaptive_log.get("n_words_fused"),
-                    "replay_check": (adaptive_log.get("replay_check") or {}).get("status", "checked"),
-                    "ingest": "in_process_harvests",
-                    "timeline": adaptive_log.get("timeline"),
-                }
-                print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('termination_reason')})")
-                if summaries["adaptive"].get("timeline"):
-                    print(f"Adaptive timeline: {summaries['adaptive']['timeline']}")
-            except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
-                print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
-                summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
-            _write_run_summary(run_dir, summaries)
-        elif args.no_adaptive_outputs:
-            summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
-            _write_run_summary(run_dir, summaries)
-
-    # Scene-context tracks attach last: they read artifacts written by the per-speaker and
-    # mask stages above, and both are questions a reviewer cannot answer from the
+    # Scene-context tracks complete the L2 annotation bundle: they read artifacts written by the
+    # per-speaker and mask stages above, and both are questions a reviewer cannot answer from the
     # uncertainty tracks alone — which intervals the machine trusted, and which speaker each
     # contested claim was about.
     try:
         from senselab.audio.workflows.audio_analysis.labelstudio import attach_scene_context_tracks_to_ls
 
         mask_rows: list[dict[str, Any]] = []
-        mask_parquet = pass_dir(run_dir, "raw_16k") / "background_mask.parquet"
+        mask_parquet = belief_dir(run_dir) / "background_mask.parquet"
         if mask_parquet.exists():
             import pandas as _pd
 
@@ -2001,6 +1956,62 @@ def main(argv: list[str] | None = None) -> int:
             )
     except Exception as exc:  # noqa: BLE001 — an annotation sidecar must not fail the run
         logger.warning("scene-context LS tracks could not be attached: %s", exc)
+
+    # The annotation bundle lands under L2 — it is the belief rendered for a human: per-pass
+    # uncertainty tracks, the mask, the per-speaker presence. Written here, before the adaptive
+    # loop, because the loop's final stage appends its consensus tracks to *this* bundle and
+    # writes the result to final/. Writing it after the loop is what made that stage a no-op.
+    write_json(belief_dir(run_dir) / "labelstudio_tasks.json", ls_tasks)
+    (belief_dir(run_dir) / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
+
+    # ── Adaptive loop, in-process (T040) ──────────────────────────
+    # Runs on the harvests the parquets were just built from, so the belief
+    # store needs no parquet round-trip. Gated on --no-adaptive-outputs; a
+    # --max-rounds 1 run still emits final/ from the round-1 belief.
+    if not args.no_adaptive_outputs and harvests_by_pass:
+        from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
+
+        try:
+            adaptive_log = run_adaptive_loop(
+                run_dir,
+                cache_dir=cache_dir,
+                policy_path=args.policy,
+                out_dir=run_dir,
+                max_rounds=args.max_rounds,
+                aggregator=args.uncertainty_aggregator,
+                harvests=harvests_by_pass,
+                summary=summaries,
+                policy_overrides=_policy_overrides(args),
+            )
+            summaries["adaptive"] = {
+                "enabled": True,
+                "max_rounds": args.max_rounds,
+                "policy": str(args.policy) if args.policy else "packaged default",
+                "policy_hash": adaptive_log.get("policy_hash"),
+                "rounds": adaptive_log.get("rounds"),
+                "run_state": adaptive_log.get("run_state"),
+                # `run_state` is the loop's own reason for stopping; `termination_reason` is
+                # that reason after non-convergence detection has had its say, so a run that
+                # ran out of moves while two interpretations traded places does not read as
+                # agreement (FR-011e).
+                "termination_reason": adaptive_log.get("termination_reason"),
+                "converged": adaptive_log.get("converged"),
+                "n_interventions_fired": adaptive_log.get("n_interventions_fired"),
+                "n_words_fused": adaptive_log.get("n_words_fused"),
+                "replay_check": (adaptive_log.get("replay_check") or {}).get("status", "checked"),
+                "ingest": "in_process_harvests",
+                "timeline": adaptive_log.get("timeline"),
+            }
+            print(f"Adaptive: {run_dir / 'final'} ({summaries['adaptive'].get('termination_reason')})")
+            if summaries["adaptive"].get("timeline"):
+                print(f"Adaptive timeline: {summaries['adaptive']['timeline']}")
+        except Exception as exc:  # noqa: BLE001 — additive artifacts must not fail the run
+            print(f"warn: adaptive loop failed: {exc!r}", file=sys.stderr)
+            summaries["adaptive"] = {"enabled": True, "status": "failed", "error": repr(exc)}
+        _write_run_summary(run_dir, summaries)
+    elif args.no_adaptive_outputs:
+        summaries["adaptive"] = {"enabled": False, "reason": "--no-adaptive-outputs"}
+        _write_run_summary(run_dir, summaries)
 
     # L1 evidence plot: every signal that reported, plus the level track. No uncertainty rows
     # — those are level-2 conclusions drawn from this evidence, and mixing them in invites
@@ -2142,12 +2153,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 — a headline must not fail a completed run
         logger.warning("run summary could not be written: %s", exc)
 
-    write_json(final_dir(run_dir) / "labelstudio_tasks.json", ls_tasks)
-    (final_dir(run_dir) / "labelstudio_config.xml").write_text(config_xml, encoding="utf-8")
-
-    print(f"\nDone. Summary: {run_dir / 'summary.json'}")
-    print(f"Label Studio tasks:  {run_dir / 'labelstudio_tasks.json'}")
-    print(f"Label Studio config: {run_dir / 'labelstudio_config.xml'}")
+    # The bundle was written to L2 before the adaptive loop, which appends its consensus tracks
+    # and writes final/. Report whichever exists: the loop is opt-out, and on a run without it L2
+    # is the whole bundle. These three lines pointed at the pre-L1/L2 flat paths, so every run
+    # ended by printing three filenames that had not existed for as long as the layout had.
+    ls_home = final_dir(run_dir) if (final_dir(run_dir) / "labelstudio_tasks.json").exists() else belief_dir(run_dir)
+    print(f"\nDone. Summary: {final_dir(run_dir) / 'summary.json'}")
+    print(f"Label Studio tasks:  {ls_home / 'labelstudio_tasks.json'}")
+    print(f"Label Studio config: {ls_home / 'labelstudio_config.xml'}")
     return 0
 
 
