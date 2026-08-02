@@ -583,6 +583,13 @@ def _fused_axis(out_dir: Path, axis: str) -> Any:  # noqa: ANN401 — pd.DataFra
     invites the reading that per-speaker presence failed to move it, when in fact the coupled
     quantity was never on the figure.
 
+    **This function is scaffolding for a defect, and should be deleted rather than maintained.**
+    The layered design has exactly one axis lineage: L1 emits per-signal measurements, L2 fuses
+    them, `final/` holds the result. A second speaker axis exists only because L1 emits a per-pass
+    axis fold it is not supposed to compute (item 25) and the belief store was built to ingest it.
+    Remove that fold and the belief store has nothing to read but L2's axes — one number, and no
+    reason for this comparison to exist.
+
     Returns ``None`` when no fused parquet exists, so older runs still render.
     """
     import pandas as pd
