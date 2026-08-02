@@ -631,6 +631,17 @@ _TWO_PASS_TREE = (
     "The per-perturbation tree is still L1/<pass>/ with the two-pass vocabulary baked in. "
     "D-17: L1/raw/ and L1/perturbation/<k>/, with the set open."
 )
+_FINAL_AT_L2_ROOT = (
+    "Declared as a deliverable and written to the L2 root instead, so final/ carries no such "
+    "file at all. The mirror of the L2/ artifact entry for the same name: one defect, seen from "
+    "the side that declares and from the side that writes. Closes with that entry."
+)
+_AXIS_NEVER_EXTRACTED = (
+    "final/ is an extraction of the last round's estimates, and this axis is never extracted: "
+    "every consumer reads L2/round/<n>/estimates/ directly. A deliverable nothing produces is a "
+    "declaration nothing satisfies — as wrong as an artifact nothing declares, and quieter."
+)
+
 KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ── the driver performs all three stages itself ─────────────────────────
     Deviation(_DRIVER, "write", "L1/signals/*.parquet", _INLINED),
@@ -739,6 +750,11 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_mod("adaptive/plot.py"), "read", "L2/iterations.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/plot.py"), "read", "L2/convergence.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/plot.py"), "read", "L2/background_mask.parquet", _AT_L2_ROOT),
+    # Bound by tuple unpacking on one line and used on four, so the whole group was invisible to
+    # a resolver that recorded only ``ast.Name`` targets — four reads of the L2 root from the
+    # deliverable renderer, under a guard that reported the rule held.
+    Deviation(_mod("adaptive/plot.py"), "read", "L2/speakers.json", _AT_L2_ROOT),
+    Deviation(_mod("adaptive/plot.py"), "read", "L2/per_speaker_presence.parquet", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_tasks.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_config.xml", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/disagreements.json", _AT_L2_ROOT),
@@ -787,15 +803,34 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation("", "artifact", "L2/per_speaker_presence.parquet", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/speech_presence.parquet", _AT_L2_ROOT),
     Deviation("", "artifact", "triage.json", "An L2-shaped decision at the run root, taken before L1 has run."),
+    # ══ declarations a complete run satisfies with nothing ═══════════════════
+    # The other half of the artifact question, and the one nothing used to ask. A declaration
+    # nothing produces is as wrong as an artifact nothing declares: both make "which stage
+    # produces this" unanswerable, and this half is the more dangerous, because every content
+    # rule passes on a file that is not there — which is how a 26-file fragment was accepted as a
+    # completed run.
+    Deviation("", "unproduced", "final/speakers.json", _FINAL_AT_L2_ROOT),
+    Deviation("", "unproduced", "final/per_speaker_presence.parquet", _FINAL_AT_L2_ROOT),
+    Deviation("", "unproduced", "final/speech_presence.parquet", _FINAL_AT_L2_ROOT),
+    Deviation("", "unproduced", "final/asr.parquet", _AXIS_NEVER_EXTRACTED),
+    Deviation("", "unproduced", "final/background_mask.parquet", _AXIS_NEVER_EXTRACTED),
+    Deviation("", "unproduced", "final/speaker/*.parquet", _AXIS_NEVER_EXTRACTED),
     Deviation(
         "",
-        "artifact",
-        "L1/perturbation/*/**",
-        "Not a violation of the layout — this is where a non-identity perturbation belongs — but "
-        "of the *key*: L1 still writes each model's raw outcome JSON there, and those files are "
-        "the tool's own product rather than a measurement L2 can read. They stay until every "
-        "consumer reads L1/signals/ instead, which is what the interventions.py entries above "
-        "track.",
+        "unproduced",
+        "final/decisions.json",
+        "The trajectory, the reversals and the stopping reason exist — as L2/iterations.json and "
+        "L2/convergence.json, flattened to the L2 root. final/ therefore has no account of how "
+        "the run got to its answer, and the evaluator reads the belief tree to reconstruct one.",
+    ),
+    Deviation(
+        "",
+        "unproduced",
+        "final/eval.json",
+        "EVAL scores the deliverable against ground truth, and a run without ground truth has "
+        "nothing to score. The one declared output whose absence is a property of the *input* "
+        "rather than of the pipeline — recorded here so that distinction is stated rather than "
+        "assumed by a guard that quietly tolerates every absence.",
     ),
 )
 """Where the tree does not yet conform to D-17, one entry per distinct violation.
@@ -822,7 +857,8 @@ would waive whatever else that glob happened to reach.
 
 Both are now live-checked, against the *recorded* complete tree rather than against whatever run
 is on the machine. The exemption they used to carry — run trees legitimately differ, so an
-unmatched entry is evidence of nothing — was true of an arbitrary run and false of a fixed one.
+unmatched entry is evidence of nothing — was true of an arbitrary run and false of a fixed one,
+and under it ``L1/perturbation/*/**`` outlived its defect by two steps of the restructure.
 """
 
 
