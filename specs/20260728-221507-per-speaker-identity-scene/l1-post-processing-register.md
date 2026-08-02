@@ -379,3 +379,42 @@ or whether the belief store should be keyed on L2 axes plus per-signal L1 eviden
 question, not a mechanical substitution.
 
 **Found by:** a real run, asking why the L1 timeline had axis rows at all.
+
+---
+
+## Item 26 — `final/` stores L1 evidence, and the pipeline reads it (open)
+
+`final/summary.json` is 6.9 MB, of which 4.8 MB is a `passes` key holding per-pass model output.
+Everything in it already exists on disk under `L1/<pass>/`:
+
+| inlined key | bytes/pass | already on disk as |
+|---|---|---|
+| `features` | 1,849,387 | `features.json`, `features/` |
+| `yamnet` | 76,165 | `yamnet.json` |
+| `asr` | 15,632 | `asr/` |
+| `alignment` | 8,071 | `alignment/` |
+| `diarization` | 6,878 | `diarization/` |
+| `ast` | 4,679 | `ast.json` |
+| `background_mask`, `background_sources` | 1,583 | `.json` + `.parquet` |
+
+So it is duplication, not information — and the duplicate is the copy the pipeline reads:
+`speaker_identity` takes `summary["passes"]`, and the adaptive loop's artifact-driven path
+reconstructs a finished run from it.
+
+**This is item 25 in the other direction.** Item 25 has L1 computing a value that belongs to L2;
+this has `final/` storing evidence that belongs to L1 *and being consumed as an input*. D-15 says
+`final/` holds only the converged state, and `layout.py` calls it "the summary, the timeline, and
+the consensus deliverables" — a deliverable is not something a later stage reads to rebuild state.
+
+It also explains why these boundaries have been easy to cross without noticing: with two copies of
+the same bytes, nothing enforces the boundary. A consumer reaching into `final/` gets exactly what
+one reading `L1/` would, so nothing breaks and the violation leaves no trace.
+
+**Fix.** Drop `passes` from `final/summary.json`; both readers read `L1/<pass>/` like every other
+evidence consumer. That takes the file from 6.9 MB to roughly 6 KB.
+
+**Check first:** whether the inlined copies are byte-identical to the files or transformed on the
+way in. If they differ, the readers depend on the transformation, and that has to move too — a
+path substitution would then silently change what they see.
+
+**Found by:** asking why `final/` contained anything that something else reads.
