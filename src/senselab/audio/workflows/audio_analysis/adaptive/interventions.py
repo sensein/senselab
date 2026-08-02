@@ -36,6 +36,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, bucket
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights, model_family
 from senselab.audio.workflows.audio_analysis.adaptive.regions import region_buckets
 from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, OVERLAP_INFORMED_AXES
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     _levenshtein,
@@ -1191,7 +1192,7 @@ def _i4_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
     mean_over_core = _mean_overlap(region["core_start"], region["core_end"])
     for apply_stream in ctx["passes"]:
-        for axis in ("speaker", "asr"):
+        for axis in OVERLAP_INFORMED_AXES:
             for row in _rows_in_span(ctx["state"].axis_rows(axis), region["core_start"], region["core_end"]):
                 ov = _mean_overlap(row["start"], row["end"])
                 if ov is None:
@@ -1220,7 +1221,7 @@ def _n_candidates_gain(region: dict[str, Any], ctx: dict[str, Any], trigger: dic
 RULES: list[dict[str, Any]] = [
     {
         "id": "S1_stream_election",
-        "axes": ["speech_presence", "speaker", "asr"],
+        "axes": list(AXIS_NAMES),
         "cost": "light",
         "trigger": _s1_trigger,
         "guard": None,

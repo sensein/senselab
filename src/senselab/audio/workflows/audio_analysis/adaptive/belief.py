@@ -40,6 +40,7 @@ from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import per_source_voice
+from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES
 from senselab.audio.workflows.audio_analysis.degradation import (
     DEFAULT_ANCHORS,
     SNR_PREFERENCE,
@@ -56,15 +57,9 @@ from senselab.audio.workflows.audio_analysis.support import (
     evidence_weight_from_corroboration,
 )
 
-AXES: tuple[AxisName, ...] = ("speech_presence", "speaker", "asr")
-"""The three uncertainty axes, typed so callers keep the narrowed literal."""
-
-ATTENUATED_AXES: tuple[str, ...] = ("speech_presence", "asr")
-"""Axes an uncorroborated speech claim may be attenuated on.
-
-The speaker axis is absent deliberately: evidence that no one spoke here is silent about *which*
-speaker it was, and carrying the discount across would be an unmeasured leap.
-"""
+AXES: tuple[AxisName, ...] = AXIS_NAMES
+"""Every active axis, from the one declaration. Re-exported here because half the loop imports it
+from this module; it is not a second list, and it is deliberately not three long."""
 
 UNCORROBORATED_SPEECH_CLAIM = "uncorroborated_speech_claim"
 """Reason recorded when a speech claim is attenuated for want of independent corroboration.

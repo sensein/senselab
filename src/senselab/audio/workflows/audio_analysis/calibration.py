@@ -33,6 +33,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.axes import CALIBRATED_AXES
+
 PROFILE_VERSION = "1"
 
 BUNDLED_PROFILE_PATH = Path(__file__).parent / "data" / "scene_quality_calibration.json"
@@ -92,7 +94,7 @@ def validate_profile(profile: dict[str, Any], *, source: str = "<dict>") -> dict
         if clean <= floor:
             raise ValueError(f"{source}: {block_name}.clean_db must exceed floor_db ({clean} <= {floor})")
     temperature = profile.get("temperature") or {}
-    for axis in ("speech_presence", "asr"):
+    for axis in CALIBRATED_AXES:
         t = float(temperature.get(axis, 1.0))
         if t <= 0:
             raise ValueError(f"{source}: temperature.{axis} must be > 0 (got {t})")

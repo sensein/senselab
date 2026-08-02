@@ -964,7 +964,7 @@ def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]
     return None
 
 
-def _mask_axis_votes(mask_regions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def mask_axis_votes(mask_regions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """The ``background_mask`` axis's per-bucket votes, from the mask's own confidence.
 
     The design names four axes and this is the fourth. It has no vote harvest of its own because
@@ -1002,7 +1002,7 @@ def _mask_axis_votes(mask_regions: Sequence[Mapping[str, Any]]) -> list[dict[str
 def mask_regions_from_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Normalise ``background_mask.parquet`` rows into the shape regional trust expects.
 
-    The mask reports ``uncertainty``; ``rounds.regional_weights`` and :func:`_mask_axis_votes`
+    The mask reports ``uncertainty``; ``rounds.regional_weights`` and :func:`mask_axis_votes`
     both read ``confidence``. Passing the rows through unconverted is not a cosmetic mismatch —
     ``region.get("confidence", 1.0)`` would default to *fully confident*, so a mask that was
     unsure would withdraw the maximum trust it is capable of withdrawing. That is the
@@ -1146,7 +1146,7 @@ def write_final_uncertainty(
         }
         for axis, field in axis_field.items()
     }
-    mask_votes = _mask_axis_votes(mask_regions)
+    mask_votes = mask_axis_votes(mask_regions)
     if mask_votes:
         buckets_by_axis["background_mask"] = {"mask": mask_votes}
 

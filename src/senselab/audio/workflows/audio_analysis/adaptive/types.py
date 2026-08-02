@@ -29,8 +29,10 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 __all__ = ["AxisName", "CostClass", "PlannedIntervention", "Region", "RegionStatus"]
 
-AxisName = Literal["speech_presence", "speaker", "asr"]
-"""The three uncertainty axes."""
+from senselab.audio.workflows.audio_analysis.axes import AxisName
+
+# Re-exported, not redeclared: this module used to carry its own three-member ``Literal``, so
+# ``adaptive`` and the workflow layer could disagree about how many axes there were — and did.
 
 CostClass = Literal["light", "medium", "heavy"]
 """Intervention cost tier; indexes the budget ledger and the priority weight."""
