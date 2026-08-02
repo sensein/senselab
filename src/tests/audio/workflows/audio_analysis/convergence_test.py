@@ -216,3 +216,54 @@ def test_zero_untried_actions_is_a_measurement_and_does_pass() -> None:
     """Having *checked* that no action remains is different from never having looked."""
     result = assess_convergence([_r(0, untried_actions=0), _r(1, untried_actions=0)])
     assert result["criteria"]["c4"] is True
+
+
+def test_the_round_record_reads_fields_that_exist_on_fused_rows() -> None:
+    """`_round_record` read `within_pass_uncertainty` — an L1-only column — off L2 rows.
+
+    `fuse_axis` emits `epistemic_uncertainty`. So every RoundRecord built from a fused round carried
+    `epistemic=None` and `measured_buckets=0`, and its signature digested a column of `None`s. C1
+    had no value to compare, C3 compared 0 to 0, and every round produced an identical signature —
+    which the shared detector then correctly reported as a repeating state. A real run stopped with
+    `oscillation` on all four axes for exactly this reason: not four dynamics agreeing, one field
+    name resolving to nothing on all of them.
+
+    A name that resolves to nothing is indistinguishable from a value that means nothing, which is
+    why this survived being looked at twice.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import _round_record, fuse_axis
+
+    rows = fuse_axis(
+        {
+            "p": [
+                {"start": 0.0, "end": 0.5, "votes": {"a": {"same_label_uncertainty": 0.4}}},
+                {"start": 0.5, "end": 1.0, "votes": {"a": {"same_label_uncertainty": 0.9}}},
+            ]
+        },
+        weights={"a": 1.0},
+    )
+    record = _round_record(0, rows, untried_actions=0)
+    assert record.epistemic is not None, "C1 cannot judge a value the record never read"
+    assert record.measured_buckets == 2, "both buckets were measured"
+
+
+def test_two_rounds_with_different_values_have_different_signatures() -> None:
+    """Cycle detection is meaningless if every round digests to the same string.
+
+    With the field name wrong, every signature was the digest of `None;None;...` — so the detector
+    saw a repeating state on the second round of every run, and reported oscillation.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import _round_record, fuse_axis
+
+    def _rows(value: float) -> list:
+        return fuse_axis(
+            {"p": [{"start": 0.0, "end": 0.5, "votes": {"a": {"same_label_uncertainty": value}}}]},
+            weights={"a": 1.0},
+        )
+
+    # 0.5 is maximum entropy, 0.02 near-minimum. Not 0.2 vs 0.8: `uncertainty` is the entropy of
+    # {settled, unsettled}, which is symmetric — those two are genuinely the same uncertainty, and
+    # a signature that distinguished them would be reporting a difference that is not there.
+    a = _round_record(0, _rows(0.5), untried_actions=0)
+    b = _round_record(1, _rows(0.02), untried_actions=0)
+    assert a.signature != b.signature
