@@ -524,29 +524,26 @@ def _aggregator_from_run(run_dir: Path) -> str | None:
 
 
 def _fused_axes_from_run(run_dir: Path) -> dict[str, list[dict[str, Any]]]:
-    """The axes L2 already wrote, for :meth:`VoteStore.fused_parity`.
+    """L2's round-0 axes, the oracle for :meth:`VoteStore.fused_parity`.
 
-    Reads the *last* round the fusion driver ran, since that is the run's answer. Missing files
-    yield an empty mapping and the parity report then says ``not_in_l2`` for every bucket, which is
-    a finding rather than a pass — a check with no oracle must not read as a check that succeeded.
+    Round 0 specifically, not the last round. The store ingests the round-0 votes and folds them
+    once; L2's later rounds condition each axis on the *others*, which is evidence the store does
+    not have, so comparing against them would skip every bucket as coupled and report a vacuous
+    zero — the exact failure signature these checks exist to remove.
+
+    Missing files yield an empty mapping and the report then says ``not_in_l2`` for every bucket,
+    which is a finding rather than a pass.
     """
     import pandas as pd
 
-    base = belief_dir(run_dir)
-    rounds = sorted(
-        (int(p.name.removeprefix("round")) for p in base.glob("round*") if p.name.removeprefix("round").isdigit()),
-        reverse=True,
-    )
-    for round_idx in rounds:
-        directory = base / f"round{round_idx}" / "uncertainty"
-        found: dict[str, list[dict[str, Any]]] = {
-            str(path.stem): pd.read_parquet(path).to_dict("records")
-            for path in sorted(directory.glob("*.parquet"))
-            if path.stem in AXES
-        }
-        if found:
-            return found
-    return {}
+    directory = belief_dir(run_dir) / "round0" / "uncertainty"
+    if not directory.is_dir():
+        return {}
+    return {
+        str(path.stem): pd.read_parquet(path).to_dict("records")
+        for path in sorted(directory.glob("*.parquet"))
+        if path.stem in AXES
+    }
 
 
 def _asr_signal_doubt(store: VoteStore, stream: str) -> float | None:
