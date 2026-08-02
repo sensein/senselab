@@ -86,11 +86,17 @@ The loop writes, under the run directory (or `--out`):
 
 - `final/transcript.json` — consensus word-level transcript (family-weighted voting across all ASR
   models) with speaker attribution, per-word confidence, and alternates where models disagree;
-- `final/diarization.json` + `final/presence.parquet` — refined speaker segments (embedding
-  change-point + re-clustering repair) and the fused speech-presence track;
-- `final/convergence.json` + `final/iterations.json` — what the loop did and why: every intervention
-  (fired / deferred / blocked) with trigger values and measured uncertainty deltas, budget
-  accounting, and regions marked `converged` / `irreducible` (with a machine-readable reason);
+- `final/diarization.json` — refined speaker segments (embedding change-point + re-clustering
+  repair);
+- `final/estimates/<axis>.parquet` — the last round's estimate of every active axis, extracted
+  verbatim from `L2/round/<last>/estimates/`. A number in `final/` that is not in the last round
+  was computed at the wrong stage, so this directory only copies;
+- `final/speakers.json` + `final/per_speaker_presence.parquet` — the speaker-count posterior with
+  its per-speaker hypotheses, and one presence track per hypothesised speaker;
+- `final/decisions.json` — what the loop did and why: every intervention (fired / deferred /
+  blocked) with trigger values and measured uncertainty deltas, budget accounting, and regions
+  marked `converged` / `irreducible` (with a machine-readable reason). Each round's own slice of
+  this is in its `L2/round/<n>/summary.json`;
 - `final/timeline.png` — ground truth (if given) vs presence / identity / utterance uncertainty per
   round, interventions, and the confidence-colored fused words;
 - `final/labelstudio_{tasks,config}.{json,xml}` + `disagreements_resolved.json` — the original Label
@@ -103,7 +109,7 @@ Useful knobs (all thresholds/budgets/models live in a versioned policy file —
 reserve/escalation pools, and identity-repair parameters. Runs are **deterministic**: identical
 inputs + policy produce byte-identical decision logs. `HF_TOKEN` enables the gated
 `pyannote/segmentation-3.0` overlap detector; without it the loop degrades gracefully and records
-the skipped intervention in `convergence.json → next_actions`.
+the skipped intervention in `final/decisions.json → convergence.next_actions`.
 
 ---
 
