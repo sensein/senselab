@@ -1682,33 +1682,26 @@ def main(argv: list[str] | None = None) -> int:
                     provenance=run_provenance,
                 )
 
-                # One timeline per round, drawn after that round's fusion.
+                # The per-round timelines are drawn by ``write_final_uncertainty`` itself now. They
+                # were drawn here, so a caller of the workflow API got rounds with no view of
+                # themselves — a third of what a round owes. What is still read back is the last
+                # round's rows, for the in-memory copy-back below.
                 import pandas as _pd_round
-
-                from senselab.audio.workflows.audio_analysis.l2_plot import build_round_timeline
 
                 by_round: dict[int, dict[str, list[dict[str, Any]]]] = {}
                 for key, path in final_maps.items():
-                    if "@round" not in key:
+                    if "@round" not in key or key.startswith("summary@"):
                         continue
                     axis_name, round_token = key.split("@round", 1)
-                    frame = _pd_round.read_parquet(path)
-                    by_round.setdefault(int(round_token), {})[axis_name] = frame.to_dict("records")
-                # Named for the round it belongs to: the run-summary block later in this same
-                # function binds its own ``axis_rows`` over the *final* axes, and one name for two
-                # different quantities in one scope is how the wrong one gets read.
-                for round_index, round_axis_rows in sorted(by_round.items()):
-                    build_round_timeline(
-                        run_dir,
-                        round_index=round_index,
-                        axis_rows=round_axis_rows,
-                        duration_s=float(summaries["passes"].get("raw", {}).get("duration_s") or 0.0),
-                        title=f"L2 round {round_index} — {args.audio.name}",
+                    by_round.setdefault(int(round_token), {})[axis_name] = _pd_round.read_parquet(path).to_dict(
+                        "records"
                     )
                 # Name the directory the writer actually used. The maps live under
                 # L2/round<N>/uncertainty/, and pointing at final/uncertainty/ sent a reader to an
                 # empty path; the count also included @round aliases, so it overstated the axes.
-                axis_names = sorted({k.split("@")[0] for k in final_maps if k != "rounds"})
+                axis_names = sorted(
+                    {k.split("@")[0] for k in final_maps if k != "round_logs" and not k.startswith("summary@")}
+                )
                 print(
                     f"  [final uncertainty] {len(axis_names)} axis map(s) under L2/round<N>/uncertainty/: {', '.join(axis_names)}"
                 )

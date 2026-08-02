@@ -965,6 +965,24 @@ def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]
     return None
 
 
+def _draw_round_timeline(
+    out_dir: Any,  # noqa: ANN401 — Path
+    round_index: int,
+    axis_rows: Mapping[str, Sequence[Mapping[str, Any]]],
+    *,
+    duration_s: float,
+) -> None:
+    """Draw ``L2/round/<n>/timeline.png``. Best-effort: a plot must not fail a fold."""
+    import sys
+
+    from senselab.audio.workflows.audio_analysis.l2_plot import build_round_timeline
+
+    try:
+        build_round_timeline(out_dir, round_index=round_index, axis_rows=axis_rows, duration_s=duration_s)
+    except Exception as exc:  # noqa: BLE001 — sidecar
+        print(f"warn: round {round_index} timeline plot failed: {exc!r}", file=sys.stderr)
+
+
 def mask_axis_votes(mask_regions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """The ``background_mask`` axis's per-bucket votes, from the mask's own confidence.
 
@@ -1223,6 +1241,19 @@ def write_final_uncertainty(
             written[f"{axis}@round{round_index}"] = str(round_path)
             # The headline path is the last round the axis actually ran.
             written[axis] = str(round_path)
+
+    # One figure per round, drawn here from the rows this function already holds. The driver used
+    # to do it, by reading every parquet it had just been handed the paths of — so a caller of the
+    # workflow API got rounds with no view of themselves, which is a third of what a round owes.
+    # ``duration_s`` from the rows rather than from a caller: the figure spans what was measured,
+    # and a length nobody measured is not something this function should invent.
+    for round_index in sorted({index for rounds_for_axis in per_round.values() for index in rounds_for_axis}):
+        rows_for_round = {axis: rounds_for_axis.get(round_index, []) for axis, rounds_for_axis in per_round.items()}
+        span = max(
+            (float(row["end"]) for rows in rows_for_round.values() for row in rows),
+            default=0.0,
+        )
+        _draw_round_timeline(out_dir, round_index, rows_for_round, duration_s=span)
 
     # The round log distinguishes "converged" from "ran out of rounds", which the maps alone
     # cannot say and which call for different follow-up. It is per round, so it goes in each
