@@ -13,10 +13,13 @@ Implements the VoteStore / BeliefRow semantics of
   existing per-axis aggregators (``aggregate.py``) — the harvest/aggregate
   split (research.md D8) demonstrated on real artifacts.
 
-The prototype ingests a completed ``analyze_audio`` run directory: the six
-per-pass uncertainty parquets are the round-1 vote population, and the stored
-``within_pass_uncertainty`` doubles as a parity oracle for the re-aggregation
-path (tasks.md T007).
+Ingest is the **linked evidence at the vote level** — ``L2/round0/votes/<axis>.parquet`` on the
+artifact path, the ``PassHarvest`` objects on the in-process path. A vote is legitimately keyed
+``(axis, bucket, source, pass, scope)``: a signal measured on a pass is a per-pass measurement.
+What may not be keyed by pass is an *axis*, which is a fold across signals **and** passes — so the
+per-pass uncertainty parquets this module used to read, and the ``within_pass_uncertainty`` it
+kept as a parity oracle, are both gone. Re-derivability is proved instead by
+:meth:`VoteStore.replay_check`, which rebuilds each bucket from what is persisted.
 """
 
 from __future__ import annotations
@@ -60,8 +63,6 @@ reach — a quiet, distant or overlapped speaker produces the identical signatur
 """
 
 _META_COLUMNS = (
-    "speech_presence_confidence",
-    "speech_presence_uncertainty",
     "snr_brouhaha_db",
     "c50_brouhaha_db",
     "snr_spectral_gating_db",
@@ -78,11 +79,19 @@ _META_COLUMNS = (
     "src_environment",
     "src_dominant",
     "token_entropy",
-    "scene_quality_coupling",
-    "intensity_weight",
-    "raw_within_pass_uncertainty",
-    "comparison_status",
+    "frame_dispersion",
 )
+"""Per-bucket measurements the store carries alongside its votes.
+
+Deliberately *only* measurements. The columns removed from this tuple —
+``speech_presence_confidence``, ``speech_presence_uncertainty``, ``raw_within_pass_uncertainty``,
+``comparison_status``, ``intensity_weight``, ``scene_quality_coupling`` — were not measurements:
+the first four are the per-pass axis fold or a function of it, and the last two are L2 decisions
+(a cross-axis reduction and a policy multiplier). Nothing in the adaptive subsystem read any of
+them; they were carried and dropped. ``quality_*`` are L2 scores rather than measurements, and
+stay only because ``aleatoric_floor`` and S1's stream election consume them; they are re-derivable
+from the dB columns above under the run's calibration profile.
+"""
 
 
 def bucket_key(start: float, end: float) -> tuple[float, float]:
@@ -147,9 +156,9 @@ class VoteStore:
         """Create an empty store."""
         self._votes: dict[str, Vote] = {}
         self._index: dict[tuple[str, str, tuple[float, float]], list[str]] = {}
-        # Per-(stream, axis, bucket) row metadata from the ingested parquets
-        # (quality / source-mass / speech_presence columns + the stored aggregate used
-        # as the round-1 parity oracle).
+        # Per-(stream, axis, bucket) measurements that belong to the bucket rather than to any
+        # one source: scene quality in native units, the L2 quality scores derived from them,
+        # source-category masses, token entropy, frame dispersion. No axis value lives here.
         self.row_meta: dict[tuple[str, str, tuple[float, float]], dict[str, Any]] = {}
         self._round_added: dict[int, list[str]] = {}
 
@@ -157,50 +166,85 @@ class VoteStore:
 
     @classmethod
     def from_run_dir(cls, run_dir: Path, passes: list[str]) -> "VoteStore":
-        """Populate round-1 votes from ``<run_dir>/<pass>/uncertainty/<axis>.parquet``."""
+        """Populate round-1 votes from ``<run_dir>/L2/round0/votes/<axis>.parquet``.
+
+        Ingests the **linked evidence at the vote level**, which is legitimately keyed
+        ``(axis, bucket, source, pass, scope)``. It used to read
+        ``L1/<pass>/uncertainty/<axis>.parquet`` — a per-pass axis fold, which is a quantity that
+        cannot exist — and to keep that fold as a parity oracle against its own recomputation.
+        Both are gone: this path now sees exactly what the in-process path
+        (:meth:`from_harvests`) sees.
+
+        The per-bucket scene measurements ride the fused presence rows, so they are read from
+        ``L2/round<0>/uncertainty/speech_presence.parquet`` and attached to every axis's buckets
+        that overlap them — they describe the recording at that instant, not one axis's view of it.
+        """
         import pandas as pd
 
         store = cls()
-        for stream in passes:
-            for axis in AXES:
-                pq = pass_dir(run_dir, stream) / "uncertainty" / f"{axis}.parquet"
-                if not pq.exists():
+        votes_dir = Path(run_dir) / "L2" / "round0" / "votes"
+        for axis in AXES:
+            pq = votes_dir / f"{axis}.parquet"
+            if not pq.exists():
+                continue
+            frame = pd.read_parquet(pq)
+            for _, row in frame.iterrows():
+                bk = bucket_key(row["start"], row["end"])
+                stream = str(row["pass_label"])
+                if stream not in passes:
                     continue
-                df = pd.read_parquet(pq)
-                for _, row in df.iterrows():
-                    bk = bucket_key(row["start"], row["end"])
-                    votes_raw = row.get("model_votes")
-                    if isinstance(votes_raw, str):
-                        try:
-                            votes = json.loads(votes_raw)
-                        except json.JSONDecodeError:
-                            votes = {}
-                    elif isinstance(votes_raw, dict):
-                        votes = votes_raw
-                    else:
-                        votes = {}
-                    for source, payload in (votes or {}).items():
-                        if not isinstance(payload, dict):
-                            continue
-                        store.add_vote(
-                            Vote(
-                                axis=axis,
-                                bucket=bk,
-                                source=str(source),
-                                stream=stream,
-                                scope="file",
-                                round=1,
-                                payload=payload,
-                            )
-                        )
-                    meta: dict[str, Any] = {
-                        "stored_within_pass_uncertainty": _float_or_none(row.get("within_pass_uncertainty"))
-                    }
-                    for col in _META_COLUMNS:
-                        if col in df.columns:
-                            meta[col] = _json_safe(row.get(col))
-                    store.row_meta[(stream, axis, bk)] = meta
+                source = str(row["source"])
+                try:
+                    payload = json.loads(row["payload"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if source.startswith("__") and source.endswith("__") and "value" in payload:
+                    # A bucket-level measurement rather than a source's statement.
+                    name = source.strip("_")
+                    store.row_meta.setdefault((stream, axis, bk), {})[name] = _json_safe(payload["value"])
+                    continue
+                store.add_vote(
+                    Vote(axis=axis, bucket=bk, source=source, stream=stream, scope="file", round=1, payload=payload)
+                )
+                store.row_meta.setdefault((stream, axis, bk), {})
+        store._attach_scene_measurements(Path(run_dir), passes)
         return store
+
+    def _attach_scene_measurements(self, run_dir: Path, passes: list[str]) -> None:
+        """Join the fused presence row's per-bucket measurements onto every axis's buckets."""
+        import pandas as pd
+
+        pq = run_dir / "L2" / "round0" / "uncertainty" / "speech_presence.parquet"
+        if not pq.exists():
+            return
+        frame = pd.read_parquet(pq)
+        columns = [c for c in _META_COLUMNS if c in frame.columns]
+        if not columns:
+            return
+        spans = [
+            (float(r["start"]), float(r["end"]), {c: _json_safe(r[c]) for c in columns})
+            for _, r in frame.iterrows()
+        ]
+        for stream, axis, bk in list(self.row_meta):
+            if stream not in passes:
+                continue
+            # Overlap, not exact key match: the axes run on different grids and share no keys on
+            # real audio, which is how a join like this came to match nothing before.
+            hits = [m for lo, hi, m in spans if lo < bk[1] and hi > bk[0]]
+            if not hits:
+                continue
+            merged: dict[str, Any] = {}
+            for name in columns:
+                values = [h[name] for h in hits if isinstance(h.get(name), (int, float))]
+                if values:
+                    merged[name] = sum(values) / len(values)
+                else:
+                    labels = [h[name] for h in hits if isinstance(h.get(name), str)]
+                    if labels:
+                        merged[name] = max(sorted(set(labels)), key=labels.count)
+            self.row_meta[(stream, axis, bk)].update(merged)
 
     @classmethod
     def from_harvests(cls, harvests: dict[str, Any], *, round_idx: int = 1, policy: Any = None) -> "VoteStore":  # noqa: ANN401
@@ -373,6 +417,10 @@ class VoteStore:
         got |= {bk for (s, a, bk) in self.row_meta if s == stream and a == axis}
         return sorted(got)
 
+    def votes_for(self, stream: str, axis: str, bucket: tuple[float, float]) -> list[Vote]:
+        """Every vote on this bucket, active or shadowed — the persisted record, not the fold."""
+        return [self._votes[vid] for vid in self._index.get((stream, axis, bucket), [])]
+
     def active_votes(self, stream: str, axis: str, bucket: tuple[float, float]) -> dict[str, dict[str, Any]]:
         """Vote dict (source → payload) of active votes, as the aggregators expect."""
         out: dict[str, dict[str, Any]] = {}
@@ -480,7 +528,7 @@ class VoteStore:
         Attenuated sources stay in ``contributing_sources`` — the record has to show who spoke up,
         and how far their claim was carried — with the withdrawn weights alongside in
         ``attenuated_sources`` and the measurements behind them in ``attenuation``. An empty weight
-        map is byte-identical to no map, which is what keeps :meth:`parity_check` comparing the
+        map is byte-identical to no map, which is what keeps :meth:`replay_check` comparing the
         same quantity it always did.
 
         ``attenuated_sources`` answers "who, and how much"; ``attenuation`` answers "measured
@@ -507,20 +555,20 @@ class VoteStore:
             "attenuation": self.attenuation_detail(stream, axis, bucket),
         }
 
-    def parity_check(self, passes: list[str], *, aggregator: str, tol: float = 1e-9) -> dict[str, Any]:
-        """Re-aggregate every round-1 bucket and compare against the stored parquet values.
+    def replay_check(self, passes: list[str], *, aggregator: str, tol: float = 1e-9) -> dict[str, Any]:
+        """Prove every value is re-derivable from the active evidence and the recorded decisions.
 
-        This is the executable proof that aggregation is a pure function of the
-        vote store (tasks.md T007): a nonzero mismatch count means the split
-        missed an input.
+        Replays each bucket from a *fresh* store carrying only what is persisted — the votes, the
+        record of which were shadowed, and the recorded evidence weights — and compares against
+        this store's aggregation. Equality is the store's own contract ("aggregation is a pure
+        function of the active votes"); a mismatch means a value depends on something not written
+        down, which is exactly what makes an estimate unreproducible.
 
-        The comparison anchors on the **pre-coupling** scale: since FR-019
-        (scene→asr coupling, scene-quality-asr US4) the parquet's
-        ``within_pass_uncertainty`` may carry a scene multiplier that is not a
-        function of the votes alone — the pure per-vote value is preserved on
-        ``raw_within_pass_uncertainty``, which is what the belief store computes
-        and compares (identical to ``within_pass_uncertainty`` on pre-FR-019
-        artifacts and wherever coupling is 1.0).
+        This replaces a comparison against ``within_pass_uncertainty`` on the L1 parquet. That was
+        an oracle of the wrong kind twice over: the quantity did not exist (a per-pass axis), and
+        it was produced by a *second implementation*, so a mismatch could not distinguish "the
+        store missed an input" from "the two folds disagree". A replay has neither problem, and it
+        runs on both ingest paths — the in-process one could not be checked at all before.
         """
         report: dict[str, Any] = {}
         for stream in passes:
@@ -529,17 +577,15 @@ class VoteStore:
                 max_abs = 0.0
                 for bk in self.buckets(stream, axis):
                     n += 1
-                    meta = self.row_meta.get((stream, axis, bk)) or {}
-                    stored = meta.get("raw_within_pass_uncertainty")
-                    if stored is None or stored != stored:  # NaN/missing → legacy column
-                        stored = meta.get("stored_within_pass_uncertainty")
-                    got = self.reaggregate_bucket(stream, axis, bk, aggregator=aggregator)["within_pass_uncertainty"]
-                    if stored is None or got is None:
-                        if (stored is None) != (got is None):
+                    first = self.reaggregate_bucket(stream, axis, bk, aggregator=aggregator)
+                    replay = self._replay_bucket(stream, axis, bk, aggregator=aggregator)
+                    a, b = first["within_pass_uncertainty"], replay["within_pass_uncertainty"]
+                    if a is None or b is None:
+                        if (a is None) != (b is None):
                             mismatches += 1
                         continue
                     compared += 1
-                    diff = abs(float(stored) - float(got))
+                    diff = abs(float(a) - float(b))
                     max_abs = max(max_abs, diff)
                     if diff > tol:
                         mismatches += 1
@@ -550,6 +596,28 @@ class VoteStore:
                     "max_abs_diff": max_abs,
                 }
         return report
+
+    def _replay_bucket(self, stream: str, axis: str, bucket: tuple[float, float], *, aggregator: str) -> dict[str, Any]:
+        """Re-aggregate one bucket from a store rebuilt out of the persisted vote records."""
+        replay = VoteStore()
+        for vote in self.votes_for(stream, axis, bucket):
+            record = vote.to_record()
+            replay.add_vote(
+                Vote(
+                    axis=record["axis"],
+                    bucket=(record["bucket_start"], record["bucket_end"]),
+                    source=record["source"],
+                    stream=record["stream"],
+                    scope=record["scope"],
+                    round=record["round"],
+                    payload=json.loads(record["payload"]),
+                    status=record["status"],
+                    shadowed_by=record["shadowed_by"],
+                    evidence_weight=record["evidence_weight"],
+                    provenance=json.loads(record["provenance"]),
+                )
+            )
+        return replay.reaggregate_bucket(stream, axis, bucket, aggregator=aggregator)
 
 
 class BeliefState:

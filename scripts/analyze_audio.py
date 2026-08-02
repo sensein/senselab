@@ -1300,6 +1300,7 @@ def main(argv: list[str] | None = None) -> int:
             build_aligned_timeline_plot,
             build_disagreements_index,
             compute_uncertainty_axes,
+            write_linked_votes,
             write_signal_parquet,
             write_signal_stability,
         )
@@ -1356,6 +1357,7 @@ def main(argv: list[str] | None = None) -> int:
         speaker_embedding_models = list(args.embeddings_models)
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         stability_evidence: dict[str, Any] = {}
+        linked_by_pass: dict[str, Any] = {}
         try:
             (
                 signal_results_by_pass,
@@ -1366,6 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
                 harvests_out=harvests_by_pass,
                 weights_out=reliability_by_axis,
                 stability_out=None if args.no_stability else stability_evidence,
+                linked_out=linked_by_pass,
                 passes=passes_for_compute,
                 grid=grid,
                 params=comparator_params,
@@ -1452,6 +1455,22 @@ def main(argv: list[str] | None = None) -> int:
             for _axis, by_signal_inst in (stability_evidence.get("instability") or {}).items():
                 instability.update({str(k): float(v) for k, v in by_signal_inst.items()})
             write_json(stability_dir(run_dir) / "signals.json", instability)
+
+        # The linked evidence, at the vote level — where (axis, bucket, source, pass, scope) is a
+        # legitimate key. This is what the artifact-driven adaptive path ingests, so it sees the
+        # same evidence the in-process path does instead of a per-pass axis fold.
+        for axis_name in ("speech_presence", "speaker", "asr"):
+            write_linked_votes(
+                {label: linked.buckets_by_axis.get(axis_name, []) for label, linked in linked_by_pass.items()},
+                axis_name,
+                belief_dir(run_dir, 0) / "votes" / f"{axis_name}.parquet",
+                provenance={
+                    **run_provenance,
+                    "speech_presence_policy": next(
+                        (linked.provenance.get("speech_presence_policy") for linked in linked_by_pass.values()), None
+                    ),
+                },
+            )
 
         # PII detection per pass — scans each ASR transcript with regex layer
         # plus optional spaCy NER. Default-on; failures (e.g. spaCy not
@@ -1904,7 +1923,7 @@ def main(argv: list[str] | None = None) -> int:
                     "converged": adaptive_log.get("converged"),
                     "n_interventions_fired": adaptive_log.get("n_interventions_fired"),
                     "n_words_fused": adaptive_log.get("n_words_fused"),
-                    "parity_check": (adaptive_log.get("parity_check") or {}).get("status", "checked"),
+                    "replay_check": (adaptive_log.get("replay_check") or {}).get("status", "checked"),
                     "ingest": "in_process_harvests",
                     "timeline": adaptive_log.get("timeline"),
                 }

@@ -371,12 +371,16 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
     assert isinstance(log, dict)
 
 
-def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -> None:
-    """A vacuous parity check would be a misleading proof — it must say "skipped".
+def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
+    """The in-process path is checkable too, and reports real comparisons.
 
-    parity_check compares re-aggregation against the *stored* parquet values. On
-    the in-process path those don't exist yet, so every bucket would be "compared:
-    0, mismatches: 0" — which reads as a pass while proving nothing.
+    The old parity check compared re-aggregation against ``within_pass_uncertainty`` on the L1
+    parquet. That oracle was wrong twice: the quantity was a per-pass axis, which cannot exist,
+    and it came from a *second implementation* of the fold, so a mismatch could not distinguish
+    "the store missed an input" from "the two folds disagree". The in-process path could not run
+    it at all and had to report "skipped". The replay proves the property that matters — every
+    value is re-derivable from the persisted votes plus the recorded decisions — and runs on both
+    paths.
     """
     import json as _json
 
@@ -396,8 +400,10 @@ def test_in_process_path_reports_parity_as_skipped_not_passing(tmp_path: Path) -
         aggregator="min",
     )
     round1 = _json.loads((belief_dir(tmp_path) / "rounds" / "1" / "summary.json").read_text())
-    assert round1["parity_check"]["status"] == "skipped"
-    assert "stored parquet" in round1["parity_check"]["reason"]
+    report = round1["replay_check"]
+    assert report, "the in-process path must be checkable, not skipped"
+    assert all(entry["mismatches"] == 0 for entry in report.values())
+    assert any(entry["compared"] > 0 for entry in report.values()), "a vacuous check proves nothing"
 
 
 def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path) -> None:

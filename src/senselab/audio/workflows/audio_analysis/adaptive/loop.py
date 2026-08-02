@@ -55,18 +55,19 @@ def run_adaptive_loop(
 
     Two ingest paths, same loop:
 
-    - **artifact-driven** (default): reads ``summary.json`` and the nine
-      uncertainty parquets from ``run_dir``. This is what ``scripts/adaptive_loop.py``
+    - **artifact-driven** (default): reads ``summary.json`` and the linked votes from
+      ``L2/round0/votes/<axis>.parquet``. This is what ``scripts/adaptive_loop.py``
       does over a finished run.
     - **in-process** (T040): the caller passes the ``PassHarvest`` objects it just
       produced via ``harvests`` (and usually ``summary``), skipping the parquet
       round-trip entirely.
 
-    The in-process path cannot run the parity check, and says so rather than
-    reporting a passing one: :meth:`VoteStore.parity_check` compares
-    re-aggregation against the *stored* parquet values, which don't exist yet when
-    the harvests are still in memory. A vacuous "0 mismatches" would be a
-    misleading proof, so ``parity_check.status`` is ``"skipped"`` instead.
+    Both paths now see the same evidence and both run :meth:`VoteStore.replay_check`. It used
+    to be a *parity* check against ``within_pass_uncertainty`` on the L1 parquet, which the
+    in-process path could not run at all — and which compared two different implementations of
+    the fold, so a mismatch could not distinguish a missing input from a disagreement between
+    them. The replay proves the property that actually matters: every value is re-derivable from
+    the persisted votes plus the recorded decisions, so the store need not persist estimates.
 
     Args:
         run_dir: The run directory. Still required for reading policy-adjacent
@@ -100,18 +101,14 @@ def run_adaptive_loop(
     if aggregator is None:
         aggregator = _aggregator_from_run(run_dir) or "min"
 
-    # ── round 1: ingest + parity (harvest/aggregate split proof) ────────
+    # ── round 1: ingest + replay proof (values are re-derivable) ────────
     t0 = time.time()
     parity: dict[str, Any]
     if harvests is not None:
         store = VoteStore.from_harvests({pl: h for pl, h in harvests.items() if pl in passes})
-        parity = {
-            "status": "skipped",
-            "reason": "in-process harvests carry no stored parquet values to compare against",
-        }
     else:
         store = VoteStore.from_run_dir(run_dir, passes)
-        parity = store.parity_check(passes, aggregator=aggregator)
+    parity = store.replay_check(passes, aggregator=aggregator)
     state = BeliefState.from_store(store, passes, aggregator=aggregator)
     asr_grid = _grid_from_rows(state.axis_rows(passes[0], "asr"))
     theta_low = float(policy["thresholds"]["theta_low"])
@@ -123,7 +120,7 @@ def run_adaptive_loop(
             {
                 "round": 1,
                 "ingested_from": str(run_dir),
-                "parity_check": parity,
+                "replay_check": parity,
                 "aggregator": aggregator,
                 "uncertainty_mass": {
                     f"{s}/{a}": round(state.uncertainty_mass(s, a, theta_low), 6) for s in passes for a in AXES
@@ -466,7 +463,7 @@ def run_adaptive_loop(
         "converged": report["converged"],
         "policy_hash": policy.get("policy_hash"),
         "timeline": timeline_path,
-        "parity_check": parity,
+        "replay_check": parity,
         "rounds": len(round_summaries) + 1,
         "n_interventions_fired": sum(1 for e in iterations if e["status"] == "fired"),
         "n_words_fused": len(words),

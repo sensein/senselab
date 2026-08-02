@@ -64,6 +64,64 @@ def write_signal_parquet(
     return dest
 
 
+def write_linked_votes(
+    buckets_by_pass: Mapping[str, Sequence[Mapping[str, Any]]],
+    axis: str,
+    dest: Path,
+    provenance: dict[str, Any] | None = None,
+) -> Path:
+    """Write ``L2/round0/votes/<axis>.parquet`` — the linked evidence, at the vote level.
+
+    A *vote* is legitimately keyed ``(axis, bucket, source, pass, scope)``: it is one source's
+    statement about one bucket of one pass, and a signal measured on a pass is a per-pass
+    measurement. What may not be keyed by pass is the **axis** — the fold across signals and
+    passes — which is why this file sits next to ``uncertainty/<axis>.parquet`` rather than under
+    ``L1/<pass>/``: the link that turned measurements into statements applied a policy, and every
+    threshold is L2's.
+
+    This is what the artifact-driven adaptive path ingests, so its beliefs come from the same
+    linked evidence the in-process path uses rather than from a per-pass axis fold.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    rows: list[tuple[str, float, float, str, str, str]] = []
+    for pass_label in sorted(buckets_by_pass):
+        for bucket in buckets_by_pass[pass_label] or []:
+            start, end = float(bucket.get("start", 0.0)), float(bucket.get("end", 0.0))
+            for source, payload in (bucket.get("votes") or {}).items():
+                rows.append(
+                    (
+                        axis,
+                        start,
+                        end,
+                        str(source),
+                        str(pass_label),
+                        json.dumps(payload, default=str, separators=(",", ":")),
+                    )
+                )
+            # Bucket-level measurements that belong to no single source travel alongside, so a
+            # re-ingest sees the same context the in-process path does.
+            for name in ("frame_dispersion",):
+                if isinstance(bucket.get(name), (int, float)):
+                    rows.append(
+                        (axis, start, end, f"__{name}__", str(pass_label), json.dumps({"value": bucket[name]}))
+                    )
+    table = pa.table(
+        {
+            "axis": pa.array([r[0] for r in rows], type=pa.string()),
+            "start": pa.array([r[1] for r in rows], type=pa.float64()),
+            "end": pa.array([r[2] for r in rows], type=pa.float64()),
+            "source": pa.array([r[3] for r in rows], type=pa.string()),
+            "pass_label": pa.array([r[4] for r in rows], type=pa.string()),
+            "payload": pa.array([r[5] for r in rows], type=pa.string()),
+        }
+    )
+    if provenance:
+        table = table.replace_schema_metadata({b"link_provenance": json.dumps(provenance, default=str).encode()})
+    pq.write_table(table, dest)
+    return dest
+
+
 def write_signal_stability(
     per_bucket: Sequence[Mapping[str, Any]],
     dest: Path,
