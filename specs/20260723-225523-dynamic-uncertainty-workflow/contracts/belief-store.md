@@ -49,6 +49,15 @@ final/ ...                  # see contracts/final-outputs.md
    `elected_stream`, `irreducible_reason`, `round`) are additive.
 7. **Provenance**: every parquet carries `schema.metadata` with `policy_hash`, `wrapper_hash`,
    `senselab_version`, `round`, mirroring `write_axis_parquet` (`io.py:22`).
+8. **A withdrawal is published, not merely recorded.** Every belief parquet — per-round and
+   `final/` — carries `n_attenuated_sources`, `attenuated_sources` (JSON `{source → weight}`) and
+   `attenuation` (JSON list of `{source, evidence_weight, factor, corroboration,
+   corroboration_pooling, evidence_sources, weight_map, floor, reason, measured_on, round}`),
+   written by `fusion.attenuation_columns`. `n_sources` cannot stand in for this: attenuation
+   keeps the source contributing by design, so the count is unchanged across a withdrawal.
+   Unattenuated buckets are written as `0` / `"{}"` / `"[]"` — absence is stated, not left as a
+   gap. Vote provenance is not a substitute either: `votes_added.parquet` only holds the round a
+   vote was *added* in, so a round-3 withdrawal against a round-1 vote appears in no round file.
 
 ## Invariants (tested)
 

@@ -396,6 +396,58 @@ class VoteStore:
                 out[v.source] = float(v.evidence_weight)
         return out
 
+    def attenuation_detail(self, stream: str, axis: str, bucket: tuple[float, float]) -> list[dict[str, Any]]:
+        """Every withdrawal recorded against this bucket's active votes, flattened for an artifact.
+
+        The store already keeps this in ``provenance["evidence_weight_factors"]``, but provenance
+        rides on the vote and the votes are only written for the round they were *added* in. An
+        attenuation applied in round 3 to a round-1 vote therefore appeared in no file at all. This
+        is the same information, reachable per bucket, so a writer can put it beside the aggregate
+        it explains.
+
+        Every factor is listed, not just the composed weight: two rules may each have something to
+        say about one vote, and only the list shows that — the product cannot be decomposed after
+        the fact.
+
+        Args:
+            stream: Pass label.
+            axis: Axis name.
+            bucket: The bucket to report on.
+
+        Returns:
+            One record per (source, withdrawal), source-ordered then in the order the withdrawals
+            were applied. Empty when nothing here was attenuated, which is distinct from
+            attenuated-to-1.0 and must stay so.
+        """
+        out: list[dict[str, Any]] = []
+        for vid in sorted(
+            self._index.get((stream, axis, bucket), []), key=lambda v: (self._votes[v].source, self._votes[v].round)
+        ):
+            v = self._votes[vid]
+            if v.status != "active":
+                continue
+            for factor in v.provenance.get("evidence_weight_factors") or []:
+                out.append(
+                    {
+                        "source": v.source,
+                        "axis": axis,
+                        # The composed weight the vote ended up with, alongside this factor's own
+                        # contribution: with several factors the two differ, and the difference is
+                        # the floor doing its job.
+                        "evidence_weight": round(float(v.evidence_weight), 6),
+                        "factor": round(float(factor.get("factor", 1.0)), 6),
+                        "corroboration": factor.get("corroboration"),
+                        "corroboration_pooling": factor.get("corroboration_pooling"),
+                        "evidence_sources": factor.get("evidence_sources"),
+                        "weight_map": factor.get("weight_map"),
+                        "floor": factor.get("floor"),
+                        "reason": factor.get("reason"),
+                        "measured_on": factor.get("measured_on"),
+                        "round": factor.get("round"),
+                    }
+                )
+        return out
+
     def has_evidence_weight_factor(
         self, stream: str, axis: str, bucket: tuple[float, float], source: str, *, reason: str
     ) -> bool:
@@ -427,8 +479,13 @@ class VoteStore:
 
         Attenuated sources stay in ``contributing_sources`` — the record has to show who spoke up,
         and how far their claim was carried — with the withdrawn weights alongside in
-        ``attenuated_sources``. An empty weight map is byte-identical to no map, which is what
-        keeps :meth:`parity_check` comparing the same quantity it always did.
+        ``attenuated_sources`` and the measurements behind them in ``attenuation``. An empty weight
+        map is byte-identical to no map, which is what keeps :meth:`parity_check` comparing the
+        same quantity it always did.
+
+        ``attenuated_sources`` answers "who, and how much"; ``attenuation`` answers "measured
+        against what". Both are needed at the artifact boundary: a weight with no measurement
+        beside it is an assertion a reader cannot check or disagree with.
         """
         votes = self.active_votes(stream, axis, bucket)
         weights = self.evidence_weights(stream, axis, bucket)
@@ -447,6 +504,7 @@ class VoteStore:
             "p_voice": p_voice,
             "contributing_sources": sorted(votes.keys()),
             "attenuated_sources": {k: round(v, 6) for k, v in sorted(weights.items())},
+            "attenuation": self.attenuation_detail(stream, axis, bucket),
         }
 
     def parity_check(self, passes: list[str], *, aggregator: str, tol: float = 1e-9) -> dict[str, Any]:
@@ -536,6 +594,7 @@ class BeliefState:
                 row["p_voice"] = new["p_voice"]
             row["contributing_sources"] = new["contributing_sources"]
             row["attenuated_sources"] = new["attenuated_sources"]
+            row["attenuation"] = new["attenuation"]
             _decompose(row, row.get("meta") or {})
             row["round"] = round_idx
             row["history"].append({"round": round_idx, "within_pass_uncertainty": row["within_pass_uncertainty"]})

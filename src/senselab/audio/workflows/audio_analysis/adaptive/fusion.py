@@ -179,6 +179,36 @@ def make_p_voice_lookup(state: Any, stream: str) -> Any:  # noqa: ANN401
 # ── final artifact writers ───────────────────────────────────────────────
 
 
+def attenuation_columns(row: dict[str, Any]) -> dict[str, Any]:
+    """The three columns that make a withdrawal readable from a parquet row.
+
+    Shared by the per-round belief files and ``final/`` so the two cannot drift into describing the
+    same withdrawal differently — the complaint being answered here is precisely that a fact held
+    in memory reached no file at all.
+
+    ``n_attenuated_sources`` exists because ``n_sources`` cannot serve. Attenuation deliberately
+    keeps the source contributing, so the count is identical either side of it and an attenuated
+    bucket read exactly like an unanimous one. The other two are JSON because the payload is a
+    per-source mapping and a list of provenance records; flattening either into columns would fix
+    an arity the run does not have.
+
+    Args:
+        row: One belief row, as produced by ``VoteStore.reaggregate_bucket``.
+
+    Returns:
+        ``n_attenuated_sources`` / ``attenuated_sources`` / ``attenuation``. An unattenuated bucket
+        gets ``0``, ``"{}"`` and ``"[]"`` rather than nulls, so "nothing was withdrawn here" is
+        stated rather than inferred from a gap.
+    """
+    weights = row.get("attenuated_sources") or {}
+    detail = row.get("attenuation") or []
+    return {
+        "n_attenuated_sources": len(weights),
+        "attenuated_sources": json.dumps(weights, sort_keys=True, default=str),
+        "attenuation": json.dumps(detail, default=str),
+    }
+
+
 def build_final_outputs(
     *,
     out_dir: Path,
@@ -353,6 +383,12 @@ def build_final_outputs(
             # available; None elsewhere (the column exists either way so the
             # schema is stable).
             "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
+            # Which sources had weight withdrawn here, how much was left, and the corroboration
+            # that sized it. `speech_presence_confidence` is a weighted fold, so without these a
+            # reader cannot tell a bucket where every source agreed from one where the only
+            # source that heard a speaker was discounted to the floor — and it is the second that
+            # needs appealing.
+            **attenuation_columns(r),
         }
         for r in state.axis_rows(stream, "speech_presence")
     ]
