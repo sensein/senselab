@@ -36,11 +36,11 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Final, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import per_source_voice
-from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES
+from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES, HARVESTED_AXES
 from senselab.audio.workflows.audio_analysis.degradation import (
     DEFAULT_ANCHORS,
     SNR_PREFERENCE,
@@ -60,6 +60,14 @@ from senselab.audio.workflows.audio_analysis.support import (
 AXES: tuple[AxisName, ...] = AXIS_NAMES
 """Every active axis, from the one declaration. Re-exported here because half the loop imports it
 from this module; it is not a second list, and it is deliberately not three long."""
+
+_HARVEST_ACCESSORS: Final[frozenset[str]] = frozenset(HARVESTED_AXES)
+"""Axes :meth:`VoteStore.from_harvests` can read straight off a ``PassHarvest``.
+
+Derived from the axis declaration rather than from the three branches below it, so that the
+branches and the set cannot disagree: an axis that grows a harvest accessor without being marked
+``harvested=True`` is caught by the branch that has no case for it, and one marked ``harvested``
+without an accessor is caught here."""
 
 UNCORROBORATED_SPEECH_CLAIM = "uncorroborated_speech_claim"
 """Reason recorded when a speech claim is attenuated for want of independent corroboration.
@@ -219,6 +227,12 @@ class VoteStore:
         ``L2/round/0/estimates/speech_presence.parquet``, a file that carries none of them: the
         intersection was empty on every run, the join returned early, and every bucket's
         measurements were silently absent.
+
+        Every vote row names the perturbation it was measured under, and a row naming one this run
+        did not take is skipped. That is a real filter and it silently ate the fourth axis: the
+        mask votes were written under a *fabricated* perturbation called ``"mask"``, which is in no
+        run's perturbation set, so this path dropped every one of them. The mask is measured on the
+        unmodified recording and now says so.
         """
         import pandas as pd
 
@@ -262,7 +276,14 @@ class VoteStore:
         slot.update({k: _json_safe(v) for k, v in payload.items() if k in _META_COLUMNS})
 
     @classmethod
-    def from_harvests(cls, harvests: dict[str, Any], *, round_idx: int = 0, policy: Any = None) -> "VoteStore":  # noqa: ANN401
+    def from_harvests(
+        cls,
+        harvests: dict[str, Any],
+        *,
+        round_idx: int = 0,
+        policy: Any = None,  # noqa: ANN401
+        unharvested: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]] | None = None,
+    ) -> "VoteStore":
         """Populate baseline-round votes directly from ``compute.harvest_pass`` outputs (T009).
 
         ``harvests`` maps pass label → ``PassHarvest`` (duck-typed:
@@ -273,10 +294,34 @@ class VoteStore:
 
         The store holds *votes*, so the speech-presence axis is linked from its L1 measurements
         under ``policy`` (defaults to the documented anchors) on the way in.
+
+        ``unharvested`` carries ``{axis → {perturbation → buckets}}`` for every active axis with
+        no vote harvest — ``background_mask`` today, whose evidence is the mask's own per-region
+        confidence rather than an ensemble. It is **required**, not optional, and omitting an axis
+        raises: this method used to enumerate three axes in a literal tuple, so the fourth entered
+        no store on this path, carried no belief through any round, proposed no region, and was
+        reported by the convergence report as ``0 buckets, residual mass 0.0`` — *settled* rather
+        than *never asked*. An empty mapping for an axis is a measurement ("the mask found
+        nothing"); a missing one is an omission, and only the second is an error.
+
+        Raises:
+            ValueError: When an active axis has neither a harvest accessor nor an ``unharvested``
+                entry — the fifth axis's version of the bug the fourth one shipped.
         """
         from senselab.audio.workflows.audio_analysis.speech_presence_link import votes_for_harvest
 
+        supplied = dict(unharvested or {})
+        missing = [a for a in AXES if a not in _HARVEST_ACCESSORS and a not in supplied]
+        if missing:
+            raise ValueError(
+                f"no evidence supplied for active axis/axes {missing}: they have no vote harvest, so the caller "
+                "must pass their buckets as `unharvested` — an axis nobody hands in is an axis the loop carries "
+                "no belief through, and it reports as settled rather than as unasked"
+            )
         store = cls()
+        for axis, by_stream in sorted(supplied.items()):
+            for stream, buckets in sorted(by_stream.items()):
+                store._ingest_buckets(axis, stream, buckets, round_idx)
         for stream, harvest in harvests.items():
             for axis, buckets in (
                 ("speech_presence", votes_for_harvest(harvest, **({"policy": policy} if policy else {}))),
@@ -315,6 +360,25 @@ class VoteStore:
                     else:
                         store.row_meta.setdefault((stream, axis, bk), {})
         return store
+
+    def _ingest_buckets(self, axis: str, stream: str, buckets: Sequence[Mapping[str, Any]], round_idx: int) -> None:
+        """File one axis's bucket votes for one perturbation. No harvest, same store."""
+        for bucket in buckets or ():
+            bk = bucket_key(bucket["start"], bucket["end"])
+            for source, payload in (bucket.get("votes") or {}).items():
+                if isinstance(payload, dict):
+                    self.add_vote(
+                        Vote(
+                            axis=axis,
+                            bucket=bk,
+                            source=str(source),
+                            stream=stream,
+                            scope="file",
+                            round=round_idx,
+                            payload=payload,
+                        )
+                    )
+            self.row_meta.setdefault((stream, axis, bk), {})
 
     # ── mutation ───────────────────────────────────────────────────────
 

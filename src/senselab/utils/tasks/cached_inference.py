@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 9
+CACHE_SCHEMA_VERSION = 10
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -107,6 +107,27 @@ adopting fusion's numbering instead of running its own 1-based one. A cached out
 still carries ``"pass": "raw_16k"`` in its provenance and joins on a directory that no
 longer exists, so it does not merely lack a column — it describes a run this pipeline
 cannot produce.
+
+Bumped 9 → 10 when the D-17 restructure was finished. Four changes, each of which makes an
+older entry answer a different question:
+
+- ``background_mask`` is a **participant**, not a spectator. Its votes are keyed by the
+  perturbation they were measured under (the identity) rather than by a fabricated
+  perturbation called ``"mask"`` that no ingest path could match, so the axis now carries a
+  belief through every round, proposes regions, and is marked by convergence. A cached run's
+  convergence report says ``background_mask: 0 buckets, residual mass 0.0``, which reads as
+  *settled* and means *never asked*.
+- ``L2/round/<n>/estimates/<axis>.parquet`` has one schema for both producers
+  (``estimates.ESTIMATE_COLUMNS``), where fusion's rounds and the loop's rounds previously
+  wrote different columns under the same name. Rows from either old shape are missing columns
+  a reader now expects and carry none of the two that moved onto them.
+- every round writes ``summary.json`` and ``timeline.png``, and fusion's per-round fold log
+  moved out of ``L2/rounds.json`` into each round's summary.
+- ``final/`` is an extraction. ``final/estimates/<axis>.parquet`` (every active axis),
+  ``final/speakers.json``, ``final/per_speaker_presence.parquet`` and ``final/decisions.json``
+  replace ``L2/speech_presence.parquet``, ``L2/speakers.json``,
+  ``L2/per_speaker_presence.parquet``, ``L2/convergence.json`` and ``L2/iterations.json``.
+  A consumer pointed at the old locations finds nothing there.
 """
 
 

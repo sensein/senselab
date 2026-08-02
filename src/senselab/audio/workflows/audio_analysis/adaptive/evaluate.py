@@ -25,13 +25,11 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
 from senselab.audio.workflows.audio_analysis.harvesters import _levenshtein
-from senselab.audio.workflows.audio_analysis.layout import (
-    belief_dir,
-    estimates_dir,
-    final_dir,
-    round_dir,
-    rounds_present,
-)
+
+# ``final_dir`` alone. Every other layout helper this module imported named a place in the belief
+# tree, and EVAL consumes the deliverable: the shortest statement of that rule is an import list
+# with nowhere else in it.
+from senselab.audio.workflows.audio_analysis.layout import final_dir
 
 _TOKEN_EQUIV = {"u": "you"}  # annotator shorthand normalization, reported separately
 
@@ -72,17 +70,17 @@ def evaluate_against_ground_truth(
 ) -> dict[str, Any]:
     """Score final outputs in ``out_dir`` against the LS ground truth; write eval.json."""
     gt = load_ls_ground_truth(gt_path)
-    # The evaluator scores the deliverable, so it is entitled to read ``final/`` — it is a
-    # consumer of the answer, not a stage that builds it. The belief artifacts it also needs are
-    # level 2, and reading them from ``final/`` crashed: the writer has put them under ``L2/``
-    # since the layout split, and nothing pointed this reader at the new location.
+    # The evaluator scores the deliverable and nothing else. Every read here is of ``final/``,
+    # which is what makes it a consumer of the answer rather than a stage that builds it — it
+    # used to reach into ``L2/`` for the presence track, the baseline round's uncertainty mass
+    # and the last round's speaker axis, and each of those was a scorer scoring an intermediate.
     final = final_dir(out_dir)
-    belief = belief_dir(out_dir)
     transcript = json.loads((final / "transcript.json").read_text())
     diarization = json.loads((final / "diarization.json").read_text())
     import pandas as pd
 
-    speech_presence = pd.read_parquet(belief / "speech_presence.parquet")
+    estimates = final / "estimates"
+    speech_presence = pd.read_parquet(estimates / "speech_presence.parquet")
 
     speech_spans = [(s["start"], s["end"]) for s in gt["segments"]]
     transcribed = [(s["start"], s["end"]) for s in gt["segments"] if s["text"]]
@@ -186,23 +184,30 @@ def evaluate_against_ground_truth(
         vals = [w["confidence"] for w in transcript["words"] if _in_any((w["start"] + w["end"]) / 2.0, spans)]
         return round(sum(vals) / len(vals), 4) if vals else None
 
-    baseline_summary = round_dir(out_dir, rounds_present(out_dir)[0]) / "summary.json"
-    rows2 = json.loads(baseline_summary.read_text())
+    # The trajectory, from the deliverable that now carries it. This read the baseline round's
+    # ``summary.json`` out of the belief tree, which is a scorer reconstructing the run's history
+    # from an intermediate; ``final/decisions.json`` is the run's own account of it.
+    decisions = json.loads((final / "decisions.json").read_text())
+    trajectory = (decisions.get("convergence") or {}).get("rounds") or []
     localization = {
         "untranscribed_gt_spans": untranscribed,
         "fused_confidence_in_untranscribed": _mean_conf(untranscribed),
         "fused_confidence_in_transcribed": _mean_conf(transcribed),
-        "baseline_uncertainty_mass": rows2.get("uncertainty_mass"),
+        # The mass the *first* recorded round entered with. ``None`` when the run recorded no
+        # round, which is a missing measurement and not a mass of zero.
+        "baseline_uncertainty_mass": (trajectory[0].get("uncertainty_mass") or {}).get("before")
+        if trajectory
+        else None,
     }
     # Identity uncertainty at GT speaker boundaries vs inside segments.
     try:
         import pandas as pd  # noqa: PLC0415
 
-        last = rounds_present(out_dir)[-1]
         # One row per bucket, folded across perturbations by the writer. The filter this replaces
         # took the transcript's stream, which scored the run against whichever perturbation the
-        # transcript came from rather than against the belief the run published.
-        ident = pd.read_parquet(estimates_dir(out_dir, last) / "speaker.parquet")
+        # transcript came from rather than against the belief the run published — and it read the
+        # last round's estimate out of ``L2/`` rather than the deliverable extracted from it.
+        ident = pd.read_parquet(estimates / "speaker.parquet")
         boundaries = [g["start"] for g in gt["segments"][1:]]
         at_b: list[float] = []
         inside: list[float] = []

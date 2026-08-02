@@ -236,12 +236,6 @@ def build_final_outputs(
     deliverable an input to the stage standing next to the one that wrote it.
     """
     final = final_dir(out_dir)
-    # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
-    # (transcript, diarization, timeline, summary) stay in final/. Different questions:
-    # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
-    belief = belief_dir(out_dir)
-    final.mkdir(parents=True, exist_ok=True)
-    belief.mkdir(parents=True, exist_ok=True)
     final.mkdir(parents=True, exist_ok=True)
 
     base_speaker_lookup = make_speaker_lookup(store, state, stream)
@@ -366,47 +360,50 @@ def build_final_outputs(
         for seg in diar_segments
     ]
     (final / "diarization.rttm").write_text("\n".join(rttm_lines) + ("\n" if rttm_lines else ""))
-
-    # speech_presence.parquet — final speech_presence belief.
-    import pandas as pd
-
-    pres_rows = [
-        {
-            "start": r["start"],
-            "end": r["end"],
-            "uncertainty": r.get("uncertainty"),
-            "epistemic_uncertainty": r.get("epistemic_uncertainty"),
-            "triage_score": r.get("triage_score"),
-            "aleatoric_floor": r.get("aleatoric_floor"),
-            "aleatoric_floor_terms": (r.get("aleatoric_floor_policy") or {}).get("terms") or [],
-            "status": r.get("status"),
-            "irreducible_reason": r.get("irreducible_reason"),
-            "round": r.get("round"),
-            # contracts/final-outputs.md columns (T042). `speech_presence_confidence` is
-            # the calibrated P(speech); it *replaces* the old `p_voice` column
-            # rather than sitting beside it — nothing on the way to alpha needs
-            # backwards compatibility, and two names for one quantity is how
-            # schemas rot.
-            "speech_presence_confidence": r.get("speech_presence_confidence", r.get("p_voice")),
-            # Which passes fed the fold. Not which one was *elected*: an axis is a fold across
-            # passes, so naming a winner here is the per-pass axis again with the index moved into
-            # the value, and this column carried one on every run.
-            "contributing_passes": r.get("contributing_passes") or [],
-            # Written by I4 / P2 when per-class segmentation posteriors were
-            # available; None elsewhere (the column exists either way so the
-            # schema is stable).
-            "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
-            # Which sources had weight withdrawn here, how much was left, and the corroboration
-            # that sized it. `speech_presence_confidence` is a weighted fold, so without these a
-            # reader cannot tell a bucket where every source agreed from one where the only
-            # source that heard a speaker was discounted to the floor — and it is the second that
-            # needs appealing.
-            **attenuation_columns(r),
-        }
-        for r in state.axis_rows("speech_presence")
-    ]
-    pd.DataFrame(pres_rows).to_parquet(belief / "speech_presence.parquet", index=False)
     return transcript, diarization
+
+
+def extract_final_estimates(out_dir: Path, round_index: int) -> tuple[Path, ...]:
+    """Copy round ``round_index``'s estimates to ``final/estimates/`` — verbatim (D-17).
+
+    This is what ``final/`` is: an extraction. The deliverable presence track used to be *rebuilt*
+    here from the belief state, into ``L2/speech_presence.parquet``, with columns
+    (``speech_presence_confidence``, ``overlap_posterior``) that no round carried — so the number
+    a consumer acted on was not the number any round believed, and there was nowhere to look to
+    see when it had been decided. The columns now live on the estimate row and this function only
+    moves bytes.
+
+    One artifact per active axis, from the axis declaration rather than a list here. The four
+    per-axis declarations this replaces named ``speech_presence``, ``asr`` and
+    ``background_mask`` — and *not* ``speaker``, so the deliverable set was itself a list of
+    three axes with the fourth missing, which is the failure ``axes.AXES`` exists to make
+    impossible.
+
+    Args:
+        out_dir: Run directory.
+        round_index: The round to extract. The last one, always: an earlier round would make the
+            deliverable a re-reading of the trajectory rather than the answer.
+
+    Returns:
+        The paths written, in axis order. An axis the round wrote nothing for is skipped and named
+        by the conformance guard rather than silently absent.
+    """
+    import pyarrow.parquet as pq
+
+    from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+    from senselab.audio.workflows.audio_analysis.layout import estimates_dir
+
+    source = estimates_dir(out_dir, round_index)
+    dest = final_dir(out_dir) / "estimates"
+    dest.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for axis in AXIS_NAMES:
+        origin = source / f"{axis}.parquet"
+        if not origin.exists():
+            continue
+        pq.write_table(pq.read_table(origin), dest / f"{axis}.parquet")
+        written.append(dest / f"{axis}.parquet")
+    return tuple(written)
 
 
 def write_speaker_outputs(
@@ -421,6 +418,11 @@ def write_speaker_outputs(
     generated_from_round: int = 0,
 ) -> tuple[Path, Path]:
     """Write ``final/speakers.json`` and ``final/per_speaker_presence.parquet`` (T102).
+
+    Where the docstring always said, and where they now go. Both were written to the ``L2`` root
+    instead — flattened per-run quantities with no round to belong to — so ``final/`` carried no
+    per-speaker output at all while two declarations for it sat unproduced, and every consumer
+    reached into the belief tree for a deliverable.
 
     Replaces the single per-bucket speaker scalar rather than sitting beside it: two names
     for one quantity is how schemas rot, and nothing on the way to alpha needs backwards
@@ -442,9 +444,7 @@ def write_speaker_outputs(
     import pandas as pd
 
     final = final_dir(out_dir)
-    belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
-    belief.mkdir(parents=True, exist_ok=True)
 
     doc = {
         "profile_version": profile_version,
@@ -454,7 +454,7 @@ def write_speaker_outputs(
         "speakers": [h.to_json() for h in hypotheses],
         "label_correspondence": [c.to_json() for c in correspondence],
     }
-    speakers_path = belief / "speakers.json"
+    speakers_path = final / "speakers.json"
     speakers_path.write_text(json.dumps(doc, indent=2) + "\n")
 
     columns = [
@@ -470,6 +470,6 @@ def write_speaker_outputs(
     ]
     rows = [t.to_row() for t in tracks]
     frame = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame({c: [] for c in columns})
-    speech_presence_path = belief / "per_speaker_presence.parquet"
+    speech_presence_path = final / "per_speaker_presence.parquet"
     frame.to_parquet(speech_presence_path, index=False)
     return speakers_path, speech_presence_path

@@ -945,17 +945,32 @@ inputs, and its content now rides in `perturbations.json` beside the declaration
 ```
 L2/
   round/<n>/
-    estimates/<axis>.parquet     one row per bucket per axis, four axes               [is]
+    estimates/<axis>.parquet     one row per bucket per axis, EVERY active axis,
+                                 EVERY round, one schema                              [is]
     derivatives/
       votes/<axis>.parquet       linked evidence, (axis, bucket, source, pass, scope) [is, round 0]
       stability/<signal>.parquet per-signal cross-perturbation |Δ| per bucket         [is, round 0]
-      regions.json               the spans this round proposed                        [is, rounds ≥ 1]
-      votes_added.parquet        what this round added to the store                   [is, rounds ≥ 1]
+      regions.json               the spans this round proposed                        [is, intervening rounds]
+      votes_added.parquet        what this round added to the store                   [is, intervening rounds]
       mask, speaker allocation, ASR consensus, scene components                       [should]
-    timeline.png                 the same figure the final timeline draws             [should]
-    summary.json                 what this round did, and what it now estimates       [is]
-  rounds.json                    per-round decision log                               [should: per round]
+    timeline.png                 the same figure the final timeline draws             [is]
+    summary.json                 what this round did, per producer                    [is]
 ```
+
+**What a round owes, and what it merely may leave.** Three artifacts are owed by *every* round —
+`estimates/` for every active axis, `summary.json`, `timeline.png` — because every round has a
+belief, an account and a view; a round missing one is a round whose place in the trajectory cannot
+be read. The four derivative families are not owed: `votes/` and `stability/` are the ingest
+round's, computed once from L1, and `regions.json` / `votes_added.parquet` belong to the rounds
+that ran interventions. Writing an empty `regions.json` from a round that does no region proposal
+would be the claim "we looked and found none", which is not what happened — **absent is not zero**.
+`Artifact.enumerated` in `contracts.py` is where that distinction is declared, and it is checked
+per member: a wildcard used to be satisfied by one match, so `L2/round/*/summary.json` read as
+produced on a run where three of five rounds wrote none.
+
+`L2/rounds.json` is **gone**. It was fusion's per-round fold log flattened to the belief root,
+where it had no round to belong to; each round's entry is now the `fusion` block of that round's
+`summary.json`, beside the loop's `adaptive` block for the round it adopts as a baseline.
 
 **One tree, 0-based.** There were two — `L2/round<N>/` from fusion and `L2/rounds/<N>/` from the
 adaptive loop — so the fusion loop's round 0 and the adaptive loop's round 1 were the same
@@ -964,14 +979,37 @@ iteration under two names. The loop now *adopts* fusion's index rather than assi
 `estimates/` rather than `uncertainty/`: a row carries uncertainty, epistemic uncertainty,
 confidence and variability, so the old name named one column rather than the thing itself.
 
-**[should], stated rather than papered over:** round 0's estimates are written by `fuse` and carry
-`signal_weights`/`weight_basis`; later rounds are written by the belief store and carry
-`p_voice`/`aleatoric_floor` instead. One artifact name, two schemas. Neither guard can see it —
-both are genuinely keyed `(axis, bucket)`, and what differs is below the key.
+**Closed, and how.** Round 0's estimates were written by `fuse` carrying
+`signal_weights`/`weight_basis`; later rounds were written by the belief store carrying
+`p_voice`/`aleatoric_floor` instead — one artifact name, two schemas, and no guard could see it
+because both are genuinely keyed `(axis, bucket)` and what differed was below the key. They are
+one artifact because a round's estimate of an axis is one quantity and rounds 2 and 3 are
+consecutive iterations of one loop; declaring them separately would assert a seam the path does
+not mention. So the schema is the **union**, declared once in `estimates.ESTIMATE_COLUMNS`, and a
+producer with nothing to say for a column writes null — "this producer does not compute a
+convergence status" is exactly what a null in `status` means. `estimate_frame` raises on a column
+no declaration names, so a producer that grows one has to grow the schema where both see it.
 
-Present per axis row: `start`, `end`, `uncertainty`, `epistemic_uncertainty`, `confidence`,
-`variability`, `triage_score`, `round`, `contributing_signals`, `contributing_passes`,
-`signal_weights`, `weight_basis`, `coupled_from`.
+The guard that now catches the class: `Artifact.slices_of_one_table` derives, from a pattern's own
+wildcards, whether its files differ only in a key dimension. `L2/round/*/estimates/*.parquet`
+varies in round and axis and in nothing else, so its files are slices of one table and must have
+one shape; `L1/signals/**` varies in *which tool measured*, so no such rule applies.
+
+Present per axis row: `start`, `end`, `axis`, `round`, `uncertainty`, `epistemic_uncertainty`,
+`confidence`, `variability`, `triage_score`, `contributing_signals`, `contributing_passes`,
+`signal_weights`, `weight_basis`, `coupled_from`, `scene_quality_coupling`,
+`triage_score_pre_coupling`, `status`, `irreducible_reason`, `speech_presence_confidence`,
+`overlap_posterior`, `p_voice`, `aleatoric_floor`, `aleatoric_floor_terms`, `n_sources`,
+`n_attenuated_sources`, `attenuated_sources`, `attenuation`.
+
+**The fourth axis is a participant.** `background_mask` had estimates in the fusion rounds and none
+in the loop's, and the convergence report answered *0 buckets, residual mass 0.0* — which reads as
+settled and meant never asked. Two causes, both closed: `VoteStore.from_harvests` enumerated three
+axes in a literal tuple, and the mask's votes were written under a fabricated perturbation called
+`"mask"` that is in no run's perturbation set, so the artifact ingest path (which skips rows naming
+a perturbation the run did not take) dropped every one of them. The mask is measured on the
+unmodified recording and now says so; an active axis with no vote harvest must be handed in
+explicitly, and omitting one raises.
 
 Four quantities kept distinct because they answer different questions and have different estimators:
 entropy, its reducible part, a probability, a dispersion in native units. `triage_score` is the
@@ -991,15 +1029,45 @@ bucket)` fold, blocked on `fuse_axis` accepting per-`(bucket, signal)` weights. 
 
 ```
 final/
-  transcript.json                fused words with confidence and alternates
-  diarization.json, .rttm        fused speaker turns
-  speakers.json                  count posterior + per-speaker hypotheses
-  per_speaker_presence.parquet   one track per hypothesised speaker
-  decisions.json                 trajectory, reversals, stopping reason
-  timeline.png, summary.md       the human-facing views
+  transcript.json                fused words with confidence and alternates       [is]
+  diarization.json, .rttm        fused speaker turns                              [is]
+  estimates/<axis>.parquet       the last round's estimates, copied verbatim,
+                                 one file per active axis                         [is]
+  speakers.json                  count posterior + per-speaker hypotheses         [is]
+  per_speaker_presence.parquet   one track per hypothesised speaker               [is]
+  decisions.json                 trajectory, reversals, stopping reason,
+                                 every intervention entry                         [is]
+  disagreements_resolved.json    which flagged regions the rounds resolved        [is]
+  timeline.png, summary.md       the human-facing views                           [is]
   summary.json                   run provenance: policy hash, versions, budget    [is: ~6 KB]
-  labelstudio_{tasks.json,config.xml}, eval.json
+  run_summary.json               the headline numbers of the last round           [is]
+  labelstudio_{tasks.json,config.xml}                                             [is]
+  eval.json                      the score, when there is ground truth to score against
 ```
+
+**Seventeen declarations, and what happened to each.** Ten were produced and stay: `transcript`,
+`diarization` ×2, `disagreements_resolved`, `timeline`, `summary.md`, `summary.json`,
+`run_summary`, and the two Label Studio files. Seven were not:
+
+- `speakers.json`, `per_speaker_presence.parquet` — written to the `L2` root by the fusion stage,
+  which is where its own docstring never said they went. Moved.
+- `speech_presence.parquet` — worse than misplaced: *rebuilt* at the `L2` root from the belief
+  state with two columns (`speech_presence_confidence`, `overlap_posterior`) that no round
+  carried, so the number a consumer acted on was not a number any round believed. Those columns
+  are on the estimate row now and the file is an extraction.
+- `asr.parquet`, `background_mask.parquet`, `speaker/*.parquet` — three per-axis declarations for
+  the deliverable axes, and the *speaker* axis was missing from them entirely. That declaration
+  was itself a list of three axes with the fourth absent, which is the failure `axes.AXES` exists
+  to make impossible; all four are replaced by one `final/estimates/*.parquet` enumerated over
+  `AXIS_NAMES`.
+- `decisions.json` — existed as `L2/convergence.json` plus `L2/iterations.json`, two per-run
+  documents at the belief root, so `final/` had no account of how the run reached its answer and
+  the evaluator read the belief tree to reconstruct one. Replaced outright.
+- `eval.json` — absent because the run had no ground truth. The one declared output whose absence
+  is a property of the *input*, and the register says so rather than tolerating it silently.
+
+The evaluator now reads `final/` and nothing else, which is what makes it a consumer of the answer
+rather than a stage that builds it.
 
 Present: the converged state and how it was reached. Absent: anything another stage reads.
 `summary.json` no longer inlines the per-perturbation evidence (register item 26, closed
@@ -1009,11 +1077,23 @@ Present: the converged state and how it was reached. Absent: anything another st
 `final/labelstudio_tasks.json` that decided what the driver printed — a stage branching on a
 deliverable is treating it as state, and a probe is a read. The loop now returns what it produced.
 
-**[should]:** `final/` is not yet pure extraction. `speakers.json`, `per_speaker_presence.parquet`
-and `speech_presence.parquet` are still written at the `L2/` root by the fusion stage rather than
-being lifted from the last round, and `convergence.json` / `iterations.json` / `rounds.json` /
-`disagreements.json` sit there too, per-round quantities with no round to belong to. Those are the
-remaining entries in `contracts.KNOWN_DEVIATIONS`.
+**[should], what is still open — stated, not closed.** Three things remain, and they are the
+remaining `artifact` entries in `contracts.KNOWN_DEVIATIONS`:
+
+- `L2/background_mask.{parquet,json}` — written by `stage_background_mask`, which runs inside
+  `run_pass`, an **L1** stage, and produces an L2 artifact. That is the cycle edge D-17 forbids,
+  and it is untouched here: the mask's *votes* now enter the belief store correctly, but the mask
+  document itself is still an L1 stage's output in the belief tree. It is a round derivative.
+- `L2/disagreements.json` and `L2/labelstudio_{tasks.json,config.xml}` — per-run indices at the
+  belief root, written by the driver and read back by the loop and the LS final stage.
+- `triage.json` at the run root — an L2-shaped decision (speech_present, needs_enhancement) taken
+  before L1 has run, stored where no stage claims it.
+
+And on the *static* side, the largest open item is unchanged: `scripts/analyze_audio.py` runs the
+stages inline instead of invoking them, so the driver opens run artifacts directly and the DAG
+cannot see inside it. The adaptive loop does the same to FINAL — it writes `final/decisions.json`
+and drives the extraction, which are FINAL's artifacts written from an L2 node. The *content* of
+`final/` is right; the caller is not, and both close with the same restructure.
 
 #### The one-line test per stage
 

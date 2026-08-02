@@ -1337,6 +1337,11 @@ def main(argv: list[str] | None = None) -> int:
     # and with --skip comparisons there is simply nothing harvested to read.
     harvests_by_pass: dict[str, Any] = {}
     reliability_by_axis: dict[str, Any] = {}
+    # Every active axis with no vote harvest gets an entry here whether or not it has anything to
+    # say, because the belief store distinguishes the two: an empty perturbation map is "no
+    # perturbation reported a mask", a *missing* axis is "nobody asked", and the second is the
+    # failure that let the fourth axis converge on silence.
+    unharvested_votes: dict[str, dict[str, list[dict[str, Any]]]] = {"background_mask": {}}
 
     if "comparisons" not in args.skip:
         from senselab.audio.workflows.audio_analysis import (
@@ -1658,14 +1663,20 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 summaries["final_uncertainty"] = final_maps
 
-                # The fourth axis's evidence, written where the other three write theirs, so the
-                # belief store ingests four axes rather than three. Without this the mask axis was
-                # fused and plotted but proposed no regions and was marked by no convergence
-                # criterion — a run could report "nothing left to do" having never asked it.
+                # The fourth axis's evidence, written where the other three write theirs and keyed
+                # by the perturbation it was measured under. It used to be written under a
+                # fabricated perturbation called "mask", which is in no run's perturbation set —
+                # so the artifact ingest path, which skips rows naming a perturbation the run did
+                # not take, dropped every mask vote, and the in-process path enumerated three axes
+                # and never looked. The mask is built on the unmodified variant only (enhancement
+                # removes the non-speech evidence it reads target activity from), so the identity
+                # perturbation is not a convenient label here, it is the true one.
                 from senselab.audio.workflows.audio_analysis.fuse import mask_axis_votes
+                from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 
+                unharvested_votes["background_mask"] = {IDENTITY_NAME: mask_axis_votes(mask_regions)}
                 write_linked_votes(
-                    {"mask": mask_axis_votes(mask_regions)},
+                    unharvested_votes["background_mask"],
                     "background_mask",
                     derivatives_dir(run_dir, 0) / "votes" / "background_mask.parquet",
                     provenance=run_provenance,
@@ -1974,7 +1985,7 @@ def main(argv: list[str] | None = None) -> int:
 
             mask_rows = _pd.read_parquet(mask_parquet).to_dict("records")
         speaker_rows: list[dict[str, Any]] = []
-        speech_presence_parquet = belief_dir(run_dir) / "per_speaker_presence.parquet"
+        speech_presence_parquet = final_dir(run_dir) / "per_speaker_presence.parquet"
         if speech_presence_parquet.exists():
             import pandas as _pd
 
@@ -2012,6 +2023,7 @@ def main(argv: list[str] | None = None) -> int:
                 max_rounds=args.max_rounds,
                 aggregator=args.uncertainty_aggregator,
                 harvests=harvests_by_pass,
+                unharvested_votes=unharvested_votes,
                 summary=summaries,
                 policy_overrides=_policy_overrides(args),
             )
@@ -2176,13 +2188,13 @@ def main(argv: list[str] | None = None) -> int:
                 frame = _pd.read_parquet(path)
                 axis_rows[axis] = frame.to_dict("records")
         speakers_doc: dict[str, Any] = {}
-        speakers_path = belief_dir(run_dir) / "speakers.json"
+        speakers_path = final_dir(run_dir) / "speakers.json"
         if speakers_path.exists():
             speakers_doc = json.loads(speakers_path.read_text())
-        rounds_doc: dict[str, Any] = {}
-        rounds_path = belief_dir(run_dir) / "rounds.json"
-        if rounds_path.exists():
-            rounds_doc = json.loads(rounds_path.read_text())
+        # From what the fold returned, not from a file. The per-round log now lives in each
+        # round's own summary.json, and reassembling it by reading five documents back would be
+        # this stage re-deriving what it was already handed.
+        rounds_doc: dict[str, Any] = (summaries.get("final_uncertainty") or {}).get("round_logs") or {}
         headline = build_run_summary(axis_rows=axis_rows, speakers=speakers_doc, rounds=rounds_doc)
         write_json(final_dir(run_dir) / "run_summary.json", headline)
         (final_dir(run_dir) / "summary.md").write_text(render_run_summary(headline), encoding="utf-8")
