@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from senselab.audio.workflows.audio_analysis.adaptive.fusion import write_speaker_outputs
-from senselab.audio.workflows.audio_analysis.layout import belief_dir
+from senselab.audio.workflows.audio_analysis.layout import final_dir
 from senselab.audio.workflows.audio_analysis.speaker_identity import (
     PerSpeakerPresenceTrack,
     SourceCountClaim,
@@ -133,7 +133,7 @@ def test_speech_presence_parquet_carries_every_contract_column(tmp_path: Path) -
 def test_empty_tracks_still_write_a_typed_parquet(tmp_path: Path) -> None:
     """An absent file would make "no speakers" indistinguishable from "never ran"."""
     write_speaker_outputs(tmp_path, posterior=_posterior(), hypotheses=[], correspondence=[], tracks=[])
-    df = pd.read_parquet(belief_dir(tmp_path) / "per_speaker_presence.parquet")
+    df = pd.read_parquet(final_dir(tmp_path) / "per_speaker_presence.parquet")
     assert len(df) == 0
     assert "speaker_id" in df.columns
 

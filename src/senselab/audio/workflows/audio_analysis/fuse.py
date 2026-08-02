@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Sequence
 
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
+from senselab.audio.workflows.audio_analysis.estimates import estimate_frame
 from senselab.audio.workflows.audio_analysis.influence import effective_weight
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
@@ -1150,7 +1151,8 @@ def write_final_uncertainty(
     if mask_votes:
         buckets_by_axis["background_mask"] = {"mask": mask_votes}
 
-    from senselab.audio.workflows.audio_analysis.layout import belief_dir, estimates_dir
+    from senselab.audio.workflows.audio_analysis.io import merge_json
+    from senselab.audio.workflows.audio_analysis.layout import estimates_dir, round_dir
 
     rows_by_axis, logs, per_round = fuse_axes(
         buckets_by_axis,
@@ -1169,30 +1171,16 @@ def write_final_uncertainty(
     written: dict[str, Any] = {}
 
     def _frame(axis: str, rows: Sequence[Mapping[str, Any]]) -> Any:  # noqa: ANN401 — pd.DataFrame
-        columns = [
-            "start",
-            "end",
-            "axis",
-            "uncertainty",
-            "epistemic_uncertainty",
-            "confidence",
-            "variability",
-            "triage_score",
-            "round",
-            "contributing_signals",
-            "contributing_passes",
-            "signal_weights",
-            "weight_basis",
-            "coupled_from",
-            "scene_quality_coupling",
-            "triage_score_pre_coupling",
-        ]
-        return pd.DataFrame(
+        # Through ``estimates.estimate_frame``, the declaration the adaptive loop's rounds are
+        # also written through: this directory holds one trajectory whose early rounds this
+        # function writes and whose later ones the belief store does, so a column list local to
+        # either producer is two shapes under one artifact name.
+        return estimate_frame(
+            axis,
             [
                 {
                     "start": r["start"],
                     "end": r["end"],
-                    "axis": axis,
                     "uncertainty": r["uncertainty"],
                     "epistemic_uncertainty": r["epistemic_uncertainty"],
                     "confidence": r["confidence"],
@@ -1213,7 +1201,6 @@ def write_final_uncertainty(
                 }
                 for r in rows
             ],
-            columns=columns,
         )
 
     # One directory per round, from the per-round history rather than the final rows. Writing the
@@ -1238,9 +1225,20 @@ def write_final_uncertainty(
             written[axis] = str(round_path)
 
     # The round log distinguishes "converged" from "ran out of rounds", which the maps alone
-    # cannot say and which call for different follow-up.
-    level2 = belief_dir(out_dir)
-    level2.mkdir(parents=True, exist_ok=True)
-    (level2 / "rounds.json").write_text(json.dumps(logs, indent=2, sort_keys=True) + "\n")
-    written["rounds"] = str(level2 / "rounds.json")
+    # cannot say and which call for different follow-up. It is per round, so it goes in each
+    # round's own ``summary.json`` rather than in one ``L2/rounds.json`` at the belief root —
+    # where it had no round to belong to, and where it left rounds 0 and 1 of every run with no
+    # account of what they did at all while the adaptive loop wrote summaries for its own.
+    # Merged rather than written, because the loop has its own block to add for the round it
+    # adopts as a baseline, and a second write would erase this one.
+    for round_index in sorted({int(entry["round"]) for entries in logs.values() for entry in entries}):
+        merge_json(
+            round_dir(out_dir, round_index) / "summary.json",
+            {"fusion": {axis: e for axis, entries in logs.items() for e in entries if int(e["round"]) == round_index}},
+        )
+        written[f"summary@round{round_index}"] = str(round_dir(out_dir, round_index) / "summary.json")
+    # Handed back rather than left for the driver to read out of the tree: the headline summary
+    # wants this log, and the only other way to get it was to open the file that has just been
+    # split across the rounds it belongs to.
+    written["round_logs"] = logs
     return written

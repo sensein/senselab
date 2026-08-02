@@ -37,6 +37,8 @@ from typing import Any, Iterator
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis.contracts import MODULE_STAGE
+
 REPO_ROOT = Path(__file__).resolve().parents[5]
 WORKFLOW_DIR = REPO_ROOT / "src" / "senselab" / "audio" / "workflows" / "audio_analysis"
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -215,133 +217,18 @@ def test_the_name_within_pass_uncertainty_is_gone_from_the_workflow_layer() -> N
 
 
 # ── 2. No pipeline module reads a path under final/ ──────────────────────────
-
-#: Path methods that read. ``mkdir`` and ``write_text`` are absent on purpose: a stage may *write*
-#: its deliverable into ``final/``; what it may not do is take one back out as input.
-_READ_METHODS = frozenset({"read_text", "read_bytes", "open", "glob", "rglob", "iterdir", "is_file", "is_dir"})
-
-#: Free/attribute calls that read a path passed as an argument.
-_READ_FUNCTIONS = frozenset({"open", "read_parquet", "read_json", "read_csv", "read_table", "load"})
-
-
-def _final_rooted(node: ast.AST, roots: set[str]) -> bool:
-    """Is this expression a path under ``final/``?
-
-    True for a ``final_dir(...)`` call, for anything divided out of one, for ``<x> / "final"``,
-    and for any local name bound to one of those.
-    """
-    if isinstance(node, ast.Call):
-        func = node.func
-        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-        return name == "final_dir"
-    if isinstance(node, ast.Name):
-        return node.id in roots
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-        if _final_rooted(node.left, roots):
-            return True
-        right = node.right
-        if isinstance(right, ast.Constant) and right.value == "final":
-            return True
-        if isinstance(right, ast.Name) and right.id == "FINAL_DIR":
-            return True
-        if isinstance(right, ast.Attribute) and right.attr == "FINAL_DIR":
-            return True
-    return False
-
-
-def _own_nodes(scope: ast.AST) -> Iterator[ast.AST]:
-    """Every node belonging to this scope, without descending into a nested one."""
-    for child in ast.iter_child_nodes(scope):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            continue
-        yield child
-        yield from _own_nodes(child)
-
-
-def _nested_scopes(scope: ast.AST) -> Iterator[ast.AST]:
-    """The scopes defined directly inside this one."""
-    for child in ast.iter_child_nodes(scope):
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            yield child
-        else:
-            yield from _nested_scopes(child)
-
-
-def _scope_reads(scope: ast.AST, inherited: frozenset[str], path: Path, lines: list[str]) -> list[str]:
-    """Reads of a ``final/`` path in this scope and the scopes inside it."""
-    roots = set(inherited)
-    assignments = [n for n in _own_nodes(scope) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
-    # A fixpoint, because aliases chain: ``final = final_dir(d)`` then ``tasks = final / "t.json"``.
-    for _ in range(len(assignments) + 1):
-        before = len(roots)
-        for node in assignments:
-            value = node.value
-            if value is None or not _final_rooted(value, roots):
-                continue
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            roots.update(t.id for t in targets if isinstance(t, ast.Name))
-        if len(roots) == before:
-            break
-
-    offenders: list[str] = []
-    for call in (n for n in _own_nodes(scope) if isinstance(n, ast.Call)):
-        func = call.func
-        hit = False
-        if isinstance(func, ast.Attribute) and func.attr in _READ_METHODS and _final_rooted(func.value, roots):
-            hit = True
-        elif isinstance(func, ast.Attribute) and func.attr in _READ_FUNCTIONS:
-            hit = any(_final_rooted(a, roots) for a in call.args)
-        elif isinstance(func, ast.Name) and func.id in _READ_FUNCTIONS:
-            hit = any(_final_rooted(a, roots) for a in call.args)
-        if hit:
-            offenders.append(f"{path.name}:{call.lineno}: {lines[call.lineno - 1].strip()}")
-
-    for child in _nested_scopes(scope):
-        offenders += _scope_reads(child, frozenset(roots), path, lines)
-    return offenders
-
-
-def test_no_pipeline_module_reads_under_final(real_run_dir: Path) -> None:
-    """``final/`` holds the answer; a stage that reads it is treating a deliverable as state.
-
-    Resolved through the AST rather than matched as text. The regex this replaces required the
-    read to be attached to the ``final_dir(...)`` call in one expression, so binding the directory
-    to a name first — which is what every real caller does — walked straight past it, and the
-    guard passed while three live reads sat in the tree.
-
-    The evaluator is exempt by design: it scores the deliverable, so it is a consumer of the
-    answer rather than a stage that builds it.
-    """
-    exempt = {"evaluate.py", Path(__file__).name}
-    offenders: list[str] = []
-    for path in _pipeline_sources():
-        if path.name in exempt:
-            continue
-        source = path.read_text()
-        offenders += _scope_reads(ast.parse(source), frozenset(), path, source.splitlines())
-    assert not offenders, "pipeline stages must not read final/:\n" + "\n".join(offenders)
-
-
-def test_the_final_read_guard_sees_through_an_alias() -> None:
-    """The rule is about the path, not about how many expressions it took to name it.
-
-    Both forms below are the same violation; the previous regex caught only the first. Asserted
-    directly so the guard's discriminating power is itself tested, rather than inferred from the
-    tree happening to be clean.
-    """
-    inline = "def f(d):\n    return json.loads((final_dir(d) / 'transcript.json').read_text())\n"
-    aliased = (
-        "def f(d):\n    final = final_dir(d)\n    p = final / 'transcript.json'\n    return json.loads(p.read_text())\n"
-    )
-    writing = (
-        "def f(d):\n"
-        "    final = final_dir(d)\n"
-        "    final.mkdir(parents=True, exist_ok=True)\n"
-        "    (final / 'x.json').write_text('{}')\n"
-    )
-    for src in (inline, aliased):
-        assert _scope_reads(ast.parse(src), frozenset(), Path("probe.py"), src.splitlines())
-    assert not _scope_reads(ast.parse(writing), frozenset(), Path("probe.py"), writing.splitlines())
+#
+# Superseded and deleted, not weakened. This rule and its alias-resolution proof are now
+# ``stage_contract_test.py``'s ``test_the_pipeline_conforms_or_the_violation_is_in_the_register``,
+# which asks the same question of *every* declared path rather than only of ``final/``, resolves
+# seven binding forms rather than three, derives its exemption from ``MODULE_STAGE`` — a ``FINAL``
+# module reads ``final/`` because those are its own outputs — and waives through a register whose
+# entries fail when they stop matching. What lived here waived by filename, and a filename
+# exemption cannot decay: it would have gone on covering ``evaluate.py`` after the evaluator was
+# fixed, and it had no way at all to say that the driver's two reads of ``final/`` are the
+# inlining defect already recorded in the D-17 register.
+#
+# What stays here is the one rule in this section that is about *content* rather than paths.
 
 
 def test_run_summary_deliverable_carries_no_l1_evidence(tmp_path: Path) -> None:

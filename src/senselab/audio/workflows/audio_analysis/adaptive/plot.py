@@ -54,15 +54,14 @@ def build_adaptive_timeline(
 
     out_dir = Path(out_dir)
     final = final_dir(out_dir)
-    # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
-    # (transcript, diarization, timeline, summary) stay in final/. Different questions:
-    # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
-    belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
-    belief.mkdir(parents=True, exist_ok=True)
     stream = transcript.get("stream", "raw")
-    iterations = json.loads((belief / "iterations.json").read_text())["entries"]
-    convergence = json.loads((belief / "convergence.json").read_text())
+    # One document, in final/, where the account of the run now lives. Two reads of the L2 root
+    # became one read of this stage's own deliverable — which a stage is entitled to, its outputs
+    # being its state, and which the L2 root never was.
+    decisions = json.loads((final / "decisions.json").read_text())
+    iterations = decisions["interventions"]
+    convergence = decisions["convergence"]
 
     # Numeric order, from the layout helper: the old ``sorted(glob("round*"))[-1]`` put
     # ``round10`` before ``round2``, so the "last round" overlay read round 9 on any run past ten.
@@ -341,10 +340,8 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
     ax.set_yticks([])
 
     final = final_dir(out_dir)
-    belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
-    belief.mkdir(parents=True, exist_ok=True)
-    speakers_path, speech_presence_path = belief / "speakers.json", belief / "per_speaker_presence.parquet"
+    speakers_path, speech_presence_path = final / "speakers.json", final / "per_speaker_presence.parquet"
     if not speakers_path.exists() or not speech_presence_path.exists():
         ax.text(
             0.5,

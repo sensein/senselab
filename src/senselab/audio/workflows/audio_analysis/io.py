@@ -13,6 +13,10 @@ reader has to say out loud.
 
 There is deliberately no axis writer here. An axis is a fold across signals *and* perturbations,
 so it can be indexed by neither; the fused axes are written by ``fuse.write_final_uncertainty``.
+
+Every function here takes its destination as an argument. The module that *decides* the path is
+the one under contract; this one merely writes where it is told, which is why it is ``PURE`` in
+the D-17 declaration and why its callers appear in ``contracts.WRITE_HELPERS``.
 """
 
 from __future__ import annotations
@@ -25,6 +29,40 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from senselab.audio.workflows.audio_analysis.types import SignalResult
+
+
+def merge_json(dest: Path, block: Mapping[str, Any]) -> Path:
+    """Merge ``block`` into the JSON document at ``dest``, top level only.
+
+    For an artifact two stages both have something to say about: a round's ``summary.json`` gets
+    fusion's per-axis fold log and, for the round the adaptive loop adopts as its baseline, the
+    loop's replay and parity proofs. They are different facts about the same round, so the round
+    has one document; writing it twice made the second write erase the first, which is the same
+    last-writer-wins defect that flattening per-round quantities to the L2 root produced.
+
+    Top level only, deliberately. A deep merge would silently interleave two producers' nested
+    structures, and then a reader could not tell which one wrote a leaf — the shallow merge keeps
+    each producer's block whole and named.
+
+    Args:
+        dest: The document to merge into. Created, with its parents, when absent.
+        block: Top-level keys to set. A key already present is replaced by this call's value.
+
+    Returns:
+        ``dest``.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, Any] = {}
+    if dest.exists():
+        try:
+            loaded = json.loads(dest.read_text())
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            existing = loaded
+    dest.write_text(json.dumps({**existing, **dict(block)}, indent=2, sort_keys=True, default=str) + "\n")
+    return dest
 
 
 def write_signal_parquet(

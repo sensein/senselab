@@ -19,6 +19,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import (
 )
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import Region
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
 from senselab.audio.workflows.audio_analysis.layout import belief_dir, round_dir
 
 BK = bucket_key(0.0, 0.5)
@@ -324,7 +325,10 @@ def test_from_harvests_in_process_integration() -> None:
         asr_votes=[],
         quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.3, "_raw": {}}},
     )
-    store = VoteStore.from_harvests({"raw": harvest})
+    # ``unharvested`` is not optional: the mask axis has no vote harvest, so a caller that omits
+    # it is a caller whose store carries three axes and reports the fourth as settled. Empty here
+    # because this fixture measures no mask — which is a measurement, unlike an omission.
+    store = VoteStore.from_harvests({"raw": harvest}, unharvested={"background_mask": {}})
     votes = store.active_votes("raw", "speech_presence", (0.0, 0.5))
     assert set(votes) == {"m1", "m2"}
     row = store.reaggregate_bucket("speech_presence", (0.0, 0.5), aggregator="min")
@@ -370,6 +374,7 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
     log = run_adaptive_loop(
         tmp_path,
         harvests={"raw": harvest},
+        unharvested_votes={"background_mask": {}},
         summary=summary,
         max_rounds=1,
         aggregator="min",
@@ -408,11 +413,15 @@ def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
     run_adaptive_loop(
         tmp_path,
         harvests={"raw": harvest},
+        unharvested_votes={"background_mask": {}},
         summary={"passes": {"raw": {"duration_s": 1.0, "audio_signature": "b" * 64}}},
         max_rounds=1,
         aggregator="min",
     )
-    round1 = _json.loads((round_dir(tmp_path, 0) / "summary.json").read_text())
+    # ``adaptive``, because a round's summary now carries a block per producer: fusion's fold log
+    # and the loop's proofs are different facts about the same round, and the round has one
+    # document rather than two writers taking turns erasing each other.
+    round1 = _json.loads((round_dir(tmp_path, 0) / "summary.json").read_text())["adaptive"]
     report = round1["replay_check"]
     assert report, "the in-process path must be checkable, not skipped"
     assert all(entry["mismatches"] == 0 for entry in report.values())
@@ -434,6 +443,7 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
     log = run_adaptive_loop(
         tmp_path,
         harvests={"raw": _h("raw"), "enhanced": _h("enhanced")},
+        unharvested_votes={"background_mask": {}},
         # enhancement failed, so the summary has no duration_s for it
         summary={
             "passes": {
@@ -735,19 +745,23 @@ def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch)
         iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw"}}, ctx)
 
 
-def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
-    """T042: final/speech_presence.parquet must carry the contracts/final-outputs.md columns.
+def test_the_deliverable_presence_track_is_the_last_round_byte_for_byte(tmp_path: Path) -> None:
+    """T042 restated as D-17 states it: ``final/`` extracts, so the columns are the round's.
 
-    `speech_presence_confidence`, `elected_stream` and `overlap_posterior` were absent —
-    verified against a real full run before this was added. The columns must exist
-    even when their values are None, so the schema is stable for readers.
+    The contract columns — ``speech_presence_confidence``, ``contributing_passes``,
+    ``overlap_posterior`` — used to exist only on a separately-built ``L2/speech_presence.parquet``
+    that ``build_final_outputs`` constructed from the belief state. The deliverable therefore
+    carried numbers *no round carried*, which is a value computed at the wrong stage and with
+    nowhere to look for when it had been decided. They are on the estimate row now, and this
+    asserts the two files are identical rather than merely agreeing.
     """
     pytest.importorskip("pandas")
     import pandas as pd
 
     from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, Vote, VoteStore
-    from senselab.audio.workflows.audio_analysis.adaptive.fusion import build_final_outputs
-    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+    from senselab.audio.workflows.audio_analysis.adaptive.fusion import extract_final_estimates
+    from senselab.audio.workflows.audio_analysis.adaptive.loop import _write_round_belief
+    from senselab.audio.workflows.audio_analysis.layout import estimates_dir, final_dir
 
     store = VoteStore()
     store.add_vote(
@@ -762,19 +776,15 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
         )
     )
     state = BeliefState.from_store(store, aggregator="min")
-    build_final_outputs(
-        out_dir=tmp_path,
-        words=[],
-        store=store,
-        state=state,
-        stream="raw",
-        policy=load_policy(),
-        generated_from_round=1,
-        corroboration_provenance={"evidence_pool": [], "evidence_pool_rejected": {}},
-    )
-    cols = list(pd.read_parquet(belief_dir(tmp_path) / "speech_presence.parquet").columns)
+    _write_round_belief(tmp_path, 1, state)
+    extract_final_estimates(tmp_path, 1)
+    deliverable = pd.read_parquet(final_dir(tmp_path) / "estimates" / "speech_presence.parquet")
     for col in ("speech_presence_confidence", "contributing_passes", "overlap_posterior"):
-        assert col in cols, f"contract column {col!r} missing from final/speech_presence.parquet"
+        assert col in list(deliverable.columns), f"contract column {col!r} missing from the deliverable"
+    pd.testing.assert_frame_equal(deliverable, pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))
+    # And every active axis, not the three a hand-written list would have named.
+    for axis in AXIS_NAMES:
+        assert (final_dir(tmp_path) / "estimates" / f"{axis}.parquet").exists(), axis
 
 
 # ── the store's fold is L2's fold (fused_parity) ─────────────────────────
@@ -795,7 +805,7 @@ def _parity_fixture() -> tuple[Any, dict[str, list[dict[str, Any]]]]:
         )
 
     harvests = {"raw": _harvest("raw", 0.2), "enhanced": _harvest("enhanced", 0.6)}
-    store = VoteStore.from_harvests(harvests)
+    store = VoteStore.from_harvests(harvests, unharvested={"background_mask": {}})
     rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={})
     return store, {"speaker": rows}
 

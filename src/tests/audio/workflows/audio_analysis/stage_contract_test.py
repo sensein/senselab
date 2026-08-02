@@ -38,6 +38,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
 from senselab.audio.workflows.audio_analysis.contracts import (
     DAG_STAGES,
     KNOWN_DEVIATIONS,
@@ -65,6 +66,7 @@ from senselab.audio.workflows.audio_analysis.contracts import (
     unwaived_artifacts,
     unwaived_unproduced,
 )
+from senselab.audio.workflows.audio_analysis.estimates import ESTIMATE_COLUMNS
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 RUNS_DIR = REPO_ROOT / "artifacts" / "analyze_audio"
@@ -224,7 +226,11 @@ def test_the_structural_vocabulary_is_derived_from_the_declaration_and_not_liste
     """Reserved names nobody has to remember to extend: they *are* the declaration's own words."""
     vocabulary = structural_vocabulary()
     assert vocabulary["final"] == frozenset({0}), "final/ is a root, and only a root"
-    assert vocabulary["estimates"] == frozenset({3}), "estimates/ sits under L2/round/<n>/"
+    # Two depths, and deliberately: ``final/estimates/`` is the last round's
+    # ``L2/round/<n>/estimates/`` copied, so the name is the same name because the content is the
+    # same content. A ``**`` may still not put it anywhere else — ``L1/raw/estimates/`` remains
+    # another stage's shape smuggled into L1's open tree.
+    assert vocabulary["estimates"] == frozenset({1, 3}), "estimates/ sits under L2/round/<n>/ and under final/"
     assert "whisper.json" not in vocabulary, "a filename is not structure"
     assert "asr" not in vocabulary, "a tool's own directory name is not the declaration's"
 
@@ -579,6 +585,11 @@ def test_no_registered_deviation_has_gone_stale() -> None:
 # ── 3. artifact conformance ──────────────────────────────────────────────────
 
 
+def _estimate_row() -> dict[str, list[object]]:
+    """Every declared estimates column, null. One shape whichever producer wrote the round."""
+    return {column: [None] for column in ESTIMATE_COLUMNS}
+
+
 def _write_table(path: Path, columns: dict[str, list[object]]) -> None:
     """A one-row parquet with the given columns, for the artifact proofs."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -897,56 +908,20 @@ def _current_run_tree(root: Path) -> None:
         "disagreements.json",
         "labelstudio_tasks.json",
         "labelstudio_config.xml",
-        "speakers.json",
-        "rounds.json",
-        "convergence.json",
-        "iterations.json",
     ):
         (belief / name).write_text("{}")
-    _write_table(belief / "per_speaker_presence.parquet", {"start": [0.0], "end": [0.5], "speaker": ["S0"]})
-    _write_table(belief / "speech_presence.parquet", {"start": [0.0], "end": [0.5], "round": [1]})
-    # One round tree, 0-based, shared by both producers — and that is where the sharing stops.
-    # Rounds 0-2 come from ``fuse.write_final_uncertainty`` and rounds 3-4 from the adaptive
-    # loop's belief store, so the run has two producers writing one declared artifact:
-    #
-    #   - the fuse rounds carry ``axis``/``signal_weights``/``weight_basis``/``coupled_from``;
-    #   - the loop rounds carry ``status``/``p_voice``/``aleatoric_floor``/``attenuation`` and no
-    #     ``axis`` at all, so a reader cannot tell from a round which producer wrote it;
-    #   - the fourth axis has estimates in 0-2 and none in 3-4;
-    #   - only the loop writes ``summary.json`` (for its baseline and its own rounds) and only
-    #     fuse writes ``timeline.png``.
-    for index in (0, 1, 2):
-        for axis in ("speech_presence", "speaker", "asr", "background_mask"):
+    # One round tree, 0-based, shared by both producers — rounds 0-2 from
+    # ``fuse.write_final_uncertainty`` and rounds 3-4 from the adaptive loop's belief store — and
+    # now one *shape*: both write through ``estimates.ESTIMATE_COLUMNS``, both write every active
+    # axis, and every round owes its belief, its account and its view.
+    for index in (0, 1, 2, 3, 4):
+        for axis in AXIS_NAMES:
             _write_table(
                 belief / "round" / str(index) / "estimates" / f"{axis}.parquet",
-                {
-                    "start": [0.0],
-                    "end": [0.5],
-                    "axis": [axis],
-                    "uncertainty": [0.3],
-                    "round": [index],
-                    "signal_weights": ["{}"],
-                    "weight_basis": ["{}"],
-                },
+                _estimate_row()
+                | {"start": [0.0], "end": [0.5], "axis": [axis], "round": [index], "uncertainty": [0.3]},
             )
         (belief / "round" / str(index) / "timeline.png").write_bytes(b"")
-    for index in (3, 4):
-        for axis in ("speech_presence", "speaker", "asr"):
-            _write_table(
-                belief / "round" / str(index) / "estimates" / f"{axis}.parquet",
-                {
-                    "start": [0.0],
-                    "end": [0.5],
-                    "uncertainty": [0.3],
-                    "round": [index],
-                    "status": ["open"],
-                    "p_voice": [0.9],
-                    "aleatoric_floor": [0.1],
-                },
-            )
-    # The loop's baseline is the last round fusion wrote, so round 2 gets a summary and the two
-    # rounds before it get none.
-    for index in (2, 3, 4):
         (belief / "round" / str(index) / "summary.json").write_text("{}")
     derivatives = belief / "round" / "0" / "derivatives"
     for axis in ("speech_presence", "speaker", "asr", "background_mask"):
@@ -991,9 +966,20 @@ def _current_run_tree(root: Path) -> None:
         "disagreements_resolved.json",
         "labelstudio_tasks.json",
         "labelstudio_config.xml",
+        # The account of how the run reached its answer. Was L2/convergence.json plus
+        # L2/iterations.json, at the belief root, so final/ had none.
+        "decisions.json",
+        "speakers.json",
     ):
         (final / name).write_text("{}")
     (final / "timeline.png").write_bytes(b"")
+    _write_table(final / "per_speaker_presence.parquet", {"start": [0.0], "end": [0.5], "speaker": ["S0"]})
+    # The extraction: the last round's estimates, byte-identical, one file per active axis.
+    for axis in AXIS_NAMES:
+        _write_table(
+            final / "estimates" / f"{axis}.parquet",
+            _estimate_row() | {"start": [0.0], "end": [0.5], "axis": [axis], "round": [4], "uncertainty": [0.3]},
+        )
 
 
 def test_the_current_run_tree_is_flagged_and_fully_accounted_for(tmp_path: Path) -> None:
@@ -1007,8 +993,10 @@ def test_the_current_run_tree_is_flagged_and_fully_accounted_for(tmp_path: Path)
     raw = artifact_violations(tmp_path)
     # What is left is one class: per-round quantities flattened to the ``L2/`` root with no round
     # to belong to, plus the triage decision at the run root. Steps 1 and 2 took this list from
-    # 34 to 12 by *declaring* the perturbation tree and the round tree, not by waiving them.
-    assert len(raw) >= 10, "the L2 root is not D-17's, and the guard must say so"
+    # 34 to 12 by *declaring* the perturbation tree and the round tree; moving the deliverables
+    # into ``final/`` took it to 6, and the remainder are the mask, the disagreements index and
+    # the LS bundle — the three that are genuinely still in the wrong place.
+    assert len(raw) >= 5, "the L2 root is not D-17's, and the guard must say so"
     assert all(p.startswith(("L2/", "triage.json")) for p in raw), raw
     assert any(p.startswith("triage.json") for p in raw)
     assert any(p.startswith("L2/background_mask") for p in raw)

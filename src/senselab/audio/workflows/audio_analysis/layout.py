@@ -22,6 +22,15 @@ each), ``derivatives/`` (the mask, the votes, the stability, the regions a round
 cannot distinguish "settled immediately" from "moved a long way and then settled", and that
 difference is what tells an operator whether the loop is earning its cost.
 
+Three of those a round **owes**: its belief, its account and its view — ``estimates/`` for every
+active axis, ``summary.json``, ``timeline.png``. Two producers write into this tree (``fuse``
+folds the early rounds, the adaptive loop iterates the later ones, adopting fusion's last as its
+baseline), and both write all three; a round summary carries one block per producer. The
+derivatives are *not* owed by every round: ``votes/`` and ``stability/`` are the ingest round's,
+computed once from L1, and ``regions.json``/``votes_added.parquet`` belong to the rounds that ran
+interventions. Writing an empty one elsewhere would claim "we looked and found none" of a round
+that does no region proposal at all.
+
 There were two trees: ``L2/round<N>/`` from fusion (0-based) and ``L2/rounds/<N>/`` from the
 adaptive loop (1-based), so the fusion loop's round 0 and the adaptive loop's round 1 were the
 same iteration under two names — and "round 1" meant different things depending on which
@@ -31,10 +40,17 @@ directory you were reading. Under one tree they are one node, and the numbering 
 confidence and variability, so naming the directory after one of the four names a column rather
 than the thing itself.
 
-``final/`` — **deliverables.** The summary, the timeline, and the consensus artifacts a
-consumer actually acts on. Kept separate from ``L2/`` because "what do we believe" and "what do
-we hand over" are different questions: the belief is per bucket and per round, the deliverable
-is one transcript and one figure.
+``final/`` — **deliverables, by extraction.** The summary, the timeline, the consensus artifacts
+a consumer acts on, and ``final/estimates/<axis>.parquet`` — the last round's estimates, copied
+verbatim, one file per active axis. Kept separate from ``L2/`` because "what do we believe" and
+"what do we hand over" are different questions: the belief is per bucket and per round, the
+deliverable is one answer.
+
+*Extraction*, and the word is load-bearing. A number in ``final/`` that is not in the last round
+was computed at the wrong stage, and there is then nowhere to look for when it was decided. The
+presence track was built that way — rebuilt from the belief state into its own file with columns
+(``speech_presence_confidence``, ``overlap_posterior``) no round carried — so those columns are on
+the estimate row now and this directory only moves bytes.
 
 Cross-perturbation disagreement is **not** here. Comparing two perturbations is a fold over an
 input dimension, by exactly the argument that makes an axis L2's, so per-signal stability is a

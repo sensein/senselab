@@ -11,7 +11,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.belief import AXES, BeliefState, VoteStore
 from senselab.audio.workflows.audio_analysis.adaptive.convergence import (
@@ -23,6 +23,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.fusion import (
     attenuation_columns,
     build_final_outputs,
     collect_word_streams,
+    extract_final_estimates,
     fuse_words,
     make_speaker_lookup,
 )
@@ -36,6 +37,8 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
+from senselab.audio.workflows.audio_analysis.estimates import estimate_frame
+from senselab.audio.workflows.audio_analysis.io import merge_json
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
     derivatives_dir,
@@ -57,6 +60,7 @@ def run_adaptive_loop(
     max_rounds: int = 3,
     aggregator: str | None = None,
     harvests: dict[str, Any] | None = None,
+    unharvested_votes: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]] | None = None,
     summary: dict[str, Any] | None = None,
     policy_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -87,6 +91,12 @@ def run_adaptive_loop(
         max_rounds: Total rounds including baseline. ``1`` = baseline only.
         aggregator: Sub-signal aggregator; inferred from the run when ``None``.
         harvests: Pass label → ``PassHarvest`` for the in-process path.
+        unharvested_votes: ``{axis → {perturbation → buckets}}`` for the active axes that have no
+            vote harvest — ``background_mask``, whose evidence is the mask's own per-region
+            confidence. Required on the in-process path for the same reason
+            :meth:`VoteStore.from_harvests` requires it: an axis nobody hands in carries no belief
+            through any round and then reports as settled. The artifact path reads the same
+            evidence out of ``L2/round/0/derivatives/votes/`` and needs nothing here.
         policy_overrides: In-memory policy overrides (CLI flags), merged last.
         summary: Pre-loaded ``{"input_audio": ..., "passes": {...}}`` index; read from
             ``L1/perturbations.json`` when ``None``.
@@ -122,7 +132,9 @@ def run_adaptive_loop(
     t0 = time.time()
     parity: dict[str, Any]
     if harvests is not None:
-        store = VoteStore.from_harvests({pl: h for pl, h in harvests.items() if pl in passes})
+        store = VoteStore.from_harvests(
+            {pl: h for pl, h in harvests.items() if pl in passes}, unharvested=unharvested_votes
+        )
     else:
         store = VoteStore.from_run_dir(run_dir, passes)
     parity = store.replay_check(aggregator=aggregator)
@@ -262,6 +274,11 @@ def run_adaptive_loop(
         (derivatives / "regions.json").write_text(json.dumps(regions, indent=2, default=str))
         _write_round_summary(out_dir, round_idx, rs)
         _write_round_votes(derivatives, store, round_idx)
+        # The round's own view of itself. Every round owes one — a trajectory a reader can only
+        # see for the rounds fusion wrote is not a trajectory — and it is the *same* figure
+        # ``fuse`` draws for its rounds, from the same declaration, so the two halves of a run's
+        # rounds are comparable pictures rather than two conventions.
+        _draw_round_timeline(out_dir, round_idx, state, duration_s=duration_s, title=run_dir.name)
 
         if not fired:
             run_state = "converged" if not not_admitted else "no_runnable_interventions"
@@ -404,7 +421,7 @@ def run_adaptive_loop(
                 }
             else:
                 timestamps_meta["reason"] = align_reason
-    last_round = round_summaries[-1]["round"] if round_summaries else 1
+    fused_from_round = round_summaries[-1]["round"] if round_summaries else 1
     transcript_doc, diarization_doc = build_final_outputs(
         out_dir=out_dir,
         words=words,
@@ -412,7 +429,7 @@ def run_adaptive_loop(
         state=state,
         stream=fusion_stream,
         policy=policy,
-        generated_from_round=last_round,
+        generated_from_round=fused_from_round,
         corroboration_provenance=corr_prov,
         refined_identity=refined,
         calibrated=calibrator is not None,
@@ -455,17 +472,22 @@ def run_adaptive_loop(
         round_states=round_states,
     )
     final = final_dir(out_dir)
-    # Belief artifacts (posterior, speech_presence, convergence) are level 2; the deliverables
-    # (transcript, diarization, timeline, summary) stay in final/. Different questions:
-    # "what do we believe" is per bucket and per round, "what do we hand over" is one answer.
-    belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
-    belief.mkdir(parents=True, exist_ok=True)
-    final.mkdir(parents=True, exist_ok=True)
-    (belief / "convergence.json").write_text(json.dumps(report, indent=2, default=str))
-    (belief / "iterations.json").write_text(
-        json.dumps({"policy_hash": policy.get("policy_hash"), "entries": iterations}, indent=2, default=str)
+    # final/decisions.json — how the run got to its answer: the trajectory, the reversals, the
+    # stopping reason and every intervention entry. This was ``L2/convergence.json`` plus
+    # ``L2/iterations.json``, two per-run documents flattened to the belief root, so ``final/``
+    # carried no account of the run at all and the evaluator reached into ``L2/`` to reconstruct
+    # one. Replaced outright rather than mirrored: one quantity in two places is one quantity that
+    # can disagree with itself, and each round's own slice is already in its ``summary.json``.
+    (final / "decisions.json").write_text(
+        json.dumps(
+            {"policy_hash": policy.get("policy_hash"), "convergence": report, "interventions": iterations},
+            indent=2,
+            default=str,
+        )
     )
+    # The deliverable axes: the last round's estimates, extracted verbatim.
+    extract_final_estimates(out_dir, last_round(out_dir) or 0)
     # Summary figure. This lived only in scripts/adaptive_loop.py, so the
     # in-process path (T040) produced every artifact except the one a human
     # actually looks at. Best-effort: a plotting failure must not fail the loop.
@@ -651,10 +673,14 @@ def _baseline_round(out_dir: Path) -> int:
 
 
 def _write_round_summary(out_dir: Path, round_index: int, payload: dict[str, Any]) -> None:
-    """Write ``L2/round/<n>/summary.json`` — what the round did, and what it now estimates."""
-    dest = round_dir(out_dir, round_index)
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / "summary.json").write_text(json.dumps(payload, indent=2, default=str))
+    """Merge this loop's block into ``L2/round/<n>/summary.json``.
+
+    Merged rather than written, because the round the loop adopts as its baseline is a round
+    ``fuse`` also has an account of. Two facts about one round belong in one document; a second
+    write erased the first, which is how the baseline round came to carry the loop's replay proof
+    and none of fusion's fold log.
+    """
+    merge_json(round_dir(out_dir, round_index) / "summary.json", {"adaptive": payload})
 
 
 def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> None:
@@ -669,9 +695,11 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
     ``contributing_passes`` survives and ``elected_stream`` does not, because they are different
     claims: the first says which passes fed the fold, the second says which pass's reading was
     taken *instead* of folding.
-    """
-    import pandas as pd
 
+    The columns come from :data:`~senselab.audio.workflows.audio_analysis.estimates.ESTIMATE_COLUMNS`,
+    the same declaration ``fuse`` writes through, because these rounds and fusion's rounds are one
+    trajectory in one directory under one declared artifact.
+    """
     round_belief = estimates_dir(out_dir, round_index)
     round_belief.mkdir(parents=True, exist_ok=True)
     for axis in AXES:
@@ -689,6 +717,11 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
                 "aleatoric_floor_terms": (r.get("aleatoric_floor_policy") or {}).get("terms") or [],
                 "status": r.get("status"),
                 "irreducible_reason": r.get("irreducible_reason"),
+                # The calibrated presence probability and the overlap posterior, on the round that
+                # believes them. ``final/`` extracts a round, so a deliverable column no round
+                # carries is a number computed at the wrong stage — and both of these were.
+                "speech_presence_confidence": r.get("speech_presence_confidence", r.get("p_voice")),
+                "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
                 "round": r.get("round"),
                 "n_sources": len(r.get("contributing_sources") or []),
                 "contributing_signals": r.get("contributing_signals") or [],
@@ -697,8 +730,28 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
             }
             for r in sorted(state.axis_rows(axis), key=lambda x: (float(x["start"]), float(x["end"])))
         ]
-        if rows:
-            pd.DataFrame(rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
+        # Written even when the axis has no rows. "This round believes nothing about the mask"
+        # and "this round was not asked about the mask" are different facts, and skipping the
+        # file makes them the same one — which is how the fourth axis's estimates stopped at
+        # round 2 while the run reported it settled. An empty table with the declared columns
+        # says the first; an absent file says neither and is read as the second.
+        estimate_frame(axis, rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
+
+
+def _draw_round_timeline(out_dir: Path, round_index: int, state: BeliefState, *, duration_s: float, title: str) -> None:
+    """Draw ``L2/round/<n>/timeline.png``. Best-effort: a plot must not fail a round."""
+    from senselab.audio.workflows.audio_analysis.l2_plot import build_round_timeline
+
+    try:
+        build_round_timeline(
+            out_dir,
+            round_index=round_index,
+            axis_rows={axis: state.axis_rows(axis) for axis in AXES},
+            duration_s=duration_s,
+            title=f"{title} — L2 round {round_index}",
+        )
+    except Exception as exc:  # noqa: BLE001 — sidecar
+        print(f"warn: round {round_index} timeline plot failed: {exc!r}", file=sys.stderr)
 
 
 def _write_round_votes(derivatives: Path, store: VoteStore, round_idx: int) -> None:

@@ -86,24 +86,22 @@ def _written_round_belief(tmp_path: Path) -> dict[tuple[float, float], dict[str,
 
 
 def _written_final_presence(tmp_path: Path) -> dict[tuple[float, float], dict[str, Any]]:
+    """The same rows again, through the deliverable — because ``final/`` is an extraction.
+
+    It used to be a second *construction*: ``build_final_outputs`` rebuilt the presence track from
+    the belief state into its own file with its own column list, so this parametrisation was
+    checking that two writers happened to agree. They did not have to, and on the attenuation
+    columns they had already diverged once. Now the round writes and ``final/`` copies, so what
+    this case asserts is that the copy is faithful.
+    """
     import pandas as pd
 
-    from senselab.audio.workflows.audio_analysis.adaptive.fusion import build_final_outputs
-    from senselab.audio.workflows.audio_analysis.layout import belief_dir
+    from senselab.audio.workflows.audio_analysis.adaptive.fusion import extract_final_estimates
+    from senselab.audio.workflows.audio_analysis.layout import final_dir
 
-    store = _attenuated_store()
-    state = BeliefState.from_store(store, aggregator="min")
-    build_final_outputs(
-        out_dir=tmp_path,
-        words=[{"text": "maybe", "start": 0.1, "end": 0.4, "confidence": 0.9, "corroboration": 0.95}],
-        store=store,
-        state=state,
-        stream=STREAM,
-        policy=load_policy(),
-        generated_from_round=2,
-        corroboration_provenance={"evidence_pool": ["frame_brouhaha_vad"]},
-    )
-    return _rows_by_bucket(pd.read_parquet(belief_dir(tmp_path) / "speech_presence.parquet"))
+    _written_round_belief(tmp_path)
+    extract_final_estimates(tmp_path, 1)
+    return _rows_by_bucket(pd.read_parquet(final_dir(tmp_path) / "estimates" / "speech_presence.parquet"))
 
 
 @pytest.mark.parametrize("written", [_written_round_belief, _written_final_presence], ids=["round", "final"])

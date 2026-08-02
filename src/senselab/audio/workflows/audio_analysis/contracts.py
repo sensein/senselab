@@ -613,12 +613,25 @@ FINAL = StageContract(
         Artifact("final/diarization.json", "fused speaker turns"),
         Artifact("final/diarization.rttm", "the same turns in RTTM"),
         Artifact("final/speakers.json", "count posterior plus per-speaker hypotheses"),
-        Artifact("final/per_speaker_presence.parquet", "one track per hypothesised speaker", key=("bucket",)),
-        Artifact("final/speech_presence.parquet", "the converged presence track", key=("bucket",)),
-        Artifact("final/asr.parquet", "the converged asr axis", key=("bucket",)),
-        Artifact("final/background_mask.parquet", "the converged mask axis", key=("bucket",)),
-        Artifact("final/speaker/*.parquet", "per_speaker, count, assignment", key=("bucket",)),
-        Artifact("final/decisions.json", "trajectory, reversals, stopping reason"),
+        Artifact(
+            "final/per_speaker_presence.parquet",
+            "one track per hypothesised speaker",
+            key=("bucket", "speaker"),
+        ),
+        # One declaration for the axes, enumerated over the axis set rather than written out. The
+        # four it replaces named speech_presence, asr, background_mask and a "final/speaker/"
+        # directory — so the deliverable set was a list of three axes with the *speaker* axis
+        # missing altogether, which is precisely the failure ``axes.AXES`` exists to make
+        # impossible. Same key and same schema as a round's estimate, because that is what these
+        # files are: the last round's, copied.
+        Artifact(
+            "final/estimates/*.parquet",
+            "the last round's estimates, extracted verbatim — one file per active axis",
+            key=("axis", "bucket", "round"),
+            keyed_in_path=("axis",),
+            enumerated=("axis",),
+        ),
+        Artifact("final/decisions.json", "trajectory, reversals, stopping reason, every intervention"),
         Artifact("final/disagreements_resolved.json", "which flagged regions the rounds resolved"),
         Artifact("final/timeline.png", "the human-facing view"),
         Artifact("final/summary.md", "the human-facing summary"),
@@ -636,7 +649,12 @@ EVAL = StageContract(
         "builds it — which is why it is the one place final/ may be read, and why it writes one "
         "file nothing else claims."
     ),
-    reads=("final/transcript.json", "final/diarization.json", "final/speech_presence.parquet"),
+    reads=(
+        "final/transcript.json",
+        "final/diarization.json",
+        "final/decisions.json",
+        "final/estimates/*.parquet",
+    ),
     writes=(Artifact("final/eval.json", "the score"),),
 )
 
@@ -763,6 +781,13 @@ _FINAL_AT_L2_ROOT = (
     "file at all. The mirror of the L2/ artifact entry for the same name: one defect, seen from "
     "the side that declares and from the side that writes. Closes with that entry."
 )
+_LOOP_INLINES_FINAL = (
+    "The loop calls the FINAL stage inline rather than the DAG invoking it, so an L2 node writes "
+    "final/decisions.json and drives the extraction into final/estimates/. The content is right — "
+    "final/ now carries the run's account and the last round's axes — and the *caller* is not: "
+    "these are FINAL's artifacts written from an L2 node. Closes with the same restructure that "
+    "un-inlines the driver."
+)
 _AXIS_NEVER_EXTRACTED = (
     "final/ is an extraction of the last round's estimates, and this axis is never extracted: "
     "every consumer reads L2/round/<n>/estimates/ directly. A deliverable nothing produces is a "
@@ -785,9 +810,8 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_DRIVER, "write", "final/summary.json", _INLINED),
     Deviation(_DRIVER, "write", "final/run_summary.json", _INLINED),
     Deviation(_DRIVER, "write", "final/summary.md", _INLINED),
-    Deviation(_DRIVER, "read", "L2/rounds.json", _INLINED),
-    Deviation(_DRIVER, "read", "L2/speakers.json", _INLINED),
-    Deviation(_DRIVER, "read", "L2/per_speaker_presence.parquet", _INLINED),
+    Deviation(_DRIVER, "read", "final/speakers.json", _INLINED),
+    Deviation(_DRIVER, "read", "final/per_speaker_presence.parquet", _INLINED),
     Deviation(_ADAPTIVE_DRIVER, "read", "L1/perturbations.json", _INLINED),
     Deviation(
         _DRIVER,
@@ -815,9 +839,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
         "An L1 module reading an L2 artifact to draw an L1 figure — the evidence view is rendered from belief.",
     ),
     # ── round artifacts still flattened to the L2 root ──────────────────────
-    Deviation(_mod("fuse.py"), "write", "L2/rounds.json", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/loop.py"), "write", "L2/convergence.json", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/loop.py"), "write", "L2/iterations.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/loop.py"), "read", "L2/disagreements.json", _AT_L2_ROOT),
     # ── L2 reads L1 outside signals/ ────────────────────────────────────────
     Deviation(
@@ -847,67 +868,12 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/embeddings/*.json", _PAST_SIGNALS),
     Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/embeddings/*.json", _PAST_SIGNALS),
     # ── final/ computes rather than extracts, and writes into L2 ────────────
-    Deviation(
-        _mod("adaptive/fusion.py"),
-        "write",
-        "L2/speech_presence.parquet",
-        "The fusion stage writes a belief artifact the evaluator then reads. A number in final/ "
-        "that is not in the last round was computed at the wrong stage; this one is in no round "
-        "at all.",
-    ),
-    Deviation(_mod("adaptive/fusion.py"), "write", "L2/speakers.json", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/fusion.py"), "write", "L2/per_speaker_presence.parquet", _AT_L2_ROOT),
-    Deviation(
-        _mod("adaptive/fusion.py"),
-        "write",
-        "L2",
-        "A dead mkdir: the fusion stage creates the belief directory and writes nothing there. "
-        "Creating another node's tree is how five such calls came to sit in modules that "
-        "produce none of its artifacts.",
-    ),
-    Deviation(_mod("adaptive/plot.py"), "write", "L2", "The same dead mkdir, in the timeline renderer."),
-    Deviation(
-        _mod("adaptive/loop.py"),
-        "write",
-        "final",
-        "The reverse: an L2 stage creating final/. It writes nothing there — the convergence "
-        "and iteration documents go to L2 — so the directory is created by a stage that does "
-        "not own it.",
-    ),
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/iterations.json", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/convergence.json", _AT_L2_ROOT),
+    Deviation(_mod("adaptive/loop.py"), "write", "final", _LOOP_INLINES_FINAL),
+    Deviation(_mod("adaptive/loop.py"), "write", "final/decisions.json", _LOOP_INLINES_FINAL),
     Deviation(_mod("adaptive/plot.py"), "read", "L2/background_mask.parquet", _AT_L2_ROOT),
-    # Bound by tuple unpacking on one line and used on four, so the whole group was invisible to
-    # a resolver that recorded only ``ast.Name`` targets — four reads of the L2 root from the
-    # deliverable renderer, under a guard that reported the rule held.
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/speakers.json", _AT_L2_ROOT),
-    Deviation(_mod("adaptive/plot.py"), "read", "L2/per_speaker_presence.parquet", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_tasks.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_config.xml", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/disagreements.json", _AT_L2_ROOT),
-    # ── the evaluator scores things that are not in final/ ──────────────────
-    Deviation(
-        _mod("adaptive/evaluate.py"),
-        "read",
-        "L2/speech_presence.parquet",
-        "The evaluator reaches into L2 for a track that should be a deliverable. Closes with "
-        "the fusion-stage write above.",
-    ),
-    Deviation(
-        _mod("adaptive/evaluate.py"),
-        "read",
-        "L2/round/*/summary.json",
-        "The evaluator reads the baseline round's uncertainty mass out of L2. EVAL consumes "
-        "final/ and nothing else — a scorer reaching into the belief tree is scoring an "
-        "intermediate. Closes when the trajectory it wants is in final/decisions.json.",
-    ),
-    Deviation(
-        _mod("adaptive/evaluate.py"),
-        "read",
-        "L2/round/*/estimates/speaker.parquet",
-        "Same: the speaker axis it localises against is the last round's estimate rather than "
-        "the deliverable. Closes when final/ carries the converged speaker axis.",
-    ),
     # ── a writer with no stage at all ───────────────────────────────────────
     Deviation(
         _mod("level.py"),
@@ -920,15 +886,9 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ══ the artifact tree ═══════════════════════════════════════════════════
     # What a completed run leaves on disk that no stage declares. Matched as patterns, so one
     # entry covers a directory the restructure moves as a unit.
-    Deviation("", "artifact", "L2/rounds.json", _AT_L2_ROOT),
-    Deviation("", "artifact", "L2/convergence.json", _AT_L2_ROOT),
-    Deviation("", "artifact", "L2/iterations.json", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/disagreements.json", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/background_mask.*", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/labelstudio_*", _AT_L2_ROOT),
-    Deviation("", "artifact", "L2/speakers.json", _AT_L2_ROOT),
-    Deviation("", "artifact", "L2/per_speaker_presence.parquet", _AT_L2_ROOT),
-    Deviation("", "artifact", "L2/speech_presence.parquet", _AT_L2_ROOT),
     Deviation("", "artifact", "triage.json", "An L2-shaped decision at the run root, taken before L1 has run."),
     # ══ declarations a complete run satisfies with nothing ═══════════════════
     # The other half of the artifact question, and the one nothing used to ask. A declaration
@@ -936,20 +896,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # produces this" unanswerable, and this half is the more dangerous, because every content
     # rule passes on a file that is not there — which is how a 26-file fragment was accepted as a
     # completed run.
-    Deviation("", "unproduced", "final/speakers.json", _FINAL_AT_L2_ROOT),
-    Deviation("", "unproduced", "final/per_speaker_presence.parquet", _FINAL_AT_L2_ROOT),
-    Deviation("", "unproduced", "final/speech_presence.parquet", _FINAL_AT_L2_ROOT),
-    Deviation("", "unproduced", "final/asr.parquet", _AXIS_NEVER_EXTRACTED),
-    Deviation("", "unproduced", "final/background_mask.parquet", _AXIS_NEVER_EXTRACTED),
-    Deviation("", "unproduced", "final/speaker/*.parquet", _AXIS_NEVER_EXTRACTED),
-    Deviation(
-        "",
-        "unproduced",
-        "final/decisions.json",
-        "The trajectory, the reversals and the stopping reason exist — as L2/iterations.json and "
-        "L2/convergence.json, flattened to the L2 root. final/ therefore has no account of how "
-        "the run got to its answer, and the evaluator reads the belief tree to reconstruct one.",
-    ),
     Deviation(
         "",
         "unproduced",
@@ -1065,6 +1011,7 @@ WRITE_FUNCTIONS: Final[frozenset[str]] = frozenset(
 
 WRITE_HELPERS: Final[frozenset[str]] = frozenset(
     {
+        "merge_json",
         "write_json",
         "write_signal_parquet",
         "write_linked_votes",
