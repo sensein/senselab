@@ -14,13 +14,41 @@
       "speaker": "cluster_0",         // unified cluster id; null when unattributable
       "confidence": 0.93,
       "sources": ["nyralabs/CrisperWhisper2.0_turbo", "Qwen/Qwen3-ASR-1.7B"],
-      "alternates": [],               // [{text, share, models}] when winner margin < policy threshold
-      "flags": []                     // overlap | low_presence | hallucination_purged_nearby | …
+      "coverage": 0.75,
+      "corroboration": 0.91,          // measured independent evidence for the winning text; null
+                                      // when no member was measured — NEVER read null as 0
+      "member_corroboration": {"Qwen/Qwen3-ASR-1.7B": 0.91, "openai/whisper-large-v3": null},
+      "corroboration_evidence": {"p_independent": 0.91, "n_buckets": 2, "n_measured": 2},
+      "alternates": [],               // [{text, share, share_uncorroborated, models, corroboration}]
+                                      // when the *uncorroborated* winner share < policy threshold
+      "flags": []                     // overlap | single_source | …
     }
   ],
-  "segments": [ /* utterance-level rollup: start, end, speaker, text, min_word_confidence */ ]
+  "segments": [ /* utterance-level rollup: start, end, speaker, text, min_word_confidence */ ],
+  "corroboration": {
+    "evidence_pool": ["frame_brouhaha_vad", "frame_segmentation"],
+    "evidence_pool_rejected": {"acoustic_loudness": "never_reports_absence"},
+    "pool_derivation": "support.evidence_signal_names + support.informative_evidence",
+    "exponent": 1.0,
+    "min_corroboration": 0.05,
+    "segment_min_corroboration": 0.2,
+    "n_words_measured": 412, "n_words_unmeasured": 0,
+    "n_words_withheld_from_segments": 3,
+    "withheld_word_indices": [88, 89, 210]
+  }
 }
 ```
+
+`flags` lost `low_presence` and `hallucination_purged_nearby`. Both thresholded, at a bare
+literal, the quantity `corroboration` now carries continuously; the number is the measurement and
+the flag was a decision recorded where it could not be re-taken.
+
+A word below `segment_min_corroboration` is **absent from `segments[].text` and present in
+`words[]`**, carrying the measurement that excluded it. Keeping it in the readable transcript
+would let it win — the deliverable would assert it, and the text consumers downstream (PII,
+sentiment, summary) would ingest it. Dropping it from `words[]` would be erasure. `withheld_word_indices`
+indexes into `words[]`, so the rollup is reproducible as a pure function of `words[]` plus one
+number, with no model re-run.
 
 Invariants: words sorted by (start, end); `0 ≤ confidence ≤ 1`; every `speaker` exists in
 final/diarization.json; every word derivable from active votes in the belief store (SC-008).

@@ -29,13 +29,13 @@ from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
 def collect_word_streams(
     asr_by_model: dict[str, dict[str, Any]],
     align_by_model: dict[str, dict[str, Any]],
-    *,
-    purged_spans: list[tuple[float, float, str]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Per-model timestamped word lists; alignment result wins for text-only models.
 
-    ``purged_spans`` = (start, end, model) spans adjudicated as hallucinations —
-    those words are excluded from fusion (C10 consequence).
+    This function removes nothing. It used to drop every word of a model overlapping a span P3 had
+    adjudicated, which left no record anywhere downstream — and made a word's survival depend on
+    whether the intervention had been admitted within budget. Doubt about a word is now carried as
+    a measured weight on the word itself (``adaptive.corroboration.apply_corroboration``).
     """
     streams: dict[str, list[dict[str, Any]]] = {}
     for model, block in asr_by_model.items():
@@ -48,12 +48,6 @@ def collect_word_streams(
         if not words:
             continue
         words.sort(key=lambda w: (w["start"], w["end"]))
-        if purged_spans:
-            words = [
-                w
-                for w in words
-                if not any(m == model and w["start"] < e and w["end"] > s for (s, e, m) in purged_spans)
-            ]
         streams[model] = words
     return streams
 
@@ -66,7 +60,6 @@ def fuse_words(
     *,
     policy: dict[str, Any],
     speaker_at: Any = None,  # noqa: ANN401 — callable (t) -> str | None
-    p_voice_at: Any = None,  # noqa: ANN401 — callable (t) -> float | None
     calibrator: Any = None,  # noqa: ANN401 — callable (c) -> c' | None
 ) -> list[dict[str, Any]]:
     """Policy-driven wrapper over the reusable transcript-ensemble task (T050).
@@ -75,6 +68,11 @@ def fuse_words(
     model-family weights (FR-008) and the fusion slot/margin parameters — and
     delegates the voting math to
     :func:`senselab.audio.tasks.speech_to_text_ensemble.fuse_word_streams`.
+
+    Per-word corroboration is read off the words themselves (stamped by
+    :func:`~senselab.audio.workflows.audio_analysis.adaptive.corroboration.apply_corroboration`),
+    not passed here: fusion must not consult the intervention log, or budget admission decides
+    what reaches the transcript.
     """
     fus = policy["fusion"]
     return fuse_word_streams(
@@ -84,10 +82,56 @@ def fuse_words(
         slot_mid_tol_s=float(fus["slot_mid_tol_s"]),
         winner_margin=float(fus["winner_margin"]),
         alternate_min_share=float(fus["alternate_min_share"]),
+        min_corroboration=float(fus["corroboration"]["min_corroboration"]),
         speaker_at=speaker_at,
-        p_voice_at=p_voice_at,
         calibrator=calibrator,
     )
+
+
+def rollup_segments(words: list[dict[str, Any]], *, min_corroboration: float) -> tuple[list[dict[str, Any]], list[int]]:
+    """Readable utterance rollup, plus the indices of words withheld from it.
+
+    A word is included iff its ``corroboration`` is ``None`` (unmeasured — absent is not zero) or
+    at least ``min_corroboration``. Withheld words stay in ``words[]`` with their measurement and
+    their sources; only the concatenated ``text`` omits them.
+
+    This is the one decision that remains, and it is deliberately at the rendering layer. Keeping
+    an uncorroborated word in the readable transcript would let it *win*: the deliverable would
+    assert it and the text consumers downstream (PII, sentiment, summary) would ingest it. Dropping
+    it from ``words[]`` would be the erasure this work removed. The split keeps the evidence
+    inspectable, carrying the number that excluded it, and makes the exclusion re-decidable by
+    re-reading one file — no model re-run.
+
+    Args:
+        words: Fused words, time-ordered.
+        min_corroboration: Rollup threshold.
+
+    Returns:
+        ``(segments, withheld_word_indices)``.
+    """
+    segments: list[dict[str, Any]] = []
+    withheld: list[int] = []
+    for index, w in enumerate(words):
+        corroboration = w.get("corroboration")
+        if corroboration is not None and float(corroboration) < float(min_corroboration):
+            withheld.append(index)
+            continue
+        if segments and w.get("speaker") == segments[-1]["speaker"] and w["start"] - segments[-1]["end"] <= 0.5:
+            seg = segments[-1]
+            seg["end"] = w["end"]
+            seg["text"] += " " + w["text"]
+            seg["min_word_confidence"] = min(seg["min_word_confidence"], w["confidence"])
+        else:
+            segments.append(
+                {
+                    "start": w["start"],
+                    "end": w["end"],
+                    "speaker": w.get("speaker"),
+                    "text": w["text"],
+                    "min_word_confidence": w["confidence"],
+                }
+            )
+    return segments, withheld
 
 
 # ── lookups from belief state ────────────────────────────────────────────
@@ -144,6 +188,7 @@ def build_final_outputs(
     stream: str,
     policy: dict[str, Any],
     generated_from_round: int,
+    corroboration_provenance: dict[str, Any],
     refined_identity: dict[str, Any] | None = None,
     calibrated: bool = False,
     timestamps_meta: dict[str, Any] | None = None,
@@ -169,24 +214,18 @@ def build_final_outputs(
         speaker_lookup = base_speaker_lookup
     p_voice_lookup = make_p_voice_lookup(state, stream)
 
-    # transcript.json — segments rollup on speaker change or >0.5 s word gap.
-    segments: list[dict[str, Any]] = []
-    for w in words:
-        if segments and w.get("speaker") == segments[-1]["speaker"] and w["start"] - segments[-1]["end"] <= 0.5:
-            seg = segments[-1]
-            seg["end"] = w["end"]
-            seg["text"] += " " + w["text"]
-            seg["min_word_confidence"] = min(seg["min_word_confidence"], w["confidence"])
-        else:
-            segments.append(
-                {
-                    "start": w["start"],
-                    "end": w["end"],
-                    "speaker": w.get("speaker"),
-                    "text": w["text"],
-                    "min_word_confidence": w["confidence"],
-                }
-            )
+    # transcript.json — segments rollup on speaker change or >0.5 s word gap, minus the words
+    # whose measured corroboration falls below the rendering threshold. They stay in `words[]`.
+    segment_min = float((policy["fusion"]["corroboration"])["segment_min_corroboration"])
+    segments, withheld = rollup_segments(words, min_corroboration=segment_min)
+    corroboration_doc = {
+        **corroboration_provenance,
+        "segment_min_corroboration": segment_min,
+        "n_words_withheld_from_segments": len(withheld),
+        # Indices into `words[]`, so the rollup is reproducible as a pure function of `words[]`
+        # plus one number — the exclusion can be re-decided without re-running a model.
+        "withheld_word_indices": withheld,
+    }
     transcript = {
         "calibrated": calibrated,
         "policy_hash": policy.get("policy_hash"),
@@ -194,6 +233,7 @@ def build_final_outputs(
         "stream": stream,
         "language": language,
         "timestamps": timestamps_meta or {"timestamps_source": "member_vote"},
+        "corroboration": corroboration_doc,
         "words": words,
         "segments": segments,
     }

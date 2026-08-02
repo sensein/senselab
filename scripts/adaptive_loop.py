@@ -5,7 +5,7 @@ Runs the loop from ``specs/20260723-225523-dynamic-uncertainty-workflow`` over a
 completed ``analyze_audio.py`` run directory: round 1 ingests the run's
 uncertainty parquets into the belief store (with a re-aggregation parity
 check), rounds 2..K execute the policy-ranked intervention catalog (stream
-election, hallucination adjudication, missed-speech correction, cache-replay
+election, uncorroborated-speech attenuation, missed-speech correction, cache-replay
 reserve-ASR escalation; live-backend rules defer with guard reasons), and the
 final round fuses a consensus transcript / diarization / speech_presence track with a
 full decision audit trail.

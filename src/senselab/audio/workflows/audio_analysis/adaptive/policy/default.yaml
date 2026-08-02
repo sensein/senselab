@@ -45,6 +45,26 @@ fusion:
   slot_mid_tol_s: 0.15         # or midpoint distance below this
   winner_margin: 0.66          # winner share below this -> record alternates
   alternate_min_share: 0.15
+  corroboration:
+    # Per-word evidence weight, measured against presence voters independent of ASR. Every word
+    # is measured, whether or not an intervention fired: under the previous design a word survived
+    # according to whether P3 had been admitted within budget, so budget accounting decided what
+    # reached the transcript.
+    exponent: 1.0              # gate = max(min_corroboration, p_independent ** exponent);
+                               # same shape as influence.uncertainty_gate.exponent
+    min_corroboration: 0.05    # floor: attenuate, never erase (MIN_CORROBORATION). Validated > 0
+                               # at load — at zero both the vote weight and the coverage
+                               # contribution vanish, which is deletion by configuration.
+    segment_min_corroboration: 0.2
+                               # below this a word stays in words[] with its measurement and its
+                               # sources, but not in the readable segment rollup. THE ONE NUMBER
+                               # THAT STILL REMOVES TEXT FROM A DELIVERABLE — raised far enough it
+                               # reproduces purging in effect. Defaulted to the same figure as
+                               # adjudication.corroboration_low because it answers the identical
+                               # question on the identical scale, but the pool differs (independent
+                               # voters only, ASR excluded), so it is PROVISIONAL and must be
+                               # re-measured on artifacts/degradation_suite/ before alpha rather
+                               # than assumed transferable.
   consensus_alignment: auto    # U3/C8: "auto" tries torchaudio MMS_FA; "off" keeps member timestamps
   consensus_alignment_timeout_s: 600.0   # SIGALRM guard around bundle load + alignment
 calibration_profile:           # T033: {"type":"logistic","a":..,"b":..} or {"type":"piecewise","x":[..],"y":[..]}

@@ -23,7 +23,6 @@ from senselab.audio.workflows.audio_analysis.adaptive.fusion import (
     build_final_outputs,
     collect_word_streams,
     fuse_words,
-    make_p_voice_lookup,
     make_speaker_lookup,
 )
 from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
@@ -289,13 +288,38 @@ def run_adaptive_loop(
                             )
                             if m2 is not None:
                                 align_by_model.setdefault(model, m2)
-    # P3 no longer hands fusion anything to delete: doubt about a claim is a weight on the vote,
-    # not a hole in the word stream. The word-level counterpart lands in the next commit.
     word_streams = collect_word_streams(asr_by_model, align_by_model)
     # Live U1 words (already in file time) join the ensemble on their stream.
     for model, live_words in (ctx.get("live_asr_words", {}).get(fusion_stream) or {}).items():
         if live_words and model not in word_streams:
             word_streams[model] = sorted(live_words, key=lambda w: (w["start"], w["end"]))
+
+    # Per-word corroboration, measured against presence voters that are independent of ASR.
+    # Stamped after the U2 cache-replay and U1 live merges so late-arriving streams are measured
+    # on the same footing, and stamped for *every* word whether or not any intervention fired —
+    # otherwise budget admission decides what survives into the transcript.
+    from senselab.audio.workflows.audio_analysis.adaptive.corroboration import (
+        apply_corroboration,
+        independent_presence_pool,
+        make_corroboration_lookup,
+    )
+
+    corr_cfg = (policy.get("fusion") or {}).get("corroboration") or {}
+    pool, pool_rejected = independent_presence_pool(store, fusion_stream)
+    if not pool:
+        print(
+            f"warn: no independent presence voter survived screening on stream {fusion_stream!r} — "
+            "word corroboration is inert for this run (every word unmeasured)",
+            file=sys.stderr,
+        )
+    word_streams, corr_prov = apply_corroboration(
+        word_streams,
+        make_corroboration_lookup(store, fusion_stream, pool=pool),
+        exponent=float(corr_cfg["exponent"]),
+        min_corroboration=float(corr_cfg["min_corroboration"]),
+        pool=pool,
+        rejected=pool_rejected,
+    )
 
     # Speaker attribution: refined speaker clusters (I2) win where available;
     # the vote-majority lookup is the fallback.
@@ -315,7 +339,6 @@ def run_adaptive_loop(
         word_streams,
         policy=policy,
         speaker_at=speaker_at,
-        p_voice_at=make_p_voice_lookup(state, fusion_stream),
         calibrator=calibrator,
     )
 
@@ -326,19 +349,34 @@ def run_adaptive_loop(
     if words and str(fus_cfg.get("consensus_alignment", "auto")) == "auto":
         from senselab.audio.workflows.audio_analysis.adaptive.audio_io import get_stream_wav
         from senselab.audio.workflows.audio_analysis.adaptive.backends import consensus_align
+        from senselab.audio.workflows.audio_analysis.adaptive.fusion import rollup_segments
 
         wav, wav_reason = get_stream_wav(ctx, fusion_stream)
         if wav is None:
             timestamps_meta["reason"] = wav_reason
         else:
+            # Only the words the rollup retains are handed to the aligner. Forced alignment places
+            # every token it is given somewhere in the audio, so feeding it text the audio may not
+            # contain lets its path optimisation drag the *neighbouring* words' timestamps with it.
+            # Withheld words keep their member-vote timestamps.
+            segment_min = float((fus_cfg.get("corroboration") or {})["segment_min_corroboration"])
+            _segments, withheld = rollup_segments(words, min_corroboration=segment_min)
+            withheld_set = set(withheld)
+            retained = [i for i in range(len(words)) if i not in withheld_set]
             aligned, align_reason = consensus_align(
-                wav, words, timeout_s=float(fus_cfg.get("consensus_alignment_timeout_s", 600.0))
+                wav,
+                [words[i] for i in retained],
+                timeout_s=float(fus_cfg.get("consensus_alignment_timeout_s", 600.0)),
             )
             if aligned is not None:
-                for w, ts in zip(words, aligned):
-                    w["start"], w["end"] = ts["start"], ts["end"]
+                for index, ts in zip(retained, aligned):
+                    words[index]["start"], words[index]["end"] = ts["start"], ts["end"]
                 words.sort(key=lambda w: (w["start"], w["end"]))
-                timestamps_meta = {"timestamps_source": "consensus_alignment_mms_fa"}
+                timestamps_meta = {
+                    "timestamps_source": "consensus_alignment_mms_fa",
+                    "n_words_aligned": len(retained),
+                    "n_words_on_member_timestamps": len(withheld_set),
+                }
             else:
                 timestamps_meta["reason"] = align_reason
     last_round = round_summaries[-1]["round"] if round_summaries else 1
@@ -350,6 +388,7 @@ def run_adaptive_loop(
         stream=fusion_stream,
         policy=policy,
         generated_from_round=last_round,
+        corroboration_provenance=corr_prov,
         refined_identity=refined,
         calibrated=calibrator is not None,
         timestamps_meta=timestamps_meta,
