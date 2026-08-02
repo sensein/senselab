@@ -198,3 +198,4 @@ artifacts/stitch_validation/
 # directory was not — one convention, and it is "not in git".
 artifacts/e2e_runs/
 artifacts/analyze_audio/
+artifacts/verify_clip/
