@@ -203,3 +203,19 @@ tutorials/video/visualize/
 # which was added first; 142 MB of run output was tracked while the default output directory was
 # not. One rule, so the question never comes up again.
 artifacts/
+
+# SpeechBrain writes checkpoints into CWD from a `save_path` on an inner lobe's hparams.yaml,
+# which the outer `savedir=` does not redirect. `dependencies.speechbrain_loading_cwd` now pins
+# CWD to the senselab cache so this cannot recur; these directories were the residue from before
+# that fix, and 3 GB of HuggingFace blobs had been committed.
+wav2vec2_checkpoint/
+wav2vec2_checkpoints/
+pretrained_models/
+
+# Tutorial output. `tutorials/video/pose_estimation.ipynb` writes these; running the notebook
+# regenerates them, and a committed copy goes stale against the model that made it.
+visualize/
+
+# Build output.
+dist/
+
