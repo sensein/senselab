@@ -193,13 +193,15 @@ def evaluate_against_ground_truth(
 
         rounds_dir = belief_dir(out_dir) / "rounds"
         last_round = max(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
+        # One row per bucket, folded across passes by the writer. The filter this replaces took
+        # the transcript's stream, which scored the run against whichever pass the transcript came
+        # from rather than against the belief the run published.
         ident = pd.read_parquet(rounds_dir / str(last_round) / "belief" / "speaker.parquet")
-        ident = ident[ident["stream"] == transcript.get("stream", "raw_16k")]
         boundaries = [g["start"] for g in gt["segments"][1:]]
         at_b: list[float] = []
         inside: list[float] = []
         for _, row in ident.iterrows():
-            u = row.get("within_pass_uncertainty")
+            u = row.get("uncertainty")
             if u is None or u != u:
                 continue
             if any(row["start"] <= b < row["end"] for b in boundaries):
