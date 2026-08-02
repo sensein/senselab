@@ -40,6 +40,15 @@ def _b(start: float, values: dict[str, float]) -> dict:
     }
 
 
+def _b2(start: float, end: float, values: dict[str, float]) -> dict:
+    """A bucket with an explicit span, for axes that do not share a grid."""
+    return {
+        "start": start,
+        "end": end,
+        "votes": {k: {"same_label_uncertainty": v} for k, v in values.items()},
+    }
+
+
 def _axes(**per_axis: dict[str, float]) -> dict:
     return {axis: {"raw_16k": [_b(0.0, values)]} for axis, values in per_axis.items()}
 
@@ -549,3 +558,60 @@ def test_every_round_s_rows_are_returned_not_only_the_last() -> None:
         assert sorted(history[axis]) == [e["round"] for e in log], f"{axis}: one snapshot per round run"
     assert history["speaker"][0][0]["round"] == 0
     assert rows["speaker"] == history["speaker"][max(history["speaker"])], "final rows are the last round's"
+
+
+# ── H1: axes meet on a common lattice, not on identical keys ─────────────
+
+
+def test_axes_on_different_grids_still_reach_each_other() -> None:
+    """The defect a real run exposed: matching exact bucket keys means never matching.
+
+    On real audio the four axes carried 85 / 41 / 1070 / 1 buckets on four different grids and
+    shared *zero* keys, so cross-axis input silently did nothing — every round byte-identical to
+    the last. The unit tests all passed because their fixtures put every axis on one synthetic
+    grid, which is the one thing real data never does.
+    """
+    by_axis = {
+        # 1 s buckets vs 0.5 s buckets: overlapping in time, disjoint as keys.
+        "asr": {"raw_16k": [_b2(0.0, 1.0, {"a": 0.9}), _b2(1.0, 2.0, {"a": 0.9})]},
+        "speaker": {"raw_16k": [_b2(0.0, 0.5, {"s": 0.0}), _b2(0.5, 1.0, {"s": 0.0})]},
+    }
+    weights = {"asr": {"a": 1.0}, "speaker": {"s": 1.0}}
+    coupled, _ = fuse_axes(by_axis, weights_by_axis=weights, max_rounds=3)
+    assert coupled["speaker"][0]["coupled_from"] == ["asr"], "a differently-gridded axis must reach it"
+
+
+def test_a_coupled_value_is_the_overlap_weighted_mean_of_the_source() -> None:
+    """Projection onto the receiver's grid, weighted by how much of it each source bucket covers.
+
+    Nearest-bucket would let a source bucket that barely touches decide the whole value.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import project_axis_onto
+
+    src = [
+        {"start": 0.0, "end": 1.0, "uncertainty": 0.0},
+        {"start": 1.0, "end": 2.0, "uncertainty": 1.0},
+    ]
+    # A receiver bucket spanning both source buckets equally sees their mean.
+    got = project_axis_onto(src, [(0.5, 1.5)])
+    assert got[(0.5, 1.5)] == pytest.approx(0.5)
+
+
+def test_projection_ignores_source_buckets_that_measured_nothing() -> None:
+    """`None` is the absence of a claim; averaging it in as zero would manufacture confidence."""
+    from senselab.audio.workflows.audio_analysis.fuse import project_axis_onto
+
+    src = [
+        {"start": 0.0, "end": 1.0, "uncertainty": None},
+        {"start": 1.0, "end": 2.0, "uncertainty": 0.8},
+    ]
+    got = project_axis_onto(src, [(0.0, 2.0)])
+    assert got[(0.0, 2.0)] == pytest.approx(0.8)
+
+
+def test_a_receiver_bucket_no_source_covers_gets_no_value() -> None:
+    """Coupling informs the receiver's grid; it never invents a claim outside the source's span."""
+    from senselab.audio.workflows.audio_analysis.fuse import project_axis_onto
+
+    src = [{"start": 0.0, "end": 1.0, "uncertainty": 0.5}]
+    assert project_axis_onto(src, [(5.0, 6.0)]) == {}

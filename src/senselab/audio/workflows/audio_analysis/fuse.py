@@ -34,6 +34,7 @@ __all__ = [
     "mask_regions_from_rows",
     "speaker_claims_from_votes",
     "measure_axis_overlap",
+    "project_axis_onto",
     "derive_mask_from_axes",
     "fuse_axes",
     "fuse_rounds",
@@ -371,6 +372,52 @@ CROSS_AXIS_PASS = "__axes__"
 value the loop computed can never be mistaken for something a microphone recorded."""
 
 
+def project_axis_onto(
+    source_rows: Sequence[Mapping[str, Any]],
+    target_spans: Sequence[tuple[float, float]],
+) -> dict[tuple[float, float], float]:
+    """Project one axis's values onto another axis's buckets (H1's common lattice).
+
+    Cross-axis input previously matched on exact ``(start, end)`` keys, which on real audio means
+    never matching: the four axes carried 85 / 41 / 1070 / 1 buckets on four different grids and
+    shared *zero* keys, so coupling did nothing and every round came out byte-identical to the
+    last. Unit tests missed it because their fixtures put every axis on one synthetic grid — the
+    one thing real data never does.
+
+    Each target bucket takes the **overlap-weighted mean** of the source buckets it intersects.
+    Weighting by overlap rather than taking the nearest bucket matters when the grids are coarse
+    relative to each other: a source bucket that barely touches the target would otherwise decide
+    its whole value.
+
+    Args:
+        source_rows: The contributing axis's rows, each with ``start``, ``end`` and ``uncertainty``.
+        target_spans: The receiving axis's bucket spans.
+
+    Returns:
+        ``{span → value}``, omitting spans no source bucket covers. Source buckets whose
+        ``uncertainty`` is ``None`` contribute nothing: that is the absence of a claim, and
+        averaging it in as zero would manufacture confidence nobody expressed.
+    """
+    measured = [
+        (float(r.get("start", 0.0)), float(r.get("end", 0.0)), float(r["uncertainty"]))
+        for r in source_rows or ()
+        if r.get("uncertainty") is not None
+    ]
+    out: dict[tuple[float, float], float] = {}
+    for span in target_spans:
+        lo, hi = float(span[0]), float(span[1])
+        total = 0.0
+        weighted = 0.0
+        for s_lo, s_hi, value in measured:
+            overlap = min(hi, s_hi) - max(lo, s_lo)
+            if overlap > 0:
+                total += overlap
+                weighted += overlap * value
+        if total > 0:
+            out[(lo, hi)] = weighted / total
+    return out
+
+
 def cross_axis_inputs(
     axis: str,
     rows_by_axis: Mapping[str, Sequence[Mapping[str, Any]]],
@@ -419,16 +466,14 @@ def cross_axis_inputs(
     """
     by_key: dict[tuple[float, float], dict[str, dict[str, float]]] = {}
     contributors: set[str] = set()
+    # The receiver's own grid is the lattice both axes meet on: coupling informs it and never
+    # extends it, so an axis holding one datum cannot acquire another axis's 1197 buckets.
+    targets = sorted(own_keys) if own_keys is not None else []
     for other in sorted(rows_by_axis):
         if other == axis:
             continue
-        for row in rows_by_axis[other] or []:
-            value = row.get("uncertainty")
-            if value is None:
-                continue
-            key = (round(float(row.get("start", 0.0)), 6), round(float(row.get("end", 0.0)), 6))
-            if own_keys is not None and key not in own_keys:
-                continue
+        projected = project_axis_onto(rows_by_axis[other] or [], targets)
+        for key, value in projected.items():
             by_key.setdefault(key, {})[f"axis::{other}"] = {"same_label_uncertainty": float(value)}
             contributors.add(other)
     buckets = [{"start": s, "end": e, "votes": by_key[(s, e)]} for s, e in sorted(by_key) if by_key[(s, e)]]
