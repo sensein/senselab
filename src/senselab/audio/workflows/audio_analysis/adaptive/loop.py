@@ -421,10 +421,11 @@ def run_adaptive_loop(
     )
 
     # T032: LS final tracks + resolved-disagreements index (best-effort, additive).
+    ls_report: dict[str, Any] = {}
     try:
         from senselab.audio.workflows.audio_analysis.adaptive.ls_final import build_final_ls_bundle
 
-        build_final_ls_bundle(
+        ls_report = build_final_ls_bundle(
             out_dir=out_dir,
             run_dir=run_dir,
             transcript=transcript_doc,
@@ -486,6 +487,9 @@ def run_adaptive_loop(
         "converged": report["converged"],
         "policy_hash": policy.get("policy_hash"),
         "timeline": timeline_path,
+        # What the LS stage produced, so the driver can report where the bundle is without
+        # probing final/ for it. A stage branching on a deliverable is treating it as state.
+        "labelstudio": ls_report,
         "replay_check": parity,
         "fused_parity": fused_parity,
         "rounds": len(round_summaries) + 1,
