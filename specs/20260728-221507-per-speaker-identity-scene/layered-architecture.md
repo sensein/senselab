@@ -1107,12 +1107,13 @@ Four kinds of thing live in it, and only one is an estimate:
 |---|---|---|
 | the value | estimate | L2's product |
 | `scope`, provenance | fact about the measurement | L1 |
-| `status` — active / shadowed / purged | decision | L2's process |
+| `status` — active / shadowed | decision | L2's process |
+| `evidence_weight` + its factors | measurement about a measurement | L2's process (see "Purging is no longer a decision") |
 | history | trajectory | L2's process |
 
 The estimates are **re-derivable** — the store's own contract says "aggregation is a pure function
-of the active votes". Given L1, the policy, and the record of which votes were shadowed or purged,
-every value can be recomputed. So the store should not persist estimates at all.
+of the active votes". Given L1, the policy, the record of which votes were shadowed and the record
+of what weight was withdrawn from which, every value can be recomputed. So the store should not persist estimates at all.
 
 **This dissolves the two-L2 problem rather than fixing it.** `fuse_axes` is the pure aggregation;
 the belief store is the decisions selecting which measurements are active. They are not rivals —
@@ -1122,3 +1123,135 @@ materialised copy of the estimates, seeded from L1's pre-folded axes (item 25), 
 
 Removing the materialised copy removes the second lineage, the parity oracle's dependence on an L1
 fold, and the need for item 27's plot overlay, in one change.
+
+---
+
+## Purging is no longer a decision
+
+*Recorded after removing both erasure sites. The paragraph at line 804 named the defect; this
+records what replaced it, and the general finding underneath it.*
+
+### What was there
+
+Two places deleted evidence rather than weighing it.
+
+**The belief store.** `VoteStore.purge_source_in_bucket` set `status = "purged_hallucination"`,
+and `active_votes()` returned only `status == "active"`, so `reaggregate_bucket` never saw the
+payload again. The source left `contributing_sources`; its `speaks`, its `native_confidence`, its
+`avg_logprob` and its `token_entropy` left the fold. The vote survived only as a row in
+`rounds/<k>/votes_added.parquet`, where nothing downstream could weigh it.
+
+**The word streams.** `collect_word_streams(purged_spans=...)` removed every word of the indicted
+model overlapping the span, before the ensemble ever saw it. `transcript.json` had no record;
+`final/` had no record.
+
+### Why it was wrong on this codebase's own terms
+
+Every other attenuation mechanism here is floored, and all four floors cite the same sentence:
+*the dissenter may be the only source that noticed something.* `MIN_REGIONAL_TRUST`,
+`MIN_RELIABILITY`, `SUPPORT_FLOOR`, `effective_weight`'s `min_gate` — four literals of `0.05`,
+each docstring pointing at the others' reasoning. Purging was the one mechanism that went to zero,
+and it did so on the weakest signal in the system:
+
+- **Non-corroboration is not fabrication.** The chain observes that an ASR produced words where
+  presence evidence is low. A quiet talker, a distant talker, an overlapped talker and a
+  fabricating recognizer all produce that. The name asserted the one cause the measurement cannot
+  reach.
+- **It was asymmetric.** Presence indicted ASR; ASR never indicted presence, though word
+  boundaries are the finer measurement and presence buckets are 0.5 s.
+- **It was self-confirming.** The trigger read `p_voice`, a weighted mean over *all* presence
+  voters including the indicted ASR — whose `hallucinated: True` payload `_weighted_p_voice` maps
+  to `p = 0.1`. The source partly protected itself, and acting on it moved the number that had
+  indicted it. This is the failure `adaptive/provenance.classify_resolution` exists to catch,
+  running inside the rule that was supposed to improve the belief.
+- **It was simultaneously total and inert.** On the asr axis it removed `avg_logprob` and
+  `token_entropy` but never touched `__pairwise_phoneme_distances__` — the dominant sub-signal,
+  keyed on `"<src_a>|<src_b>"` inside a `__`-prefixed synthetic vote. The "purged" transcript kept
+  driving the axis it had been purged from.
+- **It made survival depend on budget.** Word dropping was gated on the intervention having fired
+  *and* having been admitted within budget, so `deferred_budget` silently changed the transcript.
+
+### What replaced it
+
+One measured quantity, applied as a floored weight, in both places.
+
+| | before | after |
+|---|---|---|
+| belief store | `status = purged_hallucination`, vote leaves `active_votes` | `Vote.evidence_weight` ∈ (0, 1], vote stays active and keeps aggregating |
+| word streams | word deleted from the stream | `word["corroboration"]`, entering the vote weight **and** `coverage` |
+| trigger | `p_voice` (contains the claimant) | `bucket_corroboration` over an evidence pool that structurally excludes claimants |
+| threshold | `p_voice_hallucination / 2`, unnamed | `adjudication.corroboration_very_low`, named and in provenance |
+| floor | none | `floors.MIN_EVIDENCE_WEIGHT` / `MIN_CORROBORATION`, validated `> 0` at policy load |
+| name | `hallucination` — a cause | `uncorroborated` — the observation |
+
+Four properties are load-bearing and each was reachable only by giving up the deletion:
+
+1. **The weight *is* the measurement.** `max(floor, corroboration)` — the identity above the
+   floor. Any other shape (a multiplier, an exponent, a sigmoid) inserts a constant nobody
+   measured. The claim is "this source asserts speech here"; the independent evidence for that same
+   event is already a probability in `[0, 1]`; that probability is how far the assertion carries.
+2. **The measurement does not move when it acts.** The evidence pool contains only signals that
+   observe presence directly, so the claimant can never be in it. The fixed point is reached in one
+   step; re-measuring in a later round returns the same number. Under `p_voice` it could not have
+   been.
+3. **Unmeasured is not zero.** `corroboration is None` produces no factor and no discount, and a
+   source absent from the weight map aggregates unweighted. A run with no informative presence
+   voter is *inert*, and says so in `transcript.json`'s `evidence_pool` / `evidence_pool_rejected`
+   — rather than condemning every word at once.
+4. **Every withdrawal is re-derivable.** `provenance.evidence_weight_factors` records the
+   measurement, the pool, the pooling rule, the map, the floor and the resulting weight, appended
+   rather than overwritten so two rules acting on one vote both stay visible.
+
+One decision survives, and it is deliberately at the rendering layer:
+`fusion.corroboration.segment_min_corroboration` keeps a word out of `segments[].text` while
+leaving it in `words[]` with its measurement. Keeping it in the readable transcript would let it
+*win* — the deliverable would assert it and the text consumers would ingest it. Dropping it from
+`words[]` would be the erasure. `withheld_word_indices` makes the rollup a pure function of
+`words[]` plus one number, so the exclusion is re-decidable by re-reading one file. That number is
+now the pressure point: raised far enough it reproduces purging in effect, which is why the
+invariant a test pins is that `words[]` is untouched at *any* setting.
+
+### The general finding: "vote" made exclusion feel natural
+
+Line 795 already recorded that *"vote" is the wrong word for what L2 does* — that the metaphor made
+a hand-set `0.4` derivation gate feel natural. This is the same defect, one step further along, and
+it is the more expensive instance.
+
+Statistical aggregation has exactly one lever: **weight**. There is no operation in a weighted fold
+that removes a term; setting a weight to zero is a limit, not a separate act, and it is the one
+value of the lever that is unrecoverable. Voting has a second lever — **eligibility**. Ballots are
+counted or they are not; disqualifying one is an ordinary, reversible-sounding administrative act,
+and it leaves the tally *correct*, because a disqualified ballot was never evidence about anything.
+
+Once the data structure was named `Vote` and carried a `status` field, "exclude this vote" read as
+routine. Nobody had to argue that a source's log-probability should stop informing the ASR axis;
+they only had to argue that a ballot was invalid. The reasoning that would have been demanded of
+`weight = 0` was never demanded, because the operation never appeared as a weight.
+
+Three specific costs traceable to the metaphor, all of them found in this change:
+
+- **`status` is a filter, so filters proliferate.** `active_votes()` tests `status == "active"`.
+  Every consumer inherits that test, and each new status silently changes what five call sites
+  measure. `_p2_trigger` counted `active_votes` to compute a coarse-voter share — a purge shrank
+  its denominator, changing a rule that has nothing to do with adjudication.
+- **A tally makes partial exclusion unthinkable.** The store already had three weight channels it
+  never used: `payload["weight"]` (honoured by `_weighted_p_voice`),
+  `per_source_confidence` (honoured by `aggregate_asr`), and `reliability` (honoured by
+  `aggregate_speaker`). `contracts/belief-store.md` rule 4 *specified* weighted aggregation. The
+  machinery to attenuate was present and wired; what was missing was the thought, because
+  eligibility is binary and votes have eligibility.
+- **Exclusion hides its own incompleteness.** A weight that fails to reach a sub-signal is visibly
+  a bug. An *exclusion* that fails to reach a sub-signal looks like success — the vote is gone from
+  `active_votes`, the invariant holds — which is how the pairwise phoneme family went on consuming
+  purged transcripts without anyone noticing.
+
+The rule that follows, and the one to apply to the rest of the store: **if a mechanism cannot be
+written as a weight, it does not belong in an aggregation layer.** Where a decision genuinely has
+to be binary — the segment rollup — it belongs at a rendering boundary, applied to a copy, with the
+number that caused it recorded next to the thing it excluded.
+
+`shadowing` survives this test and stays: a region-scoped vote *supersedes* a file-scoped one from
+the same source about the same bucket. That is not two pieces of evidence with one removed; it is
+one source's later, finer answer replacing its earlier, coarser one about the same question. The
+superseded row is still on disk and the substitution is recorded. Worth stating explicitly, because
+the next reader will reasonably ask why one status survived the argument that removed the other.
