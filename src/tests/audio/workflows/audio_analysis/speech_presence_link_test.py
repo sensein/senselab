@@ -163,12 +163,23 @@ def test_asr_hallucination_gate_is_re_decidable_from_the_recorded_measurement() 
 
 
 def test_no_speech_prob_sibling_voter_inverts_at_L2() -> None:
-    """``speaks = nsp < t`` and ``confidence = 1 - nsp`` are both interpretations, not measurements."""
+    """``speaks = nsp < t`` and the confidence in that direction are interpretations, not measurements.
+
+    The confidence must follow the direction. At ``nsp = 0.9`` the voter is 0.9-confident of
+    *absence*; reporting ``1 - nsp`` regardless made ``_weighted_p_voice`` read that denial as
+    ``p_voice = 0.9`` — a confident assertion of the opposite.
+    """
     rows = [_bucket({"whisper::no_speech_prob": {"no_speech_prob": 0.2, "native_window_s": 30.0}})]
     vote = link_speech_presence(rows)[0]["votes"]["whisper::no_speech_prob"]
     assert vote["speaks"] is True
     assert vote["native_confidence"] == pytest.approx(0.8)
     assert vote["no_speech_prob"] == pytest.approx(0.2)
+
+    denying = link_speech_presence([_bucket({"whisper::no_speech_prob": {"no_speech_prob": 0.9}})])[0]["votes"][
+        "whisper::no_speech_prob"
+    ]
+    assert denying["speaks"] is False
+    assert denying["native_confidence"] == pytest.approx(0.9)
 
 
 def test_frame_posterior_threshold_and_channels_are_L2s() -> None:
@@ -190,7 +201,8 @@ def test_frame_posterior_threshold_and_channels_are_L2s() -> None:
     ]
     default = link_speech_presence(rows)[0]["votes"]["frame_segmentation"]
     assert default["speaks"] is False, "0.4 is below the default 0.5 cut"
-    assert default["native_confidence"] == pytest.approx(0.4)
+    assert default["native_confidence"] == pytest.approx(0.6), "0.4 P(speech) is a 0.6-confident no"
+    assert default["frame_mean"] == pytest.approx(0.4), "the measurement itself still travels"
     assert default["channel_means"] == pytest.approx([0.4, 0.05])
     assert default["channel_labels"] == ["speaker#1", "speaker#2"]
 
@@ -198,6 +210,23 @@ def test_frame_posterior_threshold_and_channels_are_L2s() -> None:
         "frame_segmentation"
     ]
     assert sensitive["speaks"] is True
+    assert sensitive["native_confidence"] == pytest.approx(0.4), "the direction and the confidence move together"
+
+
+def test_frame_posterior_reaching_the_aggregator_is_not_inverted() -> None:
+    """The defect this pins is not cosmetic: it inverted the presence axis where it matters most.
+
+    ``_weighted_p_voice`` reads ``native_confidence`` as confidence in the voter's own ``speaks``
+    direction. A frame posterior of 0.02 reported raw became a 0.02-confident *no*, which the
+    aggregator maps to ``p_voice = 0.98`` — a near-certain claim of speech from a detector that had
+    just reported near-certain silence. Every downstream gate keyed on ``p_voice`` (region seeding,
+    diarization voicing, corroboration) then read silence as speech.
+    """
+    from senselab.audio.workflows.audio_analysis.aggregate import speech_presence_p_voice
+
+    rows = [_bucket({"frame_brouhaha_vad": {"frame_mean": 0.02, "n_frames": 30}})]
+    votes = link_speech_presence(rows)[0]["votes"]
+    assert speech_presence_p_voice(votes) == pytest.approx(0.02)
 
 
 def test_coarse_demotion_reads_the_declared_resolution_rather_than_a_hardcoded_flag() -> None:

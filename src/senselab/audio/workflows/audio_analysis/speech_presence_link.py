@@ -233,7 +233,11 @@ def _link_no_speech_prob(ev: Mapping[str, Any], policy: SpeechPresencePolicy) ->
     nsp = _finite(ev.get("no_speech_prob"))
     if nsp is None:
         return None
-    return {"speaks": nsp < policy.no_speech_threshold, "native_confidence": 1.0 - nsp}
+    speaks = nsp < policy.no_speech_threshold
+    # Directed, like every other rule here: at nsp = 0.9 the voter is 0.9-confident of *absence*,
+    # not 0.1-confident of it. Reporting `1 - nsp` regardless of direction made the aggregator read
+    # a confident denial as a confident assertion.
+    return {"speaks": speaks, "native_confidence": (1.0 - nsp) if speaks else nsp}
 
 
 def _link_label_mass(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
@@ -246,11 +250,19 @@ def _link_label_mass(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dic
 
 
 def _link_frame(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
-    """Bucket-mean frame posterior → claim. The mean itself was L1's; the cut is policy."""
+    """Bucket-mean frame posterior → claim. The mean itself was L1's; the cut is policy.
+
+    Directed against the policy cut rather than against ``_directed``'s fixed 0.5, so a moved
+    threshold moves the direction and the confidence together. Reporting the mean raw made a
+    posterior of 0.02 read as a 0.02-confident *no*, which ``_weighted_p_voice`` maps to
+    ``p = 0.98`` — the exact inverse of what the detector measured, on the voters the presence axis
+    trusts most.
+    """
     mean = _finite(ev.get("frame_mean"))
     if mean is None:
         return None
-    return {"speaks": mean >= policy.frame_speech_threshold, "native_confidence": mean}
+    speaks = mean >= policy.frame_speech_threshold
+    return {"speaks": speaks, "native_confidence": mean if speaks else 1.0 - mean}
 
 
 def _link_hnr(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
