@@ -258,11 +258,19 @@ def _round_record(
     """
     from senselab.audio.workflows.audio_analysis.rounds import RoundRecord
 
-    values = [r.get("within_pass_uncertainty") for r in rows]
+    # `epistemic_uncertainty`, the column `fuse_axis` actually emits. This read
+    # `within_pass_uncertainty` — an L1-only column — so every record carried `epistemic=None`
+    # and `measured_buckets=0`, C1 had nothing to compare, and every round digested to the same
+    # signature, which the shared detector then correctly reported as a repeating state. A real
+    # run stopped with `oscillation` on all four axes for that reason alone: not four dynamics
+    # agreeing, one name resolving to nothing on all of them.
+    values = [r.get("epistemic_uncertainty") for r in rows]
     numeric = [float(v) for v in values if isinstance(v, (int, float))]
     epistemic = sum(numeric) / len(numeric) if numeric else None
-    measured = sum(1 for v in values if isinstance(v, (int, float)))
-    digest = ";".join(f"{r.get('start')}:{r.get('within_pass_uncertainty')}" for r in rows)
+    # A bucket counts as measured when the axis has a value there, which is what C3's
+    # unmeasured -> measured progress check is about.
+    measured = sum(1 for r in rows if isinstance(r.get("uncertainty"), (int, float)))
+    digest = ";".join(f"{r.get('start')}:{r.get('uncertainty')}:{r.get('epistemic_uncertainty')}" for r in rows)
     return RoundRecord(
         round_index=round_index,
         epistemic=epistemic,
