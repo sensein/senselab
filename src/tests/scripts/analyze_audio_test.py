@@ -278,18 +278,42 @@ def test_pass_plan_reflects_post_triage_mutation(aa: types.ModuleType) -> None:
 
 
 def test_stage_context_carries_provenance_fields(aa: types.ModuleType, tmp_path: types.ModuleType) -> None:
-    """The context must record the resolved source path and pass label."""
+    """The context must record the resolved source path and the perturbation it ran under."""
     import torch
 
     from senselab.audio.data_structures import Audio
+    from senselab.audio.workflows.audio_analysis.perturbations import identity
 
     args = aa.parse_args(["x.wav"])
     audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
-    ctx = aa._stage_context("raw_16k", audio, args, device=None, out_dir=tmp_path, cache_dir=None, senselab_ver="v")
-    assert ctx.pass_label == "raw_16k"
+    ctx = aa._stage_context(identity(), audio, args, device=None, out_dir=tmp_path, cache_dir=None, senselab_ver="v")
+    assert ctx.perturbation == "raw"
     assert ctx.device_label == "auto"
     assert ctx.audio_source.endswith("x.wav")
     assert len(ctx.audio_signature) == 64
+
+
+def test_the_variant_is_the_declared_transform_not_a_guess_from_the_name(
+    aa: types.ModuleType, tmp_path: Path
+) -> None:
+    """``variant`` comes from the perturbation's declaration, never from how its name is spelled.
+
+    It used to be ``"speech_enhanced" if label.startswith("enhanced")``. A perturbation named for
+    its model would then have claimed to be unmodified — and the background mask, which is only
+    meaningful on unmodified audio, gates on exactly this field.
+    """
+    import torch
+
+    from senselab.audio.data_structures import Audio
+    from senselab.audio.workflows.audio_analysis.perturbations import speech_enhancement
+
+    args = aa.parse_args(["x.wav"])
+    audio = Audio(waveform=torch.zeros(1, 16000), sampling_rate=16000)
+    perturbation = speech_enhancement("speechbrain/sepformer-wham16k-enhancement", name="sepformer")
+    ctx = aa._stage_context(perturbation, audio, args, device=None, out_dir=tmp_path, cache_dir=None, senselab_ver="v")
+    assert ctx.perturbation == "sepformer"
+    assert ctx.variant == "speech_enhanced"
+    assert ctx.out_dir == tmp_path / "L1" / "perturbation" / "sepformer"
 
 
 def test_policy_overrides_are_absent_when_no_flags_given(aa: types.ModuleType) -> None:

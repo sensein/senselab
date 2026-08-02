@@ -52,12 +52,12 @@ def test_per_axis_grids_coexist_and_are_recorded() -> None:
         "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
     }
     _signals, fused_axes, _, _ = compute_uncertainty_axes(
-        passes={"raw_16k": raw_pass},
+        passes={"raw": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         speech_presence_grid=BucketGrid(win_length=0.1, hop_length=0.02),
         asr_grid=BucketGrid(win_length=1.0, hop_length=0.5),
         params={},
-        audio={"raw_16k": _silent_audio(2.0)},
+        audio={"raw": _silent_audio(2.0)},
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
@@ -68,9 +68,9 @@ def test_per_axis_grids_coexist_and_are_recorded() -> None:
     assert len(speech_presence.rows) > len(speaker.rows)
     # The grid is recorded per pass, because the grid a signal was measured on is a fact about
     # that measurement — and an axis spans every pass that reported.
-    assert speech_presence.provenance["grid"]["raw_16k"]["win_length"] == 0.1
-    assert speech_presence.provenance["grid"]["raw_16k"]["hop_length"] == 0.02
-    assert speaker.provenance["grid"]["raw_16k"]["win_length"] == 0.5
+    assert speech_presence.provenance["grid"]["raw"]["win_length"] == 0.1
+    assert speech_presence.provenance["grid"]["raw"]["hop_length"] == 0.02
+    assert speaker.provenance["grid"]["raw"]["win_length"] == 0.5
 
 
 def test_speech_presence_grid_defaults_to_shared_when_absent() -> None:
@@ -80,13 +80,13 @@ def test_speech_presence_grid_defaults_to_shared_when_absent() -> None:
         "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
     }
     _signals, fused_axes, _, _ = compute_uncertainty_axes(
-        passes={"raw_16k": raw_pass},
+        passes={"raw": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
         params={},
-        audio={"raw_16k": _silent_audio(2.0)},
+        audio={"raw": _silent_audio(2.0)},
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
     )
     speech_presence = fused_axes["speech_presence"]
-    assert speech_presence.provenance["grid"]["raw_16k"]["win_length"] == 0.5
+    assert speech_presence.provenance["grid"]["raw"]["win_length"] == 0.5

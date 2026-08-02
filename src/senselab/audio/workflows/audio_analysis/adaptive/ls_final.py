@@ -38,7 +38,7 @@ def _region(
     return {"id": rid, "from_name": from_name, "to_name": "audio", "type": kind, "value": value}
 
 
-def _task_pass_label(task: dict[str, Any]) -> str | None:
+def _task_perturbation(task: dict[str, Any]) -> str | None:
     """Infer the pass a LS task belongs to from its region-id prefixes."""
     for pred in task.get("predictions") or []:
         for region in pred.get("result") or []:
@@ -128,7 +128,7 @@ def build_final_ls_bundle(
             regions.append(_region(f"final_speech_presence_{i:04d}", "final__speech_presence", s, e, labels=[status]))
 
         # Attach to the fusion stream's task (fallback: first task).
-        target = next((t for t in tasks if _task_pass_label(t) == fusion_stream), tasks[0] if tasks else None)
+        target = next((t for t in tasks if _task_perturbation(t) == fusion_stream), tasks[0] if tasks else None)
         if target is not None:
             preds = target.setdefault("predictions", [{"model_version": "adaptive_final", "score": 1.0, "result": []}])
             preds[0].setdefault("result", []).extend(regions)

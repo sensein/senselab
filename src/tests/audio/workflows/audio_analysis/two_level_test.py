@@ -55,18 +55,18 @@ def test_level_two_folds_every_pass_not_just_one() -> None:
     a consumer asks is "what do we believe", and that spans the passes.
     """
     fused = fuse_axis(
-        {"raw_16k": [_bucket(0.0, {"a": 0.0})], "enhanced_16k": [_bucket(0.0, {"a": 1.0})]},
+        {"raw": [_bucket(0.0, {"a": 0.0})], "enhanced": [_bucket(0.0, {"a": 1.0})]},
         weights={},
         aggregator="mean",
     )
     assert len(fused) == 1
     assert fused[0]["triage_score"] == pytest.approx(0.5)
-    assert sorted(fused[0]["contributing_passes"]) == ["enhanced_16k", "raw_16k"]
+    assert sorted(fused[0]["contributing_passes"]) == ["enhanced", "raw"]
 
 
 def test_level_two_weights_signals_by_what_was_measured() -> None:
     """The weighting the per-pass fold could not apply, because it ran before measurement."""
-    buckets = {"raw_16k": [_bucket(0.0, {"trusted": 0.0, "doubtful": 1.0})]}
+    buckets = {"raw": [_bucket(0.0, {"trusted": 0.0, "doubtful": 1.0})]}
     unweighted = fuse_axis(buckets, weights={}, aggregator="min")
     weighted = fuse_axis(buckets, weights={"doubtful": 0.05, "trusted": 1.0}, aggregator="min")
     # The weights act on the policy fold, which is what the adaptive loop ranks on.
@@ -76,14 +76,14 @@ def test_level_two_weights_signals_by_what_was_measured() -> None:
 
 def test_level_two_records_which_signals_it_used() -> None:
     """A final number with no attribution cannot be acted on (FR-006)."""
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.2, "b": 0.4})]}, weights={}, aggregator="mean")
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": 0.2, "b": 0.4})]}, weights={}, aggregator="mean")
     assert sorted(fused[0]["contributing_signals"]) == ["a", "b"]
 
 
 def test_level_two_reports_the_weight_each_signal_carried() -> None:
     """Otherwise a low final uncertainty is indistinguishable from a suppressed dissenter."""
     fused = fuse_axis(
-        {"raw_16k": [_bucket(0.0, {"a": 0.2, "b": 0.9})]},
+        {"raw": [_bucket(0.0, {"a": 0.2, "b": 0.9})]},
         weights={"b": 0.1},
         aggregator="mean",
     )
@@ -92,7 +92,7 @@ def test_level_two_reports_the_weight_each_signal_carried() -> None:
 
 def test_a_bucket_no_signal_spoke_in_is_not_given_an_answer() -> None:
     """``None`` says "not measured here"; 0.0 would assert confidence nobody expressed."""
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": None})]}, weights={}, aggregator="mean")
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": None})]}, weights={}, aggregator="mean")
     assert fused[0]["uncertainty"] is None
 
 
@@ -108,7 +108,7 @@ def test_buckets_come_out_in_time_order() -> None:
 
 def test_fusion_is_deterministic() -> None:
     """Same inputs, byte-identical output — no dict-order dependence."""
-    args = ({"raw_16k": [_bucket(0.0, {"a": 0.3, "b": 0.7})]}, {"b": 0.5})
+    args = ({"raw": [_bucket(0.0, {"a": 0.3, "b": 0.7})]}, {"b": 0.5})
     first = fuse_axis(args[0], weights=args[1], aggregator="mean")
     second = fuse_axis(args[0], weights=args[1], aggregator="mean")
     assert first == second
@@ -120,7 +120,7 @@ def test_fusion_is_deterministic() -> None:
 def _harvest(label: str, buckets: list[dict]) -> object:
     from types import SimpleNamespace
 
-    return SimpleNamespace(pass_label=label, speech_presence_evidence=[], speaker_votes=buckets, asr_votes=[])
+    return SimpleNamespace(perturbation=label, speech_presence_evidence=[], speaker_votes=buckets, asr_votes=[])
 
 
 def test_the_final_maps_are_written_for_every_axis(tmp_path) -> None:  # noqa: ANN001
@@ -131,7 +131,7 @@ def test_the_final_maps_are_written_for_every_axis(tmp_path) -> None:  # noqa: A
 
     written = write_final_uncertainty(
         tmp_path,
-        harvests={"raw_16k": _harvest("raw_16k", [_bucket(0.0, {"a": 0.3})])},
+        harvests={"raw": _harvest("raw", [_bucket(0.0, {"a": 0.3})])},
         weights_by_axis={},
     )
     assert {"speech_presence", "speaker", "asr"} <= set(written)
@@ -150,15 +150,15 @@ def test_the_final_map_carries_its_attribution(tmp_path) -> None:  # noqa: ANN00
     written = write_final_uncertainty(
         tmp_path,
         harvests={
-            "raw_16k": _harvest("raw_16k", [_bucket(0.0, {"a": 0.2, "b": 0.9})]),
-            "enhanced_16k": _harvest("enhanced_16k", [_bucket(0.0, {"a": 0.2, "b": 0.9})]),
+            "raw": _harvest("raw", [_bucket(0.0, {"a": 0.2, "b": 0.9})]),
+            "enhanced": _harvest("enhanced", [_bucket(0.0, {"a": 0.2, "b": 0.9})]),
         },
         weights_by_axis={"speaker": {"b": 0.1}},
     )
     frame = pd.read_parquet(written["speaker"])
     row = frame.iloc[0]
     assert sorted(row["contributing_signals"]) == ["a", "b"]
-    assert sorted(row["contributing_passes"]) == ["enhanced_16k", "raw_16k"]
+    assert sorted(row["contributing_passes"]) == ["enhanced", "raw"]
     assert json.loads(row["signal_weights"]) == {"a": 1.0, "b": 0.1}
 
 
@@ -166,7 +166,7 @@ def test_the_final_map_is_byte_identical_across_runs(tmp_path) -> None:  # noqa:
     """SC-004 applies to the answer, not only to the diagnostics."""
     from senselab.audio.workflows.audio_analysis.fuse import write_final_uncertainty
 
-    harvests = {"raw_16k": _harvest("raw_16k", [_bucket(0.5, {"b": 0.4}), _bucket(0.0, {"a": 0.1})])}
+    harvests = {"raw": _harvest("raw", [_bucket(0.5, {"b": 0.4}), _bucket(0.0, {"a": 0.1})])}
     first = tmp_path / "one"
     second = tmp_path / "two"
     a = write_final_uncertainty(first, harvests=harvests, weights_by_axis={})
@@ -186,7 +186,7 @@ def test_level_two_reports_confidence_uncertainty_and_variability() -> None:
     fold, an entropy and a max-minus-min spread all be called "uncertainty".
     """
     fused = fuse_axis(
-        {"raw_16k": [_bucket(0.0, {"a": 0.1, "b": 0.9})]},
+        {"raw": [_bucket(0.0, {"a": 0.1, "b": 0.9})]},
         weights={},
         aggregator="mean",
     )
@@ -198,7 +198,7 @@ def test_level_two_reports_confidence_uncertainty_and_variability() -> None:
 
 def test_signals_that_agree_have_no_variability_and_low_uncertainty() -> None:
     """Agreement collapses the dispersion and the entropy together."""
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.0, "b": 0.0})]}, weights={}, aggregator="mean")
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": 0.0, "b": 0.0})]}, weights={}, aggregator="mean")
     assert fused[0]["variability"] == pytest.approx(0.0)
     assert fused[0]["uncertainty"] == pytest.approx(0.0)
 
@@ -209,7 +209,7 @@ def test_a_lone_signal_has_no_variability_but_can_still_be_uncertain() -> None:
     One signal cannot disagree with anyone, so dispersion is undefined — but a signal reporting
     0.5 is still maximally undetermined about its own answer.
     """
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.5})]}, weights={}, aggregator="mean")
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": 0.5})]}, weights={}, aggregator="mean")
     assert fused[0]["variability"] is None
     assert fused[0]["uncertainty"] > 0.5
 
@@ -219,7 +219,7 @@ def test_epistemic_uncertainty_is_reported_separately() -> None:
 
     Two signals each internally certain but disagreeing: all of the doubt is reducible.
     """
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.0, "b": 1.0})]}, weights={}, aggregator="mean")
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": 0.0, "b": 1.0})]}, weights={}, aggregator="mean")
     assert fused[0]["uncertainty"] == pytest.approx(1.0, abs=0.05)
     assert fused[0]["epistemic_uncertainty"] == pytest.approx(fused[0]["uncertainty"], abs=0.05)
 
@@ -230,7 +230,7 @@ def test_shared_doubt_is_not_reported_as_reducible() -> None:
     Signals agreeing at 0.5 face noise, not disagreement; sending the loop after it would
     waste budget on evidence that cannot resolve anything.
     """
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.5, "b": 0.5})]}, weights={}, aggregator="mean")
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": 0.5, "b": 0.5})]}, weights={}, aggregator="mean")
     assert fused[0]["epistemic_uncertainty"] == pytest.approx(0.0, abs=0.05)
     assert fused[0]["uncertainty"] > 0.5
 
@@ -238,7 +238,7 @@ def test_shared_doubt_is_not_reported_as_reducible() -> None:
 def test_the_weight_basis_names_which_factor_discounted_a_signal() -> None:
     """A weight of 0.05 must say whether the signal was unstable, unsupported, or both."""
     fused = fuse_axis(
-        {"raw_16k": [_bucket(0.0, {"a": 0.3})]},
+        {"raw": [_bucket(0.0, {"a": 0.3})]},
         weights={"a": 0.2},
         aggregator="mean",
         weight_basis={"a": {"stability": 1.0, "support": 0.2}},
@@ -248,7 +248,7 @@ def test_the_weight_basis_names_which_factor_discounted_a_signal() -> None:
 
 def test_the_round_is_recorded() -> None:
     """Later rounds refine earlier ones, so a value without its round is not comparable."""
-    fused = fuse_axis({"raw_16k": [_bucket(0.0, {"a": 0.3})]}, weights={}, aggregator="mean", round_index=2)
+    fused = fuse_axis({"raw": [_bucket(0.0, {"a": 0.3})]}, weights={}, aggregator="mean", round_index=2)
     assert fused[0]["round"] == 2
 
 

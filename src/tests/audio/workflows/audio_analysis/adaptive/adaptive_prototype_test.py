@@ -29,7 +29,7 @@ def _vote(source: str, scope: str = "file", speaks: bool = True, round_idx: int 
         axis="speech_presence",
         bucket=BK,
         source=source,
-        stream="raw_16k",
+        stream="raw",
         scope=scope,
         round=round_idx,
         payload={"speaks": speaks, "native_confidence": None},
@@ -42,7 +42,7 @@ def test_region_scope_shadows_same_source_file_scope() -> None:
     store.add_vote(_vote("model_a"))
     store.add_vote(_vote("model_b"))
     store.add_vote(_vote("model_a", scope="region:r2_x", speaks=False, round_idx=2))
-    active = store.active_votes("raw_16k", "speech_presence", BK)
+    active = store.active_votes("raw", "speech_presence", BK)
     assert active["model_a"]["speaks"] is False  # region vote won
     assert active["model_b"]["speaks"] is True  # unrelated model untouched
     shadowed = [v for v in store._votes.values() if v.status == "shadowed"]
@@ -58,7 +58,7 @@ def test_attenuated_votes_stay_in_aggregation() -> None:
     store = VoteStore()
     store.add_vote(_vote("asr_x"))
     records = store.attenuate_source_in_bucket(
-        "raw_16k",
+        "raw",
         BK,
         "asr_x",
         corroboration=0.0,
@@ -68,8 +68,8 @@ def test_attenuated_votes_stay_in_aggregation() -> None:
         measured_on=("speech_presence", BK),
     )
     assert len(records) == 1
-    assert "asr_x" in store.active_votes("raw_16k", "speech_presence", BK)
-    assert store.evidence_weights("raw_16k", "speech_presence", BK)["asr_x"] > 0.0
+    assert "asr_x" in store.active_votes("raw", "speech_presence", BK)
+    assert store.evidence_weights("raw", "speech_presence", BK)["asr_x"] > 0.0
     assert all(v.status == "active" for v in store._votes.values())
 
 
@@ -316,7 +316,7 @@ def test_from_harvests_in_process_integration() -> None:
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
     harvest = PassHarvest(
-        pass_label="raw_16k",
+        perturbation="raw",
         speech_presence_evidence=[
             {"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}, "m2": {"covered_fraction": 0.0}}}
         ],
@@ -324,8 +324,8 @@ def test_from_harvests_in_process_integration() -> None:
         asr_votes=[],
         quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.3, "_raw": {}}},
     )
-    store = VoteStore.from_harvests({"raw_16k": harvest})
-    votes = store.active_votes("raw_16k", "speech_presence", (0.0, 0.5))
+    store = VoteStore.from_harvests({"raw": harvest})
+    votes = store.active_votes("raw", "speech_presence", (0.0, 0.5))
     assert set(votes) == {"m1", "m2"}
     row = store.reaggregate_bucket("speech_presence", (0.0, 0.5), aggregator="min")
     # ``p_voice`` is a probability about the world and still comes from ``speaks``: two voters
@@ -333,11 +333,11 @@ def test_from_harvests_in_process_integration() -> None:
     # voter reported any doubt of its own — no signal spoke, which is not the same as agreement.
     assert row["p_voice"] == pytest.approx(0.5)
     assert row["uncertainty"] is None
-    assert store.row_meta[("raw_16k", "speech_presence", (0.0, 0.5))]["quality_snr"] == 0.3
+    assert store.row_meta[("raw", "speech_presence", (0.0, 0.5))]["quality_snr"] == 0.3
     ident = store.reaggregate_bucket("speaker", (0.0, 1.0), aggregator="min")
     assert ident["uncertainty"] == pytest.approx(
         fuse_axis(
-            {"raw_16k": [{"start": 0.0, "end": 1.0, "votes": store.active_votes("raw_16k", "speaker", (0.0, 1.0))}]},
+            {"raw": [{"start": 0.0, "end": 1.0, "votes": store.active_votes("raw", "speaker", (0.0, 1.0))}]},
             weights={},
         )[0]["uncertainty"]
     ), "the store's fold is fuse_axis, not a second implementation of it"
@@ -356,7 +356,7 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
     harvest = PassHarvest(
-        pass_label="raw_16k",
+        perturbation="raw",
         speech_presence_evidence=[
             {"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}},
             {"start": 0.5, "end": 1.0, "evidence": {"m1": {"covered_fraction": 0.0}}},
@@ -365,11 +365,11 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
         asr_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
         grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
-    summary = {"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "a" * 64}}}
+    summary = {"passes": {"raw": {"duration_s": 1.0, "audio_signature": "a" * 64}}}
 
     log = run_adaptive_loop(
         tmp_path,
-        harvests={"raw_16k": harvest},
+        harvests={"raw": harvest},
         summary=summary,
         max_rounds=1,
         aggregator="min",
@@ -395,7 +395,7 @@ def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
     harvest = PassHarvest(
-        pass_label="raw_16k",
+        perturbation="raw",
         speech_presence_evidence=[
             {
                 "start": 0.0,
@@ -407,8 +407,8 @@ def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
     )
     run_adaptive_loop(
         tmp_path,
-        harvests={"raw_16k": harvest},
-        summary={"passes": {"raw_16k": {"duration_s": 1.0, "audio_signature": "b" * 64}}},
+        harvests={"raw": harvest},
+        summary={"passes": {"raw": {"duration_s": 1.0, "audio_signature": "b" * 64}}},
         max_rounds=1,
         aggregator="min",
     )
@@ -426,19 +426,19 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
 
     def _h(label: str) -> PassHarvest:
         return PassHarvest(
-            pass_label=label,
+            perturbation=label,
             speech_presence_evidence=[{"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}}],
             grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
         )
 
     log = run_adaptive_loop(
         tmp_path,
-        harvests={"raw_16k": _h("raw_16k"), "enhanced_16k": _h("enhanced_16k")},
+        harvests={"raw": _h("raw"), "enhanced": _h("enhanced")},
         # enhancement failed, so the summary has no duration_s for it
         summary={
             "passes": {
-                "raw_16k": {"duration_s": 1.0, "audio_signature": "c" * 64},
-                "enhanced_16k": {"status": "failed"},
+                "raw": {"duration_s": 1.0, "audio_signature": "c" * 64},
+                "enhanced": {"status": "failed"},
             }
         },
         max_rounds=1,
@@ -525,7 +525,7 @@ def _p2_ctx(
                     axis="speech_presence",
                     bucket=bk,
                     source=source,
-                    stream="raw_16k",
+                    stream="raw",
                     scope="file",
                     round=1,
                     payload=payload,
@@ -540,7 +540,7 @@ def _p2_ctx(
         def axis_rows(self, axis: str) -> list[dict[str, Any]]:
             return rows if axis == "speech_presence" else []
 
-    return {"state": _State(), "store": store, "policy": policy or load_policy(), "passes": ["raw_16k"], "_rows": rows}
+    return {"state": _State(), "store": store, "policy": policy or load_policy(), "passes": ["raw"], "_rows": rows}
 
 
 def _p2_region() -> dict[str, Any]:
@@ -682,7 +682,7 @@ def test_p2_execute_replaces_votes_at_region_scope(monkeypatch: pytest.MonkeyPat
         ),
     )
 
-    result = iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+    result = iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw"}}, ctx)
     assert result["votes_added"] == 2
     votes = [v for v in ctx["store"]._votes.values() if v.source == "frame_posterior_fine"]
     assert len(votes) == 2
@@ -711,7 +711,7 @@ def test_p2_execute_emits_overlap_posterior_for_i4_to_reuse(monkeypatch: pytest.
         "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
         lambda wav, span: ({"frame_hop": 0.1, "speech": [0.8] * 20, "overlap": [0.42] * 20, "n_classes": 7}, None),
     )
-    iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+    iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw"}}, ctx)
     assert rows[0]["overlap_posterior"] == pytest.approx(0.42, abs=1e-3)
 
 
@@ -731,7 +731,7 @@ def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch)
         lambda wav, span: (None, "posteriors_failed (boom)"),
     )
     with pytest.raises(RuntimeError, match="posteriors_failed"):
-        iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw_16k"}}, ctx)
+        iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw"}}, ctx)
 
 
 def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> None:
@@ -754,7 +754,7 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
             axis="speech_presence",
             bucket=(0.0, 0.5),
             source="m1",
-            stream="raw_16k",
+            stream="raw",
             scope="file",
             round=1,
             payload={"speaks": True},
@@ -766,7 +766,7 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
         words=[],
         store=store,
         state=state,
-        stream="raw_16k",
+        stream="raw",
         policy=load_policy(),
         generated_from_round=1,
         corroboration_provenance={"evidence_pool": [], "evidence_pool_rejected": {}},
@@ -786,14 +786,14 @@ def _parity_fixture() -> tuple[Any, dict[str, list[dict[str, Any]]]]:
 
     def _harvest(label: str, value: float) -> PassHarvest:
         return PassHarvest(
-            pass_label=label,
+            perturbation=label,
             speaker_votes=[
                 {"start": 0.0, "end": 1.0, "votes": {"diar_a": {"same_label_uncertainty": value}}},
                 {"start": 1.0, "end": 2.0, "votes": {"diar_a": {"same_label_uncertainty": 1.0 - value}}},
             ],
         )
 
-    harvests = {"raw_16k": _harvest("raw_16k", 0.2), "enhanced_16k": _harvest("enhanced_16k", 0.6)}
+    harvests = {"raw": _harvest("raw", 0.2), "enhanced": _harvest("enhanced", 0.6)}
     store = VoteStore.from_harvests(harvests)
     rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={})
     return store, {"speaker": rows}
@@ -820,7 +820,7 @@ def test_a_signal_the_ingest_drops_is_reported_as_a_mismatch() -> None:
     on one path, filed it as a measurement on the other — and no test or artifact said so.
     """
     store, fused = _parity_fixture()
-    dropped = [v for v in store.votes_for("enhanced_16k", "speaker", (0.0, 1.0))]
+    dropped = [v for v in store.votes_for("enhanced", "speaker", (0.0, 1.0))]
     assert dropped, "fixture must have an enhanced-pass vote to drop"
     for vote in dropped:
         vote.status = "shadowed"

@@ -30,7 +30,7 @@ from senselab.audio.workflows.audio_analysis.speech_presence_link import directe
 
 pytest.importorskip("pandas")
 
-STREAM = "raw_16k"
+STREAM = "raw"
 CLAIMANT = "openai/whisper-large-v3"
 QUIET = bucket_key(0.0, 0.5)  # the frame voter reports near-silence; the ASR claims speech
 LOUD = bucket_key(0.5, 1.0)  # everyone agrees — nothing is withdrawn here

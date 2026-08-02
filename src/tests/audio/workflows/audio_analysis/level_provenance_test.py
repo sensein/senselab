@@ -234,7 +234,7 @@ def test_stage_context_defaults_to_unmodified_variant() -> None:
     """A context that never mentions a variant still attributes its results."""
     from senselab.audio.workflows.audio_analysis.stage_context import StageContext
 
-    ctx = StageContext(pass_label="raw_16k", audio_signature="deadbeef")
+    ctx = StageContext(perturbation="raw", audio_signature="deadbeef")
     assert ctx.variant == "unmodified"
     assert ctx.variant_gain_db == pytest.approx(0.0)
 
@@ -244,7 +244,7 @@ def test_stage_context_records_variant_and_gain_in_provenance() -> None:
     from senselab.audio.workflows.audio_analysis.stage_context import StageContext
 
     ctx = StageContext(
-        pass_label="suppressed_16k",
+        perturbation="suppressed_16k",
         audio_signature="cafe",
         variant="foreground_suppressed",
         variant_gain_db=8.0,
@@ -259,7 +259,7 @@ def test_stage_context_rejects_unknown_variant() -> None:
     from senselab.audio.workflows.audio_analysis.stage_context import StageContext
 
     with pytest.raises(ValueError, match="variant"):
-        StageContext(pass_label="p", audio_signature="s", variant="enhanced")
+        StageContext(perturbation="p", audio_signature="s", variant="enhanced")
 
 
 def test_stage_versions_declare_the_new_stages() -> None:

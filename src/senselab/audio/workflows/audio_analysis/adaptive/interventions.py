@@ -44,7 +44,8 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     resolve_asr_result,
     whisper_bucket_avg_logprob,
 )
-from senselab.audio.workflows.audio_analysis.layout import pass_dir
+from senselab.audio.workflows.audio_analysis.layout import perturbation_dir
+from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 from senselab.audio.workflows.audio_analysis.speech_presence_link import directed_presence_vote
 from senselab.audio.workflows.audio_analysis.support import evidence_weight_from_corroboration
 
@@ -52,13 +53,13 @@ from senselab.audio.workflows.audio_analysis.support import evidence_weight_from
 
 
 def load_outcomes_dir(run_dir: Path, stream: str, task_dir: str) -> dict[str, dict[str, Any]]:
-    """Load ``pass_dir(run_dir, stream)/<task_dir>/*.json`` keyed by provenance.model_id.
+    """Load ``perturbation_dir(run_dir, stream)/<task_dir>/*.json`` keyed by provenance.model_id.
 
     Each payload records its ``_file_stem`` — alignment files are keyed by the
     *aligner* model id in provenance but written under the parent ASR model's
     safe filename, so cross-task joins go through the stem.
 
-    The path comes from :func:`~senselab.audio.workflows.audio_analysis.layout.pass_dir` rather
+    The path comes from :func:`~senselab.audio.workflows.audio_analysis.layout.perturbation_dir` rather
     than being rebuilt here. It was rebuilt as ``run_dir / stream / task_dir`` until the pass
     outputs moved under ``L1/``, at which point this returned ``{}`` on every run — silently, so
     the ASR fusion path received nothing and emitted an empty transcript with no error anywhere.
@@ -69,7 +70,7 @@ def load_outcomes_dir(run_dir: Path, stream: str, task_dir: str) -> dict[str, di
     drift above survived to the point of producing a transcript with no words.
     """
     out: dict[str, dict[str, Any]] = {}
-    d = pass_dir(run_dir, stream) / task_dir
+    d = perturbation_dir(run_dir, stream) / task_dir
     if not d.is_dir():
         print(
             f"warn: no {task_dir!r} outcomes directory for stream {stream!r} at {d} — "
@@ -93,7 +94,7 @@ def load_alignments_matched(
 ) -> dict[str, dict[str, Any]]:
     """Alignment payloads re-keyed by their parent **ASR** model id (stem join)."""
     by_stem: dict[str, dict[str, Any]] = {}
-    d = pass_dir(run_dir, stream) / "alignment"
+    d = perturbation_dir(run_dir, stream) / "alignment"
     if d.is_dir():
         for f in sorted(d.glob("*.json")):
             try:
@@ -166,7 +167,7 @@ def _action_stream(region: dict[str, Any] | None) -> str:
     rule has asked, the raw pass is the default because it is the one that was recorded rather than
     produced.
     """
-    return str((region or {}).get("action_stream") or "raw_16k")
+    return str((region or {}).get("action_stream") or IDENTITY_NAME)
 
 
 def _mean(vals: list[float | None]) -> float | None:
@@ -251,18 +252,19 @@ def _s1_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
 def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     region = cand["region"]
     scores = _election_scores(region, ctx)
-    elected = max(scores, key=lambda s: (scores[s]["total"], s == "raw_16k"))
+    # Ties go to the identity: it is the recording, and a transform has to *earn* the election.
+    elected = max(scores, key=lambda s: (scores[s]["total"], s == IDENTITY_NAME))
     guard_fired = False
-    if elected != "raw_16k":
-        # Enhancement-artifact guard (degraded): reject the enhanced stream when
-        # it claims speech text where the raw stream has none *and* raw speech_presence
-        # is confidently silent — SepFormer can synthesize speech-like energy.
-        raw_text = _region_text(ctx, "raw_16k", region)
+    if elected != IDENTITY_NAME:
+        # Transform-artifact guard (degraded): reject a transformed stream when it claims speech
+        # text where the recording itself has none *and* the recording's speech_presence is
+        # confidently silent — enhancement can synthesize speech-like energy.
+        raw_text = _region_text(ctx, IDENTITY_NAME, region)
         enh_text = _region_text(ctx, elected, region)
-        raw_pres = _mean([scores["raw_16k"]["speech_presence_conf"]]) if "raw_16k" in scores else None
+        raw_pres = _mean([scores[IDENTITY_NAME]["speech_presence_conf"]]) if IDENTITY_NAME in scores else None
         if enh_text and not raw_text and (raw_pres is not None and raw_pres < 0.2):
             guard_fired = True
-            elected = "raw_16k"
+            elected = IDENTITY_NAME
     election = {
         "region_id": region["region_id"],
         "scores": scores,
@@ -690,9 +692,9 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     stream = trigger["stream"]
     wav, reason = get_stream_wav(ctx, stream)
     stream_fallback = None
-    if wav is None and stream != "raw_16k":
+    if wav is None and stream != IDENTITY_NAME:
         stream_fallback = reason
-        stream = "raw_16k"
+        stream = IDENTITY_NAME
         wav, reason = get_stream_wav(ctx, stream)
     if wav is None:
         raise RuntimeError(f"audio_unavailable: {reason}")
@@ -792,7 +794,7 @@ def _get_identity_repair(ctx: dict[str, Any], stream: str) -> dict[str, Any] | N
     from senselab.audio.workflows.audio_analysis.adaptive.identity_repair import repair_identity
 
     window_embeddings: dict[str, list[dict[str, Any]]] = {}
-    emb_dir = pass_dir(ctx["run_dir"], stream) / "embeddings"
+    emb_dir = perturbation_dir(ctx["run_dir"], stream) / "embeddings"
     if emb_dir.is_dir():
         for f in sorted(emb_dir.glob("*.json")):
             try:
@@ -1169,9 +1171,9 @@ def _i4_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     # apply the posterior to every stream's rows over the span.
     wav, reason = get_stream_wav(ctx, stream)
     source_stream, stream_fallback = stream, None
-    if wav is None and stream != "raw_16k":
+    if wav is None and stream != IDENTITY_NAME:
         stream_fallback = reason
-        source_stream = "raw_16k"
+        source_stream = IDENTITY_NAME
         wav, reason = get_stream_wav(ctx, source_stream)
     if wav is None:
         raise RuntimeError(f"audio_unavailable: {reason}")

@@ -110,9 +110,9 @@ def _track_name(axis: str) -> str:
     return f"uncertainty__{axis}"
 
 
-def _signal_track_name(pass_label: str, signal: str) -> str:
+def _signal_track_name(perturbation: str, signal: str) -> str:
     """Per-pass, per-signal evidence track: ``<pass>__signal__<signal>``."""
-    return f"{pass_label}__signal__{re.sub(r'[^A-Za-z0-9_.-]+', '_', signal)}"
+    return f"{perturbation}__signal__{re.sub(r'[^A-Za-z0-9_.-]+', '_', signal)}"
 
 
 SOURCE_LABEL_VALUES = ("speech", "people", "machine", "environment", "unavailable")
@@ -128,12 +128,12 @@ def _build_source_labels_xml(track_name: str) -> str:
     return f'<Labels name="{track_name}" toName="audio">\n{inner}\n</Labels>'
 
 
-def _scene_track_name(pass_label: str, kind: str) -> str:
+def _scene_track_name(perturbation: str, kind: str) -> str:
     """Scene tracks: ``<pass>__presence__quality`` / ``<pass>__presence__sources``.
 
     Per pass because they carry per-pass *measurements*, not an axis fold.
     """
-    return f"{pass_label}__presence__{kind}"
+    return f"{perturbation}__presence__{kind}"
 
 
 QUALITY_DISPLAY_FOLD = {
@@ -210,11 +210,11 @@ def attach_uncertainty_tracks_to_ls(
     tasks_list = ls_tasks if isinstance(ls_tasks, list) else [ls_tasks]
     by_pass_task: dict[str, dict[str, Any]] = {}
     for t in tasks_list:
-        pass_label = (t.get("data") or {}).get("pass") or "raw_16k"
-        by_pass_task[pass_label] = t
+        perturbation = (t.get("data") or {}).get("pass") or "raw"
+        by_pass_task[perturbation] = t
     # An axis belongs to the recording, not to a transform of it, so its regions attach once —
     # to the as-recorded task.
-    axis_task = by_pass_task.get("raw_16k") or (tasks_list[0] if tasks_list else None)
+    axis_task = by_pass_task.get("raw") or (tasks_list[0] if tasks_list else None)
 
     blocks: list[str] = []
     presence_rows = fused_axes["speech_presence"].rows if "speech_presence" in fused_axes else []
@@ -222,13 +222,13 @@ def attach_uncertainty_tracks_to_ls(
         blocks.append(_build_labels_xml(_track_name(axis)))
         if axis == "asr":
             blocks.append(_build_textarea_xml(_track_name(axis)))
-    for pass_label, by_signal in sorted((signal_results_by_pass or {}).items()):
+    for perturbation, by_signal in sorted((signal_results_by_pass or {}).items()):
         for signal in sorted(by_signal):
-            blocks.append(_build_labels_xml(_signal_track_name(pass_label, signal)))
+            blocks.append(_build_labels_xml(_signal_track_name(perturbation, signal)))
         if any(_quality_degradation(m) is not None for _s, _e, m in _scene_rows(by_signal, presence_rows)):
-            blocks.append(_build_labels_xml(_scene_track_name(pass_label, "quality")))
+            blocks.append(_build_labels_xml(_scene_track_name(perturbation, "quality")))
         if "sound_sources" in by_signal:
-            blocks.append(_build_source_labels_xml(_scene_track_name(pass_label, "sources")))
+            blocks.append(_build_source_labels_xml(_scene_track_name(perturbation, "sources")))
 
     if "</View>" in ls_config:
         ls_config = ls_config.replace("</View>", "\n".join(blocks) + "\n</View>", 1)
@@ -275,13 +275,13 @@ def attach_uncertainty_tracks_to_ls(
                         }
                     )
 
-    for pass_label, by_signal in sorted((signal_results_by_pass or {}).items()):
-        target_task = by_pass_task.get(pass_label)
+    for perturbation, by_signal in sorted((signal_results_by_pass or {}).items()):
+        target_task = by_pass_task.get(perturbation)
         if target_task is None or not target_task.get("predictions"):
             continue
         result_list = target_task["predictions"][0].setdefault("result", [])
         for signal in sorted(by_signal):
-            track = _signal_track_name(pass_label, signal)
+            track = _signal_track_name(perturbation, signal)
             for row_idx, signal_row in enumerate(by_signal[signal].rows):
                 result_list.append(
                     {
@@ -296,7 +296,7 @@ def attach_uncertainty_tracks_to_ls(
                         },
                     }
                 )
-        _attach_scene_rows(result_list, pass_label, by_signal, presence_rows)
+        _attach_scene_rows(result_list, perturbation, by_signal, presence_rows)
 
     return ls_tasks, ls_config
 
@@ -324,12 +324,12 @@ def _scene_rows(
 
 def _attach_scene_rows(
     result_list: list[dict[str, Any]],
-    pass_label: str,
+    perturbation: str,
     by_signal: Mapping[str, SignalResult],
     presence_rows: Sequence[Mapping[str, Any]],
 ) -> None:
     """Attach the per-pass quality + source stripes from L1 scene rows."""
-    q_track = _scene_track_name(pass_label, "quality")
+    q_track = _scene_track_name(perturbation, "quality")
     for row_idx, (start, end, merged) in enumerate(_scene_rows(by_signal, presence_rows)):
         degradation = _quality_degradation(merged)
         if degradation is None:
@@ -351,7 +351,7 @@ def _attach_scene_rows(
     sources = by_signal.get("sound_sources")
     if sources is None:
         return
-    s_track = _scene_track_name(pass_label, "sources")
+    s_track = _scene_track_name(perturbation, "sources")
     for row_idx, source_row in enumerate(sources.rows):
         label = source_row.measurement.get("src_dominant") or source_row.measurement.get("dominant")
         if not isinstance(label, str):
@@ -516,7 +516,7 @@ def _asr_to_ls(result: Any, prefix: str, full_duration: float) -> list[dict[str,
 
 def build_labelstudio_task(
     audio_uri: str,
-    pass_label: str,
+    perturbation: str,
     duration_s: float,
     pass_summary: dict[str, Any],
     ast_win_length: float,
@@ -537,7 +537,7 @@ def build_labelstudio_task(
     dia = pass_summary.get("diarization", {})
     for model_id, model_block in (dia.get("by_model") or {}).items():
         if model_block.get("status") == "ok":
-            from_name = f"{pass_label}__diarization__{safe_model_id(model_id)}"
+            from_name = f"{perturbation}__diarization__{safe_model_id(model_id)}"
             regions.extend(_diarization_to_ls(model_block.get("result"), from_name))
 
     ast_block = pass_summary.get("ast", {})
@@ -545,7 +545,7 @@ def build_labelstudio_task(
         regions.extend(
             _classification_to_ls(
                 ast_block.get("result"),
-                f"{pass_label}__ast",
+                f"{perturbation}__ast",
                 win_length=ast_win_length,
                 hop_length=ast_hop_length,
             )
@@ -556,7 +556,7 @@ def build_labelstudio_task(
         regions.extend(
             _classification_to_ls(
                 yam_block.get("result"),
-                f"{pass_label}__yamnet",
+                f"{perturbation}__yamnet",
                 win_length=yamnet_win_length,
                 hop_length=yamnet_hop_length,
             )
@@ -568,7 +568,7 @@ def build_labelstudio_task(
     for model_id, model_block in (asr.get("by_model") or {}).items():
         if model_block.get("status") != "ok":
             continue
-        from_name = f"{pass_label}__asr__{safe_model_id(model_id)}"
+        from_name = f"{perturbation}__asr__{safe_model_id(model_id)}"
         # Three-case branch:
         # (a) ASR with native timestamps  -> use the ASR result for per-segment regions.
         # (b) ASR text-only + successful alignment -> use the alignment result.
@@ -590,12 +590,12 @@ def build_labelstudio_task(
     return {
         "data": {
             "audio": audio_uri,
-            "pass": pass_label,
+            "pass": perturbation,
             "duration_s": duration_s,
         },
         "predictions": [
             {
-                "model_version": f"senselab-analyze:{pass_label}",
+                "model_version": f"senselab-analyze:{perturbation}",
                 "score": 1.0,
                 "result": regions,
             }
@@ -616,7 +616,7 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
     parts: list[str] = ["<View>", '  <Audio name="audio" value="$audio"/>']
     seen_label_sets: dict[str, list[str]] = {}
 
-    for pass_label, pass_summary in summary.get("passes", {}).items():
+    for perturbation, pass_summary in summary.get("passes", {}).items():
         # Diarization tracks: one per model, with that model's discovered speaker labels
         dia_by_model = (pass_summary.get("diarization") or {}).get("by_model") or {}
         for model_id, model_block in dia_by_model.items():
@@ -625,28 +625,28 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
             speakers = sorted({str(getattr(seg, "speaker", "?")) for seg in (model_block.get("result", [[]])[0] or [])})
             if not speakers:
                 speakers = ["SPEAKER_00", "SPEAKER_01"]
-            seen_label_sets[f"{pass_label}__diarization__{safe_model_id(model_id)}"] = speakers
+            seen_label_sets[f"{perturbation}__diarization__{safe_model_id(model_id)}"] = speakers
 
         # AST scene labels
         ast = pass_summary.get("ast") or {}
         if ast.get("status") == "ok":
             labels = _collect_classification_labels(ast.get("result"))
             if labels:
-                seen_label_sets[f"{pass_label}__ast"] = sorted(labels)
+                seen_label_sets[f"{perturbation}__ast"] = sorted(labels)
 
         # YAMNet scene labels
         yam = pass_summary.get("yamnet") or {}
         if yam.get("status") == "ok":
             labels = _collect_classification_labels(yam.get("result"))
             if labels:
-                seen_label_sets[f"{pass_label}__yamnet"] = sorted(labels)
+                seen_label_sets[f"{perturbation}__yamnet"] = sorted(labels)
 
         # ASR: each model gets its own TextArea
         asr_by_model = (pass_summary.get("asr") or {}).get("by_model") or {}
         for model_id, model_block in asr_by_model.items():
             if model_block.get("status") != "ok":
                 continue
-            from_name = f"{pass_label}__asr__{safe_model_id(model_id)}"
+            from_name = f"{perturbation}__asr__{safe_model_id(model_id)}"
             parts.append(
                 f'  <TextArea name="{from_name}" toName="audio" perRegion="true" '
                 f'editable="true" placeholder="ASR transcript ({model_id})"/>'
@@ -680,12 +680,12 @@ def _collect_classification_labels(result: Any) -> set[str]:  # noqa: ANN401
 MASK_STATE_VALUES = ("target_free", "target_active", "indeterminate")
 
 
-def _mask_track_name(pass_label: str) -> str:
-    return f"{pass_label}__background__mask"
+def _mask_track_name(perturbation: str) -> str:
+    return f"{perturbation}__background__mask"
 
 
-def _speaker_track_name(pass_label: str) -> str:
-    return f"{pass_label}__speaker__speech_presence"
+def _speaker_track_name(perturbation: str) -> str:
+    return f"{perturbation}__speaker__speech_presence"
 
 
 def attach_scene_context_tracks_to_ls(
@@ -694,7 +694,7 @@ def attach_scene_context_tracks_to_ls(
     ls_config: str,
     mask_rows: Sequence[Mapping[str, Any]] = (),
     speaker_rows: Sequence[Mapping[str, Any]] = (),
-    pass_label: str = "raw_16k",
+    perturbation: str = "raw",
 ) -> tuple[Any, str]:
     """Append the background-mask and per-speaker speech_presence tracks to the LS bundle.
 
@@ -710,7 +710,7 @@ def attach_scene_context_tracks_to_ls(
         ls_config: Existing LS config XML.
         mask_rows: Background-mask rows with ``start``, ``end``, ``state``.
         speaker_rows: Per-speaker speech_presence rows.
-        pass_label: Pass the tracks describe. Both are properties of the recording as
+        perturbation: Pass the tracks describe. Both are properties of the recording as
             captured, so they ride on the unmodified pass.
 
     Returns:
@@ -720,7 +720,7 @@ def attach_scene_context_tracks_to_ls(
     if not mask_rows and not speaker_rows:
         return ls_tasks, ls_config
 
-    mask_track, speaker_track = _mask_track_name(pass_label), _speaker_track_name(pass_label)
+    mask_track, speaker_track = _mask_track_name(perturbation), _speaker_track_name(perturbation)
     blocks: list[str] = []
     if mask_rows:
         inner = "\n".join(f'  <Label value="{v}"/>' for v in MASK_STATE_VALUES)
@@ -743,7 +743,7 @@ def attach_scene_context_tracks_to_ls(
 
     tasks_list = ls_tasks if isinstance(ls_tasks, list) else [ls_tasks]
     target = next(
-        (t for t in tasks_list if ((t.get("data") or {}).get("pass") or "raw_16k") == pass_label),
+        (t for t in tasks_list if ((t.get("data") or {}).get("pass") or "raw") == perturbation),
         tasks_list[0] if tasks_list else None,
     )
     if target is None or not target.get("predictions"):

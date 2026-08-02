@@ -23,6 +23,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Mapping
 
+from senselab.audio.workflows.audio_analysis.perturbations import TRANSFORMS
 from senselab.utils.tasks.cached_inference import (
     CACHE_SCHEMA_VERSION,
     align_cache_key,
@@ -37,13 +38,13 @@ if TYPE_CHECKING:  # pragma: no cover — avoids a runtime torch+transformers im
 __all__ = ["STAGE_VERSIONS", "PassPlan", "StageContext", "stage_code_version"]
 
 
-_VARIANT_NAMES: Final[tuple[str, ...]] = ("unmodified", "speech_enhanced", "foreground_suppressed")
-"""Recognized audio variants.
+_VARIANT_NAMES: Final[tuple[str, ...]] = tuple(TRANSFORMS)
+"""Recognized audio variants — exactly the declared perturbation transforms.
 
-Duplicated from ``level.py`` rather than imported: ``level`` pulls numpy, and this module
-is deliberately importable without it (see the module docstring on the ``DeviceType``
-TYPE_CHECKING guard). Three strings are cheaper than the coupling.
-"""
+The variant *is* the transform the perturbation declared, so there is one list rather than two
+that have to agree. ``level.py`` carries its own copy for import weight (it pulls numpy; this
+module is deliberately importable without it), and ``perturbations`` is a plain dataclass module
+with no such cost, so this one can be the real thing."""
 
 
 STAGE_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
@@ -109,7 +110,7 @@ class StageContext:
     """Run environment shared by every stage of one pass.
 
     Attributes:
-        pass_label: e.g. ``"raw_16k"`` / ``"enhanced_16k"``.
+        perturbation: e.g. ``"raw"`` / ``"enhanced"``.
         audio_signature: From ``cached_inference.audio_signature`` — the join key
             between ``summary.json`` and each cache entry's provenance.
         device: Compute device, or ``None`` for automatic selection.
@@ -138,7 +139,7 @@ class StageContext:
         downstream of the gain.
     """
 
-    pass_label: str
+    perturbation: str
     audio_signature: str
     device: DeviceType | None = None
     cache_dir: Path | None = None
@@ -211,7 +212,7 @@ class StageContext:
             "params": dict(params),
             "audio_signature": self.audio_signature,
             "audio_source": self.audio_source,
-            "pass": self.pass_label,
+            "pass": self.perturbation,
             "variant": self.variant,
             "variant_gain_db": self.variant_gain_db,
             "device": self.device_label,

@@ -75,7 +75,7 @@ PROBE = "probe.py"
     [
         ("L1/signals/brouhaha.parquet", "L1/signals/**", True),
         ("L1/signals", "L1/signals/**", True),
-        ("L1/raw_16k/signals/brouhaha.parquet", "L1/signals/**", False),
+        ("L1/raw/signals/brouhaha.parquet", "L1/signals/**", False),
         ("L2/round/0/estimates/asr.parquet", "L2/round/*/estimates/*.parquet", True),
         ("L2/round0/uncertainty/asr.parquet", "L2/round/*/estimates/*.parquet", False),
         ("final/timeline.png", "final/timeline.png", True),
@@ -281,13 +281,33 @@ def test_an_l1_stage_writing_into_l2_is_flagged() -> None:
 
 
 def test_l2_reading_l1_outside_signals_is_flagged() -> None:
-    """``L1/signals/`` is the only thing L2 reads from L1."""
-    reaching = "def f(run_dir, stream):\n    return sorted((pass_dir(run_dir, stream) / 'asr').glob('*.json'))\n"
-    findings = check_source(PROBE, reaching, STAGE_CONTRACTS["L2_ROUND"])
-    assert [(f.op, f.pattern) for f in findings] == [("read", "L1/*/asr/*.json")]
+    """``L1/signals/`` is the only thing L2 reads from L1.
 
-    permitted = "def f(run_dir):\n    return sorted((evidence_dir(run_dir) / 'signals').glob('*.parquet'))\n"
+    ``perturbation_dir`` denotes two places — the identity's directory and any other
+    perturbation's — so one such read is flagged twice, once per place it could have reached
+    into. An access conforms only when *every* path it could name is permitted.
+    """
+    reaching = (
+        "def f(run_dir, stream):\n    return sorted((perturbation_dir(run_dir, stream) / 'asr').glob('*.json'))\n"
+    )
+    findings = check_source(PROBE, reaching, STAGE_CONTRACTS["L2_ROUND"])
+    assert [(f.op, f.pattern) for f in findings] == [
+        ("read", "L1/raw/asr/*.json"),
+        ("read", "L1/perturbation/*/asr/*.json"),
+    ]
+
+    permitted = "def f(run_dir):\n    return sorted(signals_dir(run_dir).glob('*.parquet'))\n"
     assert check_source(PROBE, permitted, STAGE_CONTRACTS["L2_ROUND"]) == []
+
+
+def test_an_l1_stage_writing_into_its_perturbation_directory_conforms() -> None:
+    """Either branch of ``perturbation_dir`` is L1's own tree, and neither is a violation.
+
+    The disjunction has to cut both ways or it is not a check: if reaching into a perturbation
+    directory from L2 fails on both branches, writing into one from L1 has to pass on both.
+    """
+    writing = "def f(run_dir, name):\n    (perturbation_dir(run_dir, name) / 'asr' / 'whisper.json').write_text('{}')\n"
+    assert check_source(PROBE, writing, STAGE_CONTRACTS["L1"]) == []
 
 
 def test_the_resolver_chases_an_alias_chain_to_a_fixpoint() -> None:
@@ -421,7 +441,7 @@ def test_a_per_pass_axis_table_is_flagged(tmp_path: Path) -> None:
     _write_table(
         tmp_path / "L1" / "signals" / "speaker.parquet",
         {
-            "perturbation": ["raw_16k"],
+            "perturbation": ["raw"],
             "signal": ["speaker"],
             "start": [0.0],
             "end": [0.5],
@@ -497,14 +517,14 @@ def test_a_fold_indexed_by_a_perturbation_is_flagged(tmp_path: Path) -> None:
     _conformant_run(tmp_path)
     _write_table(
         tmp_path / "L2" / "round" / "0" / "estimates" / "asr.parquet",
-        {"start": [0.0], "end": [0.5], "uncertainty": [0.4], "stream": ["raw_16k"]},
+        {"start": [0.0], "end": [0.5], "uncertainty": [0.4], "stream": ["raw"]},
     )
     problems = artifact_violations(tmp_path)
     assert any("is not indexed by perturbation" in p and "['stream']" in p for p in problems), problems
 
     _write_table(
         tmp_path / "L2" / "round" / "0" / "estimates" / "asr.parquet",
-        {"start": [0.0], "end": [0.5], "uncertainty": [0.4], "contributing_passes": [["raw_16k"]]},
+        {"start": [0.0], "end": [0.5], "uncertainty": [0.4], "contributing_passes": [["raw"]]},
     )
     assert artifact_violations(tmp_path) == [], "contributing_passes is provenance about an input, not an index"
 
@@ -519,31 +539,31 @@ def _current_run_tree(root: Path) -> None:
     """
     (root / "triage.json").write_text("{}")
     (root / "L1").mkdir(parents=True, exist_ok=True)
-    (root / "L1" / "passes.json").write_text("{}")
+    (root / "L1" / "perturbations.json").write_text("{}")
     (root / "L1" / "signals.png").write_bytes(b"")
     (root / "L1" / "timeline.png").write_bytes(b"")
+    # One file per signal, accumulating across every perturbation — L2's only input from L1.
     _write_table(
-        root / "L1" / "stability" / "diar_a.parquet",
-        {"start": [0.0], "end": [0.5], "signal": ["diar_a"], "pass_a": ["raw_16k"], "pass_b": ["enhanced_16k"]},
+        root / "L1" / "signals" / "brouhaha_snr_db.parquet",
+        {
+            "perturbation": ["raw", "enhanced"],
+            "start": [0.0, 0.0],
+            "end": [0.5, 0.5],
+            "signal": ["brouhaha_snr_db"] * 2,
+        },
     )
-    (root / "L1" / "stability" / "signals.json").write_text("{}")
-    for label in ("raw_16k", "enhanced_16k"):
-        pass_dir = root / "L1" / label
+    for label, pert_dir in (("raw", root / "L1" / "raw"), ("enhanced", root / "L1" / "perturbation" / "enhanced")):
         for name in ("ast.json", "yamnet.json", "features.json", "ppgs.json", "scene_agreement.json", "pii.json"):
-            pass_dir.mkdir(parents=True, exist_ok=True)
-            (pass_dir / name).write_text("{}")
+            pert_dir.mkdir(parents=True, exist_ok=True)
+            (pert_dir / name).write_text("{}")
         for task, model in (("asr", "whisper"), ("alignment", "whisper"), ("diarization", "pyannote")):
-            (pass_dir / task).mkdir(parents=True, exist_ok=True)
-            (pass_dir / task / f"{model}.json").write_text("{}")
-        (pass_dir / "embeddings").mkdir(parents=True, exist_ok=True)
-        (pass_dir / "embeddings" / "ecapa.json").write_text("{}")
-        _write_table(pass_dir / "features" / "opensmile.parquet", {"start": [0.0], "end": [0.5]})
-        _write_table(
-            pass_dir / "signals" / "brouhaha_snr_db.parquet",
-            {"start": [0.0], "end": [0.5], "signal": ["brouhaha_snr_db"]},
-        )
-        _write_table(pass_dir / "noise_floor.parquet", {"band_hz": [125.0]})
-        _write_table(pass_dir / "background_sources.parquet", {"band_hz": [125.0]})
+            (pert_dir / task).mkdir(parents=True, exist_ok=True)
+            (pert_dir / task / f"{model}.json").write_text("{}")
+        (pert_dir / "embeddings").mkdir(parents=True, exist_ok=True)
+        (pert_dir / "embeddings" / "ecapa.json").write_text("{}")
+        _write_table(pert_dir / "features" / "opensmile.parquet", {"start": [0.0], "end": [0.5]})
+        _write_table(pert_dir / "noise_floor.parquet", {"band_hz": [125.0]})
+        _write_table(pert_dir / "background_sources.parquet", {"band_hz": [125.0]})
     belief = root / "L2"
     belief.mkdir(parents=True, exist_ok=True)
     _write_table(belief / "background_mask.parquet", {"start": [0.0], "end": [0.5], "uncertainty": [0.2]})
@@ -570,8 +590,13 @@ def _current_run_tree(root: Path) -> None:
     for axis in ("speech_presence", "speaker", "asr"):
         _write_table(
             belief / "round0" / "votes" / f"{axis}.parquet",
-            {"start": [0.0], "end": [0.5], "source": ["diar_a"], "stream": ["raw_16k"]},
+            {"start": [0.0], "end": [0.5], "source": ["diar_a"], "stream": ["raw"]},
         )
+    # Cross-perturbation stability: a round derivative now, still in the 0-based fusion tree.
+    _write_table(
+        belief / "round0" / "stability" / "diar_a.parquet",
+        {"start": [0.0], "end": [0.5], "signal": ["diar_a"], "pass_a": ["raw"], "pass_b": ["enhanced"]},
+    )
     for index in (1, 2):
         for axis in ("speech_presence", "speaker", "asr"):
             _write_table(
@@ -607,11 +632,18 @@ def test_the_current_run_tree_is_flagged_and_fully_accounted_for(tmp_path: Path)
     _current_run_tree(tmp_path)
     raw = artifact_violations(tmp_path)
     assert len(raw) > 20, "the current layout is not D-17's, and the guard must say so"
-    assert any(p.startswith("L1/stability/") for p in raw)
-    assert any(p.startswith("L1/raw_16k/") for p in raw)
     assert any(p.startswith("L2/round0/") for p in raw)
     assert any(p.startswith("L2/rounds/") for p in raw)
     assert any(p.startswith("triage.json") for p in raw)
+
+    # What step 1 closed: the perturbation tree, its register, and the accumulated signal files
+    # are declared, so they no longer appear. ``L1/stability/`` is gone from the tree entirely —
+    # a cross-perturbation fold is a round derivative, and its run-level mean is on every fused
+    # row's ``weight_basis`` rather than in a second file.
+    assert not any(p.startswith("L1/stability/") for p in raw)
+    assert not any(p.startswith("L1/perturbations.json") for p in raw)
+    assert not any(p.startswith("L1/signals/") for p in raw)
+    assert not any(p.startswith("L1/raw/asr") for p in raw)
 
     assert unwaived_artifacts(raw) == []
 

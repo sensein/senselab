@@ -1,13 +1,18 @@
 """Parquet writers for the level-1 evidence artifacts.
 
-``write_signal_parquet`` writes one file per ``(pass, signal)`` — long format, one row per
-bucket, the measurement carried as JSON in the tool's own units. Units, window, hop, model and
-revision travel in ``schema.metadata`` so a reader can interpret the number without knowing which
-module produced it.
+``write_signal_parquet`` writes **one file per signal**, accumulating across raw and every
+perturbation — long format, one row per ``(perturbation, bucket)``, the measurement carried as
+JSON in the tool's own units. Units, window, hop, model and revision travel per row so a reader
+can interpret the number without knowing which module produced it.
 
-There is deliberately no axis writer here. An axis is a fold across signals *and* passes, so it
-cannot be indexed by pass; the fused axes are written by
-``fuse.write_final_uncertainty`` to ``L2/round<N>/uncertainty/<axis>.parquet``.
+One file per ``(pass, signal)`` was the earlier form, and it made the perturbation an index on
+the *location*. That is what let a consumer open one perturbation's directory and get an answer
+that looked like the signal's, when the signal's answer is the whole set of perturbations it was
+measured under. Here the perturbation is a column, so asking for one of them is something the
+reader has to say out loud.
+
+There is deliberately no axis writer here. An axis is a fold across signals *and* perturbations,
+so it can be indexed by neither; the fused axes are written by ``fuse.write_final_uncertainty``.
 """
 
 from __future__ import annotations
@@ -23,21 +28,46 @@ from senselab.audio.workflows.audio_analysis.types import SignalResult
 
 
 def write_signal_parquet(
-    signal_result: SignalResult,
+    signal_results: Sequence[SignalResult],
     dest: Path,
     provenance: dict[str, Any] | None = None,
 ) -> Path:
-    """Serialize a ``SignalResult`` to parquet at ``dest``.
+    """Serialize one signal's rows, across every perturbation, to parquet at ``dest``.
 
-    Returns the destination path. Creates parent directories. Always writes the file — even when
-    ``signal_result.rows`` is empty — so "the signal ran and found nothing" stays distinguishable
-    from "the signal never ran".
+    Args:
+        signal_results: Every ``SignalResult`` for one signal — one per perturbation that
+            measured it. Order is irrelevant; rows are sorted by ``(perturbation, start, end)``
+            so the file is byte-reproducible.
+        dest: ``L1/signals/<signal>.parquet``.
+        provenance: Run-level provenance merged onto each result's own.
+
+    Returns:
+        The destination path.
+
+    Raises:
+        ValueError: If the results do not all describe the same signal. One file per signal is
+            the artifact's identity; silently writing a mixture would make the file's name a lie.
+
+    Always writes the file — even with no rows — so "the signal ran and found nothing" stays
+    distinguishable from "the signal never ran".
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    rows = signal_result.rows
+    names = {result.signal for result in signal_results}
+    if len(names) > 1:
+        raise ValueError(f"one file per signal, but got {sorted(names)}")
+
+    flat = sorted(
+        ((result.perturbation, row) for result in signal_results for row in result.rows),
+        key=lambda pair: (pair[0], pair[1].start, pair[1].end),
+    )
+    rows = [row for _, row in flat]
 
     columns: dict[str, pa.Array] = {
+        # The perturbation is a *dimension of the measurement*: this file is what the signal
+        # reported across every transform of the recording, and a row that could not say which
+        # one it came from would make the set unusable as evidence.
+        "perturbation": pa.array([name for name, _ in flat], type=pa.string()),
         "start": pa.array([r.start for r in rows], type=pa.float64()),
         "end": pa.array([r.end for r in rows], type=pa.float64()),
         "signal": pa.array([r.signal for r in rows], type=pa.string()),
@@ -55,9 +85,12 @@ def write_signal_parquet(
     }
     table = pa.table(columns)
 
-    merged = {**signal_result.provenance, **(provenance or {})}
-    merged.setdefault("pass", signal_result.pass_label)
-    merged.setdefault("signal", signal_result.signal)
+    merged: dict[str, Any] = {
+        "signal": next(iter(names), None),
+        # Per perturbation, because each measured under its own model revision and window.
+        "per_perturbation": {result.perturbation: dict(result.provenance) for result in signal_results},
+        **(provenance or {}),
+    }
     table = table.replace_schema_metadata({b"signal_provenance": json.dumps(merged, default=str).encode("utf-8")})
 
     pq.write_table(table, dest)
@@ -85,8 +118,8 @@ def write_linked_votes(
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     rows: list[tuple[str, float, float, str, str, str]] = []
-    for pass_label in sorted(buckets_by_pass):
-        for bucket in buckets_by_pass[pass_label] or []:
+    for perturbation in sorted(buckets_by_pass):
+        for bucket in buckets_by_pass[perturbation] or []:
             start, end = float(bucket.get("start", 0.0)), float(bucket.get("end", 0.0))
             for source, payload in (bucket.get("votes") or {}).items():
                 rows.append(
@@ -95,7 +128,7 @@ def write_linked_votes(
                         start,
                         end,
                         str(source),
-                        str(pass_label),
+                        str(perturbation),
                         json.dumps(payload, default=str, separators=(",", ":")),
                     )
                 )
@@ -103,14 +136,16 @@ def write_linked_votes(
             # re-ingest sees the same context the in-process path does.
             for name in ("frame_dispersion",):
                 if isinstance(bucket.get(name), (int, float)):
-                    rows.append((axis, start, end, f"__{name}__", str(pass_label), json.dumps({"value": bucket[name]})))
+                    rows.append(
+                        (axis, start, end, f"__{name}__", str(perturbation), json.dumps({"value": bucket[name]}))
+                    )
     table = pa.table(
         {
             "axis": pa.array([r[0] for r in rows], type=pa.string()),
             "start": pa.array([r[1] for r in rows], type=pa.float64()),
             "end": pa.array([r[2] for r in rows], type=pa.float64()),
             "source": pa.array([r[3] for r in rows], type=pa.string()),
-            "pass_label": pa.array([r[4] for r in rows], type=pa.string()),
+            "perturbation": pa.array([r[4] for r in rows], type=pa.string()),
             "payload": pa.array([r[5] for r in rows], type=pa.string()),
         }
     )
@@ -125,11 +160,21 @@ def write_signal_stability(
     dest: Path,
     provenance: dict[str, Any] | None = None,
 ) -> Path:
-    """Write ``L1/stability/<signal>.parquet`` — one signal's cross-pass disagreement per bucket.
+    """Write one signal's cross-perturbation disagreement per bucket, as a **round derivative**.
 
-    Perturbation stability is a property of a *signal*, not of an axis: the two passes are the
-    same recording under a transform, so a signal that answers differently between them has not
-    earned its weight. Keyed by signal for that reason, rather than by a third pseudo-pass.
+    Perturbation stability is a property of a *signal*: the perturbations are the same recording
+    under a transform, so a signal that answers differently between them has not earned its
+    weight. Keyed by signal for that reason, rather than by a pseudo-perturbation.
+
+    It sits under the round rather than under ``L1/`` because relating two perturbations is a
+    fold over an input dimension, which is L2's by exactly the argument that makes an axis L2's.
+    Each row carries ``pass_a`` and ``pass_b`` — two values of one dimension, which is what a
+    fold looks like and what no L1 artifact may be.
+
+    Its run-level summary has no file at all. ``L1/stability/signals.json`` used to hold the mean
+    that sets each signal's fusion weight, and that same number is on every fused row as
+    ``weight_basis[signal]["stability"]``: one quantity in two places is one quantity that can
+    disagree with itself.
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)

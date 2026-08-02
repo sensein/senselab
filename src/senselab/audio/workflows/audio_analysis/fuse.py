@@ -150,7 +150,7 @@ def fuse_axis(
     """Fuse one axis's per-signal uncertainties across signals and passes.
 
     Args:
-        buckets_by_pass: ``{pass_label → per-bucket harvested votes}``.
+        buckets_by_pass: ``{perturbation → per-bucket harvested votes}``.
         weights: ``{signal → measured weight}``. A signal absent from the mapping carries
             full weight: a factor never measured must not act as a discount.
         aggregator: How to combine the weighted per-signal uncertainties into
@@ -178,13 +178,13 @@ def fuse_axis(
     collected: dict[tuple[float, float], dict[str, list[float]]] = {}
     passes_seen: dict[tuple[float, float], set[str]] = {}
 
-    for pass_label in sorted(buckets_by_pass):
-        for bucket in buckets_by_pass[pass_label] or []:
+    for perturbation in sorted(buckets_by_pass):
+        for bucket in buckets_by_pass[perturbation] or []:
             if not isinstance(bucket, Mapping):
                 continue
             key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
             slot = collected.setdefault(key, {})
-            passes_seen.setdefault(key, set()).add(str(pass_label))
+            passes_seen.setdefault(key, set()).add(str(perturbation))
             for signal, value in per_signal_uncertainty(bucket).items():
                 slot.setdefault(signal, []).append(value)
 
@@ -573,7 +573,7 @@ def fuse_axes(
     fact that would need re-finding every time the set changes.
 
     Args:
-        buckets_by_axis: ``{axis → {pass_label → L1 buckets}}``.
+        buckets_by_axis: ``{axis → {perturbation → L1 buckets}}``.
         weights_by_axis: ``{axis → {signal → measured weight}}``.
         aggregator: Aggregator for ``triage_score``.
         weight_basis_by_axis: ``{axis → {signal → {factor → value}}}``.
@@ -596,7 +596,7 @@ def fuse_axes(
         couple_axes: Whether the previous round's *other* axes are inputs. Setting both this to
             ``False`` and ``derive`` to ``None`` runs several axes fully isolated, which has to stay
             reachable: a coupling that cannot be turned off cannot be evaluated against anything.
-        remeasure: ``(axis, regions, rows_by_axis) → {pass_label: buckets} | None`` (D-10). Called
+        remeasure: ``(axis, regions, rows_by_axis) → {perturbation: buckets} | None`` (D-10). Called
             once per axis per round with the regions that axis has left unsettled, so a round may
             *re-measure* rather than only re-weight — re-weighting can only redistribute evidence
             already gathered, and a region no re-weighting resolves is exactly the one that needs a
@@ -907,7 +907,7 @@ def fuse_rounds(
     undone once for non-convergence detection.
 
     Args:
-        buckets_by_pass: ``{pass_label → L1 buckets}``.
+        buckets_by_pass: ``{perturbation → L1 buckets}``.
         weights: Round-0 per-signal weights.
         aggregator: Aggregator for ``triage_score``.
         weight_basis: Per-signal factor breakdown.
@@ -951,7 +951,7 @@ def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]
     """
     from senselab.audio.workflows.audio_analysis.joint import per_speaker_presence, speaker_spans_from_votes
 
-    harvest = harvests.get("raw_16k") or next(iter(harvests.values()), None)
+    harvest = harvests.get("raw") or next(iter(harvests.values()), None)
     if harvest is None:
         return None
     spans = speaker_spans_from_votes(getattr(harvest, "speaker_votes", None) or [])
@@ -1093,7 +1093,7 @@ def write_final_uncertainty(
 
     Args:
         out_dir: Run directory.
-        harvests: ``{pass_label → PassHarvest}``.
+        harvests: ``{perturbation → PassHarvest}``.
         weights_by_axis: ``{axis → {signal → measured weight}}``.
         aggregator: Aggregator for the ``triage_score`` fold.
         weight_basis_by_axis: ``{axis → {signal → {factor → value}}}``, so a discounted signal

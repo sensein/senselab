@@ -23,7 +23,7 @@ from senselab.audio.workflows.audio_analysis.support import (
 )
 
 BK = bucket_key(0.0, 0.5)
-STREAM = "raw_16k"
+STREAM = "raw"
 
 
 def _frame_vote(bucket: tuple[float, float], p_speech: float) -> Vote:

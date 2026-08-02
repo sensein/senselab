@@ -22,7 +22,7 @@ def _row(start: float, axis: str, u: float) -> dict:
         "variability": 0.0,
         "triage_score": u,
         "contributing_signals": ["m"],
-        "contributing_passes": ["raw_16k", "enhanced_16k"],
+        "contributing_passes": ["raw", "enhanced"],
         "signal_weights": {"m": 1.0},
         "weight_basis": {"m": {}},
         "round": 0,
@@ -71,7 +71,7 @@ def test_build_aligned_timeline_plot_writes_png(tmp_path: Path) -> None:
                 ],
             },
         }
-        for pl in ("raw_16k", "enhanced_16k")
+        for pl in ("raw", "enhanced")
     }
 
     out = build_aligned_timeline_plot(

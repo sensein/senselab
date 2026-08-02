@@ -32,6 +32,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
+from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
 from senselab.utils.data_structures.logging import logger
 
@@ -120,14 +121,14 @@ def _cluster_speakers_by_embedding(
     seed_groups: dict[tuple[str, str], list[tuple[tuple[str, str, str], np.ndarray]]] = {}
     other_items: list[tuple[tuple[str, str, str], np.ndarray]] = []
 
-    for pass_label, detail in detail_by_pass.items():
+    for perturbation, detail in detail_by_pass.items():
         per_window_emb_by_model = detail.get("per_window_embeddings") or {}
         diar_by_model = detail.get("diar_by_model") or {}
         if not per_window_emb_by_model or not any(per_window_emb_by_model.values()):
             for m, segs in diar_by_model.items():
                 for seg in segs:
                     spk = str(_seg_attr(seg, "speaker") or "?")
-                    out.setdefault((pass_label, m, spk), spk)
+                    out.setdefault((perturbation, m, spk), spk)
             continue
         emb_model = sorted(per_window_emb_by_model)[0]
         windows = per_window_emb_by_model[emb_model]
@@ -141,12 +142,12 @@ def _cluster_speakers_by_embedding(
             for label, label_seg_list in label_segs.items():
                 mean_emb = _mean_window_embedding_over_segments(label_seg_list, windows)
                 if mean_emb is None or mean_emb.size == 0:
-                    out[(pass_label, m, label)] = label
+                    out[(perturbation, m, label)] = label
                     continue
                 if is_seed:
-                    seed_groups.setdefault((pass_label, m), []).append(((pass_label, m, label), mean_emb))
+                    seed_groups.setdefault((perturbation, m), []).append(((perturbation, m, label), mean_emb))
                 else:
-                    other_items.append(((pass_label, m, label), mean_emb))
+                    other_items.append(((perturbation, m, label), mean_emb))
 
     out.update(
         assign_unified_clusters_with_seed_phase(
@@ -230,9 +231,14 @@ def _adjacent_window_cosine_series(
     return timestamps, distances
 
 
-def _pass_color_alpha(pass_label: str) -> tuple[float, str]:
-    """Lighter alpha + dashed for enhanced; full alpha + solid for raw."""
-    if pass_label == "raw_16k":
+def _pass_color_alpha(perturbation: str) -> tuple[float, str]:
+    """Full alpha + solid for the recording; lighter + dashed for any transform of it.
+
+    Two styles for an open set, deliberately: the distinction the eye needs is "the recording"
+    against "something done to it", and a palette indexed by perturbation name would have to
+    grow a colour every time one is added.
+    """
+    if perturbation == IDENTITY_NAME:
         return 0.85, "-"
     return 0.55, "--"
 
@@ -356,7 +362,7 @@ def build_aligned_timeline_plot(
         stability_by_signal: ``{signal → per-bucket stability rows}`` from
             ``L1/stability/<signal>.parquet``. Drawn as its own strip — that is what the two
             passes actually bought, in the form the weights actually use it.
-        detail_by_pass: ``{pass_label → {"diar_by_model": {..}, "asr_by_model": {..},
+        detail_by_pass: ``{perturbation → {"diar_by_model": {..}, "asr_by_model": {..},
             "per_window_embeddings": {emb_model → [WindowEmbedding, ...]},
             "ppg": {"per_frame_phonemes": [..], "frame_hop": float}}}``.
             Populates the four detail rows (diar / embedding / PPG / ASR). ``None``
@@ -388,7 +394,7 @@ def build_aligned_timeline_plot(
     has_spec = audio_waveform is not None and np.asarray(audio_waveform).size > 1
     # Pass labels actually present in the detail bundle — any pass beyond the
     # default raw/enhanced pair shows up in every detail row. Sorted so that
-    # "raw_16k" sorts before "enhanced_16k" by convention but extension passes
+    # "raw" sorts before "enhanced" by convention but extension passes
     # land in alphabetical order after.
     pass_order: list[str] = sorted(detail_by_pass.keys()) if detail_by_pass else []
     # Size the diar / PPG / ASR detail rows by stripe count (each stripe is one
@@ -649,22 +655,22 @@ def build_aligned_timeline_plot(
                 cluster_color[cluster_id] = diar_cmap(len(cluster_color) % 10)
 
         diar_stripes: list[tuple[str, str, list[Any]]] = []
-        for pass_label in pass_order:
-            for m, segs in (detail_by_pass.get(pass_label) or {}).get("diar_by_model", {}).items():
-                diar_stripes.append((pass_label, m, segs))
+        for perturbation in pass_order:
+            for m, segs in (detail_by_pass.get(perturbation) or {}).get("diar_by_model", {}).items():
+                diar_stripes.append((perturbation, m, segs))
         if diar_stripes:
-            for k, (pass_label, m, segs) in enumerate(diar_stripes):
+            for k, (perturbation, m, segs) in enumerate(diar_stripes):
                 y = k
                 # Distinguish pass via edge color (raw=solid black; enhanced=grey),
                 # not via fill — fill is reserved for speaker speaker.
-                edge = "black" if pass_label == "raw_16k" else "0.4"
+                edge = "black" if perturbation == IDENTITY_NAME else "0.4"
                 for seg in segs:
                     s = _seg_attr(seg, "start")
                     e = _seg_attr(seg, "end")
                     spk_raw = str(_seg_attr(seg, "speaker") or "?")
                     if s is None or e is None:
                         continue
-                    cluster_id = cluster_map.get((pass_label, m, spk_raw), spk_raw)
+                    cluster_id = cluster_map.get((perturbation, m, spk_raw), spk_raw)
                     color_ = cluster_color.get(cluster_id)
                     if color_ is None:
                         # Fallback for labels not seen during clustering.
@@ -711,18 +717,18 @@ def build_aligned_timeline_plot(
             "speechbrain/spkrec-resnet-voxceleb": "#8c564b",
         }
         any_emb_plotted = False
-        for pass_label in pass_order:
-            detail = detail_by_pass.get(pass_label) or {}
+        for perturbation in pass_order:
+            detail = detail_by_pass.get(perturbation) or {}
             for emb_model, windows in (detail.get("per_window_embeddings") or {}).items():
                 if not windows:
                     continue
                 centers, dists = _adjacent_window_cosine_series(windows)
                 if centers.size == 0 or np.all(np.isnan(dists)):
                     continue
-                alpha, style = _pass_color_alpha(pass_label)
+                alpha, style = _pass_color_alpha(perturbation)
                 emb_color = emb_palette.get(emb_model, "#7f7f7f")
                 short = emb_model.split("/")[-1].replace("spkrec-", "")
-                label = f"{'raw' if pass_label == 'raw_16k' else 'enh'} {short}"
+                label = f"{perturbation} {short}"
                 ax_emb.plot(centers, dists, color=emb_color, linestyle=style, linewidth=1.0, alpha=alpha, label=label)
                 any_emb_plotted = True
         ax_emb.set_ylim(0, 1)
@@ -738,8 +744,8 @@ def build_aligned_timeline_plot(
         if ppg_row is not None:
             ax_ppg = axes[ppg_row]
             ppg_stripes: list[tuple[str, list[tuple[float, float, str]]]] = []
-            for pass_label in pass_order:
-                ppg_detail = (detail_by_pass.get(pass_label) or {}).get("ppg") or {}
+            for perturbation in pass_order:
+                ppg_detail = (detail_by_pass.get(perturbation) or {}).get("ppg") or {}
                 per_frame = ppg_detail.get("per_frame_phonemes") or []
                 frame_hop = float(ppg_detail.get("frame_hop") or 0.0)
                 if per_frame and frame_hop > 0:
@@ -752,12 +758,12 @@ def build_aligned_timeline_plot(
                             cur = per_frame[f]
                             cur_start = f
                     runs.append((cur_start * frame_hop, len(per_frame) * frame_hop, cur))
-                    ppg_stripes.append((pass_label, runs))
+                    ppg_stripes.append((perturbation, runs))
 
             if ppg_stripes:
-                for k, (pass_label, runs) in enumerate(ppg_stripes):
+                for k, (perturbation, runs) in enumerate(ppg_stripes):
                     y = k
-                    alpha, _ = _pass_color_alpha(pass_label)
+                    alpha, _ = _pass_color_alpha(perturbation)
                     for rs, re_, phon in runs:
                         is_silent = phon == "<silent>"
                         ax_ppg.barh(
@@ -795,15 +801,15 @@ def build_aligned_timeline_plot(
         # Optional lookup is what let the key collision with the axis row go unnoticed.
         ax_asr = axes[row_idx["asr_words"]]
         asr_stripes: list[tuple[str, str, Any]] = []
-        for pass_label in pass_order:
-            for m, asr_result in (detail_by_pass.get(pass_label) or {}).get("asr_by_model", {}).items():
-                asr_stripes.append((pass_label, m, asr_result))
+        for perturbation in pass_order:
+            for m, asr_result in (detail_by_pass.get(perturbation) or {}).get("asr_by_model", {}).items():
+                asr_stripes.append((perturbation, m, asr_result))
         asr_palette = list(mcolors.TABLEAU_COLORS.values())
         if asr_stripes:
-            for k, (pass_label, m, asr_result) in enumerate(asr_stripes):
+            for k, (perturbation, m, asr_result) in enumerate(asr_stripes):
                 y = k
                 stripe_color = asr_palette[k % len(asr_palette)]
-                alpha, _ = _pass_color_alpha(pass_label)
+                alpha, _ = _pass_color_alpha(perturbation)
                 tokens = list(_iter_leaf_tokens(asr_result))
                 if tokens:
                     for cs, ce, ct in tokens:

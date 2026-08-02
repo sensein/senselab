@@ -132,7 +132,7 @@ def test_detect_pii_in_pass_populates_detection_confidence(monkeypatch: pytest.M
     monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
 
     report = detect_pii_in_pass(
-        pass_label="raw_16k",
+        perturbation="raw",
         asr_resolved={
             "whisper": [{"text": "Hi I am John Doe."}],
             "canary": [{"text": "Hi I am John Doe."}],
@@ -159,7 +159,7 @@ def test_detect_pii_in_pass_detection_confidence_none_when_subprocess_finds_no_d
     monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
 
     report = detect_pii_in_pass(
-        pass_label="raw_16k",
+        perturbation="raw",
         asr_resolved={"whisper": [{"text": "Some text."}]},
     )
     assert report.detector_used is None
@@ -177,7 +177,7 @@ def test_detect_pii_in_pass_detection_confidence_none_when_subprocess_raises(
     monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
 
     report = detect_pii_in_pass(
-        pass_label="raw_16k",
+        perturbation="raw",
         asr_resolved={"whisper": [{"text": "Some text."}]},
     )
     assert report.detector_used is None
@@ -196,7 +196,7 @@ def test_detect_pii_in_pass_detection_confidence_zero_when_detectors_ran_clean(
     monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
 
     report = detect_pii_in_pass(
-        pass_label="raw_16k",
+        perturbation="raw",
         asr_resolved={"whisper": [{"text": "Some text."}]},
     )
     assert report.detector_used == "presidio,gliner"
@@ -214,7 +214,7 @@ def test_detect_pii_in_pass_disabled_path_yields_none_confidence(
     monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
 
     report = detect_pii_in_pass(
-        pass_label="raw_16k",
+        perturbation="raw",
         asr_resolved={"whisper": [{"text": "Some text."}]},
         detectors=[],
     )

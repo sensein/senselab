@@ -154,10 +154,24 @@ from senselab.audio.workflows.audio_analysis.labelstudio import (
 )
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
-    evidence_dir,
     final_dir,
-    pass_dir,
-    stability_dir,
+    perturbation_dir,
+    signals_dir,
+)
+from senselab.audio.workflows.audio_analysis.perturbations import (
+    Perturbation,
+)
+from senselab.audio.workflows.audio_analysis.perturbations import (
+    apply as apply_perturbation,
+)
+from senselab.audio.workflows.audio_analysis.perturbations import (
+    identity as identity_perturbation,
+)
+from senselab.audio.workflows.audio_analysis.perturbations import (
+    speech_enhancement as speech_enhancement_perturbation,
+)
+from senselab.audio.workflows.audio_analysis.perturbations import (
+    write_register as write_perturbation_register,
 )
 from senselab.audio.workflows.audio_analysis.stage_context import STAGE_VERSIONS, PassPlan, StageContext
 from senselab.audio.workflows.audio_analysis.stages import (
@@ -1110,30 +1124,17 @@ def _policy_overrides(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _write_run_summary(run_dir: Path, summaries: dict[str, Any]) -> None:
-    """Write ``final/summary.json`` (the deliverable) and ``L1/passes.json`` (the evidence index).
+    """Write ``final/summary.json`` — the run provenance, and nothing L1 already holds.
 
-    ``summaries["passes"]`` is 4.8 MB of per-pass model output that already exists on disk under
-    ``L1/<pass>/``. Inlining it made ``final/`` the copy the pipeline read back — the adaptive
-    loop and the timeline both reconstructed a finished run from it — which is a deliverable
-    being used as an intermediate. With two copies of the same bytes nothing enforced the
-    boundary: a consumer reaching into ``final/`` got exactly what one reading ``L1/`` would.
+    ``summaries["passes"]`` is 4.8 MB of per-perturbation model output that already exists on
+    disk under ``L1/``. Inlining it made ``final/`` the copy the pipeline read back — the
+    adaptive loop and the timeline both reconstructed a finished run from it — which is a
+    deliverable being used as an intermediate. With two copies of the same bytes nothing enforced
+    the boundary: a consumer reaching into ``final/`` got exactly what one reading ``L1/`` would.
 
-    So the deliverable keeps only the converged state and the run provenance, and the small
-    index every later stage actually needs (duration, audio signature, input path) is written
-    where evidence lives.
+    The small index every later stage actually needs (duration, audio signature, source path)
+    lives in ``L1/perturbations.json``, beside the declaration of what each perturbation *is*.
     """
-    passes = summaries.get("passes") or {}
-    write_json(
-        evidence_dir(run_dir) / "passes.json",
-        {
-            "input_audio": summaries.get("input_audio"),
-            "passes": {
-                label: {k: block.get(k) for k in ("duration_s", "audio_signature", "status") if k in block}
-                for label, block in passes.items()
-                if isinstance(block, dict)
-            },
-        },
-    )
     write_json(
         final_dir(run_dir) / "summary.json",
         {k: v for k, v in summaries.items() if k != "passes"},
@@ -1141,7 +1142,7 @@ def _write_run_summary(run_dir: Path, summaries: dict[str, Any]) -> None:
 
 
 def _stage_context(
-    label: str,
+    perturbation: Perturbation,
     audio: Audio,
     args: argparse.Namespace,
     *,
@@ -1150,22 +1151,24 @@ def _stage_context(
     cache_dir: Path | None,
     senselab_ver: str,
 ) -> StageContext:
-    """Build the per-pass `StageContext` from CLI args.
+    """Build the per-perturbation `StageContext` from CLI args.
 
-    The audio variant is derived from the pass label rather than passed separately, so a
-    new pass cannot forget to declare what it is looking at. Stages that are only
-    meaningful on unmodified audio -- the background mask, most importantly -- gate on it,
-    and a context that silently claimed ``unmodified`` for the enhanced pass would defeat
-    that gate while every unit test still passed.
+    The variant is the perturbation's **declared** transform. It used to be
+    ``"speech_enhanced" if label.startswith("enhanced")`` — inferring what had been done to the
+    audio from how the directory happened to be spelled, so a perturbation named
+    ``enhanced_lowpass`` would have claimed to be plain enhancement and one named ``sepformer``
+    would have claimed to be unmodified. Stages that are only meaningful on unmodified audio (the
+    background mask, most importantly) gate on this, so a wrong answer here defeats the gate with
+    every unit test still passing.
     """
-    variant = "speech_enhanced" if label.startswith("enhanced") else "unmodified"
     return StageContext(
-        pass_label=label,
+        perturbation=perturbation.name,
         audio_signature=audio_signature(audio),
-        variant=variant,
+        variant=perturbation.transform,
+        variant_gain_db=perturbation.gain_db,
         device=device,
         cache_dir=cache_dir,
-        out_dir=pass_dir(out_dir, label),
+        out_dir=perturbation_dir(out_dir, perturbation.name),
         run_dir=out_dir,
         audio_source=str(args.audio.resolve()),
         senselab_ver=senselab_ver,
@@ -1251,49 +1254,52 @@ def main(argv: list[str] | None = None) -> int:
         and triage["needs_enhancement"] is not False  # unknown SNR ⇒ conservative: run it
     )
 
-    pass_audio: dict[str, Audio] = {"raw_16k": audio_16k}
-
-    pass_plan = _pass_plan(args)
-    summaries["passes"]["raw_16k"] = run_pass(
-        audio_16k,
-        _stage_context(
-            "raw_16k",
-            audio_16k,
-            args,
-            device=device,
-            out_dir=run_dir,
-            cache_dir=cache_dir,
-            senselab_ver=senselab_ver,
-        ),
-        pass_plan,
-    )
-
+    # The perturbation set, declared once and then only iterated. Adding a third — a second
+    # enhancement model, a band-limited variant — is one more entry here and no edit anywhere
+    # downstream: the register below tells every later stage what the set was, the loop applies
+    # each in turn, and nothing counts them.
+    perturbations: list[Perturbation] = [identity_perturbation()]
     if run_enhanced_pass:
-        print("\n=== Enhancing audio (this loads the enhancement model)... ===")
-        try:
-            enhanced = enhance_audios(
-                [audio_16k],
-                model=model_for_task(args.enhancement_model, task="enhancement"),
-                device=device,
-            )[0]
-            pass_audio["enhanced_16k"] = enhanced
-            summaries["passes"]["enhanced_16k"] = run_pass(
-                enhanced,
-                _stage_context(
-                    "enhanced_16k",
-                    enhanced,
-                    args,
-                    device=device,
-                    out_dir=run_dir,
-                    cache_dir=cache_dir,
-                    senselab_ver=senselab_ver,
-                ),
-                pass_plan,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(f"Enhancement failed: {exc!r}", file=sys.stderr)
-            summaries["passes"]["enhanced_16k"] = {"status": "failed", "error": repr(exc)}
+        perturbations.append(speech_enhancement_perturbation(args.enhancement_model))
 
+    pass_audio: dict[str, Audio] = {}
+    pass_plan = _pass_plan(args)
+    for perturbation in perturbations:
+        if not perturbation.is_identity:
+            print(f"\n=== Applying perturbation {perturbation.name!r} ({perturbation.transform})... ===")
+        try:
+            audio = apply_perturbation(perturbation, audio_16k, device=device)
+        except Exception as exc:  # noqa: BLE001
+            print(f"Perturbation {perturbation.name!r} failed: {exc!r}", file=sys.stderr)
+            summaries["passes"][perturbation.name] = {"status": "failed", "error": repr(exc)}
+            continue
+        pass_audio[perturbation.name] = audio
+        summaries["passes"][perturbation.name] = run_pass(
+            audio,
+            _stage_context(
+                perturbation,
+                audio,
+                args,
+                device=device,
+                out_dir=run_dir,
+                cache_dir=cache_dir,
+                senselab_ver=senselab_ver,
+            ),
+            pass_plan,
+        )
+
+    # The register, written once, by L1, after the set has actually been measured: it carries
+    # both the declaration (name, transform, parameters) and what running each one produced.
+    write_perturbation_register(
+        run_dir,
+        perturbations,
+        source_audio=str(args.audio.resolve()),
+        measured={
+            name: {k: block.get(k) for k in ("duration_s", "audio_signature", "status") if k in block}
+            for name, block in summaries["passes"].items()
+            if isinstance(block, dict)
+        },
+    )
     _write_run_summary(run_dir, summaries)
 
     # Hierarchical Label Studio export — one LS task per audio variant, each
@@ -1303,7 +1309,7 @@ def main(argv: list[str] | None = None) -> int:
     ls_tasks = [
         build_labelstudio_task(
             audio_uri=audio_uri,
-            pass_label=pass_label,
+            perturbation=perturbation,
             duration_s=pass_summary["duration_s"],
             pass_summary=pass_summary,
             ast_win_length=args.ast_win_length,
@@ -1311,7 +1317,7 @@ def main(argv: list[str] | None = None) -> int:
             yamnet_win_length=args.yamnet_win_length,
             yamnet_hop_length=args.yamnet_hop_length,
         )
-        for pass_label, pass_summary in summaries["passes"].items()
+        for perturbation, pass_summary in summaries["passes"].items()
         if isinstance(pass_summary, dict) and "duration_s" in pass_summary
     ]
     config_xml = build_labelstudio_config(summaries)
@@ -1458,24 +1464,30 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 sys.exit(2)
 
-        # L1 evidence: one parquet per (pass, signal), in native units. Nothing under L1/ is
-        # named for an axis — an axis is a fold across signals and passes, and the fused axes are
-        # written by the L2 block below to L2/round<N>/uncertainty/<axis>.parquet.
+        # L1 evidence: one parquet per signal, accumulating across raw and every perturbation,
+        # in native units. Nothing under L1/ is named for an axis — an axis is a fold across
+        # signals and perturbations — and nothing under L1/signals/ is keyed by *where* it sat:
+        # the perturbation is a column, so a reader asking for one has to say so.
         run_provenance = {
             "schema_version": _CACHE_SCHEMA_VERSION,
             "stage_versions": dict(STAGE_VERSIONS),
             "senselab_version": senselab_ver,
         }
-        for pass_label, by_signal in signal_results_by_pass.items():
+        results_by_signal: dict[str, list[Any]] = {}
+        for _perturbation, by_signal in signal_results_by_pass.items():
             for signal, result in by_signal.items():
-                write_signal_parquet(
-                    result,
-                    pass_dir(run_dir, pass_label) / "signals" / f"{safe_model_id(signal)}.parquet",
-                    provenance=run_provenance,
-                )
+                results_by_signal.setdefault(signal, []).append(result)
+        for signal, results in results_by_signal.items():
+            write_signal_parquet(
+                results,
+                signals_dir(run_dir) / f"{safe_model_id(signal)}.parquet",
+                provenance=run_provenance,
+            )
 
-        # Perturbation stability, keyed by signal — the property it is a property of. The
-        # run-level number in signals.json is exactly what sets each signal's fusion weight.
+        # Perturbation stability, keyed by signal — the property it is a property of — and a
+        # *round derivative*, not evidence: relating two perturbations is a fold over an input
+        # dimension, which is L2's by the same argument that makes an axis L2's. The run-level
+        # mean has no file: it is already on every fused row as weight_basis[signal]["stability"].
         per_bucket_stability: dict[str, list[dict[str, Any]]] = {}
         if stability_evidence:
             for _axis, by_signal_rows in (stability_evidence.get("per_bucket") or {}).items():
@@ -1484,13 +1496,9 @@ def main(argv: list[str] | None = None) -> int:
             for signal, rows in per_bucket_stability.items():
                 write_signal_stability(
                     sorted(rows, key=lambda r: (r["start"], r["end"])),
-                    stability_dir(run_dir) / f"{safe_model_id(signal)}.parquet",
+                    belief_dir(run_dir, 0) / "stability" / f"{safe_model_id(signal)}.parquet",
                     provenance=run_provenance,
                 )
-            instability: dict[str, float] = {}
-            for _axis, by_signal_inst in (stability_evidence.get("instability") or {}).items():
-                instability.update({str(k): float(v) for k, v in by_signal_inst.items()})
-            write_json(stability_dir(run_dir) / "signals.json", instability)
 
         # The linked evidence, at the vote level — where (axis, bucket, source, pass, scope) is a
         # legitimate key. This is what the artifact-driven adaptive path ingests, so it sees the
@@ -1525,10 +1533,10 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(b, dict) and b.get("status") == "ok":
                     asr_resolved_pii[m] = resolve_asr_result(b, align_by_model_pii.get(m))
             pii_reports[pl] = detect_pii_in_pass(
-                pass_label=pl,
+                perturbation=pl,
                 asr_resolved=asr_resolved_pii,
             )
-            write_json(pass_dir(run_dir, pl) / "pii.json", report_to_dict(pii_reports[pl]))
+            write_json(perturbation_dir(run_dir, pl) / "pii.json", report_to_dict(pii_reports[pl]))
 
         # Global run summary: 4 claims (transcript / speaker / quality / PII) → 1 scalar each
         # + a max() combined. One block for the run, not one per pass: the axes it reads are
@@ -1567,7 +1575,7 @@ def main(argv: list[str] | None = None) -> int:
 
         # Persist per-pass windowed speaker embeddings — one JSON per (pass, model)
         # at ``<pass>/embeddings/<model>.json`` with the full window grid + vectors.
-        for pass_label, by_model in per_window_embeddings_by_pass.items():
+        for pert_name, by_model in per_window_embeddings_by_pass.items():
             if not by_model:
                 continue
             for model_id, windows in by_model.items():
@@ -1584,7 +1592,9 @@ def main(argv: list[str] | None = None) -> int:
                         for w in windows
                     ],
                 }
-                write_json(pass_dir(run_dir, pass_label) / "embeddings" / f"{safe_model_id(model_id)}.json", payload)
+                write_json(
+                    perturbation_dir(run_dir, pert_name) / "embeddings" / f"{safe_model_id(model_id)}.json", payload
+                )
 
         # ── Level 2: the fused uncertainty maps ───────────────────────
         # L1 holds per-signal measurements in native units; these are the answer — one fold per
@@ -1618,7 +1628,7 @@ def main(argv: list[str] | None = None) -> int:
                 # The mask governs fusion from the *raw* pass: whether a region is target-free is a
                 # fact about the recording, not about the enhancement transform.
                 mask_regions = mask_regions_from_rows(fusion_mask_rows)
-                reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
+                reference = harvests_by_pass.get("raw") or next(iter(harvests_by_pass.values()))
                 speaker_claims = speaker_claims_from_votes(getattr(reference, "speaker_votes", []) or [])
                 from senselab.audio.workflows.audio_analysis.speech_presence_link import (
                     policy_from_params as _policy_from_params,
@@ -1665,7 +1675,7 @@ def main(argv: list[str] | None = None) -> int:
                         run_dir,
                         round_index=round_index,
                         axis_rows=round_axis_rows,
-                        duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
+                        duration_s=float(summaries["passes"].get("raw", {}).get("duration_s") or 0.0),
                         title=f"L2 round {round_index} — {args.audio.name}",
                     )
                 # Name the directory the writer actually used. The maps live under
@@ -1749,7 +1759,7 @@ def main(argv: list[str] | None = None) -> int:
                 duration_s = float(next(iter(passes_for_compute.values())).get("duration_s", 0.0) or 0.0)
                 # Build per-pass detail bundles for the plot's per-source rows.
                 detail_by_pass: dict[str, dict[str, Any]] = {}
-                for pass_label, pass_summary in passes_for_compute.items():
+                for perturbation, pass_summary in passes_for_compute.items():
                     align_by_model = ((pass_summary.get("alignment") or {}).get("by_model")) or {}
                     diar_by_model: dict[str, list[Any]] = {}
                     for m, block in ((pass_summary.get("diarization") or {}).get("by_model") or {}).items():
@@ -1776,16 +1786,16 @@ def main(argv: list[str] | None = None) -> int:
                             ppg_block.get("phoneme_labels"),
                             float(pass_summary.get("duration_s", 0.0) or 0.0),
                         )
-                    detail_by_pass[pass_label] = {
+                    detail_by_pass[perturbation] = {
                         "diar_by_model": diar_by_model,
                         "asr_by_model": asr_by_model,
-                        "per_window_embeddings": per_window_embeddings_by_pass.get(pass_label, {}),
+                        "per_window_embeddings": per_window_embeddings_by_pass.get(perturbation, {}),
                         "ppg": {
                             "per_frame_phonemes": ppg_per_frame,
                             "frame_hop": ppg_frame_hop,
                         },
                     }
-                raw_pass_audio = pass_audio.get("raw_16k")
+                raw_pass_audio = pass_audio.get("raw")
                 raw_waveform = (
                     raw_pass_audio.waveform.detach().cpu().numpy().squeeze() if raw_pass_audio is not None else None
                 )
@@ -1828,7 +1838,7 @@ def main(argv: list[str] | None = None) -> int:
                 speaker_harvest = next(
                     (
                         getattr(harvests_by_pass.get(label), "speaker_votes", None)
-                        for label in ("raw_16k", *sorted(harvests_by_pass))
+                        for label in ("raw", *sorted(harvests_by_pass))
                         if getattr(harvests_by_pass.get(label), "speaker_votes", None)
                     ),
                     None,
@@ -1854,7 +1864,7 @@ def main(argv: list[str] | None = None) -> int:
                     (
                         linked
                         for h in (
-                            harvests_by_pass.get("raw_16k"),
+                            harvests_by_pass.get("raw"),
                             *harvests_by_pass.values(),
                         )
                         if h is not None and (linked := votes_for_harvest(h))
@@ -1871,14 +1881,13 @@ def main(argv: list[str] | None = None) -> int:
                             probe_diarization_invariance,
                         )
 
-                        raw_audio = pass_audio.get("raw_16k")
+                        raw_audio = pass_audio.get("raw")
                         reference = {
                             model: n
                             for model, n in (
                                 (m, _distinct_speaker_count(o))
                                 for m, o in (
-                                    (summaries["passes"].get("raw_16k", {}).get("diarization") or {}).get("by_model")
-                                    or {}
+                                    (summaries["passes"].get("raw", {}).get("diarization") or {}).get("by_model") or {}
                                 ).items()
                             )
                             if n is not None
@@ -2027,8 +2036,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             from senselab.audio.workflows.audio_analysis.l1_plot import build_l1_signal_plot, classify_signal
 
-            reference = harvests_by_pass.get("raw_16k") or next(iter(harvests_by_pass.values()))
-            raw_summary = summaries["passes"].get("raw_16k", {}) or {}
+            reference = harvests_by_pass.get("raw") or next(iter(harvests_by_pass.values()))
+            raw_summary = summaries["passes"].get("raw", {}) or {}
 
             # Continuous voters get a trace of their own confidence; binary ones get spans.
             # Rendering a frame posterior as on/off discards everything it measured.
@@ -2114,11 +2123,11 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     l1_failed.append(classifier)
 
-            raw_audio = pass_audio.get("raw_16k")
+            raw_audio = pass_audio.get("raw")
             l1_path = build_l1_signal_plot(
                 run_dir,
                 signals=l1_signals,
-                duration_s=float(summaries["passes"].get("raw_16k", {}).get("duration_s") or 0.0),
+                duration_s=float(summaries["passes"].get("raw", {}).get("duration_s") or 0.0),
                 waveform=None if raw_audio is None else raw_audio.waveform.squeeze().numpy(),
                 sampling_rate=int(getattr(raw_audio, "sampling_rate", 16000) or 16000),
                 series=l1_series,

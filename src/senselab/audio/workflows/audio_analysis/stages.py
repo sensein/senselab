@@ -625,11 +625,11 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
     """
     duration_s = audio.waveform.shape[1] / audio.sampling_rate
     print(
-        f"\n=== Pass: {ctx.pass_label} ({duration_s:.2f}s @ {audio.sampling_rate}Hz, "
+        f"\n=== Pass: {ctx.perturbation} ({duration_s:.2f}s @ {audio.sampling_rate}Hz, "
         f"sig={ctx.audio_signature[:12]}...) ==="
     )
     summary: dict[str, Any] = {
-        "label": ctx.pass_label,
+        "label": ctx.perturbation,
         "duration_s": duration_s,
         "audio_signature": ctx.audio_signature,
     }

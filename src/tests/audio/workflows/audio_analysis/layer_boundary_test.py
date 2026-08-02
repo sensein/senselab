@@ -103,7 +103,7 @@ PER_SOURCE_COLUMNS = frozenset({"source", "signal"})
 #: pass whose reading was *taken as* the axis's is a per-pass axis with the index moved into the
 #: value. ``contributing_passes`` and ``folded_from`` are not — they say which passes fed the fold,
 #: which is provenance about an input dimension rather than a selection among outputs.
-PASS_COLUMNS = frozenset({"stream", "pass_label", "pass", "elected_stream"})
+PASS_COLUMNS = frozenset({"stream", "perturbation", "pass", "elected_stream"})
 
 
 def _fold_columns(columns: set[str]) -> list[str]:
@@ -113,7 +113,7 @@ def _fold_columns(columns: set[str]) -> list[str]:
     return sorted((columns & FOLD_COLUMNS) | ({"axis"} & columns))
 
 
-def _pass_labels(run_dir: Path) -> set[str]:
+def _perturbations(run_dir: Path) -> set[str]:
     """The pass names this run actually used, taken from ``L1/`` rather than assumed."""
     return {p.name for p in (run_dir / "L1").iterdir() if p.is_dir() and p.name != "stability"}
 
@@ -176,16 +176,29 @@ def test_signal_row_carries_no_axis_and_no_fold() -> None:
 
 
 def test_fused_axis_has_no_pass_index() -> None:
-    """An axis aggregates across passes, so it cannot be indexed by one."""
+    """An axis aggregates across perturbations, so it cannot be indexed by one."""
+    from senselab.audio.workflows.audio_analysis import types as workflow_types
+
+    assert "perturbation" not in workflow_types.FusedAxis.__dataclass_fields__
+
+
+def test_no_type_enumerates_the_perturbations() -> None:
+    """The perturbation set is OPEN, so a type that lists its members is a promise it cannot keep.
+
+    ``PassLabel = Literal["raw_16k", "enhanced_16k"]`` was that promise, and it was the reason a
+    third perturbation was a code edit rather than a register entry. What each name means lives
+    in ``L1/perturbations.json``, where the transform travels with it.
+    """
     import typing
 
     from senselab.audio.workflows.audio_analysis import types as workflow_types
 
-    assert "pass_label" not in workflow_types.FusedAxis.__dataclass_fields__
-    assert set(typing.get_args(workflow_types.PassLabel)) == {
-        "raw_16k",
-        "enhanced_16k",
-    }, "raw_vs_enhanced is not a pass"
+    assert not hasattr(workflow_types, "PassLabel")
+    for name, value in vars(workflow_types).items():
+        members = set(typing.get_args(value)) if typing.get_origin(value) is typing.Literal else set()
+        assert not (members & {"raw", "enhanced", "raw_16k", "enhanced_16k"}), (
+            f"{name} enumerates perturbations; the set is open"
+        )
 
 
 def test_the_name_within_pass_uncertainty_is_gone_from_the_workflow_layer() -> None:
@@ -344,7 +357,7 @@ def test_run_summary_deliverable_carries_no_l1_evidence(tmp_path: Path) -> None:
 
     summaries: dict[str, Any] = {
         "input_audio": "/tmp/x.wav",
-        "passes": {"raw_16k": {"duration_s": 4.0, "audio_signature": "a" * 64, "features": {"huge": [0] * 1000}}},
+        "passes": {"raw": {"duration_s": 4.0, "audio_signature": "a" * 64, "features": {"huge": [0] * 1000}}},
         "global_uncertainty": {"combined_uncertainty": 0.2},
     }
     _write_run_summary(tmp_path, summaries)
@@ -353,9 +366,9 @@ def test_run_summary_deliverable_carries_no_l1_evidence(tmp_path: Path) -> None:
     assert "passes" not in deliverable
     assert deliverable["global_uncertainty"]["combined_uncertainty"] == 0.2
 
-    index = json.loads((tmp_path / "L1" / "passes.json").read_text())
-    assert index["passes"]["raw_16k"] == {"duration_s": 4.0, "audio_signature": "a" * 64}
-    assert index["input_audio"] == "/tmp/x.wav"
+    # The index it used to also write is now ``L1/perturbations.json``, written by L1 beside the
+    # declaration of what each perturbation is — not by the run's last stage.
+    assert not (tmp_path / "L1" / "passes.json").exists()
 
 
 # ── 3. No artifact is keyed by both a pass and an axis ───────────────────────
@@ -370,7 +383,7 @@ def test_no_artifact_is_keyed_by_both_a_pass_and_an_axis(real_run_dir: Path) -> 
     stability computable at all — a vote carries a ``source``, and that is what tells the two
     apart without consulting a filename.
     """
-    labels = _pass_labels(real_run_dir)
+    labels = _perturbations(real_run_dir)
     offenders: list[str] = []
     for path in sorted(real_run_dir.rglob("*.parquet")):
         columns = _columns(path)
@@ -440,7 +453,7 @@ def test_no_belief_api_takes_a_pass_to_produce_an_axis() -> None:
         f"{fn.__qualname__}({name})"
         for fn in axis_producing
         for name in inspect.signature(fn).parameters
-        if name in {"stream", "streams", "passes", "pass_label"}
+        if name in {"stream", "streams", "passes", "perturbation"}
     ]
     assert not offenders, (
         "an axis is a fold across passes, so nothing that produces one may be indexed by a pass:\n"
@@ -456,7 +469,7 @@ def test_label_bins_travel_with_the_policy_that_produced_them() -> None:
     from senselab.audio.workflows.audio_analysis.labelstudio import attach_uncertainty_tracks_to_ls
     from senselab.audio.workflows.audio_analysis.types import FusedAxis
 
-    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    tasks = [{"data": {"pass": "raw"}, "predictions": [{"result": []}]}]
     out, _ = attach_uncertainty_tracks_to_ls(
         ls_tasks=tasks,
         ls_config="<View></View>",
@@ -472,7 +485,7 @@ def test_link_records_the_presence_policy_on_every_pass() -> None:
 
     linked = link_pass(
         PassHarvest(
-            pass_label="raw_16k",
+            perturbation="raw",
             speech_presence_evidence=[{"start": 0.0, "end": 0.5, "evidence": {"m": {"covered_fraction": 1.0}}}],
         ),
         params={},
@@ -527,7 +540,7 @@ def test_fuse_axis_emits_exactly_the_fields_its_consumers_read() -> None:
     from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
 
     rows = fuse_axis(
-        {"raw_16k": [{"start": 0.0, "end": 0.5, "votes": {"m": {"value": 0.3}}}]},
+        {"raw": [{"start": 0.0, "end": 0.5, "votes": {"m": {"value": 0.3}}}]},
         weights={"m": 1.0},
     )
     assert rows and set(rows[0]) == _FUSED_AXIS_FIELDS
@@ -547,13 +560,13 @@ def test_reliability_compares_a_field_the_evidence_actually_has() -> None:
 
     def _harvest(label: str, covered: float) -> PassHarvest:
         return PassHarvest(
-            pass_label=label,
+            perturbation=label,
             speech_presence_evidence=[
                 {"start": 0.0, "end": 0.5, "evidence": {"diar_a": {"covered_fraction": covered}}}
             ],
         )
 
-    harvests = {"raw_16k": _harvest("raw_16k", 1.0), "enhanced_16k": _harvest("enhanced_16k", 0.0)}
+    harvests = {"raw": _harvest("raw", 1.0), "enhanced": _harvest("enhanced", 0.0)}
     buckets = {label: votes_for_harvest(h) for label, h in harvests.items()}
     instability = signal_stability(harvests, axis="speech_presence", buckets_by_pass=buckets)
     assert "diar_a" in instability, "a signal that flips between passes must be measured as unstable"
@@ -577,19 +590,21 @@ def test_belief_store_meta_columns_are_measurements_only() -> None:
 
 
 def test_module_docstrings_do_not_promise_a_reader_that_does_not_exist() -> None:
-    """``layout.stability_dir`` must describe what the files under it are actually for.
+    """``layout`` must describe the tree the pipeline actually writes.
 
-    Its docstring asserted the cross-pass deltas "feed L2's weights". They fed nothing: the
-    weights came from an in-memory computation, and the parquets had no reader in src/ or
-    scripts/. A docstring documenting an intent the code does not implement is the same class of
-    defect as a glob that matches nothing.
+    ``stability_dir``'s docstring asserted the cross-pass deltas "feed L2's weights". They fed
+    nothing: the weights came from an in-memory computation, and the parquets had no reader in
+    src/ or scripts/. A docstring documenting an intent the code does not implement is the same
+    class of defect as a glob that matches nothing — so the helper is gone, and the module
+    docstring says where the quantity lives instead.
     """
     from senselab.audio.workflows.audio_analysis import layout
 
-    doc = layout.stability_dir.__doc__ or ""
-    assert "signal" in doc.lower(), "stability is a property of a signal, and the docstring must say so"
+    assert not hasattr(layout, "stability_dir"), "cross-perturbation folds are not L1's"
+    assert not hasattr(layout, "pass_dir"), "a pass is a perturbation, and the helper says so"
+    doc = layout.perturbation_dir.__doc__ or ""
+    assert "open" in doc.lower(), "the perturbation set is open, and the docstring must say so"
     tree = ast.parse(Path(layout.__file__).read_text())
     module_doc = ast.get_docstring(tree) or ""
-    # The module docstring may explain what `raw_vs_enhanced` was and why it is gone; it may not
-    # describe it as something the layout still contains.
     assert "uncertainty parquets record what one pass alone" not in module_doc
+    assert "weight_basis" in module_doc, "the run-level stability number lives on the fused row now"

@@ -26,7 +26,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.corroboration import (
 from senselab.audio.workflows.audio_analysis.adaptive.fusion import rollup_segments
 from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
 
-STREAM = "raw_16k"
+STREAM = "raw"
 
 
 def _presence_vote(source: str, bucket: tuple[float, float], p_speech: float, **extra: Any) -> Vote:  # noqa: ANN401
