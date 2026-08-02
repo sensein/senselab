@@ -751,6 +751,7 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
         stream="raw_16k",
         policy=load_policy(),
         generated_from_round=1,
+        corroboration_provenance={"evidence_pool": [], "evidence_pool_rejected": {}},
     )
     cols = list(pd.read_parquet(belief_dir(tmp_path) / "speech_presence.parquet").columns)
     for col in ("speech_presence_confidence", "elected_stream", "overlap_posterior"):

@@ -52,19 +52,27 @@ def load_policy(path: Path | None = None, overrides: dict[str, Any] | None = Non
     return policy
 
 
-_WEIGHT_FLOOR_KEYS: tuple[tuple[str, str], ...] = (("adjudication", "min_evidence_weight"),)
-"""``(block, key)`` policy entries that floor a withdrawn weight and must stay strictly positive."""
+_WEIGHT_FLOOR_KEYS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("adjudication",), "min_evidence_weight"),
+    (("fusion", "corroboration"), "min_corroboration"),
+)
+"""``(path, key)`` policy entries that floor a withdrawn weight and must stay strictly positive."""
 
 
 def _validate_floors(policy: dict[str, Any]) -> None:
     """Reject a policy that sets a weight floor to zero.
 
-    Aggregation drops a voter whose weight reaches zero, so a zero floor restores erasure through
+    Aggregation drops a voter whose weight reaches zero, and word fusion drops a word whose vote
+    weight and coverage contribution both vanish. A zero floor therefore restores erasure through
     configuration — silently, and everywhere at once. A floor that can be configured to zero is
     not a floor, which is why this raises rather than clamping.
     """
-    for block, key in _WEIGHT_FLOOR_KEYS:
-        raw = (policy.get(block) or {}).get(key)
+    for path, key in _WEIGHT_FLOOR_KEYS:
+        block = ".".join(path)
+        node: Any = policy
+        for step in path:
+            node = (node or {}).get(step)
+        raw = (node or {}).get(key)
         if raw is None:
             raise ValueError(f"policy.{block}.{key} is required — a withdrawn weight needs a stated floor")
         try:

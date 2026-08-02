@@ -114,7 +114,9 @@ class`, `uncertainty_mass {before, after} per axis`, `buckets {converged, irredu
 | `confidence` | f64 [0,1] | Calibrated when profile exists; else raw weighted vote share (`calibrated` flag at document level) |
 | `alternates` | list<struct{text, share, models}> | Present when winner margin < policy threshold |
 | `sources` | list<str> | Contributing model ids (post family-weighting) |
-| `flags` | list<str> | `hallucination_purged_nearby`, `overlap`, `low_presence`, ... |
+| `corroboration` | f64? | Independent evidence for the winning text; `null` = unmeasured, never read as 0 |
+| `member_corroboration` | map<str, f64?> | Every model with a member in the slot, winner or not — where the losing evidence stays visible |
+| `flags` | list<str> | `overlap`, `single_source`, ... — `low_presence` and `hallucination_purged_nearby` are gone, replaced by the `corroboration` number |
 
 Document level: `{calibrated: bool, policy_hash, generated_from_round, words: [...]}`.
 
