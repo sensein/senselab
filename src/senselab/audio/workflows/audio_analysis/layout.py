@@ -3,10 +3,10 @@
 The directory names carry the architecture, so a reader can tell what a file *is* from where it
 sits rather than having to know which module wrote it:
 
-``L1/`` — **evidence.** Per-pass model outputs and the per-signal uncertainties harvested from
-them, plus the cross-pass stability measurements. Nothing here is an answer; the per-pass
-uncertainty parquets record what one pass alone would have concluded, before anything was
-measured about the signals' reliability.
+``L1/`` — **evidence.** Per-pass model outputs and each signal's own measurement, in the tool's
+own units, plus the cross-pass stability measurements. Nothing here is an answer, and nothing here
+is named for an **axis**: an axis is a fold across signals *and* across passes, so it can be
+neither produced by one pass nor stored under one.
 
 ``L2/round<N>/`` — **belief.** The fused uncertainty maps, one directory per iteration. Per
 round rather than only final because a single map cannot distinguish "settled immediately" from
@@ -18,9 +18,12 @@ consumer actually acts on. Kept separate from ``L2/`` because "what do we believ
 we hand over" are different questions: the belief is per bucket and per round, the deliverable
 is one transcript and one figure.
 
-The cross-pass deltas live under ``L1/stability/`` rather than beside the L2 maps, because they
-are not a third answer — they *are* the perturbation-stability measurement that feeds L2's
-weights. Filing them as evidence is what makes that role legible.
+``L1/stability/<signal>.parquet`` holds the cross-pass disagreement **per signal**, and
+``L1/stability/signals.json`` the run-level mean that sets each signal's fusion weight. Keyed by
+signal because that is what stability is a property of: the two passes are the same recording
+under a transform, so a signal that answers differently between them has not earned its weight.
+The previous form — one file per *axis* under a ``raw_vs_enhanced`` pseudo-pass, obtained by
+subtracting two per-pass axis folds — was wrong three times over, and had no reader anywhere.
 """
 
 from __future__ import annotations
@@ -49,12 +52,17 @@ def evidence_dir(run_dir: Path | str) -> Path:
 
 
 def pass_dir(run_dir: Path | str, pass_label: str) -> Path:
-    """``<run>/L1/<pass>`` — one pass's model outputs and per-signal uncertainties."""
+    """``<run>/L1/<pass>`` — one pass's model outputs and per-signal measurements."""
     return evidence_dir(run_dir) / pass_label
 
 
 def stability_dir(run_dir: Path | str) -> Path:
-    """``<run>/L1/stability`` — cross-pass deltas, i.e. the perturbation-stability evidence."""
+    """``<run>/L1/stability`` — per-**signal** cross-pass disagreement.
+
+    ``<signal>.parquet`` per bucket, ``signals.json`` for the run-level mean that becomes each
+    signal's fusion weight. A signal, not an axis: stability is a property of the thing that
+    answered twice.
+    """
     return evidence_dir(run_dir) / "stability"
 
 

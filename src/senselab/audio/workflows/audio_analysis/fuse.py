@@ -258,8 +258,8 @@ def _round_record(
     """
     from senselab.audio.workflows.audio_analysis.rounds import RoundRecord
 
-    # `epistemic_uncertainty`, the column `fuse_axis` actually emits. This read
-    # `within_pass_uncertainty` — an L1-only column — so every record carried `epistemic=None`
+    # `epistemic_uncertainty`, the column `fuse_axis` actually emits. This read a per-pass axis
+    # column that fuse_axis never produced, so every record carried `epistemic=None`
     # and `measured_buckets=0`, C1 had nothing to compare, and every round digested to the same
     # signature, which the shared detector then correctly reported as a repeating state. A real
     # run stopped with `oscillation` on all four axes for that reason alone: not four dynamics
