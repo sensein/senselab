@@ -553,6 +553,7 @@ def stage_background_mask(
     from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
     from senselab.audio.workflows.audio_analysis.io import write_background_mask
+    from senselab.audio.workflows.audio_analysis.layout import belief_dir
 
     resolved = dict(profile or load_detection_margin_profile())
     if guard_interval_s is not None:
@@ -588,8 +589,13 @@ def stage_background_mask(
     mask = build_mask(rows, task_type, profile=resolved, long_window_s=long_window_s)
 
     doc = mask.to_json()
-    if ctx.out_dir is not None:
-        write_background_mask(mask, ctx.out_dir)
+    # ``L2/``, not ``L1/<pass>/``. Every region's ``state`` and ``uncertainty`` is a fold across
+    # this pass's presence signals put through the detection-margin profile's thresholds — a
+    # decision, in the profile's units, not a measurement in any tool's. It sat under a pass
+    # because that is where the stage that computes it runs, which is a fact about the code
+    # rather than about the artifact. One file: the mask is only built on the unmodified variant.
+    if ctx.run_dir is not None:
+        write_background_mask(mask, belief_dir(ctx.run_dir))
     return {
         "background_mask": {
             "status": "ok",

@@ -116,6 +116,10 @@ class StageContext:
         cache_dir: Cache directory, or ``None`` to disable caching.
         out_dir: Pass output directory, or ``None`` for a headless run that emits
             no sidecar files (what the adaptive loop wants).
+        run_dir: The run root, or ``None`` under the same headless condition. Carried
+            explicitly rather than walked back out of :attr:`out_dir`, because a stage whose
+            product is a *decision* rather than a measurement writes it under ``L2/`` and must
+            not have to guess how many parents up the run root is.
         audio_source: Absolute source path, recorded in provenance only.
         senselab_ver: Installed senselab version; participates in cache keys.
         variant: Which audio variant this pass consumes — ``"unmodified"``,
@@ -139,6 +143,7 @@ class StageContext:
     device: DeviceType | None = None
     cache_dir: Path | None = None
     out_dir: Path | None = None
+    run_dir: Path | None = None
     audio_source: str = ""
     senselab_ver: str = field(default_factory=senselab_version)
     variant: str = "unmodified"

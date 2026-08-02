@@ -26,11 +26,17 @@ from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_
 def build_adaptive_timeline(
     out_dir: Path,
     *,
+    transcript: dict[str, Any],
     gt_path: Path | None = None,
     title: str = "",
-    transcript: dict | None = None,
 ) -> Path | None:
-    """Render ``<out_dir>/final/timeline.png``; returns the path (None on failure)."""
+    """Render ``<out_dir>/final/timeline.png``; returns the path (None on failure).
+
+    ``transcript`` is required. The figure renders the converged answer, and its caller has just
+    produced that answer, so it hands it over; the fallback that read ``final/transcript.json``
+    when the argument was omitted made a deliverable an input to the stage that writes the
+    deliverable next to it — and, being a default, it was the path the standalone driver took.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -46,11 +52,6 @@ def build_adaptive_timeline(
     belief = belief_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
     belief.mkdir(parents=True, exist_ok=True)
-    # The figure renders the converged answer, so its caller — which has just produced that
-    # answer — hands it over. Re-reading ``final/transcript.json`` would make a deliverable an
-    # input to the stage that writes the deliverable next to it.
-    if transcript is None:
-        transcript = json.loads((final / "transcript.json").read_text())
     stream = transcript.get("stream", "raw_16k")
     iterations = json.loads((belief / "iterations.json").read_text())["entries"]
     convergence = json.loads((belief / "convergence.json").read_text())
@@ -432,18 +433,17 @@ def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # n
     ax.set_yticks([])
     ax.set_xlim(0, duration)
 
-    # ``L1/<pass>/background_mask.parquet`` — two levels down, not one. The glob was written
-    # against the flat layout and silently matched nothing once passes moved under ``L1/``, so
-    # this row reported "no background mask" on runs whose mask had found regions. Same drift,
-    # and the same silence, as the outcome loader: a glob that matches nothing is indistinguishable
-    # from a stage that produced nothing.
+    # ``L2/background_mask.parquet`` — one named path. Every previous form of this read was a
+    # glob, and every one of them drifted: first against the flat layout, then one level short of
+    # ``L1/<pass>/``. A glob that matches nothing is indistinguishable from a stage that produced
+    # nothing, and this row said "no background mask" on runs whose mask had found regions.
     rows: list[dict[str, Any]] = []
-    for candidate in sorted(evidence_dir(out_dir).glob("*/background_mask.parquet")):
+    candidate = belief_dir(out_dir) / "background_mask.parquet"
+    if candidate.exists():
         try:
             import pandas as pd
 
             rows = pd.read_parquet(candidate).to_dict("records")
-            break
         except Exception as exc:  # noqa: BLE001 — a plot must not fail a run
             logger.debug("background mask unreadable at %s: %s", candidate, exc)
 

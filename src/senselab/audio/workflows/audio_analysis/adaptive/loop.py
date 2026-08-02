@@ -472,6 +472,10 @@ def run_adaptive_loop(
         "word_streams": word_streams,
         "out_dir": str(out_dir),
         "report": report,
+        # Handed back rather than left for a caller to read out of ``final/``: a driver that wants
+        # to re-render the timeline with a ground-truth overlay needs the transcript, and the only
+        # other way to get it is to open the deliverable this loop just wrote.
+        "transcript": transcript_doc,
     }
 
 
@@ -504,7 +508,10 @@ def _resolve_input_audio(recorded: str | None, run_dir: Path) -> str | None:
 
 
 def _aggregator_from_run(run_dir: Path) -> str | None:
-    dis = run_dir / "disagreements.json"
+    # ``L2/disagreements.json``. The path here was the pre-L1/L2 flat one, so it never resolved
+    # and every standalone run silently fell back to the "min" default — including runs whose
+    # analyze_audio pass had been given a different aggregator on the command line.
+    dis = belief_dir(run_dir) / "disagreements.json"
     if dis.exists():
         try:
             return (json.loads(dis.read_text()).get("config") or {}).get("aggregator")

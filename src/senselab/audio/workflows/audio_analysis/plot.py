@@ -31,7 +31,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from senselab.audio.workflows.audio_analysis.layout import evidence_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
 from senselab.utils.data_structures.logging import logger
 
@@ -245,22 +245,24 @@ _MASK_STATE_STYLE = {
 
 
 def _load_background_mask_rows(run_dir: Path) -> list[dict[str, Any]]:
-    """Read the unmodified pass's background mask, if one was written.
+    """Read the background mask, if one was written.
 
-    Only the unmodified pass is consulted: enhancement removes the non-speech evidence
-    target activity is read from, so an enhanced-pass mask reports more of the recording as
-    safe for background claims exactly where the background was destroyed.
+    One named path rather than a glob. There is one mask per run — it is only built on the
+    unmodified variant, because enhancement removes the non-speech evidence target activity is
+    read from — so a glob was never selecting between candidates, only failing quietly when the
+    layout moved beneath it. This one was written against the flat layout and matched nothing for
+    as long as passes have lived under ``L1/``, which reads exactly like a run with no mask.
     """
-    for candidate in sorted(Path(run_dir).glob("*/background_mask.parquet")):
-        if "enhanced" in candidate.parent.name:
-            continue
-        try:
-            import pandas as pd
+    candidate = belief_dir(run_dir) / "background_mask.parquet"
+    if not candidate.exists():
+        return []
+    try:
+        import pandas as pd
 
-            return list(pd.read_parquet(candidate).to_dict("records"))
-        except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
-            logger.debug("background mask unreadable at %s: %s", candidate, exc)
-    return []
+        return list(pd.read_parquet(candidate).to_dict("records"))
+    except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
+        logger.debug("background mask unreadable at %s: %s", candidate, exc)
+        return []
 
 
 def _draw_background_mask_row(ax: Any, rows: list[dict[str, Any]], duration_s: float) -> None:  # noqa: ANN401
