@@ -1062,3 +1062,63 @@ nothing, a projection matched zero keys, a default stood in for a missing measur
 An input a stage should not have is invisible because it works; an input a stage needs and lacks is
 invisible because empty and absent look identical. That is why each was found by inspecting a real
 run's outputs, and none by a test.
+
+---
+
+## Correction: derive first, link inside estimate, and the store holds decisions not estimates
+
+Three corrections to the sequence above, from review. They collapse the round-0 special case and
+resolve the two-L2 problem.
+
+### 1. Derive comes first, in every round including round 0
+
+The sequence above put `derive` at the *end* of round 0, so round 0's axes were estimated with no
+derivative conditioning and only round 1 ever saw a mask. That is not a design decision — it is an
+artifact of the mask being computed in `stages.py` and handed to fusion as a fixed argument.
+
+Every derivative is computable from L1 alone: the mask from target confidence, speaker allocation
+from embeddings and diar labels, ASR consensus from word streams, scene components from AST/YAMNet.
+None requires an axis. Round 0 has no reason to skip the step, and skipping it makes round 0's axes
+different in kind from every later round's — which is what made "is coupling working?" hard to
+answer at all.
+
+### 2. Link belongs inside estimate, not before the loop
+
+Linking measurements to beliefs under a named policy is the first half of estimation, not a
+preamble. It was hoisted to round 0 because the policy is constant today, so the result repeats and
+caching looked free. That is an assumption, not a property: the design's "named, replaceable,
+recorded in provenance" framing anticipates a round proposing different thresholds, and hoisting the
+link out of the loop silently forbids it.
+
+**Uniform, no special case:**
+
+```
+round N:  derive(L1, axes[N-1], derivatives[N-1])              -> derivatives[N]
+          estimate(L1, policy[N], derivatives[N], axes[N-1])   -> axes[N]
+
+round 0:  identical, with axes[-1] and derivatives[-1] empty
+```
+
+### 3. The belief store's irreducible state is the decision log, not the beliefs
+
+Four kinds of thing live in it, and only one is an estimate:
+
+| held | kind | belongs to |
+|---|---|---|
+| the value | estimate | L2's product |
+| `scope`, provenance | fact about the measurement | L1 |
+| `status` — active / shadowed / purged | decision | L2's process |
+| history | trajectory | L2's process |
+
+The estimates are **re-derivable** — the store's own contract says "aggregation is a pure function
+of the active votes". Given L1, the policy, and the record of which votes were shadowed or purged,
+every value can be recomputed. So the store should not persist estimates at all.
+
+**This dissolves the two-L2 problem rather than fixing it.** `fuse_axes` is the pure aggregation;
+the belief store is the decisions selecting which measurements are active. They are not rivals —
+they are the two halves of one L2. What made them look like rivals is that the store also keeps a
+materialised copy of the estimates, seeded from L1's pre-folded axes (item 25), and uses
+`within_pass_uncertainty` as a parity oracle against its own recomputation.
+
+Removing the materialised copy removes the second lineage, the parity oracle's dependence on an L1
+fold, and the need for item 27's plot overlay, in one change.
