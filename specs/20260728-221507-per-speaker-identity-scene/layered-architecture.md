@@ -772,3 +772,43 @@ a global read-through fallback would give both — but that is a third design, n
 Not implemented. Recorded so the choice is deliberate when it is made, rather than settled by
 whichever call site is edited first. `CACHE_SCHEMA_VERSION` already makes invalidation free, so
 relocating costs recomputation and nothing else.
+
+---
+
+## The belief store's place in L1 → L2 → final (open, and the root of items 25–27)
+
+**There are two L2 implementations.** `fuse.fuse_axes` is pure, per-round, returns rows. The
+adaptive belief store (`adaptive/belief.py`) is mutable, vote-based, carried across rounds. Both
+fuse per-signal evidence into per-axis values, both iterate rounds, both decide convergence, both
+emit a speaker axis — on different grids, from different provenance.
+
+That is the root the register's items 25, 26 and 27 are symptoms of, and it explains the first
+defect found in this work: two non-convergence detectors, merged early as an accident. It was not
+an accident. Two L2s each need to decide when to stop.
+
+**Correct placement.** L1 emits per-signal measurements. **L2 holds one belief state**, fuses it,
+and iterates. `final/` holds the converged answer and is read by no stage. The belief store should
+*be* L2's state — seeded from L1's per-signal votes rather than L1's pre-folded axes, with
+`fuse_axes` as its aggregation step rather than a rival implementation. Its vote schema is already
+right for this: one entry per `(axis, bucket, source, stream, scope)` is exactly L1's proper
+granularity. Only the *seed* is wrong.
+
+**"Vote" is the wrong word for what L2 does.** Voting implies exchangeable, independent ballots
+answered by tally. The design specifies weighted inference over measurements carrying their own
+uncertainty, weighted by measured reliability. Those are not ballots — not independent, not equally
+informative, not combinable by counting. The metaphor has cost: it is what made a hand-set `0.4`
+"derivation gate" feel natural, when in a statistical combination that is an unmeasured prior the
+module explicitly forbids. `measure_axis_overlap` replaced it precisely because votes are *not*
+independent, which is a fact no voting model can state.
+
+**`purged_hallucination` claims more than the evidence supports.** The rule
+(`interventions.py:253`) fires when ASR produced words where `p_voice` is low — non-corroboration
+between two sources. It cannot distinguish a fabricating recognizer from a correct one contradicted
+by a wrong presence estimate, which is what a quiet or overlapped speaker produces. It is also
+asymmetric: presence indicts ASR, never the reverse, though word boundaries are the more precise
+measurement. `unsupported` would name the observation; `hallucination` names a cause.
+
+**The open decision.** The belief store wants per-pass, per-round values; L2's axes are fused across
+passes. Either that quantity should not exist, or L2 should expose a per-pass view alongside the
+fused one. That choice decides whether unifying the two L2s is mechanical or a redesign, and it
+should be settled before any of items 25–27 is attempted.
