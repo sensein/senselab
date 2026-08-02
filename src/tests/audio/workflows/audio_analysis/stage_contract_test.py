@@ -43,20 +43,27 @@ from senselab.audio.workflows.audio_analysis.contracts import (
     KNOWN_DEVIATIONS,
     MODULE_STAGE,
     STAGE_CONTRACTS,
+    TABULAR_SUFFIXES,
     Artifact,
     StageContract,
     artifact_violations,
     check_source,
     dag_edges,
+    dead_artifact_deviations,
     dead_static_deviations,
+    declared_artifacts,
+    folding_stages,
     matches,
     overlap,
     pipeline_sources,
     static_violations,
+    structural_vocabulary,
     topological_order,
+    unproduced_declarations,
     unrolled_contracts,
     unwaived,
     unwaived_artifacts,
+    unwaived_unproduced,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -146,6 +153,80 @@ def test_every_deviation_says_why_and_names_a_real_module() -> None:
         assert deviation.why.strip(), f"{deviation.module} {deviation.op} {deviation.pattern} has no reason"
         if deviation.module:
             assert (REPO_ROOT / deviation.module).is_file(), deviation.module
+
+
+# ── 0. the declaration cannot be written broad ───────────────────────────────
+#
+# The first defeat is not a bug in a check, it is a check that never applied. A ``**`` carrying
+# ``key=None`` reports nothing beneath it, so the guard's output on a tree full of violations is
+# byte-identical to its output on a clean one. These rules make that declaration impossible to
+# write rather than merely inadvisable, and they run at construction: a rule enforced only here
+# would still let any caller that imports the module without running this file build the hole.
+
+
+def test_a_broad_pattern_with_no_content_rule_is_refused_at_construction() -> None:
+    """The proof that rule 0 can fail, on the declaration that was actually in the tree.
+
+    ``L2/round/{n}/derivatives/**`` carried ``key=None`` for three steps of the restructure. Under
+    it, ``derivatives/estimates/speaker.parquet`` — a per-perturbation axis table, the one shape
+    D-16 says cannot exist — produced no finding, because with no key there is no rule to break.
+    """
+    with pytest.raises(ValueError, match="applies no content rule"):
+        Artifact("L2/round/{n}/derivatives/**", "anything at all", suffixes=(".parquet",))
+
+    # ...and the same pattern with a key and a pinned file kind is a declaration, not a hole.
+    bounded = Artifact(
+        "L2/round/{n}/derivatives/**",
+        "anything at all",
+        key=("axis", "bucket"),
+        suffixes=(".parquet",),
+    )
+    assert bounded.permitted_suffixes() == frozenset({".parquet"})
+
+
+def test_a_broad_pattern_must_pin_the_file_kinds_it_admits() -> None:
+    """``**`` names no extension, so an unpinned one admits every format the repo can write."""
+    with pytest.raises(ValueError, match="must declare suffixes"):
+        Artifact("L1/raw/**", "the identity's model outputs", key=("perturbation", "bucket"))
+
+    pinned = Artifact("L1/raw/**", "the identity's model outputs", key=("perturbation", "bucket"), suffixes=(".json",))
+    assert pinned.permitted_suffixes() == frozenset({".json"})
+
+
+def test_a_key_naming_every_dimension_prohibits_nothing() -> None:
+    """Breadth of location is paid for with narrowness of content, or it is not paid for."""
+    with pytest.raises(ValueError, match="prohibits none"):
+        Artifact(
+            "L1/raw/**",
+            "the identity's model outputs",
+            key=("perturbation", "axis", "signal", "bucket", "speaker", "round"),
+            suffixes=(".json",),
+        )
+
+
+def test_every_declared_artifact_pins_the_file_kinds_it_admits() -> None:
+    """Applied to the declaration itself: a pattern that names no extension and declares none."""
+    unpinned = [artifact.pattern for _stage, artifact in declared_artifacts() if not artifact.permitted_suffixes()]
+    assert not unpinned, f"these declarations admit any file kind: {unpinned}"
+
+
+def test_only_a_stage_that_decides_may_declare_a_fold() -> None:
+    """Relating two values of an input dimension is a decision, so a measuring stage may not.
+
+    ``folded`` is what lets ``derivatives/stability/`` carry ``pass_a`` beside ``pass_b``. The
+    same licence at L1 would be a stage measuring and folding in one breath, which is the
+    boundary the whole layering rests on.
+    """
+    assert "L1" not in folding_stages(), folding_stages()
+
+
+def test_the_structural_vocabulary_is_derived_from_the_declaration_and_not_listed() -> None:
+    """Reserved names nobody has to remember to extend: they *are* the declaration's own words."""
+    vocabulary = structural_vocabulary()
+    assert vocabulary["final"] == frozenset({0}), "final/ is a root, and only a root"
+    assert vocabulary["estimates"] == frozenset({3}), "estimates/ sits under L2/round/<n>/"
+    assert "whisper.json" not in vocabulary, "a filename is not structure"
+    assert "asr" not in vocabulary, "a tool's own directory name is not the declaration's"
 
 
 # ── 1. the DAG is acyclic ────────────────────────────────────────────────────
@@ -321,6 +402,117 @@ def test_the_resolver_chases_an_alias_chain_to_a_fixpoint() -> None:
     )
     findings = check_source(PROBE, chained, STAGE_CONTRACTS["FINAL"])
     assert [(f.op, f.pattern) for f in findings] == [("read", "L2/rounds/1/summary.json")]
+
+
+def test_a_path_bound_by_tuple_unpacking_is_visible() -> None:
+    """The proof that rule 2 can fail, on a line that is in the tree.
+
+    ``adaptive/plot.py:347`` binds both per-speaker deliverables in one statement and then uses
+    them on four lines. The resolver recorded ``ast.Name`` targets only, so the binding produced
+    nothing and every use afterwards was silent — four reads of the L2 root from the stage that
+    is supposed to only extract, under a guard reporting that the rule held.
+    """
+    live = (
+        "def f(out_dir):\n"
+        "    belief = belief_dir(out_dir)\n"
+        "    speakers_path, presence_path = belief / 'speakers.json', belief / 'per_speaker_presence.parquet'\n"
+        "    if not speakers_path.exists() or not presence_path.exists():\n"
+        "        return None\n"
+        "    return _json.loads(speakers_path.read_text()), pd.read_parquet(presence_path)\n"
+    )
+    findings = check_source(PROBE, live, STAGE_CONTRACTS["FINAL"])
+    assert sorted({f.pattern for f in findings}) == ["L2/per_speaker_presence.parquet", "L2/speakers.json"]
+    assert {f.op for f in findings} == {"read"}
+
+    # Bind the same two paths and use neither: the binding itself is not the finding.
+    unused = (
+        "def f(out_dir):\n"
+        "    belief = belief_dir(out_dir)\n"
+        "    speakers_path, presence_path = belief / 'speakers.json', belief / 'per_speaker_presence.parquet'\n"
+        "    return speakers_path, presence_path\n"
+    )
+    assert check_source(PROBE, unused, STAGE_CONTRACTS["FINAL"]) == []
+
+
+@pytest.mark.parametrize(
+    ("form", "source"),
+    [
+        (
+            "tuple target",
+            "def f(d):\n    b = belief_dir(d)\n    x, y = b / 'speakers.json', b / 'rounds.json'\n"
+            "    x.write_text('{}')\n    y.write_text('{}')\n",
+        ),
+        (
+            "list target",
+            "def f(d):\n    b = belief_dir(d)\n    [x, y] = [b / 'speakers.json', b / 'rounds.json']\n"
+            "    x.write_text('{}')\n    y.write_text('{}')\n",
+        ),
+        (
+            "starred target",
+            "def f(d):\n    b = belief_dir(d)\n    head, *rest = [b / 'speakers.json', b / 'rounds.json']\n"
+            "    head.write_text('{}')\n    for other in rest:\n        other.write_text('{}')\n",
+        ),
+        (
+            "augmented assignment",
+            "def f(d):\n    p = belief_dir(d)\n    p /= 'speakers.json'\n    p.write_text('{}')\n"
+            "    q = belief_dir(d)\n    q /= 'rounds.json'\n    q.write_text('{}')\n",
+        ),
+        (
+            "walrus",
+            "def f(d):\n    b = belief_dir(d)\n    if (p := b / 'speakers.json').exists():\n"
+            "        p.write_text('{}')\n    (b / 'rounds.json').write_text('{}')\n",
+        ),
+        (
+            "for target",
+            "def f(d):\n    b = belief_dir(d)\n    for p in (b / 'speakers.json', b / 'rounds.json'):\n"
+            "        p.write_text('{}')\n",
+        ),
+        (
+            "comprehension target",
+            "def f(d):\n    b = belief_dir(d)\n"
+            "    return [p.read_text() for p in [b / 'speakers.json', b / 'rounds.json']]\n",
+        ),
+    ],
+)
+def test_every_binding_form_that_names_a_path_is_visible(form: str, source: str) -> None:
+    """Assignment is one of seven binding forms, and six of them used to bind invisibly.
+
+    Not exotic syntax: a tuple assignment, a ``for``, an in-place ``/=``, a walrus and a
+    comprehension are ordinary lines. What made them a defeat is that the guard's silence on them
+    is the same silence it reports for a conformant module.
+    """
+    findings = check_source(PROBE, source, STAGE_CONTRACTS["L1"])
+    assert sorted({f.pattern for f in findings}) == ["L2/rounds.json", "L2/speakers.json"], form
+
+
+def test_an_in_place_extension_reports_the_artifact_and_not_its_directory() -> None:
+    """``p /= "speakers.json"`` extends a path; read as a rebinding it names the wrong thing.
+
+    A finding that names ``L2`` where the write was to ``L2/speakers.json`` is not a smaller
+    version of the truth — it is what a register entry then waives, and the entry would waive
+    every write to that directory.
+    """
+    source = "def f(d):\n    p = belief_dir(d)\n    p /= 'speakers.json'\n    p.write_text('{}')\n"
+    assert [(f.op, f.pattern) for f in check_source(PROBE, source, STAGE_CONTRACTS["L1"])] == [
+        ("write", "L2/speakers.json")
+    ]
+
+
+def test_a_for_over_a_glob_binds_the_paths_the_glob_yields() -> None:
+    """A ``for`` target is only visible if the iterable is, and a glob is how runs are walked.
+
+    Two findings for one loop, and both are the truth: the ``glob`` is itself a read of that
+    directory, and the loop body reads each file it yielded. What matters is that the second one
+    exists at all — the loop variable used to resolve to nothing, so a body of any size was free.
+    """
+    source = (
+        "def f(d):\n"
+        "    for path in (belief_dir(d) / 'round').glob('*/estimates/*.parquet'):\n"
+        "        path.read_text()\n"
+    )
+    findings = check_source(PROBE, source, STAGE_CONTRACTS["L1"])
+    assert {(f.op, f.pattern) for f in findings} == {("read", "L2/round/*/estimates/*.parquet")}
+    assert sorted(f.via for f in findings) == ["glob", "read_text"]
 
 
 def test_a_hand_built_path_is_resolved_even_without_the_layout_helper() -> None:
@@ -512,6 +704,131 @@ def test_cross_perturbation_evaluation_stored_under_l1_is_flagged(tmp_path: Path
     assert artifact_violations(tmp_path) == []
 
 
+@pytest.mark.parametrize(
+    ("relative", "swallowed"),
+    [
+        ("L1/raw/final/transcript.json", "final"),
+        ("L1/raw/estimates/asr.parquet", "estimates"),
+        ("L1/signals/round/asr.parquet", "round"),
+    ],
+)
+def test_a_broad_pattern_does_not_admit_the_trees_own_vocabulary_out_of_place(
+    tmp_path: Path, relative: str, swallowed: str
+) -> None:
+    """The second half of rule 0, and the half no per-artifact rule could express.
+
+    ``L1/raw/**`` has to stay open — whichever directories a tool reports by, it reports by, and
+    nobody can enumerate them in advance. What it must not do is admit another stage's *shape*:
+    a ``final/`` or an ``estimates/`` under a perturbation directory is L2's layout smuggled into
+    L1's open tree, and both used to conform. The vocabulary is derived from every declaration at
+    once, so it grows with the tree rather than being a list somebody maintains.
+    """
+    _conformant_run(tmp_path)
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.suffix == ".json":
+        path.write_text("{}")
+    else:
+        _write_table(path, {"perturbation": ["raw"], "signal": ["x"], "start": [0.0], "end": [0.5]})
+    problems = artifact_violations(tmp_path)
+    assert any(f"'{swallowed}' is the tree's own name" in p for p in problems), problems
+
+    path.unlink()
+    assert artifact_violations(tmp_path) == []
+
+
+def test_a_tool_directory_the_declaration_never_mentions_is_admitted(tmp_path: Path) -> None:
+    """The negative control for the vocabulary rule: openness is the point of a ``**``."""
+    _conformant_run(tmp_path)
+    (tmp_path / "L1" / "raw" / "diarization").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "L1" / "raw" / "diarization" / "pyannote.json").write_text("{}")
+    assert artifact_violations(tmp_path) == []
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".feather"])
+def test_the_same_rows_in_another_tabular_format_do_not_escape_the_content_rules(tmp_path: Path, suffix: str) -> None:
+    """The proof that rule 3's content half can fail, and how cheaply it used to.
+
+    ``_table_columns`` returned "not a table" for every suffix but ``.parquet``, so the key rules
+    were opt-in: the identical per-perturbation axis table written as ``speaker.csv`` conformed.
+    Two closures apply here at once — the declaration pins the kinds ``L1/signals/**`` admits, and
+    the reader now covers every format the repo can write, so neither alone has to be perfect.
+    """
+    _conformant_run(tmp_path)
+    path = tmp_path / "L1" / "signals" / f"speaker{suffix}"
+    if suffix == ".csv":
+        path.write_text("axis,stream,uncertainty\nspeaker,raw,0.7\n")
+    else:
+        import pyarrow.feather as feather
+
+        feather.write_feather(pa.table({"axis": ["speaker"], "stream": ["raw"], "uncertainty": [0.7]}), path)
+    problems = artifact_violations(tmp_path)
+    assert any("is not a permitted file kind here" in p for p in problems), problems
+
+    path.unlink()
+    assert artifact_violations(tmp_path) == []
+
+
+def test_a_json_list_of_records_is_read_as_a_table(tmp_path: Path) -> None:
+    """JSON records are a table the repo writes, so the key rules have to reach them.
+
+    ``L1/raw/`` permits JSON by declaration — that is where each tool's own outcome lands — and
+    the escape was to put the axis fold in one. An object stays a document; a list of objects is
+    rows, and rows have a key.
+    """
+    _conformant_run(tmp_path)
+    path = tmp_path / "L1" / "raw" / "scene.json"
+    path.write_text('[{"axis": "speaker", "signal": "diar_a", "uncertainty": 0.7}]')
+    problems = artifact_violations(tmp_path)
+    assert any("carries ['axis']" in p for p in problems), problems
+    assert any("carries fold column(s) ['uncertainty']" in p for p in problems), problems
+
+    path.write_text('{"axis": "speaker", "uncertainty": 0.7}')
+    assert artifact_violations(tmp_path) == [], "a JSON object is a document, not a table"
+
+
+def test_an_empty_record_list_has_no_row_to_contradict_a_key(tmp_path: Path) -> None:
+    """``regions.json`` is empty on a round that proposed nothing, and empty is not wrong."""
+    _conformant_run(tmp_path)
+    (tmp_path / "L2" / "round" / "0" / "derivatives").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "L2" / "round" / "0" / "derivatives" / "regions.json").write_text("[]")
+    assert artifact_violations(tmp_path) == []
+
+
+def test_a_file_the_guard_cannot_read_is_a_finding_and_not_a_pass(tmp_path: Path) -> None:
+    """Unreadable and conformant were the same outcome, and one of them is a lie."""
+    _conformant_run(tmp_path)
+    broken = tmp_path / "L1" / "signals" / "brouhaha_snr_db.parquet"
+    intact = broken.read_bytes()
+    broken.write_bytes(b"not a parquet file")
+    problems = artifact_violations(tmp_path)
+    assert any("could not be read" in p and "nothing about it has been checked" in p for p in problems), problems
+
+    broken.write_bytes(intact)
+    assert artifact_violations(tmp_path) == []
+
+
+@pytest.mark.parametrize("suffix", sorted(TABULAR_SUFFIXES))
+def test_every_tabular_format_the_repo_can_write_is_one_the_guard_can_read(tmp_path: Path, suffix: str) -> None:
+    """The set is closed by declaration, so it has to be closed by the reader too."""
+    from senselab.audio.workflows.audio_analysis.contracts import _table_columns
+
+    path = tmp_path / f"table{suffix}"
+    if suffix == ".parquet":
+        _write_table(path, {"axis": ["speaker"], "start": [0.0]})
+    elif suffix in {".feather", ".arrow"}:
+        import pyarrow.feather as feather
+
+        feather.write_feather(pa.table({"axis": ["speaker"], "start": [0.0]}), path)
+    elif suffix in {".csv", ".tsv"}:
+        path.write_text("axis\tstart\nspeaker\t0.0\n" if suffix == ".tsv" else "axis,start\nspeaker,0.0\n")
+    elif suffix in {".jsonl", ".ndjson"}:
+        path.write_text('{"axis": "speaker", "start": 0.0}\n')
+    else:
+        path.write_text('[{"axis": "speaker", "start": 0.0}]')
+    assert _table_columns(path) == frozenset({"axis", "start"}), suffix
+
+
 def test_a_fold_indexed_by_a_perturbation_is_flagged(tmp_path: Path) -> None:
     """An axis is a fold *over* perturbations, so it cannot be indexed by one."""
     _conformant_run(tmp_path)
@@ -606,6 +923,21 @@ def _current_run_tree(root: Path) -> None:
         regions = belief / "round" / str(index) / "derivatives" / "regions.json"
         regions.parent.mkdir(parents=True, exist_ok=True)
         regions.write_text("[]")
+        # The votes a round added, in the store's own spelling: an interval written as
+        # ``bucket_start``/``bucket_end`` is the same dimension as ``start``/``end``, which is a
+        # synonym the guard had to be taught rather than a second key.
+        _write_table(
+            regions.parent / "votes_added.parquet",
+            {
+                "axis": ["speaker"],
+                "bucket_start": [0.0],
+                "bucket_end": [0.5],
+                "source": ["diar_a"],
+                "stream": ["raw"],
+                "round": [index],
+                "evidence_weight": [1.0],
+            },
+        )
     final = root / "final"
     final.mkdir(parents=True, exist_ok=True)
     for name in (
@@ -659,25 +991,114 @@ def test_the_current_run_tree_is_flagged_and_fully_accounted_for(tmp_path: Path)
     assert unwaived_artifacts(raw) == []
 
 
+# ── 4. a declaration nothing satisfies ───────────────────────────────────────
+#
+# The mirror of rule 3, and the direction nothing used to look. Every content rule passes on a
+# file that is not there, so a declaration nobody produces is invisible by construction — and it
+# is what let a 26-file fragment be judged a completed run.
+
+
+def test_a_complete_run_produces_every_declared_artifact_or_the_gap_is_registered(tmp_path: Path) -> None:
+    """Rule 4, against the recorded complete tree.
+
+    Against a real run this question cannot be asked — a partial run makes every declaration
+    unproduced and the answer says nothing. Against the tree a completed run actually leaves it
+    is exact, and what it reports is the restructure's other half: seven of ``final/``'s declared
+    deliverables are written to the L2 root or not at all, so ``final/`` carries no converged
+    axis, no per-speaker output and no account of how the run reached its answer.
+    """
+    _current_run_tree(tmp_path)
+    missing = unwaived_unproduced(unproduced_declarations(tmp_path))
+    assert not missing, "these declared outputs nothing produces, and no register entry says why:\n" + "\n".join(
+        missing
+    )
+
+
+def test_a_declaration_nothing_produces_is_a_finding(tmp_path: Path) -> None:
+    """The proof that rule 4 can fail, written against a declaration this test owns.
+
+    Constructed rather than taken from the real declaration so the failure is reproducible
+    without a registered gap standing in for it.
+    """
+    _current_run_tree(tmp_path)
+    invented = Artifact("final/spectrogram.png", "a deliverable nobody writes")
+    assert unproduced_declarations(tmp_path, declared=[("FINAL", invented)]) == [
+        "final/spectrogram.png: declared by FINAL (a deliverable nobody writes) "
+        "and the run produced nothing matching it"
+    ]
+
+    (tmp_path / "final" / "spectrogram.png").write_bytes(b"")
+    assert unproduced_declarations(tmp_path, declared=[("FINAL", invented)]) == []
+
+
+def test_no_registered_artifact_deviation_has_gone_stale(tmp_path: Path) -> None:
+    """The artifact register decays exactly as the static one does, and now says so.
+
+    It was exempted on the grounds that run trees legitimately differ. They do — which is why
+    this is asked of the recorded tree rather than of whatever run is on the machine. Under the
+    exemption, ``L1/perturbation/*/**`` outlived its defect by two steps of the restructure.
+    """
+    _current_run_tree(tmp_path)
+    problems = [*artifact_violations(tmp_path), *unproduced_declarations(tmp_path)]
+    dead = dead_artifact_deviations(problems)
+    assert not dead, "these registered deviations no longer match anything — delete them:\n" + "\n".join(
+        f"{d.op} {d.pattern}" for d in dead
+    )
+
+
+def _incomplete(run: Path) -> list[str]:
+    """Declared outputs this run produced nothing for, ignoring the registered gaps."""
+    return unwaived_unproduced(unproduced_declarations(run))
+
+
 @pytest.fixture(scope="session")
 def real_run_dir() -> Path:
-    """The newest completed run under ``artifacts/analyze_audio/``.
+    """The newest **complete** run under ``artifacts/analyze_audio/``.
 
-    Skips rather than passing when there is none: an artifact guard with nothing to walk reports
-    exactly what an artifact guard that found no violation reports, and "did not run" has to stay
-    distinguishable from "found nothing".
+    Completeness is judged against the declaration, by the same computation that reports a
+    declaration nothing satisfies. The previous criterion was "the directory has an ``L1/`` and
+    an ``L2/``", which a 26-file partial run satisfies with no ``L1/signals/``, no ``L2/round/``
+    and no ``L1/perturbations.json`` — and against that fragment every rule below passes, because
+    a rule about a file cannot fail on a file that is not there.
+
+    Skips rather than passing when there is none, and names what was missing: "did not run" has
+    to stay distinguishable from "found nothing", and "ran against a fragment" from both.
     """
-    candidates = (
-        [p for p in RUNS_DIR.iterdir() if p.is_dir() and (p / "L1").is_dir() and (p / "L2").is_dir()]
-        if RUNS_DIR.is_dir()
-        else []
-    )
+    candidates = [p for p in RUNS_DIR.iterdir() if p.is_dir()] if RUNS_DIR.is_dir() else []
     if not candidates:
+        pytest.skip(f"no run under {RUNS_DIR}. Produce one with: uv run python scripts/analyze_audio.py <audio>")
+    complete = [run for run in candidates if not _incomplete(run)]
+    if not complete:
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
         pytest.skip(
-            f"no completed run under {RUNS_DIR} (need one with L1/ and L2/). "
-            "Produce one with: uv run python scripts/analyze_audio.py <audio>"
+            f"the newest run {newest.name} is incomplete — it produced nothing for:\n" + "\n".join(_incomplete(newest))
         )
-    return max(candidates, key=lambda p: p.stat().st_mtime)
+    return max(complete, key=lambda p: p.stat().st_mtime)
+
+
+def test_the_completeness_criterion_rejects_a_fragment(tmp_path: Path) -> None:
+    """The proof that rule 4's fixture can fail, on the fragment that was accepted.
+
+    An ``L1/`` and an ``L2/`` and nothing else inside them: the shape the previous criterion took
+    for a completed run, and the shape against which the whole artifact half of this file
+    reported clean.
+    """
+    (tmp_path / "L1" / "raw").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "L1" / "raw" / "ast.json").write_text("{}")
+    (tmp_path / "L2").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "L2" / "rounds.json").write_text("{}")
+    assert artifact_violations(tmp_path) == ["L2/rounds.json: written by no declared stage output"]
+
+    missing = _incomplete(tmp_path)
+    assert any(p.startswith("L1/signals/**") for p in missing), missing
+    assert any(p.startswith("L1/perturbations.json") for p in missing), missing
+    assert any(p.startswith("L2/round/*/estimates/*.parquet") for p in missing), missing
+
+    # ...and the recorded complete tree is not a fragment, or the criterion says nothing.
+    complete = tmp_path / "complete"
+    complete.mkdir()
+    _current_run_tree(complete)
+    assert _incomplete(complete) == []
 
 
 def test_a_real_run_conforms_or_the_violation_is_in_the_register(real_run_dir: Path) -> None:
