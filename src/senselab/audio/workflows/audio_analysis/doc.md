@@ -105,13 +105,15 @@ edit or reformat and invalidated every cached model result for nothing.
 `CACHE_SCHEMA_VERSION` remains the global lever — bumping it makes
 `sync_cache_with_schema_version` wipe stale entries automatically on every host.
 
-The adaptive loop accepts either ingest path: `run_adaptive_loop(run_dir)` reads a
-finished run's parquets, while `run_adaptive_loop(run_dir, harvests=..., summary=...)`
-consumes in-memory `PassHarvest` objects (what `analyze_audio.py` now does via
-`compute_uncertainty_axes(harvests_out=...)`). The in-process path reports
-`parity_check.status == "skipped"` rather than a passing check, because parity
-compares against stored parquet values that don't exist yet — a vacuous
-"0 mismatches" would look like proof and be none.
+The adaptive loop accepts either ingest path: `run_adaptive_loop(run_dir)` reads the linked
+votes from `L2/round0/votes/<axis>.parquet`, while
+`run_adaptive_loop(run_dir, harvests=..., summary=...)` consumes in-memory `PassHarvest`
+objects (what `analyze_audio.py` now does via `compute_uncertainty_axes(harvests_out=...)`).
+Both see the same evidence, and both run `replay_check`: every bucket is rebuilt from the
+persisted votes plus the recorded decisions and compared against the store's own aggregation.
+That replaces a parity check against `within_pass_uncertainty` on the L1 parquet — an oracle
+that was a per-pass axis (a quantity that cannot exist) produced by a second implementation of
+the fold, and that the in-process path could not run at all.
 
 Adaptive CLI surface: `--max-rounds`, `--policy`, `--budget-medium/-heavy`,
 `--max-region-rounds`, `--region-top-n`, `--reserve-asr-models`,

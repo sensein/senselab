@@ -268,9 +268,9 @@ def test_asr_axis_attenuation_reaches_the_pairwise_family() -> None:
 
 
 def test_empty_weight_map_is_byte_identical_to_none() -> None:
-    """Round-1 re-aggregation must stay bit-identical, or the parity proof proves nothing.
+    """Round-1 re-aggregation must stay bit-identical, or the replay proof proves nothing.
 
-    ``parity_check`` compares re-aggregation against the stored parquet value; if passing an empty
+    ``replay_check`` re-aggregates from the persisted votes; if passing an empty
     weight map perturbed the fold, the proof would silently become a comparison of two quantities.
     """
     from senselab.audio.workflows.audio_analysis.aggregate import aggregate_asr, aggregate_speaker

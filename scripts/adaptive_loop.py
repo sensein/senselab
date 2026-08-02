@@ -81,7 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     if verdict != result["run_state"]:
         verdict = f"{verdict} (loop stopped: {result['run_state']})"
     print(f"termination: {verdict}  rounds: {result['rounds']}")
-    print("parity:", json.dumps(result["parity_check"]))
+    print("replay:", json.dumps(result["replay_check"]))
     print(
         f"interventions fired: {result['n_interventions_fired']}  "
         f"fused words: {result['n_words_fused']}  stream: {result['fusion_stream']}"
