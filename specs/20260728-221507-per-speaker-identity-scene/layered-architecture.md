@@ -1343,3 +1343,38 @@ re-discovered by measurement instead of being a fact the code states once.
 aliases generated from it; `background_mask` participating in region proposal, convergence and the
 convergence report on the same terms as the other three; and `ATTENUATED_AXES` either justified
 against it in writing or removed. Adding the fifth axis later must be one edit, not eleven.
+
+---
+
+## `L1/stability/` violates the contract too — no cross-pass evaluation at L1
+
+The per-pass axis was removed and stability was re-keyed by *signal*, which fixed the axis half of
+the error and left the other half in place. `L1/stability/<signal>.parquet` and
+`L1/stability/signals.json` (`{signal → instability}`) are **comparisons between passes**, and a
+pass is an input dimension to the fold. Evaluating across it is a fold, by exactly the argument
+that makes an axis L2's. Re-keying changed what the fold is indexed by, not that it is one.
+
+**The rule, stated so it cannot be satisfied by renaming:** L1 emits one measurement per
+`(pass, signal, bucket)` and never relates two passes. Anything whose value depends on more than
+one pass — a delta, a flip rate, an instability, a weight derived from any of them — is L2's,
+because "how much did this signal move under the transform" is a judgement about the signal, not an
+observation of the recording.
+
+That is also what makes the passes worth having. They are a perturbation *sample*; the sample is
+L1's, the statistic over it is not.
+
+**What moves.** `reliability.signal_stability` and everything downstream of it —
+`measured_weights`, the fusion weights it feeds — are already L2 computations reading L1
+measurements, which is correct. Only the *artifact* is misfiled: the stability parquets and
+`signals.json` belong beside the round that used them (`L2/round<N>/stability/`), or nowhere at
+all if the weights they produce are already recorded on the fused rows' `weight_basis`. Writing
+both is the two-copies-of-one-quantity problem that item 26 was about.
+
+**Why this kept surviving.** Three artifacts have now been found under `L1/` that L1 cannot
+produce — the per-pass axis parquets, `background_mask.parquet`, and the stability files — and each
+was found by a person reading the tree, never by a check. The guard that keys on *shape* would
+catch the first two. It would not catch this one: a per-signal instability parquet has no `axis`
+column and no fold-across-signals column, and looks like a measurement. The shape that gives it
+away is **its keyspace**: it is keyed by signal alone while every legitimate L1 artifact is keyed
+by `(pass, ...)`. A file under `L1/` that does not carry a pass, or that carries two, is a
+cross-pass evaluation whatever its columns are named.
