@@ -20,6 +20,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.convergence import (
     round_summary,
 )
 from senselab.audio.workflows.audio_analysis.adaptive.fusion import (
+    attenuation_columns,
     build_final_outputs,
     collect_word_streams,
     fuse_words,
@@ -580,6 +581,7 @@ def _write_round_belief(round_dir: Path, state: BeliefState, passes: list[str]) 
                         "irreducible_reason": r.get("irreducible_reason"),
                         "round": r.get("round"),
                         "n_sources": len(r.get("contributing_sources") or []),
+                        **attenuation_columns(r),
                     }
                 )
         if rows:

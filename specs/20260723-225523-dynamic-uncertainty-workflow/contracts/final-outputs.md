@@ -68,11 +68,17 @@ final/diarization.json; every word derivable from active votes in the belief sto
 RTTM sidecar for interop. Cluster ids come from the existing unified clustering
 (`clustering.py:202`); boundary confidences from I1 change-point evidence where it ran, else 0.5.
 
-## final/presence.parquet
+## belief/speech_presence.parquet
 
-Fused presence at the presence grid: `start, end, p_voice, presence_confidence, status,
-irreducible_reason?, elected_stream, overlap_posterior?`. This is the last round's presence belief —
-identical values to `rounds/<K>/belief/presence.parquet`, republished for discoverability.
+Fused speech presence at the presence grid: `start, end, within_pass_uncertainty, epistemic,
+aleatoric_floor, speech_presence_confidence, status, irreducible_reason?, round, elected_stream,
+overlap_posterior?`, plus the attenuation columns `n_attenuated_sources, attenuated_sources,
+attenuation` (belief-store.md invariant 8). This is the last round's presence belief — identical
+values to `rounds/<K>/belief/speech_presence.parquet`, republished for discoverability.
+
+`speech_presence_confidence` is a *weighted* fold, so the attenuation columns are load-bearing
+rather than diagnostic: without them a bucket where every source agreed and one where the only
+source that heard a speaker was discounted to the floor are the same row.
 
 ## final/convergence.json
 
