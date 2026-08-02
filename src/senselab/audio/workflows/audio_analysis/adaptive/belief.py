@@ -567,10 +567,25 @@ class VoteStore:
         reporting the bucket", the same fold ``compute._attach_scene_measurements`` applies, named
         the same way. The measurements describe the recording at that instant; the enhancement
         transform is a second look at it, not a second instant.
+
+        Scene measurements ride the presence grid, so an axis with none of its own is filled in
+        from the presence buckets it *overlaps*. Without that, ``aleatoric_floor`` is ``None`` on
+        every speaker and asr bucket and the ``snr_floor`` verdict is unreachable on two axes out of
+        three — which is how a noisy stretch got reported as
+        ``no_reduction_under_available_interventions``: not "we looked and the scene does not
+        explain it", but "we never asked".
         """
+        collected = self._meta_for(axis, bucket)
+        if not collected and axis != "speech_presence":
+            collected = [
+                m
+                for bk in self.buckets("speech_presence")
+                if bk[0] < bucket[1] and bk[1] > bucket[0]
+                for m in self._meta_for("speech_presence", bk)
+            ]
         per_name: dict[str, list[Any]] = {}
-        for stream in self.streams_for(axis, bucket):
-            for name, value in (self.row_meta.get((stream, axis, bucket)) or {}).items():
+        for entry in collected:
+            for name, value in entry.items():
                 if value is not None:
                     per_name.setdefault(name, []).append(value)
         merged: dict[str, Any] = {}
@@ -583,6 +598,14 @@ class VoteStore:
                 if labels:
                     merged[name] = max(sorted(set(labels)), key=labels.count)
         return merged
+
+    def _meta_for(self, axis: str, bucket: tuple[float, float]) -> list[dict[str, Any]]:
+        """Each pass's measurement dict for one (axis, bucket), empties dropped."""
+        return [
+            m
+            for s in self.streams_for(axis, bucket)
+            if (m := self.row_meta.get((s, axis, bucket)))  # noqa: RUF018
+        ]
 
     def folded_evidence_weights(self, axis: str, bucket: tuple[float, float]) -> dict[str, float]:
         """``{source → evidence weight}`` for the cross-pass fold.
