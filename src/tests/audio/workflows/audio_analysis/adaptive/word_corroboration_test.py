@@ -216,7 +216,7 @@ def test_transcript_records_the_pool_it_measured_against(tmp_path: Path) -> None
     from senselab.audio.workflows.audio_analysis.adaptive.fusion import build_final_outputs
 
     store = _store(_PROFILE)
-    state = BeliefState.from_store(store, [STREAM], aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min")
     build_final_outputs(
         out_dir=tmp_path,
         words=[

@@ -44,7 +44,7 @@ def independent_presence_pool(store: Any, stream: str) -> tuple[list[str], dict[
     """Presence voters usable as corroboration for a speech claim, derived from the run itself.
 
     Args:
-        store: The vote store (duck-typed: ``buckets`` / ``active_votes``).
+        store: The vote store (duck-typed: ``vote_buckets`` / ``active_votes``).
         stream: Pass label.
 
     Returns:
@@ -53,7 +53,8 @@ def independent_presence_pool(store: Any, stream: str) -> tuple[list[str], dict[
         is visible in the artifacts instead of looking like a run where nothing was doubtful.
     """
     buckets = [
-        {"votes": store.active_votes(stream, "speech_presence", bk)} for bk in store.buckets(stream, "speech_presence")
+        {"votes": store.active_votes(stream, "speech_presence", bk)}
+        for bk in store.vote_buckets(stream, "speech_presence")
     ]
     candidates = sorted(evidence_signal_names(buckets))
     kept = informative_evidence(buckets, candidates)
@@ -90,7 +91,7 @@ def corroboration_over_span(
         ``(corroboration | None, n_buckets, n_measured)`` — the counts travel with the number so
         the coarseness of the underlying grid stays auditable per span.
     """
-    overlapping = [bk for bk in store.buckets(stream, "speech_presence") if bk[0] < end and bk[1] > start]
+    overlapping = [bk for bk in store.vote_buckets(stream, "speech_presence") if bk[0] < end and bk[1] > start]
     measured = [
         p
         for bk in overlapping

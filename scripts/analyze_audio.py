@@ -1637,6 +1637,11 @@ def main(argv: list[str] | None = None) -> int:
                     # the presence measurements under different thresholds than
                     # ``compute_uncertainty_axes`` did, so the two folds were not comparable.
                     speech_presence_policy=_policy_from_params(comparator_params),
+                    # The scene measurements round 0 attached, so the coupling is applied to every
+                    # round these calls write rather than to in-memory rows this loop then
+                    # overwrites (the copy-back below re-reads triage_score and coupled_from).
+                    scene_rows=(fused_axes["speech_presence"].rows if "speech_presence" in fused_axes else ()),
+                    comparator_params=comparator_params,
                 )
                 summaries["final_uncertainty"] = final_maps
 
@@ -1693,6 +1698,8 @@ def main(argv: list[str] | None = None) -> int:
                                 "triage_score",
                                 "round",
                                 "coupled_from",
+                                "scene_quality_coupling",
+                                "triage_score_pre_coupling",
                             ):
                                 if key in fresh:
                                     row[key] = fresh[key]

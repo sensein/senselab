@@ -74,11 +74,9 @@ from senselab.audio.workflows.audio_analysis.types import (
     UncertaintyAxis,
 )
 from senselab.audio.workflows.audio_analysis.votes import (
-    DEFAULT_UTTERANCE_SCENE_COUPLING,
     PassHarvest,
-    _coupling_weights,
+    apply_scene_coupling,
     link_pass,
-    scene_quality_coupling,
 )
 
 
@@ -746,51 +744,17 @@ def _attach_transcripts(fused_axes: dict[str, FusedAxis], asr_buckets_by_pass: d
 
 
 def _apply_scene_coupling(fused_axes: dict[str, FusedAxis], params: dict[str, Any]) -> None:
-    """Inflate the asr axis's *policy fold* where the scene degrades the evidence (FR-019).
+    """Apply the scene→asr coupling to round 0's rows (see :func:`votes.apply_scene_coupling`).
 
-    Applied to ``triage_score`` only — the policy fold, which exists to rank where to spend
-    budget — and never to ``uncertainty``, which is the entropy measure and has no policy in it.
-    The multiplier, its weights and the pre-coupling value are written onto the row, so the
-    adjustment is re-decidable without re-running anything.
+    The shared implementation lives in ``votes`` because ``write_final_uncertainty`` has to apply
+    it to *every* round: its rounds re-fold each axis from the harvests, so a coupling applied only
+    here was overwritten before anything was written to disk.
     """
     asr = fused_axes.get("asr")
     presence = fused_axes.get("speech_presence")
     if asr is None or presence is None:
         return
-    weights = _coupling_weights(params)
-    quality_intervals = [
-        (float(r["start"]), float(r["end"]), float(r["quality_snr"]))
-        for r in presence.rows
-        if isinstance(r.get("quality_snr"), (int, float))
-    ]
-    competing_intervals = [
-        (
-            float(r["start"]),
-            float(r["end"]),
-            float(r.get("src_machine") or 0.0) + float(r.get("src_environment") or 0.0),
-        )
-        for r in presence.rows
-        if isinstance(r.get("src_machine"), (int, float)) or isinstance(r.get("src_environment"), (int, float))
-    ]
-    for row in asr.rows:
-        coupling = scene_quality_coupling(
-            float(row["start"]),
-            float(row["end"]),
-            quality_degradation=quality_intervals,
-            competing_source_mass=competing_intervals,
-            weights=weights,
-        )
-        row["scene_quality_coupling"] = coupling
-        row["triage_score_pre_coupling"] = row.get("triage_score")
-        if isinstance(row.get("triage_score"), (int, float)) and coupling != 1.0:
-            row["triage_score"] = max(0.0, min(1.0, float(row["triage_score"]) * coupling))
-        if coupling != 1.0:
-            row["coupled_from"] = sorted({*(row.get("coupled_from") or []), "scene_quality"})
-    asr.provenance["asr_scene_coupling"] = {
-        "weights": dict(weights),
-        "defaults": dict(DEFAULT_UTTERANCE_SCENE_COUPLING),
-        "applies_to": "triage_score",
-    }
+    asr.provenance["asr_scene_coupling"] = apply_scene_coupling(asr.rows, presence.rows, params)
 
 
 def _speech_window_mask(

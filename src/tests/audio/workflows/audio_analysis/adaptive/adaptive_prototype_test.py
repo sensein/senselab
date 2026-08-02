@@ -75,7 +75,7 @@ def test_attenuated_votes_stay_in_aggregation() -> None:
 
 def _rows(uncertainties: list[float], win: float = 0.5) -> list[dict]:
     return [
-        {"start": i * win, "end": (i + 1) * win, "within_pass_uncertainty": u, "status": "open"}
+        {"start": i * win, "end": (i + 1) * win, "uncertainty": u, "status": "open"}
         for i, u in enumerate(uncertainties)
     ]
 
@@ -84,12 +84,12 @@ def test_region_proposal_seed_expand_pad() -> None:
     """FR-010: seed ≥ θ_high, expand ≥ θ_low, pad, mass ranking."""
     policy = load_policy()
     rows = _rows([0.1, 0.4, 0.9, 0.5, 0.1, 0.1, 0.7, 0.1])
-    regions = propose_regions(rows, axis="asr", stream="raw_16k", policy=policy, round_idx=2, duration_s=4.0)
+    regions = propose_regions(rows, axis="asr", policy=policy, round_idx=2, duration_s=4.0)
     assert len(regions) == 2
     r0 = regions[0]
     assert (r0["core_start"], r0["core_end"]) == (0.5, 2.0)  # expanded left+right over ≥0.33
     assert r0["crop_start"] == 0.0 and r0["crop_end"] == 3.0  # ±1.0 s pad, clipped
-    assert r0["region_id"] == "r2_raw_asr_0"
+    assert r0["region_id"] == "r2_asr_0"
     assert regions[1]["core_start"] == 3.0  # isolated 0.7 seed
 
 
@@ -112,7 +112,6 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
         {
             "region_id": "rA",
             "axis": "asr",
-            "stream": "raw_16k",
             "core_start": 0.0,
             "core_end": 1.0,
             "crop_start": 0.0,
@@ -124,7 +123,6 @@ def test_planner_is_deterministic_and_budget_bounded() -> None:
         {
             "region_id": "rB",
             "axis": "asr",
-            "stream": "raw_16k",
             "core_start": 2.0,
             "core_end": 3.0,
             "crop_start": 1.0,
@@ -314,7 +312,7 @@ def test_policy_hash_stable_and_override(tmp_path: Path) -> None:
 def test_from_harvests_in_process_integration() -> None:
     """T044/T009: PassHarvest → VoteStore without a parquet round-trip; parity with aggregate_pass."""
     from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
-    from senselab.audio.workflows.audio_analysis.aggregate import aggregate_speech_presence
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
     harvest = PassHarvest(
@@ -329,11 +327,20 @@ def test_from_harvests_in_process_integration() -> None:
     store = VoteStore.from_harvests({"raw_16k": harvest})
     votes = store.active_votes("raw_16k", "speech_presence", (0.0, 0.5))
     assert set(votes) == {"m1", "m2"}
-    row = store.reaggregate_bucket("raw_16k", "speech_presence", (0.0, 0.5), aggregator="min")
-    assert row["within_pass_uncertainty"] == pytest.approx(aggregate_speech_presence(votes))
+    row = store.reaggregate_bucket("speech_presence", (0.0, 0.5), aggregator="min")
+    # ``p_voice`` is a probability about the world and still comes from ``speaks``: two voters
+    # split evenly. ``uncertainty`` is the fold and is ``None`` here, because neither coverage
+    # voter reported any doubt of its own — no signal spoke, which is not the same as agreement.
+    assert row["p_voice"] == pytest.approx(0.5)
+    assert row["uncertainty"] is None
     assert store.row_meta[("raw_16k", "speech_presence", (0.0, 0.5))]["quality_snr"] == 0.3
-    ident = store.reaggregate_bucket("raw_16k", "speaker", (0.0, 1.0), aggregator="min")
-    assert ident["within_pass_uncertainty"] == pytest.approx(0.5)
+    ident = store.reaggregate_bucket("speaker", (0.0, 1.0), aggregator="min")
+    assert ident["uncertainty"] == pytest.approx(
+        fuse_axis(
+            {"raw_16k": [{"start": 0.0, "end": 1.0, "votes": store.active_votes("raw_16k", "speaker", (0.0, 1.0))}]},
+            weights={},
+        )[0]["uncertainty"]
+    ), "the store's fold is fuse_axis, not a second implementation of it"
 
 
 # ── In-process ingest path (T040) ─────────────────────────────────────
@@ -389,7 +396,13 @@ def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
 
     harvest = PassHarvest(
         pass_label="raw_16k",
-        speech_presence_evidence=[{"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}}],
+        speech_presence_evidence=[
+            {
+                "start": 0.0,
+                "end": 0.5,
+                "evidence": {"m1": {"covered_fraction": 1.0}, "vad": {"frame_mean": 0.8, "excess_db": 6.0}},
+            }
+        ],
         grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
     run_adaptive_loop(
@@ -524,7 +537,7 @@ def _p2_ctx(
         rows.append({"start": bk[0], "end": bk[1], "meta": meta})
 
     class _State:
-        def axis_rows(self, stream: str, axis: str) -> list[dict[str, Any]]:
+        def axis_rows(self, axis: str) -> list[dict[str, Any]]:
             return rows if axis == "speech_presence" else []
 
     return {"state": _State(), "store": store, "policy": policy or load_policy(), "passes": ["raw_16k"], "_rows": rows}
@@ -533,7 +546,6 @@ def _p2_ctx(
 def _p2_region() -> dict[str, Any]:
     return {
         "axis": "speech_presence",
-        "stream": "raw_16k",
         "region_id": "r2_raw_speech_presence_0",
         "core_start": 0.0,
         "core_end": 1.0,
@@ -748,7 +760,7 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
             payload={"speaks": True},
         )
     )
-    state = BeliefState.from_store(store, ["raw_16k"], aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min")
     build_final_outputs(
         out_dir=tmp_path,
         words=[],
@@ -760,5 +772,5 @@ def test_final_speech_presence_parquet_has_contract_columns(tmp_path: Path) -> N
         corroboration_provenance={"evidence_pool": [], "evidence_pool_rejected": {}},
     )
     cols = list(pd.read_parquet(belief_dir(tmp_path) / "speech_presence.parquet").columns)
-    for col in ("speech_presence_confidence", "elected_stream", "overlap_posterior"):
+    for col in ("speech_presence_confidence", "contributing_passes", "overlap_posterior"):
         assert col in cols, f"contract column {col!r} missing from final/speech_presence.parquet"

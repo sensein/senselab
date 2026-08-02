@@ -27,10 +27,10 @@ from senselab.audio.workflows.audio_analysis.adaptive.convergence import (
 class _State:
     """Minimal stand-in for BeliefState: no open buckets, so nothing distracts from the verdict."""
 
-    def axis_rows(self, _stream: str, _axis: str) -> list[dict[str, Any]]:
+    def axis_rows(self, _axis: str) -> list[dict[str, Any]]:
         return []
 
-    def uncertainty_mass(self, _stream: str, _axis: str, _theta: float) -> float:
+    def uncertainty_mass(self, _axis: str, _theta: float) -> float:
         return 0.0
 
 
@@ -42,7 +42,6 @@ class _Ledger:
 def _report(**kw: Any) -> dict[str, Any]:  # noqa: ANN401 — the callee is Any-typed by design
     base: dict[str, Any] = dict(
         state=_State(),
-        passes=["raw"],
         policy={"thresholds": {"theta_low": 0.2}},
         rounds=[{"round": 2}, {"round": 3}],
         ledger=_Ledger(),
