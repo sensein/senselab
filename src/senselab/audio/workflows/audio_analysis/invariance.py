@@ -32,6 +32,8 @@ from typing import Mapping
 
 import numpy as np
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
 __all__ = [
     "probe_diarization_invariance",
     "INVARIANT_PERTURBATIONS",
@@ -47,10 +49,13 @@ Deliberately all *attenuating* or *additive-constant* rather than amplifying: am
 risks clipping, and a clipped probe measures the distortion it introduced rather than the
 model's invariance."""
 
-MIN_INVARIANCE = 0.05
-"""Floor, so a model that fails every probe is attenuated rather than silenced. Mirrors the
-reliability and support floors — a lone dissenter may still be the only source that noticed
-something."""
+MIN_INVARIANCE = MIN_EVIDENCE_WEIGHT
+"""Floor, so a model that fails every probe is attenuated rather than silenced.
+
+Not merely *mirroring* the reliability and support floors, as the restated literal here implied —
+it is the same floor, reached by the same argument: a lone dissenter may still be the only source
+that noticed something. The number and its derivation live in
+:data:`~senselab.audio.workflows.audio_analysis.floors.MIN_EVIDENCE_WEIGHT`."""
 
 _GAIN_DOWN_DB = -6.0
 _SHIFT_S = 0.010

@@ -13,10 +13,12 @@ import math
 import re
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
 _PUNCTUATION_PATTERN = re.compile(r"[^\w\s']")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
-MIN_CORROBORATION = 0.05
+MIN_CORROBORATION = MIN_EVIDENCE_WEIGHT
 """Floor on a word's corroboration weight, so an uncorroborated word is attenuated, not erased.
 
 Same reasoning as ``rounds.MIN_REGIONAL_TRUST``, ``support.SUPPORT_FLOOR`` and
@@ -25,9 +27,13 @@ system, it is measured asymmetrically (presence buckets are coarser than word bo
 quiet or overlapped speaker produces exactly the pattern it fires on. The dissenting word may be
 the only record that something was said.
 
-Restated here rather than imported because this package is a model-independent, dependency-free
-task API and must not learn about the workflow's presence axis. The number is the same; the
-argument is the same; the coupling would be the wrong kind.
+This used to restate ``0.05`` rather than import it, on the ground that a model-independent task
+API must not learn about the workflow's presence axis. The ground was sound and the conclusion did
+not follow: what is imported is
+:mod:`~senselab.audio.workflows.audio_analysis.floors`, a module with no imports of its own, no
+knowledge of any axis, and one constant in it. Restating the number bought no independence — it is
+the *argument* that is shared, and a copy of a shared argument is just an unwatched place for it to
+change.
 """
 
 

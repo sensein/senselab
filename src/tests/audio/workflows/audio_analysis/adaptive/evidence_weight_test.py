@@ -288,14 +288,74 @@ def test_empty_weight_map_is_byte_identical_to_none() -> None:
     )
 
 
-def test_one_floor_shared_by_every_withdrawal_site() -> None:
-    """Four sites apply one argument; four literals is how they drift apart."""
-    from senselab.audio.workflows.audio_analysis import influence, reliability, rounds, support
+@pytest.mark.parametrize(
+    ("site", "constant"),
+    [
+        ("rounds.MIN_REGIONAL_TRUST", "senselab.audio.workflows.audio_analysis.rounds:MIN_REGIONAL_TRUST"),
+        ("reliability.MIN_RELIABILITY", "senselab.audio.workflows.audio_analysis.reliability:MIN_RELIABILITY"),
+        ("support.SUPPORT_FLOOR", "senselab.audio.workflows.audio_analysis.support:SUPPORT_FLOOR"),
+        ("invariance.MIN_INVARIANCE", "senselab.audio.workflows.audio_analysis.invariance:MIN_INVARIANCE"),
+        (
+            "identity_repair.MIN_WINDOW_WEIGHT",
+            "senselab.audio.workflows.audio_analysis.adaptive.identity_repair:MIN_WINDOW_WEIGHT",
+        ),
+        (
+            "speech_to_text_ensemble.MIN_CORROBORATION",
+            "senselab.audio.tasks.speech_to_text_ensemble.api:MIN_CORROBORATION",
+        ),
+    ],
+)
+def test_one_floor_shared_by_every_withdrawal_site(site: str, constant: str) -> None:
+    """Every site applies one argument; every restated literal is how they drift apart.
 
-    assert rounds.MIN_REGIONAL_TRUST == MIN_EVIDENCE_WEIGHT
-    assert reliability.MIN_RELIABILITY == MIN_EVIDENCE_WEIGHT
-    assert support.SUPPORT_FLOOR == MIN_EVIDENCE_WEIGHT
+    Identity, not equality. Two modules that each write ``0.05`` are equal today and are exactly
+    the arrangement this test exists to forbid — the value agrees until someone retunes one of
+    them, and nothing then reports that the others did not follow.
+    """
+    from importlib import import_module
+
+    module_path, name = constant.split(":")
+    value = getattr(import_module(module_path), name)
+    assert value is MIN_EVIDENCE_WEIGHT, (
+        f"{site} restates the floor instead of binding to floors.MIN_EVIDENCE_WEIGHT "
+        f"(got {value!r}). One argument, one definition."
+    )
+
+
+def test_the_gate_bottoms_out_at_the_shared_floor() -> None:
+    """The one site with no constant of its own: influence's gate, floored inside the function."""
+    from senselab.audio.workflows.audio_analysis import influence
+
     assert influence.effective_weight(1.0, uncertainty=1.0, derivation_gate=1.0) == pytest.approx(MIN_EVIDENCE_WEIGHT)
+
+
+def test_policy_yaml_weight_floors_do_not_drift_from_the_shared_constant() -> None:
+    """YAML cannot import a Python constant, so the link is a test or it is nothing.
+
+    Both keys floor a *withdrawn weight* — the same quantity as ``MIN_EVIDENCE_WEIGHT``, reached by
+    the same argument. They stay literals because an operator has to be able to read and override a
+    policy, so what is enforced is the packaged default: ship the shared number, and if someone
+    retunes the constant without the YAML (or the reverse) this is what says so.
+
+    Driven off ``policy._WEIGHT_FLOOR_KEYS`` rather than a list repeated here, so a floor added to
+    the policy is covered the moment it is registered for validation.
+    """
+    import yaml
+
+    from senselab.audio.workflows.audio_analysis.adaptive import policy as policy_module
+
+    raw = yaml.safe_load(policy_module._DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
+    assert policy_module._WEIGHT_FLOOR_KEYS, "no floors registered for validation — the guard is inert"
+    for path, key in policy_module._WEIGHT_FLOOR_KEYS:
+        node: Any = raw
+        for step in path:
+            node = node[step]
+        dotted = ".".join((*path, key))
+        assert float(node[key]) == pytest.approx(MIN_EVIDENCE_WEIGHT), (
+            f"policy default {dotted} = {node[key]} has drifted from "
+            f"floors.MIN_EVIDENCE_WEIGHT = {MIN_EVIDENCE_WEIGHT}. Both floor a withdrawn weight; "
+            "if the argument has genuinely changed for one of them, say so in floors.py."
+        )
 
 
 # ── the rule that measures ───────────────────────────────────────────────
