@@ -35,6 +35,10 @@ adjudication:
   min_indicators: 2
   # Floor on the weight P3 may withdraw. Validated > 0 at load: aggregation drops voters at
   # weight <= 0, so a zero floor here is a purge switch, not a tuning knob.
+  # This IS floors.MIN_EVIDENCE_WEIGHT — same quantity, same argument. YAML cannot import a Python
+  # constant, so the link is held by evidence_weight_test.py::
+  # test_policy_yaml_weight_floors_do_not_drift_from_the_shared_constant, which fails if this
+  # default and the constant stop agreeing. An override policy may still set its own.
   min_evidence_weight: 0.05
   p_voice_missed_low: 0.2      # C9's own lower bound; it used to borrow P3's threshold, so
                                # retuning one rule silently moved the other
@@ -52,9 +56,11 @@ fusion:
     # reached the transcript.
     exponent: 1.0              # gate = max(min_corroboration, p_independent ** exponent);
                                # same shape as influence.uncertainty_gate.exponent
-    min_corroboration: 0.05    # floor: attenuate, never erase (MIN_CORROBORATION). Validated > 0
-                               # at load — at zero both the vote weight and the coverage
-                               # contribution vanish, which is deletion by configuration.
+    min_corroboration: 0.05    # floor: attenuate, never erase. Validated > 0 at load — at zero
+                               # both the vote weight and the coverage contribution vanish, which
+                               # is deletion by configuration. Same quantity as
+                               # floors.MIN_EVIDENCE_WEIGHT (which api.MIN_CORROBORATION now binds
+                               # to); the drift guard is the same test named above.
     segment_min_corroboration: 0.2
                                # below this a word stays in words[] with its measurement and its
                                # sources, but not in the readable segment rollup. THE ONE NUMBER

@@ -29,6 +29,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
+MIN_WINDOW_WEIGHT = MIN_EVIDENCE_WEIGHT
+"""Floor on a window's contribution to its segment's pooled embedding.
+
+Pooling is ``p_voice``-weighted, so an unvoiced or unmeasured window would otherwise contribute
+nothing to the vector that decides which speaker the segment belongs to — erasure by weight, in
+the one computation where a short, quiet or unmeasured window is most likely to be the boundary
+evidence. Two bare ``0.05`` literals used to sit inline here, doing the job of this constant
+without naming it or connecting it to the argument that sets it; the number and its derivation
+live in :data:`~senselab.audio.workflows.audio_analysis.floors.MIN_EVIDENCE_WEIGHT`.
+"""
+
 
 def _l2(mat: Any) -> Any:  # noqa: ANN401
     import numpy as np
@@ -177,7 +190,7 @@ def repair_identity(
             if not inside.any():  # fall back to nearest window
                 inside = np.zeros(len(mids), dtype=bool)
                 inside[int(np.argmin(np.abs(mids - (seg["start"] + seg["end"]) / 2)))] = True
-            weights = np.asarray([max(0.05, p_voice_at(m) or 0.05) for m in mids[inside]])
+            weights = np.asarray([max(MIN_WINDOW_WEIGHT, p_voice_at(m) or 0.0) for m in mids[inside]])
             v = (vecs[inside] * weights[:, None]).sum(axis=0) / weights.sum()
             seg_vecs.append(v)
         pooled[model] = seg_vecs
