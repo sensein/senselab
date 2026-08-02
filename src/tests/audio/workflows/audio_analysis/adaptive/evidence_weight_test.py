@@ -250,7 +250,7 @@ def test_asr_axis_attenuation_reaches_the_pairwise_family() -> None:
     """
     from senselab.audio.workflows.audio_analysis.aggregate import aggregate_asr
 
-    votes = {
+    votes: dict[str, dict[str, Any]] = {
         "asr_a": {"text": "hello"},
         "asr_b": {"text": "hello"},
         "asr_c": {"text": "hello"},
