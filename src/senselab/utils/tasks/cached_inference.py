@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 7
+CACHE_SCHEMA_VERSION = 8
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -88,6 +88,14 @@ column, ``background_mask`` became a fourth emitted axis, and the per-round log 
 A round's *inputs* changed too — every round after the first now reads the previous
 round's axes and re-derived derivatives — so a cached outcome is not merely missing
 columns, it answers a different question.
+
+Bumped 7 → 8 when the per-pass axis was removed. ``L1/<pass>/uncertainty/<axis>.parquet``
+and ``L1/stability/raw_vs_enhanced/<axis>.parquet`` no longer exist; L1 emits
+``L1/<pass>/signals/<signal>.parquet`` in native units, stability is keyed by signal, the
+linked evidence is written to ``L2/round0/votes/<axis>.parquet``, and ``final/summary.json``
+no longer inlines ``passes``. Nothing needs to read an old parquet — cache invalidation is
+the free lever, and a stale entry that *looks* readable is far more expensive than
+recomputing one.
 """
 
 

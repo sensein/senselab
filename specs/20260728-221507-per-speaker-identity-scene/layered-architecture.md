@@ -808,10 +808,8 @@ by a wrong presence estimate, which is what a quiet or overlapped speaker produc
 asymmetric: presence indicts ASR, never the reverse, though word boundaries are the more precise
 measurement. `unsupported` would name the observation; `hallucination` names a cause.
 
-**The open decision.** The belief store wants per-pass, per-round values; L2's axes are fused across
-passes. Either that quantity should not exist, or L2 should expose a per-pass view alongside the
-fused one. That choice decides whether unifying the two L2s is mechanical or a redesign, and it
-should be settled before any of items 25–27 is attempted.
+**The open decision — settled 2026-08-02.** The quantity should not exist. See
+"An uncertainty axis is an aggregator" below.
 
 ---
 
@@ -913,7 +911,7 @@ Concretely, for a two-pass run. Marked **[is]** where this is what a run produce
 ```
 L1/
   <pass>/                        raw_16k, enhanced_16k
-    signals/<signal>.parquet     per-signal measurement, native units + resolution   [should]
+    signals/<signal>.parquet     per-signal measurement, native units + resolution   [is]
       + provenance.json          units, model id + revision, window/hop, tool-side reduction
     diarization/<model>.json     per-model speaker spans
     asr/<model>.json             ScriptLine tree: text, word chunks, avg_logprob,
@@ -925,7 +923,8 @@ L1/
     noise_floor.parquet          per-band floor + ECMA-74 prominence
     background_sources.parquet   per-band source candidates
     background_mask.{parquet,json}  regions + state + uncertainty
-  stability/                     cross-pass deltas — the perturbation evidence
+  stability/<signal>.parquet     per-signal cross-pass |Δ| per bucket                [is]
+  stability/signals.json         {signal → instability} — what sets each fusion weight [is]
   signals.png, timeline.png      evidence views, signals in native units
 ```
 
@@ -933,8 +932,9 @@ Present per value: the number, its units, the model and revision that produced i
 hop it was measured over, and any reduction the *tool* performed. Absent: any axis, any threshold,
 anything in `[0, 1]` that was not natively a probability.
 
-*Today `L1/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet` also exist, carrying
-`within_pass_uncertainty` — a per-axis fold. That is register item 25 and does not belong here.*
+*`L1/<pass>/uncertainty/{speech_presence,speaker,asr}.parquet` and
+`L1/stability/raw_vs_enhanced/<axis>.parquet` are gone (register item 25, closed 2026-08-02).
+An axis cannot be produced by one pass, so it could not be stored under one.*
 
 #### After each L2 round — belief
 
@@ -942,6 +942,7 @@ anything in `[0, 1]` that was not natively a probability.
 L2/
   round<N>/
     uncertainty/<axis>.parquet   one row per bucket per axis                          [is]
+    votes/<axis>.parquet         linked evidence, (axis, bucket, source, pass, scope) [is, round0]
     derivatives/                 mask, speaker allocation, ASR consensus, scene       [should]
   rounds.json                    per-round decision log
 ```
@@ -959,7 +960,10 @@ Present per round in the log: `numbers_settled` and `converged` separately, `cri
 `action_scope`, `derivatives_refreshed`, `remeasured`, `coupled_from`.
 
 The belief state itself lives here — one per `(axis, bucket, source, pass, scope)` — rather than in
-a subsystem's private store. **[should]**
+a subsystem's private store. **[should]** — the *vote level* is done (`round0/votes/<axis>.parquet`
+is what the store ingests on both paths); the store still keeps a private per-`(stream, axis,
+bucket)` fold, blocked on `fuse_axis` accepting per-`(bucket, signal)` weights. See the register's
+"What closed items 25–27".
 
 #### After final — the answer
 
@@ -971,12 +975,13 @@ final/
   per_speaker_presence.parquet   one track per hypothesised speaker
   decisions.json                 trajectory, reversals, stopping reason
   timeline.png, summary.md       the human-facing views
-  summary.json                   run provenance: policy hash, versions, budget    [should: ~6 KB]
+  summary.json                   run provenance: policy hash, versions, budget    [is: ~6 KB]
   labelstudio_{tasks.json,config.xml}, eval.json
 ```
 
-Present: the converged state and how it was reached. Absent: anything another stage reads — today
-`summary.json` carries 4.8 MB of inlined L1 evidence, which is register item 26.
+Present: the converged state and how it was reached. Absent: anything another stage reads.
+`summary.json` no longer inlines the per-pass evidence (register item 26, closed 2026-08-02);
+the index later stages need is `L1/passes.json`.
 
 #### The one-line test per stage
 
@@ -1255,3 +1260,49 @@ the same source about the same bucket. That is not two pieces of evidence with o
 one source's later, finer answer replacing its earlier, coarser one about the same question. The
 superseded row is still on disk and the substitution is recorded. Worth stating explicitly, because
 the next reader will reasonably ask why one status survived the argument that removed the other.
+
+
+---
+
+## An uncertainty axis is an aggregator
+
+**D-16, decided 2026-08-02.** Recorded because it is a *definition*, and because the code
+contained the contrary definition in enough places that it had started to read as natural.
+
+An uncertainty axis aggregates across signals **and** across passes. There is therefore no such
+thing as a per-pass axis: it is a category error, and the column name `within_pass_uncertainty`
+was a contradiction in terms.
+
+A **pass** is the same recording under a transform — `raw_16k` as recorded, `enhanced_16k` after
+speech enhancement. Passes are a **perturbation sample**: a signal whose answer flips between them
+has not earned its weight. So a pass is an input dimension to the aggregation, exactly like a
+signal is — never an index on its output.
+
+Consequences, definitional rather than negotiable:
+
+- `L1/<pass>/uncertainty/<axis>.parquet` was wrong twice over: an axis at L1 (a fold L1 must not
+  perform) *and* indexed by pass (an index an axis cannot have).
+- A **vote** may be per pass — a signal measured on a pass is a legitimate per-pass measurement.
+  An **axis** may not be. That is why `L2/round0/votes/<axis>.parquet` is keyed
+  `(axis, bucket, source, pass, scope)` and `L2/round<N>/uncertainty/<axis>.parquet` is not.
+- Perturbation stability is computed **from** per-pass per-signal measurements. That is the passes'
+  entire purpose, and it needs no per-pass axis. `reliability.signal_stability` had been doing it
+  correctly the whole time; `votes.compute_pass_deltas` was a second, wrong computation of the same
+  idea, and its output had no reader anywhere.
+- The pass dimension appears on a fused row only as the `contributing_passes` **column**.
+
+*What this closed off.* The alternative was "L2 exposes a per-pass view alongside the fused one",
+which line 811 above had left open. It is rejected: a per-pass view of an aggregator over passes is
+not a view, it is a different and less-informed quantity, and having both is what produced two
+numbers for one `(axis, bucket)` — register item 27. Anything a consumer wanted from the per-pass
+view is available more directly: per-pass evidence from `L1/<pass>/signals/`, and what the second
+pass *bought* from `L1/stability/`, in the form the fusion weights actually consume it.
+
+*Why the wrong shape felt natural.* This is the same failure line 795 already recorded about the
+word "vote": a data structure's name licensed an operation nobody would have argued for on its
+merits. `AxisResult(pass_label, axis, rows)` made `(pass, axis)` the primary key of the workflow,
+so `axis_results: dict[tuple[str, UncertaintyAxis], AxisResult]` threaded through eight modules and
+every new consumer inherited the product type without having to justify it. The clearest symptom
+was `scripts/analyze_audio.py` picking the *lower-uncertainty pass* as the run's bottom line —
+treating a perturbation sample as two competing answers, and discarding the disagreement that was
+the evidence. That reads as reasonable only if a pass can have an axis.

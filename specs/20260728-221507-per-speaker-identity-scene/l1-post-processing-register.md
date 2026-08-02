@@ -337,7 +337,7 @@ the old hand-set `coarse: True` the same fact was asserted rather than measured.
 
 ---
 
-## Item 25 — L1 emits per-axis estimates (open, largest remaining)
+## Item 25 — L1 emits per-axis estimates (**closed** 2026-08-02)
 
 **The rule.** A signal may report its own uncertainty: that is the signal's final measurement, in
 its own terms. L1 must not report an **axis** estimate, or an axis uncertainty/confidence. Folding
@@ -382,7 +382,7 @@ question, not a mechanical substitution.
 
 ---
 
-## Item 26 — `final/` stores L1 evidence, and the pipeline reads it (open)
+## Item 26 — `final/` stores L1 evidence, and the pipeline reads it (**closed** 2026-08-02)
 
 `final/summary.json` is 6.9 MB, of which 4.8 MB is a `passes` key holding per-pass model output.
 Everything in it already exists on disk under `L1/<pass>/`:
@@ -421,7 +421,7 @@ path substitution would then silently change what they see.
 
 ---
 
-## Item 27 — two parallel speaker-axis pipelines, and the timeline draws the uncoupled one (open)
+## Item 27 — two parallel speaker-axis pipelines, and the timeline draws the uncoupled one (**partially closed** 2026-08-02)
 
 Measured on one run, after H1 made cross-axis coupling work:
 
@@ -461,3 +461,115 @@ being fixed.
 The interim `_fused_axis` overlay in `adaptive/plot.py` is scaffolding for the defect: justified
 only while the violation is real and invisible on the artifact people trust, and to be deleted with
 it, not maintained.
+
+
+---
+
+## What closed items 25–27, and what remains
+
+*Recorded 2026-08-02. The correction that drove the work is stated once, in
+`layered-architecture.md` under "An uncertainty axis is an aggregator"; this records what
+changed in the code.*
+
+### The correction
+
+**An uncertainty axis IS an aggregator.** It aggregates across signals *and* across passes.
+There is therefore no such thing as a per-pass axis: a pass is an input dimension to the fold,
+never an index on its output. `within_pass_uncertainty` was a contradiction in its own name.
+
+A *pass* is the same recording under a transform. The two passes are a **perturbation sample**:
+a signal whose answer flips between them has not earned its weight. Perturbation stability is
+therefore computed *from* per-pass per-signal measurements and needs no per-pass axis — which
+`reliability.signal_stability` had been doing correctly all along, in the live path, while
+`votes.compute_pass_deltas` computed the same idea the wrong way into a file nothing read.
+
+### Item 25 — closed
+
+| was | is |
+|---|---|
+| `L1/<pass>/uncertainty/<axis>.parquet` | `L1/<pass>/signals/<signal>.parquet`, native units |
+| `L1/stability/raw_vs_enhanced/<axis>.parquet` (no reader) | `L1/stability/<signal>.parquet` + `signals.json` |
+| `UncertaintyRow` (axis + 8 fold columns) | `SignalRow` (no axis, no fold) |
+| `AxisResult(pass_label, axis, …)` | `SignalResult(pass_label, signal, …)` + `FusedAxis(axis, …)` |
+| `PassLabel` including `raw_vs_enhanced` | `Literal["raw_16k", "enhanced_16k"]` |
+| `votes.aggregate_pass` — 3 folds × N passes | `votes.link_pass` — link under a named policy, fold nothing |
+| `votes.compute_pass_deltas` — \|raw axis − enh axis\| | deleted; `reliability.stability_rows` per signal |
+| 3 axis folds reachable from two lineages | one, `fuse.fuse_axis`, which already took `buckets_by_pass` |
+
+`disagreements.json` ranks the fused axes on `triage_score` and has no `pass` field. The LS
+bundle has three axis tracks attached once, plus per-pass per-signal evidence tracks — which is
+where "what did each model say on each pass" is legitimately served. `final/timeline.png` draws
+one line per axis with `epistemic_uncertainty` shaded beneath and a per-signal stability strip,
+replacing the raw/enhanced overlay that rendered the category error on the artifact a human
+actually looks at. `compute_pass_global_summary` became `compute_run_global_summary`, and
+`best_pass` is gone: picking the lower-uncertainty pass treats a perturbation sample as two
+competing answers and throws away the disagreement that is the evidence.
+
+**Four live bugs surfaced and fixed while closing it**, each of which had been invisible because
+it failed silently:
+
+1. **Presence stability had never been measured.** `reliability._COMPARABLE_FIELDS` matched no key
+   `harvest_speech_presence_evidence` emits, so `signal_stability(axis="speech_presence")`
+   returned `{}` on every real run and every presence signal kept weight 1.0. It floored
+   correctly — absent is not a discount — which is exactly why nobody noticed. Stability is now
+   measured on `fuse.per_signal_uncertainty` of the linked belief, the same quantity the fold
+   consumes, so weight and value can no longer be derived from different things. A voter that
+   reports only a direction (`speaks: True`, no confidence) falls back to that direction, because
+   its flip is what stability is asking about.
+2. **`disagreements.json` pointed at paths that did not exist** — `<pass>/uncertainty/…` and
+   `uncertainty/raw_vs_enhanced/…`, while the writer used `L1/…` and `L1/stability/…`.
+3. **`frame_dispersion` never reached the artifact path**, so P2's frame-instability trigger read
+   `None` for every bucket and one of its two documented triggers was structurally dead. It is now
+   a persisted L1 signal.
+4. **`write_final_uncertainty` linked presence under a different policy** than round 0 did
+   (packaged `DEFAULT_POLICY` vs `policy_from_params`), so the two folds read the same
+   measurements under different thresholds.
+
+### Item 26 — closed
+
+`final/summary.json` no longer carries `passes` (~5.7 MB → ~6 KB). The index later stages
+actually need — duration, audio signature, input path — is `L1/passes.json`, where evidence
+lives. `build_final_outputs` returns the diarization instead of the loop re-reading
+`final/diarization.json` one statement after writing it; the adaptive timeline takes the
+transcript from its caller.
+
+Three readers were **already broken and silent** about it, all from the earlier layout split:
+
+- `evaluate.py` read `final/speech_presence.parquet` and `<out_dir>/rounds/`; both had moved to
+  `L2/`, so the evaluation harness crashed on every run that reached it.
+- `ls_final.py` read `<run_dir>/labelstudio_*` and `<run_dir>/disagreements.json` (moved into
+  `final/`) and `<out_dir>/rounds/` (moved to `L2/`). Absent read as "not found", which is
+  indistinguishable from a run with no bundle — so the final LS tracks and
+  `disagreements_resolved.json` had quietly stopped being produced.
+- `_final_belief_index` keyed on `(stream, axis, start, end)` and matched entries by their `pass`
+  field. Neither exists now; re-keyed `(axis, start, end)`.
+
+### Item 27 — partially closed
+
+The second lineage's *source* is gone: the belief store no longer ingests an L1 axis fold. It
+ingests the linked evidence at the vote level (`L2/round0/votes/<axis>.parquet` on the artifact
+path, `PassHarvest` in process), where `(axis, bucket, source, pass, scope)` is a legitimate key —
+a signal measured on a pass is a per-pass measurement. `parity_check` became `replay_check`: the
+old one compared two different implementations of the fold, so a mismatch could not distinguish
+"the store missed an input" from "the two folds disagree", and the in-process path could not run
+it at all. The replay rebuilds each bucket from what is persisted and proves the property the
+architecture correction turns on — estimates are re-derivable, so the store need not persist them.
+
+**What remains.** The store still computes its own per-`(stream, axis, bucket)` fold, so two
+numbers for one `(axis, bucket)` are still producible. Collapsing that is blocked on one concrete
+change named in the consumer map: **`fuse_axis` takes `weights: Mapping[str, float]` — one weight
+per signal for the whole axis — while the store's withdrawals are per `(bucket, source)`.** Until
+`fuse_axis` accepts per-`(bucket, signal)` weights, a per-bucket withdrawal cannot be expressed in
+it and the store has to keep its own fold. Everything else follows mechanically after that:
+drop the `stream` index from `BeliefState`, `regions.propose_regions`, `convergence`,
+`loop.uncertainty_mass` and `_write_round_belief`; move `p_voice` onto the fused presence axis as
+a directional confidence (it is *not* `fuse_axis`'s `confidence`, whose proposition is different);
+use `fuse_axis`'s `epistemic_uncertainty` rather than the store's second definition of the word;
+and delete `adaptive/plot._fused_axis`, the comparison overlay whose own docstring calls it
+scaffolding for the defect.
+
+Two silent fallbacks found while tracing and **still open**, both in `adaptive/fusion.py`:
+`r.get("speech_presence_confidence", r.get("p_voice"))` always takes the fallback because the
+key is only ever set inside `row["meta"]`, and `(r["meta"] or {}).get("elected_stream", stream)`
+always emits the fusion stream because `elected_stream` is written to the *region*, never to
+`row["meta"]`.
