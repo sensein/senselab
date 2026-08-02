@@ -49,7 +49,7 @@ from senselab.audio.workflows.audio_analysis.degradation import (
 )
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
-from senselab.audio.workflows.audio_analysis.layout import pass_dir
+from senselab.audio.workflows.audio_analysis.layout import perturbation_dir
 from senselab.audio.workflows.audio_analysis.support import (
     CORROBORATION_POOLING,
     EVIDENCE_WEIGHT_MAP,
@@ -236,7 +236,7 @@ class VoteStore:
             frame = pd.read_parquet(pq)
             for _, row in frame.iterrows():
                 bk = bucket_key(row["start"], row["end"])
-                stream = str(row["pass_label"])
+                stream = str(row["perturbation"])
                 if stream not in passes:
                     continue
                 source = str(row["source"])

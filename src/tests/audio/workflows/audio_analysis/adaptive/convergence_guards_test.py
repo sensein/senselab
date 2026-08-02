@@ -185,5 +185,5 @@ def test_a_missing_outcomes_directory_warns_rather_than_returning_empty_silently
     """
     from senselab.audio.workflows.audio_analysis.adaptive.interventions import load_outcomes_dir
 
-    assert load_outcomes_dir(tmp_path, "raw_16k", "asr") == {}
+    assert load_outcomes_dir(tmp_path, "raw", "asr") == {}
     assert "no 'asr' outcomes directory" in capsys.readouterr().err

@@ -464,18 +464,16 @@ def test_evidence_uses_the_two_passes_as_perturbation_points() -> None:
     """
     from senselab.audio.workflows.audio_analysis.speaker_identity import evidence_from_passes
 
-    ev = evidence_from_passes(_passes(raw_16k={"pyannote": _diar(1)}, enhanced_16k={"pyannote": _diar(3)}))
+    ev = evidence_from_passes(_passes(raw={"pyannote": _diar(1)}, enhanced={"pyannote": _diar(3)}))
     assert len(ev) == 1
-    assert ev[0].answers == {"raw_16k": 1, "enhanced_16k": 3}
+    assert ev[0].answers == {"raw": 1, "enhanced": 3}
 
 
 def test_a_diarizer_stable_across_enhancement_gets_full_weight() -> None:
     """A stable diarizer's count is taken at full weight."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
-    posterior, _h, _c = build_speaker_identity(
-        _passes(raw_16k={"pyannote": _diar(2)}, enhanced_16k={"pyannote": _diar(2)})
-    )
+    posterior, _h, _c = build_speaker_identity(_passes(raw={"pyannote": _diar(2)}, enhanced={"pyannote": _diar(2)}))
     assert posterior.modal_count == 2
     assert posterior.probabilities[2] == pytest.approx(1.0)
 
@@ -486,8 +484,8 @@ def test_a_diarizer_that_flips_under_enhancement_is_attenuated() -> None:
 
     posterior, _h, _c = build_speaker_identity(
         _passes(
-            raw_16k={"stable": _diar(1), "flipper": _diar(4)},
-            enhanced_16k={"stable": _diar(1), "flipper": _diar(2)},
+            raw={"stable": _diar(1), "flipper": _diar(4)},
+            enhanced={"stable": _diar(1), "flipper": _diar(2)},
         )
     )
     assert posterior.weights["stable"] > posterior.weights["flipper"]
@@ -506,7 +504,7 @@ def test_hypotheses_inherit_the_doubt_when_sources_are_split() -> None:
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     posterior, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"a": _diar(1), "b": _diar(3)}, enhanced_16k={"a": _diar(1), "b": _diar(3)})
+        _passes(raw={"a": _diar(1), "b": _diar(3)}, enhanced={"a": _diar(1), "b": _diar(3)})
     )
     assert posterior.is_multimodal is True
     assert hyps[0].existence_uncertainty == 0.0
@@ -518,7 +516,7 @@ def test_one_hypothesis_per_speaker_in_the_modal_count() -> None:
     """The modal count determines how many hypotheses exist."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
-    _p, hyps, _c = build_speaker_identity(_passes(raw_16k={"a": _diar(3)}, enhanced_16k={"a": _diar(3)}))
+    _p, hyps, _c = build_speaker_identity(_passes(raw={"a": _diar(3)}, enhanced={"a": _diar(3)}))
     assert [h.speaker_id for h in hyps] == ["S0", "S1", "S2"]
 
 
@@ -526,7 +524,7 @@ def test_no_diarization_yields_zero_speakers_not_an_invented_one() -> None:
     """No source reported anybody, so nobody is reported."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
-    posterior, hyps, _c = build_speaker_identity({"raw_16k": {"diarization": {"by_model": {}}}})
+    posterior, hyps, _c = build_speaker_identity({"raw": {"diarization": {"by_model": {}}}})
     assert posterior.modal_count == 0
     assert hyps == []
 
@@ -535,7 +533,7 @@ def test_a_failed_diarizer_contributes_nothing() -> None:
     """A failed outcome must not be read as a speaker count of zero."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import evidence_from_passes
 
-    passes = {"raw_16k": {"diarization": {"by_model": {"broken": {"status": "failed"}}}}}
+    passes = {"raw": {"diarization": {"by_model": {"broken": {"status": "failed"}}}}}
     assert evidence_from_passes(passes) == [], "a failed outcome must not be read as a count"
 
 
@@ -566,7 +564,7 @@ def test_the_nth_speaker_inherits_the_doubt_about_there_being_n_speakers() -> No
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"a": _diar(1), "b": _diar(3)}, enhanced_16k={"a": _diar(1), "b": _diar(3)}),
+        _passes(raw={"a": _diar(1), "b": _diar(3)}, enhanced={"a": _diar(1), "b": _diar(3)}),
         speaker_votes=_votes({"a": "Sx"}, {"a": "Sx", "b": "Sy"}, {"b": "Sz"}),
     )
     assert hyps[0].existence_uncertainty < hyps[-1].existence_uncertainty
@@ -581,7 +579,7 @@ def test_clusters_the_count_posterior_does_not_back_still_get_a_hypothesis() -> 
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        _passes(raw={"a": _diar(1)}, enhanced={"a": _diar(1)}),
         speaker_votes=_votes({"a": "Sx"}, {"a": "Sy"}, {"a": "Sz"}),
     )
     assert len(hyps) == 3
@@ -593,7 +591,7 @@ def test_a_speaker_carries_when_it_was_active() -> None:
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        _passes(raw={"a": _diar(1)}, enhanced={"a": _diar(1)}),
         speaker_votes=_votes({"a": "Sx"}, {"a": "Sx"}, {"a": "Sx"}),
     )
     assert (hyps[0].first_seen, hyps[0].last_seen, hyps[0].total_active_s) == (0.0, 1.5, 1.5)
@@ -604,7 +602,7 @@ def test_correspondence_names_the_real_diarizer_labels_when_evidence_is_availabl
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, _h, corr = build_speaker_identity(
-        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        _passes(raw={"a": _diar(1)}, enhanced={"a": _diar(1)}),
         speaker_votes=_votes({"a": "Sx"}),
     )
     assert [(c.source, c.source_label, c.speaker_id, c.cluster_id) for c in corr] == [("a", "a-Sx", "S0", "Sx")]
@@ -614,7 +612,7 @@ def test_the_builder_still_works_with_no_speaker_evidence() -> None:
     """The count posterior comes from the passes alone; harvested votes only add detail."""
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
-    posterior, hyps, _c = build_speaker_identity(_passes(raw_16k={"a": _diar(2)}, enhanced_16k={"a": _diar(2)}))
+    posterior, hyps, _c = build_speaker_identity(_passes(raw={"a": _diar(2)}, enhanced={"a": _diar(2)}))
     assert posterior.modal_count == 2 and len(hyps) == 2
 
 
@@ -631,7 +629,7 @@ def test_a_hypothesis_names_the_sources_whose_labels_landed_in_it() -> None:
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"real": _diar(1), "derived": _diar(2)}, enhanced_16k={"real": _diar(1), "derived": _diar(2)}),
+        _passes(raw={"real": _diar(1), "derived": _diar(2)}, enhanced={"real": _diar(1), "derived": _diar(2)}),
         speaker_votes=_votes({"real": "Cx", "derived": "Cx"}, {"derived": "Cy"}),
     )
     assert hyps[0].supporting_sources == ["derived", "real"]
@@ -647,7 +645,7 @@ def test_a_speaker_resting_on_unsupported_claims_says_so() -> None:
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"real": _diar(1)}, enhanced_16k={"real": _diar(1)}),
+        _passes(raw={"real": _diar(1)}, enhanced={"real": _diar(1)}),
         speaker_votes=_votes({"real": "Cx"}, {"clusterer": "Cy"}),
         support={"real": 1.0, "clusterer": 0.2},
     )
@@ -666,7 +664,7 @@ def test_a_speaker_that_might_not_exist_is_not_reported_as_converged() -> None:
     from senselab.audio.workflows.audio_analysis.speaker_identity import build_speaker_identity
 
     _p, hyps, _c = build_speaker_identity(
-        _passes(raw_16k={"a": _diar(1)}, enhanced_16k={"a": _diar(1)}),
+        _passes(raw={"a": _diar(1)}, enhanced={"a": _diar(1)}),
         speaker_votes=_votes({"a": "Cx"}, {"a": "Cy"}),
     )
     assert hyps[0].converged is True

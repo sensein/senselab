@@ -171,12 +171,27 @@ class Artifact:
 
     ``keyed_in_path`` names the dimensions the location already fixes: ``L1/raw/`` says which
     perturbation, ``estimates/<axis>.parquet`` says which axis.
+
+    ``required`` is the subset that must appear as a column, defaulting to the key minus what
+    the path fixes. It exists because a *tree* of tool outputs is not one table: ``L1/raw/**``
+    covers a per-bucket feature frame, a per-band noise floor and a pile of JSON, and no single
+    key describes all three. What does hold across them is which dimensions they may be indexed
+    by — and, far more importantly, which they may not. Declaring ``required=()`` there says "any
+    of these, none of them mandatory"; the prohibitions still bind, which is the half that
+    matters, because the rule those files must never break is that an axis is L2's.
     """
 
     pattern: str
     what: str
     key: tuple[str, ...] | None = None
     keyed_in_path: tuple[str, ...] = ()
+    required: tuple[str, ...] | None = None
+
+    def must_carry(self) -> frozenset[str]:
+        """Dimensions a row has to spell out. Derived unless the artifact overrides it."""
+        if self.required is not None:
+            return frozenset(self.required)
+        return frozenset(self.key or ()) - frozenset(self.keyed_in_path)
 
 
 @dataclass(frozen=True)
@@ -243,17 +258,23 @@ L1 = StageContract(
     reads=(),
     writes=(
         Artifact("L1/perturbations.json", "the open perturbation register: name, transform, parameters"),
+        # A tree of tool outputs in the tools' own shapes, not one table: whichever input
+        # dimensions a given model reports by, it reports by. What binds is the prohibition —
+        # no axis, no fold, one perturbation — which is what makes these measurements rather
+        # than answers.
         Artifact(
             "L1/raw/**",
             "the identity perturbation's model outputs",
-            key=("perturbation",),
+            key=("perturbation", "signal", "bucket", "speaker"),
             keyed_in_path=("perturbation",),
+            required=(),
         ),
         Artifact(
             "L1/perturbation/*/**",
             "each further transform's model outputs",
-            key=("perturbation",),
+            key=("perturbation", "signal", "bucket", "speaker"),
             keyed_in_path=("perturbation",),
+            required=(),
         ),
         Artifact(
             "L1/signals/**",
@@ -359,6 +380,7 @@ DAG_STAGES: Final[tuple[str, ...]] = ("L1", "L2_ROUND", "FINAL", "EVAL")
 
 MODULE_STAGE: Final[Mapping[str, str]] = {
     # L1 — measurement.
+    "src/senselab/audio/workflows/audio_analysis/perturbations.py": "L1",
     "src/senselab/audio/workflows/audio_analysis/stages.py": "L1",
     "src/senselab/audio/workflows/audio_analysis/stage_context.py": "L1",
     "src/senselab/audio/workflows/audio_analysis/l1_plot.py": "L1",
@@ -439,11 +461,20 @@ _TWO_PASS_TREE = (
 
 KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ── the driver performs all three stages itself ─────────────────────────
-    Deviation(_DRIVER, "write", "L1/passes.json", _INLINED),
-    Deviation(_DRIVER, "write", "L1/*/signals/*.parquet", _INLINED),
-    Deviation(_DRIVER, "write", "L1/*/pii.json", _INLINED),
-    Deviation(_DRIVER, "write", "L1/*/embeddings/*.json", _INLINED),
+    Deviation(_DRIVER, "write", "L1/signals/*.parquet", _INLINED),
+    Deviation(_DRIVER, "write", "L1/raw/pii.json", _INLINED),
+    Deviation(_DRIVER, "write", "L1/perturbation/*/pii.json", _INLINED),
+    Deviation(_DRIVER, "write", "L1/raw/embeddings/*.json", _INLINED),
+    Deviation(_DRIVER, "write", "L1/perturbation/*/embeddings/*.json", _INLINED),
     Deviation(_DRIVER, "write", "L2/round*/votes/*.parquet", _INLINED),
+    Deviation(
+        _DRIVER,
+        "write",
+        "L2/round*/stability/*.parquet",
+        _INLINED + " Cross-perturbation stability is now a round derivative rather than an L1 "
+        "artifact, which is the half of it D-17 settles; the round tree it lands in is still the "
+        "0-based fusion one, so it moves again with the rest of L2/round*/.",
+    ),
     Deviation(_DRIVER, "write", "L2/disagreements.json", _INLINED),
     Deviation(_DRIVER, "write", "L2/labelstudio_tasks.json", _INLINED),
     Deviation(_DRIVER, "write", "L2/labelstudio_config.xml", _INLINED),
@@ -453,7 +484,7 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_DRIVER, "read", "L2/rounds.json", _INLINED),
     Deviation(_DRIVER, "read", "L2/speakers.json", _INLINED),
     Deviation(_DRIVER, "read", "L2/per_speaker_presence.parquet", _INLINED),
-    Deviation(_ADAPTIVE_DRIVER, "read", "L1/passes.json", _INLINED),
+    Deviation(_ADAPTIVE_DRIVER, "read", "L1/perturbations.json", _INLINED),
     Deviation(
         _DRIVER,
         "write",
@@ -487,22 +518,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
         "read",
         "L2/background_mask.parquet",
         "An L1 module reading an L2 artifact to draw an L1 figure — the evidence view is rendered from belief.",
-    ),
-    # ── cross-perturbation evaluation, written at L1 ────────────────────────
-    Deviation(
-        _DRIVER,
-        "write",
-        "L1/stability/*.parquet",
-        "Cross-perturbation |delta| per bucket, written at L1. Comparing two perturbations is a "
-        "fold over an input dimension, which is L2's by exactly the argument that makes an axis "
-        "L2's. Each row carries pass_a AND pass_b, so it is an L1 artifact keyed by two.",
-    ),
-    Deviation(
-        _DRIVER,
-        "write",
-        "L1/stability/signals.json",
-        "The run-level {signal -> instability} that sets each fusion weight: the same fold, "
-        "keyed by signal alone, so it is an L1 artifact keyed by no perturbation at all.",
     ),
     # ── two round trees, and round artifacts flattened to the L2 root ───────
     Deviation(
@@ -538,17 +553,32 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_mod("adaptive/loop.py"), "write", "L2/iterations.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/loop.py"), "read", "L2/disagreements.json", _AT_L2_ROOT),
     # ── L2 reads L1 outside signals/ ────────────────────────────────────────
-    Deviation(_mod("adaptive/loop.py"), "read", "L1/passes.json", _PAST_SIGNALS),
-    Deviation(_mod("adaptive/interventions.py"), "read", "L1/*/*", _PAST_SIGNALS),
-    Deviation(_mod("adaptive/interventions.py"), "read", "L1/*/*/*.json", _PAST_SIGNALS),
-    Deviation(_mod("adaptive/interventions.py"), "read", "L1/*/alignment", _PAST_SIGNALS),
-    Deviation(_mod("adaptive/interventions.py"), "read", "L1/*/alignment/*.json", _PAST_SIGNALS),
-    Deviation(_mod("adaptive/interventions.py"), "read", "L1/*/embeddings", _PAST_SIGNALS),
-    Deviation(_mod("adaptive/interventions.py"), "read", "L1/*/embeddings/*.json", _PAST_SIGNALS),
-    # ── L1 still writes into the two-pass tree ──────────────────────────────
-    Deviation(_mod("stage_context.py"), "write", "L1/*/*", _TWO_PASS_TREE),
-    Deviation(_mod("stages.py"), "write", "L1/*", _TWO_PASS_TREE),
-    Deviation(_mod("stages.py"), "write", "L1/*/features/*.parquet", _TWO_PASS_TREE),
+    Deviation(
+        _mod("adaptive/loop.py"),
+        "read",
+        "L1/perturbations.json",
+        _PAST_SIGNALS + " What it actually wants are the run's *inputs* — the source recording, "
+        "the duration, the perturbation set — which are not L1 evidence at all; they are what L1 "
+        "was given. Closes when the loop is handed them rather than reading L1's index back. "
+        "Its siblings (read_register/read_measurements, called two lines apart) reach the same "
+        "file through a helper and are invisible to the static guard for the reason its docstring "
+        "gives; this one is inline, so it is the one that shows.",
+    ),
+    # Two entries per read, one per branch of ``perturbation_dir``: the identity's directory and
+    # any other perturbation's are different places, and reaching into either is the same
+    # violation committed twice rather than one violation described twice.
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/*", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/*", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/*/*.json", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/*/*.json", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/alignment", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/alignment", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/alignment/*.json", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/alignment/*.json", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/embeddings", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/embeddings", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/raw/embeddings/*.json", _PAST_SIGNALS),
+    Deviation(_mod("adaptive/interventions.py"), "read", "L1/perturbation/*/embeddings/*.json", _PAST_SIGNALS),
     # ── final/ computes rather than extracts, and writes into L2 ────────────
     Deviation(
         _mod("adaptive/fusion.py"),
@@ -591,7 +621,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
         "round10 sorts before round2 and the 'last round' overlay reads round 9's map on any run "
         "past ten rounds.",
     ),
-    Deviation(_mod("adaptive/plot.py"), "read", "L1/passes.json", _PAST_SIGNALS),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_tasks.json", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/labelstudio_config.xml", _AT_L2_ROOT),
     Deviation(_mod("adaptive/ls_final.py"), "read", "L2/disagreements.json", _EARLIER_ROUND),
@@ -618,24 +647,6 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ══ the artifact tree ═══════════════════════════════════════════════════
     # What a completed run leaves on disk that no stage declares. Matched as patterns, so one
     # entry covers a directory the restructure moves as a unit.
-    Deviation("", "artifact", "L1/raw_16k/**", _TWO_PASS_TREE),
-    Deviation("", "artifact", "L1/enhanced_16k/**", _TWO_PASS_TREE),
-    Deviation(
-        "",
-        "artifact",
-        "L1/passes.json",
-        "The perturbation index still uses the two-pass vocabulary, and is rewritten by the "
-        "last stage of the run (_write_run_summary, after the adaptive loop) — a back-edge from "
-        "final/ to the file that defines L1's inputs. D-17: L1/perturbations.json, written once "
-        "by L1, recording each transform and its parameters.",
-    ),
-    Deviation(
-        "",
-        "artifact",
-        "L1/stability/**",
-        "Cross-perturbation evaluation stored at L1: keyed by signal alone, or by pass_a and "
-        "pass_b together — an L1 artifact carrying no perturbation, or two.",
-    ),
     Deviation("", "artifact", "L2/round*/**", _TWO_TREES),
     Deviation("", "artifact", "L2/rounds/**", _TWO_TREES),
     Deviation("", "artifact", "L2/rounds.json", _AT_L2_ROOT),
@@ -648,6 +659,16 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation("", "artifact", "L2/per_speaker_presence.parquet", _AT_L2_ROOT),
     Deviation("", "artifact", "L2/speech_presence.parquet", _AT_L2_ROOT),
     Deviation("", "artifact", "triage.json", "An L2-shaped decision at the run root, taken before L1 has run."),
+    Deviation(
+        "",
+        "artifact",
+        "L1/perturbation/*/**",
+        "Not a violation of the layout — this is where a non-identity perturbation belongs — but "
+        "of the *key*: L1 still writes each model's raw outcome JSON there, and those files are "
+        "the tool's own product rather than a measurement L2 can read. They stay until every "
+        "consumer reads L1/signals/ instead, which is what the interventions.py entries above "
+        "track.",
+    ),
 )
 """Where the tree does not yet conform to D-17, one entry per distinct violation.
 
@@ -759,10 +780,20 @@ that *decides the path* is the one under contract; ``io.py`` merely writes where
 
 _LAYOUT_ROOTS: Final[Mapping[str, tuple[str, ...]]] = {
     "evidence_dir": ("L1",),
-    "stability_dir": ("L1", "stability"),
+    "signals_dir": ("L1", "signals"),
     "final_dir": ("final",),
 }
 """Layout helpers whose result is a fixed run-relative directory."""
+
+_PERTURBATION_DIRS: Final[tuple[tuple[str, ...], ...]] = (("L1", "raw"), ("L1", "perturbation", "*"))
+"""What ``perturbation_dir(run, name)`` can denote: the identity's directory, or any other's.
+
+One call site, two possible paths, because the identity is not one transform among many. That
+makes conformance a question about a **disjunction**, and the answer is the same subsumption rule
+applied to each branch: an access conforms when *every* path it could name is permitted, so both
+branches are recorded and both are checked. An L1 stage writing there passes on both; an L2 stage
+reading there fails on both, and says so twice — once per directory it reached into.
+"""
 
 _RUN_ROOT_NAMES: Final[frozenset[str]] = frozenset({"run_dir", "out_dir", "_run_dir", "_out_dir"})
 """Names that hold the run directory itself. A path built off one is run-relative only once a
@@ -775,8 +806,21 @@ _RUN_ROOT_ATTRS: Final[frozenset[str]] = frozenset({"run_dir"})
 _PASS_DIR_ATTRS: Final[frozenset[str]] = frozenset({"out_dir"})
 """Attributes holding one perturbation's L1 directory (``StageContext.out_dir``)."""
 
-_RUN_ROOT: Final[tuple[str, ...]] = ()
-"""The run directory itself, as a segment tuple. Distinct from ``None``, which means unknown."""
+_RUN_ROOT: Final[tuple[tuple[str, ...], ...]] = ((),)
+"""The run directory itself. A one-element disjunction: exactly one path, known.
+
+Distinct from ``None`` (unknown) and from ``()`` (an empty disjunction, which would mean *no*
+path can be named and would vacuously conform)."""
+
+
+_Alternatives = tuple[tuple[str, ...], ...]
+"""Every run-relative path one expression could denote.
+
+Usually one. ``perturbation_dir(run, name)`` is two, because the identity's directory and any
+other perturbation's are different places. An access conforms when every branch is permitted:
+"could be inside the declaration" is not proof that it is, which is the same reason conformance
+is subsumption rather than intersection.
+"""
 
 
 @dataclass(frozen=True)
@@ -816,7 +860,7 @@ class _PathResolver(ast.NodeVisitor):
         self._scope(tree, {})
         return self.findings
 
-    def _scope(self, scope: ast.AST, inherited: Mapping[str, tuple[str, ...]]) -> None:
+    def _scope(self, scope: ast.AST, inherited: Mapping[str, _Alternatives]) -> None:
         env = dict(inherited)
         assignments = [n for n in _own_nodes(scope) if isinstance(n, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
         for _ in range(len(assignments) + 1):
@@ -841,7 +885,7 @@ class _PathResolver(ast.NodeVisitor):
         for child in _nested_scopes(scope):
             self._scope(child, env)
 
-    def _check_call(self, call: ast.Call, env: Mapping[str, tuple[str, ...]]) -> None:
+    def _check_call(self, call: ast.Call, env: Mapping[str, _Alternatives]) -> None:
         func = call.func
         name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
         if name is None:
@@ -857,7 +901,8 @@ class _PathResolver(ast.NodeVisitor):
                     # The glob pattern is part of the path: ``belief_dir(d).glob("round*/x.parquet")``
                     # names ``L2/round*/x.parquet``, and charging it to ``L2`` would report the
                     # directory rather than the artifact.
-                    resolved = resolved + _literal_segments(call.args[0])
+                    extra = _literal_segments(call.args[0])
+                    resolved = tuple(branch + extra for branch in resolved)
                 self._record(call, op, resolved, name)
                 return
 
@@ -874,18 +919,19 @@ class _PathResolver(ast.NodeVisitor):
                     self._record(call, "write", resolved, str(name))
                 return
 
-    def _record(self, node: ast.AST, op: Literal["read", "write"], segments: tuple[str, ...], via: str) -> None:
-        if not segments:
-            # The run directory itself is not an artifact: every stage may create it and any stage
-            # may be handed it. Only what a stage does *inside* it is under contract.
-            return
-        pattern = "/".join(segments)
-        lineno = getattr(node, "lineno", 0)
-        line = self.lines[lineno - 1].strip() if 0 < lineno <= len(self.lines) else ""
-        self.findings.append(Finding(self.module, lineno, op, pattern, self.stage, line, via))
+    def _record(self, node: ast.AST, op: Literal["read", "write"], alternatives: _Alternatives, via: str) -> None:
+        for segments in alternatives:
+            if not segments:
+                # The run directory itself is not an artifact: every stage may create it and any
+                # stage may be handed it. Only what a stage does *inside* it is under contract.
+                continue
+            pattern = "/".join(segments)
+            lineno = getattr(node, "lineno", 0)
+            line = self.lines[lineno - 1].strip() if 0 < lineno <= len(self.lines) else ""
+            self.findings.append(Finding(self.module, lineno, op, pattern, self.stage, line, via))
 
-    def _eval(self, node: ast.AST, env: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
-        """The run-relative segments this expression denotes, or ``None`` when unresolvable."""
+    def _eval(self, node: ast.AST, env: Mapping[str, _Alternatives]) -> _Alternatives | None:
+        """Every run-relative path this expression could denote, or ``None`` when unresolvable."""
         if isinstance(node, ast.Name):
             if node.id in env:
                 return env[node.id]
@@ -894,7 +940,7 @@ class _PathResolver(ast.NodeVisitor):
             if node.attr in _RUN_ROOT_ATTRS:
                 return _RUN_ROOT
             if node.attr in _PASS_DIR_ATTRS:
-                return ("L1", "*")
+                return _PERTURBATION_DIRS
             return None
         if isinstance(node, ast.Call):
             return self._eval_call(node, env)
@@ -902,21 +948,22 @@ class _PathResolver(ast.NodeVisitor):
             left = self._eval(node.left, env)
             if left is None:
                 return None
-            return left + _literal_segments(node.right)
+            extra = _literal_segments(node.right)
+            return tuple(branch + extra for branch in left)
         return None
 
-    def _eval_call(self, node: ast.Call, env: Mapping[str, tuple[str, ...]]) -> tuple[str, ...] | None:
+    def _eval_call(self, node: ast.Call, env: Mapping[str, _Alternatives]) -> _Alternatives | None:
         func = node.func
         name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
         if name in _LAYOUT_ROOTS:
-            return _LAYOUT_ROOTS[str(name)]
-        if name == "pass_dir":
-            return ("L1", "*")
+            return (_LAYOUT_ROOTS[str(name)],)
+        if name == "perturbation_dir":
+            return _PERTURBATION_DIRS
         if name == "belief_dir":
             # ``belief_dir(run)`` is ``L2``; ``belief_dir(run, n)`` is ``L2/round<n>``. The second
             # form is the one the current tree writes and it is *not* the declared
             # ``L2/round/<n>``, which is exactly the two-round-trees finding.
-            return ("L2", "round*") if len(node.args) + len(node.keywords) > 1 else ("L2",)
+            return (("L2", "round*"),) if len(node.args) + len(node.keywords) > 1 else (("L2",),)
         if name == "Path" and node.args:
             return self._eval(node.args[0], env)
         if isinstance(func, ast.Attribute) and name == "joinpath":
@@ -926,8 +973,23 @@ class _PathResolver(ast.NodeVisitor):
             extra: tuple[str, ...] = ()
             for argument in node.args:
                 extra += _literal_segments(argument)
-            return base + extra
+            return tuple(branch + extra for branch in base)
         return None
+
+
+_NAMED_SEGMENTS: Final[Mapping[str, str]] = {
+    "EVIDENCE_DIR": "L1",
+    "BELIEF_DIR": "L2",
+    "FINAL_DIR": "final",
+    "REGISTER_FILENAME": "perturbations.json",
+}
+"""Module constants that stand for a fixed path segment.
+
+Vocabulary, not policy — the same role :data:`DIMENSION_COLUMNS` plays for columns. A stage that
+spells a filename through a constant is doing the right thing; a guard that could only read
+string literals would punish it, and the workaround (inlining the literal beside the constant)
+is a second spelling of one location.
+"""
 
 
 def _literal_segments(node: ast.AST) -> tuple[str, ...]:
@@ -938,10 +1000,10 @@ def _literal_segments(node: ast.AST) -> tuple[str, ...]:
     """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return _segments(node.value)
-    if isinstance(node, ast.Attribute) and node.attr in {"EVIDENCE_DIR", "BELIEF_DIR", "FINAL_DIR"}:
-        return ({"EVIDENCE_DIR": "L1", "BELIEF_DIR": "L2", "FINAL_DIR": "final"}[node.attr],)
-    if isinstance(node, ast.Name) and node.id in {"EVIDENCE_DIR", "BELIEF_DIR", "FINAL_DIR"}:
-        return ({"EVIDENCE_DIR": "L1", "BELIEF_DIR": "L2", "FINAL_DIR": "final"}[node.id],)
+    if isinstance(node, (ast.Attribute, ast.Name)):
+        name = node.attr if isinstance(node, ast.Attribute) else node.id
+        if name in _NAMED_SEGMENTS:
+            return (_NAMED_SEGMENTS[name],)
     if isinstance(node, ast.JoinedStr):
         # An f-string resolves as far as its literal prefix: ``f"round{n}"`` is ``round*``.
         rendered = ""
@@ -1084,7 +1146,7 @@ def _key_violations(relative: str, artifact: Artifact, columns: frozenset[str]) 
                     f"{relative}: keyed {artifact.key}, so it is not indexed by {dimension} — but it carries {present}"
                 )
             continue
-        if not present and dimension not in artifact.keyed_in_path:
+        if not present and dimension in artifact.must_carry():
             problems.append(
                 f"{relative}: keyed {artifact.key} and the path does not fix {dimension}, "
                 f"so a row cannot say which one it came from"

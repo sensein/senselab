@@ -178,7 +178,7 @@ def test_without_a_mask_the_driver_stops_at_round_zero() -> None:
     """
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
-    rows, log = fuse_rounds({"raw_16k": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=5)
+    rows, log = fuse_rounds({"raw": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=5)
     assert len(rows) == 1
     assert len(log) == 1 and log[0]["converged"] is True
     assert "reason" in log[0]
@@ -188,7 +188,7 @@ def test_regional_trust_changes_the_answer_in_a_contradicted_region() -> None:
     """The point of iterating: a claim the mask contradicts carries less weight afterwards."""
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
-    buckets = {"raw_16k": [_b(0.0, {"honest": 0.0, "overclaimer": 1.0})]}
+    buckets = {"raw": [_b(0.0, {"honest": 0.0, "overclaimer": 1.0})]}
     round0, _ = fuse_rounds(buckets, weights={"honest": 1.0, "overclaimer": 1.0}, aggregator="min")
     later, log = fuse_rounds(
         buckets,
@@ -207,7 +207,7 @@ def test_the_log_distinguishes_converged_from_out_of_rounds() -> None:
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
     _rows, log = fuse_rounds(
-        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        {"raw": [_b(0.0, {"a": 0.3})]},
         weights={"a": 1.0},
         mask_regions=[_region(0.0, 0.5, "target_free")],
         speaker_claims={"a": [(0.0, 0.5)]},
@@ -227,7 +227,7 @@ def test_c4_counts_this_loop_s_own_actions_rather_than_going_unmeasured() -> Non
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
     _rows, log = fuse_rounds(
-        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        {"raw": [_b(0.0, {"a": 0.3})]},
         weights={"a": 1.0},
         mask_regions=[_region(0.0, 0.5, "target_free", confidence=1.0)],
         speaker_claims={"a": [(0.0, 0.5)]},
@@ -246,7 +246,7 @@ def test_the_action_scope_is_named_so_convergence_is_not_read_too_widely() -> No
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
     _rows, log = fuse_rounds(
-        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        {"raw": [_b(0.0, {"a": 0.3})]},
         weights={"a": 1.0},
         mask_regions=[_region(0.0, 0.5, "target_free", confidence=1.0)],
         speaker_claims={"a": [(0.0, 0.5)]},
@@ -264,7 +264,7 @@ def test_a_caller_with_a_wider_inventory_overrides_the_loop_s_own_count() -> Non
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
     _rows, log = fuse_rounds(
-        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        {"raw": [_b(0.0, {"a": 0.3})]},
         weights={"a": 1.0},
         mask_regions=[_region(0.0, 0.5, "target_free", confidence=1.0)],
         speaker_claims={"a": [(0.0, 0.5)]},
@@ -283,7 +283,7 @@ def test_the_round_zero_shortcut_does_not_claim_the_criteria_were_checked() -> N
     """
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
-    _rows, log = fuse_rounds({"raw_16k": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=5)
+    _rows, log = fuse_rounds({"raw": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=5)
     assert log[0]["criteria_evaluated"] is False
 
 
@@ -292,7 +292,7 @@ def test_every_round_records_its_index() -> None:
     from senselab.audio.workflows.audio_analysis.fuse import fuse_rounds
 
     rows, _log = fuse_rounds(
-        {"raw_16k": [_b(0.0, {"a": 0.3})]},
+        {"raw": [_b(0.0, {"a": 0.3})]},
         weights={"a": 1.0},
         mask_regions=[_region(0.0, 0.5, "target_free")],
         speaker_claims={"a": [(0.0, 0.5)]},

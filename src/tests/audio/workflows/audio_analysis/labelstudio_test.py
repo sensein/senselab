@@ -47,7 +47,7 @@ def _row(start: float, end: float, u: float | None, **extra: object) -> dict:
         "variability": 0.0,
         "triage_score": u,
         "contributing_signals": ["m"],
-        "contributing_passes": ["raw_16k", "enhanced_16k"],
+        "contributing_passes": ["raw", "enhanced"],
         "signal_weights": {"m": 1.0},
         "weight_basis": {"m": {}},
         "round": 0,
@@ -55,27 +55,27 @@ def _row(start: float, end: float, u: float | None, **extra: object) -> dict:
     }
 
 
-def _signal(pass_label: str, signal: str, *, rows: list) -> SignalResult:
-    return SignalResult(pass_label=pass_label, signal=signal, rows=rows)  # type: ignore[arg-type]
+def _signal(perturbation: str, signal: str, *, rows: list) -> SignalResult:
+    return SignalResult(perturbation=perturbation, signal=signal, rows=rows)  # type: ignore[arg-type]
 
 
 def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> None:
     """Three axis tracks, attached once; per-pass evidence rides its own signal tracks."""
     base_config = '<View>\n  <Audio name="audio" value="$audio"/>\n</View>'
     ls_tasks = [
-        {"data": {"audio": "x.wav", "pass": "raw_16k"}, "predictions": [{"result": []}]},
-        {"data": {"audio": "x.wav", "pass": "enhanced_16k"}, "predictions": [{"result": []}]},
+        {"data": {"audio": "x.wav", "pass": "raw"}, "predictions": [{"result": []}]},
+        {"data": {"audio": "x.wav", "pass": "enhanced"}, "predictions": [{"result": []}]},
     ]
     fused_axes = {
         axis: FusedAxis(
             axis=axis,  # type: ignore[arg-type]
-            rows=[_row(0.0, 0.5, 0.7, consensus_votes={"raw_16k::whisper": {"text": "hello"}})],
+            rows=[_row(0.0, 0.5, 0.7, consensus_votes={"raw::whisper": {"text": "hello"}})],
         )
         for axis in ("speech_presence", "speaker", "asr")
     }
     signal_results = {
         pl: {"m": _signal(pl, "m", rows=[SignalRow(start=0.0, end=0.5, signal="m", measurement={"x": 1.0})])}
-        for pl in ("raw_16k", "enhanced_16k")
+        for pl in ("raw", "enhanced")
     }
 
     out_tasks, out_config = attach_uncertainty_tracks_to_ls(
@@ -92,14 +92,14 @@ def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> No
     assert 'name="uncertainty__asr"' in out_config
     # The vocabulary that made the category error feel natural is gone.
     assert "pass_pair__" not in out_config
-    assert "raw_16k__uncertainty__" not in out_config
-    assert 'name="raw_16k__signal__m"' in out_config
+    assert "raw__uncertainty__" not in out_config
+    assert 'name="raw__signal__m"' in out_config
 
     raw_regions = out_tasks[0]["predictions"][0]["result"]
     enh_regions = out_tasks[1]["predictions"][0]["result"]
-    # raw_16k carries the 3 axis Labels + 1 asr TextArea + its own 1 signal track.
+    # raw carries the 3 axis Labels + 1 asr TextArea + its own 1 signal track.
     assert len(raw_regions) == 5
-    # enhanced_16k carries only its own signal track: an axis is not per pass.
+    # enhanced carries only its own signal track: an axis is not per pass.
     assert len(enh_regions) == 1
     axis_labels = [r for r in raw_regions if r["from_name"].startswith("uncertainty__") and r["type"] == "labels"]
     assert all(r["value"]["labels"] == ["high"] for r in axis_labels)  # 0.7 >= HIGH
@@ -107,7 +107,7 @@ def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> No
 
 def test_binning_policy_travels_with_the_bundle() -> None:
     """A rendered "high" is a thresholded value, so the thresholds ride on the task."""
-    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    tasks = [{"data": {"pass": "raw"}, "predictions": [{"result": []}]}]
     out, _ = attach_uncertainty_tracks_to_ls(
         ls_tasks=tasks,
         ls_config="<View></View>",
@@ -126,9 +126,9 @@ def test_scene_tracks_read_l1_measurements_and_l2_scores() -> None:
         )
     }
     signal_results = {
-        "raw_16k": {
+        "raw": {
             "scene_quality": _signal(
-                "raw_16k",
+                "raw",
                 "scene_quality",
                 rows=[
                     SignalRow(start=0.0, end=0.5, signal="scene_quality", measurement={"snr_brouhaha_db": 6.0}),
@@ -136,25 +136,25 @@ def test_scene_tracks_read_l1_measurements_and_l2_scores() -> None:
                 ],
             ),
             "sound_sources": _signal(
-                "raw_16k",
+                "raw",
                 "sound_sources",
                 rows=[SignalRow(start=0.0, end=0.5, signal="sound_sources", measurement={"src_dominant": "machine"})],
             ),
         }
     }
-    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    tasks = [{"data": {"pass": "raw"}, "predictions": [{"result": []}]}]
     tasks_out, config = attach_uncertainty_tracks_to_ls(
         ls_tasks=tasks,
         ls_config="<View></View>",
         fused_axes=fused_axes,
         signal_results_by_pass=signal_results,
     )
-    assert '<Labels name="raw_16k__presence__quality"' in config
-    assert '<Labels name="raw_16k__presence__sources"' in config
+    assert '<Labels name="raw__presence__quality"' in config
+    assert '<Labels name="raw__presence__sources"' in config
     assert '<Label value="machine"/>' in config
     regions = tasks_out[0]["predictions"][0]["result"]
-    q_regions = [r for r in regions if r["from_name"] == "raw_16k__presence__quality"]
-    s_regions = [r for r in regions if r["from_name"] == "raw_16k__presence__sources"]
+    q_regions = [r for r in regions if r["from_name"] == "raw__presence__quality"]
+    s_regions = [r for r in regions if r["from_name"] == "raw__presence__sources"]
     assert len(q_regions) == 1 and q_regions[0]["value"]["labels"] == ["high"]  # 0.8 >= HIGH
     # The max-over-four is a display fold and says so on the region it produced.
     assert q_regions[0]["value"]["fold"]["rule"].startswith("max over")
@@ -163,12 +163,12 @@ def test_scene_tracks_read_l1_measurements_and_l2_scores() -> None:
 
 def test_scene_tracks_absent_without_measurements() -> None:
     """No scene signal → no scene tracks, rather than an all-"unavailable" stripe."""
-    tasks = [{"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}]
+    tasks = [{"data": {"pass": "raw"}, "predictions": [{"result": []}]}]
     _, config = attach_uncertainty_tracks_to_ls(
         ls_tasks=tasks,
         ls_config="<View></View>",
         fused_axes={"speech_presence": FusedAxis(axis="speech_presence", rows=[_row(0.0, 0.5, 0.4)])},
-        signal_results_by_pass={"raw_16k": {}},
+        signal_results_by_pass={"raw": {}},
     )
     assert "__presence__quality" not in config
     assert "__presence__sources" not in config
@@ -261,7 +261,7 @@ def test_classification_to_ls_emits_regions_for_dict_shape() -> None:
 
 
 def _bundle() -> tuple[list[dict], str]:
-    task = {"data": {"pass": "raw_16k"}, "predictions": [{"result": []}]}
+    task = {"data": {"pass": "raw"}, "predictions": [{"result": []}]}
     return [task], "<View>\n<Audio name='audio' value='$audio'/>\n</View>"
 
 
@@ -282,7 +282,7 @@ def test_the_background_mask_reaches_the_annotation_bundle() -> None:
             {"start": 1.0, "end": 2.0, "state": "target_active"},
         ],
     )
-    assert "raw_16k__background__mask" in config
+    assert "raw__background__mask" in config
     regions = tasks[0]["predictions"][0]["result"]
     assert [r["value"]["labels"] for r in regions] == [["target_free"], ["target_active"]]
     assert regions[0]["value"]["start"] == 0.0 and regions[0]["value"]["end"] == 1.0
@@ -329,8 +329,8 @@ def test_per_speaker_presence_reaches_the_bundle_labelled_by_speaker() -> None:
             },
         ],
     )
-    assert "raw_16k__speaker__speech_presence" in config
-    regions = [r for r in tasks[0]["predictions"][0]["result"] if r["from_name"] == "raw_16k__speaker__speech_presence"]
+    assert "raw__speaker__speech_presence" in config
+    regions = [r for r in tasks[0]["predictions"][0]["result"] if r["from_name"] == "raw__speaker__speech_presence"]
     assert {r["value"]["labels"][0] for r in regions} == {"S0", "S1"}
 
 

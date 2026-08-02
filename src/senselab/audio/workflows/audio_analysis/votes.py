@@ -39,7 +39,7 @@ class PassHarvest:
     """Everything the aggregate phase needs about one pass — and nothing model-bound.
 
     Attributes:
-        pass_label: e.g. ``"raw_16k"``.
+        perturbation: e.g. ``"raw"``.
         speech_presence_evidence: per-bucket ``{"start", "end", "evidence", "frame_dispersion"}``
             dicts from ``harvest_speech_presence_evidence`` — **measurements, not votes**. The
             thresholds that turn them into beliefs live in ``speech_presence_link``, so this field
@@ -68,7 +68,7 @@ class PassHarvest:
             pass-summary injection instead of being mutated silently).
     """
 
-    pass_label: str
+    perturbation: str
     speech_presence_evidence: list[dict[str, Any]] = field(default_factory=list)
     speaker_votes: list[dict[str, Any]] = field(default_factory=list)
     asr_votes: list[dict[str, Any]] = field(default_factory=list)
@@ -339,7 +339,7 @@ class LinkedPass:
     value; folding across signals happens exactly once, in ``fuse.fuse_axis``.
     """
 
-    pass_label: str
+    perturbation: str
     buckets_by_axis: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     signal_results: dict[str, SignalResult] = field(default_factory=dict)
     quality_scores: dict[tuple[float, float], dict[str, float]] = field(default_factory=dict)
@@ -442,7 +442,7 @@ def link_pass(harvest: PassHarvest, *, params: dict[str, Any]) -> LinkedPass:
             bucket["votes"] = {**bucket["votes"], "__sources__": dict(source_block.get("_raw") or {})}
 
     provenance_common = {
-        "pass": harvest.pass_label,
+        "pass": harvest.perturbation,
         "grids": {k: dict(v) for k, v in harvest.grids.items()},
         "sampling_rate": harvest.sampling_rate,
         "speech_presence_policy": asdict(presence_policy),
@@ -450,7 +450,7 @@ def link_pass(harvest: PassHarvest, *, params: dict[str, Any]) -> LinkedPass:
         **{k: v for k, v in harvest.provenance_extras.items()},
     }
     return LinkedPass(
-        pass_label=harvest.pass_label,
+        perturbation=harvest.perturbation,
         buckets_by_axis={
             "speech_presence": presence_buckets,
             "speaker": list(harvest.speaker_votes),
@@ -458,7 +458,7 @@ def link_pass(harvest: PassHarvest, *, params: dict[str, Any]) -> LinkedPass:
         },
         signal_results={
             signal: SignalResult(
-                pass_label=harvest.pass_label,  # type: ignore[arg-type]
+                perturbation=harvest.perturbation,  # type: ignore[arg-type]
                 signal=signal,
                 rows=sorted(rows, key=lambda r: (r.start, r.end)),
                 provenance=provenance_common,

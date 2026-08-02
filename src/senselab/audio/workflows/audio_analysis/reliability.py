@@ -92,10 +92,10 @@ def signal_stability(
     """Mean absolute disagreement of each signal with itself across passes.
 
     Args:
-        harvests: ``{pass_label → PassHarvest}``. At least two passes are required for any
+        harvests: ``{perturbation → PassHarvest}``. At least two passes are required for any
             signal to be scored. Ignored when ``buckets_by_pass`` is given.
         axis: ``"speech_presence"``, ``"speaker"``, or ``"asr"``.
-        buckets_by_pass: ``{pass_label → linked buckets}``. Preferred: presence measurements have
+        buckets_by_pass: ``{perturbation → linked buckets}``. Preferred: presence measurements have
             to be *linked* before they can be compared as beliefs, and the caller has already done
             that under the run's policy.
 

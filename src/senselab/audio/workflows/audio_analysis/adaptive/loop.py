@@ -37,6 +37,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
 from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
+from senselab.audio.workflows.audio_analysis.perturbations import read_measurements, read_register
 
 
 def run_adaptive_loop(
@@ -55,7 +56,7 @@ def run_adaptive_loop(
 
     Two ingest paths, same loop:
 
-    - **artifact-driven** (default): reads ``L1/passes.json`` and the linked votes from
+    - **artifact-driven** (default): reads ``L1/perturbations.json`` and the linked votes from
       ``L2/round0/votes/<axis>.parquet``. This is what ``scripts/adaptive_loop.py``
       does over a finished run.
     - **in-process** (T040): the caller passes the ``PassHarvest`` objects it just
@@ -80,7 +81,7 @@ def run_adaptive_loop(
         harvests: Pass label → ``PassHarvest`` for the in-process path.
         policy_overrides: In-memory policy overrides (CLI flags), merged last.
         summary: Pre-loaded ``{"input_audio": ..., "passes": {...}}`` index; read from
-            ``L1/passes.json`` when ``None``.
+            ``L1/perturbations.json`` when ``None``.
 
     Returns:
         The loop's decision log.
@@ -92,14 +93,18 @@ def run_adaptive_loop(
     out_dir = Path(out_dir) if out_dir else run_dir
     policy = load_policy(policy_path, policy_overrides)
 
+    register = read_register(run_dir)
     if summary is None:
-        # ``L1/passes.json``, not ``final/summary.json``. A deliverable that a later stage reads
-        # to rebuild state is an intermediate wearing the wrong name; the small index of what was
-        # measured on which pass belongs where the evidence is.
-        summary = json.loads((evidence_dir(run_dir) / "passes.json").read_text())
+        # ``L1/perturbations.json``, not ``final/summary.json``. A deliverable that a later stage
+        # reads to rebuild state is an intermediate wearing the wrong name; the index of what was
+        # measured under which perturbation belongs beside the declaration of what they are.
+        summary = {
+            "input_audio": _register_source_audio(run_dir),
+            "passes": read_measurements(run_dir),
+        }
     passes = [pl for pl, ps in (summary.get("passes") or {}).items() if isinstance(ps, dict) and "duration_s" in ps]
     if not passes:
-        raise ValueError(f"no completed passes in {run_dir}/L1/passes.json")
+        raise ValueError(f"no completed perturbations in {run_dir}/L1/perturbations.json")
     duration_s = float(summary["passes"][passes[0]]["duration_s"])
     pass_sigs = {pl: str(summary["passes"][pl].get("audio_signature") or "") for pl in passes}
     if aggregator is None:
@@ -147,6 +152,9 @@ def run_adaptive_loop(
         "asr_grid": asr_grid,
         "elections": {},
         "input_audio": input_audio,
+        # The declared set, so anything that has to *regenerate* a perturbation's audio
+        # dispatches on its transform rather than on how its name is spelled.
+        "perturbations": [p.to_json() for p in register],
         "asr_model_ids": {pl: set(load_outcomes_dir(run_dir, pl, "asr").keys()) for pl in passes},
     }
 
@@ -483,6 +491,16 @@ def run_adaptive_loop(
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
+
+
+def _register_source_audio(run_dir: Path) -> str | None:
+    """The source recording recorded in ``L1/perturbations.json``, or ``None``."""
+    try:
+        payload = json.loads((evidence_dir(run_dir) / "perturbations.json").read_text())
+    except (OSError, ValueError):
+        return None
+    source = payload.get("source_audio") if isinstance(payload, dict) else None
+    return str(source) if source else None
 
 
 def _resolve_input_audio(recorded: str | None, run_dir: Path) -> str | None:

@@ -21,7 +21,7 @@ from senselab.audio.workflows.audio_analysis.votes import (
 
 def _harvest() -> PassHarvest:
     return PassHarvest(
-        pass_label="raw_16k",
+        perturbation="raw",
         speech_presence_evidence=[
             {
                 "start": 0.0,
@@ -65,7 +65,7 @@ def test_link_pass_emits_per_signal_rows_in_native_units() -> None:
 
     assert set(linked.signal_results) >= {"m1", "m2", "a", "b", "scene_quality", "frame_dispersion"}
     m1 = linked.signal_results["m1"]
-    assert m1.pass_label == "raw_16k"
+    assert m1.perturbation == "raw"
     assert [(r.start, r.end) for r in m1.rows] == [(0.0, 0.5), (0.5, 1.0)]
     assert m1.rows[0].measurement == {"covered_fraction": 1.0}
 

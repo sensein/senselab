@@ -189,7 +189,7 @@ def _passes_for_two_speakers() -> dict:
                 }
             },
         }
-        for label in ("raw_16k", "enhanced_16k")
+        for label in ("raw", "enhanced")
     }
 
 

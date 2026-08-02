@@ -3,10 +3,18 @@
 The directory names carry the architecture, so a reader can tell what a file *is* from where it
 sits rather than having to know which module wrote it:
 
-``L1/`` — **evidence.** Per-pass model outputs and each signal's own measurement, in the tool's
-own units, plus the cross-pass stability measurements. Nothing here is an answer, and nothing here
-is named for an **axis**: an axis is a fold across signals *and* across passes, so it can be
-neither produced by one pass nor stored under one.
+``L1/`` — **evidence.** Per-perturbation model outputs under ``L1/raw/`` and
+``L1/perturbation/<k>/``, an index of what those perturbations are in ``L1/perturbations.json``,
+and each signal's own measurement in the tool's own units under ``L1/signals/``. Nothing here is
+an answer, and nothing here is named for an **axis**: an axis is a fold across signals *and*
+across perturbations, so it can be neither produced by one perturbation nor stored under one.
+
+``L1/signals/<signal>.parquet`` **accumulates across raw and every perturbation** — one file per
+signal, each row carrying the perturbation it was measured under — and is the only thing L2 reads
+from L1. Per-perturbation signal files were the earlier form; they made the perturbation an index
+on the *location* rather than a dimension of the data, which is what let consumers reach into
+``L1/<pass>/`` for one perturbation's evidence and quietly get a different answer than a fold
+over all of them.
 
 ``L2/round<N>/`` — **belief.** The fused uncertainty maps, one directory per iteration. Per
 round rather than only final because a single map cannot distinguish "settled immediately" from
@@ -18,12 +26,11 @@ consumer actually acts on. Kept separate from ``L2/`` because "what do we believ
 we hand over" are different questions: the belief is per bucket and per round, the deliverable
 is one transcript and one figure.
 
-``L1/stability/<signal>.parquet`` holds the cross-pass disagreement **per signal**, and
-``L1/stability/signals.json`` the run-level mean that sets each signal's fusion weight. Keyed by
-signal because that is what stability is a property of: the two passes are the same recording
-under a transform, so a signal that answers differently between them has not earned its weight.
-The previous form — one file per *axis* under a ``raw_vs_enhanced`` pseudo-pass, obtained by
-subtracting two per-pass axis folds — was wrong three times over, and had no reader anywhere.
+Cross-perturbation disagreement is **not** here. Comparing two perturbations is a fold over an
+input dimension, by exactly the argument that makes an axis L2's, so per-signal stability is a
+round derivative. Its run-level summary is not written at all: it is already on every fused row
+as ``weight_basis[signal]["stability"]``, and one quantity in two places is one quantity that can
+disagree with itself.
 """
 
 from __future__ import annotations
@@ -37,8 +44,8 @@ __all__ = [
     "belief_dir",
     "evidence_dir",
     "final_dir",
-    "pass_dir",
-    "stability_dir",
+    "perturbation_dir",
+    "signals_dir",
 ]
 
 EVIDENCE_DIR = "L1"
@@ -51,19 +58,28 @@ def evidence_dir(run_dir: Path | str) -> Path:
     return Path(run_dir) / EVIDENCE_DIR
 
 
-def pass_dir(run_dir: Path | str, pass_label: str) -> Path:
-    """``<run>/L1/<pass>`` — one pass's model outputs and per-signal measurements."""
-    return evidence_dir(run_dir) / pass_label
+def perturbation_dir(run_dir: Path | str, name: str) -> Path:
+    """``<run>/L1/raw`` for the identity, ``<run>/L1/perturbation/<name>`` for any other.
 
-
-def stability_dir(run_dir: Path | str) -> Path:
-    """``<run>/L1/stability`` — per-**signal** cross-pass disagreement.
-
-    ``<signal>.parquet`` per bucket, ``signals.json`` for the run-level mean that becomes each
-    signal's fusion weight. A signal, not an axis: stability is a property of the thing that
-    answered twice.
+    Two locations rather than one because the identity is not one transform among many: it is
+    the recording, the thing every other perturbation is a transform *of*, and the layout says
+    so. The set below ``perturbation/`` is open — a third needs a register entry, not a code
+    edit here.
     """
-    return evidence_dir(run_dir) / "stability"
+    from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
+
+    base = evidence_dir(run_dir)
+    return base / IDENTITY_NAME if name == IDENTITY_NAME else base / "perturbation" / name
+
+
+def signals_dir(run_dir: Path | str) -> Path:
+    """``<run>/L1/signals`` — per-signal measurements across raw and every perturbation.
+
+    L2's only input from L1. One file per signal, every row carrying its perturbation, so a
+    consumer that wants one perturbation's evidence has to say so on the data rather than by
+    picking a directory.
+    """
+    return evidence_dir(run_dir) / "signals"
 
 
 def belief_dir(run_dir: Path | str, round_index: int | None = None) -> Path:

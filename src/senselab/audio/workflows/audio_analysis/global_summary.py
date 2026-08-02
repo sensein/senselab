@@ -240,10 +240,10 @@ def compute_run_global_summary(
 
     Args:
         fused_axes: ``{axis → FusedAxis}`` — the L2 answer.
-        passes: ``{pass_label → pass_summary}``, for the per-pass quality and diarization blocks.
-        asr_resolved_by_pass: ``{pass_label → {asr_model_id → resolved}}`` for the hallucination
+        passes: ``{perturbation → pass_summary}``, for the per-pass quality and diarization blocks.
+        asr_resolved_by_pass: ``{perturbation → {asr_model_id → resolved}}`` for the hallucination
             scan.
-        pii_reports: ``{pass_label → PiiPassReport | None}``.
+        pii_reports: ``{perturbation → PiiPassReport | None}``.
         expects_speech: When ``True`` (default), n_speakers=0 → uncertainty 1.0
             (no-speech recording violates the "single speaker" claim). Set
             ``False`` when the caller wants n=0 to count as compliant.
@@ -257,16 +257,16 @@ def compute_run_global_summary(
     identity_mean = _mean_over_speech(fused_axes["speaker"].rows if "speaker" in fused_axes else [], presence_rows)
 
     by_pass: dict[str, dict[str, Any]] = {}
-    for pass_label, pass_summary in sorted(passes.items()):
+    for perturbation, pass_summary in sorted(passes.items()):
         duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
-        hallu = _detect_hallucinations(dict(asr_resolved_by_pass.get(pass_label) or {}), duration_s)
+        hallu = _detect_hallucinations(dict(asr_resolved_by_pass.get(perturbation) or {}), duration_s)
         diar_blocks = (pass_summary.get("diarization") or {}).get("by_model") or {}
         n_speakers_pass: int | None = None
         for _m, block in diar_blocks.items():
             if isinstance(block, dict) and block.get("status") == "ok" and "n_speakers" in block:
                 n_speakers_pass = int(block["n_speakers"])
                 break
-        by_pass[pass_label] = {
+        by_pass[perturbation] = {
             "hallucination_rate": hallu.get("pass_hallucination_rate"),
             "hallucination_per_model": hallu.get("per_model_rate"),
             "n_speakers": n_speakers_pass,

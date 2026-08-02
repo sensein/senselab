@@ -58,8 +58,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from senselab.audio.workflows.audio_analysis.layout import evidence_dir
 
-    if not (evidence_dir(args.run_dir) / "passes.json").exists():
-        print(f"ERROR: {args.run_dir} is not an analyze_audio run dir (no L1/passes.json)", file=sys.stderr)
+    if not (evidence_dir(args.run_dir) / "perturbations.json").exists():
+        print(
+            f"ERROR: {args.run_dir} is not an analyze_audio run dir (no L1/perturbations.json)",
+            file=sys.stderr,
+        )
         return 2
 
     _ensure_light_importable()

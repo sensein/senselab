@@ -25,13 +25,11 @@ punted fifth, but neither is harvested, so neither belongs in the type that desc
 produces. Widening it here would promise `compute.py` inputs that no harvester emits.
 """
 
-PassLabel = Literal["raw_16k", "enhanced_16k"]
-"""A pass is the same recording under a transform — as recorded, or after speech enhancement.
-
-``raw_vs_enhanced`` used to be a member. It is not a pass; it was a perturbation-stability
-*measurement* wearing a pass label so that it could be an index on an axis. Stability is now keyed
-by signal (``L1/stability/<signal>.parquet``), which is what it is a property of.
-"""
+# A perturbation is a plain ``str``, not a Literal. The set is **open** — raw is the identity,
+# enhancement is one more, and a future L2 round may propose another — so anything that enumerates
+# it in a type is a promise the pipeline is not allowed to keep. What each name means is declared
+# in ``L1/perturbations.json`` (see ``perturbations.Perturbation``), where the transform and its
+# parameters travel with it instead of being inferred from the spelling.
 
 ComparisonStatus = Literal["ok", "incomparable", "unavailable"]
 """Per-row status: did this signal produce a comparable measurement in this bucket?"""
@@ -63,13 +61,15 @@ class SignalRow:
 
 @dataclass(slots=True)
 class SignalResult:
-    """All L1 rows for one ``(pass, signal)`` plus the provenance recorded on the parquet.
+    """All L1 rows for one ``(perturbation, signal)`` plus the provenance recorded on the parquet.
 
-    Held in memory by ``compute_uncertainty_axes``; serialized by ``io.write_signal_parquet`` to
-    ``L1/<pass>/signals/<signal>.parquet``.
+    Held in memory by ``compute_uncertainty_axes``; serialized by ``io.write_signal_parquet``,
+    which writes every perturbation's rows for one signal into a single
+    ``L1/signals/<signal>.parquet`` with ``perturbation`` as a column. The perturbation is a
+    dimension of the measurement, not of its location.
     """
 
-    pass_label: PassLabel
+    perturbation: str
     signal: str
     rows: list[SignalRow] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
@@ -79,7 +79,7 @@ class SignalResult:
 class FusedAxis:
     """One axis, fused across every signal and every pass — the level-2 product.
 
-    Deliberately has no ``pass_label``. Each row is a plain dict as emitted by
+    Deliberately has no ``perturbation``. Each row is a plain dict as emitted by
     :func:`~senselab.audio.workflows.audio_analysis.fuse.fuse_axis`: ``uncertainty``,
     ``epistemic_uncertainty``, ``confidence``, ``variability``, ``triage_score``,
     ``contributing_signals``, ``contributing_passes``, ``signal_weights``, ``weight_basis``,

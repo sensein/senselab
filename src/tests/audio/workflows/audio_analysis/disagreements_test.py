@@ -22,7 +22,7 @@ def _row(start: float, triage: float | None, **extra: object) -> dict[str, Any]:
         "epistemic_uncertainty": triage,
         "triage_score": triage,
         "contributing_signals": ["m"],
-        "contributing_passes": ["raw_16k", "enhanced_16k"],
+        "contributing_passes": ["raw", "enhanced"],
         "signal_weights": {"m": 1.0},
         "weight_basis": {"m": {"stability": 1.0, "support": 1.0}},
         "round": 0,
@@ -62,7 +62,7 @@ def test_entries_have_no_pass_field(tmp_path: Path) -> None:
     )
     entry = idx["entries"][0]
     assert "pass" not in entry
-    assert entry["contributing_passes"] == ["raw_16k", "enhanced_16k"]
+    assert entry["contributing_passes"] == ["raw", "enhanced"]
     assert "rows_by_pass" not in idx["totals"]
 
 
@@ -137,9 +137,9 @@ def test_disagreements_null_triage_sorts_last(tmp_path: Path) -> None:
 def test_summary_reads_l1_measurements_not_a_second_fold(tmp_path: Path) -> None:
     """Per-signal detail comes from the L1 signal rows, joined on (bucket, signal)."""
     signal_results = {
-        "raw_16k": {
+        "raw": {
             "m": SignalResult(
-                pass_label="raw_16k",
+                perturbation="raw",
                 signal="m",
                 rows=[SignalRow(start=0.0, end=0.5, signal="m", measurement={"covered_fraction": 1.0})],
             )
@@ -156,4 +156,4 @@ def test_summary_reads_l1_measurements_not_a_second_fold(tmp_path: Path) -> None
     summary = idx["entries"][0]["summary"]
     assert "snr=12.0dB" in summary
     assert "src=speech" in summary
-    assert "raw_16k::m" in summary
+    assert "raw::m" in summary

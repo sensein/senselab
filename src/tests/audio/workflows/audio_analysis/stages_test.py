@@ -39,10 +39,10 @@ def audio() -> Audio:
 def ctx(tmp_path: Path) -> StageContext:
     """A cache- and sidecar-enabled context rooted in tmp_path."""
     return StageContext(
-        pass_label="raw_16k",
+        perturbation="raw",
         audio_signature="a" * 64,
         cache_dir=tmp_path / "cache",
-        out_dir=tmp_path / "raw_16k",
+        out_dir=tmp_path / "raw",
         senselab_ver="test",
     )
 
@@ -315,7 +315,7 @@ def test_ppg_uses_the_plural_key(audio: Audio, ctx: StageContext, monkeypatch: p
 def test_run_pass_emits_the_summary_envelope(audio: Audio, ctx: StageContext) -> None:
     """Label / duration_s / audio_signature are what adaptive/loop.py reads."""
     summary = run_pass(audio, ctx, PassPlan())
-    assert summary["label"] == "raw_16k"
+    assert summary["label"] == "raw"
     assert summary["duration_s"] == pytest.approx(1.0)
     assert summary["audio_signature"] == ctx.audio_signature
 

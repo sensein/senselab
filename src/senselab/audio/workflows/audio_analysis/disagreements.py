@@ -50,11 +50,11 @@ def _evidence_index(
 ) -> dict[tuple[float, float], dict[str, Any]]:
     """``{(start, end) → {"<pass>::<signal>": measurement}}`` from the L1 signal rows."""
     out: dict[tuple[float, float], dict[str, Any]] = {}
-    for pass_label, by_signal in sorted((signal_results_by_pass or {}).items()):
+    for perturbation, by_signal in sorted((signal_results_by_pass or {}).items()):
         for signal, result in sorted(by_signal.items()):
             for row in getattr(result, "rows", []):
                 key = (round(float(row.start), 6), round(float(row.end), 6))
-                out.setdefault(key, {})[f"{pass_label}::{signal}"] = row.measurement
+                out.setdefault(key, {})[f"{perturbation}::{signal}"] = row.measurement
     return out
 
 

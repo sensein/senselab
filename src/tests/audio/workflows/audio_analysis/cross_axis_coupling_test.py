@@ -52,7 +52,7 @@ def _b2(start: float, end: float, values: dict[str, float]) -> dict:
 
 
 def _axes(**per_axis: dict[str, float]) -> dict:
-    return {axis: {"raw_16k": [_b(0.0, values)]} for axis, values in per_axis.items()}
+    return {axis: {"raw": [_b(0.0, values)]} for axis, values in per_axis.items()}
 
 
 def _weights(by_axis: dict) -> dict:
@@ -74,8 +74,8 @@ def test_a_settled_presence_axis_reaches_the_speaker_axis_through_the_mask() -> 
     still claiming a speaker there. Nothing averages one axis's number into another's.
     """
     axes = {
-        "speech_presence": {"raw_16k": [_b(0.0, {"p": 0.0, "q": 0.0})]},
-        "speaker": {"raw_16k": [_b(0.0, {"a": 0.9, "b": 0.1})]},
+        "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
+        "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
     claims = {"a": [(0.0, 0.5)]}
     coupled, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims=claims)
@@ -114,8 +114,8 @@ def test_an_axis_is_not_an_input_to_itself() -> None:
 def test_the_coupling_is_recorded_on_the_rows_it_moved() -> None:
     """A value the shared structure moved must be distinguishable from one reached alone."""
     axes = {
-        "speech_presence": {"raw_16k": [_b(0.0, {"p": 0.0, "q": 0.0})]},
-        "speaker": {"raw_16k": [_b(0.0, {"a": 0.9, "b": 0.1})]},
+        "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
+        "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
     rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]})
     assert "speech_presence" in rows["speaker"][0]["coupled_from"]
@@ -125,8 +125,8 @@ def test_the_coupling_is_recorded_on_the_rows_it_moved() -> None:
 def test_an_axis_is_not_listed_as_coupling_to_itself() -> None:
     """Shared structure an axis contributed to is not evidence that axis gave itself."""
     axes = {
-        "speech_presence": {"raw_16k": [_b(0.0, {"p": 0.0, "q": 0.0})]},
-        "speaker": {"raw_16k": [_b(0.0, {"a": 0.9, "b": 0.1})]},
+        "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
+        "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
     rows, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]})
     assert "speech_presence" not in rows["speech_presence"][0]["coupled_from"]
@@ -139,8 +139,8 @@ def test_a_round_that_revised_the_shared_structure_is_not_credited_with_the_drop
     buy the loop more rounds on the strength of it.
     """
     axes = {
-        "speech_presence": {"raw_16k": [_b(0.0, {"p": 0.0, "q": 0.0})]},
-        "speaker": {"raw_16k": [_b(0.0, {"a": 0.9, "b": 0.1})]},
+        "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
+        "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
     _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]})
     later = [e for e in logs["speaker"] if e["round"] >= 1]
@@ -326,7 +326,7 @@ def test_a_derive_hook_returning_nothing_leaves_the_derivatives_alone() -> None:
 
 def test_the_single_axis_driver_is_the_same_loop_with_one_axis() -> None:
     """One round loop, not two. Two implementations could disagree about the same history."""
-    single, log = fuse_rounds({"raw_16k": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=3)
+    single, log = fuse_rounds({"raw": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=3)
     assert len(single) == 1
     assert log[0]["round"] == 0
 
@@ -392,8 +392,8 @@ def test_the_measured_overlap_reaches_the_weight_and_is_recorded() -> None:
 
 def _unsettled() -> dict:
     return {
-        "speaker": {"raw_16k": [_b(0.0, {"a": 0.5, "b": 0.5})]},
-        "speech_presence": {"raw_16k": [_b(0.0, {"c": 0.5, "d": 0.5})]},
+        "speaker": {"raw": [_b(0.0, {"a": 0.5, "b": 0.5})]},
+        "speech_presence": {"raw": [_b(0.0, {"c": 0.5, "d": 0.5})]},
     }
 
 
@@ -535,7 +535,7 @@ def test_cross_axis_input_cannot_create_buckets_the_axis_never_measured() -> Non
     """
     by_axis = {
         "background_mask": {"mask": [_b(0.0, {"mask": 0.0})]},
-        "speaker": {"raw_16k": [_b(0.0, {"a": 0.5}), _b(0.5, {"a": 0.5}), _b(1.0, {"a": 0.5})]},
+        "speaker": {"raw": [_b(0.0, {"a": 0.5}), _b(0.5, {"a": 0.5}), _b(1.0, {"a": 0.5})]},
     }
     rows, _logs = fuse_axes(
         by_axis,
@@ -575,8 +575,8 @@ def test_axes_on_different_grids_still_reach_each_other() -> None:
     """
     by_axis = {
         # 1 s buckets vs 0.5 s buckets: overlapping in time, disjoint as keys.
-        "asr": {"raw_16k": [_b2(0.0, 1.0, {"a": 0.9}), _b2(1.0, 2.0, {"a": 0.9})]},
-        "speaker": {"raw_16k": [_b2(0.0, 0.5, {"s": 0.0}), _b2(0.5, 1.0, {"s": 0.0})]},
+        "asr": {"raw": [_b2(0.0, 1.0, {"a": 0.9}), _b2(1.0, 2.0, {"a": 0.9})]},
+        "speaker": {"raw": [_b2(0.0, 0.5, {"s": 0.0}), _b2(0.5, 1.0, {"s": 0.0})]},
     }
     weights = {"asr": {"a": 1.0}, "speaker": {"s": 1.0}}
     coupled, _ = fuse_axes(by_axis, weights_by_axis=weights, max_rounds=3)
