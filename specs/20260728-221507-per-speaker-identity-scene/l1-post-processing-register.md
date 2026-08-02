@@ -449,3 +449,15 @@ misleading case because it is the artifact a human actually looks at.
 
 **Found by:** noticing that per-speaker presence still did not move speaker uncertainty in the
 final timeline after coupling was verified working.
+
+**Why two lineages exist at all.** They should not. The layers specify one: L1 emits per-signal
+measurements, L2 fuses them into axes, `final/` holds the converged answer. There is no second
+speaker axis in that design and nowhere for one to live. The duality is not two views of a
+quantity — it is item 25's violation with a consumer attached. L1 emits a per-pass axis fold it
+should not compute, and the belief store was built to ingest precisely that. Delete the fold and
+the belief store has nothing to read but L2's axes, at which point item 27 dissolves rather than
+being fixed.
+
+The interim `_fused_axis` overlay in `adaptive/plot.py` is scaffolding for the defect: justified
+only while the violation is real and invisible on the artifact people trust, and to be deleted with
+it, not maintained.
