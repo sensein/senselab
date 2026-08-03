@@ -768,3 +768,49 @@ not three answers. What was wrong was one consumer reading the wrong stage.
 computed over whatever the index is given, so its 0.9941 was measured over round-0 rows and is now
 measured over final coupled rows plus the newly-harvested mask axis. Whether the threshold still admits
 everything is an open measurement, not a known quantity.
+
+## Layering verification (run 4, cleared cache): 14 invariants hold, 2 violated
+
+Checked the **artifact tree against the plan**, not the numbers. 17 structural checks from D-16 – D-25.
+
+### Holding
+
+- **L1 measures.** No `L1/stability/` (the cross-pass evaluation you flagged is gone), 27 signals under
+  `L1/signals/`, each row carrying `perturbation` as a **column** — a dimension of the measurement, not
+  of its location — and `L1/perturbations.json` declaring the transforms.
+- **L2 decides, in one tree.** `L2/` contains only `round`, so the two-round-tree problem stays closed.
+  Five rounds. All four axes in the last round's `estimates/`, and **none carries a `pass` or
+  `perturbation` column** — an axis folds across passes, so it cannot be keyed by one (D-16).
+- **All four axes reach `final/`**, and `background_mask` now reaches the disagreements index, which is
+  the harvest change working end to end.
+
+### Violated
+
+**1. `final/estimates/*.parquet` matches no round, byte for byte.** Compared against all five: none
+matches. So `final/` is **not an extraction** — something produces it independently. That contradicts
+D-17's core claim about the layer (*"if a number in `final/` is not present in the last round, it was
+computed at the wrong stage"*), and `extract_final_estimates`'s own docstring, which says it "only moves
+bytes". Cause unexamined; two candidates are a second writer running after the extraction, and the
+extraction reading a round index that is not the last.
+
+**2. The index still disagrees with the parquet on `triage_score`.** `speech_presence@15.54`: parquet
+`0.4347`, index `0.9998`. My fix — return `final_rows` and rank those — is *reaching* the summary
+(`final_rows` is present in `final_uncertainty`), so the plumbing works, but the index's values are
+still not the parquet's. Given violation 1, the likely reading is that neither is wrong about its own
+source: `final_rows` are the writer's rows, and `final/estimates/*.parquet` is written by something
+else. **Not verified** — that is the next thing to read, not a conclusion.
+
+Note the index values are nearly identical across buckets (0.9997725…), where the parquet's vary per
+bucket. A near-constant value across a varying signal is worth treating as its own symptom.
+
+### One false positive in the check, recorded so the numbers are honest
+
+"L1 has no axis-named artifact" fired on `pyannote_speaker_diarization_community_1.parquet` — the
+substring `speaker` is an axis name *and* part of a model name. The check is naive; the artifact is
+correctly named after its producer. So it is 14 held / 2 violated, not 3.
+
+### What this establishes
+
+The **layered plan holds where it was rebuilt** — L1/L2 separation, one round tree, axes keyed by axis
+alone, the fourth axis present throughout. Both violations are in `final/`, the one layer this session
+did not touch, and both are about whether it extracts or computes.
