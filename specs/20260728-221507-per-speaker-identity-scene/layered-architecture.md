@@ -2215,3 +2215,109 @@ is the identity; the path is derived from it.
 - **L2 addresses evidence by key.** `votes_for(family="asr")` selects across models and
   perturbations without string matching, which is what today's `"::" in name` selectors are standing
   in for.
+
+---
+
+## D-18. Output type per signal key — and the gap between what tools generate and what L1 writes
+
+Asked of a real run's `L1/signals/*.parquet`. The answer is that **L1 does not currently store any
+tool's output**. It stores a reduction of one, resampled onto a common 0.1 s grid, with the native
+window and hop recorded beside a value that is not at them.
+
+### What the parquet actually contains
+
+| key | tool generates | L1 writes | grid |
+|---|---|---|---|
+| `(frame, pyannote/segmentation-3.0, ·)` | `(n_frames × n_speakers)` probability **matrix**, channels permutation-arbitrary per inference | `{frame_mean, frame_std}` | 0.1 s |
+| `(scene, MIT/ast-…, ·)` | **527-label score vector** per 10.24 s window, multi-label sigmoid | `{speech_label_mass: 0.623}` | 0.1 s |
+| `(diarization, pyannote/…community-1, ·)` | **set of `(start, end, label)` spans**, variable length, labels arbitrary per model | `{covered_fraction, speaker_label}` | 0.1 s |
+| `(asr, nyralabs/CrisperWhisper…, ·)` | **`ScriptLine` tree** — text, nested word chunks with times, per-segment `avg_logprob`/`no_speech_prob`/`token_entropy` | `{word_overlap_s, n_words, avg_logprobs[], …}` | 0.1 s |
+| `(quality_*, four estimators, ·)` | six quantities at **three different resolutions** | one row, `units: "mixed"`, mostly `null` | 0.1 s |
+| `(acoustic_hnr, opensmile, ·)` | series at 60 ms / 10 ms | `{hnr_db}` | 0.1 s |
+
+`frame_segmentation` records `native_window_s: 0.0619`, `resolution_s: 0.0169` on a row spanning
+`0.0 → 0.1`. The provenance describes a measurement the file does not contain.
+
+### Each of those reductions is an L2 decision
+
+- **`frame_mean`** collapses the per-speaker channels. This is the exact collapse that returned
+  `1.0000` in 100% of frames on a clip that was half digital silence, and D-5 says the channels must
+  stay intact because they are the only thing that distinguishes "two speakers at once" from
+  "uncertain which of two". Storing the mean discards that, irrecoverably.
+- **`speech_label_mass`** is a *selection* — which of 527 AudioSet labels count as speech — plus a
+  sum. Both are choices, and the label set is a policy the row does not carry.
+- **`covered_fraction`** reduces spans to a proportion, and `speaker_label` picks one label for a
+  bucket that may contain two.
+- **`avg_logprobs: []`** is a list because the bucket may span several ASR segments — a bucket grid
+  imposed on an object that is not per-bucket.
+- **`units: "mixed"`** is the honest admission that six quantities in three unit systems have been
+  put in one row.
+
+### The structural problem: one row type cannot hold L1
+
+`SignalRow(measurement: Mapping[str, float])` fits only the scalar-per-bucket case. L1's outputs
+are **six different kinds of object**, and four of them have no per-bucket scalar form:
+
+```python
+Series      # (n_frames,) at a fixed hop, one named quantity
+            #   brouhaha vad/snr/c50, hnr, lufs, level_above_floor
+Matrix      # (n_frames × n_channels) where channels are NAMED or ARBITRARY — the distinction
+            # matters: brouhaha's 3 channels have fixed meaning, segmentation's speakers do not
+            #   segmentation activations
+Categorical # (n_windows × |vocabulary|) over a FIXED label set, plus the vocabulary itself
+            #   AST (527), YAMNet (521)
+Embedding   # (n_windows × n_dims) — 192 for ECAPA, 256 for ResNet
+Spans       # variable-length [(start, end, label)] — not on any grid
+            #   diarization, ASR word spans
+Tree        # ScriptLine: text with nested chunks, per-node scores
+            #   ASR transcripts
+```
+
+A bucket grid is meaningful for `Series` and `Matrix`. It is a **projection** for `Categorical` (a
+0.96 s or 10.24 s window is not a 0.1 s bucket), and it is a **reduction** for `Spans` and `Tree`
+(there is no natural per-bucket value of a transcript). Forcing all six into one tabular row is what
+produced every reduction in the table above.
+
+### What L1 should store instead
+
+Native shape, in the file format that shape belongs in:
+
+| kind | stored as | key |
+|---|---|---|
+| `Series`, `Matrix` | parquet, one row per **native frame**, one column per channel + the channel names in metadata | `(family, *instances, perturbation)` |
+| `Categorical` | parquet, one row per **native window**, `label_scores` as `[{label: score}, …]`, vocabulary + version in metadata | same |
+| `Embedding` | parquet or npy, one row per **native window**, vector as a fixed-width list | same |
+| `Spans` | parquet, one row per **span** — `start`, `end`, `label` — no grid at all | same |
+| `Tree` | JSON, the `ScriptLine` verbatim with `timestamp_source` | same |
+
+Then `SignalRow` is not one type but a small union, and each carries its own resolution because it
+*is* at its own resolution. `native_window_s` stops being a claim beside a resampled value and
+becomes a description of the rows present.
+
+### Where the reductions go
+
+Every one of them is a named L2 derivative, taking native L1 and producing a bucketed estimate:
+
+```python
+# L2/round/{n}/derivatives/
+project_categorical(ast_native, grid, labels=SPEECH_LABELS)   -> speech_label_mass   # selection + sum
+pool_channels(segmentation_native, how="noisy_or")            -> p_speech            # the collapse, named
+count_active(segmentation_native, threshold=θ)                -> overlap_count       # permutation-invariant
+cover(diar_spans, grid)                                       -> covered_fraction    # span -> proportion
+words_in(asr_tree, grid)                                      -> word_overlap_s      # tree -> bucket
+resample(series_native, grid, how="mean")                      -> per-bucket series
+```
+
+Each names the choice it makes, records it on the row, and can be re-made without re-running a
+model — which is the whole point of the split, and is impossible while the reduction is what got
+stored.
+
+### Answering the question directly
+
+**`pyannote/segmentation-3.0` generates a `(n_frames × n_speakers)` matrix of per-speaker speech
+probabilities at 61.9 ms / 16.9 ms, whose speaker channels are permutation-arbitrary within each
+inference.** Two facts follow and neither survives the current storage: a *count* of active channels
+is permutation-invariant and therefore well-defined (which is why J1 is answerable and J4 needs
+rounds), and any pooling to a single p(speech) is a choice among several — `mean`, `max`, `noisy-or`
+— that changes the answer. L1 stores `frame_mean`, which has silently made that choice, at a
+resolution the model never reported.
