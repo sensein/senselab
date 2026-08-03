@@ -1619,3 +1619,151 @@ mutated earlier in the same round is in-memory state rather than an artifact.
 `layer_boundary_test.py` keeps its rules 4 and 5 — a threshold-derived value naming its policy,
 and a field read by a name the rows have. Those are not path rules and D-17 does not replace
 them. Its rules 1–3 are superseded and go with the restructure, not with the mechanism.
+
+---
+
+## D-18 (plan). Replace guard-by-inspection with capability-passing I/O
+
+Not implemented. Written first, because the current approach cannot be finished and the reason is
+structural rather than a matter of effort.
+
+### What exists today
+
+`contracts.py` — 1,883 lines, 62 functions — plus `stage_contract_test.py` at 1,143. Three parts:
+
+1. **Declarations.** Per stage (`L1`, `L2_ROUND`, `FINAL`), a set of `Artifact` patterns, each with
+   permitted `suffixes`, a `key` naming the dimensions its rows are indexed by, and a `folded`
+   licence. Breadth is refused at construction: a `**` with no content rule raises on the line that
+   wrote it.
+2. **A static guard.** An AST walk over every pipeline module. `_PathResolver` tries to evaluate
+   path *expressions* to a declared pattern, tracking bindings across seven node types, and flags
+   reads or writes outside the declaring stage's contract.
+3. **A dynamic guard.** Walk a completed run tree; every file must match some stage's declared
+   output, and every declaration must be satisfied by some file.
+
+Plus a `Deviation` register — currently ~30 entries — waiving known violations by
+`(module, op, pattern, reason)`.
+
+### Why it cannot be finished
+
+**The static half is attempting an undecidable problem.** "Which path does this expression evaluate
+to?" is not answerable without running the program. Every bypass found is an instance of that, not
+an oversight:
+
+```
+str(final_dir(run_dir) / "x.parquet")     os.path.join(run_dir, "final", "x.json")
+str(run_dir) + "/final/x.json"            Path(f"{run_dir}/final/x.json")
+PATHS["final"] / "x.json"                 (lambda d: d / "final")(run_dir)
+```
+
+Closing these means enumerating, and keeping current, four independent open sets: **binding forms**
+(seven so far), **write verbs** (`to_parquet`, `savefig`, `write_table`, `to_feather`,
+`os.makedirs`, …), **path constructors**, and **file formats**. Each list is complete only for the
+bypasses already demonstrated. Four generations of this guard have shipped and each was defeated;
+the fifth closed four holes and the attacker immediately found ten, including a plain logic bug
+(`_check_call` returns after the first resolvable argument, so a call carrying two paths hides the
+second).
+
+**The dynamic half is never reliably green.** It needs a *complete* run. With none, it skips — so
+the artifact rules are checked only against a fixture written in the same commit. With one, it
+fails. Green means "no complete run exists", which is the least informative state.
+
+**And the two halves can disagree**, with no rule for which wins.
+
+### The reframing: this is a data-structure problem
+
+The run directory is a **typed namespace**. The declarations already state the type. What is missing
+is that nothing *holds* the type at the moment of use — a stage has ambient authority over the whole
+tree (it is handed `run_dir`), and the guard tries afterwards to reconstruct what it did with it.
+
+Invert it. Make the permitted set something a stage **holds**, and I/O something it can only do
+**through** what it holds. Then the check is a runtime predicate, exactly as proposed:
+
+```python
+check(path, state, direction) -> None | raise
+#   state     ∈ {L1, L2_ROUND(n), FINAL}
+#   direction ∈ {input, output}
+```
+
+No AST analysis. No verb vocabulary. No path-expression resolution. Not because those problems were
+solved but because they stop being asked: the only way to reach the run directory is through a
+handle that knows the stage.
+
+### The design
+
+**One I/O module owns the run directory.** Every read and write of a run-relative path goes through
+it. It already nearly exists — `io.py`, `layout.py`, `ctx.write_sidecar` — so this is consolidation,
+not invention.
+
+**A stage receives a capability, not a path.**
+
+```python
+class StageIO:
+    """Scoped run-directory access. Holds the stage identity; resolves names, not paths."""
+    def read(self, artifact: str, **dims) -> Any: ...
+    def write(self, artifact: str, payload: Any, **dims) -> Path: ...
+    def exists(self, artifact: str, **dims) -> bool: ...
+```
+
+`artifact` is a **declared name** (`"signals"`, `"estimates"`, `"round_summary"`), not a path
+fragment; `dims` are the declaration's own dimensions (`perturbation=…`, `axis=…`, `signal=…`). The
+handle composes the path from the declaration — so a stage cannot *name* an artifact that is not
+declared, and the check is a dict lookup rather than an inference.
+
+**The strong version: remove ambient authority.** A stage never receives `run_dir`. `StageIO` holds
+it privately; `read`/`write` return payloads, not paths. Then bypassing requires reconstructing the
+run root from somewhere else, which is conspicuous in review and detectable by one narrow static
+rule instead of four open ones.
+
+That single remaining static rule is closed and small: **no pipeline module may import `open`,
+`pathlib.Path`, `pandas.read_*`/`to_*`, `pyarrow`, or `matplotlib.savefig`** — only `StageIO` may.
+An import list is decidable; a path expression is not. This is the whole gain: the undecidable
+question is replaced by one that a grep can answer.
+
+### What each current mechanism becomes
+
+| today | after |
+|---|---|
+| AST path resolution across 4 open sets | deleted — nothing to resolve |
+| static read/write verb vocabulary | one import rule over a closed list |
+| dynamic tree walk for undeclared files | kept: it answers a different question (what got written) |
+| unproduced-declaration check | kept, and strengthened: it is now the only completeness check |
+| `Deviation` register (~30 entries) | kept, but each entry becomes a *call site*, not a pattern — a waiver names the line that needs it |
+| the two halves disagreeing | cannot: one mechanism, checked at the point of use |
+
+### Migration, incrementally
+
+1. **Declare artifacts by name.** Add the name → path-template mapping to `contracts.py`. Pure
+   addition; the existing pattern list is derived from it so nothing forks.
+2. **Build `StageIO` over the existing writers.** `io.write_*` and `ctx.write_sidecar` become its
+   implementation. No caller changes yet.
+3. **Convert one stage** — `L1` is the widest and least entangled — and delete the static rules that
+   stage needed. Each conversion *removes* guard code; that is the signal it is working.
+4. **Convert `L2_ROUND`, then `FINAL`.** `FINAL` should end up with `read` only.
+5. **Drop `run_dir` from stage signatures** once no stage uses it. This is the step that makes the
+   guarantee real, and it is checkable by signature inspection.
+6. **Delete `_PathResolver`** and the verb/binding/constructor tables. Expect `contracts.py` to lose
+   most of its 1,883 lines; the declarations are the part worth keeping.
+
+Each step leaves the tree green and reduces guard surface. There is no big-bang commit.
+
+### What this does not solve, stated plainly
+
+- **A wrong value written to a permitted path.** The capability checks *where*, never *what*. The
+  key/fold content rules stay, and they run inside `write` — which is strictly better than today,
+  because they run before the bytes land rather than after a run completes.
+- **Reads of things outside the run directory** — HF cache, model checkpoints, `~/.cache/senselab`.
+  Out of scope, and correctly so.
+- **A stage that declares an output and never writes it.** Only a completed run can show that, so
+  the dynamic check survives for exactly this.
+- **Order.** The DAG's acyclicity is a separate property: `StageIO` prevents `FINAL` being *written*
+  by an earlier stage, but that L2 round *n* reads only round *n−1* is a claim about arguments, and
+  stays a signature-level check.
+
+### The argument for doing this
+
+Four guard generations were defeated, each by a mechanism its author had not enumerated. The pattern
+is not carelessness; it is that inspection-after-the-fact of an undecidable property cannot
+terminate. Every hour spent extending the vocabulary buys one bypass and leaves the class intact.
+Capability-passing changes what must be true from *"we thought of every way to write a path"* to
+*"the run directory has one door"* — and the second is a property that can actually be held.
