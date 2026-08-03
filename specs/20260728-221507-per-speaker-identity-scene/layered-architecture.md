@@ -2096,3 +2096,122 @@ def unproduced(io: StageIO) -> list[str]:
     """Declared and never written. Only a completed run can answer this."""
     return [a.name for a in ARTIFACTS.for_stage(L1) if not io.any_exists(a.name)]
 ```
+
+---
+
+## D-18. Signal keys
+
+Every L1 signal is identified by a tuple, not a filename. Grounded in the 25 files a real run emits.
+
+### Why the flat name has to go
+
+Today a signal is a mangled string:
+
+```
+nvidia_diar_sortformer_4spk_v1_speechbrain_spkrec_ecapa_voxceleb.parquet
+embedding_silhouette_speechbrain_spkrec_ecapa_voxceleb_speechbrain_spkrec_ecapa_voxceleb.parquet
+```
+
+Model ids contain `_`, `/`, `.` and digits, and the separator is also `_`, so **`a_b` cannot be
+parsed back into `(a, b)`**. The encoding is lossy in the direction that matters: a reader cannot
+recover which model is the diarizer and which the embedder. The second name carries the same model
+twice — that is not a typo, it is what a lossy encoding looks like when it is generated correctly
+from a key nobody kept.
+
+And the perturbation is **absent from the name entirely**, because it used to be the directory
+(`L1/<pass>/…`). Once `L1/signals/` is cumulative across perturbations, the perturbation must become
+a key *column*. That is not bookkeeping: it is the difference between a signal and a signal-on-a-
+perturbation, and only the second is a measurement.
+
+### The key
+
+```python
+SignalKey = tuple[Family, *Instance, Perturbation]
+```
+
+`Family` says what kind of measurement it is; `Instance` names the tool(s) that produced it — a
+variable-arity slot, because a distance between two embedding models needs two names and a VAD needs
+none beyond its own; `Perturbation` says which transform the audio had.
+
+### The 25, keyed
+
+| key | current flat name | native window / hop |
+|---|---|---|
+| `(frame, pyannote/segmentation-3.0, raw)` | `frame_segmentation` | 61.9 ms / 16.9 ms |
+| `(frame_overlap_count, pyannote/segmentation-3.0, raw)` | `frame_segmentation_overlap_count` | 61.9 / 16.9 |
+| `(frame, pyannote/brouhaha, raw)` | `frame_brouhaha_vad` | 61.9 / 16.9 |
+| `(frame_dispersion, ·, raw)` | `frame_dispersion` | 61.9 / 16.9 |
+| `(scene, MIT/ast-finetuned-audioset, raw)` | `ast` | 10.24 s / 10.24 s |
+| `(scene, google/yamnet, raw)` | `yamnet` | 0.96 s / 0.48 s |
+| `(source_mass, MIT/ast-finetuned-audioset, raw)` | — folded into `sound_sources` | 10.24 / 10.24 |
+| `(source_mass, google/yamnet, raw)` | — folded into `sound_sources` | 0.96 / 0.48 |
+| `(quality_snr, pyannote/brouhaha, raw)` | — bundled in `scene_quality` | 61.9 / 16.9 |
+| `(quality_c50, pyannote/brouhaha, raw)` | — bundled in `scene_quality` | 61.9 / 16.9 |
+| `(quality_snr, spectral_gating, raw)` | — bundled in `scene_quality` | 0.5 s / 0.25 s |
+| `(quality_snr, peak, raw)` | — bundled in `scene_quality` | 0.5 / 0.25 |
+| `(quality_rolloff, stft, raw)` | — bundled in `scene_quality` | 0.5 / 0.25 |
+| `(quality_clipping, pcm, raw)` | — bundled in `scene_quality` | 0.5 / 0.25 |
+| `(acoustic_hnr, opensmile, raw)` | `acoustic_hnr` | 60 ms / 10 ms |
+| `(acoustic_lufs, pyloudnorm, raw)` | `acoustic_lufs` | 400 ms / 100 ms |
+| `(acoustic_level_above_floor, band_floor, raw)` | `acoustic_level_above_floor` | 20 ms / 10 ms |
+| `(diarization, pyannote/speaker-diarization-community-1, raw)` | `pyannote_speaker_diarization_community_1` | segment |
+| `(diarization, nvidia/diar_sortformer_4spk-v1, raw)` | `nvidia_diar_sortformer_4spk_v1` | segment |
+| `(speaker_distance, pyannote/…community-1, speechbrain/spkrec-ecapa-voxceleb, raw)` | `pyannote_..._speechbrain_spkrec_ecapa_voxceleb` | 2.0 s / 50 ms |
+| `(speaker_distance, pyannote/…community-1, speechbrain/spkrec-resnet-voxceleb, raw)` | `pyannote_..._speechbrain_spkrec_resnet_voxceleb` | 2.0 / 0.05 |
+| `(speaker_distance, nvidia/diar_sortformer_4spk-v1, speechbrain/spkrec-ecapa-voxceleb, raw)` | `nvidia_..._ecapa_...` | 2.0 / 0.05 |
+| `(speaker_distance, nvidia/diar_sortformer_4spk-v1, speechbrain/spkrec-resnet-voxceleb, raw)` | `nvidia_..._resnet_...` | 2.0 / 0.05 |
+| `(speaker_change, speechbrain/spkrec-ecapa-voxceleb, raw)` | `speechbrain_spkrec_ecapa_voxceleb_change_point` | 2.0 / 0.05 |
+| `(speaker_change, speechbrain/spkrec-resnet-voxceleb, raw)` | `speechbrain_spkrec_resnet_voxceleb_change_point` | 2.0 / 0.05 |
+| `(embedding_silhouette, speechbrain/spkrec-ecapa-voxceleb, ·, raw)` | `embedding_silhouette_..._ecapa` | 2.0 / 0.05 |
+| `(embedding_silhouette, speechbrain/spkrec-ecapa-voxceleb, speechbrain/spkrec-ecapa-voxceleb, raw)` | `..._ecapa_ecapa` | 2.0 / 0.05 |
+| `(embedding_silhouette, speechbrain/spkrec-ecapa-voxceleb, speechbrain/spkrec-resnet-voxceleb, raw)` | `..._ecapa_resnet` | 2.0 / 0.05 |
+| `(asr, nyralabs/CrisperWhisper2.0_turbo, raw)` | `nyralabs_CrisperWhisper2_0_turbo` | word / ~30 s |
+| `(asr, Qwen/Qwen3-ASR-1.7B, raw)` | `Qwen_Qwen3_ASR_1_7B` | word |
+| `(asr, nvidia/canary-qwen-2.5b, raw)` | `nvidia_canary_qwen_2_5b` | word (externally aligned) |
+
+`·` marks an unused instance slot. Each row above exists once **per perturbation**, so a two-
+perturbation run has twice these keys, and a third perturbation adds a third set with no code edit.
+
+### Three things the keying exposes
+
+**`scene_quality` is six signals in one file.** It bundles measurements from four different
+estimators at two different resolutions — brouhaha SNR and C50 at 61.9 ms, spectral-gating and peak
+SNR, roll-off and clipping at 0.5 s. One row per bucket forces them onto one grid, which is a
+resample L1 must not perform. Keyed properly they are six artifacts at three resolutions.
+
+**`sound_sources` folds AST into YAMNet.** The current file averages a 10.24 s classifier against a
+0.96 s one and normalises the result — a reduction across a dimension the tools reported separately,
+at incompatible resolutions. Keyed by classifier, the fold has nowhere to happen at L1.
+
+**`embedding_silhouette_ecapa_ecapa` is a real question, not a naming bug.** A silhouette of ECAPA
+scored against ECAPA is a self-comparison; scored against ResNet it is cross-model. Both may be
+wanted, but the flat name made them indistinguishable from a duplicate, and one of the three
+silhouette files has an empty second slot — three files, three different arities, one name shape.
+
+### How the key becomes a path
+
+```python
+def signal_path(key: SignalKey) -> str:
+    family, *instances, perturbation = key
+    return "signals/" + "/".join([family, *map(slug, instances), perturbation]) + ".parquet"
+
+# (asr, nyralabs/CrisperWhisper2.0_turbo, raw)
+#   -> signals/asr/nyralabs__CrisperWhisper2.0_turbo/raw.parquet
+# (speaker_distance, pyannote/…community-1, speechbrain/spkrec-ecapa-voxceleb, enhanced)
+#   -> signals/speaker_distance/pyannote__…community-1/speechbrain__spkrec-ecapa-voxceleb/enhanced.parquet
+```
+
+A directory per dimension rather than one mangled name, so the structure survives on disk and
+`slug` only has to be injective per segment — not parseable, because nothing parses it back. The key
+is the identity; the path is derived from it.
+
+### What the key is for
+
+- **The registry is generated.** `derive_key(L1)` enumerates families × instances × perturbations
+  from the harvester set and the perturbation registry, so a new model or a new perturbation extends
+  the key space with no declaration edit — and the fifth axis problem cannot recur at L1.
+- **Provenance attaches to the key**, so units and native window/hop are per signal rather than per
+  file-name convention.
+- **L2 addresses evidence by key.** `votes_for(family="asr")` selects across models and
+  perturbations without string matching, which is what today's `"::" in name` selectors are standing
+  in for.
