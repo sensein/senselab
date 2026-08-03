@@ -574,3 +574,36 @@ is a keying task, not a deletion.
 Both same-model pairings now exist (`…/ecapa::ecapa`, `…/resnet::resnet`) and neither is circular, for
 the reason established earlier: a global silhouette-optimised partition and a local pairwise cosine are
 different computations over the same vectors, and the second can contradict the first.
+
+## The P2 / I4 decision, with the resolution question settled
+
+**P2 is the driver, not I4.** `_p2_trigger` fires when a speech-presence region's votes are dominated
+by **coarse** voters — sentence-level ASR, 30 s Whisper `no_speech`, AST's 10.24 s window — each casting
+one identical vote across every bucket it spans, so *agreement among them is an artifact of window size
+rather than evidence about that bucket*. Or when `frame_dispersion` says the bucket straddles an onset.
+Either way the response is to re-measure locally at frame resolution. That is the capability at stake,
+and it has nothing to do with overlap. `I4_overlap_detection` fires on a speaker region co-located with
+an asr region and reuses P2's output.
+
+**The resolution objection is settled: brouhaha's VAD hop is `0.016875 s`, the same 16.9 ms as
+`segmentation-3.0`.** Both are pyannote models on the same frame grid, so substituting brouhaha costs P2
+nothing at the one thing P2 exists for. That was the only reason to keep `segmentation-3.0`.
+
+**Recommended: option 1.**
+
+1. **Repoint P2's backend at brouhaha on the crop, and I4's overlap at diarizer spans.**
+   `segmentation-3.0` then has no consumer and goes. Overlap from spans is verified — 3.14 s detected on
+   a constructed clip, where the exclusive view had *lost* the second speaker entirely.
+2. Keep `segmentation-3.0` for P2 only — no longer justified, since the hop is identical.
+3. Drop both interventions — loses a real capability for no reason.
+
+One consequence to accept with option 1, stated rather than discovered later: P2 re-measures with the
+*same model* that already voted in round 0 (`frame_brouhaha_vad`), where it previously brought in a
+second, independent model. What P2 buys is then purely **locality** — the same estimator on a crop,
+which is a genuine re-measurement because a model given a short span sees different context — but not
+independence. Under `segmentation-3.0` it bought both. Whether that matters depends on whether P2's
+value was ever the second opinion or always the finer localisation; its trigger says localisation.
+
+Also resolved: `frame_posteriors` **does** reach an artifact — it is in
+`L1/signals/frame_brouhaha_vad.parquet`'s `signal_provenance` metadata. An earlier entry recorded this as
+unverified.
