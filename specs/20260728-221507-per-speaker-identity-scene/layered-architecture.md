@@ -2524,3 +2524,38 @@ and the padding means the weaker of the two is noisier than its confidence sugge
 
 **Required change:** the CLI defaults, and the `scene_agreement` sidecar's same-grid gate becomes
 the normal case rather than an opt-in.
+
+### Embeddings are a diarizer, not a signal family
+
+The speechbrain embedders are **an alternative to sortformer and community-1**, not a different kind
+of evidence. So the call is a *diarization task* — a model plus clustering parameters — and it emits
+what every diarizer emits:
+
+```
+(speaker_spans, speechbrain/spkrec-ecapa-voxceleb + hdbscan, p)      span set, no grid
+(speaker_spans, speechbrain/spkrec-resnet-voxceleb + hdbscan, p)     span set, no grid
+```
+
+Clustering is a parameter of the task (HDBSCAN or similar, with **silhouette optimisation choosing
+the cluster count**), and the tool slot names the pair because a different clusterer over the same
+vectors is a different diarizer. Whether a mask should modify the clustering is deferred.
+
+**Nine signals collapse into two.** Removed as L1 signals: 4 × `speaker_distance` (2 diarizers × 2
+embedders), 2 × `speaker_change`, 3 × `embedding_silhouette`. Each was a computation over vectors
+carrying an unrecorded estimator choice — cosine vs euclidean, which lag, which clustering algorithm
+— and the silhouette is now *internal* to the clustering it optimises rather than an emitted number.
+That is where it belongs: it selects a cluster count, it is not evidence about the audio.
+
+**Consequence for the speaker axis, and it is the right one.** All speaker evidence is now spans from
+diarizers of differing capacity, so the axis's uncertainty is entirely **cross-diarizer disagreement**
+— consistent with the J1 correction. No sub-signal contributes a model's internal confidence dressed
+as a distribution, and the `"::"`-keyed distance selectors disappear with the signals they selected.
+
+**The vectors are a cache, not a signal.** They are stored so a re-run does not recompute them, keyed
+on `(model, window, hop, audio_signature)` — which is what the content-addressable cache already
+does. They do not live in `L1/signals/`: that directory holds what votes, and a vector votes on
+nothing. The distinction matters because an artifact under `L1/signals/` implies a target, and the
+vectors have none — they are the intermediate a diarizer is built from.
+
+Invalidation follows from the key: changing window or hop changes the entry, so 2.0 s / 50 ms
+vectors are reused across clusterers and recomputed only when the framing changes.
