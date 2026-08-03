@@ -3153,7 +3153,7 @@ route = (pathway, perturbation)
 pathway       which signal component is PRIMARY. Changing it changes what
               "primary information target" means.        direct | background
 perturbation  a transform that preserves the primary targets OF THAT PATHWAY.
-                                                          identity | enhanced | …
+                                                          unmodified | enhanced | …
 ```
 
 Foreground suppression is the **pathway-switching** operation. It is not a perturbation of the direct
@@ -3166,7 +3166,7 @@ different component primary. Once it has, that pathway has its own perturbations
 enhancement:
 
 ```
-(background, identity)    the suppressed residual
+(background, unmodified)    the suppressed residual
 (background, enhanced)    …then enhanced, which is target-preserving FOR THE BACKGROUND
 ```
 
@@ -3209,9 +3209,9 @@ components, and a spread across them measures nothing — the same rule that for
 ### Background ASR is the third route of an existing key
 
 ```
-(transcript, nyralabs/CrisperWhisper2.0_turbo, (direct,     identity))
-(transcript, nyralabs/CrisperWhisper2.0_turbo, (direct,     enhanced))
-(transcript, nyralabs/CrisperWhisper2.0_turbo, (background, identity))   ← background speech
+(transcript, nyralabs/CrisperWhisper2.0_turbo, (direct,     unmodified))
+(transcript, nyralabs/CrisperWhisper2.0_turbo, (direct,     enhanced)  )
+(transcript, nyralabs/CrisperWhisper2.0_turbo, (background, unmodified))   ← background speech
 ```
 
 Same target, same tool, same shape, same consumers. A capability the design had no place for arrives
