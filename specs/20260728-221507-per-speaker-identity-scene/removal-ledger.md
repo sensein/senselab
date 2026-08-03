@@ -701,3 +701,43 @@ estimates" describes, arrived at from the opposite direction.
 
 Worth doing before the per-axis rewiring, because a rewiring that leaves two folds in place will produce
 two differently-rewired answers.
+
+## Step 2 is a three-way unification, not two — and it explains both open index findings
+
+`compute.py:648` is a **third** fold, and I missed it because I searched for `fuse_axes` callers while
+this one calls `fuse_axis` (singular) directly:
+
+| # | fold | scope | feeds |
+|---|---|---|---|
+| 1 | `compute.py:648` — `fuse_axis` per axis | `round_index=0`, **`HARVESTED_AXES` only** | `fused_axes` → `disagreements.json` |
+| 2 | `fuse.py:926` — `fuse_axes` in `fuse_rounds` | all rounds | the rounds path |
+| 3 | `fuse.py:1190` — `fuse_axes` in `fold_run_axes` | all rounds, + scene coupling | `estimates/*.parquet` |
+
+**This settles `background_mask`'s absence from the index, and it is not a caller oversight.** Fold 1
+iterates `HARVESTED_AXES`, and `background_mask` is declared `harvested=False` — so it is *structurally*
+excluded from `fused_axes`, and therefore from `rows_by_axis`, from the ranked entries, and from
+`high_uncertainty_rate`'s denominator. The axis is fused by folds 2/3 and written to `estimates/`, so it
+exists everywhere except the index that decides what a reader looks at.
+
+It also ties the two open items together: **making `background_mask` harvested (the decision already
+recorded) would put it in the index automatically.** The blocker there was that flipping the flag needs
+the mask's harvest to exist first — so the index fix is downstream of that work, not separate from it.
+
+**And it explains the triage discrepancy.** Fold 1 runs at `round_index=0` with round-0 weights; fold 3
+runs every round and then mutates asr rows with the scene coupling. Two different computations over the
+same buckets, so a bucket can carry `1.0` in the index and `None` in the parquet without either being
+"wrong" — they answer differently-parameterised questions under one name.
+
+**Why step 2 stops here.** Unifying them is not a wiring change: fold 1 differs from fold 3 in *round
+scope* (0 vs all) and *axis scope* (harvested vs all), so collapsing them changes what the index ranks
+and what the mask axis reports. That needs a cache-cleared run to verify per axis, and it should land
+with the `background_mask` harvest rather than before it — otherwise the index gains an axis whose rows
+come from a fold nobody has checked.
+
+`fold_run_axes` (step 1) remains the right foundation: one named place where the fold and its coupling
+live. What it still needs is for folds 1 and 2 to call it instead of folding again.
+
+**Method note that generalises.** I found fold 3, wrote it up as "the two folds", and only found fold 1
+when asked to do the unification — because I had grepped for `fuse_axes(` and this call is `fuse_axis(`.
+A one-character difference hid a third of the problem. Grep for the *singular and plural* of any
+aggregator name before concluding how many callers exist.
