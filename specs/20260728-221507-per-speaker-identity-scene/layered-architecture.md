@@ -3401,3 +3401,68 @@ Two consequences:
 
 It belongs at L2 as a fold over the frame-targeted signals, with its contributor count on the row so
 "dispersion over one voter" is visibly not a dispersion.
+
+---
+
+## D-25. Producers emit native resolution; consumers pull through a memoizing sampler
+
+**Corrects the migration step this document proposed one commit ago** — "point the three harvest grids
+at `DEFAULT_TIME_GRID`". That would bake the consumer's grid into the producer, which is the exact
+defect D-18 found: `frame_segmentation` recorded `native_window_s: 0.0619, resolution_s: 0.0169` on a
+row spanning `0.0 → 0.1`, provenance describing a measurement the file did not contain.
+
+**A producer resampling to a target grid is a producer making an L2 decision.** Which grid, and which
+reduction onto it, are both choices — and a producer that has already made them has destroyed the
+alternative before anyone could ask for it. So:
+
+- **L1 emits at native resolution and nothing else.** Already true of :mod:`.shapes`: a `Series` carries
+  its own `hop_s`, a `Categorical` its own windows, `Spans` no grid at all.
+- **Consumers query.** An axis estimator asks for the samples it wants — "signal *X* over
+  `[start, end)`, reduced how" — and the answer is computed on demand.
+- **An intermediate object serves those queries and caches them**, so the same sample or operation is
+  not fetched or recomputed twice.
+
+### The cache key is the derivative key
+
+This is what makes the sampler more than an optimisation. D-21 already says every projection is a
+named derivative keyed `(Target, Operator, Source)`. A query *is* one of those, plus the interval:
+
+```python
+sampler.at(DerivativeKey(target, Operator("resample", "mean"), sources=(signal,)), start, end)
+#          └──────────────────── the cache key, already named by the design ────────────────────┘
+```
+
+So the cache is keyed by exactly the thing the design names, and three consequences fall out:
+
+**D-22's materialisation rule becomes literal.** It said *"materialisation is a caching and
+inspectability decision, not a semantic one"*. With a sampler cache that is no longer an analogy: a
+derivative is materialised iff the cache persisted it, and the inline and stored forms are the same
+key with the same value.
+
+**`GridRelation` is the dispatch.** :mod:`.shapes` classifies each kind as `RESAMPLE`, `PROJECT` or
+`REDUCE`, which is precisely what the sampler must know to answer a query — arithmetic over finer
+frames, assignment of a window's value to the buckets it spans, or a reduction that needs a named
+choice. That enum stops being descriptive and becomes the sampler's switch.
+
+**Over-sampling stops being expressible by accident.** The consumer asks for 100 ms non-overlapping
+buckets and gets them whatever the native hop is; a 0.02 s hop under a 0.1 s window cannot arise
+because no producer is choosing the output spacing. `DEFAULT_TIME_GRID` is what a *consumer* asks for,
+not what a producer emits — and that distinction is the whole of this decision.
+
+### What it also fixes
+
+- **`frame_dispersion`**, which is a fold across frame voters stored as an L1 signal with null
+  `native_window_s` because it is not a measurement. As a query it is an L2 fold over the
+  frame-targeted signals, computed when asked, with its contributor count on the row.
+- **The four-grid problem**, without a migration: each axis asks at its own grid, and the three time
+  axes asking the same grid get identical buckets by construction rather than by agreement.
+
+### What this obliges, and what it does not
+
+The sampler is **not** a new storage layer. It reads `L1/signals/` and writes nothing; a materialised
+derivative is still written by `derive` under `StageIO`. What it removes is every producer's
+`grid=` parameter and the resampling behind it.
+
+Open, and worth measuring before committing to a cache policy: whether the working set is small enough
+to hold in memory for a run, or whether the cache needs the content-addressable store. A 21 s clip is
+not the case that decides it.
