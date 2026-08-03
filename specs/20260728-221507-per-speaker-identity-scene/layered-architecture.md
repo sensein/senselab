@@ -2372,3 +2372,36 @@ would be a count of *decisions*, not a distribution.
 **Open question before removal:** does `community-1` expose frame-level per-speaker activations
 (its internal segmentation head, or a `speaker_probabilities` output), or must J1/J4/C2 be rebuilt
 on spans and accept that they then measure decisions rather than posteriors?
+
+### Resolved: diarization emits spans, and L2 derives occupancy from them
+
+No frame-level per-speaker posterior is needed. Every diarization tool emits what sortformer and
+`community-1` already emit — `(start, end, speaker_label)` spans at their own boundaries, no grid —
+and L2 derives frame or bucket occupancy by projecting them. `segmentation-3.0` is removed with no
+replacement source, because there is nothing to replace: the object L1 owes is a span set.
+
+**This corrects J1 rather than degrading it.** `overlap_count_posterior` built a Poisson-binomial
+over `segmentation-3.0`'s per-speaker channel probabilities, treating them as independent Bernoullis.
+They are not independent — they are a powerset conversion, where the classes are mutually exclusive
+by construction and the per-speaker columns are derived from them — so the independence the
+Poisson-binomial assumes was never there. It was one model's internal confidence, dressed as a
+distribution over speaker count.
+
+The honest uncertainty about "how many speakers are active here" is the same as for every other axis
+in this design: **disagreement across models.** Each diarizer's spans give a count at time *t* — how
+many of its spans cover *t* — and the spread across diarizers of differing capacity is the
+uncertainty. That is a measured disagreement rather than an assumed independence, and it composes
+with D-19's censoring: a tool at its capacity contributes a *lower bound*, not a point.
+
+So J1, J4 and C2 are rebuilt on spans:
+
+```python
+# L2/round/{n}/derivatives/
+occupancy(spans, grid)        -> per-bucket [(speaker_label, covered_fraction), ...]  per tool
+count_at(spans, t)            -> int, per tool; censored at that tool's capacity
+count_posterior(per_tool_counts, capacities) -> distribution from cross-tool spread
+assignment(spans, clusters)   -> S_k <-> tool-label binding (C2), from spans not channels
+```
+
+L1 stores, per diarization tool: the span set, the tool's speaker capacity (D-19), and nothing
+reduced. A span set has no grid, so there is no resolution to record and no projection to get wrong.
