@@ -2602,3 +2602,59 @@ So both sources of uncertainty exist and are different things:
 Neither substitutes for the other. A confident tool that disagrees with three others, and four
 tools that agree while all reporting low confidence, are different states, and collapsing to one
 number loses the distinction.
+
+### Aligners are part of an ASR signal, not tools in their own right
+
+An ASR output **is** a time-aligned output. Whether the timings came from the recognizer itself, a
+bundled companion, or an external forced aligner is provenance on the transcript — `timestamp_source`
+— not a separate signal. So `Qwen3-ForcedAligner-0.6B` and `facebook/mms-1b-all` never appear in a
+key; they appear in the `(transcript, <model>, p)` provenance of the model whose words they timed.
+
+This keeps the dependency visible where it matters: two transcripts timed by the same aligner have
+correlated word boundaries, and the ASR axis compares word boundaries. The provenance is what lets
+that correlation be measured rather than assumed absent.
+
+### Remaining tool decisions
+
+```
+(speech, opensmile/HNR, p)            series, 60 ms / 10 ms, dB
+    Harmonics-to-noise as a speech measurement — voicing is evidence of speech.
+
+(<metric>, torchaudio-squim, p)        squim's own measurements, its own resolution
+    Stored as the quantities it reports, not folded into a score.
+
+(snr,  pyannote/brouhaha, p)          dB      \
+(c50,  pyannote/brouhaha, p)          dB       |  the scene-quality set — a set of
+(snr,  spectral_gating, p)            dB       |  measurements, each keyed by what it
+(snr,  peak, p)                       dB       |  measures, at its own resolution, and
+(rolloff, stft, p)                    hertz    |  each usable by ANY axis as appropriate
+(clipping, pcm, p)                    proportion |
+(loudness, pyloudnorm, p)             LUFS    /
+(noise_floor, band_percentile, p)     dB per band, 100 ms — both floors, and the margin
+```
+
+`scene_quality` as a single bundled artifact is gone. It is a *set*, and the set has no owner: an
+SNR measurement is as available to the speech-presence axis as a quality gate as it is to the
+background-mask axis as a scene descriptor. The `noise_floor` `binding` selection — perceptual vs
+recorder floor by a dB margin — leaves L1: both floors and the margin are stored, and choosing is L2's.
+
+**`ppgs` is dropped for now.** The ASR outputs are good enough that a phoneme posteriorgram is not
+earning its cost. The PER sub-signal it fed goes with it.
+
+### Correction: axes are not targets
+
+An earlier note here said "the axis set is the set of targets, enumerated from the signals that
+exist." That is wrong, and the scene-quality set is the counterexample: an SNR measurement serves the
+speech-presence axis, the background-mask axis, and the reliability weighting, all at once.
+
+- A **target** is what a tool measured — `speech`, `speaker_spans`, `transcript`, `snr`, `c50`,
+  `scene_labels`, `loudness`.
+- An **axis** is an L2 estimate — `speech_presence`, `speaker`, `asr`, `background_mask`, and the
+  punted `task`.
+- The mapping is **many-to-many, and it is L2 policy.** One target feeds several axes; one axis draws
+  on several targets.
+
+What survives from D-20 is the part that was load-bearing: all tools measuring one target share a
+first element, so cross-tool disagreement on that target is computable without string matching. What
+does not survive is deriving the axis set from the target set — the axis set is a policy naming which
+targets it fuses, and that policy is the thing a fifth axis edits.
