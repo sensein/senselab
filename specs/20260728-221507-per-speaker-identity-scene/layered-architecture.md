@@ -3327,10 +3327,18 @@ What each question implies, and what the run actually used:
 
 Three things follow.
 
-**A fine grid and an over-sampled one are different.** `speech_presence` at a 0.1 s window on a 0.02 s
-hop means adjacent rows share 80% of their audio, so its 1070 rows are not 1070 independent
-measurements. The question justifies fine *resolution*; it does not justify reporting five
-near-duplicate rows per window, and nothing tells a consumer they are near-duplicates.
+**A fine grid and an over-sampled one are different — but this matters less than an earlier draft of
+this section claimed.** `speech_presence` at a 0.1 s window on a 0.02 s hop means adjacent rows share
+80% of their audio, so its 1070 rows are not 1070 independent measurements. Worth knowing, and worth
+not doing.
+
+**The independence that carries weight is *within* a bucket, across sources — not across buckets.**
+Every uncertainty in this design is cross-model disagreement, so what has to be independent is the
+sources voting in one bucket. Two adjacent buckets sharing audio inflates the row count and smooths
+the timeline; two *sources* in one bucket that are secretly the same evidence corrupts the uncertainty
+itself. That is why D-21 rule 6's source-closure test exists, and why the AST/YAMNet
+shared-vocabulary note exists — and it makes non-overlapping buckets a tidiness decision where
+evidence overlap is a correctness one.
 
 **`asr` on a time grid is the wrong unit, not merely a coarse one.** Confirmed by the run: 41 rows,
 every quantity `None`, because with one recognizer a time bucket has no pairwise comparison to make.
@@ -3474,3 +3482,26 @@ derivative is still written by `derive` under `StageIO`. What it removes is ever
 Open, and worth measuring before committing to a cache policy: whether the working set is small enough
 to hold in memory for a run, or whether the cache needs the content-addressable store. A 21 s clip is
 not the case that decides it.
+
+
+### D-25 addendum: the sampler expresses a value absolutely, standardised, or against a threshold
+
+A consumer does not always want the tool's own units. Three scalings, each **named on the key** so it
+is recorded and replaceable:
+
+| scaling | what it answers | needs |
+|---|---|---|
+| `resample` | the tool's own units | nothing — the default, since it needs no reference |
+| `zscore` | "unusual *for this recording*" | the signal's own distribution over the whole recording |
+| `excess` | "how far above this reference" | a threshold in the variant, e.g. `mean@-30.0` |
+
+`zscore` is what makes two signals in different units comparable without anchoring either to an
+absolute scale — otherwise an aggregator does that silently, which is a policy applied to somebody
+else's measurement. Putting the scaling on the key keeps it out of the aggregator.
+
+A scaling is not a reduction, so the variant carries both (`"mean@-30.0"` is a mean, then an offset).
+
+Two refusals, the absent-vs-value rule again: a signal that **never varies** cannot be standardised, so
+`zscore` returns `None` rather than `0.0` — a zero z-score reads as "exactly average", a claim about a
+distribution that does not exist. And `excess` without a threshold **raises** rather than defaulting to
+zero, which would silently be the absolute value under another name.
