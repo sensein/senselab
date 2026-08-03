@@ -106,7 +106,7 @@ ways and whose real-run test skips-or-fails.
 
 | removed | condition |
 |---|---|
-| `pyannote/segmentation-3.0` | **J1/J4/C2 done and deleted.** Three further capabilities remain — see below |
+| ~~`pyannote/segmentation-3.0`~~ | **done.** No code path loads it. J1/J4/C2 rebuilt on spans; P2 on Brouhaha's VAD; I4 on cross-diarizer spans |
 | 9 embedding-derived signals (`speaker_distance` ×4, `speaker_change` ×2, `embedding_silhouette` ×3) | the embedder-plus-clusterer diarizer emits `speaker_spans` |
 | ~~`ppgs` signal + the PER sub-signal~~ | **done** — 987 net lines out of `src/`, across 11 modules + the CLI. `features_extraction/ppg.py` stays a senselab task; only the *signal* went |
 | the `scene_quality` bundle (`units: "mixed"`) | the 8 per-target scene signals exist |
@@ -607,3 +607,31 @@ value was ever the second opinion or always the finer localisation; its trigger 
 Also resolved: `frame_posteriors` **does** reach an artifact — it is in
 `L1/signals/frame_brouhaha_vad.parquet`'s `signal_provenance` metadata. An earlier entry recorded this as
 unverified.
+
+
+## Option 1 executed: `segmentation-3.0` is no longer loaded
+
+- **P2** (`_p2_execute`) calls `backends.speech_posteriors` — Brouhaha's VAD head on the crop, at the
+  **same 16.9 ms hop**, so nothing is lost at the localisation P2 exists for.
+- **I4** (`_i4_execute`) calls `backends.overlap_track_from_spans` — per-frame overlap from
+  cross-diarizer spans via `occupancy.count_at`, reading `ctx["passes"]`.
+- `extract_speech_frame_posteriors`, `collapse_to_overlap_prob` and `FramePosterior.overlap_probs` are
+  deleted. `FramePosterior`, `stitch_frames` and the chunking helpers stay — Brouhaha uses them.
+
+**Three consequences, each a decision rather than a discovery:**
+
+1. **P2 and I4 are now independent.** The contract let I4 run "light (reuses P2 output)" because P2
+   emitted `overlap_posterior` as a side effect. Brouhaha's VAD is single-channel and reports no
+   overlap, so P2 writes none — and it writes *nothing* rather than a zero, because a reader cannot
+   tell an overlap of 0.0 from an unmeasured one. The test asserting the old side effect is inverted to
+   assert its absence.
+2. **P2 buys locality, not a second opinion.** It re-measures with the same model that already voted in
+   round 0. A model given a short span sees different context, so it is a genuine re-measurement — but
+   under `segmentation-3.0` it was also an independent one. If independence is wanted back, a second
+   continuous VAD as a frame voter restores it without reviving a model whose channels nothing uses.
+3. **I4's overlap is a decision, not a posterior** — 1.0 where two or more distinct speakers cover the
+   instant. A soft probability would need a model that reports one, and manufacturing one from hard
+   spans would fabricate confidence. It depends on `exclusive=False`, which is wired and verified.
+
+`SEGMENTATION_MODEL_ID` remains as an unused constant, deliberately left rather than removed by a
+regex that had already over-stripped the module once.

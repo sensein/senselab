@@ -18,10 +18,8 @@ from senselab.audio.workflows.audio_analysis import BucketGrid, compute_uncertai
 def _offline_models(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub gated model loaders so the compute call stays offline."""
     import senselab.audio.tasks.scene_quality as sq
-    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
 
     monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
-    monkeypatch.setattr(fp, "extract_speech_frame_posteriors", lambda audios, *a, **k: [None] * len(audios))
 
 
 def _silent_audio(duration_s: float, sr: int = 16000) -> Audio:

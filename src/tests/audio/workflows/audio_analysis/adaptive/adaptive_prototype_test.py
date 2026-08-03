@@ -686,7 +686,7 @@ def test_p2_execute_replaces_votes_at_region_scope(monkeypatch: pytest.MonkeyPat
     # 0.1 s hop over a 2 s crop: speech for the first 0.5 s, silence after —
     # so bucket (0.0, 0.5) reads as speech and (0.5, 1.0) as silence.
     monkeypatch.setattr(
-        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.speech_posteriors",
         lambda wav, span: (
             {"frame_hop": 0.1, "speech": [0.9] * 5 + [0.05] * 15, "overlap": [0.2] * 20, "n_classes": 7},
             None,
@@ -705,8 +705,13 @@ def test_p2_execute_replaces_votes_at_region_scope(monkeypatch: pytest.MonkeyPat
     assert by_bucket[(0.5, 1.0)].payload["speaks"] is False
 
 
-def test_p2_execute_emits_overlap_posterior_for_i4_to_reuse(monkeypatch: pytest.MonkeyPatch) -> None:
-    """contracts/interventions.md lets I4 run "light (reuses P2 output)"."""
+def test_p2_execute_no_longer_emits_an_overlap_posterior(monkeypatch: pytest.MonkeyPatch) -> None:
+    """P2 measures speech with Brouhaha's VAD head, which is single-channel and reports no overlap.
+
+    The contract previously let I4 run "light (reuses P2 output)". I4 now derives overlap from
+    cross-diarizer spans, so the two are independent — and leaving a stale value on the row would be
+    worse than leaving none, because a reader cannot tell an overlap of 0.0 from an unmeasured one.
+    """
     from senselab.audio.workflows.audio_analysis.adaptive import interventions as iv
     from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
 
@@ -719,11 +724,12 @@ def test_p2_execute_emits_overlap_posterior_for_i4_to_reuse(monkeypatch: pytest.
         lambda c, s: (object(), None),
     )
     monkeypatch.setattr(
-        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.speech_posteriors",
         lambda wav, span: ({"frame_hop": 0.1, "speech": [0.8] * 20, "overlap": [0.42] * 20, "n_classes": 7}, None),
     )
     iv._p2_execute({"region": _p2_region(), "trigger": {"stream": "raw"}}, ctx)
-    assert rows[0]["overlap_posterior"] == pytest.approx(0.42, abs=1e-3)
+    assert "overlap_posterior" not in rows[0], "P2 must not leave a stale overlap value"
+    assert rows[0].get("meta", {}).get("overlap_posterior") is None
 
 
 def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -738,7 +744,7 @@ def test_p2_execute_raises_when_posteriors_fail(monkeypatch: pytest.MonkeyPatch)
         lambda c, s: (object(), None),
     )
     monkeypatch.setattr(
-        "senselab.audio.workflows.audio_analysis.adaptive.backends.overlap_posteriors",
+        "senselab.audio.workflows.audio_analysis.adaptive.backends.speech_posteriors",
         lambda wav, span: (None, "posteriors_failed (boom)"),
     )
     with pytest.raises(RuntimeError, match="posteriors_failed"):
