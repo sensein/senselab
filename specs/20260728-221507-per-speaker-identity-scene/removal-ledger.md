@@ -465,3 +465,42 @@ genuine diarizer-claim validation. Worth re-deciding rather than executing as wr
 Also unused and worth noting: `community-1` exposes `speaker_embeddings` on its pipeline output, which
 nothing reads. A diarizer's own embeddings validating its own claims would be a fourth circular cell if
 it were wired the same way.
+
+#### Correction 2: no cell is circular, and D-20's nine-signal removal is not justified by this evidence
+
+The "one circular cell" claim above is also wrong. `embedding_silhouette/ecapa::ecapa` is not
+self-confirming, because the claim and the verdict are **different computations over the same
+vectors**:
+
+- the claim comes from `cluster_pass_speakers` — a **global** partition of every window embedding in
+  the pass, sweeping *k* and selecting by silhouette;
+- the verdict is a **local pairwise** cosine between this bucket and the previous one on the track.
+
+A global partition can group two windows that are locally distant, joined transitively through
+intermediates, and it chooses *k* by a whole-pass criterion the local check knows nothing about. So the
+pairwise check *can* contradict the clustering it is validating. Shared representation is not shared
+computation.
+
+**So all six cells are legitimate claim × verifier pairs, and nothing here supports removing them.**
+
+Two claims withdrawn in sequence, recorded because the reasoning drifted the same way twice — from
+"these signals share a model" to "therefore they are redundant", which does not follow:
+
+1. *"They differ only in whose segments were embedded"* — wrong; the diarizers supply different claims.
+2. *"Exactly one is circular"* — wrong; a global partition and a local pairwise distance are different
+   questions.
+
+**What is left of the 0.858-vs-0.977 finding is purely about aggregation.** Six validations and two
+folds under the default `min` (max-doubt) aggregator means the validation family decides the axis. That
+is a weighting question — the folds measure cross-tool agreement about *who*, the validations measure
+whether an embedder corroborates a diarizer's local same/change claim, and max-doubt lets the more
+numerous family win regardless of which is more informative.
+
+**D-20's nine-signal removal should not be executed on this evidence.** Its premise was that each was a
+redundant computation carrying an unrecorded estimator choice. The estimator choice is real and worth
+naming (cosine, and which lag); the redundancy is not established, and twice now I inferred it from a
+shared model name.
+
+Design observation, unresolved: the synthetic diarizer is *parameterised by embedder*
+(`embedding_silhouette/<embedder>`), and only the ecapa one is instantiated. The same clustering
+algorithm over resnet embeddings would be a legitimate fourth diarizer, making the matrix 4 × 2.
