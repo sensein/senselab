@@ -148,9 +148,11 @@ def harvest_pass(
     # both the speech_presence axis (per-window silhouette voter) and the
     # diarization stack (the synthetic source becomes another diar voter
     # for the speaker axis and another stripe in the timeline plot).
-    emb_cluster: dict[str, Any] | None = None
-    # One per embedder that clustered successfully — each is a diarization model in its own
-    # right (D-20), not a variant of one.
+    # One per embedder that clustered successfully. Each is a diarization model in its own right
+    # (D-20) — its spans go into ``diarization.by_model`` beside pyannote's and sortformer's, and every
+    # consumer reads them there. There is deliberately **no pass-level representative**: the only thing
+    # ever taken from one was a cosine calibration band, which is per-embedder, so a representative
+    # meant applying one embedder's band to another's distances.
     emb_clusters: list[dict[str, Any]] = []
     if per_window_embeddings:
         from senselab.audio.workflows.audio_analysis.embeddings import (
@@ -184,10 +186,9 @@ def harvest_pass(
                 # rather than the basis of a model. Clustering over resnet vectors is a diarizer in
                 # exactly the sense clustering over ecapa vectors is (D-20).
                 emb_clusters.append(emb_cluster)
-        emb_cluster = emb_clusters[0] if emb_clusters else None
         for k, msg in cluster_failures.items():
             incomparable_reasons[f"{perturbation}/speaker/{k}"] = msg
-        if emb_cluster is None and per_window_embeddings:
+        if not emb_clusters and per_window_embeddings:
             incomparable_reasons[f"{perturbation}/speaker/embedding_clustering"] = (
                 "all embedding models too sparse / failed clustering — no n_speakers estimate"
             )
@@ -337,20 +338,24 @@ def harvest_pass(
     # Prefer per-pass empirical calibration learned from this pass's embedding
     # clusters; fall back to the CLI defaults when clustering didn't produce
     # useful per-pass anchors.
-    same_floor_eff = same_speaker_floor
-    diff_floor_eff = diff_speaker_floor
-    if isinstance(emb_cluster, dict):
-        sf = emb_cluster.get("empirical_same_speaker_floor")
-        df = emb_cluster.get("empirical_diff_speaker_floor")
+    # One band per embedder, from that embedder's own clustering. A cosine band is a property of the
+    # embedding space, not of the pass: ecapa's same/different separation is not resnet's, and the
+    # single pass-level pair this replaces calibrated *every* embedder's distances with whichever
+    # model the clustering loop happened to keep. An embedder that produced no usable band is absent
+    # here and falls back to the CLI defaults, which is the honest reading of "not measured".
+    speaker_floors: dict[str, tuple[float, float]] = {}
+    for cluster in emb_clusters:
+        sf = cluster.get("empirical_same_speaker_floor")
+        df = cluster.get("empirical_diff_speaker_floor")
         if isinstance(sf, (int, float)) and isinstance(df, (int, float)) and df > sf:
-            same_floor_eff = float(sf)
-            diff_floor_eff = float(df)
+            speaker_floors[str(cluster["embedding_model"])] = (float(sf), float(df))
     speaker_votes = harvest_speaker_votes(
         pass_summary=harvest_summary,
         grid=grid,
         per_window_embeddings=per_window_embeddings,
-        same_speaker_floor=same_floor_eff,
-        diff_speaker_floor=diff_floor_eff,
+        same_speaker_floor=same_speaker_floor,
+        diff_speaker_floor=diff_speaker_floor,
+        speaker_floors=speaker_floors,
         cluster_cosine_threshold=cluster_cosine_threshold,
     )
 
