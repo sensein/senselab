@@ -504,3 +504,39 @@ shared model name.
 Design observation, unresolved: the synthetic diarizer is *parameterised by embedder*
 (`embedding_silhouette/<embedder>`), and only the ecapa one is instantiated. The same clustering
 algorithm over resnet embeddings would be a legitimate fourth diarizer, making the matrix 4 × 2.
+
+#### `emb_cluster` should not be a consumed product — two things ride on one object
+
+The clustering's **diarization output is not consumed through `emb_cluster`.** It goes into
+`diarization.by_model` alongside pyannote and sortformer, and every downstream consumer reads it there,
+uniformly. That is correct and is what "clustering output is a diarization estimate" means.
+
+What `emb_cluster` is still consumed for is one thing, at `compute.py:342`:
+
+```python
+sf = emb_cluster.get("empirical_same_speaker_floor")
+df = emb_cluster.get("empirical_diff_speaker_floor")
+```
+
+That is a **calibration band** — the empirical cosine distances separating same-speaker from
+different-speaker in that embedding space — not a diarization estimate. Two unrelated products were
+bundled on one object, and only one of them is diarization.
+
+**The defect this exposes: the band is per-embedder and is applied globally.** ecapa's cosine
+distribution is not resnet's, but `same_floor_eff` / `diff_floor_eff` are a single pass-level pair
+handed to `harvest_speaker_votes`, which uses them to calibrate **every** embedder's distances. So
+resnet distances are calibrated with ecapa's floors — and with the `break` in place it was always
+whichever embedder sorted first, silently.
+
+That is why `emb_clusters[0]` was the wrong instinct. Not a poor choice of representative: there should
+be no pass-level representative for a per-embedder quantity.
+
+The fix, not yet made: `harvest_speaker_votes` takes `{embedder → (same_floor, diff_floor)}` instead of
+one pair, and the `::` validation looks up the band for the embedder it is using. `emb_cluster` then has
+no consumer and goes away, leaving the clustering to be exactly what it is — a diarizer that emits
+spans into `by_model`.
+
+Worth checking when that lands: whether the calibration band, being derived from the same clustering
+whose claims it calibrates, is measuring the embedding space or the clustering's own separation. That is
+the circularity question I asked in the wrong place earlier — it belongs here, about the band, not about
+the claim × verifier cells.
