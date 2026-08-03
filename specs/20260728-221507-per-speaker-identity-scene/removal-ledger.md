@@ -72,10 +72,23 @@ and this module already computes both. The signals the design wants exist and ar
 The removals are **not independent cleanups** — each is a consequence of a restructure step, and
 doing it early breaks the pipeline. Ordered by what unblocks what.
 
-### Step 1 — row types (no removals, unblocks most of them)
+### Step 1 — row types, keys, StageIO (no removals; unblocks most of them) — **done**
 
-The six L1 output kinds. Nothing can be removed first, because every reduction that dies needs a
+`shapes.py` (six L1 output kinds), `keys.py` (`Route`, `SignalKey`, `DerivativeKey`, `EstimateKey`,
+arity, source closure), `stage_io.py` (the capability). 62 tests, ruff clean, `mypy .` clean across
+387 files. Nothing can be removed before this, because every reduction that dies needs a
 native-shaped artifact to be replaced *by*.
+
+The capability turned out **smaller than the guard it replaces** because the problem changed shape:
+paths derive from keys, so a stage never holds a path and there is no expression to resolve. The
+predicate is over *key kinds and rounds* — finite, and acyclicity is exhaustively checkable over the
+stage×round product rather than inferred from pattern overlap. `stage_io.py` is 260 lines against
+`contracts.py`'s 1,883.
+
+One design change from D-17: a round's `timeline.png` and `summary.json` move to
+`L2/round/<n>/report/`. At the round root they would force a write root meaning "the files here but
+not the subdirectories", and every stage's write root being one whole directory is what makes
+containment structural rather than checked.
 
 ### Step 2 — StageIO replaces the guard
 
