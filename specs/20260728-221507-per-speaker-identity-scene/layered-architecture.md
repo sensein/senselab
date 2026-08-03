@@ -895,6 +895,13 @@ is the case in hand.
 
 ### The invariant behind all three
 
+> **Superseded in part by D-22.** The reading restriction below ("only the layer below it, plus its
+> own previous round", and the *checkable* line above it) was narrower than the design needs: the
+> input pool is monotone, so a round reads L1 and **every** earlier round, not just *n−1*. What
+> survives verbatim is the second sentence — no layer *stores* another layer's data — which is the
+> half that was load-bearing, and the acyclicity it was protecting now comes from the round index
+> strictly decreasing.
+
 **Each layer reads only the layer below it, plus its own previous round.** No layer stores another
 layer's data. Where that was violated, nothing broke — two copies of the same bytes are
 indistinguishable to a reader, a glob that matches nothing looks like a stage that produced nothing,
@@ -1757,8 +1764,10 @@ Each step leaves the tree green and reduces guard surface. There is no big-bang 
 - **A stage that declares an output and never writes it.** Only a completed run can show that, so
   the dynamic check survives for exactly this.
 - **Order.** The DAG's acyclicity is a separate property: `StageIO` prevents `FINAL` being *written*
-  by an earlier stage, but that L2 round *n* reads only round *n−1* is a claim about arguments, and
-  stays a signature-level check.
+  by an earlier stage, but which rounds a round may *read* is a claim about arguments and stays a
+  signature-level check. (Per D-22 the rule is *strictly lower round index*, not *only n−1* — and
+  since the read roots are generated from `n`, the check is that the generator was asked for the
+  right `n`, not that a hand-written list is correct.)
 
 ### The argument for doing this
 
@@ -2761,7 +2770,7 @@ everything matching.
 
 | key | value |
 |---|---|
-| `(target_free, mask/<task_type>, {(speech, ·), (background_source, ·), axes[n−1]})` | the mask regions, with `state` and `confidence` |
+| `(target_free, mask/<task_type>, {(speech, ·), (background_source, ·), estimates[<n]})` | the mask regions, with `state` and `confidence` |
 | `(speaker_presence, allocate, {(speaker_allocation, ·), (occupancy, ·)})` | the per-speaker presence track — `S_k` |
 | `(corroboration, cross_check, {(word_spans, ·), (speech, ·)})` | the floored weight that replaced purging |
 
@@ -2829,13 +2838,23 @@ filenames and invite two derivatives in one round at two grids, which is the bun
 3. A `compose` derivative **must not** report a spread across its inputs.
 4. Every `Operator` variant tag **is** the policy. A derivative whose choice is not in its key is
    the `settled_below=0.35` default argument, back.
-5. `axes[n−1]` may appear in a `Source` — and **only** there. That is the coupling channel, and
-   putting it in the key makes the feedback edge visible in the artifact tree rather than inferable
-   from a function name.
+5. An estimate from a **strictly earlier round** may appear in a `Source`, and that is the only place
+   an axis appears in a derivative key. Putting it there makes the coupling edge visible in the
+   artifact tree rather than inferable from a function name, and the strictness is what keeps the
+   round DAG acyclic — `estimates[<n]`, never `estimates[n]`.
+6. **Two inputs to one axis whose source closures intersect above the recording are the same evidence
+   twice**, and the fold must weigh that rather than count both. Checkable by set intersection over
+   keys (see D-22's "Sharing evidence is now computable"), which is why the closure has to be
+   reachable from the key rather than living in a docstring.
 
 ---
 
-## D-22. Axis estimates — an axis reads only derivatives
+## D-22. Axis estimates — the input pool is every signal and every derivative
+
+*(Heading corrected. It read "an axis reads only derivatives", which was wrong; the section
+"Correction: derivatives are add-on signals" below records what that claimed, why I reached for it,
+and what replaced it. The heading is changed rather than annotated because a false headline is what a
+reader skimming the section list takes as the decision.)*
 
 ### The key
 
@@ -2846,22 +2865,92 @@ AxisKey = tuple[Axis, Bucket]
 No tool and no perturbation, per D-16: an axis aggregates across both, so neither can index its
 output. `L2/round/<n>/estimates/<axis>.parquet`, one row per bucket.
 
-### Axes read only derivatives — never signals
+### Correction: derivatives are add-on signals, and the pool is monotone
 
-This is the load-bearing constraint of the whole L2 half, and it is what the current code violates
-in every direction. An axis needs its inputs on a common grid and comparably interpreted. Getting
-there is a derivative's job. So:
+The first draft of this section said *an axis reads only derivatives, never signals*, and called that
+"the load-bearing constraint of the whole L2 half". It is not a constraint the design needs, and it is
+wrong on its own terms.
 
-- **The same-grid problem dissolves.** `fuse_axis` cannot receive a 16.9 ms series and a 10.24 s
-  window and have to decide; it receives two derivatives on the round's grid, each naming the
-  projection that got it there.
-- **Every choice an axis depends on is named upstream of it.** There is no threshold, no label
-  selection, no channel pooling, no estimator choice inside `estimate` — all four were found inside
-  L1 and all four are now `Operator` variants.
-- **`estimate` becomes pure**, in the sense the belief store's own contract already claimed:
-  aggregation is a function of the active derivative values and their weights. Given L1, the policy,
-  and the decision log, every estimate is recomputable — which is what lets the store stop persisting
-  estimates at all, and removes the second speaker lineage (item 27) as a side effect.
+**What it got wrong.** A derivative is not a mandatory layer an axis must be funnelled through — it
+is **another signal**. A function may sample an L1 signal at an axis-relevant window without a
+materialised artifact in between, and the ASR axis may trigger directly off L1 transcripts, which are
+the finest-grained thing in the run. Interposing a required projection would mean the axis reads a
+coarsened copy of evidence that was already available at full resolution, which is the L1 reduction
+defect rebuilt one layer up and pointed the other way.
+
+**Why I reached for it**, since the motivation was real and has to survive: the exclusion was doing
+two jobs. Keeping `fuse_axis` from having to reconcile a 16.9 ms series against a 10.24 s window, and
+forcing every projection choice to be named instead of made silently inside a fold. Neither requires
+materialisation:
+
+> **Every projection an axis depends on is a named operator recorded on the estimate row, whether or
+> not it was written to disk.** Materialisation is a caching and inspectability decision. It is not a
+> semantic one.
+
+So an inline resample is the *same* `(Target, Operator, Source)` key as a materialised one — it
+appears in `contributing_derivatives` and its variant tag is in provenance; the only difference is
+that no parquet exists. That gets the naming requirement without the wall, and it makes materialising
+a derivative a free choice made for cost or for a human's benefit rather than a semantic commitment.
+
+**The pool.** Every stage sees everything produced upstream of it, and the set only grows:
+
+```
+pool(derive, round n)   = L1/signals  ∪  derivatives[0..n-1]  ∪  estimates[0..n-1]
+pool(estimate, round n) = L1/signals  ∪  derivatives[0..n]    ∪  estimates[0..n-1]
+```
+
+Round *n*'s derivatives are inputs to round *n*'s estimate — that is what `derive` before `estimate`
+means — and both may reach back to L1 and to any earlier round. Round 0 is the same expression with
+the empty predecessors, so there is still no special case.
+
+**What survives from the first draft**, unchanged: `estimate` is pure aggregation over its inputs and
+their weights, given the policy and the decision log; every estimate is recomputable, which is what
+lets the belief store stop persisting estimates and removes the second speaker lineage (item 27).
+Purity was never about *which* inputs — only about `estimate` making no unrecorded choice of its own.
+
+### One key space, several locations
+
+If a derivative is a signal then they share a key space, and they do — the signal key is the
+degenerate case:
+
+```python
+Key = (Target, Producer, Source)
+#   signal:      Producer = a model,     Source = a perturbation of the recording
+#   derivative:  Producer = an operator,  Source = the key(s) it consumed
+```
+
+`Source` is therefore a **provenance tree** whose leaves are `raw` and `perturbation/<k>` — the
+recording itself is the root source. `signals_for(target="speech")` returns brouhaha's VAD, HNR's
+voiced fraction, AST's projected label mass and an ASR's word coverage in one list, without caring
+which stage produced each.
+
+The *location* still means something and is not folded away: `L1/signals/` versus
+`L2/round/<n>/derivatives/` records which stage produced an artifact, which is what StageIO
+write-scopes and what the DAG edges are built from. **The key says what a thing is; the path says who
+made it.**
+
+### Sharing evidence is now computable from the keys
+
+Making derivatives peers of signals creates a double-counting hazard, and it is worth stating plainly
+because the merged pool invites it: `(speech, project_labels/v3, (scene_labels, AST, raw))` and an
+inline sample of `(scene_labels, AST, raw)` are **the same evidence twice**, and an axis fusing both
+counts AST twice while reporting two contributors.
+
+The unified key makes this measurable rather than assumed absent, which is what
+`measure_axis_overlap` has always been for:
+
+> Two inputs share evidence iff their **source closures intersect above the recording**. The
+> recording root is excluded because every pair shares it — an intersection of `{raw}` is not
+> evidence-sharing, it is the definition of being in the same run.
+
+That is set intersection over keys, not string matching, and it holds for a derivative of a
+derivative because the closure is transitive.
+
+**One case it does not catch**, recorded so the silence is not read as coverage: two transcripts timed
+by the same forced aligner have correlated word boundaries, and the aligner is `timestamp_source`
+*provenance* rather than a `Source` (D-20). Closure intersection cannot see it. Detecting that
+correlation requires comparing provenance, which is exactly why the aligner decision insisted the
+provenance be recorded — the two mechanisms cover different overlaps and neither subsumes the other.
 
 ### The policy is data, and it is the many-to-many mapping
 
@@ -2887,7 +2976,7 @@ axes:
     aggregator: label_disagreement
   asr:
     inputs:
-      - (word_spans, words_of, (transcript, *, *))
+      - (transcript, *, *)                          # an L1 signal, read directly — see below
       - (consensus_transcript, ensemble/rover, *)
     aggregator: pairwise_wer
   background_mask:
@@ -2899,6 +2988,17 @@ axes:
 One SNR appears as a gate under `speech_presence`, as an input under `background_mask`, and inside
 `stability` as a weight — the three uses that made "axes are targets" wrong. Adding the fifth axis is
 a block in this file plus an `axes.AXES` entry, and no code edit.
+
+**Signals and derivatives appear in the same list**, because they are the same kind of thing: the
+`asr` axis reads `(transcript, *, *)` straight from L1 at word resolution, and the `speech_presence`
+axis reads a projected label mass because AST at 0.96 s is not comparable to a 0.5 s bucket without
+one. Which of the two a given input is depends on whether a projection is needed, not on which stage
+it came from — and the aggregator is handed a `Key` either way.
+
+The `asr` entry is also the one place this list can double-count by construction:
+`(consensus_transcript, ensemble/rover, *)` has every transcript in its source closure, so it and
+`(transcript, *, *)` intersect above the recording. Rule 6 says the fold must weigh that, and here it
+means the consensus is not an independent voter against the transcripts it was built from.
 
 ### The row
 
@@ -2947,11 +3047,12 @@ Not moved — gone, with the thing that required them:
 - **`signal_stability(..., axis=...)`'s axis parameter**, per D-21.
 - **`PassHarvest.speech_presence_evidence`** and the harvest/link split, whose job was to keep
   measurement separate from interpretation across a boundary that is now `L1/` vs `derivatives/`.
-- **The last reason for an L1-side fold.** `within_pass_uncertainty` is already gone (it was a parity
-  oracle against the store's recomputation, and reading it off rows that emit
-  `epistemic_uncertainty` is what made every RoundRecord report `oscillation`). What D-22 removes is
-  the *possibility* of another: with `estimate` taking no L1 argument, there is no signature through
-  which an L1 fold could be reintroduced as an oracle.
+- **The L1-side fold.** `within_pass_uncertainty` is already gone — it was a parity oracle against the
+  store's recomputation, and reading it off rows that emit `epistemic_uncertainty` is what made every
+  RoundRecord report `oscillation`. What forbids another one is not a signature (`estimate` reads L1
+  freely) but D-16: a fold across perturbations is an axis, and axes are written by `estimate` into
+  `estimates/`. An L1 artifact that folded anything would be an L1 write outside L1's declared
+  outputs, which is a StageIO violation rather than a naming convention.
 
 Still open and not fixed by D-21/D-22, recorded so the list is not read as complete:
 `aleatoric_floor` reads a `quality_snr`-family name that exists in neither ingest path, takes `None`,
@@ -2961,14 +3062,49 @@ and floors at `0.0` on every bucket of every run. D-21 gives it a real source �
 ### The round, uniform
 
 ```
-round n:  derive(L1/signals, derivatives[n-1], estimates[n-1])  -> derivatives[n]
-          estimate(derivatives[n], policy[n])                    -> estimates[n]
-          plot(derivatives[n], estimates[n])                     -> timeline.png
-          summarise(...)                                         -> summary.json
+round n:  derive(pool(n))    -> derivatives[n]      pool = L1/signals ∪ derivatives[<n] ∪ estimates[<n]
+          estimate(pool(n) ∪ derivatives[n], policy[n])
+                             -> estimates[n]
+          plot(derivatives[n], estimates[n])        -> timeline.png
+          summarise(...)                            -> summary.json
 
-round 0:  identical, with derivatives[-1] and estimates[-1] empty
+round 0:  identical, with the empty predecessors
 ```
 
-`estimate` takes no L1 argument. That absence is the D-22 constraint, and it is checkable from the
-signature alone — which is the first thing in this design that a guard can verify without resolving
-a path.
+Two stages per round, one intra-round edge (`derive[n] → estimate[n]`), and every other edge running
+strictly backwards in the round index.
+
+### What the monotone pool costs the guard, precisely
+
+`unrolled_contracts(n)` currently produces **one node per round**, and its docstring states the
+property it relies on: *"round `n` reads round `n-1` and nothing else, and a round that reached
+sideways into its own outputs shows up as the cycle it is."* Both halves of that change.
+
+- **One node per round becomes two.** `derive[n]` and `estimate[n]` write different directories and
+  are ordered with respect to each other. As one node, that ordering is invisible and `estimate`
+  reading `derivatives[n]` is indistinguishable from a round reading its own outputs.
+- **The acyclicity argument changes, and is still sound.** It was *reads only `n-1`*, which is
+  narrower than the design needs. It becomes *reads only strictly lower indices* — for derive, strictly
+  lower rounds; for estimate, strictly lower rounds plus its own round's derive. A cycle is then still
+  a cycle and is still caught, but by an index comparison rather than by an adjacency restriction that
+  was never the real rule.
+- **What was actually protected** by the narrower rule was a round reading a sibling *mutated within
+  the same round* — the in-memory case D-17 already records as invisible to both guards. That hazard
+  is unchanged by the pool, because it was never about artifacts.
+
+### StageIO under a monotone pool
+
+The read set grows with *n*, which is a reason to **generate** it rather than enumerate it — the same
+argument as for the axis list:
+
+```python
+StageIO.for_stage("derive", round=n)     # read roots: L1/signals, derivatives[<n], estimates[<n]
+                                        # write root: derivatives[n]        — one, always
+StageIO.for_stage("estimate", round=n)   # read roots: the above ∪ derivatives[n]
+                                        # write root: estimates[n]          — one, always
+```
+
+Reads are many and derived from `n`; the **write root is always exactly one directory**, which is the
+capability that makes "a stage cannot write outside its own directory" true by construction rather
+than by inspection. That asymmetry is the whole reason D-18 works: the constraint that matters is on
+writes, and it does not weaken as the read set grows.
