@@ -149,6 +149,9 @@ def harvest_pass(
     # diarization stack (the synthetic source becomes another diar voter
     # for the speaker axis and another stripe in the timeline plot).
     emb_cluster: dict[str, Any] | None = None
+    # One per embedder that clustered successfully — each is a diarization model in its own
+    # right (D-20), not a variant of one.
+    emb_clusters: list[dict[str, Any]] = []
     if per_window_embeddings:
         from senselab.audio.workflows.audio_analysis.embeddings import (
             cluster_pass_speakers as _cluster_pass_speakers,
@@ -174,7 +177,14 @@ def harvest_pass(
             if emb_cluster is not None:
                 emb_cluster["embedding_model"] = emb_model_id
                 emb_cluster["windows"] = entries
-                break
+                # One diarizer per embedder. A ``break`` here kept only whichever embedder sorted
+                # first and discarded the rest, so a run with ecapa *and* resnet produced three
+                # diarization models where there are four — and the discarded one survived only as a
+                # ``::`` verifier, which is how "embedding" came to look like a separate dimension
+                # rather than the basis of a model. Clustering over resnet vectors is a diarizer in
+                # exactly the sense clustering over ecapa vectors is (D-20).
+                emb_clusters.append(emb_cluster)
+        emb_cluster = emb_clusters[0] if emb_clusters else None
         for k, msg in cluster_failures.items():
             incomparable_reasons[f"{perturbation}/speaker/{k}"] = msg
         if emb_cluster is None and per_window_embeddings:
@@ -186,33 +196,33 @@ def harvest_pass(
     # augmented LOCAL copy of the pass summary (no caller mutation here).
     synthetic_diarization: dict[str, Any] | None = None
     harvest_summary = pass_summary
-    if emb_cluster is not None:
-        synthetic_segments: list[Any] = []
-        entries = emb_cluster["windows"]
-        labels = emb_cluster["labels"]
-        for i, w in enumerate(entries):
-            cluster_id = labels.get(i, "NOISE")
-            if cluster_id == "NOISE":
-                continue
-            synthetic_segments.append(
-                {
-                    "start": float(w.start_s),
-                    "end": float(w.end_s),
-                    "speaker": cluster_id,
-                }
-            )
-        synthetic_diar_id = f"embedding_silhouette/{emb_cluster['embedding_model']}"
-        synthetic_block = {
-            "status": "ok",
-            "result": [synthetic_segments],
-            "n_speakers": emb_cluster["n_speakers"],
-            "best_silhouette": emb_cluster.get("best_silhouette"),
-            "is_synthetic": True,
-        }
-        synthetic_diarization = {synthetic_diar_id: synthetic_block}
+    if emb_clusters:
+        synthetic_diarization = {}
+        for cluster in emb_clusters:
+            synthetic_segments: list[Any] = []
+            entries = cluster["windows"]
+            labels = cluster["labels"]
+            for i, w in enumerate(entries):
+                cluster_id = labels.get(i, "NOISE")
+                if cluster_id == "NOISE":
+                    continue
+                synthetic_segments.append(
+                    {
+                        "start": float(w.start_s),
+                        "end": float(w.end_s),
+                        "speaker": cluster_id,
+                    }
+                )
+            synthetic_diarization[f"embedding_silhouette/{cluster['embedding_model']}"] = {
+                "status": "ok",
+                "result": [synthetic_segments],
+                "n_speakers": cluster["n_speakers"],
+                "best_silhouette": cluster.get("best_silhouette"),
+                "is_synthetic": True,
+            }
         diar_block = pass_summary.get("diarization") or {}
         by_model = dict(diar_block.get("by_model") or {})
-        by_model[synthetic_diar_id] = synthetic_block
+        by_model.update(synthetic_diarization)
         harvest_summary = {**pass_summary, "diarization": {**diar_block, "by_model": by_model}}
 
     align_by_model = ((harvest_summary.get("alignment") or {}).get("by_model")) or {}
