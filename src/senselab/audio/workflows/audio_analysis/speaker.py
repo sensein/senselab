@@ -126,6 +126,7 @@ def harvest_speaker_votes(
     per_window_embeddings: dict[str, list[WindowEmbedding]],
     same_speaker_floor: float | None = 0.30,
     diff_speaker_floor: float | None = 0.70,
+    speaker_floors: Mapping[str, tuple[float, float]] | None = None,
     cluster_cosine_threshold: float = 0.5,
     change_point_bucket_reduction: str = CHANGE_POINT_BUCKET_REDUCTION,
 ) -> list[dict[str, Any]]:
@@ -144,6 +145,13 @@ def harvest_speaker_votes(
             same-speaker (uncertainty 0 for same-claim, 1 for change-claim).
         diff_speaker_floor: Cosine distance ≥ this is treated as confidently
             different-speaker (uncertainty 1 for same-claim, 0 for change-claim).
+        speaker_floors: ``{embedding model → (same_floor, diff_floor)}`` measured empirically for
+            that model's own cosine distribution. **Per embedder, because a cosine band is a property
+            of the embedding space and not of the pass**: ecapa's same/different separation is not
+            resnet's, and one pass-level pair calibrated every embedder's distances with whichever
+            model happened to be measured — silently, since the clustering loop kept only the first.
+            An embedder absent from the map falls back to the ``*_speaker_floor`` arguments, which is
+            the honest default: no empirical band was measured for it.
         cluster_cosine_threshold: Cosine similarity threshold for clustering
             (diar_model, raw_label) into pass-wide speaker IDs. 0.5 is roughly
             the EER for ECAPA on VoxCeleb.
@@ -217,8 +225,16 @@ def harvest_speaker_votes(
     # Bound to narrowed locals rather than checked via a boolean: mypy cannot narrow
     # ``float | None`` through a separate flag, and the alternative was three ignore comments on
     # calls that are in fact guarded.
-    same_floor = None if same_speaker_floor is None else float(same_speaker_floor)
-    diff_floor = None if diff_speaker_floor is None else float(diff_speaker_floor)
+    _default_same = None if same_speaker_floor is None else float(same_speaker_floor)
+    _default_diff = None if diff_speaker_floor is None else float(diff_speaker_floor)
+    _floors = dict(speaker_floors or {})
+
+    def _band(embedder: str) -> tuple[float | None, float | None]:
+        """The calibration band for ``embedder``: its own if measured, the CLI default otherwise."""
+        measured = _floors.get(embedder)
+        if measured is None:
+            return _default_same, _default_diff
+        return float(measured[0]), float(measured[1])
 
     bucket_starts_ends = [(start, end) for start, end, _ in grid.iter_buckets(duration_s)]
 
@@ -238,12 +254,13 @@ def harvest_speaker_votes(
     # same FR-007 rule the other embedding sub-signals follow, and for the same reason: on this
     # axis a confident derived signal outvotes unanimous diarizer agreement.
     change_by_model: dict[str, dict[str, Any]] = {}
-    if same_speaker_floor is not None and diff_speaker_floor is not None:
-        for emb_model in sorted(per_window_embeddings or {}):
+    for emb_model in sorted(per_window_embeddings or {}):
+        _cp_same, _cp_diff = _band(emb_model)
+        if _cp_same is not None and _cp_diff is not None:
             series = speaker_change_series(
                 per_window_embeddings.get(emb_model) or [],
-                same_speaker_floor=same_speaker_floor,
-                diff_speaker_floor=diff_speaker_floor,
+                same_speaker_floor=_cp_same,
+                diff_speaker_floor=_cp_diff,
             )
             if series is not None:
                 change_by_model[emb_model] = series
@@ -319,6 +336,7 @@ def harvest_speaker_votes(
                 prev_same = prev_emb_per_track.get(track_key)
                 same_cos: float | None = None
                 same_unc: float | None = None
+                same_floor, diff_floor = _band(emb_model_id)
                 if prev_same is not None and prev_same[0] != window_idx:
                     same_cos = _cos_dist(vec, prev_same[1])
                     if same_cos is not None and same_floor is not None and diff_floor is not None:
