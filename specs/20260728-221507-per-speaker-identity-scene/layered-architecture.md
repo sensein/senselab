@@ -2496,3 +2496,31 @@ is a reason to raise *k*, and that is now a visible decision rather than a silen
 The `speech_label_mass` reduction and the 0.1 s projection both leave L1: the first is a selection
 plus a sum over a policy label set, the second asserts 102 independent values inside one 10.24 s
 window.
+
+#### AST runs at YAMNet's grid: 0.96 s / 0.48 s
+
+**Decision:** `--ast-win-length` and `--ast-hop-length` default to **0.96 / 0.48**, not the current
+10.24 / 10.24, so AST's output is grid-equivalent to YAMNet's. Both then emit
+`(scene_labels, <tool>, p)` at the same resolution and can be compared window for window.
+
+**The cost, recorded because it is invisible in the output.** AST ingests 1024 mel frames ≈ 10.24 s.
+A 0.96 s window is therefore ~9% signal and ~91% padding per inference, and the scores are
+correspondingly noisy — AST is being run well outside its design point on purpose. Accepted for
+comparability; AST may be replaced by a model whose native window is closer to 0.96 s.
+
+**Two ways this makes them less independent than two models suggest**, which is the concern behind
+"we are making them effectively the same":
+
+1. **Same grid.** Both now see the same 0.96 s spans, so a window-level artefact of the segmentation
+   (a word boundary, a transient) hits both identically.
+2. **Common vocabulary.** Mapping 527 and 521 labels onto one category space means two labels a map
+   collapses to `speech` agree *by construction*. The map is an L2 derivative and records which map
+   produced it; agreement between signals sharing a mapping is not independent corroboration — the
+   same rule the ASR axis needs for two models sharing an aligner.
+
+So `measure_axis_overlap`-style evidence overlap must be *measured* between them rather than assumed
+absent. Two classifiers on one grid under one vocabulary are close to one classifier counted twice,
+and the padding means the weaker of the two is noisier than its confidence suggests.
+
+**Required change:** the CLI defaults, and the `scene_agreement` sidecar's same-grid gate becomes
+the normal case rather than an opt-in.
