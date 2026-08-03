@@ -20,11 +20,13 @@ Adding ``task`` is one edit: an :data:`AXES` entry. Nothing else in the pipeline
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 __all__ = [
     "ATTENUATED_AXES",
     "AXIS_GRIDS",
+    "DEFAULT_TIME_GRID",
+    "GridKind",
     "AXES",
     "AXIS_NAMES",
     "AXIS_PRIORITY",
@@ -45,6 +47,24 @@ keep — the three-member ``Literal`` is exactly what made ``background_mask`` u
 the code that was supposed to act on it. What an axis *is* lives in :data:`AXES`, where the
 properties travel with the name; a caller that wants only the harvested ones asks for
 :data:`HARVESTED_AXES` rather than narrowing a type.
+"""
+
+
+GridKind = Literal["time", "word"]
+"""What an axis's rows are indexed by: uniform time buckets, or one row per word."""
+
+DEFAULT_TIME_GRID: Final[tuple[float, float]] = (0.1, 0.1)
+"""``(win_length, hop_length)`` in seconds for every ``"time"``-gridded axis. **Configurable** — a
+downstream need for finer or coarser buckets changes this, or the run's params override it.
+
+**Window equals hop, so the buckets do not overlap**, and that is the point rather than a coincidence.
+The run that motivated this used a 0.1 s window at a 0.02 s hop: adjacent rows shared 80% of their
+audio, so 1070 rows were not 1070 independent measurements and nothing told a consumer so. A fine
+*resolution* is what the question justifies; reporting five near-duplicate rows per window is not the
+same thing, and the near-duplication was invisible in the output.
+
+100 ms is sufficient for the downstream needs known today — speech and target-activity onsets are
+resolved at it, and speaker turns and mask regions are much longer.
 """
 
 
@@ -69,13 +89,14 @@ class Axis:
             is free of target activity (that is the mask's question).
         calibrated: Does this axis's aggregator take a calibration temperature? Only the axes
             whose sub-signals are combined through a softmax-like fold have one to take.
-        grid: What this axis's rows are indexed by (D-24). ``"time_0.1s"`` for the axes whose
-            evidence resamples or projects onto a time grid; ``"word"`` for ``asr``, whose evidence
-            is a transcript. A transcript has no natural per-bucket value, so bucketing it is the
-            ``REDUCE`` that :class:`~.shapes.GridRelation` names — performed on the *finest*
-            evidence in the run, to match three coarser axes. Declared here rather than assumed,
-            because a consumer that took time buckets for granted would silently mis-join ``asr``
-            against the other three.
+        grid: What this axis's rows are indexed by (D-24). ``"time"`` for the axes whose evidence
+            resamples or projects onto uniform buckets — they share :data:`DEFAULT_TIME_GRID`, so
+            joining them needs no projection, which the mask's derivation from presence requires.
+            ``"word"`` for ``asr``, whose evidence is a transcript: it has no natural per-bucket
+            value, so bucketing it is the ``REDUCE`` that :class:`~.shapes.GridRelation` names,
+            performed on the *finest* evidence in the run. Declared rather than assumed, because a
+            consumer that took time buckets for granted would silently mis-join ``asr`` against the
+            others.
         rank: Tiebreak order when two regions carry the same uncertainty — lower comes first.
             A *judgement* about which axis a reader should look at first, so it is declared
             rather than derived from the order the axes happen to be written in.
@@ -91,7 +112,7 @@ class Axis:
     overlap_informed: bool
     calibrated: bool
     rank: int
-    grid: str = "time_0.1s"
+    grid: GridKind = "time"
     active: bool = True
 
 
@@ -219,10 +240,11 @@ def axis(name: str) -> Axis:
     raise KeyError(f"no axis named {name!r}; declare it in axes.AXES first")
 
 
-AXIS_GRIDS: Final[dict[str, str]] = {a.name: a.grid for a in AXES if a.active}
+AXIS_GRIDS: Final[dict[str, GridKind]] = {a.name: a.grid for a in AXES if a.active}
 """ ``{axis → what its rows are indexed by}``.
 
-Read this before joining two axes' rows. Three share ``time_0.1s`` and join trivially; ``asr`` is on
+Read this before joining two axes' rows. Three share ``"time"`` at :data:`DEFAULT_TIME_GRID` and join
+trivially — non-overlapping and identical, so row *i* of one is row *i* of another. ``asr`` is on
 ``word`` and joining it against them is a **projection**, which is a named derivative that records
 which direction it went and what it did with a word spanning two buckets. Today that join is implicit
 in the cross-axis ranking, which is how an asr finding and a presence finding could be ranked against

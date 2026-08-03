@@ -3358,8 +3358,28 @@ right shape for the mask; that was wrong, and it would have kept the projection 
 Regions remain the right shape for *reporting* a mask to a human — contiguous target-free stretches
 read better than 1070 rows. But that is a rendering of the axis, not the axis.
 
-So `axes.Axis.grid` records a *justified* choice per axis rather than membership in a default, and
-`AXIS_GRIDS` remains what makes joining two axes an explicit projection instead of an index zip.
+#### Settled: 100 ms non-overlapping for the three time axes, word-aligned for asr
+
+`speech_presence`, `speaker` and `background_mask` share **100 ms windows at a 100 ms hop**, declared
+once as `axes.DEFAULT_TIME_GRID` and **configurable** if a downstream need changes. `asr` stays on the
+word grid.
+
+Two properties this buys, and both were violated by the run:
+
+**Window equals hop, so the buckets do not overlap.** The run used a 0.1 s window at a 0.02 s hop:
+adjacent rows shared 80% of their audio, so its 1070 rows were not 1070 independent measurements and
+nothing in the output said so. Fine *resolution* is what the question justifies; five near-duplicate
+rows per window is a different and unstated claim. 100 ms resolves speech and target-activity onsets,
+and speaker turns and mask regions are far longer, so it is sufficient for every downstream need known
+today.
+
+**The three share one grid, so joining them needs no projection** — row *i* of one is row *i* of
+another. That is what the mask's derivation from presence requires (see above): the coupling becomes
+exact rather than routed through an operator that can lose localisation.
+
+`Axis.grid` therefore records a *kind* — `"time"` or `"word"` — and the numbers live in one constant
+rather than being restated per axis. `AXIS_GRIDS` remains what makes joining `asr` to the others an
+explicit projection instead of an index zip.
 
 ### `frame_dispersion` is a cross-signal fold stored as an L1 signal
 
