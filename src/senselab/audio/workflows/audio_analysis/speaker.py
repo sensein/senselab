@@ -62,7 +62,11 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harmonize import harmonize_from_diarization
 from senselab.audio.workflows.audio_analysis.harvesters import diar_speaker_label_in_window
-from senselab.audio.workflows.audio_analysis.joint import overlap_count_posterior, speaker_change_series
+from senselab.audio.workflows.audio_analysis.joint import speaker_change_series
+from senselab.audio.workflows.audio_analysis.occupancy import (
+    count_posterior_in_window,
+    spans_from_diarization,
+)
 
 SILENT_CLUSTER_ID = "SIL"
 
@@ -120,7 +124,6 @@ def harvest_speaker_votes(
     pass_summary: dict[str, Any],
     grid: BucketGrid,
     per_window_embeddings: dict[str, list[WindowEmbedding]],
-    frame_posteriors: dict[str, Any] | None = None,
     same_speaker_floor: float | None = 0.30,
     diff_speaker_floor: float | None = 0.70,
     cluster_cosine_threshold: float = 0.5,
@@ -135,10 +138,6 @@ def harvest_speaker_votes(
         change_point_bucket_reduction: How a bucket summarises the change-point boundaries it
             contains — ``"max"`` (default) or ``"mean"``. Named and overridable because it is a
             decision, not arithmetic: see :data:`CHANGE_POINT_BUCKET_REDUCTION`.
-        frame_posteriors: ``{signal → FramePosterior}`` with per-speaker channels intact. Each
-            contributes a J1 ``__overlap_count__`` sub-signal: a distribution over how many
-            speakers are simultaneously active, whose entropy is the doubt. Permutation-invariant,
-            so it is well-defined before the speaker↔channel assignment is resolved (D-7).
         same_speaker_floor: ``None`` when the pass admits no usable calibration band, in
             which case the embedding sub-signals are omitted entirely. Otherwise, cosine
             distance ≤ this is treated as confidently
@@ -222,6 +221,12 @@ def harvest_speaker_votes(
     diff_floor = None if diff_speaker_floor is None else float(diff_speaker_floor)
 
     bucket_starts_ends = [(start, end) for start, end, _ in grid.iter_buckets(duration_s)]
+
+    # Span sets for J1, each carrying its tool's declared speaker capacity (D-19). Derived from the
+    # pass summary this harvest already has, rather than passed in: the diarizers *are* the speaker
+    # evidence, so needing them handed over separately was an artifact of the count coming from one
+    # model's frame channels.
+    diar_spans = spans_from_diarization(diar_blocks)
 
     # J2 — where the voice changes, computed once per pass over the embedding windows. Boundary
     # times are on the embedding hop (50 ms by default), far finer than the reporting grid, so each
@@ -401,21 +406,27 @@ def harvest_speaker_votes(
                 "native_window_s": float(series["window_s"]),
             }
 
-        # J1 — how many speakers are simultaneously active. A count is invariant to the
-        # activation channels' arbitrary ordering, so it is answerable before the speaker↔channel
-        # assignment D-7 hands to rounds; the entropy of the count distribution is the doubt.
-        for name, fp in (frame_posteriors or {}).items():
-            j1 = overlap_count_posterior(fp, start, end)
-            if j1 is None or j1["uncertainty"] is None:
-                continue
-            votes[f"{name}::overlap_count"] = {
+        # J1 — how many speakers are simultaneously active, from **cross-diarizer spread** rather
+        # than from one model's per-channel probabilities (D-19). The old construction was a
+        # Poisson-binomial over segmentation-3.0's channels, treating them as independent
+        # Bernoullis; they are a powerset conversion, mutually exclusive by construction, so that
+        # independence was never there. A count is still permutation-invariant, so this is
+        # answerable before the speaker↔label binding D-7 hands to rounds.
+        j1 = count_posterior_in_window(diar_spans, start=start, end=end) if diar_spans else None
+        if j1 is not None and j1["uncertainty"] is not None:
+            votes["__overlap_count__"] = {
                 "value": float(j1["uncertainty"]),
                 "expected_count": j1["expected_count"],
                 "p_overlap": j1["p_overlap"],
                 # The distribution itself, keyed by count, so a consumer can see *which* counts
                 # were in contention rather than only how much doubt there was between them.
                 "count_distribution": {str(k): v for k, v in j1["counts"].items()},
-                "n_frames": j1["n_frames"],
+                "n_samples": j1["n_samples"],
+                # A tool at its ceiling contributes a lower bound, so the bucket's figure inherits
+                # it. Without this a bounded count reads as a settled one.
+                "lower_bounded": j1["lower_bounded"],
+                "censored_sources": list(j1["censored_sources"]),
+                "contributing_sources": list(j1["contributing_sources"]),
             }
 
         out.append({"start": start, "end": end, "votes": votes})

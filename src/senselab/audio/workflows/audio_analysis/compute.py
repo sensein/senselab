@@ -323,7 +323,6 @@ def harvest_pass(
         pass_summary=harvest_summary,
         grid=grid,
         per_window_embeddings=per_window_embeddings,
-        frame_posteriors=frame_voters or None,
         same_speaker_floor=same_floor_eff,
         diff_speaker_floor=diff_floor_eff,
         cluster_cosine_threshold=cluster_cosine_threshold,
@@ -356,9 +355,11 @@ def harvest_pass(
         # conclusion — which also lets a later stage reuse the same cluster assignment for
         # speaker label repair instead of re-deriving one that could disagree.
         per_window_embeddings=dict(per_window_embeddings or {}),
-        # Carried so J4 can bind speakers to channels during fusion; re-running the
-        # model there would defeat the harvest/aggregate split.
         frame_posteriors=dict(frame_voters or {}),
+        # Carried so fusion can bind fused speaker ids to each diarizer's own labels (C2) without
+        # re-running a model, which would defeat the harvest/aggregate split. The channels this
+        # replaces were permutation-arbitrary and could not name anyone (D-19).
+        diarization_by_model=dict((harvest_summary.get("diarization") or {}).get("by_model") or {}),
         provenance_extras={
             "scene_quality": scene_quality_provenance,
             "sound_sources": sound_sources_provenance,

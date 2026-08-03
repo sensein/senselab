@@ -24,12 +24,110 @@ cannot produce that artifact at all.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Final, Mapping, Optional
 
-from senselab.audio.workflows.audio_analysis.shapes import Capacity, Spans
+from senselab.audio.workflows.audio_analysis.shapes import Capacity, Span, Spans
 from senselab.audio.workflows.audio_analysis.statistics import entropy_uncertainty
 
-__all__ = ["count_at", "count_posterior", "occupancy"]
+__all__ = [
+    "SPEAKER_CAPACITY",
+    "capacity_for",
+    "count_at",
+    "count_posterior",
+    "count_posterior_in_window",
+    "occupancy",
+    "spans_from_diarization",
+]
+
+SPEAKER_CAPACITY: Final[Mapping[str, Capacity]] = {
+    "pyannote/speaker-diarization-community-1": "unbounded",
+    "nvidia/diar_sortformer_4spk-v1": 4,
+    "mago-ai/ultra_diar_streaming_sortformer_8spk_v1": 8,
+}
+"""Each diarizer's maximum representable speaker count (D-19), declared once.
+
+Fixed by architecture, not by the audio, and **a tool does not report when it runs out** — it simply
+assigns what columns it has. So this is provenance of the same kind as units, and without it a reader
+cannot distinguish "3 speakers active" from "3 active and the model had no fourth column".
+
+A clustering pipeline with no fixed-width head is ``"unbounded"``. An **unlisted** model raises rather
+than defaulting: guessing ``"unbounded"`` would silently un-censor a bounded tool, which is the exact
+bias :func:`count_posterior` exists to correct.
+"""
+
+
+_CLUSTERING_PREFIXES: Final[tuple[str, ...]] = ("embedding_silhouette/",)
+"""Prefixes identifying an embedder-plus-clusterer diarizer (D-20).
+
+These are ``"unbounded"`` by *construction* rather than by lookup: a clusterer chooses its own
+cluster count, so there is no fixed-width head to run out of. Matched by prefix because the tool id
+carries the embedding model, so the set is open — one entry per *clusterer*, not per embedder.
+"""
+
+
+def capacity_for(model_id: str) -> Capacity:
+    """The declared capacity for ``model_id``, or ``None`` when nothing declared one.
+
+    ``None`` is **not** a permissive default. It means *unknown*, and
+    :func:`spans_from_diarization` omits such a tool from the span set rather than including it: a
+    tool whose capacity is unknown cannot be censored correctly, and including it uncensored is
+    exactly the bias :func:`count_posterior` exists to correct. Omitting loses its evidence, which is
+    worse than having it and better than having it wrong.
+
+    Raising instead was tried and is wrong at this depth — one unlisted diarizer would kill the whole
+    harvest, so a new model could not be trialled without a table edit first.
+    """
+    if model_id in SPEAKER_CAPACITY:
+        return SPEAKER_CAPACITY[model_id]
+    if any(model_id.startswith(prefix) for prefix in _CLUSTERING_PREFIXES):
+        return "unbounded"
+    return None
+
+
+def spans_from_diarization(by_model: Mapping[str, Any]) -> dict[str, Spans]:
+    """``{model → Spans}`` from a pass summary's ``diarization.by_model`` block.
+
+    Only models whose block reports ``status == "ok"`` **and** whose speaker capacity is declared
+    contribute.
+
+    Two omissions, for two different reasons, and both are warned about rather than being silent:
+
+    - A **failed** model is absent rather than present with an empty span set. "The diarizer crashed"
+      and "the diarizer found no speakers" are different states, and only the second is evidence.
+    - A model with **no declared capacity** is absent because it cannot be censored correctly, and an
+      uncensored bounded tool is the bias the count posterior exists to correct. Its absence from
+      ``contributing_sources`` downstream is what makes the loss visible.
+    """
+    import sys
+
+    from senselab.audio.workflows.audio_analysis.harvesters import seg_attr
+
+    out: dict[str, Spans] = {}
+    for model, block in (by_model or {}).items():
+        if not (isinstance(block, Mapping) and block.get("status") == "ok"):
+            continue
+        result = block.get("result")
+        if not isinstance(result, list) or not result:
+            continue
+        capacity = capacity_for(model)
+        if capacity is None:
+            print(
+                f"warn: diarizer {model!r} has no declared speaker capacity, so it cannot be "
+                "censored and is omitted from the count evidence; add it to "
+                "occupancy.SPEAKER_CAPACITY",
+                file=sys.stderr,
+            )
+            continue
+        segments = result[0] if isinstance(result[0], list) else result
+        spans = []
+        for segment in segments:
+            start, end = seg_attr(segment, "start"), seg_attr(segment, "end")
+            label = seg_attr(segment, "speaker") or seg_attr(segment, "label")
+            if start is None or end is None or label is None or float(end) <= float(start):
+                continue
+            spans.append(Span(start=float(start), end=float(end), label=str(label)))
+        out[model] = Spans(spans=tuple(spans), capacity=capacity)
+    return out
 
 
 def occupancy(spans: Spans, *, start: float, end: float) -> dict[str, float]:
@@ -152,3 +250,71 @@ def count_posterior(
 def _is_censored(capacity: Capacity, count: int) -> bool:
     """Is this source's count at a ceiling it cannot see past?"""
     return isinstance(capacity, int) and count >= capacity
+
+
+def count_posterior_in_window(
+    spans_by_tool: Mapping[str, Spans],
+    *,
+    start: float,
+    end: float,
+    step: float = 0.01,
+) -> Optional[dict[str, Any]]:
+    """Pool per-instant count posteriors across ``[start, end)`` into one bucket-level distribution.
+
+    Args:
+        spans_by_tool: ``{tool → its span set}``, each carrying its own capacity.
+        start: Bucket start, seconds.
+        end: Bucket end, seconds.
+        step: Sampling interval. Default 10 ms — fine enough that a turn boundary lands in its own
+            sample rather than being straddled, and it is the resolution the frame-level
+            implementation this replaces worked at.
+
+    Returns:
+        The same fields as :func:`count_posterior` plus ``n_samples``, or ``None`` when no tool
+        reported anything anywhere in the bucket.
+
+    **Pooling distributions, not counts.** The per-instant posteriors are averaged, never the counts.
+    Averaging counts first is what made two speakers alternating inside a bucket read as 0.5 speakers
+    each and report an overlap that never occurred — the defect the frame-level version was written
+    to avoid, and the reason a bucket-level count has to be built from instants and only then reduced.
+
+    ``censored_sources`` and ``lower_bounded`` are the **union** over samples: a tool that hit its
+    ceiling anywhere in the bucket was censored in that bucket, because the bucket's figure inherits
+    the bound. Intersecting them would report an unbounded count for a bucket that contained one.
+    """
+    if end <= start:
+        return None
+    n = max(1, int(round((end - start) / step)))
+    pooled: dict[int, float] = {}
+    censored: set[str] = set()
+    contributing: set[str] = set()
+    samples = 0
+    lower_bounded_anywhere = False
+    for i in range(n):
+        t = start + (i + 0.5) * (end - start) / n
+        per_tool = {tool: count_at(spans, t) for tool, spans in spans_by_tool.items()}
+        speaking = {tool: c for tool, c in per_tool.items() if c > 0}
+        if not speaking:
+            continue
+        at_t = count_posterior(speaking, capacities={tool: spans_by_tool[tool].capacity for tool in speaking})
+        if at_t is None:
+            continue
+        samples += 1
+        for count, p in at_t["counts"].items():
+            pooled[count] = pooled.get(count, 0.0) + p
+        censored |= set(at_t["censored_sources"])
+        contributing |= set(at_t["contributing_sources"])
+        lower_bounded_anywhere = lower_bounded_anywhere or at_t["lower_bounded"]
+    if not samples:
+        return None
+    counts = {count: mass / samples for count, mass in sorted(pooled.items())}
+    return {
+        "counts": counts,
+        "expected_count": sum(count * p for count, p in counts.items()),
+        "p_overlap": sum(p for count, p in counts.items() if count > 1),
+        "uncertainty": entropy_uncertainty({str(count): p for count, p in counts.items()}),
+        "lower_bounded": lower_bounded_anywhere,
+        "censored_sources": tuple(sorted(censored)),
+        "contributing_sources": tuple(sorted(contributing)),
+        "n_samples": samples,
+    }

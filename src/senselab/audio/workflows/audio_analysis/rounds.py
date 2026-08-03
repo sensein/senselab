@@ -217,11 +217,18 @@ class RoundRecord:
         epistemic: Mean epistemic (reducible) uncertainty after the round, or ``None`` when it was
             not measured — total uncertainty can plateau while reducible doubt remains, which is
             why C1 is stated on the reducible part.
-        assignment: The ``S_k`` → activation-channel mapping this round settled on (C2), from
-            ``joint.per_speaker_presence``. The numbers can settle while this still flips, so it is
-            judged separately. ``None`` means it was not measured, which blocks C2 rather than
-            satisfying it: two unmeasured rounds compare equal, and reading that as stability would
-            let the loop declare convergence on criteria nobody checked.
+        assignment: The ``(tool, S_k)`` → tool-label binding this round settled on (C2), from
+            ``identity_binding.bind_labels`` over each diarizer's spans. The numbers can settle
+            while this still flips, so it is judged separately. ``None`` means it was not measured,
+            which blocks C2 rather than satisfying it: two unmeasured rounds compare equal, and
+            reading that as stability would let the loop declare convergence on criteria nobody
+            checked.
+
+            Keyed per **tool**, because each diarizer has its own label namespace and there is no
+            single channel index to bind to. So C2 now has strictly more ways for a round to differ
+            and blocks convergence more readily. That is the honest direction: the previous single
+            binding could hold still while two diarizers disagreed about who was whom, and report
+            that as stability.
         measured_buckets: How many buckets carry a measurement (C3).
         untried_actions: Actions still available and unattempted anywhere (C4). ``None`` means the
             inventory was never taken, which blocks C4 — never having looked is not the same as

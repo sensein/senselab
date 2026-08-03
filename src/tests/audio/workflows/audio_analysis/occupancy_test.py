@@ -193,3 +193,123 @@ def test_a_censored_tool_does_not_abstain() -> None:
     alone = _posterior({"small": 3}, {"small": 3})
     assert alone["counts"] == {3: pytest.approx(1.0)}
     assert alone["lower_bounded"] is True, "and the reader is told the 3 is a floor"
+
+
+# ── count_posterior_in_window: instants pooled, never counts averaged ──
+
+
+def test_a_bucket_of_steady_overlap_reports_two_speakers() -> None:
+    """The simple case: both speakers active throughout, so every instant says 2."""
+    from senselab.audio.workflows.audio_analysis.occupancy import count_posterior_in_window
+
+    result = count_posterior_in_window(
+        {"a": _spans((0.0, 1.0, "x"), (0.0, 1.0, "y"), capacity="unbounded")}, start=0.0, end=1.0
+    )
+    assert result is not None
+    assert result["counts"] == {2: pytest.approx(1.0)}
+    assert result["p_overlap"] == pytest.approx(1.0)
+
+
+def test_turn_taking_inside_a_bucket_does_not_report_overlap() -> None:
+    """The defect this construction exists to avoid, at bucket level.
+
+    Averaging the channel probabilities first made two speakers alternating inside a bucket read as
+    0.5 each and report an overlap that never occurred. Pooling per-instant *distributions* cannot:
+    every instant has exactly one speaker, so the pooled distribution is all mass at 1.
+    """
+    from senselab.audio.workflows.audio_analysis.occupancy import count_posterior_in_window
+
+    result = count_posterior_in_window(
+        {"a": _spans((0.0, 0.5, "x"), (0.5, 1.0, "y"), capacity="unbounded")}, start=0.0, end=1.0
+    )
+    assert result is not None
+    assert result["counts"] == {1: pytest.approx(1.0)}
+    assert result["p_overlap"] == pytest.approx(0.0)
+
+
+def test_partial_overlap_inside_a_bucket_splits_the_mass() -> None:
+    """Half the bucket has one speaker and half has two, and the distribution says so."""
+    from senselab.audio.workflows.audio_analysis.occupancy import count_posterior_in_window
+
+    result = count_posterior_in_window(
+        {"a": _spans((0.0, 1.0, "x"), (0.5, 1.0, "y"), capacity="unbounded")}, start=0.0, end=1.0
+    )
+    assert result is not None
+    assert result["counts"][1] == pytest.approx(0.5, abs=0.02)
+    assert result["counts"][2] == pytest.approx(0.5, abs=0.02)
+
+
+def test_censoring_is_the_union_over_samples() -> None:
+    """A tool that hit its ceiling anywhere in the bucket censored the bucket's figure.
+
+    Intersecting instead would report an unbounded count for a bucket that contained a bound one.
+    """
+    from senselab.audio.workflows.audio_analysis.occupancy import count_posterior_in_window
+
+    result = count_posterior_in_window(
+        {"tiny": _spans((0.0, 1.0, "x"), (0.5, 1.0, "y"), capacity=2)}, start=0.0, end=1.0
+    )
+    assert result is not None
+    assert result["censored_sources"] == ("tiny",), "censored in the overlapping half"
+    assert result["lower_bounded"] is True
+
+
+def test_a_silent_bucket_yields_none_rather_than_a_count_of_zero() -> None:
+    """Nobody spoke is not "we measured zero speakers with confidence"."""
+    from senselab.audio.workflows.audio_analysis.occupancy import count_posterior_in_window
+
+    result = count_posterior_in_window({"a": _spans((5.0, 6.0, "x"), capacity="unbounded")}, start=0.0, end=1.0)
+    assert result is None
+
+
+def test_the_sample_count_is_reported() -> None:
+    """A distribution pooled from three instants is weaker evidence than one from a hundred."""
+    from senselab.audio.workflows.audio_analysis.occupancy import count_posterior_in_window
+
+    result = count_posterior_in_window(
+        {"a": _spans((0.0, 1.0, "x"), capacity="unbounded")}, start=0.0, end=1.0, step=0.1
+    )
+    assert result is not None and result["n_samples"] == 10
+
+
+# ── the capacity table gates what may contribute ───────────────────────
+
+
+def test_a_diarizer_with_no_declared_capacity_is_omitted_rather_than_assumed_unbounded() -> None:
+    """It cannot be censored correctly, and uncensored is precisely the bias to avoid.
+
+    Omission loses its evidence, which is worse than having it and better than having it wrong. The
+    tool's absence from ``contributing_sources`` downstream is what makes the loss visible.
+    """
+    from senselab.audio.workflows.audio_analysis.occupancy import spans_from_diarization
+
+    result = spans_from_diarization(
+        {
+            "pyannote/speaker-diarization-community-1": {
+                "status": "ok",
+                "result": [[{"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"}]],
+            },
+            "some/unlisted-diarizer": {
+                "status": "ok",
+                "result": [[{"start": 0.0, "end": 1.0, "speaker": "spk0"}]],
+            },
+        }
+    )
+    assert set(result) == {"pyannote/speaker-diarization-community-1"}
+
+
+def test_a_failed_diarizer_is_omitted_rather_than_contributing_an_empty_span_set() -> None:
+    """A crash and a finding of no speakers are different states; only the second is evidence."""
+    from senselab.audio.workflows.audio_analysis.occupancy import spans_from_diarization
+
+    result = spans_from_diarization({"nvidia/diar_sortformer_4spk-v1": {"status": "failed", "error": "OOM"}})
+    assert result == {}
+
+
+def test_a_clusterer_is_unbounded_by_construction() -> None:
+    """It chooses its own cluster count, so there is no fixed-width head to run out of (D-20)."""
+    from senselab.audio.workflows.audio_analysis.occupancy import capacity_for
+
+    assert capacity_for("embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb") == "unbounded"
+    assert capacity_for("nvidia/diar_sortformer_4spk-v1") == 4
+    assert capacity_for("some/unlisted") is None

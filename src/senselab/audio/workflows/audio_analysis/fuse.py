@@ -940,7 +940,7 @@ def fuse_rounds(
 
 
 def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]:
-    """J4's speaker → channel binding for the reference pass, or ``None`` when unmeasurable.
+    """The speaker → tool-label binding for the reference pass, or ``None`` when unmeasurable.
 
     Measured on the unmodified pass where available: whether a speaker occupies a channel is a fact
     about the recording, not about the enhancement transform, the same reasoning physical support
@@ -950,7 +950,9 @@ def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]
     binding and an unmeasured one mean different things to C2 — two empty mappings compare equal
     and would read as a stable assignment nobody checked.
     """
-    from senselab.audio.workflows.audio_analysis.joint import per_speaker_presence, speaker_spans_from_votes
+    from senselab.audio.workflows.audio_analysis.identity_binding import bind_labels
+    from senselab.audio.workflows.audio_analysis.joint import speaker_spans_from_votes
+    from senselab.audio.workflows.audio_analysis.occupancy import spans_from_diarization
 
     harvest = harvests.get("raw") or next(iter(harvests.values()), None)
     if harvest is None:
@@ -958,11 +960,24 @@ def _speaker_assignment(harvests: Mapping[str, Any]) -> Optional[dict[str, str]]
     spans = speaker_spans_from_votes(getattr(harvest, "speaker_votes", None) or [])
     if not spans:
         return None
-    for posterior in (getattr(harvest, "frame_posteriors", None) or {}).values():
-        result = per_speaker_presence(spans, posterior)
-        if result is not None:
-            return {k: v for k, v in result["assignment"].items() if v is not None}
-    return None
+    diar = spans_from_diarization(getattr(harvest, "diarization_by_model", None) or {})
+    if not diar:
+        return None
+    # One entry per (tool, speaker), because the binding is now per tool: each diarizer has its own
+    # label namespace, so there is no single channel index to bind to. C2 therefore judges a *set*
+    # of bindings for stability, which is strictly more information than the channel version had —
+    # and strictly more ways for a round to differ, so C2 blocks convergence more readily than
+    # before. That is the honest direction to err in: the old single binding could hold still while
+    # two diarizers disagreed about who was whom, and report that as stability.
+    out: dict[str, str] = {}
+    for tool in sorted(diar):
+        binding = bind_labels(spans, diar[tool])
+        if binding is None:
+            continue
+        for speaker, label in sorted(binding["assignment"].items()):
+            if label is not None:
+                out[f"{tool}:{speaker}"] = label
+    return out or None
 
 
 def _draw_round_timeline(
