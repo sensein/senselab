@@ -28,7 +28,7 @@ written by ``derive`` under ``StageIO``.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Final, Iterable, Mapping, Optional, Sequence
 
 from senselab.audio.workflows.audio_analysis.keys import DerivativeKey, SignalKey
 from senselab.audio.workflows.audio_analysis.shapes import (
@@ -134,8 +134,10 @@ class Sampler:
             raise KeyError(f"no signal {source.target}/{source.producer} in this sampler") from None
 
         name, variant = key.operator.name, key.operator.variant
-        if shape.grid_relation is GridRelation.RESAMPLE and name == "resample":
-            return self._resample(shape, start, end, how=variant or "mean")
+        if shape.grid_relation is GridRelation.RESAMPLE and name in _SCALINGS:
+            reduction, threshold = _split_variant(variant)
+            raw = self._resample(shape, start, end, how=reduction)
+            return _rescale(raw, name, shape=shape, threshold=threshold)
         if isinstance(shape, Categorical) and name == "project_labels":
             return self._project_labels(shape, start, end, variant=variant)
         if isinstance(shape, Spans) and name == "cover":
@@ -216,6 +218,78 @@ class Sampler:
             if overlap > 0:
                 total += overlap
         return total if total > 0 else None
+
+
+_SCALINGS: Final[frozenset[str]] = frozenset({"resample", "zscore", "excess"})
+"""How a reduced value may be expressed, each **named on the key** so it is recorded and replaceable.
+
+- ``resample`` — the tool's own units, unchanged. The default, because it is the only one that needs
+  no reference point.
+- ``zscore`` — standardised against *this signal's own distribution over the whole recording*. What a
+  consumer wants when the question is "unusual for this recording" rather than "large in dB", and it
+  makes two signals in different units comparable without anchoring either to an absolute scale.
+- ``excess`` — the value minus a threshold given in the variant (``"mean@-30.0"``). An absolute
+  reference, for a question like "how far above the noise floor".
+
+A scaling is not a reduction: ``zscore`` still needs a reduction over the bucket's frames first, which
+is why the variant carries both. Naming the scaling on the key is what keeps it out of the aggregator,
+where a rescaling would be an unrecorded policy applied to somebody else's measurement.
+"""
+
+
+def _split_variant(variant: Optional[str]) -> tuple[str, Optional[float]]:
+    """``"mean@-30.0"`` -> ``("mean", -30.0)``; ``"mean"`` -> ``("mean", None)``."""
+    if variant is None:
+        return "mean", None
+    reduction, _, threshold = variant.partition("@")
+    if not threshold:
+        return reduction or "mean", None
+    try:
+        return reduction or "mean", float(threshold)
+    except ValueError:
+        raise UnknownOperator(f"threshold {threshold!r} in variant {variant!r} is not a number") from None
+
+
+def _rescale(
+    value: Any,  # noqa: ANN401 — float or per-channel mapping
+    scaling: str,
+    *,
+    shape: Measurement,
+    threshold: Optional[float],
+) -> Any:  # noqa: ANN401
+    """Express ``value`` in the units the key asked for.
+
+    ``None`` passes through unchanged: a bucket nothing measured cannot be standardised, and a zero
+    z-score there would read as "exactly average" rather than "not measured".
+    """
+    if value is None or scaling == "resample":
+        return value
+    if isinstance(value, Mapping):
+        return {k: _rescale(v, scaling, shape=shape, threshold=threshold) for k, v in value.items()}
+    if scaling == "excess":
+        if threshold is None:
+            raise UnknownOperator("excess needs a threshold in its variant, e.g. 'mean@-30.0'")
+        return float(value) - threshold
+    mean, std = _distribution(shape)
+    if std is None or std == 0.0:
+        # A signal that never varies has no scale to standardise against. None rather than 0.0: the
+        # value is real, but "how unusual" is a question this recording cannot answer.
+        return None
+    return (float(value) - (mean or 0.0)) / std
+
+
+def _distribution(shape: Measurement) -> tuple[Optional[float], Optional[float]]:
+    """``(mean, population std)`` of a signal over the whole recording, ignoring unmeasured frames."""
+    if isinstance(shape, Series):
+        measured = [v for v in shape.values if v is not None]
+    elif isinstance(shape, Matrix):
+        measured = [v for row in shape.rows for v in row if v is not None]
+    else:
+        return None, None
+    if not measured:
+        return None, None
+    mean = sum(measured) / len(measured)
+    return mean, (sum((v - mean) ** 2 for v in measured) / len(measured)) ** 0.5
 
 
 def _reduce(values: Sequence[float], how: str) -> Optional[float]:
