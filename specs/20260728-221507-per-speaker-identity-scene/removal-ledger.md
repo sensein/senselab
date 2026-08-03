@@ -635,3 +635,39 @@ unverified.
 
 `SEGMENTATION_MODEL_ID` remains as an unused constant, deliberately left rather than removed by a
 regex that had already over-stripped the module once.
+
+## Correction 3: unmeasured rows sort *last*, and the run-1 asr discrepancy is a writer problem
+
+I recorded twice that an unmeasured axis was "ranked at maximum triage and sorted to the top of the
+index". Reading `disagreements._sort_key`:
+
+```python
+primary = -float(score) if isinstance(score, (int, float)) and not math.isnan(float(score)) else float("inf")
+```
+
+The sort is ascending on `primary`, so a `None` triage becomes `+inf` and sorts **last**. Unmeasured
+rows are the lowest-priority candidates, which is the correct behaviour and the opposite of what I
+wrote — twice.
+
+**So what was run 1 actually showing?** The index reported `triage_score: 1.0` for 18 asr entries while
+`final/estimates/asr.parquet` reported `None` for every row. The index reads `row.get("triage_score")`
+off the **in-memory** `fused_axes` rows. So fusion produced 1.0 and the *writer* wrote `None` — a
+discrepancy between an in-memory row and its own parquet, not a ranking defect.
+
+That is a different and arguably worse defect than the one I logged: two representations of the same
+row disagree, and the parquet is the one a reader keeps. **Unverified beyond this reading** — I have not
+traced which writer drops it, and the run-1 artifacts are deleted. Reproducing it needs a single-ASR
+run, since with two recognizers both agree.
+
+The other two index findings stand as observed, with their causes unexamined:
+
+- **`background_mask` absent from `rows_by_axis`.** The builder iterates `sorted(fused_axes.items())`,
+  so the axis is missing from what the *caller* passes, not skipped by the index. Caller unexamined.
+- **`high_uncertainty_rate` 0.9941.** `HIGH_THRESHOLD` against `triage_score` admits 1189 of 1196 rows.
+  A threshold that admits everything ranks nothing; whether the fix is the threshold or the score is
+  not determined by the observation.
+
+**Pattern worth flagging for whoever picks this up.** Three times now I have described a mechanism from
+signal names or from a symptom and been wrong, and each time reading the specific function settled it in
+one step. The design-doc entries written from artifact inspection have held; the ones written from
+inference have not. Prefer the ledger's *observations* over its *explanations* where they are separable.
