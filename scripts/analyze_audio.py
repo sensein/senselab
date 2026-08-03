@@ -365,7 +365,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Enhanced-pass policy (spec 20260723-225523 FR-003). 'always' preserves the historical "
             "unconditional two-pass behavior; 'auto' runs a triage round 0 (segmentation-3.0 frame "
             "posteriors + Brouhaha/DSP SNR) and runs the enhanced pass only when degraded speech is "
-            "found — and skips diarization/ASR/alignment/PPG entirely when no speech is found (FR-004); "
+            "found — and skips diarization/ASR/alignment entirely when no speech is found (FR-004); "
             "'never' ≡ --no-enhancement."
         ),
     )
@@ -561,16 +561,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "Disable the auto-align stage for timestamp-less ASR. Outputs become "
             "text-only ScriptLines; the LS export emits a single full-audio TextArea "
             "region for each timestamp-less ASR model."
-        ),
-    )
-    parser.add_argument(
-        "--ppg",
-        action="store_true",
-        help=(
-            "Run the PPG (phonetic posteriorgram) backend on each pass and feed it into "
-            "the comparator's asr axis as a per-frame phoneme-disagreement signal "
-            "(`phoneme_per_to_ppg` per ASR vote). Off by default — enabling pulls the "
-            "ppgs subprocess venv (~1.4 GB)."
         ),
     )
     parser.add_argument(
@@ -822,7 +812,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--phoneme-disagreement-threshold",
         type=float,
         default=0.50,
-        help="Phoneme-error-rate threshold for ASR↔PPG `phoneme_disagreement` flag (default 0.50).",
+        help="Phoneme edit-distance threshold for the cross-ASR `phoneme_disagreement` flag (default 0.50).",
     )
     parser.add_argument(
         "--speech-presence-labels",
@@ -1077,7 +1067,7 @@ def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None
 def _pass_plan(args: argparse.Namespace) -> PassPlan:
     """Translate parsed CLI args into a library `PassPlan`.
 
-    Called *after* triage, because `main` mutates `args.skip` / `args.ppg` on the
+    Called *after* triage, because `main` mutates `args.skip` on the
     no-speech path — a plan built before that would run diarization and ASR on
     silence. Absence-means-skip is expressed here so the library never sees a
     CLI-shaped skip set.
@@ -1105,7 +1095,6 @@ def _pass_plan(args: argparse.Namespace) -> PassPlan:
         mms_aligner_model=args.aligner_model,
         asr_language=args.asr_language,
         qwen_native_timestamps=not args.qwen_asr_no_timestamps,
-        ppg=bool(args.ppg),
     )
 
 
@@ -1246,9 +1235,8 @@ def main(argv: list[str] | None = None) -> int:
         if not triage["speech_present"]:
             summaries["run_state"] = "no_speech"
             args.skip = tuple(sorted(set(args.skip) | {"diarization", "asr", "alignment"}))
-            args.ppg = False
             print(
-                "  no speech found — skipping diarization/ASR/alignment/PPG; speech_presence outputs still emitted (FR-004)"
+                "  no speech found — skipping diarization/ASR/alignment; speech_presence outputs still emitted (FR-004)"
             )
     run_enhanced_pass = enhancement_mode == "always" or (
         enhancement_mode == "auto"
@@ -1795,25 +1783,10 @@ def main(argv: list[str] | None = None) -> int:
                         from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
 
                         asr_by_model[m] = resolve_asr_result(block, align_by_model.get(m))
-                    ppg_block = pass_summary.get("ppgs") or {}
-                    ppg_per_frame: list[str] = []
-                    ppg_frame_hop = 0.0
-                    if isinstance(ppg_block, dict) and ppg_block.get("status") == "ok":
-                        from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
-
-                        ppg_per_frame, ppg_frame_hop = ppg_argmax_per_frame(
-                            ppg_block.get("result"),
-                            ppg_block.get("phoneme_labels"),
-                            float(pass_summary.get("duration_s", 0.0) or 0.0),
-                        )
                     detail_by_pass[perturbation] = {
                         "diar_by_model": diar_by_model,
                         "asr_by_model": asr_by_model,
                         "per_window_embeddings": per_window_embeddings_by_pass.get(perturbation, {}),
-                        "ppg": {
-                            "per_frame_phonemes": ppg_per_frame,
-                            "frame_hop": ppg_frame_hop,
-                        },
                     }
                 raw_pass_audio = pass_audio.get("raw")
                 raw_waveform = (

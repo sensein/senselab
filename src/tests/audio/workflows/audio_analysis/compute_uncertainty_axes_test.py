@@ -6,8 +6,7 @@ no real model invocations, no audio loading. Covers:
 - T019: happy path with two diar models + two ASR models on a 4 s clip.
 - T026: text-only ASR resolves through the alignment block (FR-011).
 - T027: AST/YAMNet floor-based bucket→window indexing for cross-stream contributions.
-- T028: PPG present vs absent — asr axis sub-signal drops out cleanly.
-- T028b: graceful degrade (FR-013) — failed pass / empty result / missing PPG.
+- T028b: graceful degrade (FR-013) — failed pass / empty result.
 - T029: multi-word AudioSet labels survive the speech_presence_labels parser.
 """
 
@@ -305,84 +304,11 @@ def test_ast_yamnet_uses_floor_window_indexing() -> None:
         assert ast_vote is not None and ast_vote["speaks"] is True
 
 
-# ── T028 PPG speech_presence vs absence ──────────────────────────────────────
-
-
-def test_ppg_absent_drops_pairwise_ppg_pairs() -> None:
-    """When PPG is absent, the pairwise grid contains no ``__ppg__|*`` pairs."""
-    pass_summary = {
-        "duration_s": 2.0,
-        "asr": {
-            "by_model": {
-                "whisper": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 2.0, "world")]),
-            }
-        },
-    }
-    linked: dict = {}
-    signals, fused_axes, incomparable, _emb = compute_uncertainty_axes(
-        linked_out=linked,
-        passes={"raw": pass_summary},
-        grid=BucketGrid(),
-        params={},
-        audio={"raw": _silent_audio(2.0)},
-        speaker_embedding_models=[],
-        aggregator="min",
-        speech_presence_labels=["Speech"],
-    )
-    utt = fused_axes["asr"]
-    for r in utt.rows:
-        pair_block = _votes_at(linked, "raw", "asr", r["start"]).get("__pairwise_phoneme_distances__")
-        if isinstance(pair_block, dict):
-            pairs = pair_block.get("pairs") or {}
-            for pair_key in pairs:
-                assert "__ppg__" not in pair_key, "no __ppg__ pairs expected when PPG opted out"
-    assert "raw/asr/ppg" in incomparable
-
-
-def test_ppg_present_populates_pairwise_ppg_pairs() -> None:
-    """When PPG is provisioned, ``__ppg__|<asr>`` pairs appear in the bucket pairwise grid."""
-    n_frames = 200
-    n_phonemes = 40
-    ppg = np.zeros((n_phonemes, n_frames), dtype=np.float32)
-    ppg[25, :] = 1.0  # all frames argmax to "oy"
-    pass_summary = {
-        "duration_s": 2.0,
-        "asr": {
-            "by_model": {
-                "whisper": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 2.0, "world")]),
-            }
-        },
-        "ppgs": {"status": "ok", "result": [ppg]},
-    }
-    linked: dict = {}
-    signals, fused_axes, incomparable, _emb = compute_uncertainty_axes(
-        linked_out=linked,
-        passes={"raw": pass_summary},
-        grid=BucketGrid(),
-        params={},
-        audio={"raw": _silent_audio(2.0)},
-        speaker_embedding_models=[],
-        aggregator="min",
-        speech_presence_labels=["Speech"],
-    )
-    utt = fused_axes["asr"]
-    found_ppg_pair = False
-    for r in utt.rows:
-        pair_block = _votes_at(linked, "raw", "asr", r["start"]).get("__pairwise_phoneme_distances__")
-        if isinstance(pair_block, dict):
-            pairs = pair_block.get("pairs") or {}
-            for pair_key, dist in pairs.items():
-                if "__ppg__" in pair_key:
-                    found_ppg_pair = True
-                    assert 0.0 <= float(dist) <= 1.0
-    assert found_ppg_pair, "expected at least one bucket with a __ppg__ pairwise pair"
-
-
 # ── T028b graceful degrade (FR-013) ──────────────────────────────────
 
 
 def test_graceful_degrade_failed_models_do_not_raise() -> None:
-    """Failed pass / empty result / missing PPG produce comparison_status entries — no exceptions."""
+    """Failed pass / empty result produce comparison_status entries — no exceptions."""
     pass_summary = {
         "duration_s": 2.0,
         "diarization": {
@@ -397,7 +323,6 @@ def test_graceful_degrade_failed_models_do_not_raise() -> None:
                 "granite": {"status": "ok", "result": [], "cache_key": "empty"},
             }
         },
-        # No PPG block at all.
     }
     linked: dict = {}
     signals, fused_axes, incomparable, _emb = compute_uncertainty_axes(
@@ -414,8 +339,6 @@ def test_graceful_degrade_failed_models_do_not_raise() -> None:
     assert "speech_presence" in fused_axes
     assert "speaker" in fused_axes
     assert "asr" in fused_axes
-    # PPG missing reason recorded.
-    assert "raw/asr/ppg" in incomparable
 
 
 # ── T029 Multi-word AudioSet labels survive ──────────────────────────

@@ -10,7 +10,7 @@ pass summary. It does not mutate a shared dict. The returned keys are a publishe
 contract: ``speech_presence.py``, ``compute.py``, ``speaker.py``, ``asr.py``,
 ``global_summary.py`` and the adaptive interventions all read
 ``pass_summary["asr"]["by_model"]``, ``["ast"]``, ``["yamnet"]``,
-``["features"]["result"]`` and ``["ppgs"]`` — so the fragments stay plain dicts
+``["features"]["result"]`` — so the fragments stay plain dicts
 keyed exactly as before.
 
 Two contracts worth stating because breaking them fails *silently*:
@@ -20,7 +20,6 @@ Two contracts worth stating because breaking them fails *silently*:
   placeholder, since the real payload goes to parquet. Returning the sidecar
   shape instead would leave every loudness/quality column ``None`` rather than
   raising.
-- ``stage_ppg`` returns the key ``"ppgs"`` (plural). Consumers accept both
   spellings, so a rename degrades to null signals instead of failing.
 """
 
@@ -61,7 +60,6 @@ __all__ = [
     "stage_asr",
     "stage_diarization",
     "stage_features",
-    "stage_ppg",
     "stage_scene",
 ]
 
@@ -450,68 +448,6 @@ def stage_alignment(
     return {"alignment": {"by_model": by_model}}
 
 
-def stage_ppg(audio: Audio, ctx: StageContext) -> dict[str, Any]:
-    """Extract phonetic posteriorgrams and write an argmax-per-frame sidecar.
-
-    Args:
-        audio: The pass audio.
-        ctx: Run environment.
-
-    Returns:
-        ``{"ppgs": outcome}`` — note the plural key, which consumers read.
-        ``outcome["phoneme_labels"]`` carries the inventory so the harvester can
-        decode argmax indices without importing the ppgs library.
-    """
-    from senselab.audio.tasks.features_extraction.ppg import (
-        _PHONEME_LABELS as _PPG_PHONEME_LABELS,
-    )
-    from senselab.audio.tasks.features_extraction.ppg import (
-        extract_ppgs_from_audios,
-    )
-    from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
-
-    params = {"device": ctx.device_label}
-    outcome = run_task_cached(
-        "ppgs",
-        extract_ppgs_from_audios,
-        [audio],
-        device=ctx.device,
-        cache_dir=ctx.cache_dir,
-        cache_key_str=ctx.cache_key_for("ppgs", "ppgs/0.0.9", params),
-        provenance=ctx.provenance_for("ppgs", "ppgs/0.0.9", params),
-    )
-    outcome["phoneme_labels"] = list(_PPG_PHONEME_LABELS)
-
-    # The full (40 × N_frames) tensor is too large to dump; the argmax-per-frame
-    # sequence + frame_hop is what the comparator actually consumes. Write it so
-    # reviewers can inspect the phoneme timeline without rerunning the model.
-    argmax_payload: dict[str, Any] = {
-        "phoneme_labels": list(_PPG_PHONEME_LABELS),
-        "per_frame_phonemes": [],
-        "frame_hop_s": 0.0,
-    }
-    if outcome.get("status") == "ok":
-        try:
-            pf, fh = ppg_argmax_per_frame(
-                outcome.get("result"),
-                list(_PPG_PHONEME_LABELS),
-                audio.waveform.shape[-1] / audio.sampling_rate,
-            )
-            argmax_payload["per_frame_phonemes"] = pf
-            argmax_payload["frame_hop_s"] = float(fh)
-        except Exception as exc:  # noqa: BLE001
-            argmax_payload["argmax_error"] = repr(exc)
-    ctx.write_sidecar(
-        "ppgs.json",
-        {
-            **{k: v for k, v in outcome.items() if k != "result"},
-            "result_summary": "argmax-per-frame sequence in 'argmax' field; full tensor in process memory only",
-            "argmax": argmax_payload,
-        },
-    )
-    return {"ppgs": outcome}
-
-
 def stage_background_mask(
     ctx: StageContext,
     *,
@@ -673,9 +609,6 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
                 language=plan.asr_language,
             )
         )
-
-    if plan.ppg:
-        summary.update(stage_ppg(audio, ctx))
 
     # Only on the unmodified variant. Measured on a real recording: the enhanced pass
     # masked 50% of the file against the unmodified pass's 17.9%, because speech

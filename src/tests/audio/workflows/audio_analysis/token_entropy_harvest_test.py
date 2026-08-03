@@ -133,7 +133,6 @@ def test_harvest_attaches_token_entropy_vote() -> None:
     buckets = harvest_asr_votes(
         pass_summary=_pass_summary(lines),
         grid=BucketGrid(win_length=1.0, hop_length=1.0),
-        ppg_block={},
         alignment_by_model={},
     )
     assert buckets, "expected at least one bucket"
@@ -147,7 +146,6 @@ def test_harvest_token_entropy_none_for_backend_without_logits() -> None:
     buckets = harvest_asr_votes(
         pass_summary=_pass_summary(lines),
         grid=BucketGrid(win_length=1.0, hop_length=1.0),
-        ppg_block={},
         alignment_by_model={},
     )
     assert buckets[0]["votes"]["whisper"]["token_entropy"] is None

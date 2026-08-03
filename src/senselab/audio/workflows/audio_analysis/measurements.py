@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Mapping, Optional, cast
+from typing import Any, Mapping, Optional
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -122,7 +122,8 @@ def read_measurement(io: StageIO, key: Key, *, suffix: Optional[str] = None) -> 
         io: The reading stage's capability.
         key: What to read.
         suffix: Which file, when the shape is not known in advance. Defaults to trying parquet and
-            then JSON, since a ``Tree`` is the only JSON shape.
+            then JSON, since a ``Tree`` is the only JSON shape. The lookup runs inside
+            :meth:`~.stage_io.StageIO.locate`, so no path is ever held here.
 
     Returns:
         The shape, with every ``None`` still ``None``.
@@ -132,20 +133,10 @@ def read_measurement(io: StageIO, key: Key, *, suffix: Optional[str] = None) -> 
         FileNotFoundError: When nothing was written — which is a different state from an empty shape
             and is reported as the different thing it is.
     """
-    if not io.may_read(key):
-        raise _unauthorized(io, key)
-    for candidate in [suffix] if suffix else [_TABLE_SUFFIX, _TREE_SUFFIX]:
-        path = io.run_dir / key.relative_path(cast(str, candidate))
-        if path.exists():
-            return _read_path(path)
-    raise FileNotFoundError(f"no measurement stored for {key} under {io.run_dir}")
-
-
-def _unauthorized(io: StageIO, key: Key) -> Exception:
-    """The read-side refusal, mirroring ``path_for``'s write-side one."""
-    from senselab.audio.workflows.audio_analysis.stage_io import UnauthorizedArtifact
-
-    return UnauthorizedArtifact(f"stage {io.stage.value} may not read {key}")
+    path = io.locate(key, [suffix] if suffix else [_TABLE_SUFFIX, _TREE_SUFFIX])
+    if path is None:
+        raise FileNotFoundError(f"no measurement stored for {key} under {io.run_dir}")
+    return _read_path(path)
 
 
 def _read_path(path: Path) -> Measurement:

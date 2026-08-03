@@ -43,7 +43,6 @@ def test_stage_versions_are_pinned() -> None:
         "features": 1,
         "asr": 1,
         "alignment": 1,
-        "ppgs": 1,
         # Scene-quality level work. Each declares its own counter rather than
         # borrowing another stage's invalidation fate.
         "background_mask": 1,
@@ -183,7 +182,7 @@ def test_pass_plan_defaults_to_running_nothing_expensive() -> None:
     plan = PassPlan()
     assert plan.diarization_models == () and plan.asr_models == ()
     assert plan.ast_model is None and plan.yamnet_model is None
-    assert plan.features is False and plan.ppg is False
+    assert plan.features is False
 
 
 def test_pass_plan_is_frozen() -> None:

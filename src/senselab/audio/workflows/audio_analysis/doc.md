@@ -1,7 +1,7 @@
 # `senselab.audio.workflows.audio_analysis`
 
 Three-axis uncertainty for analyze_audio runs. Reads the per-task pipeline outputs
-(diarization, ASR, scene classification, alignment, PPG, speaker embeddings) and emits a
+(diarization, ASR, scene classification, alignment, speaker embeddings) and emits a
 single `[0, 1]` uncertainty scalar per bucket on each of three axes:
 
 - **speech_presence_uncertainty** — was there a speaker?
@@ -11,7 +11,7 @@ single `[0, 1]` uncertainty scalar per bucket on each of three axes:
 Every model whose output naturally encodes an axis votes (max-inclusive). The vote
 collapse is per-axis: Shannon entropy for speech_presence (binary votes); cross-model label
 disagreement + cosine across-time for speaker; pairwise mean WER + Whisper avg_logprob
-+ PPG-vs-ASR phoneme-error-rate for asr. Sub-signals within each axis fold via the
++ cross-ASR pairwise phoneme distance for asr. Sub-signals within each axis fold via the
 shared `--uncertainty-aggregator` flag (default `min` over confidences ≡ `max` over
 uncertainties).
 

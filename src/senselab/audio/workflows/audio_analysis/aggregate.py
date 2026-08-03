@@ -340,7 +340,7 @@ def aggregate_asr(
     1. **Pairwise phoneme edit-distance rate** across all available phoneme
        sources in this bucket — the 4 ASR transcripts (post-g2p_en, with
        phoneme-midpoint distribution across MMS-aligned word timestamps) and
-       the PPG argmax sequence. With 4 ASRs + PPG that's up to ``C(5, 2)=10``
+       each other. With 4 ASRs that's up to ``C(4, 2)=6``
        pairwise comparisons per bucket, each normalized to ``[0, 1]``.
        Sources with no phonemes in this bucket are dropped (don't contribute
        spurious 1.0 distances). The aggregator collapses the surviving pairs
@@ -376,7 +376,7 @@ def aggregate_asr(
 
     # Pairwise phoneme distances (the dominant asr signal). Each pair
     # is weighted by the joint confidence of its two sources — high-confidence
-    # ASR/PPG pairs dominate, while pairs involving an uncertain transcript
+    # confident pairs dominate, while pairs involving an uncertain transcript
     # contribute proportionally less. The weighted mean is folded as a single
     # sub-signal (the "uncertainty over what was said" headline number); the
     # individual sub-signals below capture orthogonal aspects.
@@ -441,20 +441,14 @@ def aggregate_asr(
         except (ValueError, OverflowError, ZeroDivisionError):
             pass
 
-    # MMS-CTC alignment scores are recorded on the parquet for diagnostic
-    # inspection (see ``alignment_ctc_score`` in each ASR vote) but are NOT
-    # aggregated as a sub-signal: the aligner's path posterior given a
-    # (possibly hallucinated) transcript doesn't reflect transcript
-    # correctness — it reflects path quality conditional on the transcript.
-    # Using it as asr uncertainty would mask hallucinated transcripts
-    # rather than expose them.
+        # MMS-CTC alignment scores are recorded on the parquet for diagnostic
+        # inspection (see ``alignment_ctc_score`` in each ASR vote) but are NOT
+        # aggregated as a sub-signal: the aligner's path posterior given a
+        # (possibly hallucinated) transcript doesn't reflect transcript
+        # correctness — it reflects path quality conditional on the transcript.
+        # Using it as asr uncertainty would mask hallucinated transcripts
+        # rather than expose them.
 
-    # PPG argmax confidence — per-bucket model confidence in its top-1
-    # phoneme decode. Uncertainty = 1 − mean argmax probability.
-    ppg_conf = votes.get("__ppg_argmax_confidence__")
-    if isinstance(ppg_conf, dict) and ppg_conf.get("value") is not None:
-        try:
-            sub_signals.append(max(0.0, min(1.0, 1.0 - float(ppg_conf["value"]))))
         except (ValueError, TypeError):
             pass
 

@@ -108,10 +108,27 @@ ways and whose real-run test skips-or-fails.
 |---|---|
 | `pyannote/segmentation-3.0` — 12 src + 8 test files | J1/J4/C2 rebuilt on spans (D-19) |
 | 9 embedding-derived signals (`speaker_distance` ×4, `speaker_change` ×2, `embedding_silhouette` ×3) | the embedder-plus-clusterer diarizer emits `speaker_spans` |
-| `ppgs` signal + the PER sub-signal | none — the *signal* goes; `features_extraction/ppg.py` stays a senselab task |
+| ~~`ppgs` signal + the PER sub-signal~~ | **done** — 987 net lines out of `src/`, across 11 modules + the CLI. `features_extraction/ppg.py` stays a senselab task; only the *signal* went |
 | the `scene_quality` bundle (`units: "mixed"`) | the 8 per-target scene signals exist |
 
-`ppgs` is the only one removable **now**, and it is the only one with no replacement to build.
+`ppgs` was the only one removable without building a replacement first, and it is done.
+
+**Two things it took with it, and one it did not.** `joint.phoneme_transcript_agreement` (J7 — "which
+reading do the acoustics support") was PPG-dependent and **test-only**, the same unwired-capability
+pattern as `sources.py`. The `plot.py` PPG stripe row went too. What did *not* go is
+`__pairwise_phoneme_distances__`: that compares two **ASRs'** g2p sequences with each other and never
+involved PPG — it is the dominant asr sub-signal and survives intact. Two things were renamed rather
+than deleted, because their justification outlived their original consumer:
+
+- `arpabet_to_ppg_inventory` → `normalize_arpabet`. It normalises ARPAbet (lowercase, stress
+  stripped), which is what makes two ASRs' sequences comparable — `AH0` and `AH1` are the same
+  phoneme and counting them as a difference inflates every pairwise distance.
+- `ppg_per_signal_enabled` → `phoneme_signal_enabled`. The English gate was never PPG's inventory; it
+  was `g2p_en`, which maps English and nothing else.
+
+`SILENCE_LABEL` also stayed, rehomed: `speaker_claims_from_votes` needs it, because a model reporting
+silence has *claimed nothing* and treating that as a claim would let the mask discount a model for
+agreeing with it.
 
 ### Step 4 — the harvest/link/vote layer dissolves into derivatives
 

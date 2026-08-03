@@ -40,7 +40,6 @@ __all__ = [
     "overlap_count_posterior",
     "count_distribution",
     "speaker_change_series",
-    "phoneme_transcript_agreement",
     "per_speaker_presence",
 ]
 
@@ -226,98 +225,6 @@ def speaker_change_series(
         "window_s": window_s,
         "hop_s": hop_s,
     }
-
-
-def phoneme_transcript_agreement(
-    slots: Sequence[Any],
-    *,
-    ppg_per_frame: Sequence[str],
-    ppg_frame_hop: float,
-) -> list[dict[str, Any]] | None:
-    """J7: score each reading of a transcript slot against the phoneme evidence.
-
-    PPG posteriors are an **independent witness**. They come from the audio without passing through
-    a language model, so where two ASR models read the same span differently, the phoneme frames
-    can favour one without merely echoing another transcriber's opinion. That is what this adds
-    over the per-window PER the ASR axis already computes: that measure asks whether *a* model's
-    transcript matches the audio, this one asks which of the readings actually on the table does.
-
-    Each distinct reading in a slot is converted to phonemes and compared against the PPG's argmax
-    run sequence over the slot's span by phoneme error rate. The candidate distribution is
-    ``max(0, 1 − PER)`` normalised — a linear link with no free temperature, so nothing here is a
-    tuned parameter: equally supported candidates give a uniform distribution and maximal doubt,
-    and one candidate matching exactly while the others do not puts the mass on it.
-
-    Args:
-        slots: :class:`~.harmonize.TranscriptSlot` list from H3.
-        ppg_per_frame: Argmax phoneme label per PPG frame.
-        ppg_frame_hop: Seconds per PPG frame.
-
-    Returns:
-        One dict per slot that had both candidates and phoneme frames, carrying ``per`` per
-        candidate, the ``acoustic_choice`` (``None`` when nothing separates them), whether it
-        ``agrees_with_consensus``, and the selection ``uncertainty``. ``None`` when there is no PPG
-        at all — an absent witness is not agreement, and must not be recorded as a verdict.
-    """
-    if not ppg_per_frame or ppg_frame_hop <= 0:
-        return None
-
-    from senselab.audio.workflows.audio_analysis.harvesters import (
-        _levenshtein,
-        arpabet_to_ppg_inventory,
-        g2p_phonemes,
-        ppg_argmax_runs_in_window,
-    )
-
-    out: list[dict[str, Any]] = []
-    for slot in slots or []:
-        runs = ppg_argmax_runs_in_window(
-            list(ppg_per_frame), float(ppg_frame_hop), float(slot.start_s), float(slot.end_s)
-        )
-        observed = [p for _, _, p in runs if p != "<silent>"]
-        candidates = sorted({str(w) for w in slot.words.values() if w})
-        if not observed or not candidates:
-            continue
-
-        per: dict[str, float] = {}
-        for candidate in candidates:
-            expected = [arpabet_to_ppg_inventory(p) for p in g2p_phonemes(candidate)]
-            expected = [p for p in expected if p]
-            if not expected:
-                continue
-            per[candidate] = float(_levenshtein(expected, observed)) / max(1, len(expected))
-        if not per:
-            continue
-
-        support = {c: max(0.0, 1.0 - v) for c, v in per.items()}
-        total = sum(support.values())
-        if total <= 0:
-            # Every reading contradicted by the audio. That is a real finding, not a missing one:
-            # the candidates are indistinguishable *because all are unsupported*, so the choice
-            # carries full doubt rather than being dropped.
-            distribution = {c: 1.0 / len(support) for c in support}
-        else:
-            distribution = {c: v / total for c, v in support.items()}
-
-        best = max(distribution.values())
-        winners = [c for c, v in distribution.items() if v == best]
-        choice = winners[0] if len(winners) == 1 else None
-        out.append(
-            {
-                "start_s": float(slot.start_s),
-                "end_s": float(slot.end_s),
-                "per": per,
-                "candidate_support": distribution,
-                "acoustic_choice": choice,
-                "consensus": slot.consensus,
-                "agrees_with_consensus": (
-                    None if choice is None or slot.consensus is None else choice == slot.consensus
-                ),
-                "uncertainty": entropy_uncertainty(distribution) if len(distribution) > 1 else 0.0,
-                "n_phoneme_runs": len(observed),
-            }
-        )
-    return out
 
 
 def per_speaker_presence(
