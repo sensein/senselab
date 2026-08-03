@@ -540,3 +540,37 @@ Worth checking when that lands: whether the calibration band, being derived from
 whose claims it calibrates, is measuring the embedding space or the clustering's own separation. That is
 the circularity question I asked in the wrong place earlier — it belongs here, about the band, not about
 the claim × verifier cells.
+
+## Verification run 3: four models, and the uncertainty fell
+
+Cache cleared, two ASR models, same clip.
+
+| | run 2 | run 3 |
+|---|---|---|
+| count-posterior sources | 3 | **4** (`spkrec-resnet-voxceleb` clustering now a model) |
+| `modal_count` / p | 2 @ 0.977 | 2 @ 0.978 |
+| speaker mean uncertainty | 0.858 | **0.7914** |
+| `::` validation signals | 6 | 8 |
+
+**The discriminating result: uncertainty fell while the signal count rose.** Two more validations were
+added and doubt dropped 0.067. That distinguishes the two competing diagnoses, and it favours the one
+that survives:
+
+- *"too many correlated signals"* predicts uncertainty rising or holding as signals are added under
+  max-doubt;
+- *"the calibration band was applied to the wrong embedder"* predicts it falling once resnet's
+  distances are read against resnet's own separation, because the excess doubt was borrowed
+  calibration rather than redundancy.
+
+The second is what happened. Adding a genuine independent model *reduced* the axis's uncertainty, which
+is what should happen when an independent source agrees.
+
+**This is the third and clearest refutation of D-20's nine-signal removal.** The evidence I had been
+citing for it — the 0.858-vs-0.977 gap — was substantially a calibration defect, and it moved when the
+calibration was fixed rather than when signals were removed. The removal should not be executed on this
+reasoning. What remains worth doing is naming the estimator choice on each key (cosine, which lag), which
+is a keying task, not a deletion.
+
+Both same-model pairings now exist (`…/ecapa::ecapa`, `…/resnet::resnet`) and neither is circular, for
+the reason established earlier: a global silhouette-optimised partition and a local pairwise cosine are
+different computations over the same vectors, and the second can contradict the first.
