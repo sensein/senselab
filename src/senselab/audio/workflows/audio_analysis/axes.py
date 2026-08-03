@@ -24,6 +24,7 @@ from typing import Final
 
 __all__ = [
     "ATTENUATED_AXES",
+    "AXIS_GRIDS",
     "AXES",
     "AXIS_NAMES",
     "AXIS_PRIORITY",
@@ -67,6 +68,13 @@ class Axis:
             is free of target activity (that is the mask's question).
         calibrated: Does this axis's aggregator take a calibration temperature? Only the axes
             whose sub-signals are combined through a softmax-like fold have one to take.
+        grid: What this axis's rows are indexed by (D-24). ``"time_0.1s"`` for the axes whose
+            evidence resamples or projects onto a time grid; ``"word"`` for ``asr``, whose evidence
+            is a transcript. A transcript has no natural per-bucket value, so bucketing it is the
+            ``REDUCE`` that :class:`~.shapes.GridRelation` names — performed on the *finest*
+            evidence in the run, to match three coarser axes. Declared here rather than assumed,
+            because a consumer that took time buckets for granted would silently mis-join ``asr``
+            against the other three.
         rank: Tiebreak order when two regions carry the same uncertainty — lower comes first.
             A *judgement* about which axis a reader should look at first, so it is declared
             rather than derived from the order the axes happen to be written in.
@@ -82,6 +90,7 @@ class Axis:
     overlap_informed: bool
     calibrated: bool
     rank: int
+    grid: str = "time_0.1s"
     active: bool = True
 
 
@@ -117,6 +126,12 @@ AXES: Final[tuple[Axis, ...]] = (
         # First: a reader triaging a run wants the words before the speaker, and the speaker
         # before whether anyone spoke at all.
         rank=0,
+        # One row per word, with an onset estimate and its variance. Every recognizer and every
+        # aligner gives a word a different onset, and that spread *is* the disagreement this axis
+        # measures — averaging it into a 0.1 s bucket before the axis sees it discards the
+        # distinction between "a word all models agree on but time differently" and "a word models
+        # disagree about", which call for different interventions.
+        grid="word",
     ),
     Axis(
         name="background_mask",
@@ -186,3 +201,14 @@ def axis(name: str) -> Axis:
         if declared.name == name:
             return declared
     raise KeyError(f"no axis named {name!r}; declare it in axes.AXES first")
+
+
+AXIS_GRIDS: Final[dict[str, str]] = {a.name: a.grid for a in AXES if a.active}
+""" ``{axis → what its rows are indexed by}``.
+
+Read this before joining two axes' rows. Three share ``time_0.1s`` and join trivially; ``asr`` is on
+``word`` and joining it against them is a **projection**, which is a named derivative that records
+which direction it went and what it did with a word spanning two buckets. Today that join is implicit
+in the cross-axis ranking, which is how an asr finding and a presence finding could be ranked against
+each other with nothing stating how their spans were reconciled.
+"""
