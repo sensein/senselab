@@ -225,21 +225,12 @@ def harvest_pass(
     frame_voters: dict[str, Any] = {}
     frame_posteriors_provenance: dict[str, Any] = {}
     brouhaha_frames = None
-    if per_pass_audio is not None:
-        from senselab.audio.tasks.voice_activity_detection.frame_posteriors import (
-            SEGMENTATION_MODEL_ID,
-            SEGMENTATION_REVISION,
-            extract_speech_frame_posteriors,
-        )
-
-        seg_fp = extract_speech_frame_posteriors([per_pass_audio])[0]
-        if seg_fp is not None:
-            frame_voters["frame_segmentation"] = seg_fp
-        frame_posteriors_provenance["segmentation"] = {
-            "id": SEGMENTATION_MODEL_ID,
-            "revision": SEGMENTATION_REVISION,
-            "available": seg_fp is not None,
-        }
+    # No ``segmentation-3.0`` frame voter. It was here as a *speech* voter, and brouhaha's VAD head
+    # (added below) is the same kind of evidence — a continuous per-frame speech probability. What
+    # segmentation-3.0 uniquely carried was per-speaker channels, and every consumer of those has
+    # moved to diarizer spans (D-19): the count to ``occupancy``, the binding to
+    # ``identity_binding``. The link dispatch is structural (on ``frame_mean``, not on a model
+    # name), so removing this voter needs no registry change.
 
     # Scene quality (US1): per-bucket SNR / clipping / reverb / bandwidth
     # degradation + estimator-spread uncertainty; additive on speech_presence rows.

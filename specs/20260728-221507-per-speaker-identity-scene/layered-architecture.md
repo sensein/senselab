@@ -3308,3 +3308,60 @@ onto time or time onto words, and that projection is a **named derivative** like
 records which direction it went and what it did with a word spanning two buckets. Today that join is
 implicit in `disagreements.json`'s cross-axis ranking, which is why an asr finding and a presence
 finding could be ranked against each other without anything saying how their spans were reconciled.
+
+### Correction to D-24: the grid follows from the axis's question, not from a shared default
+
+D-24 said three axes sit on a 0.1 s time grid and `asr` on the word grid. The first half was too
+prescriptive. **Every axis may have its own window and hop, and each should be justified by what that
+axis is trying to answer.** A shared default is a convenience, and this design does not accept a
+convenience where a decision belongs.
+
+What each question implies, and what the run actually used:
+
+| axis | its question | implied unit | run used |
+|---|---|---|---|
+| `speech_presence` | was anyone speaking here? | speech onsets are tens of ms → fine | 0.1 s win / **0.02 s hop** |
+| `speaker` | was it the same speaker? | turns are seconds → coarse is fine | 0.25 s / 0.25 s |
+| `asr` | what was said? | **the word** | 1.0 s / 0.5 s ← wrong unit |
+| `background_mask` | is this region target-free? | **variable-length regions** | one 21 s row |
+
+Three things follow.
+
+**A fine grid and an over-sampled one are different.** `speech_presence` at a 0.1 s window on a 0.02 s
+hop means adjacent rows share 80% of their audio, so its 1070 rows are not 1070 independent
+measurements. The question justifies fine *resolution*; it does not justify reporting five
+near-duplicate rows per window, and nothing tells a consumer they are near-duplicates.
+
+**`asr` on a time grid is the wrong unit, not merely a coarse one.** Confirmed by the run: 41 rows,
+every quantity `None`, because with one recognizer a time bucket has no pairwise comparison to make.
+On a word grid the same run still has content per row — text and onset — even where uncertainty is
+unmeasurable.
+
+**`background_mask` wants regions, and got one.** Variable-length regions are the right shape for
+"where is the target absent"; a single row spanning the recording is that shape degenerately filled,
+which is why its uncertainty is 0.000. The grid is not the defect here — the region finder producing
+one region is.
+
+So `axes.Axis.grid` records a *justified* choice per axis rather than membership in a default, and
+`AXIS_GRIDS` remains what makes joining two axes an explicit projection instead of an index zip.
+
+### `frame_dispersion` is a cross-signal fold stored as an L1 signal
+
+Found by removing the `segmentation-3.0` speech voter: a test broke on a missing `frame_dispersion`,
+and its own comment names it as one of **P2's two documented triggers**.
+
+`L1/signals/frame_dispersion.parquet` carries 2140 rows with `native_window_s` and `resolution_s`
+**both null on every row**, where `frame_segmentation.parquet` has both populated. That absence is the
+tell: it has no native window because **it is not a measurement.** It is the dispersion *across* frame
+voters — a fold over signals, computed at L1 and stored beside the signals it folds.
+
+Two consequences:
+
+- It is an L1-layer violation of the kind D-16 forbids, and it was invisible because the artifact looks
+  like every other signal.
+- It needs **at least two** frame voters to mean anything. With `segmentation-3.0` removed there is one,
+  so the quantity silently becomes undefined — and P2's trigger with it. That coupling was not in
+  D-19's dependency list either.
+
+It belongs at L2 as a fold over the frame-targeted signals, with its contributor count on the row so
+"dispersion over one voter" is visibly not a dispersion.
