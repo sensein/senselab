@@ -1337,4 +1337,9 @@ def write_final_uncertainty(
     # wants this log, and the only other way to get it was to open the file that has just been
     # split across the rounds it belongs to.
     written["round_logs"] = logs
+    # The final rows, so a consumer can rank *what was written* rather than re-deriving something
+    # close to it. The disagreements index used to rank the round-0 fold that feeds this function's
+    # ``scene_rows``, so the index and the parquet described different rounds of the same run under
+    # one name — and the round each described was nowhere stated.
+    written["final_rows"] = rows_by_axis
     return written

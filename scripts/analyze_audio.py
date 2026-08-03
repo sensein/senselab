@@ -1405,6 +1405,10 @@ def main(argv: list[str] | None = None) -> int:
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         stability_evidence: dict[str, Any] = {}
         linked_by_pass: dict[str, Any] = {}
+        # The rows the writer actually wrote, so the disagreements index can rank those rather
+        # than the round-0 fold that feeds the writer's scene coupling. Bound before the try so
+        # the index has a definite value on the failure path too.
+        final_rows_written: dict[str, Any] = {}
         try:
             (
                 signal_results_by_pass,
@@ -1659,6 +1663,9 @@ def main(argv: list[str] | None = None) -> int:
                     comparator_params=comparator_params,
                 )
                 summaries["final_uncertainty"] = final_maps
+                _written_rows = final_maps.get("final_rows")
+                if isinstance(_written_rows, dict):
+                    final_rows_written = _written_rows
 
                 # The fourth axis's evidence, written where the other three write theirs and keyed
                 # by the perturbation it was measured under. It used to be written under a
@@ -1745,8 +1752,25 @@ def main(argv: list[str] | None = None) -> int:
 
         # Disagreements index — opt-out via --disagreements-top-n 0.
         if fused_axes and args.disagreements_top_n > 0:
+            # Rank the rows the run actually wrote, not the round-0 fold that fed the coupling.
+            # ``fused_axes`` is round 0 and is an *input* to write_final_uncertainty (as scene_rows);
+            # its output is the final, coupled, multi-round answer. Ranking the input meant the index
+            # and estimates/*.parquet described different rounds under one name, with neither saying
+            # which. Falls back to fused_axes when the writer did not run.
+            from senselab.audio.workflows.audio_analysis.types import FusedAxis
+
+            ranked_axes = fused_axes
+            if final_rows_written:
+                ranked_axes = {
+                    name: FusedAxis(
+                        axis=name,  # type: ignore[arg-type]
+                        rows=rows,
+                        provenance=dict(fused_axes[name].provenance) if name in fused_axes else {},
+                    )
+                    for name, rows in final_rows_written.items()
+                }
             index = build_disagreements_index(
-                fused_axes=fused_axes,
+                fused_axes=ranked_axes,
                 signal_results_by_pass=signal_results_by_pass,
                 top_n=args.disagreements_top_n,
                 run_dir=run_dir,
