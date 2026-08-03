@@ -31,6 +31,7 @@ from senselab.audio.workflows.audio_analysis.influence import effective_weight
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
 __all__ = [
+    "fold_run_axes",
     "Derivatives",
     "mask_regions_from_rows",
     "speaker_claims_from_votes",
@@ -1101,6 +1102,63 @@ def speaker_claims_from_votes(
     return {m: sorted(spans) for m, spans in sorted(claims.items())}
 
 
+def fold_run_axes(
+    buckets_by_axis: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]],
+    *,
+    speaker_assignment: Optional[Mapping[str, str]] = None,
+    weights_by_axis: Mapping[str, Mapping[str, float]],
+    aggregator: str = "mean",
+    weight_basis_by_axis: Mapping[str, Mapping[str, Mapping[str, float]]] | None = None,
+    mask_regions: Sequence[Mapping[str, Any]] = (),
+    speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None,
+    max_rounds: int = 1,
+    scene_rows: Sequence[Mapping[str, Any]] = (),
+    comparator_params: Mapping[str, Any] | None = None,
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    dict[str, list[dict[str, Any]]],
+    dict[str, dict[int, list[dict[str, Any]]]],
+]:
+    """The run's **one** fold: aggregate every axis, then apply the scene→asr coupling.
+
+    Extracted from ``write_final_uncertainty``, which used to do both — and that is why two artifacts
+    of one run could disagree about the same row. ``fuse_axes`` had two callers, each producing a
+    user-visible artifact: this fold fed ``estimates/*.parquet``, and a *separate* fold inside
+    ``fuse_rounds`` fed the ``fused_axes`` that ``disagreements.json`` ranks. Two computations wearing
+    one name, so any divergence in their arguments surfaced as the parquet and the index reporting
+    different numbers for the same bucket — with the parquet being the one a reader keeps.
+
+    The coupling belongs here rather than in the writer for the same reason: it *mutates* the folded
+    rows, so a writer that applied it produced rows no other consumer had seen.
+
+    Returns:
+        ``(rows_by_axis, logs, per_round)`` — the final rows, the per-axis convergence log (keyed by
+        axis, each a list of per-round entries), and the per-round history.
+
+        Hand the same triple to the writer *and* to the disagreements index. A consumer that re-folds
+        is reintroducing the second lineage this function exists to remove.
+    """
+    rows_by_axis, logs, per_round = fuse_axes(
+        buckets_by_axis,
+        # C2 is a claim about the speaker axis specifically; handing the same binding to the other
+        # axes would report a criterion as measured on axes it says nothing about.
+        speaker_assignment_by_axis={"speaker": speaker_assignment} if speaker_assignment else None,
+        weights_by_axis=weights_by_axis,
+        aggregator=aggregator,
+        weight_basis_by_axis=weight_basis_by_axis,
+        mask_regions=mask_regions,
+        speaker_claims=speaker_claims,
+        max_rounds=max_rounds,
+        return_history=True,
+    )
+    if scene_rows and "asr" in per_round:
+        from senselab.audio.workflows.audio_analysis.votes import apply_scene_coupling
+
+        for rows in per_round["asr"].values():
+            apply_scene_coupling(rows, scene_rows, comparator_params or {})
+    return rows_by_axis, logs, per_round
+
+
 def write_final_uncertainty(
     out_dir: Any,  # noqa: ANN401 — Path
     *,
@@ -1187,18 +1245,17 @@ def write_final_uncertainty(
     from senselab.audio.workflows.audio_analysis.io import merge_json
     from senselab.audio.workflows.audio_analysis.layout import estimates_dir, round_dir
 
-    rows_by_axis, logs, per_round = fuse_axes(
+    rows_by_axis, logs, per_round = fold_run_axes(
         buckets_by_axis,
-        # C2 is a claim about the speaker axis specifically; handing the same binding to the other
-        # axes would report a criterion as measured on axes it says nothing about.
-        speaker_assignment_by_axis={"speaker": speaker_assignment},
+        speaker_assignment=speaker_assignment,
         weights_by_axis=weights_by_axis,
         aggregator=aggregator,
         weight_basis_by_axis=weight_basis_by_axis,
         mask_regions=mask_regions,
         speaker_claims=speaker_claims,
         max_rounds=max_rounds,
-        return_history=True,
+        scene_rows=scene_rows,
+        comparator_params=comparator_params,
     )
 
     written: dict[str, Any] = {}
@@ -1240,13 +1297,6 @@ def write_final_uncertainty(
     # final rows N times would have produced N identical directories claiming to be a trajectory;
     # deriving the round set from the rows' own ``round`` field produced exactly one, because every
     # final row carries the final index. Neither shows what an iteration changed.
-    if scene_rows:
-        from senselab.audio.workflows.audio_analysis.votes import apply_scene_coupling
-
-        for rounds_for_axis in [per_round["asr"]] if "asr" in per_round else []:
-            for rows in rounds_for_axis.values():
-                apply_scene_coupling(rows, scene_rows, comparator_params or {})
-
     for axis, rounds_for_axis in per_round.items():
         for round_index in sorted(rounds_for_axis):
             dest = estimates_dir(out_dir, round_index)
