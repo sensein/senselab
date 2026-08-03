@@ -2321,3 +2321,54 @@ is permutation-invariant and therefore well-defined (which is why J1 is answerab
 rounds), and any pooling to a single p(speech) is a choice among several — `mean`, `max`, `noisy-or`
 — that changes the answer. L1 stores `frame_mean`, which has silently made that choice, at a
 resolution the model never reported.
+
+---
+
+## D-19. Speaker capacity is a per-tool ceiling, and it must travel to L2
+
+Every speaker-aware tool has a **maximum number of speakers it can represent**, fixed by
+architecture, not by the audio. It is not a tuning parameter and a tool does not report when it runs
+out — it simply assigns what columns it has.
+
+| tool | capacity | note |
+|---|---|---|
+| `pyannote/segmentation-3.0` | **3 per 10 s chunk** | powerset over 3 (7 classes) → 3 per-speaker columns; channels permutation-arbitrary per chunk |
+| `nvidia/diar_sortformer_4spk-v1` | **4** | |
+| `mago-ai/ultra_diar_streaming_sortformer_8spk_v1` | **8** | not yet integrated; the option when samples exceed 4 |
+| `pyannote/speaker-diarization-community-1` | **unbounded** | clustering pipeline, not a fixed-width head |
+
+**L1 records the capacity on every speaker-aware signal**, beside the measurement. It is provenance
+of the same kind as units and window length: without it a reader cannot distinguish *"3 speakers
+active"* from *"3 active and the model had no fourth column"*.
+
+**L2 must use it when combining.** A capacity-bounded tool asked about a recording that exceeds its
+bound does not fail, it produces a confident wrong answer — so a count posterior fused across tools
+of different capacity is biased toward the smallest. Concretely: `segmentation-3.0` cannot report a
+4th concurrent speaker, so its overlap-count contribution must be treated as *censored at 3* rather
+than as evidence against a 4th. Censoring is not the same as absence and not the same as a bound
+being met.
+
+Current corpus is ≤3 concurrent speakers, so this is latent rather than active. It is recorded now
+because it is invisible in the output when it does bite.
+
+### `pyannote/segmentation-3.0` is to be removed
+
+pyannote 4.x has moved to the community diarization model; `segmentation-3.0` is the previous
+generation and should not remain a signal.
+
+**What depends on it today**, so the removal is not a silent capability loss. Ten modules reference
+it, and two capabilities are keyed specifically on its *per-speaker frame channels*:
+
+- `joint.overlap_count_posterior` (J1) — returns `None` unless `channel_format != "single"`. This is
+  the Poisson-binomial count-of-active-speakers posterior.
+- `joint.per_speaker_presence` (J4) — same guard. This is what convergence criterion **C2** (the
+  `S_k` ↔ channel assignment) is measured from; with no per-speaker posterior, C2 is unmeasured and
+  therefore blocks convergence.
+
+Brouhaha's VAD head is `channel_format == "single"` and cannot supply either. Diarization spans give
+speaker identity but not a per-frame per-speaker probability, so a count posterior built from them
+would be a count of *decisions*, not a distribution.
+
+**Open question before removal:** does `community-1` expose frame-level per-speaker activations
+(its internal segmentation head, or a `speaker_probabilities` output), or must J1/J4/C2 be rebuilt
+on spans and accept that they then measure decisions rather than posteriors?
