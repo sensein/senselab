@@ -1405,10 +1405,6 @@ def main(argv: list[str] | None = None) -> int:
         per_window_embeddings_by_pass: dict[str, dict[str, Any]] = {}
         stability_evidence: dict[str, Any] = {}
         linked_by_pass: dict[str, Any] = {}
-        # The rows the writer actually wrote, so the disagreements index can rank those rather
-        # than the round-0 fold that feeds the writer's scene coupling. Bound before the try so
-        # the index has a definite value on the failure path too.
-        final_rows_written: dict[str, Any] = {}
         try:
             (
                 signal_results_by_pass,
@@ -1663,9 +1659,6 @@ def main(argv: list[str] | None = None) -> int:
                     comparator_params=comparator_params,
                 )
                 summaries["final_uncertainty"] = final_maps
-                _written_rows = final_maps.get("final_rows")
-                if isinstance(_written_rows, dict):
-                    final_rows_written = _written_rows
 
                 # The fourth axis's evidence, written where the other three write theirs and keyed
                 # by the perturbation it was measured under. It used to be written under a
@@ -1757,18 +1750,29 @@ def main(argv: list[str] | None = None) -> int:
             # its output is the final, coupled, multi-round answer. Ranking the input meant the index
             # and estimates/*.parquet described different rounds under one name, with neither saying
             # which. Falls back to fused_axes when the writer did not run.
+            import pandas as _pd
+
+            from senselab.audio.workflows.audio_analysis.layout import final_dir as _final_dir
             from senselab.audio.workflows.audio_analysis.types import FusedAxis
 
+            # Rank the **deliverable**: ``final/estimates/`` is the last round extracted, and the last
+            # round is not this driver's — ``write_final_uncertainty`` folds the first rounds and the
+            # adaptive loop runs the rest, then extracts. Ranking either fold's in-memory rows meant
+            # the index described an earlier round than the parquet a reader keeps, which is why
+            # triage_score disagreed. Falls back to fused_axes when no deliverable was written.
             ranked_axes = fused_axes
-            if final_rows_written:
-                ranked_axes = {
-                    name: FusedAxis(
-                        axis=name,  # type: ignore[arg-type]
-                        rows=rows,
-                        provenance=dict(fused_axes[name].provenance) if name in fused_axes else {},
+            _est = _final_dir(run_dir) / "estimates"
+            if _est.is_dir():
+                _from_disk = {}
+                for _p in sorted(_est.glob("*.parquet")):
+                    _rows = _pd.read_parquet(_p).to_dict("records")
+                    _from_disk[_p.stem] = FusedAxis(
+                        axis=_p.stem,  # type: ignore[arg-type]
+                        rows=_rows,
+                        provenance=dict(fused_axes[_p.stem].provenance) if _p.stem in fused_axes else {},
                     )
-                    for name, rows in final_rows_written.items()
-                }
+                if _from_disk:
+                    ranked_axes = _from_disk
             index = build_disagreements_index(
                 fused_axes=ranked_axes,
                 signal_results_by_pass=signal_results_by_pass,
