@@ -360,3 +360,40 @@ So the work is, in order:
 Worth noting for step 1: the mask and `speech_presence` will then **share evidence** (both read VAD,
 ASR words and diarizer spans). Their agreement is therefore not corroboration, and D-21 rule 6's
 source-closure test is what makes that computable rather than assumed.
+
+## Verification run 2 (cache cleared, two ASR models, 2026-08-03)
+
+Two models on purpose, to separate "the asr axis is broken" from "one recognizer has no pairs".
+
+| check | result |
+|---|---|
+| `frame_segmentation` signal | **gone** — site 1 confirmed |
+| `frame_brouhaha_vad` signal | present, carrying the speech evidence |
+| asr axis | **41 rows, 41 measured**, mean uncertainty 0.299 |
+| speaker axis | 85 rows, mean uncertainty **0.858** — unchanged |
+| background_mask | still **1 row spanning 21 s**, still absent from the disagreements index |
+| `high_uncertainty_rate` | still **0.9941** |
+
+### Corrected: the asr `triage 1.0` vs `None` finding was a diagnosis, not an index bug
+
+Run 1 had 41 asr rows with every quantity `None` while the index ranked 18 of them at
+`triage_score: 1.0`. I recorded that as two artifacts disagreeing. With two recognizers the axis
+measures on all 41 rows and both agree, so **the axis genuinely had no evidence in run 1** — one model
+gives no pairwise comparison.
+
+The defect is narrower than I wrote and **still real**: an unmeasured axis was ranked at the maximum
+triage score, so it sorted to the top of the index. That is now *latent* rather than fixed — it needs
+one ASR model to trigger, which is a supported configuration.
+
+### Confirmed: the speaker axis is dominated by signals already marked for deletion
+
+Mean uncertainty 0.858 (0.859 in run 1) while the count posterior is confident. Six of its eight
+contributing signals are the embedding-derived ones D-20 removes — four `::spkrec-*` distances, two
+`embedding_silhouette::*`. Two runs agreeing on 0.86 while both diarizers agree on the speaker count is
+the strongest available argument for finishing the nine-signal removal.
+
+### Open: the VAD provenance is verified in-process but not in an artifact
+
+`frame_posteriors_provenance["brouhaha_vad"]` is asserted by a unit test and passes, but
+`final/summary.json` has no `frame_posteriors` block, so I could not confirm it reaches a run artifact.
+Not claimed either way — the in-memory record exists; whether any writer surfaces it is unverified.
