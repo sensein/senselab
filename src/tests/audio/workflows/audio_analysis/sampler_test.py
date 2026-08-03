@@ -238,3 +238,69 @@ def test_a_single_frame_has_zero_spread_not_none() -> None:
     """The bucket was measured and did not vary. None would say it was not measured."""
     s = Series(values=(0.7,), hop_s=0.1, window_s=0.1, units="probability")
     assert Sampler({SNR: s}).at(_resample(how="std"), 0.0, 0.1) == pytest.approx(0.0)
+
+
+# ── scaling: absolute, standardised, or against a threshold ────────────
+
+
+def test_absolute_is_the_default_because_it_needs_no_reference() -> None:
+    """The tool's own units, unchanged."""
+    s = Series(values=(10.0, 30.0), hop_s=0.05, window_s=0.05, units="dB")
+    assert Sampler({SNR: s}).at(_resample(), 0.0, 0.1) == pytest.approx(20.0)
+
+
+def test_zscore_standardises_against_the_signal_s_own_distribution() -> None:
+    """Unusual-for-this-recording is a different question from large-in-dB.
+
+    It also makes two signals in different units comparable without anchoring either to an absolute
+    scale — which is what an aggregator would otherwise have to do silently.
+    """
+    s = Series(values=(0.0, 10.0, 20.0, 30.0), hop_s=0.05, window_s=0.05, units="dB")
+    key = DerivativeKey("snr", Operator("zscore", "mean"), sources=(SNR,))
+    sampler = Sampler({SNR: s})
+    # whole-signal mean 15.0, population std ~11.18
+    assert sampler.at(key, 0.0, 0.1) == pytest.approx((5.0 - 15.0) / 11.1803, abs=1e-3)
+    assert sampler.at(key, 0.1, 0.2) == pytest.approx((25.0 - 15.0) / 11.1803, abs=1e-3)
+
+
+def test_a_signal_that_never_varies_cannot_be_standardised() -> None:
+    """None, not 0.0. The value is real, but "how unusual" is unanswerable here.
+
+    A zero z-score would read as "exactly average", which is a claim about a distribution that does
+    not exist.
+    """
+    flat = Series(values=(7.0, 7.0, 7.0), hop_s=0.05, window_s=0.05, units="dB")
+    key = DerivativeKey("snr", Operator("zscore", "mean"), sources=(SNR,))
+    assert Sampler({SNR: flat}).at(key, 0.0, 0.1) is None
+
+
+def test_excess_is_relative_to_a_threshold_carried_in_the_variant() -> None:
+    """An absolute reference, for "how far above the noise floor"."""
+    s = Series(values=(-20.0, -10.0), hop_s=0.05, window_s=0.05, units="dB")
+    key = DerivativeKey("snr", Operator("excess", "mean@-30.0"), sources=(SNR,))
+    assert Sampler({SNR: s}).at(key, 0.0, 0.1) == pytest.approx(15.0)
+
+
+def test_excess_without_a_threshold_raises() -> None:
+    """A missing reference cannot default to zero — that would silently be an absolute value."""
+    s = Series(values=(1.0,), hop_s=0.05, window_s=0.05, units="dB")
+    key = DerivativeKey("snr", Operator("excess", "mean"), sources=(SNR,))
+    with pytest.raises(UnknownOperator, match="threshold"):
+        Sampler({SNR: s}).at(key, 0.0, 0.1)
+
+
+def test_a_scaling_is_a_different_cache_entry_from_the_absolute_value() -> None:
+    """Otherwise the cache would hand back dB where a z-score was asked for."""
+    s = Series(values=(0.0, 10.0, 20.0), hop_s=0.05, window_s=0.05, units="dB")
+    sampler = Sampler({SNR: s})
+    sampler.at(_resample(), 0.0, 0.1)
+    sampler.at(DerivativeKey("snr", Operator("zscore", "mean"), sources=(SNR,)), 0.0, 0.1)
+    assert sampler.stats["misses"] == 2
+
+
+def test_an_unmeasured_bucket_stays_none_under_every_scaling() -> None:
+    """A bucket nothing measured cannot be standardised or offset into existence."""
+    s = Series(values=(1.0, 2.0), hop_s=0.05, window_s=0.05, units="dB")
+    sampler = Sampler({SNR: s})
+    for op in (Operator("zscore", "mean"), Operator("excess", "mean@0.0")):
+        assert sampler.at(DerivativeKey("snr", op, sources=(SNR,)), 9.0, 9.1) is None
