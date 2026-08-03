@@ -146,13 +146,18 @@ def stage_diarization(audio: Audio, ctx: StageContext, *, models: Sequence[str])
     """
     by_model: dict[str, Any] = {}
     for model_id in models:
-        params = {"device": ctx.device_label}
+        # The overlapping view, not the exclusive partition. With a partition, a per-instant
+        # speaker count is capped at 1 by construction, so `occupancy.count_posterior_in_window`
+        # would report p_overlap = 0.0 as a *measurement* for input that could not express overlap.
+        # In the cache key, so switching views invalidates rather than silently reusing partitions.
+        params = {"device": ctx.device_label, "exclusive": False}
         outcome = run_task_cached(
             f"diarization[{model_id}]",
             diarize_audios,
             [audio],
             model=model_for_task(model_id, task="diarization"),
             device=ctx.device,
+            exclusive=False,
             cache_dir=ctx.cache_dir,
             cache_key_str=ctx.cache_key_for("diarization", model_id, params),
             provenance=ctx.provenance_for("diarization", model_id, params),

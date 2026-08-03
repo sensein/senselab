@@ -199,9 +199,32 @@ segments survive. So span-derived overlap works today via sortformer only.
 
 `diarize_audios_with_pyannote` now takes `exclusive: bool = True`, and `exclusive=False` raises rather
 than falling back if the overlapping view is absent — silently returning a partition when overlap was
-asked for is the same failure one level down. **Unverified against a live model**: the attribute name
-for the overlapping view is read defensively and has not been exercised against a real
-`community-1` run.
+asked for is the same failure one level down.
+
+#### Verified live, and the cost is worse than "overlap is discarded"
+
+`DiarizeOutput` exposes `speaker_diarization`, `exclusive_speaker_diarization` and
+`speaker_embeddings`; the first two are **distinct objects**, so `exclusive=False` genuinely reaches
+the overlapping view.
+
+On the real conversation clip both views agree exactly — 5 spans, 2 speakers, **0.000 s of overlap**.
+That clip is clean turn-taking, so it cannot test the question: identical output there means "nothing
+to resolve", not "the switch works". Distinguishing those required audio that *does* overlap.
+
+On a constructed clip with 3 s of genuine concurrent speech:
+
+| view | spans | speakers | overlap |
+|---|---|---|---|
+| `exclusive=True` | 1 | **1** | 0.00 s |
+| `exclusive=False` | 2 | **2** | **3.14 s** (2.95–6.09 s; designed 3.0–6.0 s) |
+
+**The partition did not merely discard the overlap — it lost the second speaker entirely.** A speaker
+talking for three seconds is absent from the exclusive view. So `exclusive=False` is not a refinement
+for overlap accounting; without it, concurrent speakers can vanish from the run, and every downstream
+count, binding and per-speaker presence inherits that.
+
+This settles the `segmentation-3.0` question: overlap is available from diarization spans, so I4 does
+not require it.
 
 What genuinely remains distinct about `segmentation-3.0`'s overlap is that it is a **soft,
 pre-threshold probability** at 16.9 ms, where spans give a hard post-threshold decision at segment
@@ -218,3 +241,23 @@ Options, re-ranked after the correction:
 2. Keep `segmentation-3.0` for I4 only, as a soft overlap probability recorded as one tool's
    confidence — defensible, but no longer necessary.
 3. Drop I4.
+
+
+## Test fixtures: use NeMo's multi-speaker simulator
+
+The overlap clip above was hand-mixed, which is enough to answer one question and wrong to build on:
+its ground truth is "designed at 3.0–6.0 s and hopefully detected" rather than a known annotation.
+
+NeMo's multi-speaker data simulator generates sessions **with ground-truth RTTM** — controllable
+speaker count, overlap ratio and silence. Two things that buys, in order of value:
+
+1. **D-19's censoring becomes testable.** It is currently *latent*: the corpus is ≤3 concurrent
+   speakers, so a 4-capacity tool never hits its ceiling and the lower-bound path has never run
+   against real model output. A simulated 5- and 8-speaker session exercises it — and censoring is
+   precisely the kind of logic that is invisible in the output when it bites.
+2. **Overlap regression at known ratios**, so "did the exclusive view lose a speaker" becomes a
+   measured recall against an annotation rather than a hand-checked span list.
+
+Dependency to note: the simulator concatenates real single-speaker speech from a source manifest, so
+it needs one (LibriSpeech-style). NeMo lives in a subprocess venv, so this runs there rather than in
+the main environment.
