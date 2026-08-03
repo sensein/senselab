@@ -3241,3 +3241,70 @@ absent on `direct`** — measurable, and stated without reference to a residual'
 4. Off-target-speaker detection restated as presence-on-`background` / absence-on-`direct`.
 5. A non-systematic perturbation (MC dropout) is worth adding so stability has a second pair whose
    departure from ideal is not axis-correlated. Not a blocker.
+
+---
+
+## D-24. The axis grid is 0.1 s — except asr, whose grid is the word
+
+**Decision.** Three axes are estimated on a **0.1 s time grid**, populated by a named sampling
+function. The **asr axis is estimated on the word grid**: one row per word, carrying an **onset
+estimate and its variance**.
+
+### Why asr cannot share the time grid
+
+D-18's `GridRelation` already says it: a bucket grid is a `RESAMPLE` for `Series` and `Matrix`, a
+`PROJECT` for `Categorical`, and a **`REDUCE`** for `Spans` and `Tree`. A transcript has no natural
+per-bucket value, so putting the asr axis on 0.1 s buckets performs the reduction that the whole
+layering exists to avoid — and it is the *worst* case of it, because a transcript's word chunks are
+the **finest-grained thing in the run**. Coarsening the finest evidence to 0.1 s to match three
+coarser axes inverts the argument for keeping native resolutions at all.
+
+So the asr axis keeps the unit the object actually has. Its row is a word.
+
+### Onset and variance, not a timestamp
+
+A word's timing is **not a point**. The same word gets a different onset from every recognizer, and
+from every aligner (D-20: `timestamp_source`). That spread is not noise to be averaged away before
+the axis sees it — it *is* the cross-tool disagreement the asr axis is measuring, expressed in the
+units the object has:
+
+```
+row = (word_index, text, onset_estimate_s, onset_variance_s², duration_estimate_s, …)
+      + uncertainty / epistemic_uncertainty / confidence / variability / triage_score
+```
+
+Two things this makes visible that a bucketed asr axis cannot:
+
+- **A word every model agrees on, timed differently**, versus a word models disagree *about*. Under a
+  0.1 s grid both look like "some uncertainty in this bucket"; on the word grid the first is high
+  onset variance with low text disagreement, and they call for different interventions.
+- **Correlated boundaries.** Two transcripts timed by one aligner have correlated onsets, so their
+  agreement on onset is not independent corroboration. The variance is computable per word and the
+  provenance says which timings share an aligner — the pair the aligner decision was recorded for.
+
+### The grid is a declared property of the axis
+
+`axes.Axis` already declares per-axis properties — `harvested`, `attenuable`, `overlap_informed`,
+`calibrated` — precisely so a consumer asks for a property rather than special-casing a name. The grid
+is one more:
+
+```python
+Axis(name="speech_presence", grid="time_0.1s", …)
+Axis(name="speaker",         grid="time_0.1s", …)
+Axis(name="background_mask", grid="time_0.1s", …)
+Axis(name="asr",             grid="word",      …)
+```
+
+**This corrects `AxisKey = (Axis, Bucket)` from D-22**, which assumed one row index for every axis.
+There is no universal "bucket": the row index is whatever that axis's grid indexes, and a consumer
+that assumed time buckets would silently mis-join the asr axis against the other three. The fifth
+axis (`task`) declares its own, and a sixth needs no code edit — the same property that made
+`background_mask` representable.
+
+### Consequence: joining axes is an explicit operation
+
+Three axes on one time grid join trivially. Joining asr **against** them requires projecting words
+onto time or time onto words, and that projection is a **named derivative** like every other — it
+records which direction it went and what it did with a word spanning two buckets. Today that join is
+implicit in `disagreements.json`'s cross-axis ranking, which is why an asr finding and a presence
+finding could be ranked against each other without anything saying how their spans were reconciled.
