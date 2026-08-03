@@ -31,6 +31,7 @@ from senselab.audio.workflows.audio_analysis.influence import effective_weight
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
 __all__ = [
+    "mask_axis_votes",
     "fold_run_axes",
     "Derivatives",
     "mask_regions_from_rows",
@@ -1230,6 +1231,14 @@ def write_final_uncertainty(
         "speech_presence": None,
         "speaker": "speaker_votes",
         "asr": "asr_votes",
+        # The fourth axis reads its harvest like the other three. It used to be bolted on after this
+        # dict from ``mask_axis_votes(mask_regions)`` — one vote per *region*, so on a run that found a
+        # single region the whole recording was one bucket, the axis had nowhere to be uncertain, and
+        # it reported 0.000 across the board. On the presence grid it shares (D-24) it is one row per
+        # bucket like everything else. ``mask_axis_votes`` keeps two other callers — the driver's
+        # per-region export, and ``rounds.regional_weights`` withdrawing trust regionally — because a
+        # *region* is the right unit for both. What was wrong was using it as the axis's vote source.
+        "background_mask": "background_mask_evidence",
     }
     buckets_by_axis: dict[str, Mapping[str, Sequence[Mapping[str, Any]]]] = {
         axis: {
@@ -1238,10 +1247,6 @@ def write_final_uncertainty(
         }
         for axis, field in axis_field.items()
     }
-    mask_votes = mask_axis_votes(mask_regions)
-    if mask_votes:
-        buckets_by_axis["background_mask"] = {"mask": mask_votes}
-
     from senselab.audio.workflows.audio_analysis.io import merge_json
     from senselab.audio.workflows.audio_analysis.layout import estimates_dir, round_dir
 
