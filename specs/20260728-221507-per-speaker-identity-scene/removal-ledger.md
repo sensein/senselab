@@ -75,8 +75,8 @@ doing it early breaks the pipeline. Ordered by what unblocks what.
 ### Step 1 — row types, keys, StageIO (no removals; unblocks most of them) — **done**
 
 `shapes.py` (six L1 output kinds), `keys.py` (`Route`, `SignalKey`, `DerivativeKey`, `EstimateKey`,
-arity, source closure), `stage_io.py` (the capability). 62 tests, ruff clean, `mypy .` clean across
-387 files. Nothing can be removed before this, because every reduction that dies needs a
+arity, source closure), `stage_io.py` (the capability), `measurements.py` (native-shape parquet/JSON
+with the schema in the metadata). 78 tests, ruff clean, `mypy .` clean across 389 files. Nothing can be removed before this, because every reduction that dies needs a
 native-shaped artifact to be replaced *by*.
 
 The capability turned out **smaller than the guard it replaces** because the problem changed shape:
