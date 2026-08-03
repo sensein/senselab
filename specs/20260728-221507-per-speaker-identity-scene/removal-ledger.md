@@ -814,3 +814,34 @@ correctly named after its producer. So it is 14 held / 2 violated, not 3.
 The **layered plan holds where it was rebuilt** — L1/L2 separation, one round tree, axes keyed by axis
 alone, the fourth axis present throughout. Both violations are in `final/`, the one layer this session
 did not touch, and both are about whether it extracts or computes.
+
+## Layering verification, run 5 (both fixes in): 16 of 17 hold
+
+`high_uncertainty_rate` moved 0.9941 → **0.9590**, because the mask now contributes ~1070 rows to the
+denominator instead of 1.
+
+**`final/` extracts the last round: 4/4 axes match by content.** Violation 1 from run 4 was my check —
+byte comparison against a path that re-serializes. Corrected in the checker.
+
+**The mask grid fix works at L2 round 0: 1070 rows on the presence grid** (was 1 row @ 21 s). So
+`axis_field` reading `background_mask_evidence` did what it should.
+
+### The one remaining violation, in two parts
+
+**1. `final/` holds two artifacts describing different rounds.** `final/estimates/` is round 4
+(post-adaptive); `L2/disagreements.json` *and* `final/disagreements_resolved.json` both carry
+pre-adaptive values (`triage 0.9998` where the round-4 parquet says `0.4347`). The index is built at
+`analyze_audio.py:1747`, and the adaptive stage that produces round 4 runs at ~1797 — so **the index is
+written before the deliverable it should describe exists.** My fix to read `final/estimates/` therefore
+falls back to `fused_axes` every time; the plumbing is right and unreachable.
+
+Two ways out, and the choice is a design decision rather than a bug fix: build the index after the
+adaptive stage, or state on each index which round it ranks. Today neither artifact says, and a reader
+comparing them sees two triage scores for one bucket.
+
+**2. The adaptive loop collapses the mask back to one row.** Round 0 has 1070 mask rows; round 4 has 1.
+So the loop rebuilds the axis on its own region-based path, undoing the presence-grid fix downstream of
+where it was applied. `adaptive/` was not audited in this session's mask work.
+
+Both are *cross-round consistency* problems in the one layer this session did not rebuild, and neither
+is in the L1→L2 structure the plan describes.
