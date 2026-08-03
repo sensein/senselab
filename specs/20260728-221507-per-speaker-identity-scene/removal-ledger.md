@@ -671,3 +671,33 @@ The other two index findings stand as observed, with their causes unexamined:
 signal names or from a symptom and been wrong, and each time reading the specific function settled it in
 one step. The design-doc entries written from artifact inspection have held; the ones written from
 inference have not. Prefer the ledger's *observations* over its *explanations* where they are separable.
+
+## Traced: the parquet and the index come from two independent folds
+
+The run-1 discrepancy — index `triage_score: 1.0`, parquet `None`, same rows — is **the second L2
+lineage D-22 predicted**, now located by reading rather than inferred.
+
+`fuse_axes` has exactly two callers, and both produce a user-visible artifact:
+
+| artifact | fold | driver call |
+|---|---|---|
+| `L2/round/<n>/estimates/*.parquet` → copied to `final/estimates/` | `fuse.py:1190`, inside `write_final_uncertainty` | `analyze_audio.py:1642` |
+| `L2/disagreements.json` | `fuse.py:926`, inside `fuse_rounds` ← `compute_uncertainty_axes` | `analyze_audio.py:1414`, index at 1748 |
+
+`extract_final_estimates` is a verbatim `pq.write_table(pq.read_table(...))`, so it drops nothing —
+the round's own estimates already differ from the in-memory rows the index ranks.
+
+**The defect is that `write_final_uncertainty` re-folds instead of writing the rows it was handed.** It
+takes `harvests` + `weights_by_axis` + `mask_regions` + `scene_rows` and calls `fuse_axes` again, so the
+parquet and the index are two different computations wearing one name. Any divergence in their arguments
+surfaces as two artifacts disagreeing about the same row — and the parquet is the one a reader keeps.
+
+**The fix, and why it is not a small change.** `write_final_uncertainty` should accept the already-fused
+rows and only serialize them. Its signature is the obstacle: it currently owns the fold's inputs
+(`aggregator`, `weight_basis_by_axis`, `speech_presence_policy`, `comparator_params`), so every caller
+passes fold arguments to a writer. Inverting that means the driver folds once and hands rows to both the
+writer and the index — which is what D-22's "estimate is pure aggregation, and the store stops persisting
+estimates" describes, arrived at from the opposite direction.
+
+Worth doing before the per-axis rewiring, because a rewiring that leaves two folds in place will produce
+two differently-rewired answers.
