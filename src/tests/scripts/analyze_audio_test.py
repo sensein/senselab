@@ -267,14 +267,13 @@ def test_pass_plan_translates_skip_into_absence(aa: types.ModuleType) -> None:
 def test_pass_plan_reflects_post_triage_mutation(aa: types.ModuleType) -> None:
     """Built AFTER triage: a no-speech clip must not run diarization or ASR.
 
-    `main` mutates args.skip / args.ppg on the no-speech path, so a plan
+    `main` mutates args.skip on the no-speech path, so a plan
     constructed before that would run the full suite on silence.
     """
     args = aa.parse_args(["x.wav"])
     args.skip = ["diarization", "asr", "features"]  # what triage does
-    args.ppg = False
     plan = aa._pass_plan(args)
-    assert plan.diarization_models == () and plan.asr_models == () and plan.ppg is False
+    assert plan.diarization_models == () and plan.asr_models == ()
 
 
 def test_stage_context_carries_provenance_fields(aa: types.ModuleType, tmp_path: types.ModuleType) -> None:

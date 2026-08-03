@@ -814,6 +814,18 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_DRIVER, "read", "final/per_speaker_presence.parquet", _INLINED),
     Deviation(_ADAPTIVE_DRIVER, "read", "L1/perturbations.json", _INLINED),
     Deviation(
+        _mod("stage_io.py"),
+        "read",
+        "*",
+        "StageIO.locate is the capability itself, so it is the one place a path legitimately "
+        "exists — the static guard has no way to express 'this module is the authority' and can "
+        "only see a read of '*'. Not an exemption: the existence check was moved here out of "
+        "measurements.py precisely because the guard flagged a helper holding a raw path, which "
+        "is the shape of every defeat the earlier guards suffered. Closes when the static guard "
+        "is deleted (removal-ledger Step 2), since D-18 replaces path inspection with capability "
+        "passing and this finding is an artifact of the model being replaced.",
+    ),
+    Deviation(
         _DRIVER,
         "write",
         "triage.json",

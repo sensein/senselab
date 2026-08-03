@@ -102,9 +102,6 @@ PRODUCER_SWEEPS: dict[str, list[tuple[str, Sweep]]] = {
     "_link_excess": [
         ("level above the measured floor", lambda t: link._link_excess({"excess_db": -3.0 + 25.0 * t}, DEFAULT_POLICY)),
     ],
-    "_link_ppg": [
-        ("1 − P(silent)", lambda t: link._link_ppg({"mean_silence_posterior": 1.0 - t}, DEFAULT_POLICY)),
-    ],
     "_link_silhouette": [
         ("cluster silhouette", lambda t: link._link_silhouette({"silhouette": t}, DEFAULT_POLICY)),
     ],

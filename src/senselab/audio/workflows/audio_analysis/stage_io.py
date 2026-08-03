@@ -41,7 +41,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Final, Optional, Union
+from typing import Final, Optional, Sequence, Union
 
 from senselab.audio.workflows.audio_analysis.keys import (
     DerivativeKey,
@@ -250,6 +250,32 @@ class StageIO:
         return (earlier == self.round and self.stage is Stage.ESTIMATE and isinstance(artifact, DerivativeKey)) or (
             earlier == self.round and self.stage is Stage.REPORT
         )
+
+    def locate(self, artifact: Artifact, suffixes: Sequence[str]) -> Optional[Path]:
+        """The first of ``suffixes`` that exists for ``artifact``, or ``None``.
+
+        Here rather than in the caller because the caller must never hold a path. A helper doing its
+        own ``path.exists()`` has a path outside the capability, which is the shape of every defeat
+        the previous guards suffered — and the static guard correctly flagged exactly that when this
+        lived in ``measurements.read_measurement``.
+
+        Returning ``None`` for "nothing stored" keeps that distinguishable from an empty artifact,
+        which the caller reports as the different thing it is.
+
+        Raises:
+            UnauthorizedArtifact: When this stage may not read it.
+        """
+        if not self.may_read(artifact):
+            raise UnauthorizedArtifact(
+                f"stage {self.stage.value}"
+                + (f" at round {self.round}" if self.round is not None else "")
+                + f" may not read {_describe(artifact)}"
+            )
+        for suffix in suffixes:
+            candidate = self.run_dir / artifact.relative_path(suffix)
+            if candidate.exists():
+                return candidate
+        return None
 
     @staticmethod
     def _round_of(artifact: Artifact) -> Optional[int]:

@@ -24,7 +24,6 @@ from senselab.audio.workflows.audio_analysis.stages import (
     stage_asr,
     stage_diarization,
     stage_features,
-    stage_ppg,
     stage_scene,
 )
 
@@ -294,19 +293,6 @@ def test_alignment_skips_failed_asr(audio: Audio, ctx: StageContext) -> None:
 
 
 # ── stage_ppg ─────────────────────────────────────────────────────────
-
-
-def test_ppg_uses_the_plural_key(audio: Audio, ctx: StageContext, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Consumers accept "ppg" and "ppgs", so a rename degrades silently — pin it."""
-    import numpy as np
-
-    monkeypatch.setattr(
-        "senselab.audio.tasks.features_extraction.ppg.extract_ppgs_from_audios",
-        lambda *a, **k: [np.zeros((40, 10), dtype="float32")],
-    )
-    fragment = stage_ppg(audio, ctx)
-    assert set(fragment) == {"ppgs"}, "the key must be plural"
-    assert fragment["ppgs"]["phoneme_labels"], "inventory must ride along for the harvester"
 
 
 # ── run_pass ──────────────────────────────────────────────────────────

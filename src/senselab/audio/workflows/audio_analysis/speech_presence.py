@@ -26,7 +26,6 @@ What each signal contributes, and what the measurement is:
   therefore gain-invariant: the question LUFS cannot answer. Together these two replace a single
   per-pass percentile band that answered neither (D-3), since a rank cannot be compared to a fixed
   threshold or across files.
-- **PPG** — ``mean_silence_posterior``, the model's own posterior mass on ``<silent>`` averaged
   over the bucket's frames, plus its dispersion and frame count. Not a count of frames whose
   argmax is not ``<silent>``: that collapses each frame's distribution to a hard verdict, the same
   reduction the scene-classifier top-1 made.
@@ -232,30 +231,6 @@ def harvest_speech_presence_evidence(
     feat_result = feat_block.get("result") if isinstance(feat_block, dict) else None
     opensmile_rows: list[dict[str, Any]] = feat_result.get("opensmile", []) if isinstance(feat_result, dict) else []
 
-    # PPG argmax-per-frame for the voice-fraction signal.
-    ppg_block = pass_summary.get("ppgs") or pass_summary.get("ppg") or {}
-    ppg_silence: np.ndarray = np.empty(0)
-    ppg_frame_hop: float = 0.0
-    if isinstance(ppg_block, dict) and ppg_block.get("status") == "ok":
-        import sys as _sys
-
-        from senselab.audio.workflows.audio_analysis.harvesters import ppg_silence_posterior_per_frame
-
-        try:
-            ppg_silence, ppg_frame_hop = ppg_silence_posterior_per_frame(
-                ppg_block.get("result"),
-                ppg_block.get("phoneme_labels"),
-                duration_s,
-            )
-        except Exception as ppg_exc:  # noqa: BLE001
-            # ``_to_2d_frame_major`` raises ValueError on ambiguous tensor shape — that's a real
-            # configuration problem, surface it rather than silently disabling the signal.
-            print(
-                f"warn: PPG argmax decoding failed: {ppg_exc!r} — ppg_voice_fraction disabled for this pass",
-                file=_sys.stderr,
-            )
-            ppg_silence, ppg_frame_hop = np.empty(0), 0.0
-
     # One pass over the waveform for each absolute acoustic track, before the bucket loop: both are
     # whole-recording measurements (the floor estimate needs the whole distribution).
     lufs: tuple[np.ndarray, np.ndarray] | None = None
@@ -346,22 +321,6 @@ def harvest_speech_presence_evidence(
             if value is None:
                 continue
             evidence[name] = {value_key: value, "units": units, "resolution_s": ACOUSTIC_TRACK_HOP_S}
-
-        # ── PPG silence posterior ────────────────────────────────────────
-        if ppg_silence.size and ppg_frame_hop > 0:
-            first_frame = max(0, int(start / ppg_frame_hop))
-            last_frame = min(ppg_silence.size, max(first_frame + 1, int(round(end / ppg_frame_hop))))
-            if last_frame > first_frame:
-                window = ppg_silence[first_frame:last_frame]
-                evidence["ppg_voice_fraction"] = {
-                    "mean_silence_posterior": float(np.mean(window)),
-                    # The dispersion of the posterior across the bucket, in probability units and
-                    # unrescaled, for the same reason the frame signals report theirs.
-                    "silence_posterior_std": float(np.std(window)) if window.size > 1 else None,
-                    "n_frames": int(window.size),
-                    "units": "probability",
-                    "resolution_s": ppg_frame_hop,
-                }
 
         # ── Frame posteriors (segmentation-3.0, Brouhaha VAD) ────────────
         frame_stds: list[float] = []

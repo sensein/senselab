@@ -55,7 +55,6 @@ STAGE_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
         "features": 1,
         "asr": 1,
         "alignment": 1,
-        "ppgs": 1,
         "background_mask": 1,
         "noise_floor": 1,
         "background_sources": 1,
@@ -73,7 +72,7 @@ one module. Coarse and deliberate beats automatic and wrong.
 
 Library-side changes are already covered by ``senselab_version`` in the key, so
 these numbers only need to move for *wrapper-shaped* output changes — mainly
-``features`` (composes three backends into a row dict) and ``ppgs`` (attaches
+``features`` (composes three backends into a row dict) and the classifiers (attach
 phoneme labels). The rest are thin pass-throughs to a ``tasks/`` API.
 """
 
@@ -261,4 +260,3 @@ class PassPlan:
     mms_aligner_model: str = "facebook/mms-1b-all"
     asr_language: str = "en"
     qwen_native_timestamps: bool = True
-    ppg: bool = False

@@ -364,8 +364,8 @@ def build_aligned_timeline_plot(
             passes actually bought, in the form the weights actually use it.
         detail_by_pass: ``{perturbation → {"diar_by_model": {..}, "asr_by_model": {..},
             "per_window_embeddings": {emb_model → [WindowEmbedding, ...]},
-            "ppg": {"per_frame_phonemes": [..], "frame_hop": float}}}``.
-            Populates the four detail rows (diar / embedding / PPG / ASR). ``None``
+            }}``.
+            Populates the three detail rows (diar / embedding / ASR). ``None``
             collapses the figure to the three uncertainty rows alone.
         save_path: Override path for the single PNG (only honored when
             ``duration_s <= chunk_duration_s``; chunked output always writes into ``run_dir``).
@@ -397,19 +397,15 @@ def build_aligned_timeline_plot(
     # "raw" sorts before "enhanced" by convention but extension passes
     # land in alphabetical order after.
     pass_order: list[str] = sorted(detail_by_pass.keys()) if detail_by_pass else []
-    # Size the diar / PPG / ASR detail rows by stripe count (each stripe is one
+    # Size the diar / ASR detail rows by stripe count (each stripe is one
     # (pass, model)) so tall rows aren't squashed and short rows don't waste space.
     n_diar_stripes = 0
     n_asr_stripes = 0
-    n_ppg_stripes = 0
     if has_detail:
         assert detail_by_pass is not None
         for pl in pass_order:
             n_diar_stripes += len((detail_by_pass.get(pl) or {}).get("diar_by_model", {}))
             n_asr_stripes += len((detail_by_pass.get(pl) or {}).get("asr_by_model", {}))
-            ppg = (detail_by_pass.get(pl) or {}).get("ppg")
-            if ppg and ppg.get("per_frame_phonemes"):
-                n_ppg_stripes += 1
     # Optional scene rows (feature 20260722-175022) — only when the speech_presence
     # axis actually carries the additive columns.
     has_quality = _speech_presence_has_attr(
@@ -449,8 +445,6 @@ def build_aligned_timeline_plot(
         asr_h = max(0.9, 0.3 * max(1, n_asr_stripes))
         _add_row("diar", diar_h)
         _add_row("emb", 1.2)
-        if n_ppg_stripes > 0:
-            _add_row("ppg", max(0.9, 0.3 * n_ppg_stripes))
         _add_row("asr_words", asr_h)
     n_rows = len(height_ratios)
     fig_height = sum(height_ratios) + 1.0
@@ -465,7 +459,6 @@ def build_aligned_timeline_plot(
     sources_row = row_idx.get("sources")
     diar_row = row_idx.get("diar")
     emb_row = row_idx.get("emb")
-    ppg_row = row_idx.get("ppg")
 
     # ``None`` means chunking is off, so nothing will chunk regardless of duration. Narrowed to a
     # local rather than relying on ``bool(...) and ...`` short-circuiting, which mypy cannot follow.
@@ -736,61 +729,6 @@ def build_aligned_timeline_plot(
         ax_emb.grid(axis="x", alpha=0.2)
         if any_emb_plotted:
             ax_emb.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
-
-        # Row 6 (when present): PPG argmax phonetic sequence, time-aligned. One stripe
-        # per pass with PPG data; each contiguous run of the same argmax phoneme
-        # renders as a bar from the run's start to its end with the phoneme letter(s)
-        # as small text. ``<silent>`` runs render as a faint background bar.
-        if ppg_row is not None:
-            ax_ppg = axes[ppg_row]
-            ppg_stripes: list[tuple[str, list[tuple[float, float, str]]]] = []
-            for perturbation in pass_order:
-                ppg_detail = (detail_by_pass.get(perturbation) or {}).get("ppg") or {}
-                per_frame = ppg_detail.get("per_frame_phonemes") or []
-                frame_hop = float(ppg_detail.get("frame_hop") or 0.0)
-                if per_frame and frame_hop > 0:
-                    runs = []
-                    cur = per_frame[0]
-                    cur_start = 0
-                    for f in range(1, len(per_frame)):
-                        if per_frame[f] != cur:
-                            runs.append((cur_start * frame_hop, f * frame_hop, cur))
-                            cur = per_frame[f]
-                            cur_start = f
-                    runs.append((cur_start * frame_hop, len(per_frame) * frame_hop, cur))
-                    ppg_stripes.append((perturbation, runs))
-
-            if ppg_stripes:
-                for k, (perturbation, runs) in enumerate(ppg_stripes):
-                    y = k
-                    alpha, _ = _pass_color_alpha(perturbation)
-                    for rs, re_, phon in runs:
-                        is_silent = phon == "<silent>"
-                        ax_ppg.barh(
-                            y + 0.15,
-                            re_ - rs,
-                            left=rs,
-                            height=0.7,
-                            color="#cccccc" if is_silent else "#9467bd",
-                            alpha=alpha if not is_silent else alpha * 0.4,
-                            edgecolor="none",
-                        )
-                        if not is_silent and (re_ - rs) >= 0.04:
-                            ax_ppg.text(
-                                (rs + re_) / 2,
-                                y + 0.22,
-                                phon,
-                                ha="center",
-                                va="bottom",
-                                fontsize=3.5,
-                                color="black",
-                                clip_on=True,
-                            )
-                ax_ppg.set_yticks([k + 0.5 for k in range(len(ppg_stripes))])
-                ax_ppg.set_yticklabels([f"{pl[:3]} ppg" for pl, _ in ppg_stripes], fontsize=7)
-                ax_ppg.set_ylim(0, max(1, len(ppg_stripes)))
-            ax_ppg.set_ylabel("PPG\nphonemes", fontsize=8)
-            ax_ppg.grid(axis="x", alpha=0.2)
 
         # Row 6/7: ASR output — one stripe per (pass, asr_model), token spans at native
         # timestamps with the actual text rendered on each bar (small font) so the

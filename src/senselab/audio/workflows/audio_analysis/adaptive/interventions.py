@@ -5,7 +5,7 @@ Implemented for real on artifacts + the content-addressable cache:
 - ``S1_stream_election`` — per-region raw/enhanced election from belief evidence.
 - ``P3_uncorroborated_speech_attenuation`` / ``C9_missed_speech`` — cross-signal
   repair over existing evidence (C10 / C9), degraded to the indicators present in
-  the ingested run (no whisper ``no_speech_prob`` / PPG unless the run had them).
+  the ingested run (no whisper ``no_speech_prob`` unless the run had it).
 - ``U2_reserve_escalation`` — adds reserve ASR models by **cache replay**: the
   reserve model's whole-file result is read from ``analyze_audio``'s
   content-addressable cache (same audio signature ⇒ same waveform), windowed to
@@ -553,9 +553,7 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     if _has_g2p():
         from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 
-        harvested = harvest_asr_votes(
-            pass_summary=pass_summary_ext, grid=grid, ppg_block={}, alignment_by_model=align_by_model
-        )
+        harvested = harvest_asr_votes(pass_summary=pass_summary_ext, grid=grid, alignment_by_model=align_by_model)
     else:
         pair_kind = "word"
         harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
@@ -742,9 +740,7 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     if _has_g2p():
         from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 
-        harvested = harvest_asr_votes(
-            pass_summary=pass_summary_ext, grid=grid, ppg_block={}, alignment_by_model=align_by_model
-        )
+        harvested = harvest_asr_votes(pass_summary=pass_summary_ext, grid=grid, alignment_by_model=align_by_model)
     else:
         pair_kind = "word"
         harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])

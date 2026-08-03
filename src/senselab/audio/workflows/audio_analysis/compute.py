@@ -216,25 +216,6 @@ def harvest_pass(
         harvest_summary = {**pass_summary, "diarization": {**diar_block, "by_model": by_model}}
 
     align_by_model = ((harvest_summary.get("alignment") or {}).get("by_model")) or {}
-    ppg_block_raw = harvest_summary.get("ppgs") or harvest_summary.get("ppg")
-    if ppg_block_raw is None:
-        # PPG was opted out (e.g. ``--ppg`` not passed). The user explicitly
-        # chose not to compute it; treat as a known-missing sub-signal.
-        incomparable_reasons[f"{perturbation}/asr/ppg"] = "PPG opt-in not provided"
-        ppg_block: dict[str, Any] = {}
-    elif not (isinstance(ppg_block_raw, dict) and ppg_block_raw.get("status") == "ok"):
-        # PPG ran but failed (model crash, OOM, missing dependency). Surface
-        # the actual status so the disagreements report distinguishes
-        # "user opted out" from "we tried and it broke".
-        status = ppg_block_raw.get("status", "unknown") if isinstance(ppg_block_raw, dict) else "non_dict_payload"
-        error_msg = ppg_block_raw.get("error") if isinstance(ppg_block_raw, dict) else None
-        reason = f"PPG extraction status={status!r}"
-        if error_msg:
-            reason += f" error={str(error_msg)[:160]!r}"
-        incomparable_reasons[f"{perturbation}/asr/ppg"] = reason
-        ppg_block = {}
-    else:
-        ppg_block = ppg_block_raw
 
     # ── speech_presence harvest inputs ──
     pres_grid = speech_presence_grid if speech_presence_grid is not None else grid
@@ -353,7 +334,6 @@ def harvest_pass(
     asr_votes = harvest_asr_votes(
         pass_summary=harvest_summary,
         grid=utt_grid,
-        ppg_block=ppg_block,
         alignment_by_model=align_by_model,
     )
 

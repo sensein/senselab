@@ -335,21 +335,6 @@ def _link_excess(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[st
     return {"speaks": speaks, "native_confidence": confidence}
 
 
-def _link_ppg(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
-    """Mean PPG posterior on ``<silent>`` → voicing, by complement.
-
-    ``1 − P(silent)`` rather than a count of non-silent argmax frames: the count reduces every
-    frame to a hard verdict, so a bucket the model was 60% sure about becomes indistinguishable
-    from one it was certain about (register item 11, the same defect as the scene-classifier
-    top-1).
-    """
-    silence = _finite(ev.get("mean_silence_posterior"))
-    if silence is None:
-        return None
-    speaks, confidence = _directed(1.0 - max(0.0, min(1.0, silence)))
-    return {"speaks": speaks, "native_confidence": confidence}
-
-
 def _link_silhouette(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
     """Cluster silhouette → does a coherent speaker sit here."""
     score = _finite(ev.get("silhouette"))
@@ -454,7 +439,6 @@ _EXACT_RULES = {
     "acoustic_hnr": _link_hnr,
     "acoustic_lufs": _link_lufs,
     "acoustic_level_above_floor": _link_excess,
-    "ppg_voice_fraction": _link_ppg,
     "embedding_silhouette": _link_silhouette,
 }
 

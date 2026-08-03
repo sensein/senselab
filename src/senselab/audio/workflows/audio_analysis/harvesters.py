@@ -610,238 +610,19 @@ def g2p_phonemes(text: str) -> list[str]:
     return [str(p).strip() for p in seq if str(p).strip() and not str(p).isspace()]
 
 
-def arpabet_to_ppg_inventory(phoneme: str) -> str:
-    """Translate a g2p_en ARPAbet phoneme to the lowercase no-stress format used by ``ppgs``.
+def normalize_arpabet(phoneme: str) -> str:
+    """Normalise a g2p_en ARPAbet phoneme: lowercase, stress markers stripped.
 
     g2p_en returns uppercase ARPAbet with stress markers (``"AH0"``, ``"EY1"``).
-    The ``ppgs`` library uses lowercase ARPAbet without stress markers
+    Named for the ``ppgs`` inventory it once targeted; the normalisation outlived that consumer
+    because it is what makes two ASRs' phoneme sequences comparable — ``AH0`` and ``AH1`` are the
+    same phoneme, and counting them as a difference would inflate every pairwise distance.
+
+    The format is lowercase ARPAbet without stress markers
     (``"ah"``, ``"ey"``) plus ``"<silent>"`` for non-speech frames. Mapping:
     ``.lower().rstrip("0123456789")``.
     """
     return phoneme.lower().rstrip("0123456789")
-
-
-def ppg_argmax_per_frame(
-    ppg_result: Any,  # noqa: ANN401
-    phoneme_labels: list[str] | tuple[str, ...] | None,
-    duration_s: float,
-) -> tuple[list[str], float]:
-    """Pre-compute the per-frame argmax phoneme sequence from a PPG tensor.
-
-    Args:
-        ppg_result: The output of ``extract_ppgs_from_audios`` — typically a list of
-            tensors per audio. Each tensor is shaped ``(phonemes, frames)`` or
-            ``(1, phonemes, frames)`` per the ``ppgs`` library convention; we
-            normalize to ``(frames, phonemes)`` then argmax along the phoneme axis.
-        phoneme_labels: The PPG inventory (e.g. lowercase ARPAbet + ``<silent>``).
-            When ``None``, falls back to the 40-phoneme ppgs default inventory.
-        duration_s: Audio duration in seconds. ``frame_hop = duration_s / n_frames``.
-
-    Returns:
-        ``(per_frame_phonemes, frame_hop_s)``. Empty list and 0.0 hop on bad input.
-    """
-    if not ppg_result or duration_s <= 0:
-        return [], 0.0
-    labels = list(phoneme_labels) if phoneme_labels else list(_DEFAULT_PPG_LABELS)
-    n_phonemes = len(labels)
-    # Outer list = per-audio; we always pass a single audio.
-    ppg = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else ppg_result
-    arr = _to_2d_frame_major(ppg, n_phonemes=n_phonemes)
-    if arr is None or arr.shape[0] == 0:
-        return [], 0.0
-    n_frames = int(arr.shape[0])
-    frame_hop = duration_s / n_frames
-
-    # Argmax along phoneme axis.
-    indices = arr.argmax(axis=-1) if hasattr(arr, "argmax") else None
-    if indices is None:
-        return [], 0.0
-
-    per_frame: list[str] = []
-    for raw_idx in indices.tolist() if hasattr(indices, "tolist") else list(indices):
-        idx = int(raw_idx)
-        per_frame.append(labels[idx] if 0 <= idx < len(labels) else "<unk>")
-    return per_frame, frame_hop
-
-
-def ppg_silence_posterior_per_frame(
-    ppg_result: Any,  # noqa: ANN401
-    phoneme_labels: list[str] | tuple[str, ...] | None,
-    duration_s: float,
-) -> tuple["np.ndarray", float]:
-    """Per-frame posterior mass on ``<silent>``, and the frame hop.
-
-    The measurement behind the voice-fraction signal. Counting frames whose argmax is not
-    ``<silent>`` is the same reduction that made the scene classifiers vote on top-1 alone
-    (register items 6-7): it collapses a whole distribution to a hard 0 or 1, so a frame the model
-    called silent with 0.6 confidence votes exactly as strongly as one it called silent with 1.0.
-    The posterior keeps that difference, and L2 decides what it means.
-
-    Returns:
-        ``(silence_posterior, frame_hop_s)`` with one entry per frame. Empty array and 0.0 hop when
-        the result is unusable or the inventory has no ``<silent>`` label — an inventory without it
-        cannot answer this question, and guessing an index would fabricate an answer.
-    """
-    import numpy as np
-
-    if not ppg_result or duration_s <= 0:
-        return np.empty(0), 0.0
-    labels = list(phoneme_labels) if phoneme_labels else list(_DEFAULT_PPG_LABELS)
-    if SILENCE_LABEL not in labels:
-        return np.empty(0), 0.0
-    ppg = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else ppg_result
-    arr = _to_2d_frame_major(ppg, n_phonemes=len(labels))
-    if arr is None or arr.shape[0] == 0:
-        return np.empty(0), 0.0
-    values = np.asarray(arr, dtype=np.float64)[:, labels.index(SILENCE_LABEL)]
-    return values, duration_s / int(arr.shape[0])
-
-
-def ppg_argmax_confidence_per_frame(
-    ppg_result: Any,  # noqa: ANN401
-    phoneme_labels: list[str] | tuple[str, ...] | None,
-    duration_s: float,
-) -> tuple[list[float], float]:
-    """Pre-compute the per-frame ARGMAX POSTERIOR (max softmax value) of the PPG.
-
-    Parallel to ``ppg_argmax_per_frame`` but returns the value at the argmax
-    instead of the label. PPG outputs are softmax probabilities per phoneme per
-    frame; argmax probability is the model's confidence in its top-1 phoneme.
-    Aggregating these in a bucket window gives a per-bucket PPG-confidence
-    signal complementary to the ASR alignment score.
-
-    Returns ``(per_frame_argmax_probs, frame_hop_s)``. Empty list and 0.0 hop
-    on bad input.
-    """
-    if not ppg_result or duration_s <= 0:
-        return [], 0.0
-    labels = list(phoneme_labels) if phoneme_labels else list(_DEFAULT_PPG_LABELS)
-    n_phonemes = len(labels)
-    ppg = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else ppg_result
-    arr = _to_2d_frame_major(ppg, n_phonemes=n_phonemes)
-    if arr is None or arr.shape[0] == 0:
-        return [], 0.0
-    n_frames = int(arr.shape[0])
-    frame_hop = duration_s / n_frames
-    if not hasattr(arr, "max"):
-        return [], 0.0
-    max_per_frame = arr.max(axis=-1)
-    flat = max_per_frame.tolist() if hasattr(max_per_frame, "tolist") else list(max_per_frame)
-    return [float(v) for v in flat], frame_hop
-
-
-def ppg_mean_confidence_in_window(
-    ppg_argmax_confidence_per_frame_seq: list[float],
-    ppg_frame_hop: float,
-    win_start: float,
-    win_end: float,
-) -> float | None:
-    """Mean per-frame PPG argmax probability over frames inside ``[win_start, win_end)``.
-
-    Higher value (closer to 1.0) → PPG is more confident in its phoneme decoding
-    for this bucket. Lower value → many frames have flat / spread posteriors,
-    which usually correlates with non-speech audio or ambiguous phonetic content.
-    """
-    if not ppg_argmax_confidence_per_frame_seq or ppg_frame_hop <= 0 or win_end <= win_start:
-        return None
-    first_frame = max(0, int(win_start / ppg_frame_hop))
-    last_frame = min(int(math.ceil(win_end / ppg_frame_hop)), len(ppg_argmax_confidence_per_frame_seq))
-    if last_frame <= first_frame:
-        return None
-    slice_ = ppg_argmax_confidence_per_frame_seq[first_frame:last_frame]
-    if not slice_:
-        return None
-    return sum(slice_) / len(slice_)
-
-
-def _to_2d_frame_major(t: Any, *, n_phonemes: int) -> Any:  # noqa: ANN401
-    """Normalize a PPG tensor / array to ``(frames, phonemes)``.
-
-    ``extract_ppgs_from_audios`` returns ``(1, phonemes, frames)`` or
-    ``(phonemes, frames)``; sometimes the cache round-trip leaves a list-of-lists.
-    Cached entries from analyze_audio's wrapper serialize tensors as
-    ``{"_tensor_shape": [...], "_dtype": "torch.float32", "values": [...]}`` — we
-    recognise that shape and rebuild the array.
-
-    Disambiguates orientation by matching against the caller-supplied ``n_phonemes``
-    (the actual inventory size from the PPG block, not a hard-coded default).
-
-    Returns ``None`` on shapes we can't safely interpret. When neither dim matches
-    ``n_phonemes`` exactly, falls back to "phoneme axis is the smaller dim" — but
-    raises a ``ValueError`` if the shape is ambiguous (square, both dims tiny) so
-    the caller surfaces the problem rather than silently producing garbage argmax.
-    """
-    import numpy as np
-
-    if t is None:
-        return None
-    if isinstance(t, dict) and "_tensor_shape" in t and "values" in t:
-        # Cache-restored tensor → reconstruct the numpy array.
-        try:
-            arr = np.asarray(t["values"]).reshape(t["_tensor_shape"])
-        except (ValueError, TypeError) as exc:
-            raise ValueError(
-                f"PPG cached tensor reconstruction failed (shape={t.get('_tensor_shape')!r}): {exc!r}"
-            ) from exc
-    else:
-        arr = np.asarray(t.detach().cpu()) if hasattr(t, "detach") else np.asarray(t)
-    while arr.ndim > 2 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim != 2:
-        return None
-    rows, cols = arr.shape
-    if rows == n_phonemes and cols != n_phonemes:
-        return arr.T  # (phonemes, frames) → (frames, phonemes)
-    if cols == n_phonemes and rows != n_phonemes:
-        return arr  # already (frames, phonemes)
-    if rows == n_phonemes and cols == n_phonemes:
-        # Square against the inventory size — assume the conventional
-        # ppgs layout ``(phonemes, frames)`` and transpose.
-        return arr.T
-    # Neither dim matches the inventory exactly — heuristic fallback, but only when
-    # the shape is unambiguous. ``frames`` is typically ≥10× ``phonemes`` for any
-    # audio longer than ~0.4 s @ 100 Hz frame rate.
-    if max(rows, cols) < 4 * min(rows, cols):
-        raise ValueError(
-            f"PPG tensor shape {arr.shape} is ambiguous against inventory size "
-            f"{n_phonemes}; cannot determine frame vs phoneme axis."
-        )
-    return arr.T if rows < cols else arr
-
-
-def ppg_argmax_runs_in_window(
-    ppg_per_frame_phonemes: list[str],
-    ppg_frame_hop: float,
-    win_start: float,
-    win_end: float,
-) -> list[tuple[float, float, str]]:
-    """Return ``[(start, end, phoneme), ...]`` for argmax runs inside the window.
-
-    Walks the per-frame argmax sequence inside ``[win_start, win_end)``, collapses
-    consecutive frames sharing the same phoneme into a single run, and reports the
-    run's time span. ``<silent>`` runs are kept (they're a valid phoneme in the PPG
-    inventory). Used both by the asr edit-distance metric (just the phoneme
-    sequence) and by the plot's PPG row (which renders the time-spans as bars).
-    """
-    if not ppg_per_frame_phonemes or ppg_frame_hop <= 0 or win_end <= win_start:
-        return []
-    # ``last_frame`` is exclusive. Use ``ceil`` so a window whose end lands
-    # mid-frame still includes that frame; ``int()`` would silently drop the
-    # final partial frame and over time elide many frames from the PER signal.
-    first_frame = max(0, int(win_start / ppg_frame_hop))
-    last_frame = min(int(math.ceil(win_end / ppg_frame_hop)), len(ppg_per_frame_phonemes))
-    if last_frame <= first_frame:
-        return []
-    runs: list[tuple[float, float, str]] = []
-    cur_phon = ppg_per_frame_phonemes[first_frame]
-    cur_start_frame = first_frame
-    for f in range(first_frame + 1, last_frame):
-        if ppg_per_frame_phonemes[f] != cur_phon:
-            runs.append((cur_start_frame * ppg_frame_hop, f * ppg_frame_hop, cur_phon))
-            cur_phon = ppg_per_frame_phonemes[f]
-            cur_start_frame = f
-    runs.append((cur_start_frame * ppg_frame_hop, last_frame * ppg_frame_hop, cur_phon))
-    return runs
 
 
 def asr_phoneme_sequence_in_window(
@@ -868,7 +649,7 @@ def asr_phoneme_sequence_in_window(
       words artificially deflate the ASR sequence and inflate PER.
 
     All output phonemes are translated to PPG inventory format
-    (``arpabet_to_ppg_inventory``).
+    (``normalize_arpabet``).
     """
     if not asr_result:
         return []
@@ -892,7 +673,7 @@ def asr_phoneme_sequence_in_window(
         cs_f, ce_f = float(cs), float(ce)
         if fully_contained:
             if cs_f >= win_start and ce_f <= win_end:
-                out.extend(arpabet_to_ppg_inventory(p) for p in g2p_phonemes(text.strip()))
+                out.extend(normalize_arpabet(p) for p in g2p_phonemes(text.strip()))
             return
         # Overlap mode: distribute the word's phonemes uniformly across its
         # time span and keep those whose midpoint is inside the bucket.
@@ -906,7 +687,7 @@ def asr_phoneme_sequence_in_window(
         for i, p in enumerate(phonemes):
             mid = cs_f + (i + 0.5) * slot_dur
             if win_start <= mid < win_end:
-                out.append(arpabet_to_ppg_inventory(p))
+                out.append(normalize_arpabet(p))
 
     for line in items:
         _walk(line)
@@ -933,65 +714,10 @@ def _levenshtein(a: list[str], b: list[str]) -> int:
     return prev[-1]
 
 
-def ppg_sequence_per_in_window(
-    ppg_per_frame_phonemes: list[str],
-    ppg_frame_hop: float,
-    asr_result: Any,  # noqa: ANN401
-    win_start: float,
-    win_end: float,
-) -> float | None:
-    """Phoneme-sequence edit-distance rate between ASR and PPG over ``[win_start, win_end)``.
-
-    Builds two sequences:
-
-    - **PPG side**: argmax phoneme per frame inside the window, deduped to runs
-      (consecutive frames sharing a phoneme collapse to one entry). ``<silent>``
-      runs are stripped — they're not real phonemes in the ASR sequence.
-    - **ASR side**: g2p_en applied to each fully-contained ASR chunk in the window,
-      translated to PPG inventory format.
-
-    Returns ``edit_distance / max(len(asr), len(ppg))`` clipped to ``[0, 1]``, or
-    ``None`` when both sides are empty (no signal). Less sensitive to small time
-    misalignments than the per-frame approach because the deduped sequence ignores
-    duration and only compares phoneme order.
-    """
-    if not ppg_per_frame_phonemes or ppg_frame_hop <= 0 or win_end <= win_start:
-        return None
-    runs = ppg_argmax_runs_in_window(ppg_per_frame_phonemes, ppg_frame_hop, win_start, win_end)
-    ppg_seq = [p for _, _, p in runs if p != "<silent>"]
-    # PPG argmax includes EVERY frame in the window — even frames covering
-    # words that straddle the bucket boundary. To compare apples to apples,
-    # the ASR phoneme sequence must include the same boundary words. Use the
-    # overlap rule (not ``fully_contained``) so we don't artificially deflate
-    # the ASR side and inflate the resulting PER.
-    asr_seq = asr_phoneme_sequence_in_window(asr_result, win_start, win_end, fully_contained=False)
-    if not asr_seq:
-        # No fully-contained ASR words in this bucket. We CANNOT score
-        # PPG-vs-ASR PER for this ASR model on this bucket — return None so
-        # the aggregator drops the sub-signal rather than penalising the
-        # model with a spurious 1.0 (used to inflate asr uncertainty
-        # whenever a text-only ASR's transcript didn't quite land inside a
-        # bucket boundary).
-        return None
-    if not ppg_seq:
-        # PPG is silent throughout the bucket but ASR has phonemes — that IS
-        # a real disagreement (the audio model says no speech, the language
-        # model transcribed text). Saturate at 1.0.
-        return 1.0
-    distance = _levenshtein(asr_seq, ppg_seq)
-    denom = max(len(asr_seq), len(ppg_seq))
-    return min(1.0, distance / denom) if denom > 0 else None
-
-
-# Default PPG inventory — ppgs 0.0.9 lowercase ARPAbet + ``<silent>``.
-# Pinned here so the harvester is callable without senselab's PPG task installed.
 SILENCE_LABEL = "<silent>"
-"""The PPG inventory's non-speech class. Named once so the label and the index derived from it
-cannot drift apart across the readers that use it."""
+"""The label a harvester uses for "nobody here".
 
-_DEFAULT_PPG_LABELS = (
-    "aa", "ae", "ah", "ao", "aw", "ay", "b", "ch", "d", "dh",
-    "eh", "er", "ey", "f", "g", "hh", "ih", "iy", "jh", "k",
-    "l", "m", "n", "ng", "ow", "oy", "p", "r", "s", "sh",
-    "t", "th", "uh", "uw", "v", "w", "y", "z", "zh", "<silent>",
-)  # fmt: skip
+Spelled from the PPG inventory's non-speech class, which is where it came from, and it outlived that
+inventory because ``speaker_claims_from_votes`` needs it: a model reporting silence has *claimed
+nothing*, and treating that as a claim would let the mask discount a model for agreeing with it.
+Named once so the label and the readers that compare against it cannot drift apart."""

@@ -335,49 +335,6 @@ def test_policy_from_params_reads_the_run_configuration() -> None:
 # ── register item 11: the PPG argmax discards the distribution ───────────────
 
 
-def test_ppg_silence_posterior_keeps_what_the_argmax_threw_away() -> None:
-    """The same defect as the AST/YAMNet top-1, on a different model.
-
-    Counting frames whose argmax is not ``<silent>`` reduces each frame's whole distribution to a
-    hard 0 or 1. A frame that is 60% silent votes exactly as confidently as one that is 100%
-    silent, so a bucket the model was barely sure about is indistinguishable from one it was
-    certain about. The posterior keeps the difference.
-    """
-    import numpy as np
-
-    from senselab.audio.workflows.audio_analysis.harvesters import (
-        ppg_argmax_per_frame,
-        ppg_silence_posterior_per_frame,
-    )
-
-    labels = ["aa", "<silent>"]
-    # Every frame leans silent, but only just: argmax says "silent everywhere".
-    posteriors = np.tile(np.array([[0.4, 0.6]]), (10, 1)).T  # (phonemes, frames)
-    per_frame, _ = ppg_argmax_per_frame([posteriors], labels, 1.0)
-    assert set(per_frame) == {"<silent>"}, "the argmax is unanimous"
-
-    silence, hop = ppg_silence_posterior_per_frame([posteriors], labels, 1.0)
-    assert silence.shape == (10,)
-    assert hop == pytest.approx(0.1)
-    assert silence.mean() == pytest.approx(0.6), "the posterior records how sure the model was"
-
-
-def test_ppg_vote_reads_the_posterior_not_a_frame_count() -> None:
-    """L2 maps mean silence posterior to voice probability; the hard count is gone."""
-    rows = [_bucket({"ppg_voice_fraction": {"mean_silence_posterior": 0.6, "n_frames": 10}})]
-    vote = link_speech_presence(rows)[0]["votes"]["ppg_voice_fraction"]
-    # 0.6 silent → 0.4 voice → a 0.6-confident *no*, not the flat "no voice" the count gave.
-    assert vote["speaks"] is False
-    assert vote["native_confidence"] == pytest.approx(0.6)
-    assert vote["mean_silence_posterior"] == pytest.approx(0.6)
-
-
-def test_ppg_vote_absent_without_a_posterior() -> None:
-    """A bucket with no PPG frames drops the signal rather than voting from nothing."""
-    rows = [_bucket({"ppg_voice_fraction": {"n_frames": 0}})]
-    assert "ppg_voice_fraction" not in link_speech_presence(rows)[0]["votes"]
-
-
 # ── register item 12: clustering is an L2 derivation over L1 vectors ─────────
 
 
