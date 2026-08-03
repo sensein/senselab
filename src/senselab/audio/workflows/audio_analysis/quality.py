@@ -54,6 +54,7 @@ from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUH
 from senselab.audio.workflows.audio_analysis.embeddings import _slice_audio, _window_starts
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.resolution import resample_series
+from senselab.audio.workflows.audio_analysis.shapes import Series
 from senselab.audio.workflows.audio_analysis.signal import SignalProvenance
 
 __all__ = [
@@ -61,6 +62,7 @@ __all__ = [
     "QUALITY_ANALYSIS_WIN_S",
     "QUALITY_SIGNALS",
     "harvest_quality_measurements",
+    "quality_series",
 ]
 
 QUALITY_ANALYSIS_WIN_S = 0.5
@@ -303,3 +305,71 @@ def harvest_quality_measurements(
         row["provenance"] = provenance
         out.append(row)
     return out
+
+
+def quality_series(*, audio: Audio, brouhaha: Optional[BrouhahaFrames]) -> dict[str, Series]:
+    """One native-resolution :class:`~.shapes.Series` per quality target (D-20, D-25).
+
+    Args:
+        audio: The pass audio.
+        brouhaha: Per-frame Brouhaha outputs, or ``None`` when the model was unavailable — its two
+            targets are then absent from the result rather than present and null, because a model
+            that could not load has not measured nothing.
+
+    Returns:
+        ``{signal name → Series}`` at the analysis grid this module measures on, **not** at any
+        reporting grid. Each series carries its own units, so nothing here is ``units: "mixed"``.
+
+    This replaces :func:`harvest_quality_measurements` for consumers that hold a
+    :class:`~.sampler.Sampler`. The difference is not cosmetic:
+
+    - **No resampling.** The old function integrated or held each signal onto a reporting grid
+      handed to it, which is a producer making an L2 decision — which grid, and which rule onto it.
+      Here the values stay where they were measured and the consumer asks.
+    - **Seven targets, seven series.** ``snr``, ``c50``, ``rolloff``, ``clipping`` and the rest answer
+      different questions in different units, and one row holding all of them is exactly the bundle
+      D-20 dissolved. ``units: "mixed"`` was the honest admission of it.
+    - **Window and hop both survive.** The analysis window is 0.5 s at a 0.25 s hop, so adjacent
+      values share half their audio. A consumer that treats them as independent samples is wrong, and
+      it can only know that if both numbers travel — which they do on ``Series`` and did not on a
+      resampled row.
+    """
+    duration_s = float(audio.waveform.shape[-1]) / float(audio.sampling_rate)
+    if duration_s <= 0:
+        return {}
+    starts = _window_starts(duration_s, QUALITY_ANALYSIS_WIN_S, QUALITY_ANALYSIS_HOP_S)
+    if not starts:
+        return {}
+
+    windows = []
+    for t in starts:
+        end = min(duration_s, t + QUALITY_ANALYSIS_WIN_S)
+        windows.append(_analysis_window(_slice_audio(audio, t, end), brouhaha, t, end))
+
+    out: dict[str, Series] = {}
+    for name in QUALITY_SIGNALS:
+        values = tuple(_as_optional_float(w.get(name)) for w in windows)
+        if all(v is None for v in values):
+            # Every window unmeasured: the estimator produced nothing anywhere, which is different
+            # from producing zeros. Omitted rather than emitted as an all-null series, so a consumer
+            # asking for it gets a KeyError naming the absence instead of a series of Nones.
+            continue
+        out[name] = Series(
+            values=values,
+            hop_s=QUALITY_ANALYSIS_HOP_S,
+            window_s=QUALITY_ANALYSIS_WIN_S,
+            units=_UNITS[name],
+            start_s=float(starts[0]),
+        )
+    return out
+
+
+def _as_optional_float(value: Any) -> Optional[float]:  # noqa: ANN401 — estimator output
+    """A finite float, or ``None`` for anything that is not a measurement."""
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
