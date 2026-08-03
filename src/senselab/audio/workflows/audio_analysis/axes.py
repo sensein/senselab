@@ -55,9 +55,10 @@ class Axis:
     Attributes:
         name: The axis id — the ``estimates/<name>.parquet`` filename and the ``axis`` column.
         question: What a high value on this axis means a reader does not know.
-        harvested: Does an *ensemble* vote on it? ``background_mask`` does not: it is one derived
-            judgement per region that reports its own confidence, so it has evidence without
-            having voters. That distinction is what ``harvest`` needs and nothing else does.
+        harvested: Does an *ensemble* vote on it? ``background_mask`` is *designed* to — VAD, ASR
+            and the diarizers all bear on whether the target was active — but its harvest does not
+            exist yet, so the flag is still ``False``. See its entry: the flag tracks the code, and
+            flipping it early makes every harvest consumer ask for evidence nothing produces.
         attenuable: May an uncorroborated speech claim discount this axis? Evidence that nobody
             spoke here says nothing about *which* speaker it was, so carrying the discount onto
             the speaker axis would be an unmeasured leap; and it says nothing about whether a
@@ -136,9 +137,24 @@ AXES: Final[tuple[Axis, ...]] = (
     Axis(
         name="background_mask",
         question="is this region free of target activity?",
-        # No ensemble: the mask is one derived judgement per region. It reports how sure it is,
-        # and ``1 - confidence`` is that judgement's uncertainty in the units the others use, so
-        # it has evidence without having voters.
+        # An ensemble: VAD, ASR and the diarizers all bear on whether the target was active here,
+        # so the mask's uncertainty is cross-source disagreement rather than one judgement's
+        # self-reported confidence. It was ``False`` while a single derived judgement produced the
+        # mask — which read as a property of the mask when it was a property of there being one
+        # producer.
+        #
+        # **What each contributes depends on ``--task-type``**, which is why these are votes and
+        # not a formula. In a speech task, VAD / words / speaker spans indicate target activity. In
+        # a breathing task the target is the breath, speech detection is *silent* through it, and a
+        # speech vote therefore indicates target **absence** — the case that made a mask built from
+        # voice activity alone report the collected signal as a background source.
+        #
+        # **Still ``False``, and that is a statement about the code rather than the design.** Being
+        # harvested requires a harvest: a ``PassHarvest`` field holding the mask's evidence, and a
+        # ``reliability._AXIS_SIGNALS`` entry naming it. Flipping this flag before that exists puts
+        # the axis into ``HARVESTED_AXES`` and every harvest consumer then asks for evidence nothing
+        # produces — which is what happened when it was tried. The flag flips with the harvest, not
+        # ahead of it.
         harvested=False,
         # The mask's question is about target activity, not about speech, and an uncorroborated
         # speech claim is evidence about the latter only.
