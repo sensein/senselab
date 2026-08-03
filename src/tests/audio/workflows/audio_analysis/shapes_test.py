@@ -19,6 +19,7 @@ from senselab.audio.workflows.audio_analysis.shapes import (
     GridRelation,
     LabelScore,
     Matrix,
+    Measurement,
     Series,
     Span,
     Spans,
@@ -209,7 +210,7 @@ def test_a_tree_records_where_its_timings_came_from() -> None:
 def test_an_unknown_timestamp_source_is_refused() -> None:
     """The set is closed: native, bundled_aligner, external_aligner."""
     with pytest.raises(ValueError, match="timestamp_source"):
-        Tree(script_line={"text": "hi"}, timestamp_source="guessed")
+        Tree(script_line={"text": "hi"}, timestamp_source="guessed")  # type: ignore[arg-type]
 
 
 # ── the union ──────────────────────────────────────────────────────────
@@ -221,7 +222,7 @@ def test_every_shape_reports_whether_a_bucket_grid_is_meaningful_for_it() -> Non
     A grid is meaningful for Series and Matrix, a projection for Categorical and Embedding, and a
     reduction for Spans and Tree. Conflating the three is what made one row type look sufficient.
     """
-    cases = [
+    cases: list[tuple[Measurement, GridRelation]] = [
         (Series(values=(0.1,), hop_s=0.1, window_s=0.1, units="dB"), GridRelation.RESAMPLE),
         (Matrix(rows=((0.1,),), channels=("a",), hop_s=0.1, window_s=0.1, units="dB"), GridRelation.RESAMPLE),
         (
