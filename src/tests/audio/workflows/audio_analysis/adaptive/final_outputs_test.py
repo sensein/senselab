@@ -124,7 +124,6 @@ def test_speech_presence_parquet_carries_every_contract_column(tmp_path: Path) -
         "speech_presence_uncertainty",
         "overlap_with",
         "contributing_sources",
-        "round",
         "resolution_kind",
     ):
         assert col in df.columns, f"missing {col}"

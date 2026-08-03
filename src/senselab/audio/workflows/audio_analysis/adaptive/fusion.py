@@ -465,7 +465,6 @@ def write_speaker_outputs(
         "speech_presence_uncertainty",
         "overlap_with",
         "contributing_sources",
-        "round",
         "resolution_kind",
     ]
     rows = [t.to_row() for t in tracks]

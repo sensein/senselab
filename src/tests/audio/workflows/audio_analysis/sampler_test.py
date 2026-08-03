@@ -218,3 +218,23 @@ def test_the_grid_the_consumer_asks_for_is_not_a_property_of_the_producer() -> N
     coarse = sampler.on_grid(_resample(), duration_s=0.2, win_length=0.2, hop_length=0.2)
     assert len(fine) == 4
     assert len(coarse) == 1
+
+
+def test_resample_std_is_the_within_bucket_spread() -> None:
+    """What `frame_std` measured per signal, as a query rather than a stored reduction.
+
+    A bucket mean of 0.5 from two steady frames and one from an onset crossing the bucket are
+    different evidence, and the mean alone cannot tell them apart — which is why the spread is worth
+    asking for, and why it belongs to the consumer rather than to the producer.
+    """
+    steady = Series(values=(0.5, 0.5), hop_s=0.05, window_s=0.05, units="probability")
+    onset = Series(values=(0.0, 1.0), hop_s=0.05, window_s=0.05, units="probability")
+    key = _resample(how="std")
+    assert Sampler({SNR: steady}).at(key, 0.0, 0.1) == pytest.approx(0.0)
+    assert Sampler({SNR: onset}).at(key, 0.0, 0.1) == pytest.approx(0.5)
+
+
+def test_a_single_frame_has_zero_spread_not_none() -> None:
+    """The bucket was measured and did not vary. None would say it was not measured."""
+    s = Series(values=(0.7,), hop_s=0.1, window_s=0.1, units="probability")
+    assert Sampler({SNR: s}).at(_resample(how="std"), 0.0, 0.1) == pytest.approx(0.0)

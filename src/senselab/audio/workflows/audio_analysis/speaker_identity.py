@@ -223,7 +223,14 @@ class PerSpeakerPresenceTrack:
     resolution_kind: str = "unresolved"
 
     def to_row(self) -> dict[str, Any]:
-        """Row for ``final/per_speaker_presence.parquet``."""
+        """Row for ``final/per_speaker_presence.parquet``.
+
+        **No ``round`` column.** The artifact is keyed ``(bucket, speaker)``, and D-17's key rule says
+        a dimension outside the key must not appear as a column — a ``round`` on every row invites a
+        reader to group by it and find one group, or to join two rounds' files and get a cross
+        product. ``final/`` *is* one round by construction, so the round belongs to the file. It stays
+        on this dataclass because the fusion step needs to know which round it extracted.
+        """
         return {
             "speaker_id": self.speaker_id,
             "start": self.start,
@@ -232,7 +239,6 @@ class PerSpeakerPresenceTrack:
             "speech_presence_uncertainty": self.speech_presence_uncertainty,
             "overlap_with": list(self.overlap_with),
             "contributing_sources": list(self.contributing_sources),
-            "round": self.round,
             "resolution_kind": self.resolution_kind,
         }
 

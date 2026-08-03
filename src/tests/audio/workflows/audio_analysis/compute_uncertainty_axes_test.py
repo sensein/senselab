@@ -531,16 +531,26 @@ def test_speech_presence_rows_carry_source_columns() -> None:
 
 def test_speech_presence_confidence_uncertainty_split_and_instability(monkeypatch: pytest.MonkeyPatch) -> None:
     """US3: speech_presence_confidence + speech_presence_uncertainty columns; frame instability lifts uncertainty."""
-    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
-    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+    import senselab.audio.tasks.scene_quality as sq
+    from senselab.audio.tasks.scene_quality.brouhaha import BrouhahaFrames
 
-    # Rapidly alternating posterior → high within-bucket std (instability) everywhere.
+    # Rapidly alternating VAD posterior → high within-bucket std (instability) everywhere.
+    # Brouhaha's VAD head rather than segmentation-3.0's: the latter is no longer a frame voter, and
+    # the instability this test is about is a property of a continuous posterior, not of that model.
     probs = np.tile([0.0, 1.0], 100)  # 200 frames @ 0.01 s hop = 2 s
     monkeypatch.setattr(
-        fp,
-        "extract_speech_frame_posteriors",
+        sq,
+        "extract_brouhaha_frames",
         lambda audios, *a, **k: (
-            [FramePosterior(activations=probs[:, None], frame_hop_s=0.01, channel_format="single")] * len(audios)
+            [
+                BrouhahaFrames(
+                    vad=probs,
+                    snr_db=np.full(probs.shape, 30.0),
+                    c50_db=np.full(probs.shape, 30.0),
+                    frame_hop_s=0.01,
+                )
+            ]
+            * len(audios)
         ),
     )
     raw_pass = {
@@ -574,7 +584,9 @@ def test_speech_presence_confidence_uncertainty_split_and_instability(monkeypatc
     assert dispersion.rows
     assert all(r.measurement["frame_dispersion"] > 0.0 for r in dispersion.rows)
     assert all(r.units == "probability" for r in dispersion.rows)
-    assert linked["raw"].provenance["frame_posteriors"]["segmentation"]["available"] is True
+    # The frame voter is brouhaha's VAD head now, and its provenance is recorded whether or not
+    # the model loaded — a voter with no provenance is a number nobody can reproduce.
+    assert linked["raw"].provenance["frame_posteriors"]["brouhaha_vad"]["available"] is True
 
 
 def test_speech_presence_quality_null_when_scene_quality_disabled() -> None:
