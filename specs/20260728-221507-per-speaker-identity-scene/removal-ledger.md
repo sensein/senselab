@@ -42,9 +42,10 @@ not exist**: `--foreground-suppression` appears in CLAUDE.md and zero times in
 *Settled by D-23 — wire it, as a **pathway**, not a perturbation.* Foreground suppression is an
 alternate route to enhancing a signal component (the background), and a perturbation is by definition
 a transform that does not remove the primary information targets. Suppression removes the foreground
-target on purpose, so it is a pathway alongside `enhanced`, which is itself reclassified as the
-`foreground` pathway. `project_onto` / `suppression_depth_db` / `leakage_margin_db` become what the
-pathway reports about itself in the route register.
+target on purpose, even ideally, so it is what makes a *different* component primary — the `background`
+pathway's constitutive transform. Enhancement stays a perturbation: ideally it removes only non-target
+content, so the primary target survives. `project_onto` / `suppression_depth_db` /
+`leakage_margin_db` become what the pathway reports about itself in the route register.
 
 ### `level.py` — 389 lines, one live export
 
