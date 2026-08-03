@@ -741,3 +741,30 @@ live. What it still needs is for folds 1 and 2 to call it instead of folding aga
 when asked to do the unification — because I had grepped for `fuse_axes(` and this call is `fuse_axis(`.
 A one-character difference hid a third of the problem. Grep for the *singular and plural* of any
 aggregator name before concluding how many callers exist.
+
+
+## Correction 4: fold 1 is an *input* to fold 3, not a duplicate of it
+
+The "three redundant folds" framing was wrong. `analyze_audio.py:1658` passes
+`fused_axes["speech_presence"].rows` into `write_final_uncertainty` as `scene_rows`, so:
+
+```
+fold 1 (compute.py, round 0) ──► scene_rows ──► fold 3 (fold_run_axes, all rounds + coupling) ──► parquet
+        └──► disagreements.json
+```
+
+It is a **pipeline**, and fold 1 cannot be deleted — fold 3 consumes it. So the defect is not duplication:
+it is that **the index ranked fold 1's output while the parquet held fold 3's**, and nothing said which
+round either described. Those rows *should* differ; fold 3 has more rounds and the scene coupling applied.
+
+**Fixed by ranking what was written.** `write_final_uncertainty` now returns `final_rows` alongside its
+paths, and the driver wraps those for `build_disagreements_index`, falling back to `fused_axes` when the
+writer did not run. The index and `estimates/*.parquet` now describe the same rows.
+
+That leaves `fuse_axis`/`fuse_axes` called in three places, which is **correct** — they are three stages,
+not three answers. What was wrong was one consumer reading the wrong stage.
+
+**Still to verify on a cleared cache**, because the index's contents change: `high_uncertainty_rate` is
+computed over whatever the index is given, so its 0.9941 was measured over round-0 rows and is now
+measured over final coupled rows plus the newly-harvested mask axis. Whether the threshold still admits
+everything is an open measurement, not a known quantity.
