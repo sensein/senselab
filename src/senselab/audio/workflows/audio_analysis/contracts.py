@@ -748,6 +748,13 @@ class Deviation:
     why: str
 
 
+_FOREIGN_FILES: Final[frozenset[str]] = frozenset({".DS_Store", "Thumbs.db", ".gitkeep"})
+"""Files no stage wrote and none claims — skipped rather than reported as undeclared outputs."""
+
+_FOREIGN_SUFFIXES: Final[frozenset[str]] = frozenset({".pyc", ".swp", ".tmp", ".part"})
+"""Suffixes belonging to tooling rather than to the run."""
+
+
 def _mod(name: str) -> str:
     """A workflow module's repo-relative path. Keeps the register readable at a glance."""
     return f"src/senselab/audio/workflows/audio_analysis/{name}"
@@ -1732,6 +1739,11 @@ def artifact_violations(run_dir: Path) -> list[str]:
     shapes: dict[str, dict[frozenset[str], list[str]]] = {}
     for path in sorted(root.rglob("*")):
         if not path.is_file():
+            continue
+        # Not written by the pipeline and not a claim about anything: a desktop file manager's index,
+        # a Python cache, an editor's swap. Reporting them as undeclared outputs buries the findings
+        # that are about *this* code among findings about whoever opened the folder.
+        if path.name in _FOREIGN_FILES or path.suffix in _FOREIGN_SUFFIXES:
             continue
         relative = path.relative_to(root).as_posix()
         owners = [artifact for artifact in declared if matches(relative, artifact.pattern)]

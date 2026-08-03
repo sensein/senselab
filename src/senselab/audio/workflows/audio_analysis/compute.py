@@ -251,14 +251,6 @@ def harvest_pass(
         # turn those into degradation scores are applied by ``aggregate_pass`` at L2.
         for q in harvest_quality_measurements(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid):
             quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
-        # Reuse the Brouhaha VAD head as a second frame-posterior speech_presence voter.
-        if brouhaha_frames is not None:
-            # A VAD head is genuinely one channel, so ``single`` is a declaration, not a collapse.
-            frame_voters["frame_brouhaha_vad"] = FramePosterior(
-                activations=np.asarray(brouhaha_frames.vad, dtype=np.float64)[:, None],
-                frame_hop_s=brouhaha_frames.frame_hop_s,
-                channel_format="single",
-            )
         scene_quality_provenance.update(
             {
                 "analysis_win_length": QUALITY_ANALYSIS_WIN_S,
@@ -271,6 +263,39 @@ def harvest_pass(
                 },
             }
         )
+
+    # Brouhaha's VAD head as a frame-posterior speech voter. **Not gated on ``scene_quality``**: by
+    # D-20 one forward pass yields three signals — ``(speech, brouhaha/VAD)``, ``(snr, brouhaha)`` and
+    # ``(c50, brouhaha)`` — and sharing a pass is an implementation fact, not a reason to share a
+    # flag. It was inside the quality gate, and once ``segmentation-3.0`` stopped being a voter that
+    # left **zero** frame voters whenever a caller disabled scene quality: the speech axis silently
+    # lost its frame evidence to a quality switch. Found by a test that passes ``scene_quality=False``.
+    if per_pass_audio is not None:
+        from senselab.audio.tasks.scene_quality import extract_brouhaha_frames as _brouhaha_for_vad
+        from senselab.audio.tasks.scene_quality.brouhaha import (
+            BROUHAHA_MODEL_ID as _VAD_MODEL_ID,
+        )
+        from senselab.audio.tasks.scene_quality.brouhaha import (
+            BROUHAHA_REVISION as _VAD_REVISION,
+        )
+        from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
+
+        vad_frames = brouhaha_frames if brouhaha_frames is not None else _brouhaha_for_vad([per_pass_audio])[0]
+        if vad_frames is not None:
+            # A VAD head is genuinely one channel, so ``single`` is a declaration, not a collapse.
+            frame_voters["frame_brouhaha_vad"] = FramePosterior(
+                activations=np.asarray(vad_frames.vad, dtype=np.float64)[:, None],
+                frame_hop_s=vad_frames.frame_hop_s,
+                channel_format="single",
+            )
+        # Recorded whether or not the model loaded: a voter with no provenance is a number nobody can
+        # reproduce, and ``available: False`` is the only way "the model was unreachable" stays
+        # distinguishable from "this voter was never asked for".
+        frame_posteriors_provenance["brouhaha_vad"] = {
+            "id": _VAD_MODEL_ID,
+            "revision": _VAD_REVISION,
+            "available": vad_frames is not None,
+        }
 
     speech_presence_evidence = harvest_speech_presence_evidence(
         pass_summary=harvest_summary,

@@ -154,7 +154,7 @@ class Sampler:
 
     def _resample(self, shape: Measurement, start: float, end: float, *, how: str) -> Any:  # noqa: ANN401
         """Arithmetic over the native frames covering the interval — never a stored reduction."""
-        if how not in ("mean", "max", "min"):
+        if how not in ("mean", "max", "min", "std"):
             raise UnknownOperator(f"resample variant {how!r} is not implemented")
         if isinstance(shape, Series):
             vals = [shape.values[i] for i in self._frames_in(shape, start, end)]
@@ -224,6 +224,11 @@ def _reduce(values: Sequence[float], how: str) -> Optional[float]:
         return None
     if how == "mean":
         return sum(values) / len(values)
+    if how == "std":
+        # Population std over the frames actually in the bucket. A single frame has no spread, which
+        # is 0.0 rather than None: the bucket *was* measured, and it did not vary.
+        mean = sum(values) / len(values)
+        return (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
     return max(values) if how == "max" else min(values)
 
 

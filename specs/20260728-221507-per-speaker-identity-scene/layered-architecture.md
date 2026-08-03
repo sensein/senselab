@@ -3395,9 +3395,17 @@ Two consequences:
 
 - It is an L1-layer violation of the kind D-16 forbids, and it was invisible because the artifact looks
   like every other signal.
-- It needs **at least two** frame voters to mean anything. With `segmentation-3.0` removed there is one,
-  so the quantity silently becomes undefined — and P2's trigger with it. That coupling was not in
-  D-19's dependency list either.
+- **Correction to an earlier claim here.** I wrote that it "needs at least two frame voters to mean
+  anything". It does not. Each `std` is one posterior's **within-bucket temporal** standard deviation,
+  and `frame_dispersion` is the *mean of those across voters* — so with one voter it equals that
+  voter's temporal std, which is well-defined and useful. What removing `segmentation-3.0` actually
+  did was leave the quantity resting on brouhaha alone, and break a test **fixture** that supplied
+  segmentation and no brouhaha. The P2-trigger coupling is real; the undefinedness was not.
+
+What survives, and is the part worth acting on: the *cross-voter average* is an L2 fold, while the
+per-voter `frame_std` beside it is a legitimate per-signal quantity — and under D-25 even that is a
+**reduction over native frames**, so it is a sampler query (`resample/std`) rather than something a
+producer computes and stores.
 
 It belongs at L2 as a fold over the frame-targeted signals, with its contributor count on the row so
 "dispersion over one voter" is visibly not a dispersion.

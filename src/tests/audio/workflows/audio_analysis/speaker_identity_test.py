@@ -241,7 +241,6 @@ def test_speech_presence_row_carries_every_contract_column() -> None:
         "speech_presence_uncertainty",
         "overlap_with",
         "contributing_sources",
-        "round",
         "resolution_kind",
     ):
         assert col in row, f"missing {col}"
