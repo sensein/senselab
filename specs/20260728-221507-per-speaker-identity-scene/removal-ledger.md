@@ -328,3 +328,35 @@ are the embedding-derived ones D-20 removes (`::change_point` ×2, `embedding_si
 the default `min` (max-doubt) aggregator they decide the axis. This is the "saturated embedding check
 outvotes unanimous diarizer agreement" failure, reproduced from a real run, and it is the concrete
 argument for finishing the nine-signal removal.
+
+## Decision: `background_mask` becomes a harvested axis (VAD + ASR + speakers)
+
+Settles the question D-22 left open. The mask's uncertainty should be **cross-source disagreement**
+over VAD, ASR words and diarizer spans — not one derived judgement's self-reported confidence.
+`harvested=False` read as a property of the mask when it was a property of there being one producer.
+
+**What each source contributes depends on `--task-type`, which is why these must be votes and not a
+formula.** In a speech task, VAD / words / speaker spans indicate target activity. In a breathing task
+the target is the breath, speech detection is *silent* through it, and a speech vote therefore
+indicates target **absence** — the case that made a mask built from voice activity alone report the
+collected signal as a background source.
+
+**Not yet implemented, and the flag stays `False` until it is.** Flipping it was tried and breaks the
+pipeline: the axis enters `HARVESTED_AXES`, and every consumer then asks for evidence nothing produces
+— `reliability._AXIS_SIGNALS` is a three-member map of axis → (`PassHarvest` field, key), and the mask
+has no field because it never had voters. Two new test failures confirmed it immediately, one of them
+`unknown axis 'background_mask'`.
+
+So the work is, in order:
+
+1. A `PassHarvest` field for the mask's evidence, and a `harvest_background_mask_evidence` that emits
+   VAD / ASR-word / speaker-span votes **on `speech_presence`'s grid** (they share it — see the D-24
+   correction).
+2. A `_AXIS_SIGNALS` entry, and a link rule mapping each source to target-activity *under the declared
+   task type*.
+3. Flip `harvested=True`, and delete the region-count assumption in the mask writer that currently
+   yields one row for the whole recording.
+
+Worth noting for step 1: the mask and `speech_presence` will then **share evidence** (both read VAD,
+ASR words and diarizer spans). Their agreement is therefore not corroboration, and D-21 rule 6's
+source-closure test is what makes that computable rather than assumed.
