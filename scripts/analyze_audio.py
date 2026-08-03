@@ -1002,23 +1002,26 @@ def _models_without_native_signal(summaries: dict[str, Any]) -> list[str]:
 def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None) -> dict[str, Any]:
     """Round 0 (spec US1): frame-posterior speech gate + SNR enhancement gate.
 
-    Uses continuous segmentation-3.0 frame posteriors (never segmentized VAD —
-    see SPEECH_PRESENCE_CERTAINTY_ANALYSIS.md) and Brouhaha SNR with an ungated
-    percentile-DSP fallback. Degrades conservatively: missing posteriors ⇒
-    ``speech_present=True``; missing SNR ⇒ ``needs_enhancement=None`` (the
-    caller treats unknown as "run the enhanced pass").
+    Uses **continuous** frame posteriors from Brouhaha's VAD head — never segmentized VAD, see
+    SPEECH_PRESENCE_CERTAINTY_ANALYSIS.md — plus Brouhaha SNR with an ungated percentile-DSP
+    fallback. Degrades conservatively: missing posteriors ⇒ ``speech_present=True``; missing SNR ⇒
+    ``needs_enhancement=None`` (the caller treats unknown as "run the enhanced pass").
+
+    Brouhaha rather than ``segmentation-3.0``: the gate needs a continuous speech probability, which
+    both provide, and Brouhaha is already loaded here for SNR — so this is one model where there
+    were two. What ``segmentation-3.0`` uniquely offered was per-speaker channels, which a speech
+    gate does not use.
     """
-    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import (
-        extract_speech_frame_posteriors,
-    )
+    import numpy as np
+
+    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
     from senselab.audio.workflows.audio_analysis.adaptive.triage import dsp_snr_series, triage_decision
 
     t0 = time.time()
-    posterior = extract_speech_frame_posteriors([audio], device=device)[0]
-
     snr_db: list[float] | None = None
     snr_hop_s: float | None = None
     snr_estimator: str | None = None
+    posterior = None
     try:
         from senselab.audio.tasks.scene_quality.brouhaha import extract_brouhaha_frames
 
@@ -1027,6 +1030,12 @@ def run_triage(audio: Audio, args: argparse.Namespace, device: DeviceType | None
             snr_db = [float(v) for v in brouhaha.snr_db]
             snr_hop_s = float(brouhaha.frame_hop_s)
             snr_estimator = "brouhaha"
+            # A VAD head is genuinely one channel, so ``single`` is a declaration, not a collapse.
+            posterior = FramePosterior(
+                activations=np.asarray(brouhaha.vad, dtype=np.float64)[:, None],
+                frame_hop_s=float(brouhaha.frame_hop_s),
+                channel_format="single",
+            )
     except Exception as exc:  # noqa: BLE001 — SNR is optional; DSP fallback below
         print(f"  [triage] brouhaha unavailable ({exc!r}); falling back to DSP SNR", file=sys.stderr)
     if snr_db is None:

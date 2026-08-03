@@ -243,7 +243,7 @@ Options, re-ranked after the correction:
 3. Drop I4.
 
 
-## Test fixtures: use NeMo's multi-speaker simulator
+## TODO (deferred): overlap + capacity test fixtures via NeMo's multi-speaker simulator
 
 The overlap clip above was hand-mixed, which is enough to answer one question and wrong to build on:
 its ground truth is "designed at 3.0–6.0 s and hopefully detected" rather than a known annotation.
@@ -261,3 +261,70 @@ speaker count, overlap ratio and silence. Two things that buys, in order of valu
 Dependency to note: the simulator concatenates real single-speaker speech from a source manifest, so
 it needs one (LibriSpeech-style). NeMo lives in a subprocess venv, so this runs there rather than in
 the main environment.
+
+**Deferred deliberately** — the rewiring for a full run comes first. Until these fixtures exist, two
+things are verified only by a hand-built clip and should be read as such: that the overlapping view
+preserves a concurrent speaker (it does — a speaker was *lost* without it), and that censoring works
+at all (it has never run against real model output).
+## Run findings (2026-08-03, cache cleared, 21.5 s two-speaker clip)
+
+The rewiring works: `__overlap_count__` votes from spans, `exclusive: False` is in the diarization
+provenance and therefore the cache key, and the run reports **2 speakers at p=0.977** — both diarizers
+agreeing, the embedding clusterer dissenting at 1 and down-weighted to 0.046. Correct for this clip.
+
+Five defects the run exposed, none of them caused by the rewiring:
+
+### 1. The asr axis reports `triage_score: 1.0` in the index and `None` in the parquet
+
+`final/estimates/asr.parquet` has `uncertainty`, `epistemic_uncertainty`, `confidence` and
+`triage_score` **all None on every one of its 41 rows**. `L2/disagreements.json` lists **18 asr
+entries with `triage_score: 1.0`** — the maximum, so they sort to the top of the index.
+
+Two artifacts of one run disagree about whether the axis was measured. An unmeasured axis is being
+ranked as maximally doubtful, which is the absent-vs-value confusion in its most consequential form:
+the top of the triage index is phantom findings.
+
+### 2. `n_sources: 2` while `contributing_signals: []`
+
+Same asr rows. Two sources counted, none contributing. A count that does not agree with the list it
+counts.
+
+### 3. `high_uncertainty_rate: 0.994`
+
+1189 of 1196 rows flagged high-uncertainty. An index that flags 99.4% of rows ranks nothing, so the
+threshold is not doing the work its name claims.
+
+### 4. `background_mask` is absent from the disagreements index
+
+`rows_by_axis` lists `speech_presence`, `speaker`, `asr` — three. The fourth axis is fused, written to
+`final/estimates/background_mask.parquet`, drawn on the timeline, and **missing from the index that
+decides what a reader looks at**. This is the same fourth-axis omission `axes.py` was created to end,
+still live in this artifact.
+
+### 5. Four axes, four grids, ranked against each other
+
+| axis | window | hop | rows |
+|---|---|---|---|
+| speech_presence | 0.1 s | **0.02 s** | 1070 |
+| speaker | 0.25 s | 0.25 s | 85 |
+| asr | 1.0 s | 0.5 s | 41 |
+| background_mask | **21.0 s** | — | **1** |
+
+The index's 100 entries mix widths of 1.0 s (18), 0.1 s (76) and 0.25 s (6), ranked by `triage_score`
+with nothing recording how the spans were reconciled — exactly what D-24 predicted. Two further
+observations from the same table:
+
+- **speech_presence is 0.1 s windows at a 0.02 s hop**, so adjacent rows share 80% of their audio.
+  1070 rows are not 1070 independent measurements, and no consumer is told that.
+- **background_mask is a single row spanning the whole recording.** It has no time resolution at all,
+  which is why its uncertainty is 0.000: one region, confident. A degenerate axis, not a timeline.
+- **No axis is on the 0.1 s grid D-24 specifies.** speech_presence has a 0.1 s *window* but a 0.02 s
+  hop.
+
+### 6. The speaker axis is dominated by signals already marked for deletion
+
+Mean uncertainty 0.859 while the speaker *count* is 0.977 confident. Of the 6 contributing signals, 4
+are the embedding-derived ones D-20 removes (`::change_point` ×2, `embedding_silhouette::…` ×2). Under
+the default `min` (max-doubt) aggregator they decide the axis. This is the "saturated embedding check
+outvotes unanimous diarizer agreement" failure, reproduced from a real run, and it is the concrete
+argument for finishing the nine-signal removal.
