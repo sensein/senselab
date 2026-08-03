@@ -426,3 +426,42 @@ independence that matters for correctness:
 That is the mechanism behind 0.858 uncertainty against a 0.977-confident count posterior: not two views
 disagreeing, but one family of near-duplicate signals outvoting the folds. D-21 rule 6's source-closure
 test is what makes this computable rather than argued — all six closures contain the same embedders.
+
+#### Correction: the cross product is a claim × verifier matrix, and only one cell is circular
+
+The explanation above is wrong about the mechanism. The `::` vote is a **claim validation**, not a
+distance labelled with two model names. The *diarizer* supplies a claim — "same speaker as the previous
+bucket on this track", or "the speaker changed" — and the *embedder* supplies a verdict on it via cosine
+distance. `prev_emb_per_track` is keyed `(diarizer, embedder, cluster_id)`, so the comparison points
+differ per diarizer.
+
+So `community-1::ecapa` and `sortformer::ecapa` are **not the same distance twice**. They validate
+different claims with the same yardstick, which is a real second dimension. "They differ only in whose
+segments were embedded" was wrong.
+
+The three diarizers stand in *different* relations to the embedders, which is what the uniform-cross-
+product reading missed:
+
+| cell | claim from | verdict from | independent |
+|---|---|---|---|
+| `community-1::{ecapa,resnet}` | spans, no embeddings of its own in play | ecapa / resnet | yes |
+| `sortformer::{ecapa,resnet}` | spans, no embeddings | ecapa / resnet | yes |
+| `embedding_silhouette/ecapa::resnet` | ecapa clustering | resnet | yes |
+| `embedding_silhouette/ecapa::ecapa` | ecapa clustering | **ecapa** | **no — circular** |
+
+**Exactly one of the six is degenerate**, not all six. So the cross product is not the defect; it is a
+legitimate claim × verifier matrix with one self-validating cell.
+
+What survives is narrower and is about **aggregation, not duplication**: six validations against two
+folds under the default `min` (max-doubt) aggregator means the validation family decides the axis, which
+is why 0.858 sits against a 0.977-confident count. That is an argument for weighting the folds against
+the validations — and for removing the circular cell — rather than for deleting the family wholesale.
+
+**This weakens the case for the nine-signal removal as stated in D-20.** Its premise was that each was
+"a computation over vectors carrying an unrecorded estimator choice". The estimator choice is real
+(cosine, and which lag), but these are not redundant re-measurements, and removing all of them removes
+genuine diarizer-claim validation. Worth re-deciding rather than executing as written.
+
+Also unused and worth noting: `community-1` exposes `speaker_embeddings` on its pipeline output, which
+nothing reads. A diarizer's own embeddings validating its own claims would be a fourth circular cell if
+it were wired the same way.
