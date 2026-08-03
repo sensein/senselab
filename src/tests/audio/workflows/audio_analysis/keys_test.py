@@ -37,7 +37,7 @@ YAMNET_LABELS = SignalKey(target="scene_labels", producer="yamnet", route=Route(
 
 def test_the_default_route_is_the_direct_pathway_unperturbed() -> None:
     """What used to be spelled ``raw``. Two dimensions, both defaulted, neither special-cased."""
-    assert Route() == Route(pathway="direct", perturbation="identity")
+    assert Route() == Route(pathway="direct", perturbation="unmodified")
 
 
 def test_the_identity_route_gets_no_special_spelling() -> None:
@@ -45,9 +45,9 @@ def test_the_identity_route_gets_no_special_spelling() -> None:
 
     Every route spells both dimensions, so a reader cannot mistake a comparison for a member.
     """
-    assert Route().path == "direct/identity"
+    assert Route().path == "direct/unmodified"
     assert Route(perturbation="enhanced").path == "direct/enhanced"
-    assert Route(pathway="background").path == "background/identity"
+    assert Route(pathway="background").path == "background/unmodified"
 
 
 def test_the_route_is_two_path_levels_so_the_joiner_cannot_be_ambiguous() -> None:
@@ -80,7 +80,7 @@ def test_tools_measuring_one_target_share_a_first_element() -> None:
 
 def test_a_signal_path_is_derived_from_its_key() -> None:
     """Paths are built from keys, never parsed back out of them."""
-    assert BROUHAHA_SNR.relative_path(".parquet") == "L1/signals/snr/pyannote__brouhaha/direct/identity.parquet"
+    assert BROUHAHA_SNR.relative_path(".parquet") == "L1/signals/snr/pyannote__brouhaha/direct/unmodified.parquet"
 
 
 def test_a_producer_id_that_could_collide_after_slugging_is_refused() -> None:
@@ -90,7 +90,7 @@ def test_a_producer_id_that_could_collide_after_slugging_is_refused() -> None:
     would make every path unreadable to buy safety against an id no real model has.
     """
     ok = SignalKey(target="transcript", producer="nvidia/canary-qwen-2.5b", route=Route())
-    assert ok.relative_path(".json") == "L1/signals/transcript/nvidia__canary-qwen-2.5b/direct/identity.json"
+    assert ok.relative_path(".json") == "L1/signals/transcript/nvidia__canary-qwen-2.5b/direct/unmodified.json"
     with pytest.raises(ValueError, match="__"):
         SignalKey(target="transcript", producer="nvidia__canary-qwen-2.5b", route=Route())
 
@@ -265,7 +265,7 @@ def test_a_projection_path_keeps_the_source_producer_and_route() -> None:
     """Dropping either is the reduction D-18 found: a value describing something else."""
     d = DerivativeKey(target="speech", operator=Operator("project_labels", "speech_v3"), sources=(AST_LABELS,), round=0)
     assert d.relative_path(".parquet") == (
-        "L2/round/0/derivatives/speech/project_labels__speech_v3/MIT__ast-finetuned-audioset/direct/identity.parquet"
+        "L2/round/0/derivatives/speech/project_labels__speech_v3/MIT__ast-finetuned-audioset/direct/unmodified.parquet"
     )
 
 
@@ -274,3 +274,13 @@ def test_a_fold_collapses_its_sources_to_the_operator_and_materialises_them_as_c
     d = DerivativeKey(target="scene_labels", operator=Operator("agree"), sources=(AST_LABELS, YAMNET_LABELS), round=0)
     assert d.relative_path(".parquet") == "L2/round/0/derivatives/scene_labels/agree.parquet"
     assert d.required_columns == ("contributing_producers", "contributing_routes")
+
+
+def test_the_no_op_perturbation_is_not_called_identity() -> None:
+    """``identity`` means the per-speaker identity axis in this project, so it cannot mean a no-op.
+
+    ``L1/signals/snr/pyannote__brouhaha/direct/identity.parquet`` reads as an identity *estimate*,
+    and nothing under ``L1/signals/`` is an estimate. ``perturbations.IDENTITY_TRANSFORM`` already
+    used ``unmodified``; the collision was invented, not inherited.
+    """
+    assert "identity" not in Route().path

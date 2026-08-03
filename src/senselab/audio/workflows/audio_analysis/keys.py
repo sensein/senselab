@@ -48,8 +48,19 @@ __all__ = [
 DEFAULT_PATHWAY: Final[str] = "direct"
 """The pathway on which the recording's own foreground is the primary information target."""
 
-DEFAULT_PERTURBATION: Final[str] = "identity"
-"""The transform that does nothing."""
+DEFAULT_PERTURBATION: Final[str] = "unmodified"
+"""The transform that does nothing.
+
+**Not** ``identity``. That is the mathematically obvious name and it collides: ``identity`` was the
+per-speaker axis's name before the rename to ``speaker``, and it survives in CLAUDE.md's
+``uncertainty/{presence,identity,utterance}.parquet`` and in the spec directory name — so it is still
+what a reader of this repo expects the word to mean. A path ending ``direct/identity.parquet`` under
+``L1/signals/`` then reads as an identity *estimate*, which is how the first reader read it, and
+nothing under ``L1/signals/`` is an estimate at all.
+
+``unmodified`` is what ``perturbations.IDENTITY_TRANSFORM`` already used, so this is the name the
+codebase had before a colliding one was invented for it.
+"""
 
 
 def slug(identifier: str) -> str:
@@ -110,7 +121,7 @@ class Route:
         return f"{slug(self.pathway)}/{slug(self.perturbation)}"
 
     @property
-    def is_identity(self) -> bool:
+    def is_unmodified(self) -> bool:
         """Is this the untransformed recording on its own pathway?"""
         return self.pathway == DEFAULT_PATHWAY and self.perturbation == DEFAULT_PERTURBATION
 
