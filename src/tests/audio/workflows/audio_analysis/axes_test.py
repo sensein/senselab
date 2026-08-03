@@ -68,11 +68,23 @@ def test_the_attenuated_set_excludes_exactly_what_its_axes_say_it_does() -> None
     assert axis("background_mask").attenuable is False
 
 
-def test_the_mask_axis_has_evidence_without_having_voters() -> None:
-    """It is one derived judgement per region, not an ensemble — which is what ``harvested`` says."""
-    assert axis("background_mask").harvested is False
-    assert "background_mask" not in HARVESTED_AXES
-    assert "background_mask" in AXIS_NAMES, "not harvested is not the same as not an axis"
+def test_the_mask_axis_is_harvested_like_every_other() -> None:
+    """VAD, ASR words and speaker occupancy all bear on whether the target was active.
+
+    It was ``harvested=False`` while a single derived judgement produced the mask, which read as a
+    property of the mask when it was a property of there being one producer. The flag decides two
+    things at once, and the second is why this matters: the disagreements index builds from
+    ``HARVESTED_AXES``, so while the flag was ``False`` the axis was fused, written to ``estimates/``
+    and drawn on the timeline while absent from the ranking that decides what a reader looks at.
+    """
+    assert axis("background_mask").harvested is True
+    assert "background_mask" in HARVESTED_AXES
+    assert "background_mask" in AXIS_NAMES
+
+
+def test_every_active_axis_is_harvested_and_that_is_checked_not_assumed() -> None:
+    """A future axis may genuinely have one producer, so the property stays declared."""
+    assert set(HARVESTED_AXES) == set(AXIS_NAMES)
 
 
 def test_an_undeclared_axis_raises_rather_than_returning_nothing() -> None:

@@ -32,7 +32,7 @@ source is then only visible via ``PassHarvest.synthetic_diarization``.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 
@@ -100,6 +100,7 @@ def harvest_pass(
     diff_speaker_floor: float = 0.70,
     cluster_cosine_threshold: float = 0.5,
     clustering_algorithm: str = "spectral",
+    task_type: str | None = None,
     calibration: dict[str, Any] | None = None,
 ) -> tuple[PassHarvest, dict[str, list[WindowEmbedding]], dict[str, str]]:
     """Run every model-touching step for one pass and return its harvested votes.
@@ -334,6 +335,36 @@ def harvest_pass(
             source_by_bucket[(round(s["start"], 6), round(s["end"], 6))] = s
         sound_sources_provenance["category_map_version"] = load_source_category_map().get("version")
 
+    # ── background-mask harvest ──
+    # Derived from the presence evidence already gathered, not re-measured: the mask shares the
+    # presence grid (D-24 correction), so one measurement serves both axes and they cannot drift.
+    # Which reading indicates *target* activity depends on ``task_type`` — in a breathing task speech
+    # indicates target *absence*, which is how a collected breath came to be reported as background.
+    from senselab.audio.workflows.audio_analysis.mask_harvest import harvest_background_mask_evidence
+
+    _speech_by_bucket: dict[tuple[float, float], float] = {}
+    _words_by_bucket: dict[tuple[float, float], float] = {}
+    _occupancy_by_bucket: dict[tuple[float, float], float] = {}
+    for row in speech_presence_evidence:
+        key = (round(float(row["start"]), 6), round(float(row["end"]), 6))
+        for name, ev in (row.get("evidence") or {}).items():
+            if not isinstance(ev, Mapping):
+                continue
+            if "frame_mean" in ev and ev["frame_mean"] is not None:
+                _speech_by_bucket[key] = max(_speech_by_bucket.get(key, 0.0), float(ev["frame_mean"]))
+            elif ev.get("word_overlap_s") is not None:
+                _words_by_bucket[key] = max(_words_by_bucket.get(key, 0.0), float(ev["word_overlap_s"]))
+            elif ev.get("covered_fraction") is not None:
+                _occupancy_by_bucket[key] = max(_occupancy_by_bucket.get(key, 0.0), float(ev["covered_fraction"]))
+    background_mask_evidence = harvest_background_mask_evidence(
+        duration_s=float(harvest_summary.get("duration_s", 0.0) or 0.0),
+        grid=pres_grid,
+        task_type=task_type,
+        speech_by_bucket=_speech_by_bucket,
+        word_coverage_by_bucket=_words_by_bucket,
+        speaker_occupancy_by_bucket=_occupancy_by_bucket,
+    )
+
     # ── speaker harvest ──
     # Prefer per-pass empirical calibration learned from this pass's embedding
     # clusters; fall back to the CLI defaults when clustering didn't produce
@@ -390,6 +421,7 @@ def harvest_pass(
         # re-running a model, which would defeat the harvest/aggregate split. The channels this
         # replaces were permutation-arbitrary and could not name anyone (D-19).
         diarization_by_model=dict((harvest_summary.get("diarization") or {}).get("by_model") or {}),
+        background_mask_evidence=background_mask_evidence,
         provenance_extras={
             "scene_quality": scene_quality_provenance,
             "sound_sources": sound_sources_provenance,

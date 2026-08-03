@@ -182,9 +182,16 @@ def test_compute_uncertainty_axes_happy_path() -> None:
         speech_presence_labels=["Speech"],
     )
 
-    # Three axes, keyed by axis alone. An axis folds across passes, so a (pass, axis) key
+    # Every active axis, keyed by axis alone. An axis folds across passes, so a (pass, axis) key
     # cannot exist — and neither can a raw_vs_enhanced pseudo-pass to hold their difference.
-    assert set(fused_axes) == {"speech_presence", "speaker", "asr"}
+    #
+    # ``background_mask`` is here because it is harvested now: VAD / ASR words / speaker occupancy
+    # vote on whether the target was active. A hard-coded set of three is what let the fourth axis be
+    # fused and written while being absent from the index that ranks it, so this asserts against the
+    # declaration rather than a literal.
+    from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+
+    assert set(fused_axes) == set(AXIS_NAMES)
     for axis_result in fused_axes.values():
         assert not hasattr(axis_result, "perturbation")
         for r in axis_result.rows:

@@ -48,6 +48,11 @@ _AXIS_SIGNALS: dict[str, tuple[str, str]] = {
     "speech_presence": ("speech_presence_evidence", "evidence"),
     "speaker": ("speaker_votes", "votes"),
     "asr": ("asr_votes", "votes"),
+    # The mask is an ensemble now: VAD / ASR words / speaker occupancy each vote on whether the
+    # *target* was active, under the declared task type. It was absent from this map while it had one
+    # producer, which is what kept it out of ``HARVESTED_AXES`` — and therefore out of the
+    # disagreements index, while ``estimates/`` carried it all along.
+    "background_mask": ("background_mask_evidence", "votes"),
 }
 
 
