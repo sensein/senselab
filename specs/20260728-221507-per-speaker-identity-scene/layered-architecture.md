@@ -3323,7 +3323,7 @@ What each question implies, and what the run actually used:
 | `speech_presence` | was anyone speaking here? | speech onsets are tens of ms → fine | 0.1 s win / **0.02 s hop** |
 | `speaker` | was it the same speaker? | turns are seconds → coarse is fine | 0.25 s / 0.25 s |
 | `asr` | what was said? | **the word** | 1.0 s / 0.5 s ← wrong unit |
-| `background_mask` | is this region target-free? | **variable-length regions** | one 21 s row |
+| `background_mask` | is this region target-free? | **whatever `speech_presence` uses** | one 21 s row |
 
 Three things follow.
 
@@ -3337,10 +3337,26 @@ every quantity `None`, because with one recognizer a time bucket has no pairwise
 On a word grid the same run still has content per row — text and onset — even where uncertainty is
 unmeasurable.
 
-**`background_mask` wants regions, and got one.** Variable-length regions are the right shape for
-"where is the target absent"; a single row spanning the recording is that shape degenerately filled,
-which is why its uncertainty is 0.000. The grid is not the defect here — the region finder producing
-one region is.
+**`background_mask` shares `speech_presence`'s grid**, and this is not a convenience — it is forced
+twice over.
+
+*By the question.* "Is the target absent here?" and "was anyone speaking here?" are complementary
+questions about the same fast-changing thing. Target activity starts and stops as sharply as speech
+does, so any resolution good enough for one is required by the other.
+
+*By the coupling.* The mask is **derived from** the presence axis — `derive_mask_from_axes` calls a
+region target-free where presence has settled. If the two are on different grids that derivation needs
+a projection, and every projection is a place to lose localisation. On a shared grid the coupling is
+exact and needs no operator at all.
+
+The run shows the cost of not sharing it: presence produced 1070 rows and the mask produced **one**,
+spanning the whole recording. So the coupling projected 1070 settled/unsettled judgements onto a single
+region, which is why the mask's uncertainty is 0.000 — not because the mask is confident, but because
+it has nowhere to be uncertain. An earlier draft of this section called variable-length regions the
+right shape for the mask; that was wrong, and it would have kept the projection in place.
+
+Regions remain the right shape for *reporting* a mask to a human — contiguous target-free stretches
+read better than 1070 rows. But that is a rendering of the axis, not the axis.
 
 So `axes.Axis.grid` records a *justified* choice per axis rather than membership in a default, and
 `AXIS_GRIDS` remains what makes joining two axes an explicit projection instead of an index zip.
