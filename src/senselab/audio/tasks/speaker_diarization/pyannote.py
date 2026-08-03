@@ -81,6 +81,7 @@ def diarize_audios_with_pyannote(
     num_speakers: Optional[int] = None,
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
+    exclusive: bool = True,
 ) -> List[List[ScriptLine]]:
     """Diarize audios with **Pyannote**; returns per-speaker segments per audio.
 
@@ -102,8 +103,23 @@ def diarize_audios_with_pyannote(
         max_speakers (int | None):
             Maximum speakers when estimating (ignored if `num_speakers` is set).
 
+        exclusive (bool):
+            Which view of the pipeline's output to return. ``True`` (default) returns
+            ``exclusive_speaker_diarization``: a **partition**, where every instant belongs to at
+            most one speaker and concurrent speech has been resolved away. ``False`` returns the
+            pipeline's overlapping view, where two speakers talking at once produce two segments
+            covering the same instant.
+
+            This matters more than it looks. With the exclusive view, *no downstream consumer can
+            detect overlap at all* — a per-instant speaker count derived from these segments is
+            capped at 1 by construction, so it reports "no overlap" as a confident measurement
+            rather than as something the input could not express. `community-1` computes overlap
+            internally (its local segmentation model is `segmentation-3.0`); the exclusive view
+            discards it.
+
     Returns:
-        list[list[ScriptLine]]: One list per input audio with `(speaker, start, end)`.
+        list[list[ScriptLine]]: One list per input audio with `(speaker, start, end)`. Segments may
+        overlap when ``exclusive=False``.
 
     Raises:
         ModuleNotFoundError:
@@ -191,7 +207,20 @@ def diarize_audios_with_pyannote(
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )
-        results.append(_annotation_to_script_lines(diarization.exclusive_speaker_diarization))
+        # ``getattr`` with an explicit failure rather than a silent fallback to the exclusive view:
+        # returning a partition when the caller asked for overlap would be the absent-vs-zero
+        # failure again — a structurally-impossible overlap reading as a measured absence of one.
+        if exclusive:
+            annotation = diarization.exclusive_speaker_diarization
+        else:
+            annotation = getattr(diarization, "speaker_diarization", None)
+            if annotation is None:
+                raise AttributeError(
+                    "the pipeline output exposes no overlapping speaker_diarization view; "
+                    "exclusive=False cannot be honoured, and silently returning the exclusive "
+                    "partition would report structural non-overlap as a measurement"
+                )
+        results.append(_annotation_to_script_lines(annotation))
     end_time_diarization = time.time()
     elapsed_time_diarization = end_time_diarization - start_time_diarization
     logger.info(f"Time taken to perform diarization: {elapsed_time_diarization:.2f} seconds")

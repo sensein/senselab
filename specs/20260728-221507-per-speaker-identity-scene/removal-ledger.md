@@ -169,20 +169,52 @@ each is a capability rather than a call site:
 | consumer | what it does | what removal costs |
 |---|---|---|
 | `compute.py` → `frame_voters["frame_segmentation"]` | a speech-presence voter | **one fewer voter**, not a lost capability. `_rule_for` dispatches on `frame_mean` rather than on a model name, so brouhaha's VAD keeps its identical path with no registry edit |
-| `adaptive/backends.py` (I4, FR-016) | overlap detection via `FramePosterior.overlap_probs()` | the whole intervention. No other tool exposes per-class overlap posteriors, and `occupancy.count_posterior_in_window` answers a *different* question — cross-tool spread about a count, not one model's overlap track |
+| `adaptive/backends.py` (I4, FR-016) | overlap detection via `FramePosterior.overlap_probs()` | **less than first claimed — see the correction below.** Overlap *is* derivable from diarization spans; `segmentation-3.0` is the local segmentation model inside `community-1`, so the pipeline already computes it |
 | `scripts/analyze_audio.py` | triage's round-0 speech gate | the gate, unless it moves to brouhaha VAD |
 
-**So the removal is blocked on a decision, not on work.** The first and third have obvious
-substitutes (brouhaha VAD, already a voter with a live customer in the speech-presence axis). The
-second does not: I4's gated overlap detection is the only per-class overlap posterior in the pipeline,
-and D-19's argument against `segmentation-3.0` was specifically about *deriving a count distribution*
-from its channels — not about the channels being useless. An overlap track read as one model's
-evidence, weighed against others, is not the defect the Poisson-binomial was.
+### Correction: overlap comes from diarization output, and one line was discarding it
 
-Options, in the order I would rank them:
+I claimed no other tool exposes overlap, so I4 made `segmentation-3.0` irreplaceable. That was wrong,
+and the reason is worth recording because it hid a live defect.
 
-1. **Keep `segmentation-3.0` for I4 only**, and remove it as a *count* source and as a
-   speech-presence voter. That matches what D-19 actually argued and leaves one narrow, justified
-   use.
-2. Replace I4 with a `community-1`-based overlap measure, if it exposes one. Unverified.
-3. Drop I4 and accept that overlap detection leaves the intervention catalogue.
+`segmentation-3.0` **is a diarizer** — specifically the local segmentation model inside
+`community-1`'s pipeline. So `community-1` already computes overlap; the question was only whether
+senselab keeps it. It does not:
+
+```python
+results.append(_annotation_to_script_lines(diarization.exclusive_speaker_diarization))
+```
+
+`exclusive_speaker_diarization` is a **partition**: every instant belongs to at most one speaker, and
+concurrent speech has been resolved away before senselab sees it.
+
+**The consequence is a defect in the J1 replacement, not just a missed substitution.**
+`count_at(spans, t)` over `community-1` spans is capped at 1 by construction, so
+`count_posterior_in_window` reports `p_overlap = 0.0` — *confidently*, as a measurement, for input
+that could not have expressed overlap. The absent-vs-zero failure this design keeps finding, arrived at
+through correct code fed structurally-impossible input.
+
+`nvidia/diar_sortformer_4spk-v1` is unaffected: it emits per-speaker activity, so its concurrent
+segments survive. So span-derived overlap works today via sortformer only.
+
+`diarize_audios_with_pyannote` now takes `exclusive: bool = True`, and `exclusive=False` raises rather
+than falling back if the overlapping view is absent — silently returning a partition when overlap was
+asked for is the same failure one level down. **Unverified against a live model**: the attribute name
+for the overlapping view is read defensively and has not been exercised against a real
+`community-1` run.
+
+What genuinely remains distinct about `segmentation-3.0`'s overlap is that it is a **soft,
+pre-threshold probability** at 16.9 ms, where spans give a hard post-threshold decision at segment
+boundaries. That is a real difference — but it is the *same* difference this design already ruled on
+(a tool's reported confidence vs cross-tool disagreement, both recorded, neither substituting), and for
+an intervention meant to resolve doubt, two independent diarizers agreeing on overlap is the stronger
+evidence.
+
+Options, re-ranked after the correction:
+
+1. **Wire `exclusive=False` for the workflow's diarization**, then remove `segmentation-3.0`
+   entirely. Overlap becomes cross-tool and the speech voter and triage gate move to brouhaha VAD.
+   Needs verification against a live `community-1` run first.
+2. Keep `segmentation-3.0` for I4 only, as a soft overlap probability recorded as one tool's
+   confidence — defensible, but no longer necessary.
+3. Drop I4.
