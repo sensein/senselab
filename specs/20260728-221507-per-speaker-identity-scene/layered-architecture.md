@@ -2469,3 +2469,30 @@ is represented, not what it is of.
 
 `speaker_spans` is the target both diarizers share, which is exactly what lets their counts be
 compared and their capacities censored against each other (D-19).
+
+### `(scene_labels, MIT/ast-finetuned-audioset, p)` — one key, top-k configurable
+
+One signal, not several. AST's target is the **label distribution itself**; which labels count as
+speech, music, machine or environment is an L2 mapping over that distribution, not something L1
+decides. That keeps the AudioSet→category map (`data/audioset_source_map.json`) where it can be
+changed without re-running the model, and it means a new category needs no new signal.
+
+```
+(scene_labels, MIT/ast-finetuned-audioset, p)
+  shape       window, 10.24 s / 10.24 s (non-overlapping)
+  measurement label_scores: [{label: score}, ...] — top-k, descending
+  units       probability   (sigmoid, multi-label — NOT softmaxed; softmax across 527 classes
+                             structurally suppressed secondary background categories)
+  provenance  k, vocabulary id + size (527), model revision
+```
+
+**`k` is configurable, default 7.** The stored tail is truncated, so this bounds what L2 can ask:
+label mass over a set whose members fall outside the top *k* is not recoverable without re-running.
+`k` therefore travels **on the row**, so a consumer can tell a zero mass ("this label scored below
+the 7th") from a real absence ("this label scored nothing") — the same absent-vs-zero distinction
+this design turns on everywhere else. A category map whose labels routinely fall outside the top *k*
+is a reason to raise *k*, and that is now a visible decision rather than a silent truncation.
+
+The `speech_label_mass` reduction and the 0.1 s projection both leave L1: the first is a selection
+plus a sum over a policy label set, the second asserts 102 independent values inside one 10.24 s
+window.
