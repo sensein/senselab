@@ -106,7 +106,7 @@ ways and whose real-run test skips-or-fails.
 
 | removed | condition |
 |---|---|
-| `pyannote/segmentation-3.0` — 12 src + 8 test files | J1/J4/C2 rebuilt on spans (D-19) |
+| `pyannote/segmentation-3.0` — 12 src + 8 test files | **J1 done** (`occupancy.py`: `occupancy`, `count_at`, `count_posterior` with censoring). J4/C2 still on frame channels |
 | 9 embedding-derived signals (`speaker_distance` ×4, `speaker_change` ×2, `embedding_silhouette` ×3) | the embedder-plus-clusterer diarizer emits `speaker_spans` |
 | ~~`ppgs` signal + the PER sub-signal~~ | **done** — 987 net lines out of `src/`, across 11 modules + the CLI. `features_extraction/ppg.py` stays a senselab task; only the *signal* went |
 | the `scene_quality` bundle (`units: "mixed"`) | the 8 per-target scene signals exist |
