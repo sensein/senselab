@@ -397,3 +397,32 @@ the strongest available argument for finishing the nine-signal removal.
 `frame_posteriors_provenance["brouhaha_vad"]` is asserted by a unit test and passes, but
 `final/summary.json` has no `frame_posteriors` block, so I could not confirm it reaches a run artifact.
 Not claimed either way — the in-memory record exists; whether any writer surfaces it is unverified.
+
+### Why the speaker axis has six embedding signals: it is a cross product
+
+`speaker.py` builds them in a nested loop — `for m in diarizers: for emb in embedders:
+votes[f"{m}::{emb}"]` — so the count is **diarizers × embedders**. The run has 3 × 2 = 6:
+
+- diarizers: `community-1`, `sortformer`, **and** `embedding_silhouette/spkrec-ecapa-voxceleb`
+- embedders: `spkrec-ecapa-voxceleb`, `spkrec-resnet-voxceleb`
+
+It grows multiplicatively. A third embedder makes 9; a fourth diarizer makes 12. The two genuinely
+cross-tool signals (`__cross_diar_label_disagreement__`, `__overlap_count__`) stay at one each, because
+each already folds across every diarizer.
+
+**Corrects D-20's arithmetic**, which predicted "4 × `speaker_distance` (2 diarizers × 2 embedders)".
+The synthetic embedding-derived diarizer was not counted, so the removal is larger than written.
+
+**The count is not the defect; the correlation is** — and it is precisely the within-bucket
+independence that matters for correctness:
+
+- All six share the same two embedders. `community-1::ecapa` and `sortformer::ecapa` differ *only* in
+  whose segments were embedded; the model the cosine distance comes from is identical.
+- `embedding_silhouette/ecapa::ecapa` is degenerate — the same model as both diarizer and embedder,
+  comparing ecapa against itself.
+- Under the default `min` (max-doubt) aggregator a single high value decides the axis, so six
+  correlated signals reliably outvote two independent folds.
+
+That is the mechanism behind 0.858 uncertainty against a 0.977-confident count posterior: not two views
+disagreeing, but one family of near-duplicate signals outvoting the folds. D-21 rule 6's source-closure
+test is what makes this computable rather than argued — all six closures contain the same embedders.
