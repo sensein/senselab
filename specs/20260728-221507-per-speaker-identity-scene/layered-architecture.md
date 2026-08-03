@@ -3108,3 +3108,138 @@ Reads are many and derived from `n`; the **write root is always exactly one dire
 capability that makes "a stage cannot write outside its own directory" true by construction rather
 than by inspection. That asymmetry is the whole reason D-18 works: the constraint that matters is on
 writes, and it does not weaken as the read set grows.
+
+---
+
+## D-23. A perturbation preserves every information target — so enhancement is not one
+
+**The criterion, and it is a definition rather than a guideline:**
+
+> A perturbation is a transform that, **in ideal circumstances, does not remove the primary
+> information targets.**
+
+Stated in the design's own vocabulary (D-20's targets), it decides membership rather than describing
+a tendency, and it settles the question `suppress_foreground` raised.
+
+### Foreground suppression is an alternate pathway, not a perturbation
+
+It is a **route to enhancing a chosen signal component**. Speech enhancement enhances the foreground
+component; suppress-then-enhance enhances the background component. They are the same kind of
+operation applied to different components, and each **removes** the other's information targets by
+design — that is what they are for, not a side effect.
+
+So the family is one operation with a component parameter:
+
+```
+enhance(component=foreground)    what "enhanced" is today
+enhance(component=background)    suppress the foreground, then enhance what remains
+```
+
+### The consequence: `enhanced` was never a perturbation, and neither is anything else here
+
+Two transforms are declared: `unmodified` (identity) and `speech_enhanced`. Under the criterion:
+
+| declared | removes a primary target? | perturbation? |
+|---|---|---|
+| `unmodified` | no | **yes** — the identity |
+| `speech_enhanced` | yes: background sources, and intruding speakers | **no** — a pathway |
+
+**The pipeline therefore has exactly one perturbation and zero non-trivial ones.** That is not a
+quibble about naming; it invalidates a live mechanism.
+
+### `reliability.signal_stability` has never had a valid pair
+
+Its premise, verbatim from the module docstring:
+
+> The reliability is **derived rather than assigned** […] the raw and enhanced passes are the same
+> recording under a transform, so each signal's two answers already constitute a stability sample. A
+> signal that contradicts itself between them has not earned its weight; one that answers identically
+> has.
+
+The reasoning is right and the instance is wrong. `(raw, enhanced)` is its **only** pair, and
+enhancement removes primary targets — so a signal's two answers are not one question answered twice.
+They are answers about different information content, and their disagreement is the pathway doing its
+job.
+
+The corroboration is already in this repo, from the other direction: the off-target-speaker work must
+run on `raw` **because enhancement hides intruders**. That is the criterion's own words. So on the
+axis where cross-pathway disagreement is the *finding*, the weighting mechanism has been reading it
+as unreliability and attenuating toward `MIN_RELIABILITY`.
+
+**The honest interim needs no new mechanism.** `reliability.py` already specifies the fallback: *"a
+signal with no perturbation evidence simply keeps its full weight by default"*, on the grounds that
+one observation is not a stability sample. Removing the invalid pair lands exactly there — measured
+weights disappear until a real perturbation exists, rather than being replaced by a fabricated
+substitute.
+
+### Two independent parts of where the audio came from
+
+```
+route = (pathway, perturbation)
+
+pathway       which component's information this route preserves or enhances
+              direct | foreground | background
+perturbation  a target-preserving variation within a pathway
+              identity | …
+```
+
+`raw` is `(direct, identity)`. The signal key keeps three slots — D-21's parallel with derivatives
+depends on the arity — with the third naming the route, and `L1/routes.json` declaring its parts.
+
+**D-21's arity rule then decides what a difference means, with nothing new to declare:**
+
+| comparison | arity | reading |
+|---|---|---|
+| same pathway, different perturbation | **fold** — same question twice | instability → the fusion weight |
+| different pathway | **compose** — different information content | complementary, **not** corroborative; no weight |
+
+That is the same rule that forbids a spread across `snr` and `c50`, applied one level up. It is why
+the `expects_invariance` matrix an earlier draft of this section proposed is unnecessary: the
+component makes the comparison well-posed or it does not, and the arity already encodes that.
+
+### Background ASR is the third route of an existing key
+
+```
+(transcript, nyralabs/CrisperWhisper2.0_turbo, (direct,     identity))
+(transcript, nyralabs/CrisperWhisper2.0_turbo, (foreground, identity))
+(transcript, nyralabs/CrisperWhisper2.0_turbo, (background, identity))   ← background speech
+```
+
+Same target, same tool, same shape, same consumers. A capability the design had no place for arrives
+as a row, which is what target-first keying was chosen for.
+
+### Revelation is absent-vs-present, not a delta
+
+The background pathway's value is that it **produces a measurement where the direct pathway produced
+none** — a speaker whose spans or whose words exist only once the foreground is projected out. That
+is the absent-vs-present distinction this design turns on everywhere, not a magnitude of change, and
+it is why an earlier draft's `(revealed, delta_under/<pathway>, …)` derivative was the wrong shape: a
+|Δ| against nothing is not a large delta, it is undefined.
+
+So off-target-speaker detection reads as: **`speaker_spans` present on the `background` pathway and
+absent on `direct`.** Measurable, and stated without reference to a residual's power.
+
+### What a real perturbation looks like
+
+The mechanism is sound and has nothing to run on. Candidates that satisfy the criterion — ideally
+target-preserving — and are therefore what stability actually wants:
+
+- **Monte Carlo dropout** at inference. Already specified as a wanted senselab primitive, and the
+  closest fit: it perturbs the *estimator* while leaving every target in the audio untouched.
+- Gain change, resample round-trip, codec round-trip, window-offset shift, decoder seed.
+
+`foreground.py` is wired rather than deleted either way (see `removal-ledger.md`): `project_onto`,
+`suppression_depth_db` and `leakage_margin_db` are what a `background` pathway must report about
+itself, and measuring depth *by projection rather than by level* is the reason its parameters alone
+are not sufficient provenance.
+
+### What this obliges
+
+1. `Perturbation` splits into `Pathway` + `Perturbation`; `L1/perturbations.json` becomes
+   `L1/routes.json`. Part of the row-types step, since the register is being reshaped anyway.
+2. `speech_enhancement(model_id)` becomes `enhance(component=…)`, and `enhanced` is reclassified as
+   `(foreground, identity)` — not renamed away, reclassified, so existing runs stay interpretable.
+3. `signal_stability` loses its `axis` parameter (D-21) **and** its only pair. Measured weights are
+   absent until a perturbation exists; the documented no-evidence default carries it.
+4. `background` pathway wired, with its projection-measured suppression depth in the register.
+5. Off-target-speaker detection restated as presence-on-`background` / absence-on-`direct`.
