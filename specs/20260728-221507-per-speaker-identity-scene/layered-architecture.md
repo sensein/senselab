@@ -1767,3 +1767,128 @@ is not carelessness; it is that inspection-after-the-fact of an undecidable prop
 terminate. Every hour spent extending the vocabulary buys one bypass and leaves the class intact.
 Capability-passing changes what must be true from *"we thought of every way to write a path"* to
 *"the run directory has one door"* — and the second is a property that can actually be held.
+
+### D-18 revised. The capability is rooted, and the schema travels with the artifact
+
+The plan above still had the guard's mindset: it built a checker and then listed what the checker
+could not catch. Two of those "limits" were artefacts of under-designing, not properties of the
+problem. **These are our own functions.** The goal is not to detect a bad write; it is to leave no
+way to express one.
+
+#### 1. A stage's handle is rooted at its own directory
+
+`StageIO` is not "run-directory access that knows which stage you are". It is constructed **at the
+stage's own directory** and holds no other root for writing:
+
+```python
+io = StageIO.for_stage(L2_ROUND, round=3)     # write root: L2/round/3/
+io.write("estimates", payload, axis="speaker")  # -> L2/round/3/estimates/speaker.parquet
+```
+
+Writing outside is not checked, it is **unreachable**: the handle exposes no way to name a parent,
+`..` and absolute paths are rejected at construction, and the root is private. There is no
+`run_dir` in the stage's scope to build one from. The earlier plan's import rule — "no pipeline
+module may import `Path` or `open`" — becomes a hygiene check rather than the load-bearing
+guarantee, because even a module that imports `pathlib` has no run root to point it at.
+
+#### 2. Reading another stage is a read-root, and the read-roots *are* the DAG
+
+A stage needs upstream evidence: L2 reads `L1/signals/`. So a handle carries one **write root** (its
+own directory) and zero or more **read roots** (its declared upstream stages), read-only:
+
+```python
+StageIO.for_stage(L2_ROUND, round=3, reads=[L1_SIGNALS, L2_ROUND(2)])
+```
+
+This is the DAG, made concrete rather than asserted. A stage's in-edges are literally the roots it
+was handed. Acyclicity holds by construction — a handle can only be given roots for stages already
+constructed — so `FINAL` being read by an earlier stage, and round *n* reading round *n* instead of
+*n−1*, both become impossible rather than checked. The separate acyclicity test disappears.
+
+#### 3. The schema travels with the artifact, so a wrong value cannot be written
+
+`write` does not take an untyped payload. Each declared artifact names the **record type** its rows
+are, and the writer's signature is that type:
+
+```python
+@dataclass(frozen=True)
+class EstimateRow:            # the four quantities, kept distinct, plus attribution
+    start: float; end: float
+    uncertainty: float | None
+    epistemic_uncertainty: float | None
+    confidence: float | None
+    variability: float | None
+    triage_score: float | None
+    contributing_signals: tuple[str, ...]
+    contributing_passes: tuple[str, ...]
+
+ARTIFACTS["estimates"] = Artifact(row=EstimateRow, key=("axis", "bucket"), ...)
+```
+
+`io.write("estimates", rows: Sequence[EstimateRow], axis=…)` then cannot carry a `perturbation`
+column, because `EstimateRow` has no field for one. The per-perturbation axis — the category error
+this whole thread has been chasing — stops being a thing a guard notices in a parquet and becomes a
+field that does not exist on the type. Same for a fold column under L1: `SignalRow` has no
+`uncertainty` field.
+
+So "a wrong value on a permitted path" is not a residual risk. It was a residual risk *of a design
+that accepted `Any` at the boundary*.
+
+#### 4. Keys are derived, not maintained
+
+The earlier plan had a hand-written `key` per artifact — another list to keep current, and the fifth
+axis would have been missed again. Instead the key space is **generated from the structure that
+already exists**:
+
+- **L1 keys come from L1's own shape.** A signal measurement is indexed by
+  `(perturbation, signal, bucket)` because that is what L1 produces — one measurement per signal,
+  per bucket, per perturbation. The perturbation set is enumerated from the perturbation registry;
+  the signal set from the harvesters that exist.
+- **L2 keys come from the derivative functions.** A derivative's key is the dimensions of *its own
+  function signature* — `mask` is keyed by bucket, `speaker allocation` by `(speaker, bucket)`,
+  `estimates` by `(axis, bucket)` where the axis set is the one authoritative axis enumeration.
+  Adding the punted `task` axis extends the key space with no declaration edit, because the
+  enumeration is the source.
+
+A key nobody wrote cannot drift from a structure nobody updated.
+
+#### 5. What the registry is
+
+A small table — the "lightweight database" — with one row per declared artifact:
+
+| field | source |
+|---|---|
+| name | the call site's vocabulary (`"signals"`, `"estimates"`) |
+| stage | which stage owns the write root it lands in |
+| row type | a frozen dataclass; the writer's signature |
+| key | derived from L1 structure or the L2 derivative's signature |
+| path template | derived from stage + key, not written by hand |
+
+Nothing in it is a pattern to match after the fact. It is the thing paths and schemas are *built
+from*, so conformance is not a property to test — it is the only shape the code can produce.
+
+#### 6. What genuinely remains
+
+Two things, and both are about absence rather than transgression:
+
+- **A declared artifact that no run produces.** Only a completed run shows it. This is the one place
+  the dynamic tree walk survives, and it is now its whole job.
+- **A stage that writes nothing at all.** Same class: the registry says what should exist; only a run
+  says what did.
+
+Everything else in the earlier plan's "does not solve" list was a consequence of accepting untyped
+payloads and an ambient run root. Removing those two removes the list.
+
+#### 7. Revised migration
+
+The order changes, because the row types are what everything else derives from:
+
+1. **Row types first.** `SignalRow`, `EstimateRow`, `DerivativeRow`, `VoteRow`. These already
+   half-exist in `types.py`; make them the writer signatures.
+2. **Derive the key space** from the perturbation registry, the harvester set, and the axis
+   enumeration. Delete the hand-written `key=` tuples.
+3. **`StageIO.for_stage`** with a private write root and explicit read roots.
+4. **Convert L1**, then `L2_ROUND`, then `FINAL` (read-only). Each conversion deletes static rules.
+5. **Remove `run_dir` from stage signatures.** After this the guarantee is structural.
+6. **Delete `_PathResolver`**, the verb/binding/constructor tables, and the acyclicity test — the
+   read-roots supersede it. `contracts.py` should end up a registry, not a checker.
