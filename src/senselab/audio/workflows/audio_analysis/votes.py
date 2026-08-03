@@ -59,6 +59,11 @@ class PassHarvest:
         per_window_embeddings: ``{embedding_model → [WindowEmbedding]}`` — L1 vectors. Clustering
             them is an L2 derivation (``speech_presence_link.derive_window_clusters``), so the
             vectors travel and the conclusion is drawn where it can be re-drawn.
+        background_mask_evidence: per-bucket votes on whether the **target** was active, from VAD /
+            ASR words / speaker occupancy under the declared task type
+            (``mask_harvest.harvest_background_mask_evidence``). Derived from
+            ``speech_presence_evidence`` rather than re-measured: the mask shares the presence grid, so
+            one measurement serves both and the two cannot drift.
         diarization_by_model: ``{model → diarization block}``, carried so the fusion phase can bind
             fused speaker ids to each diarizer's own labels (C2) without re-running a model, which
             would defeat the harvest/aggregate split. This replaces ``frame_posteriors`` as the
@@ -80,6 +85,7 @@ class PassHarvest:
     sampling_rate: int = 16000
     per_window_embeddings: dict[str, list[Any]] = field(default_factory=dict)
     diarization_by_model: dict[str, Any] = field(default_factory=dict)
+    background_mask_evidence: list[dict[str, Any]] = field(default_factory=list)
     provenance_extras: dict[str, Any] = field(default_factory=dict)
     synthetic_diarization: dict[str, Any] | None = None
 

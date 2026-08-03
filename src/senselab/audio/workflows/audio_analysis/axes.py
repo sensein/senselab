@@ -75,10 +75,10 @@ class Axis:
     Attributes:
         name: The axis id — the ``estimates/<name>.parquet`` filename and the ``axis`` column.
         question: What a high value on this axis means a reader does not know.
-        harvested: Does an *ensemble* vote on it? ``background_mask`` is *designed* to — VAD, ASR
-            and the diarizers all bear on whether the target was active — but its harvest does not
-            exist yet, so the flag is still ``False``. See its entry: the flag tracks the code, and
-            flipping it early makes every harvest consumer ask for evidence nothing produces.
+        harvested: Does an *ensemble* vote on it? Every active axis does. Kept as a declared property
+            rather than assumed of all axes, because a future axis may genuinely have a single
+            producer — and because it decides two things at once: whether ``harvest`` gathers votes,
+            and whether the axis appears in the disagreements index.
         attenuable: May an uncorroborated speech claim discount this axis? Evidence that nobody
             spoke here says nothing about *which* speaker it was, so carrying the discount onto
             the speaker axis would be an unmeasured leap; and it says nothing about whether a
@@ -170,13 +170,15 @@ AXES: Final[tuple[Axis, ...]] = (
         # speech vote therefore indicates target **absence** — the case that made a mask built from
         # voice activity alone report the collected signal as a background source.
         #
-        # **Still ``False``, and that is a statement about the code rather than the design.** Being
-        # harvested requires a harvest: a ``PassHarvest`` field holding the mask's evidence, and a
-        # ``reliability._AXIS_SIGNALS`` entry naming it. Flipping this flag before that exists puts
-        # the axis into ``HARVESTED_AXES`` and every harvest consumer then asks for evidence nothing
-        # produces — which is what happened when it was tried. The flag flips with the harvest, not
-        # ahead of it.
-        harvested=False,
+        # ``True`` since the harvest exists: ``mask_harvest.harvest_background_mask_evidence`` fills
+        # ``PassHarvest.background_mask_evidence``, and ``reliability._AXIS_SIGNALS`` names it. The flag
+        # was held at ``False`` until both were in place — flipping it early puts the axis into
+        # ``HARVESTED_AXES`` and every consumer then asks for evidence nothing produces.
+        #
+        # This is also what puts the mask into ``disagreements.json``. The index builds from
+        # ``HARVESTED_AXES``, so the axis was fused, written to ``estimates/`` and drawn on the
+        # timeline while being absent from the ranking that decides what a reader looks at.
+        harvested=True,
         # The mask's question is about target activity, not about speech, and an uncorroborated
         # speech claim is evidence about the latter only.
         attenuable=False,
