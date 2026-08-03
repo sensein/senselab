@@ -36,10 +36,8 @@ def _no_brouhaha(monkeypatch: pytest.MonkeyPatch) -> None:
     to inject synthetic frames.
     """
     import senselab.audio.tasks.scene_quality as sq
-    import senselab.audio.tasks.voice_activity_detection.frame_posteriors as fp
 
     monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
-    monkeypatch.setattr(fp, "extract_speech_frame_posteriors", lambda audios, *a, **k: [None] * len(audios))
 
 
 # ── Test fixture builders ─────────────────────────────────────────────

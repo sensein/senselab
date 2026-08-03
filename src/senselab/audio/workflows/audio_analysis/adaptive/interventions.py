@@ -1028,36 +1028,38 @@ def _p2_guard(region: dict[str, Any], ctx: dict[str, Any]) -> str | None:
     if _spec_missing("pyannote"):
         return "posteriors_unavailable (pyannote.audio not installed)"
     if not (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")):
-        return "posteriors_unavailable (HF token required for pyannote/segmentation-3.0)"
+        return "posteriors_unavailable (HF token required for pyannote/brouhaha)"
     if not ctx.get("input_audio"):
         return "input_audio_missing"
     return None
 
 
 def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Re-run segmentation-3.0 on the crop and replace the region's speech_presence evidence.
+    """Re-measure speech at frame resolution on the crop and replace the region's evidence.
 
     The replacement vote is scoped ``region:<id>`` so it supersedes the coarse
     round-1 voters over this span without deleting them — the store keeps both and
     the later scope wins, which is what makes the decision log auditable.
 
-    Emits ``overlap_posterior`` on covered rows as a side effect, which is why the
-    contract lets I4 run "light (reuses P2 output)" afterwards.
+    **No longer emits ``overlap_posterior``.** Brouhaha's VAD head is single-channel, so it reports no
+    overlap, and I4 now derives overlap from cross-diarizer spans instead of reusing this output. The
+    two interventions are independent, which is the honest arrangement — I4's overlap never depended on
+    P2's *purpose*, only on its side effect.
     """
     from senselab.audio.workflows.audio_analysis.adaptive.audio_io import get_stream_wav  # noqa: PLC0415
-    from senselab.audio.workflows.audio_analysis.adaptive.backends import overlap_posteriors  # noqa: PLC0415
+    from senselab.audio.workflows.audio_analysis.adaptive.backends import speech_posteriors  # noqa: PLC0415
 
     region = cand["region"]
     stream = cand["trigger"]["stream"]
     wav, reason = get_stream_wav(ctx, stream)
     if wav is None:
         raise RuntimeError(f"audio_unavailable: {reason}")
-    post, err = overlap_posteriors(wav, span=(region["crop_start"], region["crop_end"]))
+    post, err = speech_posteriors(wav, span=(region["crop_start"], region["crop_end"]))
     if post is None:
         raise RuntimeError(err or "posteriors_failed")
 
     hop = float(post["frame_hop"])
-    speech, overlap = post["speech"], post["overlap"]
+    speech = post["speech"]
     crop_start = float(region["crop_start"])
 
     def _mean_over(track: list[float], s: float, e: float) -> float | None:
@@ -1111,10 +1113,10 @@ def _p2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
             )
         )
         n_votes += 1
-        ov = _mean_over(overlap, row["start"], row["end"])
-        if ov is not None:
-            row.setdefault("meta", {})["overlap_posterior"] = round(ov, 4)
-            row["overlap_posterior"] = round(ov, 4)
+        # No ``overlap_posterior`` written here. Brouhaha's VAD head is single-channel and reports no
+        # overlap; I4 derives it from cross-diarizer spans instead of reusing this rule's side effect.
+        # Leaving a stale value on the row would be worse than leaving none — a reader cannot tell an
+        # overlap of 0.0 from an overlap nothing measured.
         touched.setdefault("speech_presence", set()).add(bk)
 
     return {
@@ -1151,7 +1153,7 @@ def _i4_guard(region: dict[str, Any], ctx: dict[str, Any]) -> str | None:
     if _spec_missing("pyannote"):
         return "posteriors_unavailable (pyannote.audio not installed)"
     if not (os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")):
-        return "posteriors_unavailable (HF token required for pyannote/segmentation-3.0)"
+        return "posteriors_unavailable (HF token required for pyannote/brouhaha)"
     if not ctx.get("input_audio"):
         return "input_audio_missing"
     return None
@@ -1159,24 +1161,22 @@ def _i4_guard(region: dict[str, Any], ctx: dict[str, Any]) -> str | None:
 
 def _i4_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     from senselab.audio.workflows.audio_analysis.adaptive.audio_io import get_stream_wav
-    from senselab.audio.workflows.audio_analysis.adaptive.backends import overlap_posteriors
+    from senselab.audio.workflows.audio_analysis.adaptive.backends import overlap_track_from_spans
 
     region = cand["region"]
     stream = cand["trigger"]["stream"]
-    # Overlap is a property of the scene, not the processing stream: fall back
-    # to the raw waveform when the region's stream can't be materialized, and
-    # apply the posterior to every stream's rows over the span.
-    wav, reason = get_stream_wav(ctx, stream)
+    # Overlap is a property of the scene, not the processing stream: fall back to the identity stream
+    # when the region's own stream has no diarization, and apply the result to every stream's rows.
+    passes = ctx.get("passes") or {}
     source_stream, stream_fallback = stream, None
-    if wav is None and stream != IDENTITY_NAME:
-        stream_fallback = reason
+    by_model = ((passes.get(stream) or {}).get("diarization") or {}).get("by_model") or {}
+    if not by_model and stream != IDENTITY_NAME:
+        stream_fallback = f"no diarization on stream {stream!r}"
         source_stream = IDENTITY_NAME
-        wav, reason = get_stream_wav(ctx, source_stream)
-    if wav is None:
-        raise RuntimeError(f"audio_unavailable: {reason}")
-    post, err = overlap_posteriors(wav, span=(region["crop_start"], region["crop_end"]))
+        by_model = ((passes.get(IDENTITY_NAME) or {}).get("diarization") or {}).get("by_model") or {}
+    post, err = overlap_track_from_spans(by_model, span=(region["crop_start"], region["crop_end"]))
     if post is None:
-        raise RuntimeError(err or "posteriors_failed")
+        raise RuntimeError(err or "overlap_unavailable")
     touched: dict[str, set[tuple[float, float]]] = {}
     hop, overlap = float(post["frame_hop"]), post["overlap"]
 

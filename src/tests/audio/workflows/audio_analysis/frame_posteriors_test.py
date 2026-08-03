@@ -188,21 +188,6 @@ def test_chunked_inference_stitches_long_clip() -> None:
     assert np.allclose(data, 0.8)  # overlap-averaging preserves the constant
 
 
-def test_null_safe_when_model_construction_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    """FR-023: a gated/inaccessible model (ValidationError at construction) → [None], no raise.
-
-    Regression for the real-model finding: PyannoteAudioModel validates against HF at
-    construction, so its failure must be caught inside the extractor's guard.
-    """
-    if not fp_mod.PYANNOTEAUDIO_AVAILABLE:
-        pytest.skip("pyannote-audio not installed")
-
-    def _boom(*args: object, **kwargs: object) -> None:
-        raise ValueError("gated repo — not in authorized list")
-
-    monkeypatch.setattr(fp_mod, "PyannoteAudioModel", _boom)
-    audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
-    assert fp_mod.extract_speech_frame_posteriors([audio]) == [None]
 
 
 # ── chunk stitching must not average two different speakers together ─────────

@@ -1,4 +1,8 @@
-"""Continuous per-frame speech posteriors from ``pyannote/segmentation-3.0``.
+"""The continuous per-frame posterior container, and the chunk stitching Brouhaha uses.
+
+No longer loads ``pyannote/segmentation-3.0``: nothing consumes its per-speaker channels
+(D-19 moved the count to ``occupancy`` and the binding to ``identity_binding``), and
+Brouhaha's VAD head supplies the speech posterior at the same 16.9 ms hop.
 
 Unlike ``detect_human_voice_activity_in_audios`` (which runs the high-level
 ``Pipeline`` and returns thresholded ``ScriptLine`` segments), this extractor
@@ -100,19 +104,6 @@ def collapse_to_speech_prob(data: np.ndarray, *, channel_format: ChannelFormat) 
     return np.clip(1.0 - np.prod(1.0 - clipped, axis=1), 0.0, 1.0)
 
 
-def collapse_to_overlap_prob(data: np.ndarray, *, channel_format: ChannelFormat) -> np.ndarray:
-    """Pool an activation matrix into per-frame P(≥ 2 concurrent speakers) — an **L2** reduction.
-
-    ``powerset``: the multi-speaker classes (columns 4+). ``per_speaker``: the second-highest
-    activation, i.e. the probability that a second speaker is also active. ``single``: zeros —
-    a one-channel detector cannot report overlap, which is different from reporting none.
-    """
-    if data.ndim != 2 or data.shape[1] < 2 or channel_format == "single":
-        return np.zeros(data.shape[0] if data.ndim >= 1 else 0)
-    clipped = np.clip(data, 0.0, 1.0)
-    if channel_format == "powerset" and clipped.shape[1] >= 5:
-        return np.clip(clipped[:, 4:].sum(axis=1), 0.0, 1.0)
-    return np.sort(clipped, axis=1)[:, ::-1][:, 1]
 
 
 @dataclass
@@ -176,11 +167,6 @@ class FramePosterior:
             return None
         return np.asarray(np.nanmean(self.activations[span[0] : span[1], :], axis=0), dtype=np.float64)
 
-    def overlap_probs(self) -> Optional[np.ndarray]:
-        """Per-frame P(≥ 2 concurrent speakers), or ``None`` for a single-channel signal."""
-        if self.activations.ndim != 2 or self.activations.shape[1] < 2:
-            return None
-        return collapse_to_overlap_prob(self.activations, channel_format=self.channel_format)
 
 
 def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
@@ -411,59 +397,3 @@ def _declared_classes(inference: "Inference") -> Optional[list[str]]:
     return [str(c) for c in classes] if classes else None
 
 
-def extract_speech_frame_posteriors(
-    audios: list[Audio],
-    model: Optional[PyannoteAudioModel] = None,
-    device: Optional[DeviceType] = None,
-) -> list[Optional[FramePosterior]]:
-    """Return per-frame activations for each audio, channels intact (``None`` on failure).
-
-    If the model cannot be loaded (not installed, gated without a token, native-lib failure),
-    every entry is ``None`` and the speech_presence axis simply omits this signal (FR-023) — the
-    workflow does not abort.
-
-    The full ``(frames, channels)`` matrix is always retained: it is the L1 measurement, and it
-    is the only thing that can say *which* speaker was active. There is no opt-in flag, because
-    the previous default discarded it and every consumer then had to work from a pooled value.
-    """
-    if not PYANNOTEAUDIO_AVAILABLE:
-        logger.warning("pyannote-audio unavailable; segmentation frame posteriors will be null.")
-        return [None] * len(audios)
-    try:
-        # PyannoteAudioModel validates id/revision against HF at construction
-        # (ValidationError for a gated repo the token can't access), so guard it too.
-        if model is None:
-            model = PyannoteAudioModel(path_or_uri=SEGMENTATION_MODEL_ID, revision=SEGMENTATION_REVISION)
-        hf_local_files_only(str(model.path_or_uri), revision=model.revision)
-        inference = _get_inference(model=model, device=device)
-    except Exception as exc:  # noqa: BLE001 — any load/access failure degrades to null (FR-023)
-        logger.warning(f"Failed to load {SEGMENTATION_MODEL_ID}: {exc}. Frame posteriors will be null.")
-        return [None] * len(audios)
-
-    results: list[Optional[FramePosterior]] = []
-    for audio in audios:
-        try:
-            t0 = time.time()
-            data, hop_s, win_s = chunked_frame_inference(inference, audio)
-            matrix = np.asarray(data, dtype=np.float64)
-            if matrix.ndim == 1:
-                matrix = matrix[:, None]
-            declared = _declared_classes(inference)
-            fmt = channel_format_for(n_columns=int(matrix.shape[1]), declared_classes=declared)
-            results.append(
-                FramePosterior(
-                    activations=matrix,
-                    frame_hop_s=hop_s,
-                    frame_win_s=win_s,
-                    channel_format=fmt,
-                    channel_labels=tuple(declared) if declared and fmt == "per_speaker" else (),
-                )
-            )
-            logger.info(
-                f"segmentation inference took {time.time() - t0:.2f}s "
-                f"({matrix.shape[0]} frames x {matrix.shape[1]} ch [{fmt}] @ {hop_s:.4f}s)"
-            )
-        except (RuntimeError, ValueError, OSError) as exc:
-            logger.warning(f"segmentation inference failed for one audio: {exc}")
-            results.append(None)
-    return results
