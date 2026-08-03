@@ -2405,3 +2405,67 @@ assignment(spans, clusters)   -> S_k <-> tool-label binding (C2), from spans not
 
 L1 stores, per diarization tool: the span set, the tool's speaker capacity (D-19), and nothing
 reduced. A span set has no grid, so there is no resolution to record and no projection to get wrong.
+
+---
+
+## D-20. The key's first element is the TARGET, not the mechanism
+
+Corrects D-18's signal keys. They were written as `(family, *instances, perturbation)` where
+`family` conflated three different things: a **resolution** (`frame`), a **domain** (`scene`), and
+occasionally an actual target (`asr`, `diarization`). That is why `scene_quality` could bundle six
+quantities and `frame_*` could group a probability with two dB measures — the first element was not
+naming what was measured, so it could not tell them apart.
+
+```python
+SignalKey = tuple[Target, Tool, Perturbation]
+#   Target       what the tool is measuring — the quantity, not how it was obtained
+#   Tool         which tool measured it, at its own resolution
+#   Perturbation which transform the audio had
+```
+
+**Brouhaha is three signals, because it targets three things** in one forward pass:
+
+```
+(speech,   pyannote/brouhaha/VAD, raw)    probability   — it is a speech detector
+(snr,      pyannote/brouhaha,     raw)    dB            — a scene-quality measure
+(c50,      pyannote/brouhaha,     raw)    dB            — a different scene-quality measure
+```
+
+Sharing a forward pass is an implementation fact and not a reason to share an artifact. What makes
+them one call is caching; what makes them three signals is that they answer three questions.
+
+### Why target-first is the load-bearing choice
+
+**All voters on one target share a first element.** That is what makes cross-tool disagreement
+computable without string matching: `signals_for(target="speech")` returns every speech detector —
+brouhaha's VAD, a diarizer's occupancy projected to a grid, an ASR's word coverage — regardless of
+mechanism or resolution. Under the old keying those lived under `frame_*`, `diarization` and an ASR
+model name, and only a `"::"`-style selector could gather them, which is what the code does today.
+
+**It makes the axes derived rather than declared.** An axis is the fusion of every signal sharing a
+target (and of targets a policy groups). The "one authoritative axis set" problem, and the fifth
+axis needing eleven edits, both dissolve: the axis set is the set of targets, enumerated from the
+signals that exist.
+
+**A bundle cannot form.** `scene_quality` was possible because `scene` named a domain that six
+quantities could all claim. With the target first, `snr`, `c50`, `rolloff` and `clipping` are four
+targets and cannot share a file — and each keeps its own native resolution, which is what the bundle
+destroyed by forcing one grid.
+
+**Mechanism moves to provenance, where it belongs.** `frame`, `window`, `span`, `tree` describe the
+*shape* of the output and belong beside `units` and `native_window_s` — they are how the measurement
+is represented, not what it is of.
+
+### Keys settled so far
+
+| key | output shape | capacity |
+|---|---|---|
+| `(speech, pyannote/brouhaha/VAD, p)` | series, 61.9 ms / 16.9 ms, probability | — |
+| `(snr, pyannote/brouhaha, p)` | series, same grid, dB | — |
+| `(c50, pyannote/brouhaha, p)` | series, same grid, dB | — |
+| `(speaker_spans, pyannote/speaker-diarization-community-1, p)` | span set, no grid | unbounded |
+| `(speaker_spans, nvidia/diar_sortformer_4spk-v1, p)` | span set, no grid | 4 |
+| ~~`(·, pyannote/segmentation-3.0, ·)`~~ | removed — pyannote 4.x moved to community diarization | ~~3~~ |
+
+`speaker_spans` is the target both diarizers share, which is exactly what lets their counts be
+compared and their capacities censored against each other (D-19).
