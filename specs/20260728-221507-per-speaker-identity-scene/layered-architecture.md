@@ -2559,3 +2559,46 @@ vectors have none — they are the intermediate a diarizer is built from.
 
 Invalidation follows from the key: changing window or hop changes the entry, so 2.0 s / 50 ms
 vectors are reused across clusterers and recomputed only when the framing changes.
+
+### ASR emits ScriptLine transcripts, scores inside
+
+```
+(transcript, nyralabs/CrisperWhisper2.0_turbo, p)   ScriptLine tree, JSON
+(transcript, Qwen/Qwen3-ASR-1.7B, p)                ScriptLine tree, JSON
+(transcript, nvidia/canary-qwen-2.5b, p)            ScriptLine tree, JSON
+```
+
+One target, three tools — the diarizer pattern. L1 stores the tree **verbatim**: text, nested word
+chunks with their own boundaries, and `timestamp_source` (`native` | `bundled_aligner` |
+`external_aligner`). Word spans on a grid are an L2 projection, exactly as diarization spans are.
+
+**A tool's own scores stay inside the ScriptLine.** `avg_logprob`, `no_speech_prob` and
+`token_entropy` are already fields on it, per node, and they belong there: they are quantities the
+tool reported, which is what L1 records. Nothing about them is folded, thresholded or rescaled — the
+current `avg_logprobs: []` list exists only because a 0.1 s bucket spans several segments, and it
+disappears with the bucket.
+
+### Correction: a tool's reported uncertainty is recorded, not replaced
+
+An earlier note here said the speaker axis's uncertainty becomes *entirely* cross-diarizer
+disagreement, and that no sub-signal contributes a model's internal confidence. That overstated it.
+
+**If a tool reports its own uncertainty, L1 records it and L2 uses it.** A model's confidence is a
+measurement the model made; refusing it would discard information the tool is uniquely placed to
+give. So a diarizer that reports per-span confidence has that confidence stored, alongside its spans.
+
+What was wrong with J1 was narrower and worth keeping straight: it built a Poisson-binomial over
+`segmentation-3.0`'s per-speaker channel probabilities **as if they were independent Bernoullis**,
+when they are a powerset conversion whose classes are mutually exclusive by construction. The defect
+was the *assumed independence* used to manufacture a distribution — not the recording of a model's
+confidence.
+
+So both sources of uncertainty exist and are different things:
+
+- **A tool's reported confidence** — recorded at L1, per its own units, unfolded.
+- **Cross-tool disagreement** — computed at L2 over tools sharing a target, and the only source that
+  can speak to whether the tools are right rather than merely sure.
+
+Neither substitutes for the other. A confident tool that disagrees with three others, and four
+tools that agree while all reporting low confidence, are different states, and collapsing to one
+number loses the distinction.
