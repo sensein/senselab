@@ -2658,3 +2658,317 @@ What survives from D-20 is the part that was load-bearing: all tools measuring o
 first element, so cross-tool disagreement on that target is computable without string matching. What
 does not survive is deriving the axis set from the target set — the axis set is a policy naming which
 targets it fuses, and that policy is the thing a fifth axis edits.
+
+---
+
+## D-21. Derivative keys — `(Target, Operator, Source)`
+
+L1's keys are settled (D-20). The reductions that used to happen inside L1 are now L2 derivatives,
+and they need keys for the same reason signals did: **a derivative is a measurement about a
+measurement, and an unkeyed one cannot be compared, re-made, or told apart from a different choice
+of the same name.**
+
+### What exists today
+
+Two fields on a dataclass:
+
+```python
+@dataclass
+class Derivatives:
+    mask_regions: tuple[Mapping[str, Any], ...] = ()
+    speaker_claims: Mapping[str, Sequence[tuple[float, float]]] | None = None
+```
+
+Neither is keyed, neither is written to `derivatives/`, and neither records what produced it.
+`derive_mask_from_axes` has a `settled_below: float = 0.35` in its signature — a threshold that
+decides which regions may withdraw trust from a model, travelling as a default argument rather than
+as provenance on a row. The other four derivatives D-17 names (speaker allocation, ASR consensus,
+scene components, and now every projection leaving L1) do not exist as artifacts at all: they are
+intermediate variables inside `stages.py`, which is precisely why the same reduction could be made
+twice with different parameters and nothing could see it.
+
+### The key
+
+Parallel to `SignalKey`, and deliberately the same arity:
+
+```python
+DerivativeKey = tuple[Target, Operator, Source]
+#   Target     what the derivative is a value OF. Same vocabulary as signal targets, extended
+#              where a derivation changes the quantity (occupancy, speaker_count, target_free,
+#              consensus_transcript, stability).
+#   Operator   the named derivation and the choices inside it — "the tool", for a derivative.
+#              `project_labels/speech_v3`, `resample/mean`, `voiced_fraction/θ=0.4`,
+#              `censored_posterior`. The variant after the slash is the policy, and it is what
+#              makes two derivatives of one signal distinguishable.
+#   Source     which keys it consumed — one signal key, or a set of them.
+```
+
+The middle slot is where a signal names a *model* and a derivative names an *operator*. That is the
+whole difference, and it is the right one: a signal's uncertainty comes from which model you asked, a
+derivative's from which choice you made.
+
+### Three arities, and each licenses something different
+
+`Source` is one key or a set, and which it is says what the derivative may be used for:
+
+| arity | shape | folds | what it licenses |
+|---|---|---|---|
+| **project** | 1 signal → 1 | nothing | the tool and perturbation survive into the key, so the result is still *that tool's* measurement and can still be compared against another tool's |
+| **fold** | n derivatives sharing a target → 1 | tools and/or perturbations | cross-tool disagreement is *meaningful here* — the inputs answer the same question |
+| **compose** | derivatives of *different* targets → 1 | nothing (a joint function) | disagreement is **meaningless** — these are different quantities, and a spread between them measures nothing |
+
+That table is the reason to have arities at all. Under the old code the mask (a compose) and the
+count posterior (a fold) were both "derivatives", so nothing prevented a spread being computed
+across quantities that do not answer the same question — which is the same defect as
+`units: "mixed"`, one level up.
+
+**A `fold` derivative has to justify why it is not an axis**, since D-16 says an axis *is* a fold.
+The answer is always the same: a fold derivative produces a **value**, an axis produces **doubt about
+a family of values**. `censored_posterior` yields a distribution over speaker counts — a value. The
+speaker axis takes its entropy — a doubt. Both are round outputs and they are not the same object.
+
+### The derivatives, keyed
+
+Written against the twelve settled signals. `p` is a perturbation, `T` a tool, `⋁` a fold over
+everything matching.
+
+**project** — one signal in, tool and perturbation preserved:
+
+| key | value |
+|---|---|
+| `(speech, resample/mean, (speech, pyannote/brouhaha/VAD, p))` | probability, on the grid |
+| `(speech, project_labels/<map>, (scene_labels, T, p))` | label mass over the speech label set — the old `speech_label_mass`, with the selection named |
+| `(speech, voiced_fraction/θ, (speech, opensmile/HNR, p))` | voicing proportion from HNR |
+| `(speech, word_coverage, (transcript, T, p))` | seconds of word overlap — the old `word_overlap_s` |
+| `(background_source, project_labels/<map>, (scene_labels, T, p))` | non-target category mass |
+| `(occupancy, cover, (speaker_spans, T, p))` | `[(label, covered_fraction), …]` per bucket |
+| `(speaker_count, count_at, (speaker_spans, T, p))` | int per bucket, **censored at T's capacity** (D-19) |
+| `(word_spans, words_of, (transcript, T, p))` | the tree flattened to spans |
+| `(snr, resample/mean, (snr, T, p))` | one per SNR tool — four of them, still four |
+| `(scene_score, anchor/<profile>, (snr, T, p))` | dB → `[0, 1]` against the calibration anchors |
+| `(noise_floor, select_binding/<margin>, (noise_floor, band_percentile, p))` | the `binding` choice that left L1 |
+
+**fold** — across tools, across perturbations, or both:
+
+| key | value |
+|---|---|
+| `(speaker_count, censored_posterior, ⋁(speaker_count, T, p))` | distribution from cross-diarizer spread, censoring each tool at its capacity |
+| `(consensus_transcript, ensemble/<method>, ⋁(word_spans, T, p))` | the consensus, with dissent retained |
+| `(speaker_allocation, harmonise, ⋁(occupancy, T, p))` | the `C0` clusters — one label space across diarizers |
+| `(stability, mean_abs_delta, ⋁ₚ(X, T, p))` | per-derivative cross-perturbation \|Δ\|, **the fusion weight** |
+
+**compose** — different targets, a joint function:
+
+| key | value |
+|---|---|
+| `(target_free, mask/<task_type>, {(speech, ·), (background_source, ·), axes[n−1]})` | the mask regions, with `state` and `confidence` |
+| `(speaker_presence, allocate, {(speaker_allocation, ·), (occupancy, ·)})` | the per-speaker presence track — `S_k` |
+| `(corroboration, cross_check, {(word_spans, ·), (speech, ·)})` | the floored weight that replaced purging |
+
+### `L1/stability/` is a fold derivative — the open violation closes here
+
+The flagged contract breach was that `L1/stability/` evaluates *across* perturbations, and no
+cross-perturbation evaluation may live at L1. It has a home now: `(stability, mean_abs_delta, ⋁ₚ …)`
+is a fold whose `Source` wildcards the perturbation, which is exactly what the arity is for.
+
+Two things improve on the way:
+
+- **It becomes per-derivative rather than per-axis.** `signal_stability(harvests, *, axis=...)` takes
+  an axis today because it compares *linked* buckets, and linking was per-axis. Under D-21 the
+  linking is the projection, so stability is measured on the projected value and the axis parameter
+  disappears. A signal's instability is a property of the signal, not of the axis reading it — and
+  taking an axis meant one signal had three different stabilities.
+- **The wildcard must materialise.** D-17's key rule says a key dimension the path does not supply
+  appears as a column, so `⋁ₚ` obliges a `contributing_perturbations` column. A stability computed
+  over one perturbation is then visibly a stability over one perturbation, rather than a number.
+
+### Linking is a projection, which supersedes "link belongs inside estimate"
+
+The earlier correction (§ *Derive first, link inside estimate*) put linking in the first half of
+`estimate`. Its **reasoning stands and its placement does not.** The concern was that linking had
+been hoisted out of the loop to round 0, silently forbidding a later round from proposing different
+thresholds. Making the link a *derivative* satisfies that concern exactly — `derive` runs in every
+round — and it is a better fit than the earlier placement, for a reason the earlier draft could not
+see:
+
+Linking has two halves. Getting a native measurement onto the grid is geometry. Interpreting it
+against a threshold is a decision. Both are already what the `Operator` slot's variant tag records
+(`project_labels/speech_v3`, `voiced_fraction/θ=0.4`). Splitting them across `derive` and `estimate`
+would put half of every interpretation in each stage, and the point of the split is that **all
+interpretation is in one place and re-makeable without re-running a model.**
+
+So `speech_presence_link.link_speech_presence` becomes a set of `project` derivatives, one per
+signal, each carrying its policy in its key. `SpeechPresencePolicy` stops being a parameter threaded
+into a harvest and becomes the operator variant, which is where a reader can find it.
+
+### Paths, and the grid
+
+```
+L2/round/<n>/derivatives/<target>/<operator>/<source…>.parquet
+
+# (speech, project_labels/speech_v3, (scene_labels, MIT/ast-finetuned-audioset, raw))
+#   -> derivatives/speech/project_labels__speech_v3/MIT__ast-finetuned-audioset/raw.parquet
+# (speaker_count, censored_posterior, ⋁(speaker_count, T, p))
+#   -> derivatives/speaker_count/censored_posterior.parquet   + contributing_* columns
+```
+
+Exactly `L1/signals/<target>/<tool>/<perturbation>.parquet` with the tool slot holding an operator.
+A fold or compose collapses its `Source` to the operator file and materialises the members as
+columns, per the key rule.
+
+**The grid is round-level, not per-derivative.** `L2/round/<n>/grid.json` declares it once; every
+derivative records it. The alternative — `resample/mean/0.5s` — would put the same string in twelve
+filenames and invite two derivatives in one round at two grids, which is the bundle problem again.
+
+### Rules that fall out, and are checkable
+
+1. A `project` derivative's key **must** carry its source tool and perturbation. Dropping either is
+   the reduction D-18 found: a value with provenance describing something else.
+2. A `fold` derivative's inputs **must** share a target. Folding across targets is a `compose`, and
+   calling it a fold licenses a spread that measures nothing.
+3. A `compose` derivative **must not** report a spread across its inputs.
+4. Every `Operator` variant tag **is** the policy. A derivative whose choice is not in its key is
+   the `settled_below=0.35` default argument, back.
+5. `axes[n−1]` may appear in a `Source` — and **only** there. That is the coupling channel, and
+   putting it in the key makes the feedback edge visible in the artifact tree rather than inferable
+   from a function name.
+
+---
+
+## D-22. Axis estimates — an axis reads only derivatives
+
+### The key
+
+```python
+AxisKey = tuple[Axis, Bucket]
+```
+
+No tool and no perturbation, per D-16: an axis aggregates across both, so neither can index its
+output. `L2/round/<n>/estimates/<axis>.parquet`, one row per bucket.
+
+### Axes read only derivatives — never signals
+
+This is the load-bearing constraint of the whole L2 half, and it is what the current code violates
+in every direction. An axis needs its inputs on a common grid and comparably interpreted. Getting
+there is a derivative's job. So:
+
+- **The same-grid problem dissolves.** `fuse_axis` cannot receive a 16.9 ms series and a 10.24 s
+  window and have to decide; it receives two derivatives on the round's grid, each naming the
+  projection that got it there.
+- **Every choice an axis depends on is named upstream of it.** There is no threshold, no label
+  selection, no channel pooling, no estimator choice inside `estimate` — all four were found inside
+  L1 and all four are now `Operator` variants.
+- **`estimate` becomes pure**, in the sense the belief store's own contract already claimed:
+  aggregation is a function of the active derivative values and their weights. Given L1, the policy,
+  and the decision log, every estimate is recomputable — which is what lets the store stop persisting
+  estimates at all, and removes the second speaker lineage (item 27) as a side effect.
+
+### The policy is data, and it is the many-to-many mapping
+
+D-20's correction says the axis↔target mapping is many-to-many L2 policy. This is where it lives:
+
+```yaml
+# policy/default.yaml
+axes:
+  speech_presence:
+    inputs:
+      - (speech, resample/mean,             (speech, pyannote/brouhaha/VAD, *))
+      - (speech, project_labels/speech_v3,  (scene_labels, *, *))
+      - (speech, voiced_fraction/θ=0.4,     (speech, opensmile/HNR, *))
+      - (speech, word_coverage,             (transcript, *, *))
+      - (occupancy, cover,                  (speaker_spans, *, *))
+    gates:
+      - (scene_score, anchor/v3, (snr, *, *))     # a quality gate, not a voter
+    aggregator: entropy
+  speaker:
+    inputs:
+      - (speaker_count, censored_posterior, *)
+      - (occupancy, cover, (speaker_spans, *, *))
+    aggregator: label_disagreement
+  asr:
+    inputs:
+      - (word_spans, words_of, (transcript, *, *))
+      - (consensus_transcript, ensemble/rover, *)
+    aggregator: pairwise_wer
+  background_mask:
+    inputs:
+      - (target_free, mask/<task_type>, *)
+    aggregator: passthrough_confidence
+```
+
+One SNR appears as a gate under `speech_presence`, as an input under `background_mask`, and inside
+`stability` as a weight — the three uses that made "axes are targets" wrong. Adding the fifth axis is
+a block in this file plus an `axes.AXES` entry, and no code edit.
+
+### The row
+
+Unchanged in shape from `fuse_axis` today, with two renames that stop being lies:
+
+| field | note |
+|---|---|
+| `uncertainty` | the entropy measure — no policy in it |
+| `epistemic_uncertainty` | its reducible part |
+| `confidence` | a probability |
+| `variability` | a dispersion |
+| `triage_score` | the policy fold (`aggregator`) |
+| `contributing_derivatives` | was `contributing_signals`. An axis's contributors are derivatives now, and calling them signals is what made a projection look like a measurement. |
+| `contributing_perturbations` | was `contributing_passes`. The pass dimension appears **only** here — D-16's rule, unchanged. |
+| `derivative_weights` + `weight_basis` | from `(stability, mean_abs_delta, …)`, with the factors behind each |
+| `round` | which iteration produced it |
+
+Every quantity stays `None` where nothing spoke. `0.0` is a confident claim.
+
+### Value and doubt, and why the mask is both
+
+The split that makes the two artifact directories mean different things:
+
+- `derivatives/` holds **values** — the consensus transcript, the count posterior, the mask regions,
+  the per-speaker presence track. These are the answers.
+- `estimates/` holds **doubt about a family of values** — four axes, each the fold across the
+  derivatives that answer one question.
+
+`background_mask` is in both, and that is not a duplication: `(target_free, mask/…)` is the value
+(which regions, with what confidence), and the `background_mask` axis is how much a reader should
+doubt it. This is also why `axes.Axis(harvested=False)` is currently true of it — one derived
+judgement, no ensemble.
+
+**Open, and it looks like an improvement:** if the mask were composed from more than one candidate —
+one from presence, one from scene labels, one from task type — the axis would have voters and
+`harvested` would become `True`, which is the difference between a mask that reports its own
+confidence and a mask whose uncertainty is measured. Not decided; recorded because `harvested=False`
+currently reads as a property of the mask when it is a property of there being one producer.
+
+### What dissolves
+
+Not moved — gone, with the thing that required them:
+
+- **`L2/round0/votes/<axis>.parquet`.** A vote was a measurement linked to a belief under a policy.
+  That is a `project` derivative, keyed and written once, and the adaptive store ingests derivatives.
+- **`signal_stability(..., axis=...)`'s axis parameter**, per D-21.
+- **`PassHarvest.speech_presence_evidence`** and the harvest/link split, whose job was to keep
+  measurement separate from interpretation across a boundary that is now `L1/` vs `derivatives/`.
+- **The last reason for an L1-side fold.** `within_pass_uncertainty` is already gone (it was a parity
+  oracle against the store's recomputation, and reading it off rows that emit
+  `epistemic_uncertainty` is what made every RoundRecord report `oscillation`). What D-22 removes is
+  the *possibility* of another: with `estimate` taking no L1 argument, there is no signature through
+  which an L1 fold could be reintroduced as an oracle.
+
+Still open and not fixed by D-21/D-22, recorded so the list is not read as complete:
+`aleatoric_floor` reads a `quality_snr`-family name that exists in neither ingest path, takes `None`,
+and floors at `0.0` on every bucket of every run. D-21 gives it a real source —
+`(scene_score, anchor/<profile>, (snr, T, p))` — but the wiring is a separate change.
+
+### The round, uniform
+
+```
+round n:  derive(L1/signals, derivatives[n-1], estimates[n-1])  -> derivatives[n]
+          estimate(derivatives[n], policy[n])                    -> estimates[n]
+          plot(derivatives[n], estimates[n])                     -> timeline.png
+          summarise(...)                                         -> summary.json
+
+round 0:  identical, with derivatives[-1] and estimates[-1] empty
+```
+
+`estimate` takes no L1 argument. That absence is the D-22 constraint, and it is checkable from the
+signature alone — which is the first thing in this design that a guard can verify without resolving
+a path.
