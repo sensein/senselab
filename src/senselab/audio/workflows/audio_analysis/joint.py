@@ -4,7 +4,11 @@ Each function here answers a question no single tool was asked. They are L2 by c
 inputs are L1 measurements, and the combining rule is a modelling choice that belongs where it can
 be seen and changed.
 
-**J1 — how many speakers are simultaneously active** (:func:`overlap_count_posterior`).
+**J1 and J4 have moved.** The count posterior is now cross-diarizer spread
+(:mod:`.occupancy`) and the speaker binding is over each tool's own labels
+(:mod:`.identity_binding`), both from spans. What lived here was built on
+``segmentation-3.0``'s per-speaker channels, whose independence the Poisson-binomial assumed
+and which a powerset conversion does not have.
 
 Available now, while J4 (per-speaker presence) still needs rounds, and the reason is worth stating
 because it decides what else can be built on the activation channels. `segmentation-3.0` reports
@@ -33,102 +37,13 @@ import numpy as np
 
 from senselab.audio.workflows.audio_analysis.statistics import entropy_uncertainty
 
-if TYPE_CHECKING:
-    from senselab.audio.tasks.voice_activity_detection.frame_posteriors import FramePosterior
-
 __all__ = [
-    "overlap_count_posterior",
-    "count_distribution",
     "speaker_change_series",
-    "per_speaker_presence",
 ]
 
 
-def count_distribution(probs: np.ndarray) -> np.ndarray:
-    """Distribution over "how many of these succeeded", for independent Bernoulli trials.
-
-    The Poisson-binomial pmf, computed by the standard convolution: start certain that zero have
-    succeeded, then fold in one channel at a time.
-
-    Independence is an assumption, and it is the right one to be explicit about. In per-speaker
-    mode the columns are *marginal* speaker probabilities, so reading them as independent is the
-    model's own framing; but two channels tracking the same speaker through a permutation flip are
-    obviously not independent, and this will then overstate the chance of overlap. Stating it here
-    is what lets a later stage measure that error rather than inherit it silently.
-
-    Args:
-        probs: One probability per channel, in ``[0, 1]``.
-
-    Returns:
-        Array of length ``len(probs) + 1`` where entry ``j`` is ``P(exactly j active)``.
-    """
-    pmf = np.zeros(len(probs) + 1, dtype=np.float64)
-    pmf[0] = 1.0
-    for k, p in enumerate(probs):
-        p = float(min(1.0, max(0.0, p)))
-        # Walk downward so each update reads the previous iteration's values.
-        pmf[1 : k + 2] = pmf[1 : k + 2] * (1.0 - p) + pmf[0 : k + 1] * p
-        pmf[0] *= 1.0 - p
-    return pmf
 
 
-def overlap_count_posterior(
-    posterior: "FramePosterior",
-    start_s: float,
-    end_s: float,
-) -> dict[str, Any] | None:
-    """J1: a distribution over the number of speakers active in ``[start_s, end_s)``.
-
-    Built **per frame and then pooled**, never from the bucket's per-channel means. Two speakers
-    taking turns within a bucket average to 0.5 on each channel, which as a per-bucket calculation
-    would report a 25% chance of overlap that never occurred. Overlap is an instantaneous fact, so
-    it has to be evaluated at frame resolution and only then reduced.
-
-    Args:
-        posterior: Frame posteriors with per-speaker channels intact (D-5).
-        start_s: Bucket start, seconds.
-        end_s: Bucket end, seconds.
-
-    Returns:
-        ``{"counts", "expected_count", "p_overlap", "uncertainty", "n_frames", "n_channels"}``, or
-        ``None`` when the question cannot be answered from this input — a single collapsed speech
-        probability has already discarded the count and must not be made to guess one, and a bucket
-        containing no frames has nothing to count.
-
-        ``counts`` maps speaker count → probability. ``uncertainty`` is the normalised Shannon
-        entropy of that distribution per ``statistics.entropy_uncertainty``, so it is comparable
-        with the other axes; ``p_overlap`` is the mass above one speaker.
-    """
-    if posterior is None or posterior.channel_format == "single":
-        return None
-    data = np.asarray(posterior.activations, dtype=np.float64)
-    if data.ndim != 2 or data.shape[1] < 2:
-        return None
-    window = posterior.frame_slice(start_s, end_s)
-    if window is None:
-        return None
-    lo, hi = window
-    frames = data[lo:hi]
-    if frames.size == 0:
-        return None
-
-    # One count distribution per frame, averaged over the bucket. Averaging distributions (rather
-    # than averaging the channel probabilities first) is what preserves within-bucket timing.
-    pooled = np.mean([count_distribution(frame) for frame in frames], axis=0)
-    total = float(pooled.sum())
-    if total <= 0:
-        return None
-    pooled = pooled / total
-
-    counts = {int(k): float(v) for k, v in enumerate(pooled)}
-    return {
-        "counts": counts,
-        "expected_count": float(np.dot(np.arange(len(pooled)), pooled)),
-        "p_overlap": float(pooled[2:].sum()) if len(pooled) > 2 else 0.0,
-        "uncertainty": entropy_uncertainty({str(k): v for k, v in counts.items()}),
-        "n_frames": int(hi - lo),
-        "n_channels": int(data.shape[1]),
-    }
 
 
 def speaker_change_series(
@@ -227,93 +142,6 @@ def speaker_change_series(
     }
 
 
-def per_speaker_presence(
-    speaker_spans: Mapping[str, Sequence[tuple[float, float]]],
-    posterior: "FramePosterior",
-) -> dict[str, Any] | None:
-    """J4: bind harmonised speakers to activation channels, and report how firmly.
-
-    A **joint** space rather than an inheritance (D-7). The activation channels are
-    permutation-arbitrary, so they carry timing but cannot name anyone; the harmonised speaker space
-    carries names but only segment-level timing, so it cannot place a speaker inside a segment. Each
-    supplies exactly what the other lacks, and the binding between them is evidence — how
-    well-determined it is *is* part of the speaker uncertainty rather than an input to it, which is
-    what makes its stability a convergence criterion (C2) rather than a preprocessing step.
-
-    The binding is decided by temporal agreement, Hungarian-matched, because that is the only
-    evidence linking a name to a channel. Nothing is thresholded: a speaker with no overlapping
-    channel activity is left unbound rather than given the least-bad channel, and a channel no
-    speaker claimed is reported rather than dropped — that is the shape a missed speaker takes.
-
-    Args:
-        speaker_spans: ``{speaker id → [(start_s, end_s), ...]}`` from the harmonised speaker space.
-        posterior: Frame posteriors with per-speaker channels intact (D-5).
-
-    Returns:
-        ``{"assignment", "assignment_margin", "presence", "unassigned_channels",
-        "unassigned_speakers", "uncertainty"}``, or ``None`` when the question cannot be asked —
-        a single pooled channel has already discarded who was speaking, and no speakers means
-        nothing to bind.
-
-        ``presence`` maps each bound speaker to its channel's ``(times, probabilities)`` at frame
-        resolution — the timing the speaker space never had. ``assignment_margin`` is the bound
-        channel's overlap lead over the runner-up, normalised; ``uncertainty`` is one minus the
-        mean margin, so a tie between channels reads as doubt rather than as a decision.
-    """
-    if posterior is None or posterior.channel_format == "single":
-        return None
-    data = np.asarray(posterior.activations, dtype=np.float64)
-    if data.ndim != 2 or data.shape[1] < 2:
-        return None
-    speakers = sorted(s for s, spans in (speaker_spans or {}).items() if spans)
-    if not speakers:
-        return None
-
-    hop = float(posterior.frame_hop_s)
-    if hop <= 0:
-        return None
-    n_frames, n_channels = data.shape
-    labels = list(posterior.channel_labels) or [f"speaker#{i + 1}" for i in range(n_channels)]
-    times = np.arange(n_frames) * hop
-
-    # Agreement between each speaker's claimed spans and each channel's activity, in
-    # activation-seconds: a channel that is strongly active throughout a speaker's turn agrees more
-    # than one that flickers.
-    score = np.zeros((len(speakers), n_channels), dtype=np.float64)
-    for i, speaker in enumerate(speakers):
-        mask = np.zeros(n_frames, dtype=bool)
-        for start, end in speaker_spans[speaker]:
-            mask |= (times >= float(start)) & (times < float(end))
-        if mask.any():
-            score[i] = data[mask].sum(axis=0) * hop
-
-    from senselab.audio.workflows.audio_analysis.harmonize import _maximise
-
-    pairs = _maximise(score)
-    assignment: dict[str, str | None] = {s: None for s in speakers}
-    margin: dict[str, float] = {s: 0.0 for s in speakers}
-    for i, j in pairs:
-        if score[i, j] <= 0:
-            continue  # no agreement at all is absence of evidence, not a weak match
-        assignment[speakers[i]] = labels[j]
-        row = np.sort(score[i])[::-1]
-        runner_up = float(row[1]) if row.size > 1 else 0.0
-        best = float(row[0])
-        margin[speakers[i]] = (best - runner_up) / best if best > 0 else 0.0
-
-    bound = {c for c in assignment.values() if c is not None}
-    presence = {s: (times, data[:, labels.index(c)]) for s, c in assignment.items() if c is not None and c in labels}
-    margins = [margin[s] for s in speakers if assignment[s] is not None]
-    return {
-        "assignment": assignment,
-        "assignment_margin": margin,
-        "presence": presence,
-        # A channel nobody claimed is how a missed speaker shows up, and a speaker no channel backs
-        # is a claim the frames do not carry. Both are findings; neither is a tidying-up problem.
-        "unassigned_channels": [c for c in labels if c not in bound and float(data[:, labels.index(c)].max()) > 0],
-        "unassigned_speakers": [s for s in speakers if assignment[s] is None],
-        "uncertainty": float(1.0 - (sum(margins) / len(margins))) if margins else 1.0,
-    }
 
 
 def speaker_spans_from_votes(

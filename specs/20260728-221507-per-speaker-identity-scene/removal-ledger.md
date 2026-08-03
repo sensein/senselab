@@ -106,7 +106,7 @@ ways and whose real-run test skips-or-fails.
 
 | removed | condition |
 |---|---|
-| `pyannote/segmentation-3.0` — 12 src + 8 test files | **J1 + J4/C2 rebuilt on spans** (`occupancy.py`, `identity_binding.py`). Remaining: rewire the callers off `FramePosterior`, then delete |
+| `pyannote/segmentation-3.0` | **J1/J4/C2 done and deleted.** Three further capabilities remain — see below |
 | 9 embedding-derived signals (`speaker_distance` ×4, `speaker_change` ×2, `embedding_silhouette` ×3) | the embedder-plus-clusterer diarizer emits `speaker_spans` |
 | ~~`ppgs` signal + the PER sub-signal~~ | **done** — 987 net lines out of `src/`, across 11 modules + the CLI. `features_extraction/ppg.py` stays a senselab task; only the *signal* went |
 | the `scene_quality` bundle (`units: "mixed"`) | the 8 per-target scene signals exist |
@@ -155,3 +155,34 @@ agreeing with it.
 - `background_sources.parquet` is written with `[]` when detection finds nothing and the finding type
   comes from an uncalled module — so an empty artifact and an unwired subsystem look identical from
   the run directory. The same absent-vs-empty confusion this design keeps hitting.
+
+
+## `segmentation-3.0`: three capabilities D-19 did not enumerate
+
+D-19 said remove it and resolved J1, J4 and C2. Those are done: rebuilt on spans
+(`occupancy.py`, `identity_binding.py`), rewired, and the frame-channel implementations deleted along
+with `PassHarvest.frame_posteriors`, which was written and never read once fusion stopped using it.
+
+**But `extract_speech_frame_posteriors` has three other consumers**, none of them named in D-19, and
+each is a capability rather than a call site:
+
+| consumer | what it does | what removal costs |
+|---|---|---|
+| `compute.py` → `frame_voters["frame_segmentation"]` | a speech-presence voter | **one fewer voter**, not a lost capability. `_rule_for` dispatches on `frame_mean` rather than on a model name, so brouhaha's VAD keeps its identical path with no registry edit |
+| `adaptive/backends.py` (I4, FR-016) | overlap detection via `FramePosterior.overlap_probs()` | the whole intervention. No other tool exposes per-class overlap posteriors, and `occupancy.count_posterior_in_window` answers a *different* question — cross-tool spread about a count, not one model's overlap track |
+| `scripts/analyze_audio.py` | triage's round-0 speech gate | the gate, unless it moves to brouhaha VAD |
+
+**So the removal is blocked on a decision, not on work.** The first and third have obvious
+substitutes (brouhaha VAD, already a voter with a live customer in the speech-presence axis). The
+second does not: I4's gated overlap detection is the only per-class overlap posterior in the pipeline,
+and D-19's argument against `segmentation-3.0` was specifically about *deriving a count distribution*
+from its channels — not about the channels being useless. An overlap track read as one model's
+evidence, weighed against others, is not the defect the Poisson-binomial was.
+
+Options, in the order I would rank them:
+
+1. **Keep `segmentation-3.0` for I4 only**, and remove it as a *count* source and as a
+   speech-presence voter. That matches what D-19 actually argued and leaves one narrow, justified
+   use.
+2. Replace I4 with a `community-1`-based overlap measure, if it exposes one. Unverified.
+3. Drop I4 and accept that overlap detection leaves the intervention catalogue.

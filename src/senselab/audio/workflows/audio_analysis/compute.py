@@ -355,7 +355,6 @@ def harvest_pass(
         # conclusion — which also lets a later stage reuse the same cluster assignment for
         # speaker label repair instead of re-deriving one that could disagree.
         per_window_embeddings=dict(per_window_embeddings or {}),
-        frame_posteriors=dict(frame_voters or {}),
         # Carried so fusion can bind fused speaker ids to each diarizer's own labels (C2) without
         # re-running a model, which would defeat the harvest/aggregate split. The channels this
         # replaces were permutation-arbitrary and could not name anyone (D-19).
