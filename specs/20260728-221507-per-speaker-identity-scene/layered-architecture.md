@@ -1892,3 +1892,207 @@ The order changes, because the row types are what everything else derives from:
 5. **Remove `run_dir` from stage signatures.** After this the guarantee is structural.
 6. **Delete `_PathResolver`**, the verb/binding/constructor tables, and the acyclicity test — the
    read-roots supersede it. `contracts.py` should end up a registry, not a checker.
+
+---
+
+## D-18. L1 workflow — pseudocode
+
+Grounded in the 25 signals a real run emits today. Not implemented; this is the target shape.
+
+### The registry L1 reads from
+
+```python
+# contracts.py — a registry, not a checker. Nothing here is a pattern to match after the fact;
+# these are the things paths and payloads are BUILT from.
+
+@dataclass(frozen=True)
+class SignalRow:
+    """One signal's measurement in one bucket of one perturbation. No axis. No fold."""
+    start: float
+    end: float
+    measurement: Mapping[str, float]     # the tool's own quantities, in the tool's own units
+    status: Literal["ok", "incomparable", "unavailable"] = "ok"
+    # NOTE there is no `uncertainty`, no `axis`, no `confidence`. A fold has no field to land in,
+    # so a fold under L1 is not a violation to detect — it is unrepresentable.
+
+@dataclass(frozen=True)
+class SignalProvenance:
+    """What a different lab needs to reproduce the number from the audio alone."""
+    units: Mapping[str, str]             # per measurement key
+    model_id: str | None
+    revision: str | None
+    native_window_s: float
+    native_hop_s: float
+    tool_side_reduction: str | None      # a reduction the TOOL performed, named
+
+ARTIFACTS["signals"] = Artifact(
+    stage=L1, row=SignalRow, sidecar=SignalProvenance,
+    key=derive_key(L1),                  # (perturbation, signal, bucket) — from L1's own shape
+    template="signals/{signal}.parquet",
+)
+ARTIFACTS["perturbations"] = Artifact(stage=L1, row=PerturbationRow, key=("perturbation",),
+                                      template="perturbations.json")
+```
+
+`key=derive_key(L1)` is computed from the perturbation registry and the harvester set — not written
+out. Adding a harvester extends the key space; nothing is edited.
+
+### Perturbations are declared transforms, and the set is open
+
+```python
+@dataclass(frozen=True)
+class Perturbation:
+    name: str                            # "raw", "enhanced", …
+    transform: Callable[[Audio], Audio]  # identity for "raw"
+    params: Mapping[str, Any]            # recorded, so the transform is reproducible
+    requested_by: str                    # "run_start" | "L2/round/{n}"
+
+RAW = Perturbation("raw", identity, {}, requested_by="run_start")
+```
+
+`requested_by` is the field that makes L1 re-enterable: a later L2 round may propose a perturbation,
+and the artifact records who asked for it. Nothing about "two passes" is encoded anywhere.
+
+### The node
+
+```python
+def run_L1(audio_path, *, perturbations, harvesters, grids, io: StageIO) -> None:
+    """L1 measures. It does not decide, fold, threshold, or relate two perturbations.
+
+    io is rooted at L1/ and holds NO other write root. There is no run_dir in this scope, so
+    writing to L2/ or final/ is not forbidden — it is unreachable.
+    """
+    source = load(audio_path)
+
+    # ── one directory per perturbation, and its parameters ────────────────────
+    for p in perturbations:                       # RAW first; the rest in registry order
+        variant = p.transform(source)
+        io.write("perturbation_audio", variant, perturbation=p.name)
+        io.write("perturbation_params", PerturbationRow.of(p), perturbation=p.name)
+
+    io.write("perturbations", [PerturbationRow.of(p) for p in perturbations])
+
+    # ── measure each signal on each perturbation, independently ───────────────
+    # Nested this way round, not the other, for a reason: the inner loop never sees a second
+    # perturbation, so it CANNOT compute a delta. Cross-perturbation evaluation is L2's, and here
+    # it has no operand to reach for.
+    for p in perturbations:
+        variant = io.read("perturbation_audio", perturbation=p.name)
+
+        for h in harvesters:                      # the 25 below
+            if not h.applicable(variant, grids):
+                io.write("signals", [], perturbation=p.name, signal=h.name,
+                         sidecar=h.provenance(reason="unavailable"))
+                continue                          # absent, recorded as absent — not zero-filled
+
+            raw = cached(h.measure, variant, key=h.cache_key(variant, grids))
+
+            rows = [
+                SignalRow(
+                    start=b.start, end=b.end,
+                    measurement=raw.at(b),        # native units, verbatim
+                    status="ok" if raw.covers(b) else "unavailable",
+                )
+                for b in h.native_buckets(variant, grids)   # the TOOL's grid, not a shared one
+                if raw.has(b)                     # a bucket the tool said nothing about has no row
+            ]
+
+            io.write("signals", rows, perturbation=p.name, signal=h.name,
+                     sidecar=h.provenance())
+```
+
+Three properties are structural rather than checked:
+
+- **No fold.** `SignalRow` has no field an axis value could occupy.
+- **No cross-perturbation evaluation.** The measuring loop holds one perturbation at a time.
+- **No write outside L1.** `io` has one write root and it is `L1/`.
+
+### The 25 harvesters, at their own resolutions
+
+```python
+HARVESTERS = [
+  # frame-rate posteriors — 61.9 ms / 16.9 ms
+  Harvester("frame_segmentation",               model="pyannote/segmentation-3.0",
+            measurement={"activations": "probability"},   # per-speaker CHANNELS INTACT
+            note="the collapse to one number is a fold; it is L2's to make"),
+  Harvester("frame_segmentation_overlap_count", model="pyannote/segmentation-3.0",
+            measurement={"n_active": "count"}),           # permutation-invariant, so well-defined
+  Harvester("frame_brouhaha_vad",  model="pyannote/brouhaha", measurement={"p_speech": "probability"}),
+  Harvester("frame_dispersion",    derived_from="frame_*", measurement={"sd": "probability"}),
+
+  # scene classifiers — their own windows, NOT resampled here
+  Harvester("ast",     model="MIT/ast-finetuned-audioset", window=10.24, hop=10.24,
+            measurement={"label_scores": "probability"}),  # [{label: score}, …]
+  Harvester("yamnet",  model="google/yamnet",              window=0.96,  hop=0.48,
+            measurement={"label_scores": "probability"}),
+  Harvester("sound_sources", derived_from=("ast", "yamnet"),
+            measurement={"per_category_mass": "probability"},
+            note="per source, per classifier — NOT averaged across them; that reduction is L2's"),
+
+  # scene quality — dB / hertz / proportion, never a [0,1] score
+  Harvester("scene_quality", measurement={
+      "snr_brouhaha_db": "dB", "c50_brouhaha_db": "dB", "snr_spectral_gating_db": "dB",
+      "snr_peak_db": "dB", "rolloff_95_hz": "hertz", "proportion_clipped": "proportion"}),
+  Harvester("acoustic_hnr",   measurement={"hnr_db": "dB"}),
+  Harvester("acoustic_lufs",  measurement={"lufs": "LUFS"}),
+  Harvester("acoustic_level_above_floor", measurement={"excess_db": "dB"}),
+
+  # diarization — one per model, spans in seconds
+  *[Harvester(f"{safe(m)}", model=m, measurement={"speaker_label": "label", "span": "seconds"})
+    for m in DIAR_MODELS],                        # pyannote community-1, sortformer, …
+
+  # embeddings — 2.0 s / 50 ms (D-2). One per (diar model × embedding model).
+  *[Harvester(f"{safe(d)}_{safe(e)}", measurement={"cosine": "distance"})
+    for d in DIAR_MODELS for e in EMB_MODELS],
+  *[Harvester(f"{safe(e)}_change_point", measurement={"cosine": "distance"})
+    for e in EMB_MODELS],
+  *[Harvester(f"embedding_silhouette_{safe(e)}", measurement={"silhouette": "score"})
+    for e in EMB_MODELS],
+
+  # ASR — one per model. Words at their own boundaries.
+  *[Harvester(f"{safe(m)}", model=m, measurement={
+      "text": "tokens", "word_spans": "seconds", "avg_logprob": "log-probability",
+      "no_speech_prob": "probability", "token_entropy": "nats",
+      "timestamp_source": "category"})            # native | bundled_aligner | external
+    for m in ASR_MODELS],
+]
+```
+
+Every entry names its units and its native window/hop. That is the whole L1 contract: a number, what
+it is measured in, and at what resolution.
+
+### What L1 does not contain, and where each thing went
+
+| removed from L1 | now |
+|---|---|
+| `L1/<pass>/uncertainty/<axis>.parquet` | `L2/round/{n}/estimates/{axis}` — an axis is a fold |
+| `within_pass_uncertainty` | gone; the name is a contradiction |
+| `L1/stability/` | `L2/round/{n}/derivatives/stability/` — relating two perturbations is a fold |
+| `background_mask` | `L2/round/{n}/derivatives/` — a verdict from six thresholds |
+| `quality_snr`/`clip`/`reverb` scores | `L2` — the dB→[0,1] anchoring is calibration |
+| `sound_sources` argmax + normalise | `L2` — a reduction across what the tools reported separately |
+| `noise_floor` estimator selection | `L2` — choosing perceptual over recorder floor is a decision |
+
+### Re-entry, when an L2 round asks for a perturbation
+
+```python
+def extend_L1(audio_path, *, new_perturbation, harvesters, grids, io: StageIO) -> None:
+    """Add one perturbation and measure every signal on it. Additive; nothing is recomputed."""
+    assert new_perturbation.requested_by.startswith("L2/round/")
+    run_L1(audio_path, perturbations=[new_perturbation], harvesters=harvesters, grids=grids, io=io)
+    io.append("perturbations", PerturbationRow.of(new_perturbation))
+```
+
+L1 stays a pure function of `(audio, perturbation, harvester, grid)`. A round may ask for more
+evidence; it cannot ask L1 to conclude anything.
+
+### The one check that survives
+
+Everything above is structural. The single remaining question is **absence** — a declared artifact
+no run produced:
+
+```python
+def unproduced(io: StageIO) -> list[str]:
+    """Declared and never written. Only a completed run can answer this."""
+    return [a.name for a in ARTIFACTS.for_stage(L1) if not io.any_exists(a.name)]
+```
