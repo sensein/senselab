@@ -11,13 +11,19 @@ mis-join `asr` against the other three.
 
 from __future__ import annotations
 
-from senselab.audio.workflows.audio_analysis.axes import AXES, AXIS_GRIDS, AXIS_NAMES, axis
+from senselab.audio.workflows.audio_analysis.axes import (
+    AXES,
+    AXIS_GRIDS,
+    AXIS_NAMES,
+    DEFAULT_TIME_GRID,
+    axis,
+)
 
 
 def test_asr_is_on_the_word_grid_and_the_others_are_on_time() -> None:
     """The one asymmetry, and it follows from what the evidence is rather than from convenience."""
     assert axis("asr").grid == "word"
-    assert {AXIS_GRIDS[name] for name in AXIS_NAMES if name != "asr"} == {"time_0.1s"}
+    assert {AXIS_GRIDS[name] for name in AXIS_NAMES if name != "asr"} == {"time"}
 
 
 def test_every_active_axis_declares_a_grid() -> None:
@@ -39,3 +45,25 @@ def test_joining_asr_to_a_time_axis_is_detectable_from_the_declaration_alone() -
     """
     assert AXIS_GRIDS["asr"] != AXIS_GRIDS["speech_presence"]
     assert AXIS_GRIDS["speaker"] == AXIS_GRIDS["background_mask"]
+
+
+def test_the_time_grid_does_not_overlap() -> None:
+    """Window equals hop, so adjacent rows share no audio.
+
+    The run that motivated this used a 0.1 s window at a 0.02 s hop: adjacent rows shared 80% of
+    their audio, so 1070 rows were not 1070 independent measurements — and nothing in the output said
+    so. A fine resolution is what the question justifies; five near-duplicate rows per window is not
+    the same claim.
+    """
+    win, hop = DEFAULT_TIME_GRID
+    assert win == hop, "overlapping buckets are not independent measurements"
+    assert win == 0.1, "100 ms resolves speech and target-activity onsets"
+
+
+def test_the_mask_and_presence_share_a_grid_so_their_coupling_needs_no_projection() -> None:
+    """`derive_mask_from_axes` reads presence rows to decide mask regions.
+
+    On different grids that derivation needs a projection, and every projection can lose
+    localisation — the run projected 1070 presence judgements onto a single mask region.
+    """
+    assert AXIS_GRIDS["background_mask"] == AXIS_GRIDS["speech_presence"] == "time"
