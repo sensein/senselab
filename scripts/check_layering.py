@@ -12,6 +12,7 @@ ok, bad = [], []
 
 
 def check(name: str, passed: bool, detail: str = "") -> None:
+    """Record one invariant. ``detail`` is printed on failure, so it should name the offending value."""
     (ok if passed else bad).append(f"{name}{': ' + detail if detail else ''}")
 
 
