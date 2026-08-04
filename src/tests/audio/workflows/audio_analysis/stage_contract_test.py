@@ -660,6 +660,42 @@ def test_a_per_pass_axis_table_is_flagged(tmp_path: Path) -> None:
     assert artifact_violations(tmp_path) == []
 
 
+def test_a_row_whose_round_contradicts_its_directory_is_flagged(tmp_path: Path) -> None:
+    """The one rule that reads a value, and the only one that could have caught this.
+
+    ``L2/round/4/estimates/speech_presence.parquet`` shipped holding rows whose ``round`` said 1, 3
+    and 4. Every name-level rule passed — the column is declared, there is one spelling of it, and
+    the key rules never open a value — so the disagreements index went on deriving a pointer from
+    the column and sending readers to a different fold's numbers.
+
+    A row that stays *silent* is not a finding: ``keyed_in_path`` says the location already fixes
+    the round, so repeating it is optional and only contradicting it is wrong.
+    """
+    _conformant_run(tmp_path)
+
+    def _estimate(round_index: int, claimed: object) -> None:
+        # Both rounds carry the same columns, or the shape rule reports the difference instead and
+        # this test would pass on the wrong finding.
+        _write_table(
+            tmp_path / "L2" / "round" / str(round_index) / "estimates" / "speaker.parquet",
+            {"start": [0.0], "end": [0.5], "uncertainty": [0.3], "contributing_passes": [["raw"]], "round": [claimed]},
+        )
+
+    _estimate(0, 0)
+    _estimate(1, 4)
+    assert artifact_violations(tmp_path) == [
+        "L2/round/1/estimates/speaker.parquet: its location fixes round='1', but its 'round' column "
+        "carries ['4'] — a row that contradicts the directory it is in points every consumer that "
+        "reads the column at another round's numbers"
+    ]
+
+    _estimate(1, 1)
+    assert artifact_violations(tmp_path) == []
+
+    _estimate(1, None)
+    assert artifact_violations(tmp_path) == []
+
+
 def test_an_l1_table_keyed_by_two_perturbations_is_flagged(tmp_path: Path) -> None:
     """``L1/stability/`` in the shape that survived being re-keyed by signal.
 

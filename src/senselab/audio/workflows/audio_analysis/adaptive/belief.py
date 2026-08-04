@@ -914,8 +914,17 @@ class BeliefState:
         self.rows: dict[str, list[dict[str, Any]]] = {}
 
     @classmethod
-    def from_store(cls, store: VoteStore, *, aggregator: str) -> "BeliefState":
-        """Round-1 belief: fold every bucket, attach its measurements and its aleatoric floor."""
+    def from_store(cls, store: VoteStore, *, aggregator: str, round_index: int) -> "BeliefState":
+        """Baseline belief: fold every bucket, attach its measurements and its aleatoric floor.
+
+        Args:
+            store: The ingested vote store.
+            aggregator: Aggregator for the policy fold.
+            round_index: The round this baseline *is* — the one the loop adopts from fusion. Taken
+                from the caller because only the caller knows it: this used to be a hardcoded ``1``
+                while the loop adopted fusion's last round, so on a three-round fold every
+                untouched bucket carried a round stamp naming a round the loop had never run.
+        """
         state = cls(aggregator)
         for axis in AXES:
             rows = []
@@ -925,8 +934,8 @@ class BeliefState:
                 row["meta"] = meta
                 _attach_floor(row, meta)
                 row["status"] = "open"
-                row["round"] = 1
-                row["history"] = [{"round": 1, "uncertainty": row["uncertainty"]}]
+                row["last_refolded_round"] = int(round_index)
+                row["history"] = [{"round": int(round_index), "uncertainty": row["uncertainty"]}]
                 rows.append(row)
             state.rows[axis] = rows
         return state
@@ -958,7 +967,7 @@ class BeliefState:
             if new["p_voice"] is not None:
                 row["p_voice"] = new["p_voice"]
             _attach_floor(row, row.get("meta") or {})
-            row["round"] = round_idx
+            row["last_refolded_round"] = round_idx
             row["history"].append({"round": round_idx, "uncertainty": row["uncertainty"]})
             changed.append(row)
         return changed
