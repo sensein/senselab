@@ -940,3 +940,28 @@ at its own parquet. It now follows the pointer. Tally for the session: 2 checks 
 re-serialization and cross-round comparison, 1 wrong three times over, and 2 real violations missed
 because the suite was incomplete. The suite is now `scripts/check_layering.py` so it is version-controlled
 and can be corrected rather than rewritten from memory each time.
+
+## Baseline before signal/estimator changes (run 8, cold cache)
+
+Run: `english_conversation_higgs_audio_v2_20260804-120913`. `scripts/check_layering.py` -> **42 held, 0 violated**.
+
+| axis | rows | mean uncertainty | distinct signals |
+|---|---|---|---|
+| speech_presence | 1070 | 0.4996 | 12 |
+| speaker | 85 | 0.7914 | 12 |
+| asr | 41 | 0.2995 | 2 |
+| background_mask | 1070 | 0.0344 | 3 |
+
+Speaker count **2 @ p=0.978**, 4 sources. `high_uncertainty_rate` 0.9819.
+
+**Cross-axis coupling verified as designed** — not "surprising", as I had framed it. Round 0 carries no
+`axis::` signal because the coupling loop starts at `round_index=1`; round 1 carries all three. `previous`
+is snapshotted for every axis before any is refolded (FR-011f), so it is genuinely the prior round rather
+than a sibling read. The receiver's own grid bounds it — *"coupling informs it and never extends it"* —
+which is what stops a one-row axis from inheriting another's 1197 buckets. The uncertainty gate is
+deliberately open, because the quantity a cross-axis input carries *is* the other axis's uncertainty;
+what **is** gated is evidence overlap, via `measure_axis_overlap`, which is D-21 rule 6 implemented.
+
+**The one gap:** `contributing_signals` records `axis::asr` but not *which round* of asr. The code makes it
+previous-round; the artifact cannot say so. Same two-facts-one-field shape as the `round` column.
+
