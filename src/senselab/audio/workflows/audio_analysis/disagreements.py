@@ -1,6 +1,6 @@
 """Top-level ranked index over the fused axes — ``disagreements.json``.
 
-Ranks over ``L2/round<N>/uncertainty/<axis>.parquet``, on ``triage_score`` — the column that
+Ranks over ``L2/round/<n>/estimates/<axis>.parquet``, on ``triage_score`` — the column that
 exists for exactly this question ("where should budget be spent?"). There is no ``pass`` field:
 an axis is a fold across passes, so a disagreement belongs to a span of the recording, not to one
 transform of it. Per-signal detail comes from the L1 signal rows, joined on ``(bucket, signal)``.
@@ -15,6 +15,7 @@ from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.axes import AXIS_PRIORITY as _AXIS_PRIORITY
 from senselab.audio.workflows.audio_analysis.labelstudio import HIGH_THRESHOLD
+from senselab.audio.workflows.audio_analysis.layout import estimates_dir
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
 
 
@@ -102,7 +103,7 @@ def build_disagreements_index(
                 "signal_weights": dict(row.get("signal_weights") or {}),
                 "weight_basis": dict(row.get("weight_basis") or {}),
                 "round": row.get("round"),
-                "parquet": _parquet_path_for(axis, row.get("round") if round_index is None else round_index),
+                "parquet": _parquet_path_for(run_dir, axis, row.get("round") if round_index is None else round_index),
                 "row_idx": row_idx,
                 "ls_region_id": f"{_track_name(axis)}__{row_idx}",
                 "summary": _row_summary(row, axis, evidence.get(bucket)),
@@ -147,10 +148,21 @@ def build_disagreements_index(
     }
 
 
-def _parquet_path_for(axis: str, round_index: Any) -> str:  # noqa: ANN401
-    """Path of the parquet (relative to run_dir) that holds this axis's fused rows."""
+def _parquet_path_for(run_dir: Path, axis: str, round_index: Any) -> str:  # noqa: ANN401
+    """Path of the parquet that holds this axis's fused rows, relative to ``run_dir``.
+
+    Derived from :mod:`~senselab.audio.workflows.audio_analysis.layout` rather than formatted from
+    a literal, so the pointer cannot drift from the layout the writer actually uses. It had already
+    drifted: the string still read ``L2/round<N>/uncertainty/<axis>.parquet`` after ``estimates/``
+    replaced ``uncertainty/`` and the round moved under ``round/<n>/``, so every entry in the index
+    — and every entry the loop copied into ``final/disagreements_resolved.json`` — pointed a reader
+    at a path with no file at the end of it.
+
+    Run-relative, not absolute: the index travels inside the run directory, so a path recorded
+    against wherever the run happened to sit is wrong the moment the directory is copied.
+    """
     n = int(round_index) if isinstance(round_index, (int, float)) else 0
-    return f"L2/round{n}/uncertainty/{axis}.parquet"
+    return (estimates_dir(run_dir, n) / f"{axis}.parquet").relative_to(Path(run_dir)).as_posix()
 
 
 def _track_name(axis: str) -> str:
