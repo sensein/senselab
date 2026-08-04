@@ -905,3 +905,38 @@ The pattern worth keeping: a check suite is itself code that can be wrong in the
 checks. Two of this session's "violations" were my checks being wrong; two real violations went unseen
 because my checks were incomplete. Same root cause — the invariant I *thought* I was testing was not the
 one I wrote.
+
+## Run 7: 42 of 42 layering invariants hold
+
+Both round-bookkeeping violations are fixed at the writers and confirmed in a cleared-cache run:
+
+- **Every round stamps its own round.** `round/4/*.parquet` rows all say `round: 4`; previously `{1,3,4}`.
+  `round` is now taken from the directory index, because `contracts.py` already declares
+  `keyed_in_path=("axis","round")` — the location fixes it. The loop's genuine fact, *which round last
+  recomputed a bucket*, survives as a new declared column `last_refolded_round`. Two facts had been
+  sharing one column.
+- **Every round has every axis.** Round 2 lacked `speaker.parquet` because the axis **converged at round
+  1** and `fuse_axes` skips a stopped axis, so the writer derived its directory set per axis. My guess —
+  "empty axis, writer skips empties" — was wrong, and the fix I proposed would have been wrong in the
+  *opposite* direction: an empty round-2 file claims the round believes nothing about the speaker, when
+  it believes what round 1 concluded. Fixed by carrying the last fold forward, stamped with the
+  directory's round.
+- **The index's pointer resolves**: `L2/round/2/estimates/speech_presence.parquet` → `is_file()` True.
+- `high_uncertainty_rate` 0.9819.
+
+**A sixth artifact rule** generalises violation 1: where `keyed_in_path` says the location fixes a
+dimension and the file carries it as a column, every row must agree with its directory.
+
+**This also closes an item open since early in the session.** The real-run conformance suite was
+*skipping*, not passing — `unproduced_declarations` had been correctly reporting the missing
+`speaker.parquet`, and the fixture skips on an incomplete run. The guard had caught this all along and
+the skip hid it; `estimates_schema_test.py` passed because it folded at `max_rounds=1`, never reaching
+the early-stop path.
+
+### My check suite was wrong three times, the same way
+
+Comparing an index entry against `final/estimates/` when the entry **declares its own round** and points
+at its own parquet. It now follows the pointer. Tally for the session: 2 checks wrong about
+re-serialization and cross-round comparison, 1 wrong three times over, and 2 real violations missed
+because the suite was incomplete. The suite is now `scripts/check_layering.py` so it is version-controlled
+and can be corrected rather than rewritten from memory each time.
