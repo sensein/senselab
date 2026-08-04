@@ -1730,36 +1730,15 @@ def main(argv: list[str] | None = None) -> int:
 
         # Disagreements index — opt-out via --disagreements-top-n 0.
         if fused_axes and args.disagreements_top_n > 0:
-            # Rank the rows the run actually wrote, not the round-0 fold that fed the coupling.
-            # ``fused_axes`` is round 0 and is an *input* to write_final_uncertainty (as scene_rows);
-            # its output is the final, coupled, multi-round answer. Ranking the input meant the index
-            # and estimates/*.parquet described different rounds under one name, with neither saying
-            # which. Falls back to fused_axes when the writer did not run.
-            import pandas as _pd
-
-            from senselab.audio.workflows.audio_analysis.layout import final_dir as _final_dir
-            from senselab.audio.workflows.audio_analysis.types import FusedAxis
-
-            # Rank the **deliverable**: ``final/estimates/`` is the last round extracted, and the last
-            # round is not this driver's — ``write_final_uncertainty`` folds the first rounds and the
-            # adaptive loop runs the rest, then extracts. Ranking either fold's in-memory rows meant
-            # the index described an earlier round than the parquet a reader keeps, which is why
-            # triage_score disagreed. Falls back to fused_axes when no deliverable was written.
-            ranked_axes = fused_axes
-            _est = _final_dir(run_dir) / "estimates"
-            if _est.is_dir():
-                _from_disk = {}
-                for _p in sorted(_est.glob("*.parquet")):
-                    _rows = _pd.read_parquet(_p).to_dict("records")
-                    _from_disk[_p.stem] = FusedAxis(
-                        axis=_p.stem,  # type: ignore[arg-type]
-                        rows=_rows,
-                        provenance=dict(fused_axes[_p.stem].provenance) if _p.stem in fused_axes else {},
-                    )
-                if _from_disk:
-                    ranked_axes = _from_disk
+            # The index is **pre-adaptive by design**: the adaptive stage *consumes* it to propose
+            # regions, so it runs after this point and the index cannot rank that stage's output.
+            # ``final/estimates/`` does not exist yet here, and a block that reached for it was
+            # simply dead. What identifies the fold an entry describes is its own ``round`` field —
+            # ``fused_axes`` has already been advanced in place to the last round
+            # ``write_final_uncertainty`` wrote for each axis (the copy-back above), so an entry's
+            # ``round`` and its ``parquet`` pointer name the file its ``triage_score`` came from.
             index = build_disagreements_index(
-                fused_axes=ranked_axes,
+                fused_axes=fused_axes,
                 signal_results_by_pass=signal_results_by_pass,
                 top_n=args.disagreements_top_n,
                 run_dir=run_dir,
