@@ -1303,23 +1303,46 @@ def write_final_uncertainty(
     # final rows N times would have produced N identical directories claiming to be a trajectory;
     # deriving the round set from the rows' own ``round`` field produced exactly one, because every
     # final row carries the final index. Neither shows what an iteration changed.
-    for axis, rounds_for_axis in per_round.items():
-        for round_index in sorted(rounds_for_axis):
+    #
+    # The rounds **the run** took, not the rounds each axis took. Axes stop independently — a
+    # converged one is skipped by every later round — so a directory set derived per axis left
+    # round 2 of a three-round fold holding three axes out of four, and "the speaker axis was never
+    # asked" and "the speaker axis settled in round 1 and its estimate still stands" were written
+    # the same way: not at all. The second is what happened, so the last fold is *carried forward*
+    # and stamped with the directory's round, while ``last_refolded_round`` keeps saying which round
+    # produced the numbers. An empty file would have said the opposite of both — a round does not
+    # stop believing an axis because it stopped re-folding it.
+    run_rounds = sorted({index for rounds_for_axis in per_round.values() for index in rounds_for_axis})
+    # Resolved once, for the parquets *and* the figures: a round whose file has four axes and whose
+    # picture has three is the same gap moved somewhere a reader is less likely to check.
+    # An axis that folded no round at all resolves to the empty table rather than to no file —
+    # absent is the one thing this may not produce, because absent is read as "never asked".
+    believed: dict[int, dict[str, Sequence[Mapping[str, Any]]]] = {index: {} for index in run_rounds}
+    for axis, rounds_for_axis in sorted(per_round.items()):
+        carried: Sequence[Mapping[str, Any]] = []
+        for round_index in run_rounds:
+            carried = rounds_for_axis.get(round_index, carried)
+            believed[round_index][axis] = carried
+
+    for axis in sorted(per_round):
+        for round_index in run_rounds:
             dest = estimates_dir(out_dir, round_index)
             dest.mkdir(parents=True, exist_ok=True)
             round_path = dest / f"{axis}.parquet"
-            _frame(axis, rounds_for_axis[round_index], round_index=round_index).to_parquet(round_path, index=False)
+            _frame(axis, believed[round_index][axis], round_index=round_index).to_parquet(round_path, index=False)
             written[f"{axis}@round{round_index}"] = str(round_path)
-            # The headline path is the last round the axis actually ran.
-            written[axis] = str(round_path)
+            # The headline path is the last round the axis actually ran — the fold, not the last
+            # directory that carries it, because that is the round whose numbers these are.
+            if round_index in per_round[axis]:
+                written[axis] = str(round_path)
 
     # One figure per round, drawn here from the rows this function already holds. The driver used
     # to do it, by reading every parquet it had just been handed the paths of — so a caller of the
     # workflow API got rounds with no view of themselves, which is a third of what a round owes.
     # ``duration_s`` from the rows rather than from a caller: the figure spans what was measured,
     # and a length nobody measured is not something this function should invent.
-    for round_index in sorted({index for rounds_for_axis in per_round.values() for index in rounds_for_axis}):
-        rows_for_round = {axis: rounds_for_axis.get(round_index, []) for axis, rounds_for_axis in per_round.items()}
+    for round_index in run_rounds:
+        rows_for_round = believed[round_index]
         span = max(
             (float(row["end"]) for rows in rows_for_round.values() for row in rows),
             default=0.0,

@@ -130,8 +130,17 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
     Deliberately *not* a substitute for the recorded fixture or for the real-run test: this tree
     has one perturbation, no models and no L1, so it exercises the round and ``final/`` writers and
     nothing else. What it proves is that those writers satisfy their own declaration.
+
+    **The fusion half has to fold more than one round, and one of its axes has to converge before
+    the rest.** This assertion existed and passed while the run on disk violated it, for exactly
+    that reason: at ``max_rounds=1`` fusion writes round 0 and nothing else, so every round in the
+    tree came from the adaptive producer — which writes all four axes unconditionally — and the
+    path where an axis stops being re-folded was never reached. ``diarization_by_model`` is what
+    reaches it: it gives ``_speaker_assignment`` a binding, so C2 holds for ``speaker`` and blocks
+    for the other three, and ``speaker`` converges with rounds still to run.
     """
     pytest.importorskip("pandas")
+    import pandas as pd
 
     from senselab.audio.workflows.audio_analysis.adaptive.loop import run_adaptive_loop
     from senselab.audio.workflows.audio_analysis.contracts import (
@@ -150,7 +159,18 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
             {"start": 0.0, "end": 0.5, "evidence": {"m1": {"covered_fraction": 1.0}}},
             {"start": 0.5, "end": 1.0, "evidence": {"m1": {"covered_fraction": 0.0}}},
         ],
-        speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"diar_a": {"same_label_uncertainty": 0.4}}}],
+        speaker_votes=[
+            {
+                "start": 0.0,
+                "end": 0.5,
+                "votes": {"diar_a": {"same_label_uncertainty": 0.4, "cluster_ids": {"SPEAKER_00": "C0"}}},
+            },
+            {
+                "start": 0.5,
+                "end": 1.0,
+                "votes": {"diar_a": {"same_label_uncertainty": 0.4, "cluster_ids": {"SPEAKER_01": "C1"}}},
+            },
+        ],
         asr_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
         # The mask axis's evidence rides on the harvest with the other three, per bucket. It used to
         # be handed to the loop separately as one vote per mask *region*, so the two producers of
@@ -159,13 +179,32 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
             {"start": 0.0, "end": 0.5, "task_type": "speech", "votes": {"speech": {"same_label_uncertainty": 0.2}}},
             {"start": 0.5, "end": 1.0, "task_type": "speech", "votes": {"speech": {"same_label_uncertainty": 0.6}}},
         ],
+        # What lets one axis settle before the others: a declared-capacity diarizer's spans give
+        # C2 something to be stable about, and C2 is a claim about the speaker axis alone.
+        diarization_by_model={
+            "pyannote/speaker-diarization-community-1": {
+                "status": "ok",
+                "result": [
+                    [
+                        {"start": 0.0, "end": 0.5, "speaker": "SPEAKER_00"},
+                        {"start": 0.5, "end": 1.0, "speaker": "SPEAKER_01"},
+                    ]
+                ],
+            }
+        },
         grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
     # Regions, not buckets: this is what regional trust withdraws over, which is the one thing a
     # region is still the right unit for.
     mask = [{"start": 0.0, "end": 1.0, "state": "target_free", "confidence": 0.8}]
-    write_final_uncertainty(
-        tmp_path, harvests={"raw": harvest}, weights_by_axis={}, aggregator="min", mask_regions=mask
+    fusion_rounds = 4
+    written = write_final_uncertainty(
+        tmp_path,
+        harvests={"raw": harvest},
+        weights_by_axis={},
+        aggregator="min",
+        mask_regions=mask,
+        max_rounds=fusion_rounds,
     )
     run_adaptive_loop(
         tmp_path,
@@ -173,6 +212,17 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
         summary={"passes": {"raw": {"duration_s": 1.0, "audio_signature": "a" * 64}}},
         max_rounds=3,
         aggregator="min",
+    )
+
+    # The precondition, asserted rather than assumed: without an axis that stops early this test
+    # cannot fail, and a test that cannot fail is how the gap got here.
+    stopped_early = {
+        axis
+        for axis, entries in written["round_logs"].items()
+        if max(int(e["round"]) for e in entries) < fusion_rounds - 1
+    }
+    assert stopped_early, (
+        "no fusion axis stopped before the last round, so the carry-forward path this test exists for was not exercised"
     )
 
     rounds = rounds_present(tmp_path)
@@ -184,10 +234,24 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
         assert (base / "summary.json").is_file(), f"round {index} left no account of itself"
         assert (base / "timeline.png").is_file(), f"round {index} left no view of itself"
         for axis in AXIS_NAMES:
-            assert (base / "estimates" / f"{axis}.parquet").is_file(), (
+            estimate = base / "estimates" / f"{axis}.parquet"
+            assert estimate.is_file(), (
                 f"round {index} has no belief about {axis} — and an absent file says "
                 "'never asked', not 'nothing to say'"
             )
+            # And it is *this* round's belief. A row claiming another round sends anything that
+            # derives a path from the column to a different fold's numbers.
+            frame = pd.read_parquet(estimate)
+            assert set(frame["round"].dropna().astype(int)) <= {index}, (
+                f"round {index}'s {axis} estimate carries rounds {sorted(set(frame['round'].dropna().astype(int)))}"
+            )
+
+    # An axis carried forward keeps saying which round produced its numbers, or "settled in round 1"
+    # and "re-folded to the same value" are the same row.
+    for axis in stopped_early:
+        last = max(int(e["round"]) for e in written["round_logs"][axis])
+        carried = pd.read_parquet(tmp_path / "L2" / "round" / str(fusion_rounds - 1) / "estimates" / f"{axis}.parquet")
+        assert set(carried["last_refolded_round"].dropna().astype(int)) == {last}
 
     # final/ carries the extraction, one file per active axis, plus the run's own account.
     for axis in AXIS_NAMES:
