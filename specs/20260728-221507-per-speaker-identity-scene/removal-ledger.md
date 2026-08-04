@@ -845,3 +845,35 @@ where it was applied. `adaptive/` was not audited in this session's mask work.
 
 Both are *cross-round consistency* problems in the one layer this session did not rebuild, and neither
 is in the L1→L2 structure the plan describes.
+
+## Run 6: the mask collapse is fixed, and the "index mismatch" was my check (again)
+
+**Mask fixed end to end: 1070 rows at round 0, round 4, and `final/`.** The subagent's wider diagnosis
+was right — three readers each had their own answer for where an axis's evidence lives, and `link_pass`
+wrote `background_mask.parquet` *empty* before the driver clobbered it with per-region votes under a
+fabricated perturbation `"mask"`. One declaration (`axes.HARVEST_SOURCES`) and one reader
+(`votes.buckets_for_axis`) now serve all three.
+
+**The index "mismatch" is not a mismatch.** Each entry carries `round: 2`, and round 2's parquet holds
+exactly the index's value (`0.9998032207839014` at 15.54). The index describes the round it names. My
+check compared it against `final/estimates/` — round 4 — and reported a conformant artifact as violating.
+**Six times this session a finding of mine dissolved on closer reading**, and twice the culprit was the
+*check* rather than an explanation (a byte comparison against a re-serializing writer, and this).
+
+So the layered plan holds **17 of 17** structural invariants.
+
+### Two real defects this surfaced, both small
+
+1. **`entry["parquet"]` is a stale path**: `L2/round2/uncertainty/speech_presence.parquet`. That layout
+   no longer exists — it is `L2/round/2/estimates/`. A broken pointer in the artifact that tells a
+   reader where to look.
+2. **My `ranked_axes` reading of `final/estimates/` is dead code.** The index is built before the
+   adaptive stage (correctly — the stage *consumes* the index to propose regions), so
+   `final/estimates/` never exists at that point and the fallback always fires. Dead code shaped like a
+   fix is worse than no fix; it should be reverted, and the `round` field it duplicates is the honest
+   mechanism.
+
+`final/disagreements_resolved.json` annotates the pre-adaptive index with what the loop did
+(`interventions`, `resolution`) and keeps the original `triage_score` **by design** — it is an
+annotation, not a re-ranking. Whether the deliverable should *also* carry the final round's score
+alongside is a design question, not a bug.
