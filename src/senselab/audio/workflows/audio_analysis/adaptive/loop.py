@@ -91,12 +91,15 @@ def run_adaptive_loop(
         max_rounds: Total rounds including baseline. ``1`` = baseline only.
         aggregator: Sub-signal aggregator; inferred from the run when ``None``.
         harvests: Pass label → ``PassHarvest`` for the in-process path.
-        unharvested_votes: ``{axis → {perturbation → buckets}}`` for the active axes that have no
-            vote harvest — ``background_mask``, whose evidence is the mask's own per-region
-            confidence. Required on the in-process path for the same reason
-            :meth:`VoteStore.from_harvests` requires it: an axis nobody hands in carries no belief
-            through any round and then reports as settled. The artifact path reads the same
-            evidence out of ``L2/round/0/derivatives/votes/`` and needs nothing here.
+        unharvested_votes: ``{axis → {perturbation → buckets}}`` for an active axis with no vote
+            harvest. **No active axis needs it today**: all four declare a
+            ``axes.HarvestSource``, ``background_mask`` included, so the mask arrives with the rest
+            of the harvest — it used to be handed in here as one vote per mask *region*, which gave
+            the loop a single bucket to fold where L2 had 1070. Kept because
+            :meth:`VoteStore.from_harvests` raises for an axis it can read nowhere, and this is the
+            remedy that error names — activating the declared-but-unbuilt ``task`` axis
+            (``harvested=False``) would use it. The artifact path reads the same evidence out of
+            ``L2/round/0/derivatives/votes/`` and needs nothing here.
         policy_overrides: In-memory policy overrides (CLI flags), merged last.
         summary: Pre-loaded ``{"input_audio": ..., "passes": {...}}`` index; read from
             ``L1/perturbations.json`` when ``None``.

@@ -808,8 +808,10 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_DRIVER, "write", "L1/perturbation/*/pii.json", _INLINED),
     Deviation(_DRIVER, "write", "L1/raw/embeddings/*.json", _INLINED),
     Deviation(_DRIVER, "write", "L1/perturbation/*/embeddings/*.json", _INLINED),
+    # No separate entry for background_mask.parquet: the mask's votes are written by the same loop
+    # over ``HARVESTED_AXES`` as every other axis's, from the same per-bucket harvest. The second,
+    # per-region write that needed its own entry is gone.
     Deviation(_DRIVER, "write", "L2/round/*/derivatives/votes/*.parquet", _INLINED),
-    Deviation(_DRIVER, "write", "L2/round/*/derivatives/votes/background_mask.parquet", _INLINED),
     Deviation(_DRIVER, "write", "L2/round/*/derivatives/stability/*.parquet", _INLINED),
     Deviation(_DRIVER, "write", "L2/disagreements.json", _INLINED),
     Deviation(_DRIVER, "write", "L2/labelstudio_tasks.json", _INLINED),

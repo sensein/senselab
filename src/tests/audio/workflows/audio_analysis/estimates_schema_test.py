@@ -135,18 +135,24 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
         ],
         speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"diar_a": {"same_label_uncertainty": 0.4}}}],
         asr_votes=[{"start": 0.0, "end": 1.0, "votes": {"a": {"text": "hi"}}}],
+        # The mask axis's evidence rides on the harvest with the other three, per bucket. It used to
+        # be handed to the loop separately as one vote per mask *region*, so the two producers of
+        # this tree disagreed about the fourth axis by three orders of magnitude in bucket count.
+        background_mask_evidence=[
+            {"start": 0.0, "end": 0.5, "task_type": "speech", "votes": {"speech": {"same_label_uncertainty": 0.2}}},
+            {"start": 0.5, "end": 1.0, "task_type": "speech", "votes": {"speech": {"same_label_uncertainty": 0.6}}},
+        ],
         grids={"asr": {"win_length": 1.0, "hop_length": 1.0}},
     )
+    # Regions, not buckets: this is what regional trust withdraws over, which is the one thing a
+    # region is still the right unit for.
     mask = [{"start": 0.0, "end": 1.0, "state": "target_free", "confidence": 0.8}]
     write_final_uncertainty(
         tmp_path, harvests={"raw": harvest}, weights_by_axis={}, aggregator="min", mask_regions=mask
     )
-    from senselab.audio.workflows.audio_analysis.fuse import mask_axis_votes
-
     run_adaptive_loop(
         tmp_path,
         harvests={"raw": harvest},
-        unharvested_votes={"background_mask": {"raw": mask_axis_votes(mask)}},
         summary={"passes": {"raw": {"duration_s": 1.0, "audio_signature": "a" * 64}}},
         max_rounds=3,
         aggregator="min",

@@ -32,6 +32,8 @@ __all__ = [
     "AXIS_PRIORITY",
     "CALIBRATED_AXES",
     "HARVESTED_AXES",
+    "HARVEST_SOURCES",
+    "HarvestSource",
     "OVERLAP_INFORMED_AXES",
     "Axis",
     "AxisName",
@@ -69,6 +71,36 @@ resolved at it, and speaker turns and mask regions are much longer.
 
 
 @dataclass(frozen=True)
+class HarvestSource:
+    """Where one axis's per-bucket evidence sits on a ``PassHarvest``, and what that field holds.
+
+    Declared because *three* readers need it — ``votes.link_pass`` (the L1→L2 link),
+    ``fuse.write_final_uncertainty`` (the run's fold) and
+    ``adaptive.belief.VoteStore.from_harvests`` (the loop's ingest) — and each wrote its own
+    answer. Two agreed on four axes and the third enumerated three in a literal tuple, so
+    ``background_mask`` was fused into 1070 buckets by the first two and rebuilt from one vote per
+    mask *region* by the third: an axis with one bucket has nowhere to be uncertain, and it went
+    from 1070 rows at round 0 to 1 by round 4 without anything reporting a loss.
+
+    ``reliability._AXIS_SIGNALS`` still spells the same field names out for a *different* question
+    — which key inside a bucket holds the per-signal mapping, for enumerating signal names — and is
+    the one remaining copy. It already covers all four axes, so it is not part of this defect;
+    folding it in here is a follow-up, not a fix.
+
+    Attributes:
+        field: The ``PassHarvest`` attribute carrying this axis's per-bucket rows.
+        holds: ``"votes"`` when the field already carries one statement per source, or
+            ``"measurements"`` when it carries L1 readings in native units that a *link* has to
+            read under a policy first (``speech_presence``). Declared rather than inferred from
+            the field name: the difference decides whether a reader may use the rows as they are,
+            and guessing it is how an unlinked measurement reaches a fold.
+    """
+
+    field: str
+    holds: Literal["votes", "measurements"]
+
+
+@dataclass(frozen=True)
 class Axis:
     """One uncertainty axis: the question it answers, and how the pipeline may treat it.
 
@@ -103,6 +135,12 @@ class Axis:
         active: ``False`` for an axis the design names but does not yet produce. It still appears
             here, because "declared and not yet built" and "not thought of" are different states
             and only the first can be checked.
+        harvest: Where this axis's evidence lives on a ``PassHarvest`` (:class:`HarvestSource`).
+            Required of every ``harvested`` axis and unread for the rest — an axis with
+            ``harvested=True`` and no ``harvest`` is one the pipeline claims an ensemble votes on
+            while no reader can find the votes, which is exactly the state ``background_mask`` was
+            in for the adaptive loop. :data:`HARVEST_SOURCES` omits it, and every reader raises on
+            it rather than folding an axis out of nothing.
     """
 
     name: str
@@ -114,6 +152,7 @@ class Axis:
     rank: int
     grid: GridKind = "time"
     active: bool = True
+    harvest: HarvestSource | None = None
 
 
 AXES: Final[tuple[Axis, ...]] = (
@@ -126,6 +165,11 @@ AXES: Final[tuple[Axis, ...]] = (
         overlap_informed=False,
         calibrated=True,
         rank=2,
+        # Measurements, not votes: the harvest holds ``covered_fraction`` / ``word_overlap_s`` /
+        # ``frame_mean`` in their own units and every threshold that turns them into a statement is
+        # L2's (``speech_presence_link``). A reader that took these for votes would fold unlinked
+        # readings.
+        harvest=HarvestSource(field="speech_presence_evidence", holds="measurements"),
     ),
     Axis(
         name="speaker",
@@ -137,6 +181,7 @@ AXES: Final[tuple[Axis, ...]] = (
         overlap_informed=True,
         calibrated=False,
         rank=1,
+        harvest=HarvestSource(field="speaker_votes", holds="votes"),
     ),
     Axis(
         name="asr",
@@ -154,6 +199,7 @@ AXES: Final[tuple[Axis, ...]] = (
         # distinction between "a word all models agree on but time differently" and "a word models
         # disagree about", which call for different interventions.
         grid="word",
+        harvest=HarvestSource(field="asr_votes", holds="votes"),
     ),
     Axis(
         name="background_mask",
@@ -185,6 +231,11 @@ AXES: Final[tuple[Axis, ...]] = (
         overlap_informed=False,
         calibrated=False,
         rank=3,
+        # The same declaration the other harvested axes make, and the one the adaptive store had no
+        # way to read: it enumerated three axes in a literal tuple, so the loop rebuilt this axis
+        # from one vote per mask *region* while L2 folded it per bucket. Declared here, all three
+        # readers find it.
+        harvest=HarvestSource(field="background_mask_evidence", holds="votes"),
     ),
     Axis(
         name="task",
@@ -206,6 +257,18 @@ AXIS_NAMES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.active)
 
 HARVESTED_AXES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.active and a.harvested)
 """Axes with a vote harvest — the ones an ensemble votes on (FR-001/FR-002)."""
+
+HARVEST_SOURCES: Final[dict[str, HarvestSource]] = {
+    a.name: a.harvest for a in AXES if a.active and a.harvested and a.harvest is not None
+}
+"""``{axis → where its evidence lives on a PassHarvest}`` — the one answer all three readers use.
+
+Deliberately *not* the same set as :data:`HARVESTED_AXES`: this one is what a reader can actually
+find, so an axis declared ``harvested`` without a :class:`HarvestSource` is absent here and raises
+at the reader instead of quietly folding to nothing. The two sets agreeing is a checkable property
+(``axes_test``) rather than an assumption, and it is the property that failed — the flag said
+harvested, the loop's ingest enumerated three axes, and nothing compared them.
+"""
 
 ATTENUATED_AXES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.active and a.attenuable)
 """Axes an uncorroborated speech claim may be attenuated on.

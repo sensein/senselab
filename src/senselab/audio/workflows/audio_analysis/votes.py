@@ -26,8 +26,10 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, MutableMapping, Sequence
 
+from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
 from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
 from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+    SpeechPresencePolicy,
     policy_from_params,
     votes_for_harvest,
 )
@@ -88,6 +90,57 @@ class PassHarvest:
     background_mask_evidence: list[dict[str, Any]] = field(default_factory=list)
     provenance_extras: dict[str, Any] = field(default_factory=dict)
     synthetic_diarization: dict[str, Any] | None = None
+
+
+def buckets_for_axis(
+    harvest: Any,  # noqa: ANN401 — PassHarvest, duck-typed like the rest of this module
+    axis: str,
+    *,
+    policy: SpeechPresencePolicy | None = None,
+) -> list[dict[str, Any]]:
+    """One axis's per-bucket belief buckets, read off ``harvest`` the way that axis declares.
+
+    The single answer to "where does this axis's evidence come from", for the three readers that
+    each had their own: :func:`link_pass` (the L1→L2 link), ``fuse.write_final_uncertainty`` (the
+    run's fold) and ``adaptive.belief.VoteStore.from_harvests`` (the loop's ingest). Two of them
+    read four axes off ``axes.AXES`` while the third enumerated three in a literal tuple, so
+    ``background_mask`` was folded per bucket by L2 and rebuilt from one vote per mask *region* by
+    the loop — 1070 rows at round 0, one row by round 4, and nothing reporting a loss. A reader
+    that cannot name a per-axis field cannot skip an axis.
+
+    Args:
+        harvest: One pass's ``PassHarvest``.
+        axis: The axis to read. Must be harvested and must declare a
+            :class:`~.axes.HarvestSource`.
+        policy: Presence-link policy, for an axis whose harvest holds *measurements*. ``None`` uses
+            the documented default anchors.
+
+    Returns:
+        Bucket dicts in the shape ``fuse.fuse_axis`` consumes — votes already linked, so no
+        consumer has to know which axes needed linking.
+
+    Raises:
+        KeyError: For an axis with no declared harvest source. An axis marked ``harvested`` whose
+            evidence no reader can find is the failure this replaces, and it has to be loud: an
+            empty result reads as "this axis had nothing to say".
+        NotImplementedError: For a measurements-holding axis other than speech presence. The only
+            link that exists reads ``speech_presence_evidence``; returning its votes for a
+            different axis would be a silent mislabel.
+    """
+    source = HARVEST_SOURCES.get(str(axis))
+    if source is None:
+        raise KeyError(
+            f"axis {axis!r} declares no harvest source; add a HarvestSource to its axes.AXES entry "
+            f"— known: {sorted(HARVEST_SOURCES)}"
+        )
+    if source.holds == "measurements":
+        if source.field != "speech_presence_evidence":
+            raise NotImplementedError(
+                f"axis {axis!r} holds measurements in {source.field!r}, and the only link that exists reads "
+                "speech_presence_evidence; give the axis its own linker rather than borrowing presence's"
+            )
+        return votes_for_harvest(harvest, **({"policy": policy} if policy is not None else {}))
+    return list(getattr(harvest, source.field, None) or [])
 
 
 def mask_from_pvoice(p: float) -> float:
@@ -370,7 +423,12 @@ def link_pass(harvest: PassHarvest, *, params: dict[str, Any]) -> LinkedPass:
     recorded in ``provenance`` — and the emission of the per-signal L1 rows.
     """
     presence_policy = policy_from_params(params)
-    presence_buckets = votes_for_harvest(harvest, policy=presence_policy)
+    # Every harvested axis, read the way it declares — including ``background_mask``, whose
+    # per-bucket harvest was absent from this dict while ``reliability`` and ``fuse`` both knew
+    # about it. So this pass contributed no mask evidence to ``L2/round/0/derivatives/votes/`` and
+    # the driver overwrote that (empty) file with one vote per mask region.
+    buckets_by_axis = {axis: buckets_for_axis(harvest, axis, policy=presence_policy) for axis in HARVEST_SOURCES}
+    presence_buckets = buckets_by_axis["speech_presence"]
 
     signal_rows: dict[str, list[SignalRow]] = {}
     _signal_rows_from_buckets(harvest.speech_presence_evidence, "evidence", signal_rows)
@@ -459,11 +517,7 @@ def link_pass(harvest: PassHarvest, *, params: dict[str, Any]) -> LinkedPass:
     }
     return LinkedPass(
         perturbation=harvest.perturbation,
-        buckets_by_axis={
-            "speech_presence": presence_buckets,
-            "speaker": list(harvest.speaker_votes),
-            "asr": list(harvest.asr_votes),
-        },
+        buckets_by_axis=buckets_by_axis,
         signal_results={
             signal: SignalResult(
                 perturbation=harvest.perturbation,  # type: ignore[arg-type]

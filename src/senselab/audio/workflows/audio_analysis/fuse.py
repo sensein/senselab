@@ -1001,12 +1001,20 @@ def _draw_round_timeline(
 
 
 def mask_axis_votes(mask_regions: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """The ``background_mask`` axis's per-bucket votes, from the mask's own confidence.
+    """The mask's own per-**region** confidence, restated as votes in the shared units.
 
-    The design names four axes and this is the fourth. It has no vote harvest of its own because
-    the mask is not a model ensemble — it is one derived judgement per region — but it does report
-    how sure it is, and ``1 - confidence`` is that judgement's uncertainty in exactly the units the
-    other axes use.
+    **Not the ``background_mask`` axis's vote source.** That axis is harvested per bucket like the
+    other three (``mask_harvest.harvest_background_mask_evidence`` →
+    ``PassHarvest.background_mask_evidence``, read through ``votes.buckets_for_axis``), and using
+    this function for it is what gave a run 1070 mask buckets at round 0 and one by round 4: a
+    region is as coarse as the mask happens to be, so on a recording with a single region the axis
+    had nowhere to be uncertain.
+
+    What survives is the region-scoped reading, for a consumer whose unit genuinely *is* a region.
+    ``rounds.regional_weights`` is that consumer, and it takes its regions from
+    :func:`mask_regions_from_rows` rather than from here — so as of this change nothing in the
+    pipeline calls this function, and it is kept as the one place that states how a region's
+    confidence converts into the axes' units.
 
     An ``indeterminate`` region is skipped rather than voted at maximum uncertainty. "I cannot tell"
     is the absence of a claim, and the other axes already treat an absent claim as absent rather
@@ -1214,38 +1222,26 @@ def write_final_uncertainty(
 
     import pandas as pd
 
-    from senselab.audio.workflows.audio_analysis.speech_presence_link import (
-        DEFAULT_POLICY,
-        votes_for_harvest,
-    )
+    from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
+    from senselab.audio.workflows.audio_analysis.speech_presence_link import DEFAULT_POLICY
+    from senselab.audio.workflows.audio_analysis.votes import buckets_for_axis
 
     policy = speech_presence_policy if speech_presence_policy is not None else DEFAULT_POLICY
     # C2 asks whether the speaker-to-channel binding is stable, so it has to be measured before the
     # rounds that judge it. Unavailable on a pass with no per-speaker channels or no harmonised
     # clusters, in which case it stays None and C2 blocks rather than passing.
     speaker_assignment = _speaker_assignment(harvests)
-    # The design names four axes, with ``task`` punted. ``background_mask`` votes come from the
-    # mask's own per-region confidence rather than a vote harvest, because the mask reports where
-    # it is sure a region is target-free — which is exactly this axis's question.
-    axis_field: dict[str, str | None] = {
-        "speech_presence": None,
-        "speaker": "speaker_votes",
-        "asr": "asr_votes",
-        # The fourth axis reads its harvest like the other three. It used to be bolted on after this
-        # dict from ``mask_axis_votes(mask_regions)`` — one vote per *region*, so on a run that found a
-        # single region the whole recording was one bucket, the axis had nowhere to be uncertain, and
-        # it reported 0.000 across the board. On the presence grid it shares (D-24) it is one row per
-        # bucket like everything else. ``mask_axis_votes`` keeps two other callers — the driver's
-        # per-region export, and ``rounds.regional_weights`` withdrawing trust regionally — because a
-        # *region* is the right unit for both. What was wrong was using it as the axis's vote source.
-        "background_mask": "background_mask_evidence",
-    }
+    # Every harvested axis, read where its own declaration says its evidence lives (D-17), through
+    # the one reader all three consumers share. The fourth axis used to be bolted on after a
+    # hand-written map of three from ``mask_axis_votes(mask_regions)`` — one vote per *region*, so on
+    # a run that found a single region the whole recording was one bucket, the axis had nowhere to be
+    # uncertain, and it reported 0.000 across the board. On the presence grid it shares (D-24) it is
+    # one row per bucket like everything else. ``mask_axis_votes`` keeps its region-scoped callers —
+    # ``rounds.regional_weights`` withdrawing trust regionally, and the per-region mask export —
+    # because a *region* is the right unit for both. What was wrong was using it as a vote source.
     buckets_by_axis: dict[str, Mapping[str, Sequence[Mapping[str, Any]]]] = {
-        axis: {
-            label: (votes_for_harvest(h, policy=policy) if field is None else (getattr(h, field, []) or []))
-            for label, h in harvests.items()
-        }
-        for axis, field in axis_field.items()
+        axis: {label: buckets_for_axis(h, axis, policy=policy) for label, h in harvests.items()}
+        for axis in HARVEST_SOURCES
     }
     from senselab.audio.workflows.audio_analysis.io import merge_json
     from senselab.audio.workflows.audio_analysis.layout import estimates_dir, round_dir

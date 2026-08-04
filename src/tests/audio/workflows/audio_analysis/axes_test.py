@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -189,24 +190,84 @@ def test_the_disagreements_tiebreak_ranks_every_axis_by_decision() -> None:
     assert AXIS_PRIORITY["background_mask"] == 3
 
 
-def test_the_mask_axis_votes_are_written_where_the_others_are(tmp_path: Path) -> None:
-    """Its evidence has to be in the store, or iterating four axes still proposes over three."""
+def test_every_harvested_axis_declares_where_its_evidence_lives() -> None:
+    """``harvested=True`` with no ``HarvestSource`` is a claim no reader can act on.
+
+    The two sets are kept separate on purpose — ``HARVESTED_AXES`` is what an axis *claims*,
+    ``HARVEST_SOURCES`` is what a reader can *find* — and their agreeing is exactly the property
+    that failed. ``background_mask`` was flagged harvested while the adaptive store's ingest
+    enumerated three axes in a literal tuple, and the store's own accessor set was built from the
+    flag, so it reported the mask as covered and the guard that exists to catch an unreadable axis
+    could not fire.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
+
+    assert set(HARVEST_SOURCES) == set(HARVESTED_AXES)
+    assert HARVEST_SOURCES["background_mask"].field == "background_mask_evidence"
+    assert HARVEST_SOURCES["background_mask"].holds == "votes"
+    # Presence is the one axis whose harvest holds measurements: every threshold that turns them
+    # into a statement is L2's, so a reader must link rather than fold them as they are.
+    assert HARVEST_SOURCES["speech_presence"].holds == "measurements"
+
+
+def test_the_mask_axis_is_read_from_the_harvest_one_row_per_bucket(tmp_path: Path) -> None:
+    """The bug this file's fourth-axis theme exists for, in its last hiding place.
+
+    ``fuse`` and ``reliability`` read the mask's per-bucket harvest; the adaptive store did not, and
+    the driver made up the difference by handing it ``mask_axis_votes(mask_regions)`` — one vote per
+    mask *region*. A run whose mask found a single region therefore carried 1070 mask buckets at
+    round 0 and **one** by round 4, and an axis with one bucket has nowhere to be uncertain, so the
+    convergence report read it as settled. Both the store and the votes file now come from the same
+    per-bucket harvest.
+    """
     import pyarrow.parquet as pq
 
-    from senselab.audio.workflows.audio_analysis.fuse import mask_axis_votes
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
     from senselab.audio.workflows.audio_analysis.io import write_linked_votes
     from senselab.audio.workflows.audio_analysis.layout import derivatives_dir
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest, link_pass
 
-    regions = [
-        {"start": 0.0, "end": 1.0, "state": "target_free", "confidence": 0.9},
-        {"start": 1.0, "end": 2.0, "state": "indeterminate", "confidence": 0.5},
+    spans = [(round(s / 10, 6), round((s + 1) / 10, 6)) for s in range(6)]
+    evidence: list[dict[str, Any]] = [
+        {"start": start, "end": end, "task_type": "speech", "votes": {"speech": {"reading": 0.4 + i / 100}}}
+        for i, (start, end) in enumerate(spans)
     ]
-    votes = mask_axis_votes(regions)
-    # "I cannot tell" is the absence of a claim, not a confident maximum.
-    assert [(v["start"], v["end"]) for v in votes] == [(0.0, 1.0)]
+    harvest = PassHarvest(perturbation="raw", background_mask_evidence=evidence)
 
+    store = VoteStore.from_harvests({"raw": harvest})
+    assert store.buckets("background_mask") == spans
+
+    linked = link_pass(harvest, params={})
+    assert linked.buckets_by_axis["background_mask"] == evidence
     dest = write_linked_votes(
-        {"mask": votes}, "background_mask", derivatives_dir(tmp_path, 0) / "votes" / "background_mask.parquet"
+        {"raw": linked.buckets_by_axis["background_mask"]},
+        "background_mask",
+        derivatives_dir(tmp_path, 0) / "votes" / "background_mask.parquet",
     )
     assert dest.parent == tmp_path / "L2" / "round" / "0" / "derivatives" / "votes"
-    assert pq.read_table(dest).column("axis").to_pylist() == ["background_mask"]
+    table = pq.read_table(dest)
+    assert table.column("axis").to_pylist() == ["background_mask"] * len(evidence)
+    # Keyed by the perturbation it was measured under. The per-region write named a fabricated
+    # perturbation ("mask"), which is in no run's perturbation set, so the artifact ingest path —
+    # which skips a row naming a perturbation the run did not take — dropped every one of them.
+    assert set(table.column("perturbation").to_pylist()) == {"raw"}
+
+
+def test_an_axis_no_reader_can_find_raises_rather_than_folding_to_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard has to stay able to fail, now that no active axis needs ``unharvested``.
+
+    All four axes declare a harvest source today, so the ``unharvested`` mapping is empty on every
+    real call — which is precisely when a guard rots into a formality. Simulated with a fifth active
+    axis that declares no source: it must raise, because an axis nobody hands in carries no belief
+    through any round and is then reported as ``0 buckets, residual mass 0.0`` — settled rather than
+    never asked.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive import belief as belief_module
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    monkeypatch.setattr(belief_module, "AXES", (*AXIS_NAMES, "prosody"))
+    with pytest.raises(ValueError, match="prosody"):
+        belief_module.VoteStore.from_harvests({"raw": PassHarvest(perturbation="raw")})
+    # ...and an *empty* entry is accepted, because "nothing was found" is a measurement.
+    store = belief_module.VoteStore.from_harvests({"raw": PassHarvest(perturbation="raw")}, unharvested={"prosody": {}})
+    assert store.buckets("prosody") == []
