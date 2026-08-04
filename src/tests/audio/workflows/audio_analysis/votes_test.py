@@ -87,9 +87,19 @@ def test_link_pass_records_the_policy_that_read_the_measurements() -> None:
 
 
 def test_link_pass_emits_belief_buckets_per_axis_but_no_axis_value() -> None:
-    """The buckets L2 fuses come out; a per-pass axis number does not."""
+    """The buckets L2 fuses come out; a per-pass axis number does not.
+
+    Four keys, not three. ``background_mask`` is harvested per bucket like the rest and was absent
+    from this dict, so the votes file the artifact-driven adaptive path ingests was written empty
+    for it and then overwritten by the driver with one vote per mask *region*: L2 folded 1070
+    buckets and the loop carried one. The keys are :data:`axes.HARVEST_SOURCES` now, so an axis
+    cannot be missing from here while being declared harvested.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
+
     linked = link_pass(_harvest(), params={})
-    assert set(linked.buckets_by_axis) == {"speech_presence", "speaker", "asr"}
+    assert set(linked.buckets_by_axis) == set(HARVEST_SOURCES)
+    assert set(HARVEST_SOURCES) == {"speech_presence", "speaker", "asr", "background_mask"}
     assert len(linked.buckets_by_axis["speech_presence"]) == 2
     for buckets in linked.buckets_by_axis.values():
         for bucket in buckets:

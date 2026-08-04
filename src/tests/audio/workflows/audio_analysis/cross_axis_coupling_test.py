@@ -502,6 +502,30 @@ def test_a_mask_row_with_no_uncertainty_is_dropped_rather_than_assumed_certain()
     assert mask_regions_from_rows([{"start": 0.0, "end": 1.0, "state": "target_free"}]) == []
 
 
+def test_an_indeterminate_region_casts_no_mask_vote_rather_than_a_confident_maximum() -> None:
+    """``mask_axis_votes``'s contract, which lost its only test when the mask axis stopped using it.
+
+    The axis now reads its per-bucket harvest, so this function has no caller in the pipeline — it
+    is kept as the one statement of how a *region*'s confidence converts into the axes' units, for a
+    consumer whose unit genuinely is a region. Untested public API that nothing calls is how a
+    contract rots quietly, and this particular contract is the absent-reads-as-fine failure the
+    design keeps hitting: "I cannot tell" must be the *absence* of a claim, because imputing maximum
+    uncertainty would let an unresolved region outvote the regions that were actually resolved.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import mask_axis_votes
+
+    votes = mask_axis_votes(
+        [
+            {"start": 1.0, "end": 2.0, "state": "indeterminate", "confidence": 0.5},
+            {"start": 0.0, "end": 1.0, "state": "target_free", "confidence": 0.9},
+            # No confidence at all is likewise no claim, not a certain one.
+            {"start": 2.0, "end": 3.0, "state": "target_free"},
+        ]
+    )
+    assert [(v["start"], v["end"]) for v in votes] == [(0.0, 1.0)]
+    assert votes[0]["votes"]["mask"]["same_label_uncertainty"] == pytest.approx(0.1)
+
+
 def test_speaker_claims_are_the_spans_each_model_actually_named_a_speaker() -> None:
     """Regional trust discounts a signal where it *claimed* a speaker, so the claim must be real."""
     from senselab.audio.workflows.audio_analysis.fuse import speaker_claims_from_votes

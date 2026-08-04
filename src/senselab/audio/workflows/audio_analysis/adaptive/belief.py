@@ -40,7 +40,7 @@ from typing import Any, Final, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import per_source_voice
-from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES, HARVESTED_AXES
+from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES, HARVEST_SOURCES
 from senselab.audio.workflows.audio_analysis.degradation import (
     DEFAULT_ANCHORS,
     SNR_PREFERENCE,
@@ -61,13 +61,16 @@ AXES: tuple[AxisName, ...] = AXIS_NAMES
 """Every active axis, from the one declaration. Re-exported here because half the loop imports it
 from this module; it is not a second list, and it is deliberately not three long."""
 
-_HARVEST_ACCESSORS: Final[frozenset[str]] = frozenset(HARVESTED_AXES)
+_HARVEST_ACCESSORS: Final[frozenset[str]] = frozenset(HARVEST_SOURCES)
 """Axes :meth:`VoteStore.from_harvests` can read straight off a ``PassHarvest``.
 
-Derived from the axis declaration rather than from the three branches below it, so that the
-branches and the set cannot disagree: an axis that grows a harvest accessor without being marked
-``harvested=True`` is caught by the branch that has no case for it, and one marked ``harvested``
-without an accessor is caught here."""
+Derived from :data:`~.axes.HARVEST_SOURCES` — what a reader can actually *find* — and not from the
+``harvested`` flag, which is only what the axis claims. The distinction is the bug: the flag said
+``background_mask`` was harvested, this method enumerated three axes in a literal tuple, and
+``frozenset(HARVESTED_AXES)`` then reported the mask as covered. So the guard below could not fire,
+the caller's ``unharvested`` entry was accepted instead, and the axis was rebuilt from one vote per
+mask *region* — 1070 buckets at round 0, one by round 4. Keyed on the declaration a reader
+dereferences, an axis nothing can read is *not* in this set and the guard raises."""
 
 UNCORROBORATED_SPEECH_CLAIM = "uncorroborated_speech_claim"
 """Reason recorded when a speech claim is attenuated for want of independent corroboration.
@@ -295,20 +298,29 @@ class VoteStore:
         The store holds *votes*, so the speech-presence axis is linked from its L1 measurements
         under ``policy`` (defaults to the documented anchors) on the way in.
 
-        ``unharvested`` carries ``{axis → {perturbation → buckets}}`` for every active axis with
-        no vote harvest — ``background_mask`` today, whose evidence is the mask's own per-region
-        confidence rather than an ensemble. It is **required**, not optional, and omitting an axis
-        raises: this method used to enumerate three axes in a literal tuple, so the fourth entered
-        no store on this path, carried no belief through any round, proposed no region, and was
+        Every axis is read through :func:`votes.buckets_for_axis` at the field its own declaration
+        names, so the four axes L2 folds are the four this store carries. This method used to
+        enumerate three of them in a literal tuple: ``background_mask`` entered no store on this
+        path, and the caller compensated by handing its evidence in as ``unharvested`` — one vote
+        per mask *region*, where L2 had folded one per bucket. A run's fourth axis therefore went
+        from 1070 rows at round 0 to 1 by round 4, and an axis with a single bucket has nowhere to
+        be uncertain, so it read as *settled*.
+
+        ``unharvested`` carries ``{axis → {perturbation → buckets}}`` for an active axis with no
+        vote harvest at all. **No active axis needs it today** — all four declare a
+        :class:`~.axes.HarvestSource` — and it is kept because the guard below needs a remedy to
+        name: ``task`` is declared ``harvested=False``, so activating it would make this the way its
+        evidence arrives. An entry is still required for such an axis, and omitting one raises: an
+        axis nobody hands in carries no belief through any round, proposes no region, and is
         reported by the convergence report as ``0 buckets, residual mass 0.0`` — *settled* rather
-        than *never asked*. An empty mapping for an axis is a measurement ("the mask found
-        nothing"); a missing one is an omission, and only the second is an error.
+        than *never asked*. An empty mapping for an axis is a measurement ("nothing was found");
+        a missing one is an omission, and only the second is an error.
 
         Raises:
-            ValueError: When an active axis has neither a harvest accessor nor an ``unharvested``
-                entry — the fifth axis's version of the bug the fourth one shipped.
+            ValueError: When an active axis has neither a readable harvest source nor an
+                ``unharvested`` entry — the fifth axis's version of the bug the fourth one shipped.
         """
-        from senselab.audio.workflows.audio_analysis.speech_presence_link import votes_for_harvest
+        from senselab.audio.workflows.audio_analysis.votes import buckets_for_axis
 
         supplied = dict(unharvested or {})
         missing = [a for a in AXES if a not in _HARVEST_ACCESSORS and a not in supplied]
@@ -323,11 +335,10 @@ class VoteStore:
             for stream, buckets in sorted(by_stream.items()):
                 store._ingest_buckets(axis, stream, buckets, round_idx)
         for stream, harvest in harvests.items():
-            for axis, buckets in (
-                ("speech_presence", votes_for_harvest(harvest, **({"policy": policy} if policy else {}))),
-                ("speaker", harvest.speaker_votes),
-                ("asr", harvest.asr_votes),
-            ):
+            # Declaration order, not set order: votes are appended to the round's append-only file
+            # in insertion order, so iterating a frozenset would make the artifact vary per process.
+            for axis in HARVEST_SOURCES:
+                buckets = buckets_for_axis(harvest, axis, policy=policy)
                 for bucket in buckets:
                     bk = bucket_key(bucket["start"], bucket["end"])
                     for source, payload in (bucket.get("votes") or {}).items():

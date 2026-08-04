@@ -325,10 +325,10 @@ def test_from_harvests_in_process_integration() -> None:
         asr_votes=[],
         quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.3, "_raw": {}}},
     )
-    # ``unharvested`` is not optional: the mask axis has no vote harvest, so a caller that omits
-    # it is a caller whose store carries three axes and reports the fourth as settled. Empty here
-    # because this fixture measures no mask — which is a measurement, unlike an omission.
-    store = VoteStore.from_harvests({"raw": harvest}, unharvested={"background_mask": {}})
+    # Every harvested axis is read off the harvest, the mask included, so nothing has to be handed
+    # in beside it. This fixture measures no mask, and an axis with no evidence is *absent* from the
+    # store rather than present-and-settled.
+    store = VoteStore.from_harvests({"raw": harvest})
     votes = store.active_votes("raw", "speech_presence", (0.0, 0.5))
     assert set(votes) == {"m1", "m2"}
     row = store.reaggregate_bucket("speech_presence", (0.0, 0.5), aggregator="min")
@@ -374,7 +374,6 @@ def test_run_adaptive_loop_accepts_in_process_harvests(tmp_path: Path) -> None:
     log = run_adaptive_loop(
         tmp_path,
         harvests={"raw": harvest},
-        unharvested_votes={"background_mask": {}},
         summary=summary,
         max_rounds=1,
         aggregator="min",
@@ -413,7 +412,6 @@ def test_both_ingest_paths_run_the_replay_proof(tmp_path: Path) -> None:
     run_adaptive_loop(
         tmp_path,
         harvests={"raw": harvest},
-        unharvested_votes={"background_mask": {}},
         summary={"passes": {"raw": {"duration_s": 1.0, "audio_signature": "b" * 64}}},
         max_rounds=1,
         aggregator="min",
@@ -443,7 +441,6 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
     log = run_adaptive_loop(
         tmp_path,
         harvests={"raw": _h("raw"), "enhanced": _h("enhanced")},
-        unharvested_votes={"background_mask": {}},
         # enhancement failed, so the summary has no duration_s for it
         summary={
             "passes": {
@@ -811,7 +808,7 @@ def _parity_fixture() -> tuple[Any, dict[str, list[dict[str, Any]]]]:
         )
 
     harvests = {"raw": _harvest("raw", 0.2), "enhanced": _harvest("enhanced", 0.6)}
-    store = VoteStore.from_harvests(harvests, unharvested={"background_mask": {}})
+    store = VoteStore.from_harvests(harvests)
     rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={})
     return store, {"speaker": rows}
 

@@ -1334,11 +1334,6 @@ def main(argv: list[str] | None = None) -> int:
     # and with --skip comparisons there is simply nothing harvested to read.
     harvests_by_pass: dict[str, Any] = {}
     reliability_by_axis: dict[str, Any] = {}
-    # Every active axis with no vote harvest gets an entry here whether or not it has anything to
-    # say, because the belief store distinguishes the two: an empty perturbation map is "no
-    # perturbation reported a mask", a *missing* axis is "nobody asked", and the second is the
-    # failure that let the fourth axis converge on silence.
-    unharvested_votes: dict[str, dict[str, list[dict[str, Any]]]] = {"background_mask": {}}
 
     if "comparisons" not in args.skip:
         from senselab.audio.workflows.audio_analysis import (
@@ -1660,24 +1655,14 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 summaries["final_uncertainty"] = final_maps
 
-                # The fourth axis's evidence, written where the other three write theirs and keyed
-                # by the perturbation it was measured under. It used to be written under a
-                # fabricated perturbation called "mask", which is in no run's perturbation set —
-                # so the artifact ingest path, which skips rows naming a perturbation the run did
-                # not take, dropped every mask vote, and the in-process path enumerated three axes
-                # and never looked. The mask is built on the unmodified variant only (enhancement
-                # removes the non-speech evidence it reads target activity from), so the identity
-                # perturbation is not a convenient label here, it is the true one.
-                from senselab.audio.workflows.audio_analysis.fuse import mask_axis_votes
-                from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
-
-                unharvested_votes["background_mask"] = {IDENTITY_NAME: mask_axis_votes(mask_regions)}
-                write_linked_votes(
-                    unharvested_votes["background_mask"],
-                    "background_mask",
-                    derivatives_dir(run_dir, 0) / "votes" / "background_mask.parquet",
-                    provenance=run_provenance,
-                )
+                # The fourth axis's votes are written by the loop over ``HARVESTED_AXES`` above,
+                # from the same per-bucket harvest every other axis's come from. A second write
+                # used to happen here from ``mask_axis_votes(mask_regions)`` — one vote per mask
+                # *region*, keyed under a fabricated perturbation called "mask" — and it clobbered
+                # the per-bucket file. Both ingest paths then saw a single bucket where L2 had
+                # folded 1070, which is an axis with nowhere to be uncertain. ``mask_regions``
+                # itself stays: it is what ``write_final_uncertainty`` withdraws regional trust
+                # with, and a region is the right unit for that.
 
                 # The per-round timelines are drawn by ``write_final_uncertainty`` itself now. They
                 # were drawn here, so a caller of the workflow API got rounds with no view of
@@ -2026,7 +2011,6 @@ def main(argv: list[str] | None = None) -> int:
                 max_rounds=args.max_rounds,
                 aggregator=args.uncertainty_aggregator,
                 harvests=harvests_by_pass,
-                unharvested_votes=unharvested_votes,
                 summary=summaries,
                 policy_overrides=_policy_overrides(args),
             )
