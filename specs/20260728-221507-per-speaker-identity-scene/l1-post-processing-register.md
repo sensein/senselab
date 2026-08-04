@@ -721,11 +721,40 @@ still fuse, because the frame-posterior and ASR signals carry confidences — bu
 coverage-only fixture now reports `None`. `p_voice` itself is unchanged and still comes from
 `speaks`, so every consumer that needed a probability about the world still has one.
 
+### Direction-only voters: judged, and `aggregate`'s treatment promoted
+
+The paragraph above ("this changes nothing measurable — 896/896 presence buckets still fuse,
+because the frame-posterior and ASR signals carry confidences") was measured on a configuration
+nobody ships, and it does not hold on the defaults. Only Whisper reports `avg_logprob`, so on the
+shipped ASR set the presence axis fused **7 signals of 14**: all three ASR models and both
+diarizers were dropped, because each asserts a direction and scores nothing. `fuse_axis` was the
+only reader of a presence vote that did not understand that shape — `aggregate.per_source_voice`
+and `support.presence_probability` both already map such a vote to `p = 1.0`/`0.0` — and
+`reliability._bucket_beliefs` had *already* had to reintroduce these voters by hand to measure
+their stability, so a weight was being computed for signals the fold could never use.
+
+Judged in favour of `aggregate`'s treatment, and promoted: `fuse.is_direction_only_claim` names the
+shape and `per_signal_uncertainty` reads it at full strength (doubt `0.0`), by `setdefault` so a
+measured pairwise doubt still wins. Re-folding a completed run's own stored votes: 6.97 → 13.97
+signals per bucket, `uncertainty` 0.5438 → 0.3415, `confidence` 0.8675 → 0.9340, and
+`triage_score` **unchanged to four decimals** with 0 of 1070 buckets dropping — the default fold is
+max-doubt, so a voter carrying no doubt cannot make a region look calmer than it is.
+`reliability._bucket_beliefs` now keys its substitution on the shape rather than on the fold's
+silence, so cross-pass flip detection is byte-identical to before. Guarded by
+`asr_presence_signal_test.py`, parameterised over the ASR result shapes.
+
+Found while doing it, and **still open**: Whisper's word coverage never reached the axis either.
+`avg_logprob` sits on the line, and `asr_bucket_chunk_evidence` only falls back to line-level
+scalars when no chunk of that line overlapped the bucket — so Whisper's score reaches exactly the
+buckets where it placed *no* words, and a bucket full of its words was as direction-only as any
+other backend's. Its presence signal was carried entirely by its silent buckets, which is the whole
+of what made it look like the shape that worked. Whether a segment's score should also describe the
+buckets its own words landed in is a separate decision about the scalar fallback (item 4's
+neighbourhood), not about the fold.
+
 ### Still open
 
-`aggregate.aggregate_speech_presence`, `aggregate_speaker` and `aggregate_asr` now have no caller
-in `src/`. They are the per-axis estimators the store used before delegating to `fuse_axis`, and
-leaving them in the tree leaves a second definition of the axis available to the next reader who
-goes looking. They should be deleted with their tests, or one of them promoted into
-`fuse.per_signal_uncertainty` if its treatment of a direction-only voter is judged better than
-returning nothing.
+`aggregate.aggregate_speech_presence`, `aggregate_speaker` and `aggregate_asr` still have no caller
+in `src/`. Leaving them in the tree leaves a second definition of the axis available to the next
+reader who goes looking; the direction-only rule they encoded now lives in `fuse`, so they should be
+deleted with their tests.

@@ -65,7 +65,7 @@ def _bucket_beliefs(buckets: Any) -> dict[tuple[float, float], dict[str, float]]
     which the presence harvest emits, so presence stability silently returned ``{}`` on every real
     run and every presence signal kept weight 1.0: unmeasured, hence floored, hence never applied.
     """
-    from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
+    from senselab.audio.workflows.audio_analysis.fuse import is_direction_only_claim, per_signal_uncertainty
 
     out: dict[tuple[float, float], dict[str, float]] = {}
     for bucket in buckets or []:
@@ -73,16 +73,19 @@ def _bucket_beliefs(buckets: Any) -> dict[tuple[float, float], dict[str, float]]
             continue
         key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
         per_signal = dict(per_signal_uncertainty(bucket))
-        # A voter that states only a direction — ``speaks: True`` with no confidence — has no
-        # per-signal *doubt* to compare, so `per_signal_uncertainty` rightly omits it. But its
-        # answer is what flipped, and a flip is exactly what stability is asking about. Each
-        # signal is only ever compared against itself across passes, so the scale need only be
-        # consistent per signal; omitting these voters is what left them permanently unmeasured.
+        # A voter that states only a direction — ``speaks: True`` with no confidence — expresses no
+        # doubt, so `per_signal_uncertainty` reports it as ``0.0`` in *both* directions. That is the
+        # right reading for the fold and useless here: it is constant, so it can never show a flip,
+        # and a flip is exactly what stability is asking about. Substitute the direction itself.
+        # Each signal is only ever compared against itself across passes, so the scale need only be
+        # consistent per signal; before either treatment existed these voters were dropped outright,
+        # which is what left them permanently unmeasured.
         for name, entry in (bucket.get("votes") or {}).items():
-            if str(name) in per_signal or not isinstance(entry, Mapping):
+            if not isinstance(entry, Mapping) or not is_direction_only_claim(entry):
                 continue
-            if isinstance(entry.get("speaks"), bool):
-                per_signal[str(name)] = 1.0 if entry["speaks"] else 0.0
+            speaks = entry.get("speaks")
+            if isinstance(speaks, bool):
+                per_signal[str(name)] = 1.0 if speaks else 0.0
         if per_signal:
             out[key] = per_signal
     return out

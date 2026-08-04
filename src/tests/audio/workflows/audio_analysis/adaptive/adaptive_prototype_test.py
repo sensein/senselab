@@ -333,10 +333,19 @@ def test_from_harvests_in_process_integration() -> None:
     assert set(votes) == {"m1", "m2"}
     row = store.reaggregate_bucket("speech_presence", (0.0, 0.5), aggregator="min")
     # ``p_voice`` is a probability about the world and still comes from ``speaks``: two voters
-    # split evenly. ``uncertainty`` is the fold and is ``None`` here, because neither coverage
-    # voter reported any doubt of its own — no signal spoke, which is not the same as agreement.
+    # split evenly. ``uncertainty`` is the fold, and both voters are direction-only — a coverage
+    # claim with nothing scored — so each is read at the full strength every other consumer of a
+    # presence vote already reads it at, and neither leaves any doubt behind. It fused to ``None``
+    # while the fold could not read such a vote at all, which is what removed all three default
+    # ASR models and both diarizers from the presence axis on a real run.
+    #
+    # Worth seeing plainly in the same fixture: the two voters flatly contradict each other, and
+    # ``uncertainty`` is nevertheless zero. ``fuse_axis`` folds each signal's doubt *about its own
+    # claim*, not the disagreement between claims — that lives in ``p_voice`` (0.5 here), and in
+    # ``variability`` once the doubts themselves differ.
     assert row["p_voice"] == pytest.approx(0.5)
-    assert row["uncertainty"] is None
+    assert row["uncertainty"] == pytest.approx(0.0)
+    assert row["confidence"] == pytest.approx(1.0)
     assert store.row_meta[("raw", "speech_presence", (0.0, 0.5))]["quality_snr"] == 0.3
     ident = store.reaggregate_bucket("speaker", (0.0, 1.0), aggregator="min")
     assert ident["uncertainty"] == pytest.approx(
