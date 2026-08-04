@@ -941,7 +941,7 @@ re-serialization and cross-round comparison, 1 wrong three times over, and 2 rea
 because the suite was incomplete. The suite is now `scripts/check_layering.py` so it is version-controlled
 and can be corrected rather than rewritten from memory each time.
 
-## Baseline before signal/estimator changes (run 8, cold cache)
+## Baseline before signal/estimator changes (run 9, cold cache, DEFAULT ASR set)
 
 Run: `english_conversation_higgs_audio_v2_20260804-120913`. `scripts/check_layering.py` -> **42 held, 0 violated**.
 
@@ -988,3 +988,58 @@ is not a fixed point of anything statable. Worth changing only with an ordering 
 
 **The artifact still cannot say which reading applies** — `contributing_signals` names `axis::asr` with no
 round. That is the remaining gap, and the fix is a field, not a behaviour change.
+
+## Baseline before signal/estimator changes (run 9, cold cache, DEFAULT ASR set)
+
+Run: `english_conversation_higgs_audio_v2_20260804-145231`. `scripts/check_layering.py` -> **42 held, 0 violated**.
+
+| axis | rows | mean uncertainty | n | signals |
+|---|---|---|---|---|
+| speech_presence | 1070 | 0.5034 | 8 | `acoustic_hnr`<br>`acoustic_level_above_floor`<br>`acoustic_lufs`<br>`ast`<br>`embedding_silhouette`<br>`frame_brouhaha_vad`<br>`frame_posterior_fine`<br>`yamnet` |
+| speaker | 85 | 0.7917 | 12 | `__cross_diar_label_disagreement__`<br>`__overlap_count__`<br>`embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb::speechbrain/spkrec-ecapa-voxceleb`<br>`embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb::speechbrain/spkrec-resnet-voxceleb`<br>`embedding_silhouette/speechbrain/spkrec-resnet-voxceleb::speechbrain/spkrec-ecapa-voxceleb`<br>`embedding_silhouette/speechbrain/spkrec-resnet-voxceleb::speechbrain/spkrec-resnet-voxceleb`<br>`nvidia/diar_sortformer_4spk-v1::speechbrain/spkrec-ecapa-voxceleb`<br>`nvidia/diar_sortformer_4spk-v1::speechbrain/spkrec-resnet-voxceleb`<br>`pyannote/speaker-diarization-community-1::speechbrain/spkrec-ecapa-voxceleb`<br>`pyannote/speaker-diarization-community-1::speechbrain/spkrec-resnet-voxceleb`<br>`speechbrain/spkrec-ecapa-voxceleb::change_point`<br>`speechbrain/spkrec-resnet-voxceleb::change_point` |
+| asr | 41 | 0.4266 | 3 | `Qwen/Qwen3-ASR-1.7B`<br>`nvidia/canary-qwen-2.5b`<br>`nyralabs/CrisperWhisper2.0_turbo` |
+| background_mask | 1070 | 0.0949 | 3 | `speakers`<br>`speech`<br>`words` |
+
+Speaker count **2 @ p=0.978**, 4 sources. `high_uncertainty_rate` 0.9819.
+
+**Cross-axis coupling verified as designed** — not "surprising", as I had framed it. Round 0 carries no
+`axis::` signal because the coupling loop starts at `round_index=1`; round 1 carries all three. `previous`
+is snapshotted for every axis before any is refolded (FR-011f), so it is genuinely the prior round rather
+than a sibling read. The receiver's own grid bounds it — *"coupling informs it and never extends it"* —
+which is what stops a one-row axis from inheriting another's 1197 buckets. The uncertainty gate is
+deliberately open, because the quantity a cross-axis input carries *is* the other axis's uncertainty;
+what **is** gated is evidence overlap, via `measure_axis_overlap`, which is D-21 rule 6 implemented.
+
+**The one gap:** `contributing_signals` records `axis::asr` but not *which round* of asr. The code makes it
+previous-round; the artifact cannot say so. Same two-facts-one-field shape as the `round` column.
+
+
+### Two predictions I got wrong, and both are findings
+
+Earlier runs in this session all passed `--asr-models openai/whisper-large-v3-turbo openai/whisper-small`,
+which **replaces** the defaults. So every number recorded before run 9 describes a configuration nobody
+ships. Run 9 uses the real defaults — CrisperWhisper 2.0 turbo, Canary-Qwen 2.5b, Qwen3-ASR 1.7B.
+
+**Right:** `asr` mean uncertainty rose 0.2995 → **0.4266**. CrisperWhisper is *verbatim* against two
+fluent models, so pairwise WER now includes filled pauses and repetitions as disagreement.
+
+**Wrong 1 — the default ASR models contribute nothing to `speech_presence`.** I predicted it would gain a
+signal or two; it went from 12 signals to **8**. The two `::no_speech_prob` losses are expected (only
+Whisper exposes token logits). But the ASR models *themselves* also vanished: with Whisper,
+`openai/whisper-*` appeared as presence signals via word coverage. With the defaults, **no ASR model
+appears on the presence axis at all.** Word coverage is a presence signal by design — an ASR placing words
+in a bucket is evidence someone spoke there — and on the shipped configuration that evidence is absent.
+Cause unexamined; the likely place is whatever maps an ASR result to `word_overlap_s` in
+`speech_presence.py`, which may depend on a field only Whisper's result shape carries.
+
+**Wrong 2 — `n_words_on_member_timestamps` is still 0.** I predicted non-zero, because CrisperWhisper
+advertises native word timestamps and Qwen3-ASR has a bundled aligner. Every one of the 62 words is timed
+by `consensus_alignment_mms_fa`. So the consensus aligner overrides native timestamps even when two of
+three models supply them — which means **onset disagreement remains structurally zero on the default set
+too**, and D-24's onset variance would measure nothing until this is resolved. This is the concrete case
+D-20's aligner-provenance rule was written for: all three transcripts share one timing source, so their
+boundary agreement is not corroboration.
+
+Unchanged: **42/42 layering invariants hold** with a different model set, which is the right kind of
+insensitivity — nothing structural depends on which models ran. `speaker` (0.7917) and `background_mask`
+(0.0949) barely moved, as expected since neither reads ASR.
