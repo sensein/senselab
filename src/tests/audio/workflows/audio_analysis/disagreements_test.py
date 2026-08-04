@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.disagreements import build_disagreements_index
+from senselab.audio.workflows.audio_analysis.layout import estimates_dir
 from senselab.audio.workflows.audio_analysis.types import FusedAxis, SignalResult, SignalRow
 
 
@@ -67,7 +68,17 @@ def test_entries_have_no_pass_field(tmp_path: Path) -> None:
 
 
 def test_parquet_path_points_at_the_file_that_exists(tmp_path: Path) -> None:
-    """The index has to send a reader to a path the writer actually used."""
+    """The index has to send a reader to a path the writer actually used.
+
+    Resolved against a file on disk and against :func:`estimates_dir`, not against a literal. The
+    literal this used to assert (``L2/round3/uncertainty/asr.parquet``) kept passing after both the
+    directory name and the round nesting changed under it, so the test named the property while
+    pinning the drift.
+    """
+    written = estimates_dir(tmp_path, 3) / "asr.parquet"
+    written.parent.mkdir(parents=True)
+    written.write_bytes(b"")
+
     idx = build_disagreements_index(
         fused_axes=_axes(asr=[_row(0.0, 0.5, round=3)]),
         top_n=10,
@@ -75,7 +86,12 @@ def test_parquet_path_points_at_the_file_that_exists(tmp_path: Path) -> None:
         config={},
         incomparable_reasons={},
     )
-    assert idx["entries"][0]["parquet"] == "L2/round3/uncertainty/asr.parquet"
+
+    pointer = idx["entries"][0]["parquet"]
+    assert pointer == "L2/round/3/estimates/asr.parquet"
+    assert not Path(pointer).is_absolute(), "the pointer travels inside the run dir"
+    assert (tmp_path / pointer) == written
+    assert (tmp_path / pointer).is_file()
     assert idx["entries"][0]["ls_region_id"].startswith("uncertainty__asr__")
 
 
