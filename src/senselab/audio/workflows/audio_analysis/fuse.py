@@ -1261,11 +1261,15 @@ def write_final_uncertainty(
 
     written: dict[str, Any] = {}
 
-    def _frame(axis: str, rows: Sequence[Mapping[str, Any]]) -> Any:  # noqa: ANN401 — pd.DataFrame
+    def _frame(axis: str, rows: Sequence[Mapping[str, Any]], *, round_index: int) -> Any:  # noqa: ANN401 — DataFrame
         # Through ``estimates.estimate_frame``, the declaration the adaptive loop's rounds are
         # also written through: this directory holds one trajectory whose early rounds this
         # function writes and whose later ones the belief store does, so a column list local to
         # either producer is two shapes under one artifact name.
+        #
+        # ``round`` is the directory's, stamped by the declaration; the fold's own index rides on
+        # ``last_refolded_round``, which is what tells a reader whether this round recomputed the
+        # value or inherited it.
         return estimate_frame(
             axis,
             [
@@ -1277,7 +1281,7 @@ def write_final_uncertainty(
                     "confidence": r["confidence"],
                     "variability": r["variability"],
                     "triage_score": r["triage_score"],
-                    "round": r["round"],
+                    "last_refolded_round": r["round"],
                     "contributing_signals": r["contributing_signals"],
                     "contributing_passes": r["contributing_passes"],
                     "signal_weights": json.dumps(r["signal_weights"], sort_keys=True),
@@ -1292,6 +1296,7 @@ def write_final_uncertainty(
                 }
                 for r in rows
             ],
+            round_index=round_index,
         )
 
     # One directory per round, from the per-round history rather than the final rows. Writing the
@@ -1303,7 +1308,7 @@ def write_final_uncertainty(
             dest = estimates_dir(out_dir, round_index)
             dest.mkdir(parents=True, exist_ok=True)
             round_path = dest / f"{axis}.parquet"
-            _frame(axis, rounds_for_axis[round_index]).to_parquet(round_path, index=False)
+            _frame(axis, rounds_for_axis[round_index], round_index=round_index).to_parquet(round_path, index=False)
             written[f"{axis}@round{round_index}"] = str(round_path)
             # The headline path is the last round the axis actually ran.
             written[axis] = str(round_path)

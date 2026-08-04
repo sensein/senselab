@@ -80,7 +80,7 @@ def _written_round_belief(tmp_path: Path) -> dict[tuple[float, float], dict[str,
     from senselab.audio.workflows.audio_analysis.adaptive.loop import _write_round_belief
 
     store = _attenuated_store()
-    state = BeliefState.from_store(store, aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min", round_index=1)
     _write_round_belief(tmp_path, 1, state)
     return _rows_by_bucket(pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))
 
@@ -174,7 +174,7 @@ def test_every_withdrawal_is_listed_not_only_the_last(tmp_path: Path) -> None:
         round_idx=3,
         measured_on=("speech_presence", QUIET),
     )
-    state = BeliefState.from_store(store, aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min", round_index=1)
     _write_round_belief(tmp_path, 1, state)
     rows = _rows_by_bucket(pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))
     reasons = [f["reason"] for f in json.loads(rows[QUIET]["attenuation"])]
@@ -192,7 +192,7 @@ def test_a_later_round_republishes_the_attenuation_it_inherited(tmp_path: Path) 
     from senselab.audio.workflows.audio_analysis.adaptive.loop import _write_round_belief
 
     store = _attenuated_store()
-    state = BeliefState.from_store(store, aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min", round_index=1)
     state.update_buckets(store, "speech_presence", {QUIET}, round_idx=3)
     _write_round_belief(tmp_path, 1, state)
     rows = _rows_by_bucket(pd.read_parquet(estimates_dir(tmp_path, 1) / "speech_presence.parquet"))

@@ -198,7 +198,7 @@ def test_attenuated_source_stays_in_contributing_sources() -> None:
     row = store.reaggregate_bucket("speech_presence", BK, aggregator="min")
     assert "openai/whisper-large-v3" in row["contributing_sources"]
     assert row["attenuated_sources"]["openai/whisper-large-v3"] == pytest.approx(MIN_EVIDENCE_WEIGHT)
-    state = BeliefState.from_store(store, aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min", round_index=1)
     belief_row = state.axis_rows("speech_presence")[0]
     assert "openai/whisper-large-v3" in belief_row["attenuated_sources"]
 

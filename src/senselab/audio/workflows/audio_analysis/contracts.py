@@ -64,10 +64,11 @@ import ast
 import csv
 import graphlib
 import json
+import math
 from dataclasses import dataclass, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Final, Iterable, Iterator, Literal, Mapping, Sequence
+from typing import Any, Final, Iterable, Iterator, Literal, Mapping, Sequence
 
 __all__ = [
     "ENUMERABLE_DIMENSIONS",
@@ -1638,18 +1639,30 @@ def _table_columns(path: Path) -> frozenset[str] | None:
         raise UnreadableArtifact(f"{type(exc).__name__}: {exc}") from exc
 
 
-def _json_record_columns(path: Path, suffix: str) -> frozenset[str] | None:
-    """Column names of a JSON document that is a list of records, else ``None``."""
+def _json_records(path: Path, suffix: str) -> list[dict[str, Any]]:
+    """The rows of a JSON document that is a list of records, or empty when it is not one.
+
+    An object is a *document* and an empty list has no row that could contradict anything, so both
+    read as "not a table" — the same judgement, made once, for the name rules and the value rules.
+    """
     text = path.read_text(encoding="utf-8")
     if suffix in {".jsonl", ".ndjson"}:
         records: list[object] = [json.loads(line) for line in text.splitlines() if line.strip()]
     else:
         parsed = json.loads(text)
         if not isinstance(parsed, list):
-            return None
+            return []
         records = list(parsed)
     rows = [record for record in records if isinstance(record, dict)]
     if not rows or len(rows) != len(records):
+        return []
+    return rows
+
+
+def _json_record_columns(path: Path, suffix: str) -> frozenset[str] | None:
+    """Column names of a JSON document that is a list of records, else ``None``."""
+    rows = _json_records(path, suffix)
+    if not rows:
         return None
     return frozenset().union(*(frozenset(row) for row in rows))
 
@@ -1687,6 +1700,117 @@ def _vocabulary_violations(
             f"a '**' does not license another stage's shape"
         )
     return problems
+
+
+def _path_fixed_dimensions(relative: str, artifact: Artifact) -> dict[str, str]:
+    """What the *location* of ``relative`` says each of its path-fixed dimensions is.
+
+    Only the dimensions :func:`_enumeration_slot` can place — ``round`` and ``axis``. A
+    ``perturbation`` is also fixed by its path, but the set of names a perturbation segment may
+    take is open, so there is no slot to read it out of and this returns nothing for it rather
+    than guessing which segment it was.
+    """
+    segments = _segments(relative)
+    fixed: dict[str, str] = {}
+    for dimension in artifact.keyed_in_path:
+        slot = _enumeration_slot(artifact.pattern, dimension)
+        if slot is None or slot >= len(segments):
+            continue
+        segment = segments[slot]
+        if slot == len(segments) - 1 and "." in segment:
+            segment = segment[: segment.rindex(".")]
+        fixed[dimension] = segment
+    return fixed
+
+
+def _dimension_token(value: Any) -> str | None:  # noqa: ANN401 — any cell a table can hold
+    """How a path segment would spell ``value``, or ``None`` where it says nothing.
+
+    A null is skipped rather than reported: "this row does not repeat what the path said" is
+    exactly what ``keyed_in_path`` permits, and the column-presence rules are :func:`_key_violations`'
+    business. What is checked here is only a row that *does* speak and contradicts its location.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        return None if math.isnan(value) else (str(int(value)) if value.is_integer() else str(value))
+    if isinstance(value, int):
+        return str(value)
+    text = str(value).strip()
+    return text or None
+
+
+def _location_violations(relative: str, artifact: Artifact, columns: frozenset[str], path: Path) -> list[str]:
+    """Where a row's own value for a path-fixed dimension disagrees with its location.
+
+    The rules above are about column *names*; this one is about values, and it is the only rule
+    that can catch the defect it exists for. ``L2/round/4/estimates/speech_presence.parquet`` held
+    rows whose ``round`` said 1, 3 and 4 — every name-level rule passed, because the column is
+    declared and there is only one spelling of it. What was wrong was that three of those numbers
+    named a directory the file is not in, and anything deriving a path from the column (the
+    disagreements index does) then sent a reader to a different fold's numbers.
+
+    ``keyed_in_path`` is what licenses the check: the declaration says the location already fixes
+    this dimension, so a column repeating it is provenance and provenance that contradicts its own
+    subject is worse than no provenance at all.
+    """
+    fixed = _path_fixed_dimensions(relative, artifact)
+    if not fixed:
+        return []
+    wanted = {
+        column: dimension
+        for dimension in fixed
+        for column in sorted(DIMENSION_COLUMNS.get(dimension, frozenset()) & columns)
+    }
+    if not wanted:
+        return []
+    values = _table_column_values(path, tuple(wanted))
+    problems: list[str] = []
+    for column, dimension in sorted(wanted.items()):
+        disagreeing = sorted(
+            {
+                t
+                for value in values.get(column, ())
+                if (t := _dimension_token(value)) != fixed[dimension] and t is not None
+            }
+        )
+        if disagreeing:
+            problems.append(
+                f"{relative}: its location fixes {dimension}={fixed[dimension]!r}, but its {column!r} column "
+                f"carries {disagreeing} — a row that contradicts the directory it is in points every "
+                f"consumer that reads the column at another {dimension}'s numbers"
+            )
+    return problems
+
+
+def _table_column_values(path: Path, names: Sequence[str]) -> dict[str, list[Any]]:
+    """The values ``names`` take in a table, for the same file kinds :func:`_table_columns` reads.
+
+    Read column-wise where the format allows it, so checking a value costs the two columns the
+    declaration names rather than the whole frame.
+    """
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".parquet":
+            import pyarrow.parquet as pq
+
+            table = pq.read_table(path, columns=list(names))
+            return {name: table.column(name).to_pylist() for name in names}
+        if suffix in {".feather", ".arrow"}:
+            import pyarrow.feather as feather
+
+            table = feather.read_table(path, columns=list(names))
+            return {name: table.column(name).to_pylist() for name in names}
+        if suffix in {".csv", ".tsv"}:
+            with path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle, delimiter="\t" if suffix == ".tsv" else ","))
+            return {name: [row.get(name) for row in rows] for name in names}
+        records = _json_records(path, suffix)
+        return {name: [record.get(name) for record in records] for name in names}
+    except Exception as exc:  # noqa: BLE001 — every failure to read is the same finding
+        raise UnreadableArtifact(f"{type(exc).__name__}: {exc}") from exc
 
 
 def _key_violations(relative: str, artifact: Artifact, columns: frozenset[str]) -> list[str]:
@@ -1727,12 +1851,15 @@ def artifact_violations(run_dir: Path) -> list[str]:
     Static analysis cannot see a path handed to a helper as a parameter, nor a file emitted by a
     library the caller pointed somewhere unexpected. Walking what was actually written can.
 
-    Five questions per file, in the order a defeat gets past them: is it declared at all; did a
+    Six questions per file, in the order a defeat gets past them: is it declared at all; did a
     ``**`` admit it by admitting another stage's shape; is its *kind* one the declaring pattern
-    permits; do its columns contradict the key; and — across files rather than per file — do two
-    slices of one artifact carry different columns. The third and fourth used to be one question
-    that only parquet could fail; the fifth is a question about a *set* of files and so could not
-    be asked at all by a loop that looked at one at a time.
+    permits; do its columns contradict the key; do its column *values* contradict the location the
+    declaration says fixes them; and — across files rather than per file — do two slices of one
+    artifact carry different columns. The third and fourth used to be one question that only
+    parquet could fail; the fifth is the only one that looks at a value, and it is what a row in
+    ``L2/round/4/`` claiming ``round: 1`` gets past when every name-level rule is satisfied; the
+    sixth is a question about a *set* of files and so could not be asked at all by a loop that
+    looked at one at a time.
     """
     root = Path(run_dir)
     declared = _declared_artifacts()
@@ -1766,6 +1893,10 @@ def artifact_violations(run_dir: Path) -> list[str]:
             continue
         for artifact in owners:
             problems += _key_violations(relative, artifact, columns)
+            try:
+                problems += _location_violations(relative, artifact, columns, path)
+            except UnreadableArtifact as unreadable:
+                problems.append(f"{relative}: could not be read ({unreadable}), so its key values are unchecked")
             if artifact.slices_of_one_table():
                 shapes.setdefault(artifact.pattern, {}).setdefault(columns, []).append(relative)
     return problems + _shape_violations(shapes)

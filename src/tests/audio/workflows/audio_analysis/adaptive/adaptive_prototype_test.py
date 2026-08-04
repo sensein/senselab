@@ -778,7 +778,7 @@ def test_the_deliverable_presence_track_is_the_last_round_byte_for_byte(tmp_path
             payload={"speaks": True},
         )
     )
-    state = BeliefState.from_store(store, aggregator="min")
+    state = BeliefState.from_store(store, aggregator="min", round_index=1)
     _write_round_belief(tmp_path, 1, state)
     extract_final_estimates(tmp_path, 1)
     deliverable = pd.read_parquet(final_dir(tmp_path) / "estimates" / "speech_presence.parquet")

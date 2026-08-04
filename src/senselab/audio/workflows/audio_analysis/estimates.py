@@ -21,6 +21,21 @@ null in ``status`` means.
 
 A column no producer may invent is the other half: :func:`estimate_frame` raises on one, so adding
 a column costs an edit here, where both producers see it.
+
+**The round comes from the directory, for the same reason the axis comes from the filename.** The
+declaration keys this artifact ``(axis, bucket, round)`` with *both* axis and round fixed by the
+path, so a row that spells either is repeating what its location already said and the two must not
+be able to disagree. They did: fusion stamped the round it folded, and the adaptive loop stamped
+the round in which each bucket was last re-folded — so ``L2/round/4/estimates/speech_presence.parquet``
+held rows claiming rounds 1, 3 and 4 at once, and ``final/estimates/asr.parquet`` — the verbatim
+extraction of round 4 — claimed round 1. Anything deriving a path from the column (the
+disagreements index does) then pointed a reader at another round's fold.
+
+The fact the loop was overloading onto ``round`` is real and survives under its own name:
+``last_refolded_round`` says which round last recomputed this value, which is *earlier* than the
+round wherever an axis converged or a bucket went untouched and its estimate was carried forward.
+Provenance about how the value came to be, never an index on the row — the same standing
+``contributing_passes`` has, and the reason neither is a second spelling of its dimension.
 """
 
 from __future__ import annotations
@@ -39,6 +54,11 @@ ESTIMATE_COLUMNS: Final[tuple[str, ...]] = (
     "end",
     "axis",
     "round",
+    # Which round last recomputed the value above. Equal to ``round`` where this round re-folded
+    # the bucket, earlier where the estimate was carried forward — an axis that converged, or a
+    # bucket no intervention touched. Without it, carrying a value forward and re-folding it to the
+    # same number are the same row.
+    "last_refolded_round",
     # The estimate itself, in the four numbers an axis actually carries — which is why the
     # directory is named ``estimates/`` and not after any one of them.
     "uncertainty",
@@ -79,7 +99,7 @@ The order is part of the schema rather than incidental: a reader diffing two rou
 axis should not have to sort columns to see that they agree."""
 
 
-def estimate_frame(axis: str, rows: Sequence[Mapping[str, Any]]) -> "pd.DataFrame":
+def estimate_frame(axis: str, rows: Sequence[Mapping[str, Any]], *, round_index: int) -> "pd.DataFrame":
     """One round's estimate of one axis, in the declared shape.
 
     Args:
@@ -89,6 +109,10 @@ def estimate_frame(axis: str, rows: Sequence[Mapping[str, Any]]) -> "pd.DataFram
         rows: Prepared row dicts. Any declared column a row omits is written null — the producer
             had nothing to say about it, which is a fact worth recording and not a reason to
             change shape.
+        round_index: The round whose directory this frame is written into. Stamped for exactly the
+            reason ``axis`` is: the path fixes it, so a caller cannot be the one who decides what
+            it says. Required rather than defaulted — a default is what the loop's hardcoded ``1``
+            was, and it outlived the round it was true of.
 
     Returns:
         A frame with exactly :data:`ESTIMATE_COLUMNS`, in that order. Empty rows still produce the
@@ -110,5 +134,7 @@ def estimate_frame(axis: str, rows: Sequence[Mapping[str, Any]]) -> "pd.DataFram
             "ESTIMATE_COLUMNS so the other producer writes it too, or two rounds of one axis will "
             "have different columns and nothing in the path will say which producer wrote which"
         )
-    prepared = [{**dict.fromkeys(ESTIMATE_COLUMNS), **dict(row), "axis": axis} for row in rows]
+    prepared = [
+        {**dict.fromkeys(ESTIMATE_COLUMNS), **dict(row), "axis": axis, "round": int(round_index)} for row in rows
+    ]
     return pd.DataFrame(prepared, columns=list(ESTIMATE_COLUMNS))

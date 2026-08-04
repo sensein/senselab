@@ -142,15 +142,21 @@ def run_adaptive_loop(
         store = VoteStore.from_run_dir(run_dir, passes)
     parity = store.replay_check(aggregator=aggregator)
     fused_parity = store.fused_parity(_fused_axes_from_run(run_dir), aggregator=aggregator)
-    state = BeliefState.from_store(store, aggregator=aggregator)
-    asr_grid = _grid_from_rows(state.axis_rows("asr"))
-    theta_low = float(policy["thresholds"]["theta_low"])
 
     # The baseline is not a round of the loop's own — it *is* the round fusion already wrote, and
     # numbering it separately is what produced two trees whose "round 1" meant different things.
     # So the loop adopts fusion's index, writes only what it can add there (the replay and parity
     # proofs), and does not rewrite estimates it has just proven it agrees with.
+    #
+    # Resolved before the ingest fold rather than after, because the fold has to stamp it: the
+    # state's rows record which round last recomputed them, and a baseline that names itself ``1``
+    # while the tree calls it ``2`` is a row disagreeing with its own directory from the first
+    # write onwards.
     baseline = _baseline_round(out_dir)
+    state = BeliefState.from_store(store, aggregator=aggregator, round_index=baseline)
+    asr_grid = _grid_from_rows(state.axis_rows("asr"))
+    theta_low = float(policy["thresholds"]["theta_low"])
+
     (round_dir(out_dir, baseline)).mkdir(parents=True, exist_ok=True)
     _write_round_summary(
         out_dir,
@@ -725,7 +731,11 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
                 # carries is a number computed at the wrong stage — and both of these were.
                 "speech_presence_confidence": r.get("speech_presence_confidence", r.get("p_voice")),
                 "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
-                "round": r.get("round"),
+                # Not ``round`` — that one the declaration stamps from the directory below. This
+                # is the round that last recomputed the row, which for an untouched bucket is an
+                # earlier one, and writing it as ``round`` is what made a round directory hold
+                # rows claiming three different rounds.
+                "last_refolded_round": r.get("last_refolded_round"),
                 "n_sources": len(r.get("contributing_sources") or []),
                 "contributing_signals": r.get("contributing_signals") or [],
                 "contributing_passes": r.get("contributing_passes") or [],
@@ -738,7 +748,7 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
         # file makes them the same one — which is how the fourth axis's estimates stopped at
         # round 2 while the run reported it settled. An empty table with the declared columns
         # says the first; an absent file says neither and is read as the second.
-        estimate_frame(axis, rows).to_parquet(round_belief / f"{axis}.parquet", index=False)
+        estimate_frame(axis, rows, round_index=round_index).to_parquet(round_belief / f"{axis}.parquet", index=False)
 
 
 def _draw_round_timeline(out_dir: Path, round_index: int, state: BeliefState, *, duration_s: float, title: str) -> None:

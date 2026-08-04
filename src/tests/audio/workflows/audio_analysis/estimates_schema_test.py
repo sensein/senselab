@@ -56,7 +56,7 @@ def test_the_two_producers_write_the_same_columns(tmp_path: Path) -> None:
             payload={"same_label_uncertainty": 0.4},
         )
     )
-    _write_round_belief(tmp_path, 9, BeliefState.from_store(store, aggregator="min"))
+    _write_round_belief(tmp_path, 9, BeliefState.from_store(store, aggregator="min", round_index=1))
 
     fused = pd.read_parquet(estimates_dir(tmp_path, 0) / "speaker.parquet")
     looped = pd.read_parquet(estimates_dir(tmp_path, 9) / "speaker.parquet")
@@ -73,7 +73,7 @@ def test_a_column_no_declaration_names_is_refused() -> None:
     and the tree guard would not report it until a run had already been written.
     """
     with pytest.raises(ValueError, match="written by no declaration"):
-        estimate_frame("speaker", [{"start": 0.0, "end": 0.5, "invented_by_one_writer": 1.0}])
+        estimate_frame("speaker", [{"start": 0.0, "end": 0.5, "invented_by_one_writer": 1.0}], round_index=0)
 
 
 def test_an_axis_with_nothing_to_say_still_has_a_shape() -> None:
@@ -83,21 +83,38 @@ def test_an_axis_with_nothing_to_say_still_has_a_shape() -> None:
     axis's estimates stopped after round 2 while the convergence report called it settled. The
     empty table carries every declared column, which says the first of the two.
     """
-    frame = estimate_frame("background_mask", [])
+    frame = estimate_frame("background_mask", [], round_index=0)
     assert list(frame.columns) == list(ESTIMATE_COLUMNS)
     assert len(frame) == 0
 
 
 def test_the_axis_column_comes_from_the_filename_not_the_caller() -> None:
     """The file is named for its axis, so the column and the name must not be able to disagree."""
-    frame = estimate_frame("asr", [{"start": 0.0, "end": 0.5, "axis": "speaker", "uncertainty": 0.2}])
+    frame = estimate_frame("asr", [{"start": 0.0, "end": 0.5, "axis": "speaker", "uncertainty": 0.2}], round_index=0)
     assert list(frame["axis"]) == ["asr"]
+
+
+def test_the_round_column_comes_from_the_directory_not_the_caller() -> None:
+    """And the round, for the same reason: the path fixes it, so a caller cannot decide it.
+
+    A caller *did*. The adaptive producer passed each row's last-refolded round through as
+    ``round``, so ``L2/round/4/estimates/speech_presence.parquet`` held rows claiming rounds 1, 3
+    and 4 — and the round-4 extraction in ``final/`` inherited the claim. The fact the loop was
+    spending the column on survives beside it, under a name that says what it is.
+    """
+    frame = estimate_frame(
+        "asr",
+        [{"start": 0.0, "end": 0.5, "round": 1, "last_refolded_round": 1}],
+        round_index=4,
+    )
+    assert list(frame["round"]) == [4]
+    assert list(frame["last_refolded_round"]) == [1]
 
 
 def test_every_active_axis_is_writable_under_this_schema() -> None:
     """A schema that only fits three axes is the three-axis bug in another place."""
     for axis in AXIS_NAMES:
-        assert list(estimate_frame(axis, [{"start": 0.0, "end": 0.5}])["axis"]) == [axis]
+        assert list(estimate_frame(axis, [{"start": 0.0, "end": 0.5}], round_index=0)["axis"]) == [axis]
 
 
 def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp_path: Path) -> None:
