@@ -945,12 +945,12 @@ and can be corrected rather than rewritten from memory each time.
 
 Run: `english_conversation_higgs_audio_v2_20260804-120913`. `scripts/check_layering.py` -> **42 held, 0 violated**.
 
-| axis | rows | mean uncertainty | distinct signals |
-|---|---|---|---|
-| speech_presence | 1070 | 0.4996 | 12 |
-| speaker | 85 | 0.7914 | 12 |
-| asr | 41 | 0.2995 | 2 |
-| background_mask | 1070 | 0.0344 | 3 |
+| axis | rows | mean uncertainty | n | signals |
+|---|---|---|---|---|
+| speech_presence | 1070 | 0.4996 | 12 | `acoustic_hnr`<br>`acoustic_level_above_floor`<br>`acoustic_lufs`<br>`ast`<br>`embedding_silhouette`<br>`frame_brouhaha_vad`<br>`frame_posterior_fine`<br>`openai/whisper-large-v3-turbo`<br>`openai/whisper-large-v3-turbo::no_speech_prob`<br>`openai/whisper-small`<br>`openai/whisper-small::no_speech_prob`<br>`yamnet` |
+| speaker | 85 | 0.7914 | 12 | `__cross_diar_label_disagreement__`<br>`__overlap_count__`<br>`embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb::speechbrain/spkrec-ecapa-voxceleb`<br>`embedding_silhouette/speechbrain/spkrec-ecapa-voxceleb::speechbrain/spkrec-resnet-voxceleb`<br>`embedding_silhouette/speechbrain/spkrec-resnet-voxceleb::speechbrain/spkrec-ecapa-voxceleb`<br>`embedding_silhouette/speechbrain/spkrec-resnet-voxceleb::speechbrain/spkrec-resnet-voxceleb`<br>`nvidia/diar_sortformer_4spk-v1::speechbrain/spkrec-ecapa-voxceleb`<br>`nvidia/diar_sortformer_4spk-v1::speechbrain/spkrec-resnet-voxceleb`<br>`pyannote/speaker-diarization-community-1::speechbrain/spkrec-ecapa-voxceleb`<br>`pyannote/speaker-diarization-community-1::speechbrain/spkrec-resnet-voxceleb`<br>`speechbrain/spkrec-ecapa-voxceleb::change_point`<br>`speechbrain/spkrec-resnet-voxceleb::change_point` |
+| asr | 41 | 0.2995 | 2 | `openai/whisper-large-v3-turbo`<br>`openai/whisper-small` |
+| background_mask | 1070 | 0.0344 | 3 | `speakers`<br>`speech`<br>`words` |
 
 Speaker count **2 @ p=0.978**, 4 sources. `high_uncertainty_rate` 0.9819.
 
@@ -965,3 +965,26 @@ what **is** gated is evidence overlap, via `measure_axis_overlap`, which is D-21
 **The one gap:** `contributing_signals` records `axis::asr` but not *which round* of asr. The code makes it
 previous-round; the artifact cannot say so. Same two-facts-one-field shape as the `round` column.
 
+
+### "Contributing signals should always use the latest output" — where that holds, and the one tension
+
+**It holds across rounds.** `previous[axis]` is `rows_by_axis[axis]`, which carries the last fold for
+every axis — including one that converged and stopped early, thanks to the carry-forward fix. So a
+round-4 row citing `axis::speaker` cites the newest speaker belief that exists, not a stale round-1 one.
+
+**It does not hold *within* a round, and that is a deliberate trade.** `previous` is snapshotted once at
+the top of each round, before any axis is refolded (FR-011f), so when `speech_presence` folds in round *n*
+it sees round *n−1*'s asr even if asr has already folded round *n*. Using the newer value would make the
+result depend on the order axes happen to be visited — the fixed point would differ between runs that
+iterate the axes differently.
+
+So there are two readings of "latest" and they conflict:
+
+- *newest value in existence* → order-dependent, non-reproducible fixed point
+- *newest **complete** state, identical for every axis* → what the code does
+
+The second is what makes convergence meaningful: a fixed point reached under a per-axis-varying input set
+is not a fixed point of anything statable. Worth changing only with an ordering declared and recorded.
+
+**The artifact still cannot say which reading applies** — `contributing_signals` names `axis::asr` with no
+round. That is the remaining gap, and the fix is a field, not a behaviour change.
