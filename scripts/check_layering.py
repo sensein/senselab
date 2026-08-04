@@ -8,7 +8,8 @@ import pandas as pd
 
 R = pathlib.Path(sys.argv[1])
 AXES = ("speech_presence", "speaker", "asr", "background_mask")
-ok, bad = [], []
+ok: list[str] = []
+bad: list[str] = []
 
 
 def check(name: str, passed: bool, detail: str = "") -> None:
