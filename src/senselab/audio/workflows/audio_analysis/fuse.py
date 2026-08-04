@@ -43,6 +43,7 @@ __all__ = [
     "fuse_rounds",
     "write_final_uncertainty",
     "fuse_axis",
+    "is_direction_only_claim",
     "per_signal_uncertainty",
 ]
 
@@ -68,6 +69,52 @@ _CONFIDENCE_FIELDS = ("native_confidence", "p_speech", "p_voice", "argmax_confid
 # fused 0 of 41 buckets while the other two fused fully.
 _LOGPROB_FIELDS = ("avg_logprob",)
 
+# The direction a vote cast, when it scored nothing at all. See :func:`is_direction_only_claim`.
+_DIRECTION_FIELD = "speaks"
+
+_SCORED_FIELDS = (*_UNCERTAINTY_FIELDS, *_LOGPROB_FIELDS, *_CONFIDENCE_FIELDS)
+
+
+def is_direction_only_claim(entry: Any) -> bool:  # noqa: ANN401 — vote entries are duck-typed
+    """True when a vote asserts a direction and scores nothing.
+
+    Three real voters are shaped this way, and none of them is defective:
+
+    - a **diarizer**, because a segment boundary is asserted rather than scored
+      (``speech_presence_link._link_diar`` deliberately reports no ``native_confidence``);
+    - an **ASR backend without token logits** placing words in the bucket — CrisperWhisper 2.0
+      turbo, Canary-Qwen and Qwen3-ASR all expose ``avg_logprob``/``no_speech_prob`` as ``None``,
+      so word coverage is the whole of what they said;
+    - the adaptive loop's **missed-speech adjudicator**, whose claim is that two model families
+      agree words are here.
+
+    Every other reader of a presence vote already takes such a vote at full strength — see
+    ``aggregate.per_source_voice`` and ``support.presence_probability``, both of which map it to
+    ``p = 1.0``/``0.0``. :func:`per_signal_uncertainty` did not, and dropped it instead. The cost
+    was measured on a real run: with ``--asr-models openai/whisper-*`` the presence axis fused 12
+    signals, and on the *shipped* default ASR set only 8 — all three ASR models and both
+    diarizers had silently left the axis, because Whisper is the only backend whose per-segment
+    ``avg_logprob`` gave the fold a number to read. ``reliability._bucket_beliefs`` had already
+    had to reintroduce these voters by hand to measure their stability, so a weight was being
+    computed for signals the fold could never use.
+
+    Args:
+        entry: One signal's vote payload.
+
+    Returns:
+        ``True`` only when ``speaks`` is a bool *and* no field carrying a scored quantity holds a
+        number. A vote that scores anything is not direction-only, and its score is authoritative.
+    """
+    if not isinstance(entry, Mapping):
+        return False
+    if not isinstance(entry.get(_DIRECTION_FIELD), bool):
+        return False
+    for field in _SCORED_FIELDS:
+        value = entry.get(field)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return False
+    return True
+
 
 def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     """Each signal's own uncertainty in one bucket — the level-1 emission.
@@ -76,7 +123,10 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     re-weighted after the fact, which is the whole reason for the split.
 
     A signal that said nothing is absent from the result rather than zero-filled: zero is a
-    confident claim, and imputing it would manufacture confidence nobody expressed (FR-007).
+    confident claim, and imputing it would manufacture confidence nobody expressed (FR-007). A
+    signal that asserted a *direction* without scoring it did say something, and is read at the
+    full strength every other consumer of a presence vote already reads it at — see
+    :func:`is_direction_only_claim` for why that is a different case, and for what dropping it cost.
     """
     votes = bucket.get("votes") or {}
     if not isinstance(votes, Mapping):
@@ -86,6 +136,12 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     out.update(_pairwise_per_signal(votes))
     for name, entry in votes.items():
         if not isinstance(entry, Mapping):
+            continue
+        if is_direction_only_claim(entry):
+            # A full-strength claim leaves no doubt of its own. ``setdefault`` rather than
+            # assignment because a pairwise distance *was* measured about this signal, and a vote
+            # that scored nothing cannot overrule it.
+            out.setdefault(str(name), 0.0)
             continue
         for field in _UNCERTAINTY_FIELDS:
             value = entry.get(field)
