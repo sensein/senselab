@@ -877,3 +877,31 @@ So the layered plan holds **17 of 17** structural invariants.
 (`interventions`, `resolution`) and keeps the original `triage_score` **by design** — it is an
 annotation, not a re-ranking. Whether the deliverable should *also* carry the final round's score
 alongside is a design question, not a bug.
+
+## Two violations my check suite did not test for (found by a subagent, confirmed)
+
+Both fixes landed (`37c0f9d9` stale pointer, `2a1bd6ed` dead code). The subagent then found two things
+I had not thought to check, and both reproduce:
+
+**1. A round directory holds rows claiming other rounds.**
+`L2/round/4/estimates/speech_presence.parquet` contains rows with `round ∈ {1, 3, 4}`. Rounds 0–2, which
+the fusion writer produces, are internally consistent (`round/2` holds only `round == 2`). The
+adaptive-written rounds are not. So the directory name and the row's own `round` column disagree — and
+since the index's `parquet` pointer is now *derived from the row's round*, a reader following a pointer
+into an adaptive round can land in a directory holding a different fold. It resolves today only because
+the index ranks rounds 0–2.
+
+**2. `L2/round/2/estimates/` has no `speaker.parquet`.** Three axes where four are declared, in a run
+whose rounds 0 and 4 both have four. `estimates_schema_test.py:169` asserts every round writes every
+active axis and passes, so the test's synthetic path and the real writer diverge — which is exactly the
+class of gap that let the fourth axis go unranked for weeks.
+
+Neither was in my 17 checks: I tested *which* axes reach a round and `final/`, and whether estimates
+carry a `pass` column, but never **whether a row's declared round matches the directory containing it**,
+nor **whether every round has every axis** (only the last round and `final/`). Both are one-line additions
+to `check_layering.py` and would have caught these on run 4.
+
+The pattern worth keeping: a check suite is itself code that can be wrong in the same ways as the code it
+checks. Two of this session's "violations" were my checks being wrong; two real violations went unseen
+because my checks were incomplete. Same root cause — the invariant I *thought* I was testing was not the
+one I wrote.
