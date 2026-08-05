@@ -71,7 +71,15 @@ fusion:
                                # voters only, ASR excluded), so it is PROVISIONAL and must be
                                # re-measured on artifacts/degradation_suite/ before alpha rather
                                # than assumed transferable.
-  consensus_alignment: auto    # U3/C8: "auto" tries torchaudio MMS_FA; "off" keeps member timestamps
+  consensus_alignment: auto    # U3/C8: "auto" re-times the consensus sequence; "off" keeps member
+                               # timestamps (which is what the per-edge onset/offset confidences
+                               # describe, so "off" is the setting under which the published timing
+                               # and the reported boundary agreement refer to the same thing).
+  consensus_alignment_backend: qwen   # "qwen" = Qwen3-ForcedAligner-0.6B, the aligner the pre-fusion
+                               # path already uses (D-1); "mms" = torchaudio MMS_FA. Was hard-coded
+                               # to MMS with no knob, which ran two aligners in one pipeline — the
+                               # thing D-1 removed when it moved Canary off MMS so boundary
+                               # differences would reflect models rather than aligners.
   consensus_alignment_timeout_s: 600.0   # SIGALRM guard around bundle load + alignment
 calibration_profile:           # T033: {"type":"logistic","a":..,"b":..} or {"type":"piecewise","x":[..],"y":[..]}
                                # produced by the synthetic calibration harness; null -> calibrated: false

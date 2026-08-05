@@ -155,3 +155,48 @@ def test_the_mask_axis_row_draws_the_estimate_not_the_region_value(drawn_axes: l
         "every series on the background_mask row is flat; the row is drawing the region value "
         f"(one span, uncertainty 0.0) rather than the fused axis: {plotted}"
     )
+
+
+# ── U3: which aligner re-times the consensus, and whether it is recorded ──────
+
+
+def test_the_consensus_aligner_defaults_to_the_pipeline_s_own_aligner() -> None:
+    """One aligner per pipeline (D-1), and the choice is a policy value rather than a literal.
+
+    ``consensus_align`` hard-coded torchaudio MMS_FA, so the pipeline ran Qwen3-ForcedAligner before
+    fusion and MMS after — the two-aligner situation D-1 removed when it moved Canary off MMS "so
+    word-boundary differences reflect the models, not two different aligners".
+    """
+    import inspect
+
+    from senselab.audio.workflows.audio_analysis.adaptive.backends import consensus_align
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    assert inspect.signature(consensus_align).parameters["backend"].default == "qwen"
+    assert str((load_policy()["fusion"]).get("consensus_alignment_backend")) == "qwen"
+
+
+def test_an_empty_word_list_is_refused_rather_than_aligned() -> None:
+    """Nothing to place is a reason, not a silent success that publishes an empty span list."""
+    from senselab.audio.workflows.audio_analysis.adaptive.backends import consensus_align
+
+    spans, reason = consensus_align(None, [], backend="qwen")
+    assert spans is None and reason == "no_words_to_align"
+
+
+def test_a_span_count_mismatch_is_refused() -> None:
+    """Every span after a divergence would attach to the wrong word, so refuse the whole result.
+
+    Publishing a plausible-looking misalignment is worse than keeping the member timings: the
+    timestamps would look authoritative while naming the wrong audio.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive import backends
+
+    class _Stub:
+        chunks = None
+        start, end = 0.0, 0.4
+
+    monkey = getattr(backends, "_word_leaves")
+    assert monkey(_Stub()) == [(0.0, 0.4)], "the leaf reader must find a timed node"
+    nested = type("L", (), {"chunks": [_Stub(), _Stub()]})()
+    assert len(monkey(nested)) == 2, "and must descend to the words"

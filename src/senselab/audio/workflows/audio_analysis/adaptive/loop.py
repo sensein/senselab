@@ -414,17 +414,24 @@ def run_adaptive_loop(
             _segments, withheld = rollup_segments(words, min_corroboration=segment_min)
             withheld_set = set(withheld)
             retained = [i for i in range(len(words)) if i not in withheld_set]
+            backend = str(fus_cfg.get("consensus_alignment_backend", "qwen"))
             aligned, align_reason = consensus_align(
                 wav,
                 [words[i] for i in retained],
                 timeout_s=float(fus_cfg.get("consensus_alignment_timeout_s", 600.0)),
+                backend=backend,
             )
             if aligned is not None:
                 for index, ts in zip(retained, aligned):
                     words[index]["start"], words[index]["end"] = ts["start"], ts["end"]
                 words.sort(key=lambda w: (w["start"], w["end"]))
                 timestamps_meta = {
-                    "timestamps_source": "consensus_alignment_mms_fa",
+                    # Names the backend that actually ran rather than the one that used to be
+                    # hard-coded here: a reader comparing published timings against the per-edge
+                    # boundary agreement needs to know whether the published value came from inside
+                    # the set of members whose spread is being reported, or from outside it.
+                    "timestamps_source": f"consensus_alignment_{backend}",
+                    "consensus_alignment_backend": backend,
                     "n_words_aligned": len(retained),
                     "n_words_on_member_timestamps": len(withheld_set),
                 }

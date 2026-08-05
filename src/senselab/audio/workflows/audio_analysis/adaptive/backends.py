@@ -276,13 +276,80 @@ def consensus_align(
     words: list[dict[str, Any]],
     *,
     timeout_s: float = 600.0,
+    backend: str = "qwen",
+    aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
-    """U3 (C8): align the consensus word sequence via the forced-alignment task's MMS_FA backend."""
+    """U3 (C8): time the consensus word sequence against the audio.
+
+    Needed because the consensus is a sequence **no single model produced**: its per-word timings
+    would otherwise be a vote over member timings for a word order none of them emitted, which can
+    come out non-monotonic. ``fusion.consensus_alignment: off`` keeps the member-vote timings.
+
+    **Default backend is the Qwen forced aligner, the same one the pre-fusion path uses.** This was
+    hard-coded to torchaudio MMS_FA with no way to choose, which left the pipeline running two
+    aligners — Qwen3-ForcedAligner before fusion, MMS after — and D-1 moved Canary off MMS precisely
+    so that word-boundary differences would "reflect the models, not two different aligners". A third
+    aligner appearing after fusion reintroduced what that decision removed.
+
+    The trade is real and worth knowing rather than discovering: Qwen's aligner already times
+    Qwen3-ASR (bundled) and Canary (externally), so a Qwen-timed consensus shares its source with
+    most members and the published boundary sits closer to theirs by construction. MMS is
+    independent of every member but is a third opinion nobody asked for. Consistency won because the
+    per-edge confidences measure spread *among members*, which either choice leaves untouched — what
+    changes is only whether the published value is drawn from inside or outside that set.
+
+    Returns ``(spans, None)``, or ``(None, reason)`` when the backend is unavailable, the aligner
+    returns a count that does not match the words given, or the timeout fires. Never raises for
+    those: the caller keeps member timings and records the reason.
+    """
+    texts = [str(w["text"]) for w in words]
+    if not texts:
+        return None, "no_words_to_align"
+
+    if str(backend).lower() == "mms":
+        try:
+            from senselab.audio.tasks.forced_alignment.mms_fa import align_words_mms_fa  # noqa: PLC0415
+        except ImportError as exc:
+            return None, f"aligner_backend_unavailable ({getattr(exc, 'name', exc)})"
+        return align_words_mms_fa(wav, texts, timeout_s=timeout_s)
+
     try:
-        from senselab.audio.tasks.forced_alignment.mms_fa import align_words_mms_fa  # noqa: PLC0415
+        import numpy as np  # noqa: PLC0415
+        import torch  # noqa: PLC0415
+
+        from senselab.audio.data_structures import Audio  # noqa: PLC0415
+        from senselab.audio.tasks.speech_to_text.qwen import QwenASR  # noqa: PLC0415
+        from senselab.utils.data_structures import Language, ScriptLine  # noqa: PLC0415
     except ImportError as exc:
         return None, f"aligner_backend_unavailable ({getattr(exc, 'name', exc)})"
-    return align_words_mms_fa(wav, [w["text"] for w in words], timeout_s=timeout_s)
+
+    try:
+        waveform = torch.as_tensor(np.asarray(wav, dtype=np.float32)).reshape(1, -1)
+        audio = Audio(waveform=waveform, sampling_rate=16000)
+        aligned = QwenASR.align_with_qwen(
+            [(audio, ScriptLine(text=" ".join(texts)), Language(language_code="en"))],
+            aligner_model=aligner_model,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed realignment must not fail the run
+        return None, f"qwen_alignment_failed ({type(exc).__name__})"
+
+    leaves = [leaf for line in (aligned[0] if aligned else []) for leaf in _word_leaves(line)]
+    spans = [{"start": float(t[0]), "end": float(t[1])} for t in leaves]
+    if len(spans) != len(texts):
+        # A count mismatch means the aligner and the caller disagree about which word is which, so
+        # every span after the divergence would be attached to the wrong word. Refuse rather than
+        # publish a plausible-looking misalignment.
+        return None, f"qwen_alignment_count_mismatch ({len(spans)} != {len(texts)})"
+    return spans, None
+
+
+def _word_leaves(line: Any) -> list[tuple[float, float]]:  # noqa: ANN401 — ScriptLine tree
+    """Deepest timed nodes of a ScriptLine, in order — the words the aligner placed."""
+    chunks = getattr(line, "chunks", None)
+    if chunks:
+        return [span for child in chunks for span in _word_leaves(child)]
+    start, end = getattr(line, "start", None), getattr(line, "end", None)
+    return [(float(start), float(end))] if start is not None and end is not None else []
 
 
 def senselab_transcribe_available() -> bool:
