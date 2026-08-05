@@ -167,8 +167,14 @@ def test_fusion_votes_and_abstention_penalty() -> None:
     words = fuse_words(streams, policy=policy)
     assert [w["text"] for w in words] == ["hello", "stray"]
     hello, stray = words
-    assert hello["confidence"] > 0.9 and hello["coverage"] == 1.0
+    # The claim under test is agreement about *what was said*, which is `existence_confidence`
+    # since D-27 split the two parts. `confidence` is now the joint, and the three models place
+    # this 0.39 s word's onset across a 50 ms span — 13% of its own length — so the joint sits at
+    # 0.87. That is the temporal part doing its job, not a regression in the vote.
+    assert hello["existence_confidence"] > 0.9 and hello["coverage"] == 1.0
+    assert hello["temporal_confidence"] is not None and hello["temporal_confidence"] > 0.8
     assert stray["confidence"] < 0.5 and "single_source" in stray["flags"]
+    assert stray["temporal_confidence"] is None, "one witness has no timing agreement to measure"
     assert hello["alternates"] == []
 
 

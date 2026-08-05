@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 
@@ -56,6 +56,39 @@ def _corroboration_of(member: Any, floor: float) -> float | None:  # noqa: ANN40
 def _normalize_word(text: str) -> str:
     cleaned = _PUNCTUATION_PATTERN.sub(" ", text.lower())
     return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
+
+
+def _temporal_agreement(members: Sequence[Mapping[str, Any]]) -> tuple[float | None, int]:
+    """How well the independent timing sources agree on *where* this word is (D-27).
+
+    Returns ``(temporal_confidence, n_timing_sources)``. ``temporal_confidence`` is ``None`` for a
+    single timing source: one opinion cannot corroborate itself, and reporting 1.0 there is the
+    manufactured certainty this split exists to remove.
+
+    **Grouped by ``timestamp_source``, not by model.** Two transcripts timed by one aligner agree
+    about onset by construction — Canary-Qwen is timed by Qwen's aligner, and on a real run their
+    presence votes came out byte-identical. Counting them as two agreeing opinions would turn a
+    shared dependency into evidence. A member with no recorded ``timestamp_source`` is treated as
+    its own source, which is the conservative reading: unknown provenance is not shared provenance,
+    and assuming otherwise would silently erase real corroboration.
+
+    **Anchored to the word's own duration**, which is the only absolute reference a word carries:
+    onsets disagreeing by a whole word-length mean the sources are not describing the same
+    position. Both edges count, because a word can be agreed-on at its start and not its end.
+    """
+    by_source: dict[str, list[Mapping[str, Any]]] = {}
+    for index, m in enumerate(members):
+        key = str(m.get("timestamp_source") or f"__member_{index}__")
+        by_source.setdefault(key, []).append(m)
+    if len(by_source) < 2:
+        return None, len(by_source)
+
+    # One opinion per timing source: members sharing an aligner are averaged, not counted twice.
+    starts = [sum(float(m["start"]) for m in group) / len(group) for group in by_source.values()]
+    ends = [sum(float(m["end"]) for m in group) / len(group) for group in by_source.values()]
+    duration = max(1e-6, sum(float(m["end"]) - float(m["start"]) for m in members) / max(1, len(members)))
+    disagreement = max(max(starts) - min(starts), max(ends) - min(ends)) / duration
+    return max(0.0, 1.0 - min(1.0, disagreement)), len(by_source)
 
 
 def iter_word_leaves(node: Any) -> list[dict[str, Any]]:  # noqa: ANN401 — recursive JSON walk
@@ -146,10 +179,32 @@ def fuse_word_streams(
     Words across systems are grouped into time slots (time-overlap fraction ≥
     ``slot_overlap`` or midpoint distance ≤ ``slot_mid_tol_s``); each slot votes
     on the normalized text with ``weights[system] × word confidence ×
-    corroboration``. The winner's confidence is ``vote share × mean member
-    confidence × coverage``, where coverage penalizes slots that only a subset of
+    corroboration``. Coverage penalizes slots that only a subset of
     systems witnessed (abstention is evidence). Optional ``speaker_at`` attributes
     speakers; ``calibrator`` maps raw confidences through a calibration profile.
+
+    **A word is doubtful in two independent ways (D-27), and reports both.**
+
+    - ``existence_confidence`` — was this said, and is this the text: ``share × coverage``, times
+      the members' own confidence **when any member reports one**. It used to be
+      ``share × member_conf × coverage`` with ``member_conf`` defaulting to 1.0, and every default
+      recognizer reports no confidence at all — so the term was always 1.0 and 61 of 62 words on a
+      real run came out at exactly 1.0. Absent is now absent: ``member_confidence`` is ``None`` and
+      the term drops out rather than silently reading as certainty.
+    - ``temporal_confidence`` — is it *here*: agreement between **timing sources** on the word's
+      onset and offset, anchored to the word's own duration. ``None`` for a single timing source,
+      which has nobody to agree with; a lone source reporting perfect temporal confidence is the
+      same manufactured certainty in the other field.
+
+    ``confidence`` remains, and is the joint — their product where both exist. The asr axis is a
+    resampling of that joint onto the time grid, which is why the two parts have to survive
+    separately as far as the axis: a word every model agrees on but times differently and a word
+    the models disagree about are different findings, and the product alone cannot tell them apart.
+
+    **Timing sources, not models.** Two transcripts timed by one aligner agree about onset by
+    construction (Canary-Qwen is timed by Qwen's aligner), so members are grouped by
+    ``timestamp_source`` before the spread is measured. Provenance is the only thing that can see
+    this: an aligner is not a ``Source``, so source-closure intersection cannot (D-20).
 
     **Corroboration** is an optional per-word ``corroboration`` field in ``[0, 1]``: external
     evidence, measured by the caller, that something was said there. It enters in exactly two
@@ -274,15 +329,24 @@ def fuse_word_streams(
         _win_key, win = ranked[0]
         share = win["weight"] / total_w
         share_uncorroborated = win["weight_uncorroborated"] / total_w_uncorroborated
-        member_conf = sum(win["confs"]) / len(win["confs"]) if win["confs"] else 1.0
+        # Absent is absent (D-27). ``None`` when no member reported a confidence, so the term drops
+        # out of the product instead of entering it as 1.0 — which is a claim of certainty made on
+        # behalf of models that said nothing about themselves.
+        member_conf = sum(win["confs"]) / len(win["confs"]) if win["confs"] else None
         coverage = min(1.0, coverage_mass / ensemble_weight)
-        raw_conf = share * member_conf * coverage
+        existence_conf = share * coverage * (1.0 if member_conf is None else member_conf)
+        temporal_conf, timing_sources = _temporal_agreement(slot["members"])
+        raw_conf = existence_conf if temporal_conf is None else existence_conf * temporal_conf
         win_corr = (win["corr_num"] / win["corr_den"]) if win["corr_den"] > 0 else None
         word = {
             "text": win["display"],
             "start": round(slot["start"], 4),
             "end": round(slot["end"], 4),
             "confidence": round(calibrator(raw_conf), 4) if calibrator else round(raw_conf, 4),
+            "existence_confidence": round(existence_conf, 4),
+            "temporal_confidence": None if temporal_conf is None else round(temporal_conf, 4),
+            "member_confidence": None if member_conf is None else round(member_conf, 4),
+            "timing_sources": timing_sources,
             "coverage": round(coverage, 4),
             "corroboration": None if win_corr is None else round(win_corr, 6),
             "member_corroboration": {

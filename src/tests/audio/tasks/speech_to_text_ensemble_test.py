@@ -161,3 +161,89 @@ def test_the_low_presence_flag_is_gone() -> None:
     word = fuse_word_streams({"m1": [_w("hi", 0.0, 0.4, corroboration=0.01)]})[0]
     assert "low_speech_presence" not in word["flags"]
     assert word["corroboration"] == pytest.approx(MIN_CORROBORATION)
+
+
+# ── D-27: a word's confidence has two parts ───────────────────────────────────
+#
+# Measured on `english_conversation_higgs_audio_v2_20260805-034348`: 61 of 62 fused words carried
+# `confidence` exactly 1.0, because `member_conf` falls back to 1.0 when a model reports none and
+# all three default recognizers report `avg_logprob`/`no_speech_prob`/`token_entropy` as None. The
+# product measured agreement and coverage and called it confidence. Meanwhile two of those
+# recognizers produced word-identical transcripts whose per-bucket texts still differed, because
+# they timed the same words differently — a doubt no field on the word could express.
+
+
+def test_absent_member_confidence_is_recorded_as_absent_not_as_one() -> None:
+    """``member_confidence`` is ``None`` when nobody reported one; 1.0 is a claim nobody made.
+
+    The absent-vs-zero rule in its other direction. A reader cannot otherwise tell a word three
+    confident models agreed on from a word three silent models agreed on.
+    """
+    out = fuse_word_streams(
+        {"a": [_w("hello", 0.0, 0.5)], "b": [_w("hello", 0.0, 0.5)]},
+        min_corroboration=MIN_CORROBORATION,
+    )
+    assert out[0]["member_confidence"] is None, out[0]
+    assert out[0]["existence_confidence"] == pytest.approx(1.0), "two models agreeing is full agreement"
+
+
+def test_reported_member_confidence_still_reaches_the_word() -> None:
+    """When a model does report one, it is used — the fallback was the defect, not the term."""
+    out = fuse_word_streams(
+        {"a": [_w("hello", 0.0, 0.5, confidence=0.5)], "b": [_w("hello", 0.0, 0.5, confidence=0.5)]},
+        min_corroboration=MIN_CORROBORATION,
+    )
+    assert out[0]["member_confidence"] == pytest.approx(0.5)
+    assert out[0]["existence_confidence"] < 1.0, "a model's own doubt is doubt about the word existing"
+
+
+def test_a_word_all_models_time_alike_is_temporally_confident() -> None:
+    """Agreement on *when* is a separate measurement from agreement on *what*."""
+    out = fuse_word_streams(
+        {"a": [_w("hello", 1.00, 1.40)], "b": [_w("hello", 1.01, 1.41)]},
+        min_corroboration=MIN_CORROBORATION,
+    )
+    assert out[0]["temporal_confidence"] > 0.9, out[0]
+
+
+def test_a_word_models_place_differently_is_temporally_doubtful() -> None:
+    """The failure the old scheme could not express.
+
+    Both models say the same word; they disagree about where it is by more than its own length.
+    Under a time-bucketed WER this read as textual disagreement in whichever buckets they fell in;
+    here it is what it is — a word whose text is certain and whose position is not.
+    """
+    out = fuse_word_streams(
+        {"a": [_w("hello", 1.00, 1.40)], "b": [_w("hello", 1.45, 1.85)]},
+        min_corroboration=MIN_CORROBORATION,
+        slot_mid_tol_s=0.6,
+    )
+    assert len(out) == 1, f"the two readings must land in one slot for this to be a timing question: {out}"
+    assert out[0]["existence_confidence"] == pytest.approx(1.0), "both models said the word"
+    assert out[0]["temporal_confidence"] < 0.5, out[0]
+
+
+def test_a_lone_source_has_no_temporal_agreement_to_measure() -> None:
+    """One timing source cannot corroborate itself, so the quantity is absent rather than perfect."""
+    out = fuse_word_streams({"a": [_w("hello", 0.0, 0.5)]}, min_corroboration=MIN_CORROBORATION)
+    assert out[0]["temporal_confidence"] is None, out[0]
+
+
+def test_two_transcripts_sharing_an_aligner_are_one_timing_source() -> None:
+    """Canary was timed by Qwen's aligner, so their onsets agree by construction.
+
+    Counting them as two agreeing opinions about *when* would manufacture temporal confidence out
+    of a shared dependency. ``timestamp_source`` is the only provenance that can see it — an
+    aligner is not a ``Source``, so closure intersection cannot.
+    """
+    shared = fuse_word_streams(
+        {
+            "canary": [_w("hello", 1.0, 1.4, timestamp_source="qwen-aligner")],
+            "qwen": [_w("hello", 1.0, 1.4, timestamp_source="qwen-aligner")],
+        },
+        min_corroboration=MIN_CORROBORATION,
+    )
+    assert shared[0]["temporal_confidence"] is None, (
+        f"two transcripts sharing one aligner are one timing source: {shared[0]}"
+    )
+    assert shared[0]["timing_sources"] == 1
