@@ -3857,3 +3857,127 @@ Items 2, 4 and 8 change numbers in every run. Items 1, 3, 5, 6, 7 and 9 change s
 **Already done, and the table depends on it:** `d45aaf1d` made direction-only votes reachable by the
 fold, which is what lets rows 6 and 7 of the presence table be voters at all — without it, retargeting
 them would have been renaming signals the fold still discarded.
+
+---
+
+## D-27. A word's confidence has two parts, and the asr axis is their resampling
+
+**Corrects D-24's second half.** D-24 settled that "the asr axis is estimated on the word grid: one
+row per word". The first half of that — ASR *output* is word-shaped — stands and is not in question.
+The second half is wrong, and the run that exposed it shows why.
+
+### What the run measured
+
+`english_conversation_higgs_audio_v2_20260805-034348`, three default recognizers:
+
+| observation | value |
+|---|---|
+| Qwen3-ASR vs CrisperWhisper transcripts | **word-identical** — 62 words, same normalised sequence |
+| mean pairwise WER across the 41 asr buckets | **0.0751** (median 0.0; 30 of 41 buckets have one distinct text) |
+| the asr axis's mean `uncertainty` | **0.4266** |
+| fused words at `confidence` exactly 1.0 | **61 of 62** (two distinct values in the whole transcript) |
+
+Three mechanisms produce that spread, and they are worth separating because only one of them is a
+disagreement about *what was said*.
+
+**The axis reports entropy, not doubt.** `fuse_axis` sets `confidence` to the weighted mean of
+per-signal certainty and `uncertainty` to the normalised binary entropy over `{settled, unsettled}`.
+Binary entropy peaks at *p* = 0.5, so it amplifies small disagreement hard. Verified against real
+rows, hand-computing *H(p)*:
+
+| bucket | mean per-signal doubt | `confidence` | `uncertainty` | *H(p)* |
+|---|---|---|---|---|
+| 0.0–1.0 | 0.0444 | 0.9556 | 0.2623 | 0.2621 |
+| 3.0–4.0 | 0.3333 | 0.6667 | 0.9183 | 0.9180 |
+
+Both columns are correct and they are not comparable, which is a problem only because the figure
+plots one directly above words coloured by the other.
+
+**The word confidence is manufactured.** `fuse_word_streams` computes
+`share × member_conf × coverage`, and `member_conf` falls back to `1.0` when a model reports none.
+All three default recognizers report `avg_logprob`, `no_speech_prob` and `token_entropy` as `None`
+(the fact behind `d45aaf1d`), so the term is always 1.0 and the product measures agreement and
+coverage only. This is the absent-vs-zero rule in its other direction: **absent is not 1.0 either.**
+
+**The doubt is boundary-driven.** `harvest_asr_votes` buckets each model's words by time with
+`fully_contained=True`. Bucket 0.5–1.5 holds "you did that without" against "you did that" from two
+recognizers whose full transcripts are word-identical. The docstring already knew — it widened the
+grid to mitigate it — but a mitigation for a unit error is still a unit error.
+
+### The decision
+
+**A word carries two confidences, because a word has two ways of being doubtful:**
+
+| field | question | evidence |
+|---|---|---|
+| `existence_confidence` | was this said, and is this the text? | cross-model vote share × coverage, and a model's own confidence **when it reports one** |
+| `temporal_confidence` | is it *here*? | cross-model spread of onset and offset, anchored to the word's own duration |
+
+These are independent failure modes and the old scheme could not tell them apart: a word every model
+agrees on but times differently, and a word models disagree about, both arrived as bucket
+disagreement. Separated, the first is a wide, low-mass contribution and the second is a narrow,
+high-mass one — different findings calling for different interventions.
+
+**The asr axis stays on the time grid, as a resampling of the joint.** Each word contributes doubt
+mass `1 − existence_confidence`, spread over time according to its temporal uncertainty: a
+well-localised word deposits its doubt in the buckets it occupies, a poorly localised one smears the
+same mass wider. The bucket's value is the aggregate of the contributions reaching it.
+
+Three things this buys:
+
+- **The boundary artifact disappears at its source.** A word no longer has to be *fully contained* in
+  a bucket to count. How far it reaches is decided by how well it is localised, which is a
+  measurement, rather than by whether it happened to straddle a grid line.
+- **The axis stays joinable.** D-24 put the asr axis on words and then had to make every join with
+  the other three axes an explicit projection. Under this decision the projection happens once, in
+  the direction that has a natural answer — words onto time, where a word's own timing uncertainty
+  is the resampling kernel — instead of at every consumer.
+- **`asr` remains an axis in the same sense as the others** (D-16): a fold across signals and
+  perturbations, reported per bucket on the shared grid.
+
+### Correlated timings are not agreement
+
+Canary-Qwen and Qwen3-ASR were **byte-identical** on this run's presence axis because Canary was
+timed by Qwen's aligner. Their onsets are therefore correlated by construction, and a temporal
+confidence built from onset spread would read that correlation as two models agreeing.
+
+`timestamp_source` (D-20) is the provenance that exposes it, and it is the only thing that can:
+source-closure intersection cannot see an aligner, because an aligner is not a `Source`. So
+`temporal_confidence` counts a *timing source*, not a model — two transcripts timed by one aligner
+contribute one independent opinion about onset, whatever they contribute about text.
+
+### What stays open
+
+The anchor converting onset spread to a confidence is a policy value and belongs in the fusion
+profile with the rest, not as a literal. Its natural reference is the word's own duration — onsets
+disagreeing by more than the word is long means the word is not localised at all — but the exact
+shape wants fitting against the aligner-agreement data rather than asserting.
+
+### The mask couples to asr, and the coupling is one-way per round
+
+`background_mask` bears on `asr` in the obvious way: a word claimed where the mask says the target
+was not active is a different kind of claim from the same word inside target activity, and a
+recogniser emitting text in a target-free stretch is the classic hallucination signature. So the
+mask's state should reach the asr axis's `existence_confidence`.
+
+**But the reverse edge already exists**, and it is the one that makes this dangerous:
+`apply_span_evidence` feeds ASR words *into* the mask as direct evidence the target was active.
+Wiring mask → asr without care closes a loop in which a word raises the mask's target-active
+confidence, and the mask then returns that confidence as corroboration of the word. Uncertainty
+falling because a value was fed back is not a confidence gain — the self-confirmation hazard
+`adaptive/influence.py` exists to catch, arriving through a cross-axis edge rather than a write.
+
+D-21 rule 6 already decides it, and here it has a concrete consequence:
+
+> The mask components the asr axis may read are exactly those whose **source closure excludes the
+> transcript**. `(target_free, from_vad, …)`, `(target_free, from_occupancy, …)` and the proposed
+> `(background_source, project_labels/…, …)` qualify. `(target_free, from_words, …)` does not, and
+> must be excluded from the mask value the asr axis consumes.
+
+That is checkable from the keys rather than asserted, which is what the keyed derivatives of D-21
+were for. It also explains why the mask's voters had to be keyed individually rather than folded
+into one number before anyone asked for this coupling: a scalar mask cannot have its word-derived
+component removed, and the coupling would have had to be refused or taken on trust.
+
+Directionality per round follows the existing rule (D-22 rule 5): the asr axis reads the mask from a
+**strictly earlier round**, so the edge cannot close a cycle inside one round's fold.
