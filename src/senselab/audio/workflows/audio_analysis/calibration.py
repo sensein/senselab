@@ -15,12 +15,19 @@ temperatures for the uncertainty aggregators:
 ```
 
 Profiles are fitted by ``scripts/calibrate_scene_quality.py`` from synthetic
-mixtures (research.md D9) and consumed at runtime by ``quality.py`` (flat
-``*_clean_db``/``*_floor_db`` keys) and ``aggregate.py`` (``temperature``,
-``token_entropy_reference_nats``): :func:`profile_to_runtime` bridges the
+mixtures (research.md D9). The dB anchors are consumed at runtime by ``quality.py`` /
+``degradation.py`` (flat ``*_clean_db``/``*_floor_db`` keys); :func:`profile_to_runtime` bridges the
 versioned on-disk shape to that flat runtime convention. Absent profile →
 :data:`DEFAULT_PROFILE`, which mirrors the documented uncalibrated defaults in
 ``quality.py`` (bounded, not fitted).
+
+**``temperature`` and ``token_entropy_reference_nats`` currently reach no fold.** Their only
+consumers were ``aggregate.aggregate_asr`` and ``aggregate.aggregate_speech_presence``, which had no
+production caller and are deleted; the run's single fold is ``fuse.fuse_axis``, which takes no
+temperature. They stay in the schema, validated, because the *question* they answer is real — two
+backends' confidences are not on a common scale — and dropping the fields would lose the fitted
+values already on disk. But they are declared-and-unread until ``fuse_axis`` takes them, and
+``axes.CALIBRATED_AXES`` names the axes that would receive them; see the note there.
 
 Stdlib-only; safe to import anywhere.
 """
@@ -104,10 +111,10 @@ def validate_profile(profile: dict[str, Any], *, source: str = "<dict>") -> dict
 def profile_to_runtime(profile: dict[str, Any]) -> dict[str, Any]:
     """Bridge the versioned §5 profile to the flat runtime dict consumers read.
 
-    ``quality.py`` reads ``snr_clean_db``/``snr_floor_db``/``c50_clean_db``/
-    ``c50_floor_db``; ``aggregate.py`` reads ``temperature`` (per axis) and
-    ``token_entropy_reference_nats``. Unknown extra keys pass through untouched
-    so future profile fields reach their consumers without another bridge edit.
+    ``quality.py`` / ``degradation.py`` read ``snr_clean_db``/``snr_floor_db``/``c50_clean_db``/
+    ``c50_floor_db``. ``temperature`` and ``token_entropy_reference_nats`` are carried but
+    **currently read by nothing** — see the module docstring. Unknown extra keys pass through
+    untouched so future profile fields reach their consumers without another bridge edit.
     """
     runtime: dict[str, Any] = {
         "calibration_version": str(profile.get("version", PROFILE_VERSION)),

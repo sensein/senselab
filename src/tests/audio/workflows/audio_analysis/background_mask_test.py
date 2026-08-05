@@ -626,12 +626,15 @@ def test_the_mask_is_cut_on_the_grid_it_is_given(tmp_path: Path) -> None:
     )
 
 
-def test_the_cli_cuts_the_mask_on_the_speech_presence_grid() -> None:
+def test_the_cli_cuts_the_mask_on_the_runs_one_grid() -> None:
     """The wiring, not the knob — the same gap the variant test above was written for.
 
     ``stage_background_mask`` accepted a ``grid`` from the day it was written and no caller ever
-    passed one, so the mask ran at ``BucketGrid()``'s 0.5 s while presence ran at 0.1 s. A unit
-    test that hands the stage a grid by hand cannot see that; this reads the source.
+    passed one, so the mask ran at ``BucketGrid()``'s 0.5 s while presence ran at 0.1 s. A unit test
+    that hands the stage a grid by hand cannot see that; this reads the source. It now asserts the
+    plan takes the run's *single* grid through the one constructor, rather than rebuilding it from
+    presence's two CLI values — which was a second construction of a pair of floats that could only
+    agree as long as nobody edited one of them.
     """
     import ast
     import pathlib
@@ -640,6 +643,7 @@ def test_the_cli_cuts_the_mask_on_the_speech_presence_grid() -> None:
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_pass_plan")
     body = ast.get_source_segment(src, fn) or ""
-    assert "mask_grid=" in body, "_pass_plan must give the plan a mask grid"
-    assert "speech_presence_grid_win_length" in body, "the mask grid must be speech_presence's, per D-24"
-    assert "speech_presence_grid_hop_length" in body
+    assert "mask_grid=_bucket_grid(cfg)" in body, (
+        "the mask must be cut on the run's one grid, built by the one constructor (D-24)"
+    )
+    assert "BucketGrid(" not in body, "a second grid construction here is a second grid waiting to happen"

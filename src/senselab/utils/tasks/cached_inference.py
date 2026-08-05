@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 10
+CACHE_SCHEMA_VERSION = 11
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -128,6 +128,28 @@ older entry answer a different question:
   replace ``L2/speech_presence.parquet``, ``L2/speakers.json``,
   ``L2/per_speaker_presence.parquet``, ``L2/convergence.json`` and ``L2/iterations.json``.
   A consumer pointed at the old locations finds nothing there.
+
+Bumped 10 → 11 when the four axes moved onto one grid. **Every axis's row count and every number
+downstream of it changes**, so this is the widest invalidation on this list:
+
+- the grid. ``speech_presence`` and ``background_mask`` ran at a 0.1 s window on a 0.02 s hop,
+  ``speaker`` at 0.25/0.25, ``asr`` at 1.0/0.5 — four grids sharing zero bucket keys. Every axis is
+  now on ``axes.DEFAULT_TIME_GRID`` (0.1 s, window == hop), so a cached row's ``(start, end)`` names
+  a bucket the run no longer has.
+- the asr axis has **one** voter, ``consensus_words``, and no per-bucket text. Gone with it:
+  ``__pairwise_phoneme_distances__``, and the per-bucket ``avg_logprob`` / ``token_entropy`` /
+  ``alignment_ctc_score`` reads. A cached asr vote carries five keys the fold no longer reads and
+  lacks the one it does.
+- the fused asr rows lost ``consensus_votes``, and the LS bundle lost the
+  ``uncertainty__asr__text`` TextArea it fed. The words are published at word resolution in
+  ``final/transcript.json`` and rendered by ``adaptive.ls_final``.
+- the run is configured by ``data/run_config/default.yaml``, whose identity is stamped into every
+  artifact's provenance. A cached entry predates that field, so a run replaying it could not say
+  what configured it.
+
+Anything fitted or tuned against the old grids must be **re-measured, not carried over**: the
+scene-quality calibration profile, the convergence thresholds, the triage gates and the
+``detection_margin`` mask thresholds were all fitted at spacings that no longer exist.
 """
 
 

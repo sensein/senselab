@@ -49,7 +49,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_dir", type=Path, help="Completed analyze_audio run directory")
     parser.add_argument("--cache-dir", type=Path, default=Path("artifacts/analyze_audio_cache"))
-    parser.add_argument("--policy", type=Path, default=None, help="Policy YAML overriding the default")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=(
+            "Run config YAML deep-merged over the packaged default; its `adaptive:` section is the "
+            "policy. A file with policy keys at the top level is refused rather than silently ignored."
+        ),
+    )
     parser.add_argument("--out", type=Path, default=None, help="Output dir (default: run_dir)")
     parser.add_argument("--max-rounds", type=int, default=3)
     parser.add_argument("--aggregator", default=None, help="Override (default: from run's disagreements.json)")
@@ -72,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     result = run_adaptive_loop(
         args.run_dir,
         cache_dir=args.cache_dir,
-        policy_path=args.policy,
+        config_path=args.config,
         out_dir=args.out,
         max_rounds=args.max_rounds,
         aggregator=args.aggregator,

@@ -281,7 +281,13 @@ OVERLAP_INFORMED_AXES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.
 """Axes an overlapped-speech posterior is evidence about."""
 
 CALIBRATED_AXES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.active and a.calibrated)
-"""Axes whose aggregator takes a calibration temperature."""
+"""Axes whose fold *would* take a calibration temperature.
+
+Declared and unconsumed today, and named as such rather than left to look wired: the profile's
+``temperature`` block reached ``aggregate.aggregate_asr`` and
+``aggregate.aggregate_speech_presence``, both of which had no production caller and are deleted.
+``fuse.fuse_axis`` is the one fold and takes no temperature. See ``calibration.py``.
+"""
 
 AXIS_PRIORITY: Final[dict[str, int]] = {a.name: a.rank for a in AXES if a.active}
 """``{axis → tiebreak rank}`` for ranking across axes; lower comes first.

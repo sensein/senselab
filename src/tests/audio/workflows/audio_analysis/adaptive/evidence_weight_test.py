@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from senselab.audio.workflows.audio_analysis.adaptive.belief import BeliefState, Vote, VoteStore, bucket_key
-from senselab.audio.workflows.audio_analysis.aggregate import aggregate_speech_presence, speech_presence_p_voice
+from senselab.audio.workflows.audio_analysis.aggregate import speech_presence_p_voice
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 from senselab.audio.workflows.audio_analysis.support import (
     bucket_corroboration,
@@ -242,29 +242,36 @@ def test_no_purged_status_survives() -> None:
     assert not hasattr(VoteStore, "purge_source_in_bucket")
 
 
-def test_asr_axis_attenuation_reaches_the_pairwise_family() -> None:
-    """Purging removed ``avg_logprob``/``token_entropy`` but never touched the pairwise distances.
+def test_asr_axis_attenuation_reaches_its_one_voter() -> None:
+    """A weight must reach the asr axis's voter, and must not erase it.
 
-    The pairwise phoneme family is the dominant asr sub-signal, so the old erasure was total for
-    two sub-signals and inert for the one that decides the axis. A weight has to reach all three.
+    This used to check that attenuation reached the pairwise phoneme family, back when the axis
+    carried per-model text plus a pairwise distance block and the weight reached two of the three
+    sub-signals. There is one voter now — the consensus word fold — so "reaches all three" collapses
+    to "reaches it", and the floor still has to keep its dissent visible.
+
+    ``apply_aggregator`` scales a signal's *doubt* by its weight rather than taking a weighted mean,
+    so a lone voter's attenuation does move the fold; that is the documented behaviour and the reason
+    the floor is not zero.
     """
-    from senselab.audio.workflows.audio_analysis.aggregate import aggregate_asr
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
 
-    votes: dict[str, dict[str, Any]] = {
-        "asr_a": {"text": "hello"},
-        "asr_b": {"text": "hello"},
-        "asr_c": {"text": "hello"},
-        "__pairwise_phoneme_distances__": {
-            # asr_a is the outlier: both pairs containing it disagree, the pair without it agrees.
-            "pairs": {"asr_a|asr_b": 0.9, "asr_a|asr_c": 0.9, "asr_b|asr_c": 0.0},
-            "per_source_confidence": {},
-        },
-    }
-    unweighted = aggregate_asr(votes, aggregator="mean")
-    attenuated = aggregate_asr(votes, aggregator="mean", weights={"asr_a": MIN_EVIDENCE_WEIGHT})
-    assert unweighted is not None and attenuated is not None
-    assert attenuated < unweighted, "an attenuated outlier must stop dominating the pairwise fold"
-    assert attenuated > 0.0, "and must still contribute — the floor keeps its dissent visible"
+    buckets = {"raw": [{"start": 0.0, "end": 0.1, "votes": {"consensus_words": {"value": 0.9}}}]}
+    unweighted = fuse_axis(buckets, weights={}, aggregator="mean")[0]
+    attenuated = fuse_axis(
+        buckets,
+        weights={"consensus_words": MIN_EVIDENCE_WEIGHT},
+        aggregator="mean",
+        weight_basis={"consensus_words": {"stability": MIN_EVIDENCE_WEIGHT, "support": 1.0}},
+    )[0]
+    assert attenuated["triage_score"] < unweighted["triage_score"]
+    assert attenuated["triage_score"] > 0.0, "the floor keeps an attenuated voter's dissent visible"
+    # The weight and the factors behind it are on the row, so a discounted voter records *why*.
+    assert attenuated["signal_weights"] == {"consensus_words": MIN_EVIDENCE_WEIGHT}
+    assert attenuated["weight_basis"]["consensus_words"]["stability"] == pytest.approx(MIN_EVIDENCE_WEIGHT)
+    # ``uncertainty`` is the entropy measure and takes no weight, so it is unmoved — the split the
+    # fold exists to keep.
+    assert attenuated["uncertainty"] == pytest.approx(unweighted["uncertainty"])
 
 
 def test_empty_weight_map_is_byte_identical_to_none() -> None:
@@ -273,19 +280,19 @@ def test_empty_weight_map_is_byte_identical_to_none() -> None:
     ``replay_check`` re-aggregates from the persisted votes; if passing an empty
     weight map perturbed the fold, the proof would silently become a comparison of two quantities.
     """
-    from senselab.audio.workflows.audio_analysis.aggregate import aggregate_asr, aggregate_speaker
+    from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
 
     presence = {"a": {"speaks": True, "native_confidence": 0.8}, "b": {"speaks": False, "native_confidence": 0.6}}
-    assert aggregate_speech_presence(presence, weights={}) == aggregate_speech_presence(presence)
     assert speech_presence_p_voice(presence, weights={}) == speech_presence_p_voice(presence)
 
-    asr = {"m": {"avg_logprob": -0.3, "token_entropy": [0.4, 0.6]}}
-    assert aggregate_asr(asr, aggregator="min", weights={}) == aggregate_asr(asr, aggregator="min")
-
+    # The per-axis folds this used to check are gone — they had no production caller. What the replay
+    # proof actually re-derives from is ``per_signal_uncertainty``, which reads the votes and takes no
+    # weight map at all: an empty map cannot perturb a function that never receives one, and stating
+    # that is the property the deleted assertions were reaching for.
+    asr = {"consensus_words": {"value": 0.42}}
     speaker = {"d::e": {"same_label_uncertainty": 0.4, "change_inconsistency_uncertainty": 0.2}}
-    assert aggregate_speaker(speaker, raw_vs_enh=None, aggregator="min", evidence_weights={}) == aggregate_speaker(
-        speaker, raw_vs_enh=None, aggregator="min"
-    )
+    assert per_signal_uncertainty({"votes": asr}) == {"consensus_words": 0.42}
+    assert per_signal_uncertainty({"votes": speaker}) == {"d::e": 0.4}
 
 
 @pytest.mark.parametrize(
@@ -332,6 +339,8 @@ def test_the_gate_bottoms_out_at_the_shared_floor() -> None:
 def test_policy_yaml_weight_floors_do_not_drift_from_the_shared_constant() -> None:
     """YAML cannot import a Python constant, so the link is a test or it is nothing.
 
+    Reads the ``adaptive:`` section of ``data/run_config/default.yaml``.
+
     Both keys floor a *withdrawn weight* — the same quantity as ``MIN_EVIDENCE_WEIGHT``, reached by
     the same argument. They stay literals because an operator has to be able to read and override a
     policy, so what is enforced is the packaged default: ship the shared number, and if someone
@@ -343,8 +352,10 @@ def test_policy_yaml_weight_floors_do_not_drift_from_the_shared_constant() -> No
     import yaml
 
     from senselab.audio.workflows.audio_analysis.adaptive import policy as policy_module
+    from senselab.audio.workflows.audio_analysis.run_config import DEFAULT_CONFIG_PATH
 
-    raw = yaml.safe_load(policy_module._DEFAULT_POLICY_PATH.read_text(encoding="utf-8"))
+    # The policy is the ``adaptive:`` section of the run config now, not a file of its own.
+    raw = (yaml.safe_load(DEFAULT_CONFIG_PATH.read_text(encoding="utf-8")) or {})["adaptive"]
     assert policy_module._WEIGHT_FLOOR_KEYS, "no floors registered for validation — the guard is inert"
     for path, key in policy_module._WEIGHT_FLOOR_KEYS:
         node: Any = raw

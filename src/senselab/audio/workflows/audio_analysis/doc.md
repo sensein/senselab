@@ -1,31 +1,96 @@
 # `senselab.audio.workflows.audio_analysis`
 
-Three-axis uncertainty for analyze_audio runs. Reads the per-task pipeline outputs
-(diarization, ASR, scene classification, alignment, speaker embeddings) and emits a
-single `[0, 1]` uncertainty scalar per bucket on each of three axes:
+Uncertainty axes for analyze_audio runs. Reads the per-task pipeline outputs (diarization, ASR,
+scene classification, alignment, speaker embeddings) and emits one `[0, 1]` uncertainty per bucket
+on each of four axes:
 
-- **speech_presence_uncertainty** — was there a speaker?
-- **speaker_uncertainty** — was it the same speaker?
-- **asr_uncertainty** — what was said?
+- **speech_presence** — was there a speaker?
+- **speaker** — was it the same speaker?
+- **asr** — what was said?
+- **background_mask** — is this region free of *target* activity?
 
-Every model whose output naturally encodes an axis votes (max-inclusive). The vote
-collapse is per-axis: Shannon entropy for speech_presence (binary votes); cross-model label
-disagreement + cosine across-time for speaker; pairwise mean WER + Whisper avg_logprob
-+ cross-ASR pairwise phoneme distance for asr. Sub-signals within each axis fold via the
-shared `--uncertainty-aggregator` flag (default `min` over confidences ≡ `max` over
-uncertainties).
+The set is declared once, in `axes.AXES`, with each axis's properties beside its name. Any list of
+four axes written out by hand is one that can go stale: the mask was fused and written while being
+absent from region proposal, convergence and the disagreements index, because three consumers
+enumerated three axes in literal tuples.
 
-Output:
+## One grid
 
-- 9 parquets (3 axes × 2 passes + 3 raw_vs_enhanced deltas) — see
-  `contracts/uncertainty-row.parquet.md`.
-- `disagreements.json` — top-N ranked across all parquets — see
-  `contracts/disagreements.json.md`.
-- `timeline.png` — 5-row figure (speech_presence / speaker / asr overlaid raw-vs-enhanced
-  + delta strip + reference) — see `contracts/ls-bundle.md` for the matching LS tracks.
+**Every axis is harvested on `axes.DEFAULT_TIME_GRID`** — a 0.1 s window at a 0.1 s hop — so row *i*
+of one axis is row *i* of another and a cross-axis join needs no reconciliation.
 
-See `specs/20260508-173136-compare-uncertainty/spec.md` for the full design and
-`specs/20260508-173136-compare-uncertainty/quickstart.md` for reviewer recipes.
+This was measured, not assumed. With a per-axis grid the four axes carried 242 / 242 / 19 / 8 rows
+on 0.1/0.02, 0.1/0.02, 0.25/0.25 and 1.0/0.5, and shared **zero** bucket keys: `fuse.project_axis_onto`
+found nothing to project, every cross-axis coupling ran and did nothing, and each round came out
+byte-identical to the last. Unit tests missed it because their fixtures put every axis on one
+synthetic grid — the one thing real data never did.
+
+Window equals hop deliberately. A 0.1 s window at a 0.02 s hop makes adjacent rows share 80% of
+their audio, so 1070 rows are not 1070 independent measurements and nothing in the output said so.
+Fine *resolution* is what a question justifies; five near-duplicate rows per window is a different
+thing. `BucketGrid()` defaults to the declared constant, so there is one answer rather than a
+constant and a default that can disagree.
+
+## One fold
+
+`fuse.fuse_axis` is the run's single fold. It reads each signal's own reading through
+`fuse.per_signal_uncertainty`, weights it by two *measured* factors — perturbation stability
+(`reliability.signal_stability`: does the signal agree with itself between the raw and enhanced
+passes?) and physical support (`support.signal_support`: does the audio carry what it claimed?) —
+and collapses the weighted readings via the run config's `uncertainty.aggregator` (default `min`,
+"most-doubtful wins"). A signal absent from the weights carries full weight: a factor never
+measured must not act as a discount.
+
+Each row carries four quantities that are deliberately **not** collapsed into one: `uncertainty`
+(normalised binary entropy), `epistemic_uncertainty` (its reducible part), `confidence` (a weighted
+mean, so a probability), and `variability` (dispersion across signals). `triage_score` is the policy
+fold — what the adaptive loop ranks by — and is the only one an aggregator choice touches.
+
+Nothing here is per pass. An axis aggregates across signals *and* across passes, so a pass is an
+input dimension to the fold and appears on the output only as each row's `contributing_passes`.
+
+### The asr axis has one voter
+
+`asr.harvest_asr_votes` emits `consensus_words` and nothing else: the recognizers' words are fused
+once per pass (`fuse_word_streams`, grouped by sequence alignment and graded phonemically by
+`asr.phoneme_similarity`), and each bucket takes the coverage-weighted mean of
+`1 - existence_confidence` over the words reaching it. A bucket no word reaches carries **no vote**
+rather than `0.0` — nothing was said there, which is not the same as nothing being in doubt.
+
+Four things used to ride beside it and all four are gone: the per-bucket text (a reconstruction of
+what `final/transcript.json` holds at word resolution, and the reason this axis needed a 1.0 s
+window — a fully-contained text read returns nothing from a bucket narrower than a word), the
+cross-ASR pairwise phoneme distance (already recorded-but-unscored, because its source closure is a
+subset of the consensus fold's), and the per-bucket `avg_logprob` / `token_entropy` /
+`alignment_ctc_score` reads.
+
+**Temporal agreement is excluded from this axis on purpose.** Two attempts proved a single number
+cannot carry both accuracy and localisation and stay readable: bucketed pairwise WER reported 0.4266
+on a pair of word-identical transcripts (timing jitter reading as textual disagreement), and a joint
+of accuracy × localisation gave 0.788, which could mean either half. Localisation now lives on the
+word, split per edge (`onset_confidence` / `offset_confidence`), where a figure can show *which*
+boundary is in doubt.
+
+## L1 measures, L2 decides
+
+L1 reports what a tool produced, in that tool's units, at its own resolution: no thresholds, no
+rescaling against an anchor, no reduction across a dimension the tool reported separately, no
+selection among estimators. Every interpretation lives at L2, where it is named and can be changed
+without re-running a model. `speech_presence.harvest_speech_presence_evidence` emits measurements
+and `speech_presence_link.link_speech_presence` turns them into votes under a recorded policy;
+`quality.harvest_quality_measurements` emits dB / hertz / proportion and `degradation` anchors them.
+
+## Output
+
+- `L1/<pass>/signals/<signal>.parquet` — one row per (signal, bucket), in the tool's own units.
+- `L1/stability/<signal>.parquet` — cross-pass `|Δ|` per bucket; the run-level mean is on every
+  fused row as `weight_basis[signal]["stability"]`.
+- `L2/round<N>/uncertainty/<axis>.parquet` — the fused axes, all on one grid.
+- `L2/round0/votes/<axis>.parquet` — the linked evidence at vote level; what the adaptive store
+  ingests.
+- `L2/disagreements.json` — top-N over the fused axes by `triage_score`, axis-priority tiebreak.
+- `final/` — the deliverables: `transcript.json`, `diarization.json`, `speakers.json`,
+  `estimates/<axis>.parquet`, `decisions.json`, `timeline.png`, the annotated LS bundle.
 
 ## Public API
 
@@ -36,37 +101,31 @@ from senselab.audio.workflows.audio_analysis import (
     build_disagreements_index,
     build_aligned_timeline_plot,
     attach_uncertainty_tracks_to_ls,
-    write_axis_parquet,
 )
 ```
 
-`compute_uncertainty_axes(passes, grid, params, *, audio, speaker_embedding_models,
-aggregator)` is the workflow entry point. It is a pure function: callers (such as
-`scripts/analyze_audio.py`) handle the surrounding I/O (cache lookup, parquet writing,
-disagreements.json + plot, LS bundle extension).
+`compute_uncertainty_axes(passes, grid, params, *, audio, speaker_embedding_models, aggregator,
+speech_presence_labels)` is the entry point — a thin wrapper over `harvest_pass` (expensive,
+model-touching) + `votes.link_pass` (pure) + `fuse.fuse_axis` (pure). There is deliberately **no**
+per-axis grid parameter; `grid_test` asserts the absence on the signature, because an override
+coming back would restore the four-grid defect with every value assertion still passing.
 
-## Scene-aware speech_presence + calibration (spec 20260722-175022, US1–US5)
+## Configuration
 
-The speech_presence axis carries additive scene columns beside `aggregated_uncertainty`
-(unchanged): `speech_presence_confidence`/`speech_presence_uncertainty` (decisiveness +
-within-bucket temporal instability from frame posteriors), four `quality_*`
-degradation scores in `[0, 1]` (SNR / clipping / reverb / bandwidth) plus
-`quality_uncertainty` (estimator spread), and the `src_*` source-category masses
-with `src_dominant`. The asr axis couples to the scene per FR-019: the
-reported `aggregated_uncertainty` is the per-vote value times a
-`scene_quality_coupling` multiplier (≥ 1; pre-coupling value preserved on
-`raw_aggregated_uncertainty`), and carries `token_entropy` when the Whisper
-token-confidence capture ran. The Label Studio bundle adds
-`<pass>__speech_presence__quality` / `<pass>__speech_presence__sources` tracks and the
-disagreements index exposes the speech_presence sub-signals (FR-024).
+One versioned file, `data/run_config/default.yaml`, with each value's derivation written beside it:
+model ids, the grid, the aggregator, the task type, the triage and enhancement gates, which stages
+run, and the adaptive loop's policy as its `adaptive:` section. `run_config.load_run_config` merges
+an optional override over it and hashes the *merged* mapping, so `{name, version, config_hash,
+sources}` identifies the run in every artifact's provenance.
 
-Calibration (US5): dB→`[0, 1]` anchors and per-axis aggregator temperatures live
-in a versioned `CalibrationProfile` JSON (`calibration.py`; documented defaults
-when absent). Fit one from synthetic sweeps with
-`scripts/calibrate_scene_quality.py` and pass it to the pipeline via
-`scripts/analyze_audio.py --calibration-profile <profile.json>`. Temperatures
-default to 1.0 — fitting them requires labeled correctness (see the adaptive
-loop's ground-truth evaluation harness).
+`scripts/analyze_audio.py` therefore takes an audio file, `--out`, and `--config` — nothing else.
+The seventy flags that preceded it differed in ways a reader had no basis to choose between, and the
+shipped defaults of four of them are what put the axes on four grids.
+
+Scene-quality calibration (`calibration.py`) supplies the dB→`[0, 1]` anchors `degradation` reads.
+Its `temperature` and `token_entropy_reference_nats` fields currently reach **no fold** — their only
+consumers were the uncalled per-axis aggregators — and are kept validated rather than dropped so
+fitted values survive until `fuse_axis` takes them.
 
 ## Importable pipeline: stages, cache, adaptive loop (T051 / T040)
 
@@ -77,7 +136,7 @@ in-process instead of shelling out to the CLI:
 ```python
 from senselab.audio.workflows.audio_analysis import PassPlan, StageContext, run_pass
 
-summary = run_pass(audio, StageContext(pass_label="raw_16k", audio_signature=sig), PassPlan(
+summary = run_pass(audio, StageContext(perturbation="raw", audio_signature=sig), PassPlan(
     diarization_models=("pyannote/speaker-diarization-3.1",),
     asr_models=("openai/whisper-large-v3-turbo",),
 ))
@@ -115,10 +174,10 @@ That replaces a parity check against `within_pass_uncertainty` on the L1 parquet
 that was a per-pass axis (a quantity that cannot exist) produced by a second implementation of
 the fold, and that the in-process path could not run at all.
 
-Adaptive CLI surface: `--max-rounds`, `--policy`, `--budget-medium/-heavy`,
-`--max-region-rounds`, `--region-top-n`, `--reserve-asr-models`,
-`--enable-overlap-separation`, `--no-adaptive-outputs`. Precedence is packaged
-default < `--policy` file < CLI flags, and `policy_hash` is recomputed after
-merging so two runs differing only by a flag don't claim the same provenance.
-`--max-rounds 1` is the golden-compat mode: verified to leave the uncertainty
-parquets, Label Studio bundle and pre-existing `summary.json` keys byte-identical.
+The adaptive surface is config, not flags: `rounds.max_rounds`, `stages.adaptive_outputs`, and the
+whole `adaptive:` section (budgets, region caps, reserve pools, per-rule enables). Precedence is
+packaged default < `--config` file < in-memory overrides, and `policy_hash` is recomputed after
+merging so two runs differing only by one entry cannot claim the same provenance. A file with
+`thresholds:` / `fusion:` / `rules:` at the *top* level is refused rather than merged into keys
+nothing reads. `rounds.max_rounds: 1` is baseline-only: no interventions and no rounds ≥ 2, though
+`final/` is still emitted from the round-1 belief.

@@ -98,12 +98,14 @@ def drawn_axes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    captured: list[Any] = []
+    # ``list[Any]`` rather than a narrower type: each entry is a numpy array of axes whose length is
+    # what the pick below compares, and mypy cannot see that through ``plt.subplots``' signature.
+    captured: list[list[Any]] = []
     real_subplots = plt.subplots
 
     def spy(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — a passthrough spy on plt.subplots
         figure, axes = real_subplots(*args, **kwargs)
-        captured.append(axes)
+        captured.append(list(axes) if hasattr(axes, "__len__") else [axes])
         return figure, axes
 
     monkeypatch.setattr(plt, "subplots", spy)
@@ -114,7 +116,7 @@ def drawn_axes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     assert out is not None and out.exists(), "the figure did not render, so nothing below is testable"
 
     assert captured, "plt.subplots was never called"
-    return list(max(captured, key=len))
+    return max(captured, key=len)
 
 
 def test_every_active_axis_has_an_uncertainty_row(drawn_axes: list[Any]) -> None:

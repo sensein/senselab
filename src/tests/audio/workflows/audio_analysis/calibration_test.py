@@ -73,13 +73,12 @@ def test_profile_round_trip_and_validation(tmp_path: Path) -> None:
     runtime = profile_to_runtime(loaded)
     assert runtime["snr_clean_db"] == 22.0 and runtime["snr_floor_db"] == 3.0
     assert runtime["c50_clean_db"] == 28.0 and runtime["c50_floor_db"] == -4.0
+    # Carried through the bridge and validated, but read by no fold today: the aggregators that
+    # consumed them had no production caller and are gone, and ``fuse.fuse_axis`` takes no
+    # temperature. Asserting the passthrough keeps the fitted values reaching the runtime dict, so
+    # wiring them into the fold later is one edit rather than a refit.
     assert runtime["temperature"] == {"speech_presence": 1.2, "asr": 0.8}
-    assert runtime["token_entropy_reference_nats"] == 2.5  # passthrough reaches aggregate.py
-
-    # The runtime dict speaks aggregate.py's temperature convention.
-    from senselab.audio.workflows.audio_analysis.aggregate import _axis_temperature
-
-    assert _axis_temperature(runtime, "asr") == pytest.approx(0.8)
+    assert runtime["token_entropy_reference_nats"] == 2.5
 
     with pytest.raises(ValueError, match="version"):
         validate_profile({**profile, "version": "0"})

@@ -20,7 +20,31 @@ from typing import Any
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.asr import resample_word_doubt
+from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes, resample_word_doubt
+from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+
+
+def _pass_summary(words_by_model: dict[str, list[tuple[float, float, str]]], *, duration_s: float) -> dict[str, Any]:
+    """A pass summary in the shape the pipeline hands the harvest: ScriptLine trees per model."""
+    from senselab.utils.data_structures import ScriptLine
+
+    by_model: dict[str, Any] = {}
+    for model, words in words_by_model.items():
+        by_model[model] = {
+            "status": "ok",
+            "result": [
+                ScriptLine(
+                    text=" ".join(text for _s, _e, text in words),
+                    start=words[0][0],
+                    end=words[-1][1],
+                    chunks=[
+                        ScriptLine(text=text, start=start, end=end, timestamp_source="native", timestamp_model=model)
+                        for start, end, text in words
+                    ],
+                )
+            ],
+        }
+    return {"duration_s": duration_s, "asr": {"by_model": by_model}}
 
 BUCKETS = [(round(i * 0.5, 6), round(i * 0.5 + 1.0, 6)) for i in range(6)]
 
@@ -125,45 +149,39 @@ def test_no_words_at_all_reports_nothing() -> None:
     assert all(v is None for v in resample_word_doubt([], BUCKETS).values())
 
 
-def test_the_axis_reads_the_derivative_and_the_transcripts_only_witness_it() -> None:
+def test_the_axis_folds_the_derivative_and_nothing_else() -> None:
     """The restructure, end to end through the fold (D-27, D-21 rule 6).
 
     The asr axis used to score three per-model signals whose values came from pairwise phoneme
     distance over bucketed text. Those transcripts are exactly what the consensus derivative folds,
-    so scoring both is one body of evidence twice. Now the derivative is the voter and the
-    per-model texts stay on the row as the record of *what* each said — which the fold cannot say.
+    so scoring both is one body of evidence twice — and the per-bucket text is a reconstruction of
+    what ``final/transcript.json`` holds at word resolution, which is why it is gone rather than
+    kept beside the derivative as a record.
+
+    Asserted through ``harvest_asr_votes`` rather than on a hand-built bucket, because the earlier
+    version of this test constructed per-model texts and a pairwise block and then checked they were
+    ignored — a shape the harvest no longer emits, so it proved nothing about the pipeline.
     """
     from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
 
-    bucket = {
-        "start": 0.0,
-        "end": 1.0,
-        "votes": {
-            "model-a": {"text": "hello there"},
-            "model-b": {"text": "hello thair"},
-            "__pairwise_phoneme_distances__": {"pairs": {"model-a|model-b": 0.4}, "scored": False},
-            "consensus_words": {"value": 0.3, "operator": "consensus_words/resample"},
-        },
-    }
-    per_signal = per_signal_uncertainty(bucket)
-
-    assert per_signal == {"consensus_words": pytest.approx(0.3)}, (
-        f"the axis must fold the derivative alone; got {per_signal}"
+    harvested = harvest_asr_votes(
+        pass_summary=_pass_summary(
+            {
+                "model-a": [(0.0, 0.4, "hello"), (0.4, 0.9, "there")],
+                "model-b": [(0.0, 0.4, "hello"), (0.4, 0.9, "chair")],
+            },
+            duration_s=1.0,
+        ),
+        grid=BucketGrid(),
+        alignment_by_model={},
     )
-
-
-def test_an_unscored_pairwise_block_still_reaches_the_artifact() -> None:
-    """Excluded from the fold is not removed from the record.
-
-    Dropping the block would lose which *pair* of recognizers diverged, and a consensus number
-    cannot recover that. The rule is about double-counting evidence, not about hiding it.
-    """
-    from senselab.audio.workflows.audio_analysis.fuse import _pairwise_per_signal
-
-    scored = {"__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}}}
-    unscored = {"__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}, "scored": False}}
-    assert _pairwise_per_signal(scored) == {"a": pytest.approx(0.4), "b": pytest.approx(0.4)}
-    assert _pairwise_per_signal(unscored) == {}
+    scored = [b for b in harvested if b["votes"]]
+    assert scored, "the harvest emitted no votes at all"
+    for bucket in scored:
+        assert set(bucket["votes"]) == {"consensus_words"}, (
+            f"the asr axis has one voter; got {sorted(bucket['votes'])}"
+        )
+        assert set(per_signal_uncertainty(bucket)) == {"consensus_words"}
 
 
 def test_the_fold_reads_the_shape_the_pipeline_actually_hands_it() -> None:

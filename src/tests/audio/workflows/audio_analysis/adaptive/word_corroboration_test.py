@@ -249,7 +249,7 @@ def test_transcript_records_the_pool_it_measured_against(tmp_path: Path) -> None
 
 def test_a_zero_corroboration_floor_is_refused_by_the_policy_loader(tmp_path: Path) -> None:
     """A floor that can be configured to zero is not a floor."""
-    override = tmp_path / "p.yaml"
-    override.write_text("fusion:\n  corroboration:\n    min_corroboration: 0\n")
+    override = tmp_path / "config.yaml"
+    override.write_text("adaptive:\n  fusion:\n    corroboration:\n      min_corroboration: 0\n")
     with pytest.raises(ValueError, match="min_corroboration"):
         load_policy(override)

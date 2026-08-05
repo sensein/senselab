@@ -7,6 +7,7 @@ error and now lives only in ``fuse.fuse_axis``, which sees every pass at once.
 
 import pytest
 
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
 from senselab.audio.workflows.audio_analysis.compute import _apply_scene_coupling
 from senselab.audio.workflows.audio_analysis.degradation import DEFAULT_ANCHORS
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
@@ -36,25 +37,31 @@ def _harvest() -> PassHarvest:
             },
         ],
         speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.8}}}],
+        # What ``harvest_asr_votes`` actually emits: one voter, the consensus word fold, and no
+        # per-model text. The fixture used to carry two per-model texts plus a pairwise-distance
+        # block — three keys the harvest no longer produces, so the test was asserting that the link
+        # handles a shape nothing hands it.
         asr_votes=[
             {
                 "start": 0.0,
                 "end": 1.0,
                 "votes": {
-                    "a": {"text": "hi", "avg_logprob": None},
-                    "b": {"text": "hi", "avg_logprob": None},
-                    "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.25}, "per_source_confidence": {}},
+                    "consensus_words": {
+                        "value": 0.25,
+                        "operator": "consensus_words/resample",
+                        "sources": ["a", "b"],
+                        "n_words": 2,
+                    }
                 },
             }
         ],
         # L1 measurements in dB; 23 dB against the 25/5 dB anchors scores 0.1 at L2.
         quality_by_bucket={(0.0, 0.5): {"snr_brouhaha_db": 23.0, "c50_brouhaha_db": 28.0}},
         source_by_bucket={(0.0, 0.5): {"src_speech": 0.9, "src_dominant": "speech", "_raw": {"speech": 0.9}}},
-        grids={
-            "speech_presence": {"win_length": 0.5, "hop_length": 0.5},
-            "speaker": {"win_length": 1.0, "hop_length": 1.0},
-            "asr": {"win_length": 1.0, "hop_length": 1.0},
-        },
+        # Every axis, and the same pair for each — which is what ``harvest_pass`` records now. The
+        # fixture named three axes at two different spacings, which is the arrangement that shared no
+        # bucket keys on real audio.
+        grids={axis: {"win_length": 1.0, "hop_length": 1.0} for axis in AXIS_NAMES},
         provenance_extras={"scene_quality": {"enabled": True}},
     )
 
@@ -63,7 +70,7 @@ def test_link_pass_emits_per_signal_rows_in_native_units() -> None:
     """One row per (signal, bucket), carrying the tool's own measurement — no fold, no axis."""
     linked = link_pass(_harvest(), params={"p": 1})
 
-    assert set(linked.signal_results) >= {"m1", "m2", "a", "b", "scene_quality", "frame_dispersion"}
+    assert set(linked.signal_results) >= {"m1", "m2", "consensus_words", "scene_quality", "frame_dispersion"}
     m1 = linked.signal_results["m1"]
     assert m1.perturbation == "raw"
     assert [(r.start, r.end) for r in m1.rows] == [(0.0, 0.5), (0.5, 1.0)]

@@ -341,7 +341,6 @@ def build_aligned_timeline_plot(
     fused_axes: Mapping[str, FusedAxis],
     duration_s: float,
     grid_hop: float,
-    asr_grid_hop: float | None = None,
     stability_by_signal: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     detail_by_pass: dict[str, dict[str, Any]] | None = None,
     save_path: Path | None = None,
@@ -372,10 +371,10 @@ def build_aligned_timeline_plot(
             no raw/enhanced overlay any more: the two passes are a perturbation sample, and what
             they bought is drawn as the stability strip instead.
         duration_s: Audio duration in seconds — drives the x-axis extent.
-        grid_hop: Bucket hop length (seconds) — matches the comparator grid.
-        asr_grid_hop: Hop length for the asr grid (typically wider than
-            ``grid_hop``, e.g. 0.5 s with a 1.0 s window). When ``None``, falls back
-            to ``grid_hop`` for the asr row.
+        grid_hop: Bucket hop length (seconds) — the run's one grid, so it applies to every axis
+            row. There was a second ``asr_grid_hop`` parameter while the asr axis had a grid of its
+            own; drawing two axes at two spacings on one x-axis is a figure whose rows cannot be
+            read against each other.
         stability_by_signal: ``{signal → per-bucket stability rows}`` from
             ``L1/stability/<signal>.parquet``. Drawn as its own strip — that is what the two
             passes actually bought, in the form the weights actually use it.
@@ -496,7 +495,6 @@ def build_aligned_timeline_plot(
         fig.suptitle(title, fontsize=11)
 
     axis_color = {"speech_presence": "#1f77b4", "speaker": "#ff7f0e", "asr": "#2ca02c"}
-    utt_hop = asr_grid_hop if asr_grid_hop is not None else grid_hop
 
     if mask_row is not None and mask_rows:
         _draw_background_mask_row(axes[mask_row], mask_rows, duration_s)
@@ -544,16 +542,14 @@ def build_aligned_timeline_plot(
     # competing — on the artifact a human actually looks at.
     for axis, row_i in (("speech_presence", speech_presence_row), ("speaker", speaker_row), ("asr", asr_row)):
         ax = axes[row_i]
-        # Utterance has its own (possibly wider+overlapping) grid.
-        axis_hop = utt_hop if axis == "asr" else grid_hop
         result = fused_axes.get(axis)
         if result is not None:
-            centers, values = _series_for(result.rows, duration_s, axis_hop)
+            centers, values = _series_for(result.rows, duration_s, grid_hop)
             if centers.size:
                 ax.plot(
                     centers, values, linestyle="-", color=axis_color[axis], linewidth=1.2, label=f"{axis} uncertainty"
                 )
-                _, epistemic = _series_for(result.rows, duration_s, axis_hop, key="epistemic_uncertainty")
+                _, epistemic = _series_for(result.rows, duration_s, grid_hop, key="epistemic_uncertainty")
                 if epistemic.size == centers.size and not np.all(np.isnan(epistemic)):
                     ax.fill_between(
                         centers,

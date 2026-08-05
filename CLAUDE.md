@@ -160,18 +160,33 @@ See `specs/20260503-235625-scalene-profiling/quickstart.md` for the full option 
 
 `scripts/analyze_audio.py` runs senselab's full task suite (diarization, AST, YAMNet, quality features, ASR, speaker embeddings) on an audio file with and without speech enhancement, with content-addressable caching plus full provenance and a hierarchical Label Studio export bundle.
 
+**The CLI is two arguments.** Everything else is one versioned config with its derivation written beside each value: `src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`.
+
 ```bash
-# Full default-model pass (cache reused on subsequent runs)
-uv run python scripts/analyze_audio.py --input path/to/audio.wav
+# Full default pass (cache reused on subsequent runs)
+uv run python scripts/analyze_audio.py path/to/audio.wav
 
-# Single ASR model + skip alignment
-uv run python scripts/analyze_audio.py --input audio.wav \
-    --asr-models openai/whisper-large-v3-turbo --no-align-asr
+# Somewhere else
+uv run python scripts/analyze_audio.py audio.wav --out artifacts/experiment_3
 
-# Force MMS auto-align over Qwen3-ASR's bundled aligner
-uv run python scripts/analyze_audio.py --input audio.wav \
-    --asr-models Qwen/Qwen3-ASR-1.7B --qwen-asr-no-timestamps
+# Change a value: a YAML with only the keys you are changing, deep-merged over the packaged one.
+# The merged mapping's hash is stamped into every artifact, so the run can be named.
+cat > one_asr.yaml <<'EOF'
+models:
+  asr: [openai/whisper-large-v3-turbo]
+stages:
+  align_asr: false
+EOF
+uv run python scripts/analyze_audio.py audio.wav --config one_asr.yaml
 ```
+
+There are deliberately **no per-knob flags**. Seventy existed; the recipes in this file differed only
+in flags whose right value a reader had no basis to choose, and the shipped defaults of the four grid
+flags put the four uncertainty axes on four spacings sharing zero bucket keys — which disabled every
+cross-axis coupling in the pipeline while reporting that it had run. Adding a flag back is adding an
+unmeasured decision with a public interface; add a config key with its derivation instead. The
+config's `{name, version, config_hash, sources}` travels into `final/summary.json`, the comparator
+params on every fused row, and `disagreements.json`.
 
 New senselab APIs landed alongside the script:
 
@@ -191,13 +206,17 @@ regions per axis, executes a policy-ranked catalog (stream election, hallucinati
 cache-replay/live ASR escalation, embedding change-point + re-cluster identity repair, gated
 segmentation-3.0 overlap detection), and fuses a consensus transcript / refined diarization /
 presence track with a byte-reproducible decision log (`final/iterations.json`,
-`final/convergence.json`, `final/timeline.png`). Policy (thresholds/budgets/model pools):
-`src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml` (override with
-`--policy`). analyze_audio gained `--enhancement {auto,always,never}` + `--triage-*` (round-0
-frame-posterior speech gate + SNR enhancement gate; `always` preserves legacy behavior) and
-`--calibration-profile` (US5 scene-quality calibration: versioned dB→[0,1] anchors + per-axis
-aggregator temperatures; fit via `scripts/calibrate_scene_quality.py`, bridge in
-`workflows/audio_analysis/calibration.py`). The
+`final/convergence.json`, `final/timeline.png`). Policy (thresholds/budgets/model pools) is the
+`adaptive:` **section of the run config** — `data/run_config/default.yaml`, override the whole file
+with `--config`; a file with `thresholds:` / `fusion:` / `rules:` at the top level is *refused*
+rather than merged where nothing reads it. It keeps its own `policy_hash` beside the config's
+`config_hash`, because a policy change and a model change are not the same event. `enhancement.mode`
+(`auto` | `always` | `never`) plus the `triage:` block carry the round-0 frame-posterior speech gate
+and SNR enhancement gate (`always`, the default, runs both passes unconditionally — which is what
+makes raw and enhanced a perturbation *sample*); `profiles.calibration` carries the US5 scene-quality
+calibration (versioned dB→[0,1] anchors, fit via `scripts/calibrate_scene_quality.py`, bridge in
+`workflows/audio_analysis/calibration.py`; its `temperature` block currently reaches no fold — see
+the note there). The
 comparator is split into `harvest_pass` (model-touching, `compute.py`) + `aggregate_pass` (pure,
 `votes.py`); `compute_uncertainty_axes` is a compatible wrapper (`mutate_passes=False` for the
 side-effect-free API). Design/spec/results: `specs/20260723-225523-dynamic-uncertainty-workflow/`
@@ -207,7 +226,11 @@ side-effect-free API). Design/spec/results: `specs/20260723-225523-dynamic-uncer
 
 The reusable comparator lives at `senselab.audio.workflows.audio_analysis`. The CLI script `scripts/analyze_audio.py` is a thin wrapper: per-task pipeline → one call to `compute_uncertainty_axes(...)` → parquet writers + LS bundle + disagreements index + timeline plot.
 
-The workflow emits three per-bucket uncertainty time series — `speech_presence` (was there a speaker?), `speaker` (was it the same speaker?), and `asr` (what was said?) — each in `[0, 1]`. Every model whose output naturally encodes an axis votes (max-inclusive); the per-axis aggregator (Shannon entropy for speech_presence, cross-model label disagreement + cosine for speaker, pairwise mean WER + Whisper avg_logprob + PPG-vs-ASR PER for asr) collapses sub-signals via `--uncertainty-aggregator`.
+The workflow emits four per-bucket uncertainty time series — `speech_presence` (was there a speaker?), `speaker` (was it the same speaker?), `asr` (what was said?) and `background_mask` (is this region free of target activity?) — each in `[0, 1]`. Every model whose output naturally encodes an axis votes; `fuse.fuse_axis` is the **one** fold, weighting each signal by its measured perturbation stability and physical support and collapsing via `uncertainty.aggregator`.
+
+**Every axis is on one grid** (`axes.DEFAULT_TIME_GRID`, 0.1 s window == 0.1 s hop), so row *i* of one axis is row *i* of another and a cross-axis join needs no reconciliation. Measured before it was: 242 / 242 / 19 / 8 rows on 0.1/0.02, 0.1/0.02, 0.25/0.25 and 1.0/0.5, sharing **zero** bucket keys — so coupling did nothing and every round came out byte-identical. Window equals hop deliberately: a 0.1 s window at a 0.02 s hop reports five near-duplicate rows per window, and nothing in the output said so.
+
+The `asr` axis has **one** voter, `consensus_words`: the recognizers' words are fused once per pass (`asr._consensus_word_doubt`, graded phonemically by `asr.phoneme_similarity`) and each bucket takes the coverage-weighted mean of `1 - existence_confidence` over the words reaching it. There is no per-bucket text — that was a reconstruction of what `final/transcript.json` holds at word resolution, and it is what forced this axis onto a 1.0 s grid, since a fully-contained text read returns nothing from a bucket narrower than a word. Localisation lives on the word (`onset_confidence` / `offset_confidence`), not in the axis number.
 
 **L1 measures, L2 decides.** L1 reports what a tool produced, in that tool's units, at its own
 resolution: no thresholds, no rescaling to `[0, 1]` against an anchor, no reduction across a
@@ -239,12 +262,12 @@ Output:
 - `<run_dir>/L1/<pass>/signals/<signal>.parquet` — one row per (signal, bucket), the measurement in the tool's own units; units / window / hop / model / revision in `schema.metadata`.
 - `<run_dir>/L1/stability/<signal>.parquet` + `signals.json` — cross-pass `|Δ|` per bucket and the run-level mean that sets each signal's fusion weight.
 - `<run_dir>/L1/passes.json` — the small index later stages read (duration, audio signature, input path).
-- `<run_dir>/L2/round<N>/uncertainty/<axis>.parquet` — the three fused axes: `uncertainty`, `epistemic_uncertainty`, `confidence`, `variability`, `triage_score`, `contributing_signals`, `contributing_passes`, `signal_weights`, `weight_basis`, `round`.
+- `<run_dir>/L2/round<N>/uncertainty/<axis>.parquet` — the four fused axes, all on one grid: `uncertainty`, `epistemic_uncertainty`, `confidence`, `variability`, `triage_score`, `contributing_signals`, `contributing_passes`, `signal_weights`, `weight_basis`, `round`.
 - `<run_dir>/L2/round0/votes/<axis>.parquet` — the linked evidence at the vote level, keyed `(axis, bucket, source, pass, scope)`; what the adaptive store ingests.
 - `<run_dir>/final/disagreements.json` — top-N ranked over the fused axes by `triage_score`, axis-priority tiebreak (asr > speaker > speech_presence). No `pass` field: an axis has no pass.
 - `<run_dir>/final/uncertainty_detail.png` — one line per axis with `epistemic_uncertainty` shaded beneath, plus a per-signal stability strip and per-source detail rows. An axis view is a conclusion, so it lives under `final/`, never under `L1/`; the evidence figure with no conclusions on it is `L1/signals.png`.
 - `<run_dir>/final/timeline.png` — the adaptive loop's view: fused words, interventions and run state.
-- LS Labels tracks `uncertainty__{speech_presence,speaker,asr}` (attached once) plus per-pass evidence tracks `<pass>__signal__<signal>`; asr has a sibling TextArea carrying transcript consensus + dissenting models.
+- LS Labels tracks `uncertainty__<axis>` (attached once) plus per-pass evidence tracks `<pass>__signal__<signal>`. **No transcript TextArea**: the words are published at word resolution in `final/transcript.json` and rendered as `final__consensus_transcript__text` by `adaptive.ls_final`, so the bundle carries one rendering of the transcript rather than two at two resolutions.
 
 ```bash
 # Default — runs the full pipeline including the workflow
@@ -255,7 +278,7 @@ uv run python -c "
 from senselab.audio.workflows.audio_analysis import BucketGrid, compute_uncertainty_axes
 signals, fused_axes, incomparable, embeddings = compute_uncertainty_axes(
     passes=passes_summary,    # the dict produced by analyze_audio's per-task run_pass
-    grid=BucketGrid(),         # 0.5 s non-overlapping by default
+    grid=BucketGrid(),         # = axes.DEFAULT_TIME_GRID; every axis is on it, no per-axis override
     params={...},
     audio={'raw_16k': audio},
     speaker_embedding_models=['speechbrain/spkrec-ecapa-voxceleb'],
@@ -264,11 +287,15 @@ signals, fused_axes, incomparable, embeddings = compute_uncertainty_axes(
 )
 "
 
-# Skip the workflow entirely
-uv run python scripts/analyze_audio.py audio.wav --skip comparisons
-
-# Switch the aggregator from "max-doubtful" (default min) to "average-doubt"
-uv run python scripts/analyze_audio.py audio.wav --uncertainty-aggregator mean
+# Skip the workflow entirely, or switch the aggregator from "max-doubtful" (default min) to
+# "average-doubt": both are run-config keys, not flags.
+cat > variant.yaml <<'EOF'
+stages:
+  comparisons: false
+uncertainty:
+  aggregator: mean
+EOF
+uv run python scripts/analyze_audio.py audio.wav --config variant.yaml
 ```
 
 See `specs/20260508-173136-compare-uncertainty/` for the full design (spec.md, plan.md, contracts/cli.md, contracts/uncertainty-row.parquet.md, contracts/disagreements.json.md, contracts/ls-bundle.md, quickstart.md).
@@ -286,7 +313,8 @@ absolute floor; what it cannot fix is a source buried under leaked foreground.
 uv run python scripts/probe_classifier_levels.py --input clip.wav --out artifacts/level_probe/
 
 # Full run with the mask and background characterization
-uv run python scripts/analyze_audio.py clip.wav --task-type speech --foreground-suppression
+# task.type: speech in the run config selects what counts as the participant's own activity
+uv run python scripts/analyze_audio.py clip.wav
 ```
 
 Key pieces, and the reasoning that shaped each:
@@ -303,7 +331,7 @@ Key pieces, and the reasoning that shaped each:
   amplified noise floor produces confident water-like labels indistinguishable from genuine
   broadband noise.
 - **`background_mask.py`** — regions free of **target** activity (not free of speech).
-  What counts as target comes from `--task-type`: in a breathing task, speech detection is
+  What counts as target comes from `task.type`: in a breathing task, speech detection is
   silent during the target event, and since AudioSet maps `Breathing` to `people`, a mask
   built from voice activity alone reports the collected signal as a background source.
 - **`foreground.py`** — suppression depth is the binding constraint, measured by

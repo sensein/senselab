@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,16 +34,8 @@ from typing import Any
 from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights, model_family
 from senselab.audio.workflows.audio_analysis.adaptive.regions import region_buckets
-from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
 from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, OVERLAP_INFORMED_AXES
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-from senselab.audio.workflows.audio_analysis.harvesters import (
-    _levenshtein,
-    asr_alignment_score_in_window,
-    asr_text_in_window,
-    resolve_asr_result,
-    whisper_bucket_avg_logprob,
-)
 from senselab.audio.workflows.audio_analysis.layout import perturbation_dir
 from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 from senselab.audio.workflows.audio_analysis.speech_presence_link import directed_presence_vote
@@ -136,13 +127,6 @@ def _pick_ok(entries: list[dict[str, Any]]) -> dict[str, Any] | None:
         if e.get("status") == "ok" and e.get("result") is not None:
             return e
     return None
-
-
-def _has_g2p() -> bool:
-    try:
-        return importlib.util.find_spec("g2p_en") is not None
-    except (ImportError, ValueError):
-        return False
 
 
 def _spec_missing(module: str) -> bool:
@@ -257,11 +241,11 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     elected = max(scores, key=lambda s: (scores[s]["total"], s == IDENTITY_NAME))
     guard_fired = False
     if elected != IDENTITY_NAME:
-        # Transform-artifact guard (degraded): reject a transformed stream when it claims speech
-        # text where the recording itself has none *and* the recording's speech_presence is
-        # confidently silent — enhancement can synthesize speech-like energy.
-        raw_text = _region_text(ctx, IDENTITY_NAME, region)
-        enh_text = _region_text(ctx, elected, region)
+        # Transform-artifact guard (degraded): reject a transformed stream when it claims words
+        # where the recording itself has none *and* the recording's speech_presence is confidently
+        # silent — enhancement can synthesize speech-like energy.
+        raw_text = _claims_words(ctx, IDENTITY_NAME, region)
+        enh_text = _claims_words(ctx, elected, region)
         raw_pres = _mean([scores[IDENTITY_NAME]["speech_presence_conf"]]) if IDENTITY_NAME in scores else None
         if enh_text and not raw_text and (raw_pres is not None and raw_pres < 0.2):
             guard_fired = True
@@ -279,16 +263,23 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     return {"election": election, "touched": {}}
 
 
-def _region_text(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> str:
-    texts = []
+def _claims_words(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> bool:
+    """Did any recognizer place a word inside this region, on this stream?
+
+    Asked of the *votes*, not of a transcript: the asr axis emits ``consensus_words`` only where a
+    word actually reaches a bucket, so the vote's presence is the claim. This used to concatenate
+    each model's per-bucket ``text`` and test the string for emptiness — the same question, answered
+    through a reconstruction of the transcript that existed for no other reader, and that forced the
+    axis onto a 1.0 s grid so a whole word could fit inside a bucket.
+    """
     lo, hi = float(region["core_start"]), float(region["core_end"])
     for bk in ctx["store"].vote_buckets(stream, "asr"):
         if bk[1] <= lo or bk[0] >= hi:
             continue
         for source, payload in ctx["store"].active_votes(stream, "asr", bk).items():
-            if not source.startswith("__") and payload.get("text"):
-                texts.append(str(payload["text"]))
-    return " ".join(texts).strip()
+            if not source.startswith("__") and payload.get("value") is not None:
+                return True
+    return False
 
 
 # ── P3 / C9: adjudication over existing evidence (C10 / C9) ─────────────
@@ -547,16 +538,7 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         used_reserves.append({"model": model, "cache_file": entry.get("_cache_file")})
 
     pass_summary_ext = {"duration_s": ctx["duration_s"], "asr": {"by_model": asr_by_model}}
-    grid = BucketGrid(win_length=ctx["asr_grid"][0], hop_length=ctx["asr_grid"][1])
-
-    pair_kind = "phoneme"
-    if _has_g2p():
-        from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
-
-        harvested = harvest_asr_votes(pass_summary=pass_summary_ext, grid=grid, alignment_by_model=align_by_model)
-    else:
-        pair_kind = "word"
-        harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
+    harvested = _reharvest_asr(pass_summary_ext, ctx, align_by_model)
 
     rows = ctx["state"].axis_rows("asr")
     covered = region_buckets(region, rows)
@@ -567,8 +549,6 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         if bk not in covered:
             continue  # merge-back midpoint rule (D2)
         for source, payload in entry["votes"].items():
-            if isinstance(payload, dict) and source == "__pairwise_phoneme_distances__":
-                payload = {**payload, "pair_distance_kind": pair_kind}
             ctx["store"].add_vote(
                 Vote(
                     axis="asr",
@@ -586,64 +566,33 @@ def _u2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     fam = family_weights(sorted([m for m in asr_by_model]), ctx["policy"])
     return {
         "reserves_used": used_reserves,
-        "pair_distance_kind": pair_kind,
         "votes_added": n_votes,
         "family_weights": fam,
         "touched": touched,
     }
 
 
-def _harvest_word_level(
-    pass_summary: dict[str, Any],
-    grid: BucketGrid,
-    alignment_by_model: dict[str, Any],
-    duration_s: float,
+def _reharvest_asr(
+    pass_summary_ext: dict[str, Any],
+    ctx: dict[str, Any],
+    align_by_model: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """g2p-free fallback: pairwise WORD-Levenshtein rate (the original FR-002 WER form).
+    """Re-harvest the asr axis over an escalated model set, on the run's own grid.
 
-    Same vote schema as ``harvest_asr_votes`` so ``aggregate_asr``
-    consumes it unchanged; ``pair_distance_kind: "word"`` is recorded on the
-    pair block by the caller.
+    One path, and no g2p gate. The gate used to route to ``_harvest_word_level``, a second
+    harvester emitting pairwise *word*-Levenshtein distances in the same vote schema — so an
+    environment without ``g2p_en`` produced an axis measuring a different quantity under the same
+    column name, recorded only as ``pair_distance_kind``. The axis now has one voter, the consensus
+    word fold, and its word-similarity grading degrades to exact match on its own when g2p is
+    absent (``asr.phoneme_similarity``) rather than by switching harvesters.
+
+    The grid comes from the axis rows the loop is already holding, so an escalation cannot land its
+    votes on buckets the belief store has no keys for.
     """
-    from itertools import combinations
+    from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
 
-    asr_blocks = (pass_summary.get("asr") or {}).get("by_model") or {}
-    resolved = {
-        m: resolve_asr_result(b, alignment_by_model.get(m))
-        for m, b in asr_blocks.items()
-        if isinstance(b, dict) and b.get("status") == "ok"
-    }
-    out = []
-    for start, end, _idx in grid.iter_buckets(duration_s):
-        votes: dict[str, Any] = {}
-        seqs: dict[str, list[str]] = {}
-        confs: dict[str, float] = {}
-        for m, res in resolved.items():
-            text = asr_text_in_window(res, start, end, fully_contained=True)
-            alp = whisper_bucket_avg_logprob(res, start, end)
-            ctc = asr_alignment_score_in_window(res, start, end)
-            votes[m] = {"text": text, "phoneme_sequence": [], "avg_logprob": alp, "alignment_ctc_score": ctc}
-            tokens = _normalize_transcript_for_wer(text or "").split()
-            if tokens:
-                seqs[m] = tokens
-            if alp is not None:
-                try:
-                    confs[m] = max(0.0, min(1.0, math.exp(float(alp))))
-                except (ValueError, OverflowError):
-                    pass
-        pairs = {}
-        for a, b in combinations(sorted(seqs), 2):
-            denom = max(len(seqs[a]), len(seqs[b]))
-            if denom:
-                pairs[f"{a}|{b}"] = min(1.0, _levenshtein(seqs[a], seqs[b]) / denom)
-        votes["__pairwise_phoneme_distances__"] = {
-            "pairs": pairs,
-            "n_sources": len(seqs),
-            "sources": sorted(seqs),
-            "per_source_confidence": confs,
-        }
-        out.append({"start": start, "end": end, "votes": votes})
-    return out
+    grid = BucketGrid(win_length=ctx["grid"][0], hop_length=ctx["grid"][1])
+    return harvest_asr_votes(pass_summary=pass_summary_ext, grid=grid, alignment_by_model=align_by_model)
 
 
 # ── U1: live region re-ASR ───────────────────────────────────────────────
@@ -735,15 +684,7 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     align_by_model = load_alignments_matched(ctx["run_dir"], stream, asr_by_model)
     asr_by_model.update(ext_blocks)
     pass_summary_ext = {"duration_s": ctx["duration_s"], "asr": {"by_model": asr_by_model}}
-    grid = BucketGrid(win_length=ctx["asr_grid"][0], hop_length=ctx["asr_grid"][1])
-    pair_kind = "phoneme"
-    if _has_g2p():
-        from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
-
-        harvested = harvest_asr_votes(pass_summary=pass_summary_ext, grid=grid, alignment_by_model=align_by_model)
-    else:
-        pair_kind = "word"
-        harvested = _harvest_word_level(pass_summary_ext, grid, align_by_model, ctx["duration_s"])
+    harvested = _reharvest_asr(pass_summary_ext, ctx, align_by_model)
     rows = ctx["state"].axis_rows("asr")
     covered = region_buckets(region, rows)
     touched: dict[str, set[tuple[float, float]]] = {}
@@ -753,8 +694,6 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         if bk not in covered:
             continue
         for source, payload in entry["votes"].items():
-            if isinstance(payload, dict) and source == "__pairwise_phoneme_distances__":
-                payload = {**payload, "pair_distance_kind": pair_kind}
             ctx["store"].add_vote(
                 Vote(
                     axis="asr",
@@ -773,7 +712,6 @@ def _u1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         "models": ran,
         "stream": stream,
         "stream_fallback": stream_fallback,
-        "pair_distance_kind": pair_kind,
         "votes_added": n_votes,
         "touched": touched,
     }
