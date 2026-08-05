@@ -65,12 +65,24 @@ def _temporal_agreement(members: Sequence[Mapping[str, Any]]) -> tuple[float | N
     single timing source: one opinion cannot corroborate itself, and reporting 1.0 there is the
     manufactured certainty this split exists to remove.
 
-    **Grouped by ``timestamp_source``, not by model.** Two transcripts timed by one aligner agree
-    about onset by construction — Canary-Qwen is timed by Qwen's aligner, and on a real run their
-    presence votes came out byte-identical. Counting them as two agreeing opinions would turn a
-    shared dependency into evidence. A member with no recorded ``timestamp_source`` is treated as
-    its own source, which is the conservative reading: unknown provenance is not shared provenance,
-    and assuming otherwise would silently erase real corroboration.
+    **Grouped by the timing model's identity, not by the model that produced the text and not by
+    the *kind* of timing source.** Two transcripts timed by one aligner agree about onset by
+    construction, and counting them as two agreeing opinions would turn a shared dependency into
+    evidence.
+
+    Keying on ``timestamp_source`` alone does not work, and the case it misses is the one that
+    motivated this. ``TimestampSource`` is ``native | bundled_aligner | external_aligner`` — a
+    *kind*. Qwen3-ASR's word times come from ``Qwen/Qwen3-ForcedAligner-0.6B`` shipped with it
+    (``bundled_aligner``); Canary-Qwen carries no timings, so the workflow aligns it with **the
+    same model** (``external_aligner``). Two labels, one aligner. Measured on
+    ``english_conversation_higgs_audio_v2_20260805-034348``: their onsets are bit-identical across
+    all 62 words (max onset difference 0.0000 s), while both differ from CrisperWhisper by the same
+    0.032 s mean. So the key is ``timestamp_model`` when a member declares one, and the
+    ``timestamp_source`` kind only as a fallback.
+
+    A member declaring neither is treated as its own source, which is the conservative reading:
+    unknown provenance is not shared provenance, and assuming otherwise would silently erase real
+    corroboration.
 
     **Anchored to the word's own duration**, which is the only absolute reference a word carries:
     onsets disagreeing by a whole word-length mean the sources are not describing the same
@@ -78,7 +90,10 @@ def _temporal_agreement(members: Sequence[Mapping[str, Any]]) -> tuple[float | N
     """
     by_source: dict[str, list[Mapping[str, Any]]] = {}
     for index, m in enumerate(members):
-        key = str(m.get("timestamp_source") or f"__member_{index}__")
+        # Identity first, kind second. A shared aligner reaches two members under two different
+        # kinds (bundled vs external), so the kind cannot detect the sharing it exists to expose.
+        timing_model = m.get("timestamp_model")
+        key = str(timing_model or m.get("timestamp_source") or f"__member_{index}__")
         by_source.setdefault(key, []).append(m)
     if len(by_source) < 2:
         return None, len(by_source)

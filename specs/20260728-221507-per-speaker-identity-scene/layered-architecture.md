@@ -3981,3 +3981,36 @@ component removed, and the coupling would have had to be refused or taken on tru
 
 Directionality per round follows the existing rule (D-22 rule 5): the asr axis reads the mask from a
 **strictly earlier round**, so the edge cannot close a cycle inside one round's fold.
+
+### D-1 is why the timing sources collapse, and the kind label cannot see it
+
+D-1 moved Canary off MMS so that "word-boundary differences between two models reflect the models,
+not two different aligners". For the *text* comparison that reasoning stands. For the *temporal*
+comparison D-27 introduces, it has a consequence D-1 did not set out to cause.
+
+Qwen3-ASR is not one of "the two text-only paths" in practice: `qwen_native_timestamps` is on, so
+its word times come from `Qwen/Qwen3-ForcedAligner-0.6B` bundled with it, and `stage_alignment`
+skips it (`_asr_has_timestamps`). Canary is the only model aligned — **with the same model**. Same
+aligner, same audio, and transcripts that are word-identical, so the timings are identical too.
+Measured on `english_conversation_higgs_audio_v2_20260805-034348`: onsets bit-identical across all
+62 words, max \|Δ\| = 0.0000 s, while both differ from CrisperWhisper by the same 0.032 s mean.
+
+**Three recognizers therefore supply two timing opinions, not three**, and nothing in the output
+said so until `timing_sources` was added.
+
+The trap is that `TimestampSource` cannot express this. It is
+`native | bundled_aligner | external_aligner` — a **kind**. Qwen3-ASR is `bundled_aligner` and
+Canary is `external_aligner`: two labels, one aligner. Its own docstring warns that "a new backend
+inventing its own label would silently read as independent", and the closed vocabulary has the same
+hole from the other side. So `_temporal_agreement` groups on `timestamp_model` — the aligner's
+identity — and falls back to the kind only when no identity is declared.
+
+Two consequences worth stating rather than rediscovering:
+
+- **A member declaring neither is its own source.** Unknown provenance is not shared provenance;
+  assuming otherwise erases real corroboration.
+- **Fitting the temporal anchor needs independent aligners**, and the default configuration does not
+  provide them. `--aligner mms` restores a second independent timing source at exactly the cost D-1
+  named. Whether the anchor is fitted under the default config or a deliberately diversified one is
+  a choice the fit has to declare, because under the default two of three sources agree by
+  construction and any anchor fitted there is fitted to a near-degenerate sample.
