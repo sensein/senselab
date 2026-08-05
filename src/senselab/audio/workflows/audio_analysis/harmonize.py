@@ -393,6 +393,17 @@ class TranscriptSlot:
     words: dict[str, Optional[str]]
     consensus: Optional[str]
     disagreement: float
+    indices: dict[str, Optional[int]] = field(default_factory=dict)
+    """``{model → index into that model's word list}``, ``None`` where it filled no word.
+
+    The identity of the word, not a description of it. A consumer rebuilding richer word objects
+    from this lattice cannot re-derive it from ``times``: forced aligners emit words that share an
+    onset and words of zero duration (measured: a recognizer placed "Josh" at ``[2.72, 2.72]`` and
+    another placed two words at ``2.72``), so an onset does not identify a word. Matching by onset
+    put one word in two columns and dropped another, which is how "wanted to take" became "wanted
+    take take".
+    """
+
     times: dict[str, Optional[tuple[float, float]]] = field(default_factory=dict)
     """``{model → (start_s, end_s)}`` as that model placed *its* word, ``None`` where it had none.
 
@@ -538,6 +549,7 @@ def harmonize_transcripts(
                 # whatever the enclosing loop left behind, so every model reported the last member's
                 # span. It produced a lattice where one word appeared in two columns and another
                 # vanished — a wrong answer that still looked like a lattice.
+                indices={m: members.get(m) for m in models},
                 times={m: (words[m][members[m]][0], words[m][members[m]][1]) if m in members else None for m in models},
             )
         )

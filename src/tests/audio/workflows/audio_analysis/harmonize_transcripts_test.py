@@ -137,3 +137,21 @@ def test_a_model_absent_from_a_slot_reports_no_span() -> None:
     ).slots
     filler = next(s for s in slots if s.words.get("a") == "um")
     assert filler.times["a"] == (0.5, 0.9) and filler.times["b"] is None
+
+
+def test_a_slot_identifies_each_model_word_by_index_not_by_onset() -> None:
+    """Onsets do not identify words, so the lattice carries the index.
+
+    Measured on the 5-speaker clip: a recognizer placed "Josh" at ``[2.72, 2.72]`` — zero duration —
+    and another placed two words starting at 2.72. A consumer rebuilding richer word objects by
+    ``(model, onset)`` therefore fetched the wrong word, put one word in two columns and dropped
+    another, turning "wanted to take" into "wanted take take". The index makes the rebuild exact.
+    """
+    a = [(0.0, 0.4, "hi"), (0.4, 0.4, "there"), (0.4, 0.9, "friend")]
+    slots = harmonize_transcripts({"a": a, "b": list(a)}).slots
+
+    assert [s.indices["a"] for s in slots] == [0, 1, 2]
+    assert [s.words["a"] for s in slots] == ["hi", "there", "friend"]
+    # Two words share onset 0.4; only the index tells them apart.
+    shared = [s for s in slots if s.times["a"] is not None and s.times["a"][0] == 0.4]
+    assert {s.indices["a"] for s in shared} == {1, 2}
