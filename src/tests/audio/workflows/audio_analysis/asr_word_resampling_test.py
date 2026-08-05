@@ -142,3 +142,36 @@ def test_an_unscored_pairwise_block_still_reaches_the_artifact() -> None:
     unscored = {"__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}, "scored": False}}
     assert _pairwise_per_signal(scored) == {"a": pytest.approx(0.4), "b": pytest.approx(0.4)}
     assert _pairwise_per_signal(unscored) == {}
+
+
+def test_the_fold_reads_the_shape_the_pipeline_actually_hands_it() -> None:
+    """``resolve_asr_result`` returns ``ScriptLine`` objects, not dicts.
+
+    Caught by a real run, not by a unit test: every test above builds dicts, and
+    ``iter_word_leaves`` walks dicts only — so the fold silently produced no words, the
+    ``consensus_words`` entry was never emitted, and the asr axis came out with **zero**
+    contributing signals where it previously had three. An axis that vanishes is worse than one
+    that is wrong, and nothing in the type system objected.
+    """
+    from senselab.audio.workflows.audio_analysis.asr import _consensus_word_doubt
+    from senselab.utils.data_structures import ScriptLine
+
+    line = ScriptLine(
+        text="hello there",
+        chunks=[
+            ScriptLine(text="hello", start=0.0, end=0.4, timestamp_source="native", timestamp_model="m-a"),
+            ScriptLine(text="there", start=0.4, end=0.9, timestamp_source="native", timestamp_model="m-a"),
+        ],
+    )
+    other = ScriptLine(
+        text="hello there",
+        chunks=[
+            ScriptLine(text="hello", start=0.02, end=0.42, timestamp_source="native", timestamp_model="m-b"),
+            ScriptLine(text="there", start=0.41, end=0.92, timestamp_source="native", timestamp_model="m-b"),
+        ],
+    )
+    doubt, provenance = _consensus_word_doubt({"m-a": [line], "m-b": [other]}, BUCKETS)
+
+    assert provenance.get("n_words"), f"no words were folded out of the real shape: {provenance}"
+    assert doubt[(0.0, 1.0)] is not None, "the first bucket holds both words and must carry a value"
+    assert provenance["timing_sources"] == 2, provenance
