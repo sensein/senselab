@@ -29,6 +29,20 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 
 
+def _as_plain(node: Any) -> Any:  # noqa: ANN401 — ScriptLine tree or its JSON form
+    """Normalise a ScriptLine tree to the dict/list form the word walker understands.
+
+    ``resolve_asr_result`` hands back ``ScriptLine`` *objects* from a live backend and dicts from
+    the cache, and ``iter_word_leaves`` walks dicts only. Without this the fold silently found no
+    words and the asr axis came out with zero contributing signals on a real run — the failure
+    every unit test here missed, because they all construct dicts.
+    """
+    if isinstance(node, list):
+        return [_as_plain(item) for item in node]
+    dump = getattr(node, "model_dump", None)
+    return dump() if callable(dump) else node
+
+
 def _consensus_word_doubt(
     asr_resolved: Mapping[str, Any],
     buckets: Sequence[tuple[float, float]],
@@ -47,23 +61,25 @@ def _consensus_word_doubt(
     slot_overlap, slot_mid_tol_s = 0.3, 0.15
     streams: dict[str, list[dict[str, Any]]] = {}
     for model_id, resolved in asr_resolved.items():
-        words = iter_word_leaves(resolved)
+        words = iter_word_leaves(_as_plain(resolved))
         if words:
             streams[str(model_id)] = words
     if not streams:
         return ({b: None for b in buckets}, {})
 
     fused = fuse_word_streams(streams, slot_overlap=slot_overlap, slot_mid_tol_s=slot_mid_tol_s)
-    timing_sources = sorted({str(w.get("timing_sources")) for w in fused})
+    counts = sorted({int(w["timing_sources"]) for w in fused if w.get("timing_sources") is not None})
     provenance = {
         "operator": "consensus_words/resample",
         "sources": sorted(streams),
         "n_words": len(fused),
         "slot_overlap": slot_overlap,
         "slot_mid_tol_s": slot_mid_tol_s,
-        # How many *independent* timing opinions the words had. Two recognizers sharing an aligner
-        # are one, so this can be lower than the number of sources and the row should say so.
-        "timing_sources": timing_sources[0] if len(timing_sources) == 1 else timing_sources,
+        # How many *independent* timing opinions the words had — an int when every word had the
+        # same number, the sorted set otherwise. Two recognizers sharing an aligner count as one,
+        # so this is routinely lower than ``len(sources)`` and the row has to say so rather than
+        # leaving a reader to infer independence from the model count.
+        "timing_sources": (counts[0] if len(counts) == 1 else counts) if counts else None,
     }
     return resample_word_doubt(fused, buckets), provenance
 
