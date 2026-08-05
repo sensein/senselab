@@ -15,7 +15,7 @@ sub-signals and folds them via ``--uncertainty-aggregator``.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
@@ -27,6 +27,66 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
     resolve_asr_result,
     whisper_bucket_avg_logprob,
 )
+
+
+def resample_word_doubt(
+    words: Sequence[Mapping[str, Any]],
+    buckets: Sequence[tuple[float, float]],
+) -> dict[tuple[float, float], float | None]:
+    """Project the two-part word confidence onto a time grid — the asr axis (D-27).
+
+    Each word contributes doubt **mass** ``1 - existence_confidence``, over a **span** set by how
+    well it is localised. Those are separate on purpose: a word every model agrees on but times
+    differently and a word the models disagree about are different findings calling for different
+    interventions, and the previous scheme — pairwise WER over fully-contained bucket text —
+    collapsed both into "the texts differ here". On the run that motivated this, two recognizers
+    with word-identical transcripts disagreed in 11 of 41 buckets purely because a word straddled
+    a grid line.
+
+    **Reach follows temporal uncertainty.** A word localised to within its own length deposits its
+    doubt where it is; one the sources place a word-length apart reaches a word-length further on
+    each side. Reach never changes the mass — spreading doubt must not create it.
+
+    **Unmeasured localisation does not smear.** ``temporal_confidence`` is ``None`` when only one
+    timing source spoke, which is *unmeasured*, not zero. Treating it as zero would spread a
+    single-witness word across the recording on the strength of a measurement nobody made.
+
+    Args:
+        words: Fused words carrying ``start``, ``end``, ``existence_confidence`` and
+            ``temporal_confidence`` (``None`` when unmeasured).
+        buckets: ``(start, end)`` pairs on the axis grid.
+
+    Returns:
+        ``{bucket → doubt}``, the coverage-weighted mean of the doubt reaching it. ``None`` where no
+        word reaches at all: a bucket nothing was said in is unmeasured, and reporting ``0.0``
+        there would assert that we are certain nothing was said — a claim of a different kind.
+    """
+    contributions: dict[tuple[float, float], list[tuple[float, float]]] = {b: [] for b in buckets}
+    for word in words:
+        try:
+            start, end = float(word["start"]), float(word["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        duration = max(1e-6, end - start)
+        existence = word.get("existence_confidence")
+        doubt = 1.0 - float(existence) if isinstance(existence, (int, float)) else 1.0
+        temporal = word.get("temporal_confidence")
+        # Unmeasured -> no smear (the word's own span); measured -> reach grows with the doubt.
+        slack = 0.0 if not isinstance(temporal, (int, float)) else duration * (1.0 - float(temporal))
+        lo, hi = start - slack, end + slack
+        for bucket in buckets:
+            overlap = min(hi, bucket[1]) - max(lo, bucket[0])
+            if overlap > 0:
+                contributions[bucket].append((overlap, max(0.0, min(1.0, doubt))))
+
+    out: dict[tuple[float, float], float | None] = {}
+    for bucket, reaching in contributions.items():
+        if not reaching:
+            out[bucket] = None
+            continue
+        total = sum(w for w, _ in reaching)
+        out[bucket] = sum(w * d for w, d in reaching) / total if total > 0 else None
+    return out
 
 
 def harvest_asr_votes(
