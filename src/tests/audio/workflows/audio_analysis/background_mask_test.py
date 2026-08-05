@@ -14,6 +14,7 @@ mask from speech detection alone.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -582,3 +583,63 @@ def test_continuous_conversation_still_has_uncertainty_at_its_boundaries() -> No
     assert any(r.uncertainty > 0.0 for r in mask.regions), (
         f"every region is perfectly certain: {[(r.state, r.uncertainty) for r in mask.regions]}"
     )
+
+
+def test_the_mask_is_cut_on_the_grid_it_is_given(tmp_path: Path) -> None:
+    """``stage_background_mask`` honours ``grid`` rather than its 0.5 s fallback.
+
+    D-24 settles that ``background_mask`` shares ``speech_presence``'s grid, and it is forced
+    twice over: the mask is *derived from* presence — a region is target-free where presence has
+    settled — so on different grids that derivation needs a projection, and every projection is a
+    place to lose localisation.
+
+    Called directly rather than through ``run_pass``: the pass would also run
+    ``stage_background_sources``, which does real DSP and makes a wiring assertion cost minutes.
+    """
+    from types import SimpleNamespace
+
+    # One turn ending at 0.35 s — a boundary only a grid finer than 0.5 s can place.
+    import pandas as pd
+
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.layout import belief_dir
+    from senselab.audio.workflows.audio_analysis.stage_context import StageContext
+    from senselab.audio.workflows.audio_analysis.stages import stage_background_mask
+
+    nested = [[SimpleNamespace(start=0.0, end=0.35)]]
+    summary = {"diarization": {"by_model": {"m": {"status": "ok", "result": nested}}}}
+    ctx = StageContext(perturbation="raw", audio_signature="a" * 64, variant="unmodified", run_dir=tmp_path)
+
+    stage_background_mask(
+        ctx,
+        pass_summary=summary,
+        duration_s=1.0,
+        task_type="speech",
+        grid=BucketGrid(win_length=0.1, hop_length=0.1),
+    )
+
+    rows = pd.read_parquet(belief_dir(tmp_path) / "background_mask.parquet")
+    edges = sorted({round(float(e), 6) for e in rows["end"]})
+    assert len(rows) > 1, f"a 0.1 s grid over a turn ending mid-recording is not one region: {rows}"
+    assert any(e not in (0.5, 1.0) for e in edges), (
+        f"every region boundary landed on the 0.5 s fallback grid, so the given grid was ignored: {edges}"
+    )
+
+
+def test_the_cli_cuts_the_mask_on_the_speech_presence_grid() -> None:
+    """The wiring, not the knob — the same gap the variant test above was written for.
+
+    ``stage_background_mask`` accepted a ``grid`` from the day it was written and no caller ever
+    passed one, so the mask ran at ``BucketGrid()``'s 0.5 s while presence ran at 0.1 s. A unit
+    test that hands the stage a grid by hand cannot see that; this reads the source.
+    """
+    import ast
+    import pathlib
+
+    src = pathlib.Path("scripts/analyze_audio.py").read_text()
+    tree = ast.parse(src)
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_pass_plan")
+    body = ast.get_source_segment(src, fn) or ""
+    assert "mask_grid=" in body, "_pass_plan must give the plan a mask grid"
+    assert "speech_presence_grid_win_length" in body, "the mask grid must be speech_presence's, per D-24"
+    assert "speech_presence_grid_hop_length" in body
