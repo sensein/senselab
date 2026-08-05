@@ -460,6 +460,17 @@ def _speech_activity_by_bucket(
 ) -> list[float | None]:
     """Per-bucket speech-activity confidence from diarization segments.
 
+    Each diarizer contributes the **fraction of the bucket it covers**, and the bucket takes the
+    mean across diarizers. Not a hit test: a segment clipping a bucket by 10 ms and one filling it
+    entirely are not the same evidence, and ``diar_covered_fraction`` was already saying so
+    elsewhere in this package while this function asked "does anything overlap".
+
+    That boolean is what made the mask unable to be uncertain. Every bucket of a continuous
+    conversation scored exactly 1.0, so every bucket classified identically at margin 1.0 —
+    uncertainty 0.0 — and ``build_mask``'s run-length encoding correctly collapsed 1070 identical
+    buckets into a single 21 s region reporting no doubt at all. The encoding was right; the
+    evidence had already thrown away every distinction it could have encoded.
+
     ``None`` where no diarizer contributed, so "nobody looked" stays distinguishable from
     "everybody said no" — collapsing the two is what would let an unexamined bucket be
     reported as clean background.
@@ -474,9 +485,30 @@ def _speech_activity_by_bucket(
         return [None] * len(buckets)
     out: list[float | None] = []
     for b_start, b_end in buckets:
-        votes = [1.0 if any(_overlaps(s, e, b_start, b_end) for s, e in track) else 0.0 for track in tracks]
-        out.append(sum(votes) / len(votes) if votes else None)
+        coverage = [_covered_fraction(track, b_start, b_end) for track in tracks]
+        out.append(sum(coverage) / len(coverage) if coverage else None)
     return out
+
+
+def _covered_fraction(spans: Sequence[tuple[float, float]], win_start: float, win_end: float) -> float:
+    """Fraction of ``[win_start, win_end)`` covered by the union of ``spans``.
+
+    Union rather than sum: two speakers overlapping inside one bucket must not report more than a
+    bucket's worth of coverage. Shares ``harvesters._union_length`` with
+    ``harvesters.diar_covered_fraction`` so the two cannot drift — that function takes a raw model
+    result and this one takes bounds already flattened by the caller.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import _union_length
+
+    span = float(win_end) - float(win_start)
+    if span <= 0:
+        return 0.0
+    clipped = [
+        (lo, hi) for s, e in spans if (hi := min(float(win_end), float(e))) > (lo := max(float(win_start), float(s)))
+    ]
+    if not clipped:
+        return 0.0
+    return max(0.0, min(1.0, _union_length(clipped) / span))
 
 
 def _label_score_by_bucket(
@@ -621,18 +653,30 @@ def combine_target_evidence(
     if not values:
         return {"start": start, "end": end, "target_confidence": 0.0, "uncertainty": 1.0}
     confidence = max(float(v) for v in values)
+    return {
+        "start": start,
+        "end": end,
+        "target_confidence": confidence,
+        "uncertainty": margin_uncertainty(confidence, active_at=active_at, free_at=free_at),
+    }
+
+
+def margin_uncertainty(confidence: float, *, active_at: float, free_at: float) -> float:
+    """How undetermined a verdict at ``confidence`` is: distance from the decision, inverted.
+
+    Extracted so the mask has **one** definition of its own uncertainty. ``apply_span_evidence``
+    used to pin ``uncertainty`` to ``min(u, 0.0)`` for any bucket a word touched, which is a second
+    definition — and an absolute one, asserted from a single overlap. Two rules for one quantity is
+    how a bucket could be certain for a reason unrelated to how far its confidence sat from the
+    threshold.
+    """
     if confidence >= float(active_at):
         margin = (confidence - float(active_at)) / max(1e-9, 1.0 - float(active_at))
     elif confidence <= float(free_at):
         margin = (float(free_at) - confidence) / max(1e-9, float(free_at))
     else:
         margin = 0.0
-    return {
-        "start": start,
-        "end": end,
-        "target_confidence": confidence,
-        "uncertainty": max(0.0, min(1.0, 1.0 - margin)),
-    }
+    return max(0.0, min(1.0, 1.0 - margin))
 
 
 NONTARGET_EXCLUDED_CATEGORIES = ("speech",)
@@ -761,6 +805,8 @@ def apply_span_evidence(
     rows: Sequence[Mapping[str, Any]],
     *,
     target_spans: Sequence[tuple[float, float]],
+    active_at: float = 0.6,
+    free_at: float = 0.2,
 ) -> list[dict[str, Any]]:
     """Fold span-resolution target evidence into per-bucket confidence.
 
@@ -774,8 +820,18 @@ def apply_span_evidence(
     convert a recogniser's miss into a positive claim that nobody spoke, and that region would then
     be offered as usable background — the most damaging direction for this particular error.
 
-    A bucket a span touches also becomes more *certain*: a direct observation resolves doubt, and
-    leaving the uncertainty untouched would understate what is now known.
+    **Graded by what was observed.** The contribution scales with the fraction of the bucket the
+    spans cover, onto ``[active_at, 1.0]`` — so any word makes the bucket at least target-active
+    and a bucket packed with words is fully confident. A word clipping a bucket's edge and a
+    bucket packed with words are different evidence, and the flat version was the second saturator
+    that
+    left the mask unable to be uncertain: it set ``uncertainty`` to ``min(u, 0.0)`` — exactly zero,
+    the confident claim that nothing about this bucket is in doubt — for every bucket a single word
+    touched, which on a conversation is nearly all of them.
+
+    Uncertainty now follows from the raised confidence through :func:`margin_uncertainty`, the same
+    rule :func:`combine_target_evidence` uses, and can only fall: a direct observation resolves
+    doubt, and leaving it untouched would understate what is now known.
 
     Note this improves accuracy, not boundary resolution: regions are still cut on the bucket grid.
     Word-resolution boundaries need ``build_mask`` to accept spans rather than buckets, which
@@ -784,6 +840,8 @@ def apply_span_evidence(
     Args:
         rows: Per-bucket evidence rows with ``start``, ``end``, ``target_confidence``.
         target_spans: Spans where an axis observed the target directly — ASR words, speaker turns.
+        active_at: The mask's target-active threshold, for the shared margin rule.
+        free_at: The mask's target-free threshold, for the shared margin rule.
 
     Returns:
         New rows; inputs are not mutated.
@@ -793,8 +851,20 @@ def apply_span_evidence(
     for row in rows:
         new = dict(row)
         lo, hi = float(new.get("start", 0.0)), float(new.get("end", 0.0))
-        if any(min(hi, b) - max(lo, a) > 0 for a, b in spans):
-            new["target_confidence"] = max(float(new.get("target_confidence") or 0.0), 1.0)
-            new["uncertainty"] = min(float(new.get("uncertainty") or 0.0), 0.0)
+        covered = _covered_fraction(spans, lo, hi)
+        if covered > 0.0:
+            # Coverage is not confidence. A word filling 5% of a bucket is direct evidence the
+            # target was active *in this bucket* — the unit the mask decides on — so it cannot
+            # score 0.05 and read as nearly target-free. It maps onto ``[active_at, 1.0]``: any
+            # observed word puts the bucket at the active threshold, and how far above depends on
+            # how much of it was observed. The doubt about the unobserved remainder then arrives
+            # through the margin rule rather than being discarded.
+            observed = float(active_at) + (1.0 - float(active_at)) * covered
+            confidence = max(float(new.get("target_confidence") or 0.0), observed)
+            new["target_confidence"] = confidence
+            new["uncertainty"] = min(
+                float(new.get("uncertainty") or 0.0),
+                margin_uncertainty(confidence, active_at=active_at, free_at=free_at),
+            )
         out.append(new)
     return out

@@ -497,3 +497,88 @@ def test_task_specific_events_are_still_task_specific() -> None:
     breath, _ = target_event_types_for("breath", PROFILE)
     assert "cough" in cough and "cough" not in breath
     assert "breath" in breath and "breath" not in cough
+
+
+# ── graded evidence: the mask must be able to be uncertain (D-24) ──────────────
+#
+# The defect these pin, measured on ``english_conversation_higgs_audio_v2_20260804-145231``:
+# ``L2/background_mask.parquet`` held **one** region spanning 0-21 s, ``target_active``, at
+# ``uncertainty`` 0.0, while the ``background_mask`` axis over the same recording had 1070 buckets
+# averaging 0.0949. ``build_mask`` is not the problem — it classifies per bucket and run-length
+# encodes — the evidence reaching it was boolean, so every bucket scored an identical, maximal
+# confidence and the encoding correctly collapsed them into one.
+#
+# Two independent saturators produced that. Both are the same error in different clothes: a
+# yes/no answer to a question whose measurement is graded.
+
+
+def test_partially_covered_bucket_is_partially_active() -> None:
+    """Coverage is a proportion, not a hit test.
+
+    ``_speech_activity_by_bucket`` asked "does any segment overlap this bucket" per diarizer, so a
+    bucket a segment clips by 10 ms and one it fills entirely both scored 1.0. ``diar_covered_
+    fraction`` already exists for exactly this reason and says so: "A segment overlapping 5% of a
+    bucket and one covering all of it are not the same evidence, and a bool cannot tell them
+    apart — which matters most at segment boundaries."
+    """
+    from types import SimpleNamespace
+
+    from senselab.audio.workflows.audio_analysis.background_mask import _speech_activity_by_bucket
+
+    nested = [[SimpleNamespace(start=0.0, end=1.0)]]
+    summary = {"diarization": {"by_model": {"m": {"status": "ok", "result": nested}}}}
+    # 0.8-1.0 is covered only up to 1.0, so one fifth of the 1.0-1.8 bucket.
+    covered = _speech_activity_by_bucket(summary, [(0.0, 0.5), (0.8, 1.8), (2.0, 2.5)])
+
+    assert covered[0] == pytest.approx(1.0), "a fully covered bucket is fully active"
+    assert covered[2] == pytest.approx(0.0), "an uncovered bucket is inactive"
+    assert 0.0 < (covered[1] or 0.0) < 1.0, f"a partially covered bucket must be graded, got {covered[1]}"
+
+
+def test_word_evidence_does_not_pin_a_bucket_to_absolute_certainty() -> None:
+    """A word touching a bucket raises confidence; it does not make the bucket certain.
+
+    ``apply_span_evidence`` set ``uncertainty`` to ``min(u, 0.0)`` — which is 0.0 for every bucket
+    a span touches, however slightly. Zero is the confident claim "nothing about this bucket is in
+    doubt", asserted from a single overlapping word, and on a conversation that is most buckets.
+    """
+    from senselab.audio.workflows.audio_analysis.background_mask import apply_span_evidence
+
+    rows = [
+        {"start": 0.0, "end": 1.0, "target_confidence": 0.3, "uncertainty": 0.8},
+        {"start": 1.0, "end": 2.0, "target_confidence": 0.3, "uncertainty": 0.8},
+    ]
+    # A word covering 5% of the first bucket, and one covering all of the second.
+    out = apply_span_evidence(rows, target_spans=[(0.0, 0.05), (1.0, 2.0)])
+
+    assert out[0]["target_confidence"] > 0.3, "a word is evidence the target was active"
+    assert out[0]["target_confidence"] < out[1]["target_confidence"], (
+        "a word clipping a bucket is weaker evidence than a bucket full of words"
+    )
+    assert out[0]["uncertainty"] > 0.0, f"a 5% word overlap left the bucket absolutely certain: {out[0]}"
+    assert out[1]["uncertainty"] < 0.8, "a bucket full of words is more certain than before"
+
+
+def test_continuous_conversation_still_has_uncertainty_at_its_boundaries() -> None:
+    """The reported symptom, at the smallest scale that reproduces it.
+
+    Diarization covering a whole recording made every bucket identical, so the mask was one region
+    with nothing to be uncertain about. Speaker turns have boundaries, and a bucket straddling one
+    is partly covered — so a real conversation cannot produce a single perfectly certain verdict.
+    """
+    from types import SimpleNamespace
+
+    from senselab.audio.workflows.audio_analysis.background_mask import target_confidence_by_bucket
+
+    # Two turns with a 0.15 s gap: continuous-looking coverage with real boundaries in it.
+    nested = [[SimpleNamespace(start=0.0, end=1.05), SimpleNamespace(start=1.2, end=2.0)]]
+    summary = {"diarization": {"by_model": {"m": {"status": "ok", "result": nested}}}}
+    buckets = [(round(i * 0.1, 6), round((i + 1) * 0.1, 6)) for i in range(20)]
+
+    rows = target_confidence_by_bucket(summary, buckets, ("speech",))
+    mask = build_mask(rows, "conversation", profile=PROFILE)
+
+    assert len({r.state for r in mask.regions}) > 1, "a recording with a pause is not one uniform state"
+    assert any(r.uncertainty > 0.0 for r in mask.regions), (
+        f"every region is perfectly certain: {[(r.state, r.uncertainty) for r in mask.regions]}"
+    )

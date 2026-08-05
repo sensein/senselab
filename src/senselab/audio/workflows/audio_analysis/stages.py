@@ -526,7 +526,7 @@ def stage_background_mask(
     # become a positive claim that nobody spoke.
     word_spans = _target_word_spans(pass_summary)
     if word_spans and "speech" in {str(e) for e in event_types}:
-        rows = apply_span_evidence(rows, target_spans=word_spans)
+        rows = apply_span_evidence(rows, target_spans=word_spans, active_at=active_threshold, free_at=free_threshold)
     mask = build_mask(rows, task_type, profile=resolved, long_window_s=long_window_s)
 
     doc = mask.to_json()
@@ -627,6 +627,7 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
                 pass_summary=summary,
                 duration_s=duration_s,
                 task_type=plan.task_type,
+                grid=plan.mask_grid,
                 guard_interval_s=plan.mask_guard_interval_s,
                 long_window_s=plan.ast_win_length,
             )

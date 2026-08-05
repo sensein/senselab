@@ -251,6 +251,19 @@ class PassPlan:
     background_sources: bool = True
     task_type: str | None = None
     mask_guard_interval_s: float | None = None
+    mask_grid: Any = None
+    """The grid the background mask is cut on — ``speech_presence``'s, per D-24.
+
+    Defaulted to ``None`` (``BucketGrid()``'s 0.5 s) only so a caller that builds a plan without
+    grids still works. The run must pass the presence grid: the mask is *derived from* presence —
+    a region is target-free where presence has settled — so on different grids that derivation
+    needs a projection, and every projection is a place to lose localisation. On a shared grid
+    row *i* of one is row *i* of the other and the coupling is exact.
+
+    Measured cost of not sharing it: presence produced 1070 buckets at 100 ms and the mask 43 at
+    0.5 s, so five presence judgements were projected onto each mask bucket before the mask could
+    say anything.
+    """
     features: bool = False
     features_win_length: float = 1.0
     features_hop_length: float = 0.5
