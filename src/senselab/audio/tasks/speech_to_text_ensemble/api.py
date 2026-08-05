@@ -58,12 +58,19 @@ def _normalize_word(text: str) -> str:
     return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
 
 
-def _temporal_agreement(members: Sequence[Mapping[str, Any]]) -> tuple[float | None, int]:
+def _temporal_agreement(
+    members: Sequence[Mapping[str, Any]],
+) -> tuple[float | None, float | None, int]:
     """How well the independent timing sources agree on *where* this word is (D-27).
 
-    Returns ``(temporal_confidence, n_timing_sources)``. ``temporal_confidence`` is ``None`` for a
-    single timing source: one opinion cannot corroborate itself, and reporting 1.0 there is the
-    manufactured certainty this split exists to remove.
+    Returns ``(onset_confidence, offset_confidence, n_timing_sources)`` — **per edge, not pooled**.
+    A word can be agreed on at its start and disputed at its end, and that is a different finding
+    from one whose whole span is uncertain: the first localises a boundary, the second does not
+    localise the word. Pooling them with a ``max`` reported the worse edge and named it "temporal
+    confidence", so a reader could not tell which edge was in doubt or whether both were.
+
+    Each is ``None`` for a single timing source: one opinion cannot corroborate itself, and
+    reporting 1.0 there is the manufactured certainty this split exists to remove.
 
     **Grouped by the timing model's identity, not by the model that produced the text and not by
     the *kind* of timing source.** Two transcripts timed by one aligner agree about onset by
@@ -86,7 +93,7 @@ def _temporal_agreement(members: Sequence[Mapping[str, Any]]) -> tuple[float | N
 
     **Anchored to the word's own duration**, which is the only absolute reference a word carries:
     onsets disagreeing by a whole word-length mean the sources are not describing the same
-    position. Both edges count, because a word can be agreed-on at its start and not its end.
+    position.
     """
     by_source: dict[str, list[Mapping[str, Any]]] = {}
     for index, m in enumerate(members):
@@ -96,14 +103,17 @@ def _temporal_agreement(members: Sequence[Mapping[str, Any]]) -> tuple[float | N
         key = str(timing_model or m.get("timestamp_source") or f"__member_{index}__")
         by_source.setdefault(key, []).append(m)
     if len(by_source) < 2:
-        return None, len(by_source)
+        return None, None, len(by_source)
 
     # One opinion per timing source: members sharing an aligner are averaged, not counted twice.
     starts = [sum(float(m["start"]) for m in group) / len(group) for group in by_source.values()]
     ends = [sum(float(m["end"]) for m in group) / len(group) for group in by_source.values()]
     duration = max(1e-6, sum(float(m["end"]) - float(m["start"]) for m in members) / max(1, len(members)))
-    disagreement = max(max(starts) - min(starts), max(ends) - min(ends)) / duration
-    return max(0.0, 1.0 - min(1.0, disagreement)), len(by_source)
+
+    def _edge(values: list[float]) -> float:
+        return max(0.0, 1.0 - min(1.0, (max(values) - min(values)) / duration))
+
+    return _edge(starts), _edge(ends), len(by_source)
 
 
 def iter_word_leaves(node: Any) -> list[dict[str, Any]]:  # noqa: ANN401 — recursive JSON walk
@@ -357,7 +367,12 @@ def fuse_word_streams(
         member_conf = sum(win["confs"]) / len(win["confs"]) if win["confs"] else None
         coverage = min(1.0, coverage_mass / ensemble_weight)
         existence_conf = share * coverage * (1.0 if member_conf is None else member_conf)
-        temporal_conf, timing_sources = _temporal_agreement(slot["members"])
+        onset_conf, offset_conf, timing_sources = _temporal_agreement(slot["members"])
+        # The pooled figure is the worse edge, kept for consumers that want one number — but the
+        # edges are reported separately because they are separate findings, and a renderer colouring
+        # one box by the pooled value cannot show which end is in doubt.
+        edges = [c for c in (onset_conf, offset_conf) if c is not None]
+        temporal_conf = min(edges) if edges else None
         raw_conf = existence_conf if temporal_conf is None else existence_conf * temporal_conf
         win_corr = (win["corr_num"] / win["corr_den"]) if win["corr_den"] > 0 else None
         word = {
@@ -367,6 +382,8 @@ def fuse_word_streams(
             "confidence": round(calibrator(raw_conf), 4) if calibrator else round(raw_conf, 4),
             "existence_confidence": round(existence_conf, 4),
             "temporal_confidence": None if temporal_conf is None else round(temporal_conf, 4),
+            "onset_confidence": None if onset_conf is None else round(onset_conf, 4),
+            "offset_confidence": None if offset_conf is None else round(offset_conf, 4),
             "member_confidence": None if member_conf is None else round(member_conf, 4),
             "timing_sources": timing_sources,
             "coverage": round(coverage, 4),

@@ -302,12 +302,13 @@ def build_adaptive_timeline(
     text_lanes = (0.78, 0.50, 0.22)
     for idx, w in enumerate(transcript["words"]):
         mid = (w["start"] + w["end"]) / 2
-        conf = float(w.get("confidence") or 0.0)
+        # **Accuracy only.** The box used to be coloured by ``confidence``, which is the joint of
+        # word accuracy and temporal agreement — so a word every recognizer agreed on read amber
+        # purely because two aligners placed it differently, and nothing distinguished that from a
+        # word they disputed. One colour cannot answer two questions.
+        accuracy = w.get("existence_confidence")
+        accuracy = float(accuracy) if isinstance(accuracy, (int, float)) else float(w.get("confidence") or 0.0)
         lane = idx % len(text_lanes)
-        # Confidence lives on the label's own background. The separate box-plus-number below each
-        # word encoded the same quantity three ways — box colour, printed value, and position —
-        # while the staggering had already pulled the label away from the box it belonged to, so
-        # the colour stopped reading as that word's.
         ax_w.text(
             mid,
             text_lanes[lane],
@@ -318,12 +319,32 @@ def build_adaptive_timeline(
             zorder=2,
             bbox={
                 "boxstyle": "round,pad=0.2",
-                "facecolor": cmap_conf(conf),
+                "facecolor": cmap_conf(accuracy),
                 "edgecolor": "black",
                 "linewidth": 0.3,
                 "alpha": 0.9,
             },
         )
+        # The two temporal halves, at the edges they describe. A mark at the onset and one at the
+        # offset, each coloured by agreement about *that* boundary, so "we know the word and not
+        # where it starts" is visible as such rather than folded into the label's colour. Absent
+        # (one timing source) draws nothing: an unmeasured edge must not render as a confident one.
+        for edge_time, edge_key in ((w["start"], "onset_confidence"), (w["end"], "offset_confidence")):
+            edge_conf = w.get(edge_key)
+            if not isinstance(edge_conf, (int, float)):
+                continue
+            ax_w.add_patch(
+                Rectangle(
+                    (float(edge_time) - 0.012, text_lanes[lane] - 0.055),
+                    0.024,
+                    0.11,
+                    facecolor=cmap_conf(float(edge_conf)),
+                    edgecolor="black",
+                    linewidth=0.25,
+                    alpha=0.95,
+                    zorder=3,
+                )
+            )
         if w.get("alternates"):
             alt_txt = "|".join(a["text"] for a in w["alternates"][:2])
             ax_w.text(mid, text_lanes[lane] - 0.09, alt_txt, ha="center", va="center", fontsize=5, color="grey")
@@ -337,7 +358,10 @@ def build_adaptive_timeline(
             orientation="horizontal",
         )
         cax.tick_params(labelsize=5, length=2, pad=1)
-        cax.set_title("word confidence", fontsize=6, pad=2)
+        # Naming both users of the scale, because the row now carries two quantities on it: the
+        # label's fill is the word's accuracy and the two edge marks are agreement about that
+        # boundary. Calling it "word confidence" was accurate about neither once they were split.
+        cax.set_title("label fill = word accuracy · edge marks = onset/offset agreement", fontsize=6, pad=2)
     ax_w.set_ylabel("fused words", rotation=0, ha="right", va="center")
     ax_w.set_ylim(0, 1.1)
     ax_w.set_yticks([])

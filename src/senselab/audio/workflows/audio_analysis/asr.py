@@ -88,27 +88,27 @@ def resample_word_doubt(
     words: Sequence[Mapping[str, Any]],
     buckets: Sequence[tuple[float, float]],
 ) -> dict[tuple[float, float], float | None]:
-    """Project the two-part word confidence onto a time grid — the asr axis (D-27).
+    """Project **word-sequence accuracy** onto a time grid — the asr axis (D-27, revised).
 
-    Each word contributes doubt **mass** ``1 - existence_confidence``, over a **span** set by how
-    well it is localised. Those are separate on purpose: a word every model agrees on but times
-    differently and a word the models disagree about are different findings calling for different
-    interventions, and the previous scheme — pairwise WER over fully-contained bucket text —
-    collapsed both into "the texts differ here". On the run that motivated this, two recognizers
-    with word-identical transcripts disagreed in 11 of 41 buckets purely because a word straddled
-    a grid line.
+    One question, one axis: how much do the recognizers disagree about *what words were said*. Each
+    word contributes doubt ``1 - existence_confidence`` over its own span, and nothing else enters.
 
-    **Reach follows temporal uncertainty.** A word localised to within its own length deposits its
-    doubt where it is; one the sources place a word-length apart reaches a word-length further on
-    each side. Reach never changes the mass — spreading doubt must not create it.
+    **Temporal agreement is deliberately excluded** — from the mass and from the reach. It is not
+    that localisation does not matter; it is that a single number cannot carry both and stay
+    readable, and two attempts proved it. Bucketed pairwise WER made timing jitter *look* like
+    textual disagreement, reporting an axis mean of 0.4266 on a pair of word-identical transcripts.
+    Replacing that with a joint of accuracy × localisation fixed the conflation but not the
+    legibility: 0.788 could mean either half, and a reader had no way to tell which. Localisation
+    now lives on the word, split per edge (``onset_confidence`` / ``offset_confidence``), where the
+    figure can show *which* boundary is in doubt instead of averaging it into a score.
 
-    **Unmeasured localisation does not smear.** ``temporal_confidence`` is ``None`` when only one
-    timing source spoke, which is *unmeasured*, not zero. Treating it as zero would spread a
-    single-witness word across the recording on the strength of a measurement nobody made.
+    The cost, stated because it is real: on a run where every recognizer agrees, this axis is near
+    zero — and that is the honest answer, since there is no disagreement about what was said. A
+    poorly localised word no longer registers here at all, which is why the word-level fields and
+    the figure's onset/offset marks are the place that question is answered.
 
     Args:
-        words: Fused words carrying ``start``, ``end``, ``existence_confidence`` and
-            ``temporal_confidence`` (``None`` when unmeasured).
+        words: Fused words carrying ``start``, ``end`` and ``existence_confidence``.
         buckets: ``(start, end)`` pairs on the axis grid.
 
     Returns:
@@ -122,21 +122,16 @@ def resample_word_doubt(
             start, end = float(word["start"]), float(word["end"])
         except (KeyError, TypeError, ValueError):
             continue
-        duration = max(1e-6, end - start)
-        existence = word.get("existence_confidence")
-        temporal = word.get("temporal_confidence")
-        certainty = float(existence) if isinstance(existence, (int, float)) else 0.0
-        # The **joint**, not existence alone. The axis asks what was said *here*, and a word nobody
-        # can place leaves that unanswered however sure we are the word exists. Measured: on a real
-        # run existence was 1.0 for 61 of 62 words while temporal ranged 0.25-1.0, so an
-        # existence-only mass reported 0.0000 across the whole recording and discarded the only
-        # part that varied.
-        if isinstance(temporal, (int, float)):
-            certainty *= float(temporal)
-        doubt = 1.0 - certainty
-        # Unmeasured -> no smear (the word's own span); measured -> reach grows with the doubt.
-        slack = 0.0 if not isinstance(temporal, (int, float)) else duration * (1.0 - float(temporal))
-        lo, hi = start - slack, end + slack
+        accuracy = word.get("existence_confidence")
+        doubt = 1.0 - float(accuracy) if isinstance(accuracy, (int, float)) else 1.0
+        # Accuracy only, and the word's own span only. Temporal agreement is deliberately **not**
+        # here — not in the mass and not in the reach — so this axis answers one question: how much
+        # do the recognizers disagree about the word sequence. Mixing localisation in is what made
+        # the axis unreadable twice, first as bucketed-WER disagreement that was really timing jitter
+        # and then as a joint whose two halves could not be told apart in the number. The temporal
+        # halves live on the word (``onset_confidence`` / ``offset_confidence``) where a reader can
+        # see which edge is in doubt.
+        lo, hi = start, end
         for bucket in buckets:
             overlap = min(hi, bucket[1]) - max(lo, bucket[0])
             if overlap > 0:
