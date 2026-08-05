@@ -233,13 +233,36 @@ def test_two_transcripts_sharing_an_aligner_are_one_timing_source() -> None:
     """Canary was timed by Qwen's aligner, so their onsets agree by construction.
 
     Counting them as two agreeing opinions about *when* would manufacture temporal confidence out
-    of a shared dependency. ``timestamp_source`` is the only provenance that can see it — an
-    aligner is not a ``Source``, so closure intersection cannot.
+    of a shared dependency. Provenance is the only thing that can see it — an aligner is not a
+    ``Source``, so closure intersection cannot.
+
+    The labels differ and the aligner does not, which is the whole trap: ``TimestampSource`` is
+    ``native | bundled_aligner | external_aligner`` — a *kind*. Qwen3-ASR's timings come from
+    ``Qwen/Qwen3-ForcedAligner-0.6B`` shipped with it (``bundled_aligner``) and Canary's come from
+    the workflow aligning it with **the same model** (``external_aligner``). Grouping on the kind
+    reads one aligner as two independent opinions. Verified on a real run: their word onsets are
+    bit-identical across all 62 words, max |Δ| = 0.0000 s.
     """
     shared = fuse_word_streams(
         {
-            "canary": [_w("hello", 1.0, 1.4, timestamp_source="qwen-aligner")],
-            "qwen": [_w("hello", 1.0, 1.4, timestamp_source="qwen-aligner")],
+            "canary": [
+                _w(
+                    "hello",
+                    1.0,
+                    1.4,
+                    timestamp_source="external_aligner",
+                    timestamp_model="Qwen/Qwen3-ForcedAligner-0.6B",
+                )
+            ],
+            "qwen": [
+                _w(
+                    "hello",
+                    1.0,
+                    1.4,
+                    timestamp_source="bundled_aligner",
+                    timestamp_model="Qwen/Qwen3-ForcedAligner-0.6B",
+                )
+            ],
         },
         min_corroboration=MIN_CORROBORATION,
     )
