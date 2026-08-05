@@ -333,16 +333,22 @@ def build_adaptive_timeline(
             edge_conf = w.get(edge_key)
             if not isinstance(edge_conf, (int, float)):
                 continue
+            # Sized against the whole recording, not against a word. At 0.024 s these were ~2 px
+            # on a 21 s x-axis — present in the data and unreadable on the page, which is the same
+            # as not showing them. Width scales with the recording so the mark stays visible at any
+            # duration, and the height spans the lane so it reads as a boundary marker rather than
+            # as another small box competing with the label.
+            mark_w = max(0.02, duration * 0.004)
             ax_w.add_patch(
                 Rectangle(
-                    (float(edge_time) - 0.012, text_lanes[lane] - 0.055),
-                    0.024,
-                    0.11,
+                    (float(edge_time) - mark_w / 2.0, text_lanes[lane] - 0.085),
+                    mark_w,
+                    0.17,
                     facecolor=cmap_conf(float(edge_conf)),
                     edgecolor="black",
-                    linewidth=0.25,
+                    linewidth=0.4,
                     alpha=0.95,
-                    zorder=3,
+                    zorder=1,
                 )
             )
         if w.get("alternates"):
