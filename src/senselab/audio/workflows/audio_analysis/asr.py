@@ -29,7 +29,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 
 
-def _aligned_columns(streams: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[list[dict[str, Any]]] | None:
+def aligned_columns(streams: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[list[dict[str, Any]]] | None:
     """Group the recognizers' words by **sequence alignment**, one list per aligned position.
 
     Time-overlap grouping cannot represent an insertion, and the consequence is not a lost filler
@@ -157,7 +157,7 @@ def _consensus_word_doubt(
         slot_overlap=slot_overlap,
         slot_mid_tol_s=slot_mid_tol_s,
         text_similarity=phoneme_similarity,
-        columns=_aligned_columns(streams),
+        columns=aligned_columns(streams),
     )
     counts = sorted({int(w["timing_sources"]) for w in fused if w.get("timing_sources") is not None})
     provenance = {

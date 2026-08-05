@@ -75,6 +75,13 @@ def fuse_words(
     what reaches the transcript.
     """
     fus = policy["fusion"]
+    # Alignment-grouped columns and phoneme-graded agreement, on the path that writes the
+    # deliverable. Wiring only the axis left the transcript itself still grouping by time overlap
+    # and matching exactly — so a filler one recognizer heard would still have lost a vote against
+    # its neighbour and vanished from ``final/transcript.json``, which is the artifact the
+    # requirement is about. Both helpers are pure functions.
+    from senselab.audio.workflows.audio_analysis.asr import aligned_columns, phoneme_similarity
+
     return fuse_word_streams(
         word_streams,
         weights=family_weights(sorted(word_streams), policy),
@@ -85,6 +92,8 @@ def fuse_words(
         min_corroboration=float(fus["corroboration"]["min_corroboration"]),
         speaker_at=speaker_at,
         calibrator=calibrator,
+        columns=aligned_columns(word_streams),
+        text_similarity=phoneme_similarity,
     )
 
 
