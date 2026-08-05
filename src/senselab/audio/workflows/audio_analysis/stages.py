@@ -448,9 +448,42 @@ def stage_alignment(
             ),
             provenance=align_provenance,
         )
+        # Stamp *which* aligner produced these times, not only that an external one did. The kind
+        # cannot distinguish this run's aligner from any other, and the asr axis needs to know when
+        # two transcripts' word times come from the same place: Canary is aligned here with the
+        # very model that already timed Qwen3-ASR internally, so on the kind alone they read as two
+        # independent opinions about onset when they are bit-identical.
+        _stamp_timing_provenance(outcome.get("result"), source="external_aligner", model_id=aligner_model_id)
         by_model[model_id] = outcome
         ctx.write_sidecar(f"alignment/{safe_model_id(model_id)}.json", outcome)
     return {"alignment": {"by_model": by_model}}
+
+
+def _stamp_timing_provenance(result: Any, *, source: str, model_id: str) -> None:  # noqa: ANN401
+    """Record who produced these word times, in place, over a ScriptLine tree or its dict form.
+
+    Best-effort and recursive: a backend that returns dicts (cache-deserialized) and one that
+    returns ``ScriptLine`` objects must both end up carrying the provenance, or the grouping that
+    depends on it silently falls back to treating every member as its own timing source — which is
+    the permissive direction, and the one that manufactures corroboration.
+    """
+    if isinstance(result, list):
+        for item in result:
+            _stamp_timing_provenance(item, source=source, model_id=model_id)
+        return
+    if isinstance(result, dict):
+        result.setdefault("timestamp_source", source)
+        result.setdefault("timestamp_model", model_id)
+        for child in result.get("chunks") or []:
+            _stamp_timing_provenance(child, source=source, model_id=model_id)
+        return
+    if hasattr(result, "chunks"):
+        if getattr(result, "timestamp_source", None) is None:
+            result.timestamp_source = source
+        if getattr(result, "timestamp_model", None) is None:
+            result.timestamp_model = model_id
+        for child in result.chunks or []:
+            _stamp_timing_provenance(child, source=source, model_id=model_id)
 
 
 def stage_background_mask(

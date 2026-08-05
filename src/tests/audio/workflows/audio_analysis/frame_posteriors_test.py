@@ -188,8 +188,6 @@ def test_chunked_inference_stitches_long_clip() -> None:
     assert np.allclose(data, 0.8)  # overlap-averaging preserves the constant
 
 
-
-
 # ── chunk stitching must not average two different speakers together ─────────
 
 

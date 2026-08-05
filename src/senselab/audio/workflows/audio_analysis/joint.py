@@ -42,10 +42,6 @@ __all__ = [
 ]
 
 
-
-
-
-
 def speaker_change_series(
     entries: Sequence[Any],
     *,
@@ -140,8 +136,6 @@ def speaker_change_series(
         "window_s": window_s,
         "hop_s": hop_s,
     }
-
-
 
 
 def speaker_spans_from_votes(

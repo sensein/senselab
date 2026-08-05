@@ -133,6 +133,13 @@ def iter_word_leaves(node: Any) -> list[dict[str, Any]]:  # noqa: ANN401 — rec
         score = node.get("score")
         if isinstance(score, (int, float)) and 0.0 <= float(score) <= 1.0:
             word["confidence"] = float(score)
+        # Timing provenance travels with the word, because that is where the consumer needs it:
+        # ``_temporal_agreement`` groups members by who produced their times, and a word that
+        # arrives without it is counted as its own independent timing source.
+        for field in ("timestamp_source", "timestamp_model"):
+            value = node.get(field)
+            if value:
+                word[field] = str(value)
         if word["text"]:
             out.append(word)
     return out
