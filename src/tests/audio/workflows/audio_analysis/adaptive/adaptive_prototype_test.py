@@ -305,11 +305,16 @@ def test_calibration_profiles() -> None:
 
 
 def test_policy_hash_stable_and_override(tmp_path: Path) -> None:
-    """D10: identical policy → identical hash; overrides change it."""
+    """D10: identical policy → identical hash; overrides change it.
+
+    The override is a *run config* — the policy is its ``adaptive:`` section now, not a file of its
+    own. A file with ``thresholds:`` at the top level is rejected rather than merged into a key
+    nothing reads; see ``test_a_bare_policy_file_is_refused_rather_than_silently_ignored``.
+    """
     p1, p2 = load_policy(), load_policy()
     assert p1["policy_hash"] == p2["policy_hash"]
-    override = tmp_path / "p.yaml"
-    override.write_text("thresholds:\n  theta_high: 0.5\n")
+    override = tmp_path / "config.yaml"
+    override.write_text("adaptive:\n  thresholds:\n    theta_high: 0.5\n")
     p3 = load_policy(override)
     assert p3["thresholds"]["theta_high"] == 0.5
     assert p3["policy_hash"] != p1["policy_hash"]
@@ -475,16 +480,32 @@ def test_in_process_ingest_ignores_passes_absent_from_the_summary(tmp_path: Path
 # ── Policy override precedence (T040) ─────────────────────────────────
 
 
-def test_cli_overrides_win_over_a_policy_file(tmp_path: Path) -> None:
-    """Precedence is packaged default < --policy file < CLI flags."""
+def test_in_memory_overrides_win_over_a_config_file(tmp_path: Path) -> None:
+    """Precedence is packaged default < --config file < in-memory overrides."""
     import json as _json
 
     from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
 
-    policy_file = tmp_path / "p.yaml"
-    policy_file.write_text(_json.dumps({"budget": {"heavy_per_run": 9}}))  # YAML accepts JSON
-    merged = load_policy(policy_file, {"budget": {"heavy_per_run": 0}})
-    assert merged["budget"]["heavy_per_run"] == 0, "CLI must beat the file"
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(_json.dumps({"adaptive": {"budget": {"heavy_per_run": 9}}}))  # YAML accepts JSON
+    merged = load_policy(config_file, {"budget": {"heavy_per_run": 0}})
+    assert merged["budget"]["heavy_per_run"] == 0, "an in-memory override must beat the file"
+
+
+def test_a_bare_policy_file_is_refused_rather_than_silently_ignored(tmp_path: Path) -> None:
+    """A file in the old shape merges into keys nothing reads, so it must raise.
+
+    ``adaptive/policy/default.yaml`` had ``thresholds:`` / ``fusion:`` / ``rules:`` at the top level.
+    Handed to the new loader as a run config, every one of those would land beside ``models:`` and
+    ``grid:`` — deep-merged successfully, read by nobody, and the run would proceed under the
+    packaged policy while reporting that an override had been supplied.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.policy import load_policy
+
+    stale = tmp_path / "old_policy.yaml"
+    stale.write_text("thresholds:\n  theta_high: 0.5\n")
+    with pytest.raises(ValueError, match="adaptive"):
+        load_policy(stale)
 
 
 def test_none_overrides_leave_the_policy_untouched() -> None:

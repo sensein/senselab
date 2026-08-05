@@ -368,7 +368,7 @@ def stage_alignment(
     aligner: Literal["qwen", "mms"] = "qwen",
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
     mms_aligner_model: str = "facebook/mms-1b-all",
-    language: str = "en",
+    language: str | None = None,
 ) -> dict[str, Any]:
     """Align text-only ASR outputs so they gain per-word timestamps.
 
@@ -389,7 +389,11 @@ def stage_alignment(
         aligner: Which aligner backend to use.
         qwen_aligner_model: Qwen forced-aligner model id.
         mms_aligner_model: MMS aligner model id.
-        language: ISO language code for the aligner.
+        language: ISO language code for the aligner, or ``None`` for "not pinned" — which resolves
+            to English below. The annotation said ``str`` with a ``"en"`` default while every caller
+            passed the CLI's unset value straight through, so the declared default never applied and
+            the real one lived in the ``or "en"`` a line into the body. ``None`` is the honest type:
+            an unset language is a state the config can express.
 
     Returns:
         ``{"alignment": {"by_model": {model_id: outcome}}}``, containing only the

@@ -63,10 +63,11 @@ _UNCERTAINTY_FIELDS = (
 # none, since the gap is invisible in the output.
 _CONFIDENCE_FIELDS = ("native_confidence", "p_speech", "p_voice", "argmax_confidence")
 
-# Utterance signals expose neither an uncertainty nor a [0, 1] confidence — they report
+# Some signals expose neither an uncertainty nor a [0, 1] confidence — they report
 # ``avg_logprob``, a mean token log-probability. exp() takes it back to a probability, which is
-# the model's own confidence in the transcript it produced. Left unhandled, the asr axis
-# fused 0 of 41 buckets while the other two fused fully.
+# the model's own confidence in the transcript it produced. Read on the *presence* axis, where an
+# ASR backend's per-chunk logprob is one of the voters (``speech_presence_link``); the asr axis has
+# a single voter and it reports ``value`` directly.
 _LOGPROB_FIELDS = ("avg_logprob",)
 
 # The direction a vote cast, when it scored nothing at all. See :func:`is_direction_only_claim`.
@@ -132,16 +133,16 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     if not isinstance(votes, Mapping):
         return {}
     out: dict[str, float] = {}
-    # Pairwise evidence first, then overridden below by anything a signal states directly.
-    out.update(_pairwise_per_signal(votes))
     for name, entry in votes.items():
         if not isinstance(entry, Mapping):
             continue
         if is_direction_only_claim(entry):
-            # A full-strength claim leaves no doubt of its own. ``setdefault`` rather than
-            # assignment because a pairwise distance *was* measured about this signal, and a vote
-            # that scored nothing cannot overrule it.
-            out.setdefault(str(name), 0.0)
+            # A full-strength claim leaves no doubt of its own. Plain assignment: this was
+            # ``setdefault`` so that a pairwise distance measured *about* this signal could not be
+            # overwritten by a vote that scored nothing, and the asr axis's pairwise block was the
+            # only thing that ever pre-filled ``out``. With one voter per signal there is nothing to
+            # defer to, and a ``setdefault`` with no other writer reads as if there were.
+            out[str(name)] = 0.0
             continue
         for field in _UNCERTAINTY_FIELDS:
             value = entry.get(field)
@@ -168,41 +169,6 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
                     out[str(name)] = max(0.0, min(1.0, 1.0 - float(value)))
                     break
     return out
-
-
-def _pairwise_per_signal(votes: Mapping[str, Any]) -> dict[str, float]:
-    """Per-signal uncertainty from pairwise disagreement, for axes that only report pairs.
-
-    The asr axis carries ``{model_a|model_b: phoneme_distance}`` rather than a per-model
-    confidence, and on a real recording all three ASR backends were text-only so every
-    ``avg_logprob`` was ``None`` — leaving the axis with no per-signal quantity at all and L2
-    fusing 0 of 41 buckets.
-
-    A distance belongs to both models in the pair, so each model's uncertainty is the mean of
-    the distances it participates in: a transcript that differs from everyone else's is the
-    doubtful one, and that is recoverable from pairs even when no model reports its own
-    confidence. Attributing to one side only would blame whichever name sorted first.
-    """
-    block = votes.get("__pairwise_phoneme_distances__")
-    if not isinstance(block, Mapping):
-        return {}
-    if block.get("scored") is False:
-        # Present for the record, not as evidence. The asr axis now folds the same transcripts into
-        # a consensus derivative, and the pairwise distance is computed over that derivative's own
-        # inputs — its source closure is a subset, so scoring both counts one body of evidence
-        # twice (D-21 rule 6). The block stays on the row because it names *which pair* diverged,
-        # which a fold cannot.
-        return {}
-    per_model: dict[str, list[float]] = {}
-    for key, distance in (block.get("pairs") or {}).items():
-        if not isinstance(distance, (int, float)):
-            continue
-        parts = str(key).split("|", 1)
-        if len(parts) != 2:
-            continue
-        for model in parts:
-            per_model.setdefault(model, []).append(max(0.0, min(1.0, float(distance))))
-    return {model: sum(v) / len(v) for model, v in sorted(per_model.items()) if v}
 
 
 def fuse_axis(

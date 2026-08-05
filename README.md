@@ -70,17 +70,27 @@ It runs in two steps:
 
 ```bash
 # Step 1 — analyze: run every model on the recording (results are content-addressably
-# cached, so re-runs are cheap). `--enhancement auto` adds a triage round 0 that skips
-# the speech-enhancement pass on clean audio and stops early on silent recordings.
-uv run python scripts/analyze_audio.py path/to/recording.wav --enhancement auto
-# → artifacts/analyze_audio/<name>_<timestamp>/  (per-task JSONs, 9 uncertainty
-#   parquets, Label Studio bundle, disagreements.json, timeline.png)
+# cached, so re-runs are cheap). Two arguments: the audio, and where results go.
+uv run python scripts/analyze_audio.py path/to/recording.wav
+# → artifacts/analyze_audio/<name>_<timestamp>/  (L1 per-signal parquets, L2 fused
+#   axes, Label Studio bundle, disagreements.json, final/ deliverables)
 
 # Step 2 — adapt: run the uncertainty-driven loop over that run directory.
 uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
     --cache-dir artifacts/analyze_audio_cache \
     --ground-truth path/to/labelstudio_export.json   # optional: scores vs human labels
 ```
+
+**`analyze_audio.py` takes an audio file and `--out`, and nothing else.** Every other value — the
+model ids, the bucket grid, the aggregator, the task type, the triage and enhancement gates, which
+stages run — lives in one versioned file with its derivation recorded beside it:
+`src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`. To change something,
+write a YAML holding only the keys you are changing and pass `--config my.yaml`; it deep-merges over
+the packaged one, and the merged mapping's hash is stamped into every artifact's provenance, so a run
+can always be named. There are deliberately no per-knob flags: the seventy that preceded this
+differed in ways a reader had no basis to choose between, and the *shipped defaults* of the four grid
+flags put the four uncertainty axes on four spacings that shared no bucket keys — silently disabling
+every cross-axis coupling in the pipeline.
 
 The loop writes, under the run directory (or `--out`):
 
@@ -103,11 +113,11 @@ The loop writes, under the run directory (or `--out`):
   Studio bundle with `final__*` consensus tracks added, and the round-1 disagreements annotated with
   their resolutions.
 
-Useful knobs (all thresholds/budgets/models live in a versioned policy file —
-`src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml` — overridable via
-`--policy my_policy.yaml`): `--max-rounds`, `--aggregator`, per-run intervention budgets, ASR
-reserve/escalation pools, and identity-repair parameters. Runs are **deterministic**: identical
-inputs + policy produce byte-identical decision logs. `HF_TOKEN` enables the gated
+All thresholds, budgets and model pools live in the `adaptive:` section of that same run config —
+round count, aggregator, per-run intervention budgets, ASR reserve/escalation pools, identity-repair
+parameters — and it keeps its own `policy_hash` beside the config's `config_hash`, because a policy
+change and a model change are not the same event. `scripts/adaptive_loop.py` takes `--config` too.
+Runs are **deterministic**: identical inputs + config produce byte-identical decision logs. `HF_TOKEN` enables the gated
 `pyannote/segmentation-3.0` overlap detector; without it the loop degrades gracefully and records
 the skipped intervention in `final/decisions.json → convergence.next_actions`.
 
@@ -120,7 +130,8 @@ near-microphone foreground speaker, and reports **how far above the noise floor*
 sits so a marginal finding is never mistaken for a confident one.
 
 ```bash
-uv run python scripts/analyze_audio.py recording.wav --task-type speech --foreground-suppression
+# `task.type` in the run config selects what counts as the participant's own activity.
+uv run python scripts/analyze_audio.py recording.wav
 ```
 
 Three things worth knowing before reading the output:
@@ -137,7 +148,7 @@ noise-standard traditions, and the classifiers' own measured detection floors.
 background found" is distinguishable from "suppression was too shallow to look".
 
 The background mask marks where claims are trustworthy without relying on suppression at
-all. `--task-type` matters: in a breathing or cough task the target event *is* a non-speech
+all. `task.type` matters: in a breathing or cough task the target event *is* a non-speech
 vocal sound, and a mask built from voice activity alone would report the collected signal as
 a background source.
 

@@ -1,10 +1,14 @@
 """Label Studio bundle integration for the three uncertainty axes.
 
 The bundle exposes:
-    - 3 Labels tracks, named ``uncertainty__<axis>``, from the fused L2 axes. No pass token:
-      an axis is a fold across passes, so there is no per-pass axis to draw.
-    - 1 asr TextArea sibling, ``uncertainty__asr__text``, carrying the per-bucket transcript
-      consensus + dissenting model transcripts.
+    - one Labels track per fused L2 axis, named ``uncertainty__<axis>``. No pass token: an axis is a
+      fold across passes, so there is no per-pass axis to draw.
+    - **no transcript text.** There was an ``uncertainty__asr__text`` TextArea rebuilding a
+      per-bucket consensus from each model's bucketed transcript; the words are published at word
+      resolution in ``final/transcript.json``, and ``adaptive.ls_final`` renders them as
+      ``final__consensus_transcript__text`` in the deliverable bundle this one is the input to. Two
+      renderings of one transcript at two resolutions is one too many, and the coarse one is what
+      forced the asr axis onto a 1.0 s grid of its own.
     - per-pass, per-signal evidence tracks ``<pass>__signal__<signal>`` straight from the L1
       signal rows. That is where "what did each model say on each pass" is legitimately served —
       per pass without being an axis.
@@ -159,33 +163,6 @@ def _quality_degradation(row: Mapping[str, Any]) -> float | None:
     return max(values) if values else None
 
 
-def _build_textarea_xml(track_name: str) -> str:
-    return (
-        f'<TextArea name="{track_name}__text" toName="audio" perRegion="true" '
-        f'editable="false" placeholder="Per-bucket transcript consensus + dissenting models"/>'
-    )
-
-
-def _utterance_text_payload(model_votes: Mapping[str, Any]) -> str:
-    """Build the consensus + dissenting-models string for the asr TextArea."""
-    transcripts = [
-        (m, str(v.get("text") or "").strip())
-        for m, v in model_votes.items()
-        if isinstance(v, Mapping) and str(v.get("text") or "").strip()
-    ]
-    if not transcripts:
-        return "(no transcripts on this bucket)"
-    # Plurality consensus.
-    counts: dict[str, int] = {}
-    for _, t in transcripts:
-        counts[t] = counts.get(t, 0) + 1
-    consensus = max(counts.items(), key=lambda kv: kv[1])[0]
-    lines = [f"consensus: {consensus!r}"]
-    for model_id, t in transcripts:
-        lines.append(f"{model_id}: {t!r}")
-    return "\n".join(lines)
-
-
 def attach_uncertainty_tracks_to_ls(
     *,
     ls_tasks: Any,  # noqa: ANN401 — list[dict] or dict, matches build_labelstudio_task variants
@@ -193,7 +170,7 @@ def attach_uncertainty_tracks_to_ls(
     fused_axes: Mapping[str, FusedAxis],
     signal_results_by_pass: Mapping[str, Mapping[str, SignalResult]] | None = None,
 ) -> tuple[Any, str]:
-    """Append the fused-axis Labels + TextArea tracks, and the per-pass signal evidence tracks.
+    """Append one Labels track per fused axis, plus the per-pass signal evidence tracks.
 
     Args:
         ls_tasks: Existing LS tasks payload (single dict or list of dicts) — typically
@@ -220,8 +197,6 @@ def attach_uncertainty_tracks_to_ls(
     presence_rows = fused_axes["speech_presence"].rows if "speech_presence" in fused_axes else []
     for axis in sorted(fused_axes):
         blocks.append(_build_labels_xml(_track_name(axis)))
-        if axis == "asr":
-            blocks.append(_build_textarea_xml(_track_name(axis)))
     for perturbation, by_signal in sorted((signal_results_by_pass or {}).items()):
         for signal in sorted(by_signal):
             blocks.append(_build_labels_xml(_signal_track_name(perturbation, signal)))
@@ -260,20 +235,6 @@ def attach_uncertainty_tracks_to_ls(
                         },
                     }
                 )
-                if axis == "asr":
-                    result_list.append(
-                        {
-                            "id": f"{region_id}__text",
-                            "from_name": f"{track}__text",
-                            "to_name": "audio",
-                            "type": "textarea",
-                            "value": {
-                                "start": float(row["start"]),
-                                "end": float(row["end"]),
-                                "text": [_utterance_text_payload(row.get("consensus_votes") or {})],
-                            },
-                        }
-                    )
 
     for perturbation, by_signal in sorted((signal_results_by_pass or {}).items()):
         target_task = by_pass_task.get(perturbation)
@@ -610,7 +571,7 @@ def build_labelstudio_config(summary: dict[str, Any]) -> str:
     ``<TextArea>`` control per (pass, asr_model). Speakers, scene labels,
     and transcripts each become a stacked timeline annotation row.
 
-    The three-axis uncertainty tracks are appended downstream by
+    The per-axis uncertainty tracks are appended downstream by
     ``senselab.audio.workflows.audio_analysis.attach_uncertainty_tracks_to_ls``.
     """
     parts: list[str] = ["<View>", '  <Audio name="audio" value="$audio"/>']

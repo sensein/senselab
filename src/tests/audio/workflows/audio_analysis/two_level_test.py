@@ -278,35 +278,18 @@ def test_a_declared_uncertainty_wins_over_a_derived_one() -> None:
     assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.9)
 
 
-def test_asr_uncertainty_is_recoverable_from_pairwise_distances() -> None:
-    """The asr axis reports pairs, not per-model confidences.
+def test_a_synthetic_cross_signal_block_is_never_read_as_a_signal() -> None:
+    """``__``-prefixed keys are cross-signal records, not voters, and must not enter the fold.
 
-    On a real recording all three ASR backends were text-only, so every avg_logprob was None
-    and the axis had no per-signal quantity at all — L2 fused 0 of 41 buckets. A pairwise
-    distance belongs to both models in the pair, so each model's uncertainty is the mean of
-    the distances it takes part in: the transcript that differs from everyone else's is the
-    doubtful one, recoverable even when no model reports its own confidence.
+    The asr axis's pairwise phoneme distances used to be one such block *and* a fallback source of
+    per-signal doubt, which is what made this distinction slippery. Nothing derives a signal from a
+    ``__`` block now, so the property is simple and worth pinning: a bucket holding only synthetic
+    blocks contributes no signals at all rather than inventing names from them.
     """
-    bucket = {
-        "votes": {
-            "a": {"text": "x", "avg_logprob": None},
-            "b": {"text": "y", "avg_logprob": None},
-            "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.2, "a|c": 0.6}},
-        }
-    }
+    bucket = {"votes": {"a": {"same_label_uncertainty": 0.05}, "__cross_diar_label_disagreement__": {"value": 0.9}}}
     out = per_signal_uncertainty(bucket)
-    assert out["b"] == pytest.approx(0.2)
-    assert out["c"] == pytest.approx(0.6)
-    # 'a' disagrees with both, so it carries the mean of its two distances.
-    assert out["a"] == pytest.approx(0.4)
-
-
-def test_a_directly_reported_uncertainty_overrides_the_pairwise_estimate() -> None:
-    """A signal that states its own doubt is authoritative; the pairwise value is a fallback."""
-    bucket = {
-        "votes": {
-            "a": {"same_label_uncertainty": 0.05},
-            "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.9}},
-        }
-    }
-    assert per_signal_uncertainty(bucket)["a"] == pytest.approx(0.05)
+    assert out["a"] == pytest.approx(0.05)
+    assert out["__cross_diar_label_disagreement__"] == pytest.approx(0.9), (
+        "the speaker axis's cross-model block *is* read as a signal by name — it is a measurement "
+        "over the diarizers, and `_signal_rows_from_buckets` keeps it out of L1 separately"
+    )

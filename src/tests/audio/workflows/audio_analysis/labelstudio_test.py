@@ -60,7 +60,14 @@ def _signal(perturbation: str, signal: str, *, rows: list) -> SignalResult:
 
 
 def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> None:
-    """Three axis tracks, attached once; per-pass evidence rides its own signal tracks."""
+    """One Labels track per axis, attached once; per-pass evidence rides its own signal tracks.
+
+    And **no transcript TextArea**. There was one on the asr axis, rebuilding a per-bucket consensus
+    from each model's bucketed text — a second rendering of what ``final/transcript.json`` publishes
+    at word resolution, and the reason the asr axis needed a 1.0 s window (a fully-contained text read
+    returns nothing from a bucket narrower than a word). ``adaptive.ls_final`` renders the words in
+    the deliverable bundle this one feeds.
+    """
     base_config = '<View>\n  <Audio name="audio" value="$audio"/>\n</View>'
     ls_tasks = [
         {"data": {"audio": "x.wav", "pass": "raw"}, "predictions": [{"result": []}]},
@@ -69,7 +76,7 @@ def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> No
     fused_axes = {
         axis: FusedAxis(
             axis=axis,  # type: ignore[arg-type]
-            rows=[_row(0.0, 0.5, 0.7, consensus_votes={"raw::whisper": {"text": "hello"}})],
+            rows=[_row(0.0, 0.5, 0.7)],
         )
         for axis in ("speech_presence", "speaker", "asr")
     }
@@ -85,9 +92,9 @@ def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> No
         signal_results_by_pass=signal_results,
     )
 
-    # 3 axis tracks + 1 signal track per (pass, signal) = 5 Labels; 1 asr TextArea.
+    # 3 axis tracks + 1 signal track per (pass, signal) = 5 Labels, and no TextArea at all.
     assert out_config.count('<Labels name="') == 5
-    assert out_config.count("<TextArea") == 1
+    assert out_config.count("<TextArea") == 0
     assert 'name="uncertainty__speech_presence"' in out_config
     assert 'name="uncertainty__asr"' in out_config
     # The vocabulary that made the category error feel natural is gone.
@@ -97,8 +104,9 @@ def test_attach_uncertainty_tracks_adds_one_track_per_axis_no_pass_token() -> No
 
     raw_regions = out_tasks[0]["predictions"][0]["result"]
     enh_regions = out_tasks[1]["predictions"][0]["result"]
-    # raw carries the 3 axis Labels + 1 asr TextArea + its own 1 signal track.
-    assert len(raw_regions) == 5
+    # raw carries the 3 axis Labels + its own 1 signal track.
+    assert len(raw_regions) == 4
+    assert not [r for r in raw_regions if r["type"] == "textarea"]
     # enhanced carries only its own signal track: an axis is not per pass.
     assert len(enh_regions) == 1
     axis_labels = [r for r in raw_regions if r["from_name"].startswith("uncertainty__") and r["type"] == "labels"]

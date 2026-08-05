@@ -37,6 +37,7 @@ from senselab.audio.workflows.audio_analysis.adaptive.interventions import (
 from senselab.audio.workflows.audio_analysis.adaptive.policy import BudgetLedger, load_policy, plan_round
 from senselab.audio.workflows.audio_analysis.adaptive.regions import propose_regions
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, PlannedIntervention, Region
+from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
 from senselab.audio.workflows.audio_analysis.estimates import estimate_frame
 from senselab.audio.workflows.audio_analysis.io import merge_json
 from senselab.audio.workflows.audio_analysis.layout import (
@@ -55,7 +56,7 @@ def run_adaptive_loop(
     run_dir: Path,
     *,
     cache_dir: Path | None = None,
-    policy_path: Path | None = None,
+    config_path: Path | None = None,
     out_dir: Path | None = None,
     max_rounds: int = 3,
     aggregator: str | None = None,
@@ -86,7 +87,8 @@ def run_adaptive_loop(
         run_dir: The run directory. Still required for reading policy-adjacent
             artifacts and for output pathing, even on the in-process path.
         cache_dir: Cache directory for intervention re-runs.
-        policy_path: Policy YAML; ``None`` uses the packaged default.
+        config_path: Run config YAML whose ``adaptive:`` section supplies the policy; ``None`` uses
+            the packaged default.
         out_dir: Where ``rounds/`` and ``final/`` are written; defaults to ``run_dir``.
         max_rounds: Total rounds including baseline. ``1`` = baseline only.
         aggregator: Sub-signal aggregator; inferred from the run when ``None``.
@@ -100,7 +102,9 @@ def run_adaptive_loop(
             remedy that error names — activating the declared-but-unbuilt ``task`` axis
             (``harvested=False``) would use it. The artifact path reads the same evidence out of
             ``L2/round/0/derivatives/votes/`` and needs nothing here.
-        policy_overrides: In-memory policy overrides (CLI flags), merged last.
+        policy_overrides: In-memory policy overrides, merged last. No CLI feeds this any more —
+            the flags that did are values in the run config — but the adaptive tests and any
+            programmatic caller still need a way to vary one entry without writing a file.
         summary: Pre-loaded ``{"input_audio": ..., "passes": {...}}`` index; read from
             ``L1/perturbations.json`` when ``None``.
 
@@ -112,7 +116,7 @@ def run_adaptive_loop(
     """
     run_dir = Path(run_dir)
     out_dir = Path(out_dir) if out_dir else run_dir
-    policy = load_policy(policy_path, policy_overrides)
+    policy = load_policy(config_path, policy_overrides)
 
     register = read_register(run_dir)
     if summary is None:
@@ -154,7 +158,11 @@ def run_adaptive_loop(
     # write onwards.
     baseline = _baseline_round(out_dir)
     state = BeliefState.from_store(store, aggregator=aggregator, round_index=baseline)
-    asr_grid = _grid_from_rows(state.axis_rows("asr"))
+    # One grid for the run, read off the axis rows the fold wrote. Every axis is on it, so which
+    # axis it is read from cannot matter — asserted rather than assumed, because it silently did
+    # matter when the four axes each had their own and an escalation harvested onto buckets the
+    # belief store had no keys for.
+    grid = _grid_from_rows(state.axis_rows("asr"))
     theta_low = float(policy["thresholds"]["theta_low"])
 
     (round_dir(out_dir, baseline)).mkdir(parents=True, exist_ok=True)
@@ -181,7 +189,7 @@ def run_adaptive_loop(
         "passes": passes,
         "pass_sigs": pass_sigs,
         "duration_s": duration_s,
-        "asr_grid": asr_grid,
+        "grid": grid,
         "elections": {},
         "input_audio": input_audio,
         # The declared set, so anything that has to *regenerate* a perturbation's audio
@@ -635,8 +643,14 @@ def _asr_signal_doubt(store: VoteStore, stream: str) -> float | None:
 
 
 def _grid_from_rows(rows: list[dict[str, Any]]) -> tuple[float, float]:
+    """``(win, hop)`` read off the fold's own rows; the declared grid when there are none.
+
+    The fallback was ``(1.0, 0.5)`` — the asr axis's old private grid, hard-coded here as a second
+    place that decided a spacing. With one grid there is one answer, and it is
+    ``axes.DEFAULT_TIME_GRID``.
+    """
     if not rows:
-        return (1.0, 0.5)
+        return DEFAULT_TIME_GRID
     win = float(rows[0]["end"]) - float(rows[0]["start"])
     hop = (float(rows[1]["start"]) - float(rows[0]["start"])) if len(rows) > 1 else win
     return (round(win, 6), round(hop, 6) or win)

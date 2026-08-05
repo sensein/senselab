@@ -9,41 +9,52 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention, Region
+from senselab.audio.workflows.audio_analysis.axes import AXIS_PRIORITY as _AXIS_PRIORITY
 
-_AXIS_PRIORITY = {"asr": 0, "speaker": 1, "speech_presence": 2}
 _COST_WEIGHT = {"light": 1.0, "medium": 4.0, "heavy": 16.0}
-
-_DEFAULT_POLICY_PATH = Path(__file__).parent / "policy" / "default.yaml"
 
 
 def load_policy(path: Path | None = None, overrides: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Load the default policy, deep-merge an optional override file, attach ``policy_hash``.
+    """The loop's policy — the ``adaptive:`` section of the run config — with ``policy_hash``.
 
-    Precedence is packaged default < ``path`` file < ``overrides`` — the CLI wins
-    over a policy file, per contracts/cli.md ("Overrides below win over the file").
+    There is no separate policy file. It lived at ``adaptive/policy/default.yaml`` beside a CLI that
+    also carried model ids, grids and stage switches as flags, so a run's configuration was spread
+    across a file and seventy arguments and only the file part had an identity. It is now one section
+    of ``data/run_config/default.yaml``, and ``path`` is a **run config**, not a bare policy: a file
+    whose policy keys sit at the top level would deep-merge into keys nothing reads, which is a
+    silent no-op, so its absence is raised rather than tolerated.
 
-    ``policy_hash`` is computed *after* all merging, so it identifies the policy
-    that actually ran rather than the file on disk. That matters for
-    reproducibility: two runs with the same ``--policy`` but different
-    ``--budget-heavy`` must not claim the same hash.
+    ``policy_hash`` stays separate from the config's own ``config_hash`` because a policy change and a
+    model change are not the same event and a reader must be able to tell them apart. It is computed
+    *after* all merging, so it identifies the policy that actually ran.
 
     Args:
-        path: Optional policy YAML to deep-merge over the packaged default.
-        overrides: Optional in-memory overrides (e.g. built from CLI flags),
-            deep-merged last. ``None`` values are dropped so an unset flag does
-            not clobber a file's value.
+        path: Optional run config YAML deep-merged over the packaged default; its ``adaptive:``
+            section becomes the policy.
+        overrides: Optional in-memory policy overrides, deep-merged last. ``None`` values are dropped
+            so an unset entry leaves the file's value alone.
 
     Returns:
         The merged policy dict with ``policy_hash`` attached.
-    """
-    import yaml  # type: ignore[import-untyped]
 
-    with open(_DEFAULT_POLICY_PATH, encoding="utf-8") as f:
-        policy = yaml.safe_load(f)
+    Raises:
+        ValueError: When ``path`` names a file with no ``adaptive:`` section — a policy file in the
+            old shape, whose values would otherwise be merged where nothing looks for them.
+    """
+    from senselab.audio.workflows.audio_analysis.run_config import load_run_config
+
     if path is not None:
-        with open(path, encoding="utf-8") as f:
-            override = yaml.safe_load(f) or {}
-        policy = _deep_merge(policy, override)
+        import yaml  # type: ignore[import-untyped]
+
+        with open(path, encoding="utf-8") as handle:
+            candidate = yaml.safe_load(handle) or {}
+        if not isinstance(candidate, dict) or "adaptive" not in candidate:
+            raise ValueError(
+                f"{path} has no `adaptive:` section. Policy values are one section of the run config "
+                "now, so a file with `thresholds:` / `fusion:` / `rules:` at the top level would "
+                "merge into keys nothing reads. Nest them under `adaptive:`."
+            )
+    policy = dict(load_run_config(path).adaptive)
     if overrides:
         policy = _deep_merge(policy, _drop_none(overrides))
     _validate_floors(policy)

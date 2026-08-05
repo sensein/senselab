@@ -243,24 +243,6 @@ def test_a_signal_absent_from_the_evidence_is_absent_from_the_axis() -> None:
     assert "another/asr-model" not in fused[0]["signal_weights"]
 
 
-def test_a_direction_only_claim_never_overrules_a_measured_doubt() -> None:
-    """A vote that scored nothing cannot displace a doubt something else measured about it.
-
-    The asr axis derives a per-model doubt from pairwise phoneme distances. That is a measurement;
-    the bare direction is not, so it fills a gap rather than overwriting.
-    """
-    bucket = {
-        "votes": {
-            "a": {"speaks": True, "native_confidence": None},
-            "b": {"speaks": True, "native_confidence": None},
-            "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.6}},
-        }
-    }
-    out = per_signal_uncertainty(bucket)
-    assert out["a"] == pytest.approx(0.6)
-    assert out["b"] == pytest.approx(0.6)
-
-
 def test_stability_still_sees_a_direction_only_voter_flip_between_passes() -> None:
     """A flip is what stability asks about, and zero doubt in both directions cannot show one.
 

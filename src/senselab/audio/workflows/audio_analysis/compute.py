@@ -1,9 +1,14 @@
-"""Public entry point for the three-axis comparator workflow.
+"""Public entry point for the uncertainty-axis comparator workflow.
 
 ``compute_uncertainty_axes`` is the only function callers should typically need. It reads the
 in-memory ``passes`` summary produced by analyze_audio's per-task pipeline and returns the L1
-per-signal results (one per ``(pass, signal)``) plus the three fused axes, plus an
-``incomparable_reasons`` dict for the disagreements index.
+per-signal results (one per ``(pass, signal)``) plus one fused axis per ``axes.AXIS_NAMES`` entry,
+plus an ``incomparable_reasons`` dict for the disagreements index. Counted from the declaration
+rather than written out: "three" was wrong from the moment ``background_mask`` became the fourth.
+
+**One grid, every axis** (D-24). ``grid`` applies to all of them, and there is deliberately no
+per-axis override — the three that existed produced four grids sharing zero bucket keys, so every
+cross-axis coupling in the pipeline ran and did nothing.
 
 **There is no per-pass axis.** An axis aggregates across signals *and* across passes: a pass is an
 input dimension to the fold, never an index on its output. So harvest and link are per pass, and
@@ -38,7 +43,7 @@ import numpy as np
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
-from senselab.audio.workflows.audio_analysis.axes import HARVESTED_AXES
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, HARVESTED_AXES
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
@@ -90,8 +95,6 @@ def harvest_pass(
     grid: BucketGrid,
     speaker_embedding_models: list[str],
     speech_presence_labels: list[str],
-    asr_grid: BucketGrid | None = None,
-    speech_presence_grid: BucketGrid | None = None,
     scene_quality: bool = True,
     sound_sources: bool = True,
     embedding_window_s: float = 2.0,
@@ -104,6 +107,12 @@ def harvest_pass(
     calibration: dict[str, Any] | None = None,
 ) -> tuple[PassHarvest, dict[str, list[WindowEmbedding]], dict[str, str]]:
     """Run every model-touching step for one pass and return its harvested votes.
+
+    **One ``grid``, every axis.** There is no per-axis grid parameter, because there is no axis
+    whose question is answered at a different spacing: presence and the mask are cut on it, the
+    speaker votes are cast on it, and the asr axis resamples the consensus word fold onto it. The
+    three that used to exist produced four grids that shared no bucket key, which silently disabled
+    every cross-axis coupling in the pipeline.
 
     Does NOT mutate ``pass_summary``: the synthetic embedding-silhouette diar source is
     harvested from an augmented local copy and reported via
@@ -230,8 +239,6 @@ def harvest_pass(
     align_by_model = ((harvest_summary.get("alignment") or {}).get("by_model")) or {}
 
     # ── speech_presence harvest inputs ──
-    pres_grid = speech_presence_grid if speech_presence_grid is not None else grid
-
     # Frame-level speech posteriors (US3): segmentation-3.0 raw scores + the
     # Brouhaha VAD head, as continuous fine-resolution speech_presence voters.
     frame_voters: dict[str, Any] = {}
@@ -261,7 +268,7 @@ def harvest_pass(
         brouhaha_frames = extract_brouhaha_frames([per_pass_audio])[0]
         # No ``calibration`` here: L1 measures in dB / hertz / proportion, and the anchors that
         # turn those into degradation scores are applied by ``aggregate_pass`` at L2.
-        for q in harvest_quality_measurements(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=pres_grid):
+        for q in harvest_quality_measurements(audio=per_pass_audio, brouhaha=brouhaha_frames, grid=grid):
             quality_by_bucket[(round(q["start"], 6), round(q["end"], 6))] = q
         scene_quality_provenance.update(
             {
@@ -311,7 +318,7 @@ def harvest_pass(
 
     speech_presence_evidence = harvest_speech_presence_evidence(
         pass_summary=harvest_summary,
-        grid=pres_grid,
+        grid=grid,
         speech_presence_labels=speech_presence_labels,
         alignment_by_model=align_by_model,
         frame_posteriors=frame_voters or None,
@@ -331,7 +338,7 @@ def harvest_pass(
             load_source_category_map,
         )
 
-        for s in harvest_source_categories(pass_summary=harvest_summary, grid=pres_grid):
+        for s in harvest_source_categories(pass_summary=harvest_summary, grid=grid):
             source_by_bucket[(round(s["start"], 6), round(s["end"], 6))] = s
         sound_sources_provenance["category_map_version"] = load_source_category_map().get("version")
 
@@ -358,7 +365,7 @@ def harvest_pass(
                 _occupancy_by_bucket[key] = max(_occupancy_by_bucket.get(key, 0.0), float(ev["covered_fraction"]))
     background_mask_evidence = harvest_background_mask_evidence(
         duration_s=float(harvest_summary.get("duration_s", 0.0) or 0.0),
-        grid=pres_grid,
+        grid=grid,
         task_type=task_type,
         speech_by_bucket=_speech_by_bucket,
         word_coverage_by_bucket=_words_by_bucket,
@@ -391,10 +398,9 @@ def harvest_pass(
     )
 
     # ── asr harvest ──
-    utt_grid = asr_grid if asr_grid is not None else grid
     asr_votes = harvest_asr_votes(
         pass_summary=harvest_summary,
-        grid=utt_grid,
+        grid=grid,
         alignment_by_model=align_by_model,
     )
 
@@ -405,11 +411,12 @@ def harvest_pass(
         asr_votes=asr_votes,
         quality_by_bucket=quality_by_bucket,
         source_by_bucket=source_by_bucket,
-        grids={
-            "speech_presence": {"win_length": pres_grid.win_length, "hop_length": pres_grid.hop_length},
-            "speaker": {"win_length": grid.win_length, "hop_length": grid.hop_length},
-            "asr": {"win_length": utt_grid.win_length, "hop_length": utt_grid.hop_length},
-        },
+        # Every axis, and the same pair for each — recorded per axis rather than once because the
+        # *claim* being made is per axis, and a reader checking "are these on one grid?" must be
+        # able to see the four answers rather than infer them from a single entry. Built from
+        # ``AXIS_NAMES`` so an axis cannot be missing from it: ``background_mask`` was, while being
+        # cut on the presence grid, so nothing recorded what the mask's rows were spaced at.
+        grids={axis_name: {"win_length": grid.win_length, "hop_length": grid.hop_length} for axis_name in AXIS_NAMES},
         # Carried so the aggregate phase can compare a measured roll-off against Nyquist without
         # touching audio, which would break its purity guarantee.
         sampling_rate=int(per_pass_audio.sampling_rate) if per_pass_audio is not None else 16000,
@@ -441,8 +448,6 @@ def compute_uncertainty_axes(
     speaker_embedding_models: list[str],
     aggregator: str,
     speech_presence_labels: list[str],
-    asr_grid: BucketGrid | None = None,
-    speech_presence_grid: BucketGrid | None = None,
     scene_quality: bool = True,
     sound_sources: bool = True,
     embedding_window_s: float = 2.0,
@@ -474,7 +479,9 @@ def compute_uncertainty_axes(
             same dict-of-dicts shape produced by analyze_audio's run_pass (keyed by task,
             then by ``"by_model"`` for multi-model tasks). Pass labels are typically
             ``"raw"`` and ``"enhanced"``.
-        grid: Bucket grid (FR-010).
+        grid: The run's one bucket grid — every axis is harvested on it, so row *i* of one axis is
+            row *i* of another and cross-axis coupling needs no projection. Defaults to
+            :data:`~.axes.DEFAULT_TIME_GRID`; there is deliberately no per-axis override.
         params: Comparator-relevant CLI flags — recorded into each row's parquet
             provenance for reproducibility.
         audio: Per-pass ``Audio`` objects, used to slice waveforms for per-segment
@@ -495,14 +502,6 @@ def compute_uncertainty_axes(
             recomputable.
         speech_presence_labels: AudioSet labels that count as "speech-present" for AST /
             YAMNet contributions to the speech_presence axis.
-        asr_grid: Optional separate bucket grid for the asr axis (typically
-            wider + overlapping than the shared grid so most words land fully inside at
-            least one bucket). When ``None``, the shared ``grid`` is reused for asr.
-        speech_presence_grid: Optional separate (typically finer) bucket grid for the speech_presence
-            axis, so brief events can be localized from continuous frame posteriors. When
-            ``None``, the shared ``grid`` is reused (preserving legacy behavior); the CLI
-            defaults it to 0.1 s / 0.02 s. Quality and source columns are computed on this
-            same speech_presence grid so they align with the speech_presence rows.
         scene_quality: When True (default), compute per-bucket audio-quality degradation
             scores (SNR / clipping / reverb / bandwidth + estimator-spread uncertainty)
             via Brouhaha + existing DSP metrics and attach them as additive columns on
@@ -569,8 +568,6 @@ def compute_uncertainty_axes(
             grid=grid,
             speaker_embedding_models=speaker_embedding_models,
             speech_presence_labels=speech_presence_labels,
-            asr_grid=asr_grid,
-            speech_presence_grid=speech_presence_grid,
             scene_quality=scene_quality,
             sound_sources=sound_sources,
             embedding_window_s=embedding_window_s,
@@ -710,7 +707,12 @@ def compute_uncertainty_axes(
 
     _attach_scene_measurements(fused_axes, linked_by_pass)
     _apply_scene_coupling(fused_axes, params)
-    _attach_transcripts(fused_axes, buckets_by_axis_pass["asr"])
+    # No transcript column on the asr rows. It used to carry ``{pass::model → {text}}`` per bucket,
+    # rebuilt from the same words ``final/transcript.json`` publishes at word resolution — and it is
+    # what made this axis need a 1.0 s window, because a fully-contained per-bucket text read
+    # returns nothing from a bucket narrower than a word. The reader that wanted it
+    # (``labelstudio``) now gets the word-level ``final__consensus_transcript__text`` track that
+    # ``adaptive.ls_final`` builds from the transcript itself.
 
     return signal_results_by_pass, fused_axes, incomparable_reasons, per_window_embeddings_by_pass
 
@@ -765,29 +767,6 @@ def _attach_scene_measurements(
         if names:
             row["src_dominant"] = max(sorted(set(names)), key=names.count)
     presence.provenance["scene_measurement_fold"] = "mean over passes reporting the bucket"
-
-
-def _attach_transcripts(fused_axes: dict[str, FusedAxis], asr_buckets_by_pass: dict[str, Any]) -> None:
-    """Carry each model's transcript for the bucket onto the fused asr row.
-
-    Not a fold and not an estimate — it is what a reviewer needs in order to see *why* the axis
-    is unsure, keyed ``<pass>::<model>`` so the pass a transcript came from stays visible without
-    the axis acquiring a pass index.
-    """
-    asr = fused_axes.get("asr")
-    if asr is None:
-        return
-    by_bucket: dict[tuple[float, float], dict[str, Any]] = {}
-    for perturbation, buckets in sorted(asr_buckets_by_pass.items()):
-        for bucket in buckets or []:
-            key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
-            for model, vote in (bucket.get("votes") or {}).items():
-                if str(model).startswith("__") or not isinstance(vote, dict) or not vote.get("text"):
-                    continue
-                by_bucket.setdefault(key, {})[f"{perturbation}::{model}"] = {"text": vote.get("text")}
-    for row in asr.rows:
-        key = (round(float(row["start"]), 6), round(float(row["end"]), 6))
-        row["consensus_votes"] = by_bucket.get(key, {})
 
 
 def _apply_scene_coupling(fused_axes: dict[str, FusedAxis], params: dict[str, Any]) -> None:

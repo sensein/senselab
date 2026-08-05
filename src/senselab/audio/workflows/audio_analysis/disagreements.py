@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.axes import AXIS_PRIORITY as _AXIS_PRIORITY
+from senselab.audio.workflows.audio_analysis.axes import HARVESTED_AXES
 from senselab.audio.workflows.audio_analysis.labelstudio import HIGH_THRESHOLD
 from senselab.audio.workflows.audio_analysis.layout import estimates_dir
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
@@ -75,7 +76,10 @@ def build_disagreements_index(
     speech_presence) and start-time secondary tiebreak. Truncated to ``top_n``; ``top_n=0``
     returns an empty entries list (caller should skip writing the file).
     """
-    rows_by_axis: dict[str, int] = {"speech_presence": 0, "speaker": 0, "asr": 0}
+    # Seeded from the declaration, not from a literal of three: an axis that produced no rows has to
+    # report ``0`` rather than be absent, and a hand-written tuple is how ``background_mask`` came to
+    # be missing from every count that named the axes.
+    rows_by_axis: dict[str, int] = dict.fromkeys(HARVESTED_AXES, 0)
     total_rows = 0
     high_count = 0
     evidence = _evidence_index(signal_results_by_pass)
@@ -130,7 +134,10 @@ def build_disagreements_index(
             for k in (
                 "top_n",
                 "aggregator",
-                "phoneme_disagreement_threshold",
+                # The run config's identity, so an entry can be traced to the values that produced
+                # it. ``phoneme_disagreement_threshold`` used to sit here and was echoed only —
+                # nothing read it, so the index reported a threshold that gated nothing.
+                "run_config",
                 "bucket_grid",
                 "speech_presence_labels",
             )

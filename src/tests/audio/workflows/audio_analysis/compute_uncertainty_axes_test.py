@@ -149,7 +149,11 @@ def test_compute_uncertainty_axes_happy_path() -> None:
         "asr": {
             "by_model": {
                 "whisper": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world")]),
-                "granite": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world!!")]),
+                # A genuine substitution, not a punctuation edit. The axis grades word agreement
+                # *phonemically* (``asr.phoneme_similarity``), so "world" vs "world!!" is agreement —
+                # which is the right reading and made this fixture assert on a difference that the
+                # measure, correctly, does not see.
+                "granite": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "planet")]),
             }
         },
     }
@@ -218,10 +222,13 @@ def test_compute_uncertainty_axes_happy_path() -> None:
     assert avg_speech_presence > 0.5
     assert avg_speaker > 0.5
 
-    # Utterance: raw pass has one transcript edit (granite "world!!" vs whisper "world"),
-    # so at least one bucket should have non-zero uncertainty.
+    # Utterance: the raw pass substitutes one word (granite "planet" vs whisper "world"), so the
+    # buckets that word reaches carry doubt — and the buckets no word reaches carry ``None`` rather
+    # than 0.0, because nothing was said there.
     raw_asr = fused_axes["asr"]
-    assert any((r["triage_score"] or 0) > 0 for r in raw_asr.rows)
+    scored = [r for r in raw_asr.rows if r["triage_score"] is not None]
+    assert scored, "the asr axis measured nothing at all"
+    assert any(r["triage_score"] > 0 for r in scored)
 
 
 # ── T026 text-only ASR via alignment block ───────────────────────────
@@ -256,10 +263,12 @@ def test_text_only_asr_resolves_through_alignment() -> None:
         speech_presence_labels=["Speech"],
     )
     speech_presence = fused_axes["speech_presence"]
-    # Bucket [0.0, 0.5) should have granite voting True (covers both aligned chunks).
-    matching = [r for r in speech_presence.rows if abs(r["start"] - 0.0) < 1e-6]
-    assert matching, "expected a row at start=0.0"
-    granite_vote = _votes_at(linked, "raw", "speech_presence", 0.0).get("granite")
+    # On the run's own 0.1 s grid, "hello" spans [0.1, 0.4]: the bucket at 0.1 is the one the word
+    # reaches. Asserting at 0.0 only worked while ``BucketGrid()`` defaulted to 0.5 s — a bucket wide
+    # enough to swallow the leading silence, and a default that disagreed with the declared grid.
+    matching = [r for r in speech_presence.rows if abs(r["start"] - 0.1) < 1e-6]
+    assert matching, "expected a row at start=0.1"
+    granite_vote = _votes_at(linked, "raw", "speech_presence", 0.1).get("granite")
     assert granite_vote is not None and granite_vote["speaks"] is True
 
 
@@ -567,7 +576,6 @@ def test_speech_presence_confidence_uncertainty_split_and_instability(monkeypatc
         linked_out=linked,
         passes={"raw": raw_pass},
         grid=BucketGrid(win_length=0.5, hop_length=0.5),
-        speech_presence_grid=BucketGrid(win_length=0.1, hop_length=0.1),
         params={},
         audio={"raw": _silent_audio(2.0)},
         speaker_embedding_models=[],
@@ -642,7 +650,11 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
         "asr": {
             "by_model": {
                 "whisper": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world")]),
-                "granite": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world!!")]),
+                # A genuine substitution, not a punctuation edit. The axis grades word agreement
+                # *phonemically* (``asr.phoneme_similarity``), so "world" vs "world!!" is agreement —
+                # which is the right reading and made this fixture assert on a difference that the
+                # measure, correctly, does not see.
+                "granite": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "planet")]),
             }
         },
     }

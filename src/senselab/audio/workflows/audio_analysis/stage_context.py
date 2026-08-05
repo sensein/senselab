@@ -271,5 +271,8 @@ class PassPlan:
     aligner: Literal["qwen", "mms"] = "qwen"
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
     mms_aligner_model: str = "facebook/mms-1b-all"
-    asr_language: str = "en"
+    # ``None`` = not pinned, which ``stage_alignment`` resolves to English. It was ``str = "en"``
+    # while the CLI passed its unset value through unchanged, so the annotation described a default
+    # that never took effect.
+    asr_language: str | None = None
     qwen_native_timestamps: bool = True
