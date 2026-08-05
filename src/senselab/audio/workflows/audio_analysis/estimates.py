@@ -45,7 +45,51 @@ from typing import TYPE_CHECKING, Any, Final, Mapping, Sequence
 if TYPE_CHECKING:  # pragma: no cover — import cost stays out of the runtime path
     import pandas as pd
 
-__all__ = ["ESTIMATE_COLUMNS", "estimate_frame"]
+__all__ = ["ESTIMATE_COLUMNS", "control_doubt", "estimate_frame"]
+
+
+def control_doubt(row: Mapping[str, Any]) -> float | None:
+    """Doubt in this bucket's answer, on the scale ``theta_low`` / ``theta_high`` are written on.
+
+    **The loop's gates need a probability, and only ``confidence`` is one.** Region seeding
+    (``regions.propose_regions``), convergence marking (``convergence.apply_convergence_marks``) and
+    the residual metric (``belief.BeliefState.uncertainty_mass``) all compared ``uncertainty``
+    against those thresholds — but ``uncertainty`` is normalised *binary entropy* of the mean
+    per-signal doubt, and entropy climbs steeply away from zero: ``H(0.10) = 0.469``,
+    ``H(0.20) = 0.722``. The thresholds are doubt-scaled (they are the Label Studio high/low bins),
+    so the comparison silently meant "flag anything above 17% doubt, converge only below 6%" —
+    solve ``H(p) = 0.66`` and ``H(p) = 0.33``. Nobody chose those numbers.
+
+    Measured cost, on a clean two-speaker conversation whose speaker-count posterior is 0.978
+    unimodal and whose per-speaker ``existence_uncertainty`` is 0.0: the speaker axis read 0.666 and
+    seeded **114 of 214** buckets, letting 23 converge. On doubt it seeds 13 and converges 152. Of
+    the 0.666, aleatoric was 0.391 and epistemic 0.275 — so 59% of what drove region proposal was
+    doubt no further measurement can remove, which is the waste ``statistics.py`` says the
+    decomposition exists to prevent.
+
+    **Why not ``epistemic_uncertainty``**, which is the reducible part and looks like the principled
+    choice: it is inter-signal disagreement, so it is structurally ``0.0`` for a single-voter axis.
+    ``asr`` has exactly one voter (``consensus_words``), and gating on epistemic would make it
+    permanently un-investigatable while its doubt is real — measured mean 0.215, max 0.918. A lone
+    confident-but-doubtful voter is a reason to add a second, not a reason to stop looking. Each rule
+    keeps its own reducibility test where that question belongs: ``U1``/``U2`` gate on
+    ``epistemic_uncertainty`` themselves.
+
+    Args:
+        row: An estimates row.
+
+    Returns:
+        ``1 - confidence`` clipped to ``[0, 1]``, or ``None`` when the bucket carries no confidence —
+        which is "nothing was measured here", and distinct from confident agreement at zero doubt.
+        ``NaN`` counts as absent: it is what a parquet null deserialises to, and comparing it against
+        a threshold silently answers ``False`` in both directions.
+    """
+    value = row.get("confidence")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    if value != value:  # NaN — a parquet null round-tripped through pandas
+        return None
+    return max(0.0, min(1.0, 1.0 - float(value)))
 
 
 ESTIMATE_COLUMNS: Final[tuple[str, ...]] = (

@@ -6,6 +6,7 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.belief import AXES, bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.types import PlannedIntervention
+from senselab.audio.workflows.audio_analysis.estimates import control_doubt
 from senselab.audio.workflows.audio_analysis.rounds import detect_non_convergence
 
 __all__ = [
@@ -47,7 +48,11 @@ def apply_convergence_marks(
         for row in state.axis_rows(axis):
             if row.get("status") != "open":
                 continue
-            u = row.get("uncertainty")
+            # Doubt, not entropy. ``theta_low`` is doubt-scaled, so the entropy column made
+            # "converged" mean "under 6% doubt" and left confident buckets open forever
+            # (``estimates.control_doubt``). ``aleatoric_floor`` below is built from [0, 1]
+            # degradation scores, so it is on this scale too and only now comparable.
+            u = control_doubt(row)
             if u is None:
                 continue
             if u <= theta_low:
@@ -58,7 +63,9 @@ def apply_convergence_marks(
             hist = row.get("history") or []
             improvement = None
             if len(hist) >= 2:
-                improvement = hist[-2]["uncertainty"] - hist[-1]["uncertainty"]
+                # Measured on the same quantity the gate compares, or "stalled" and "converged"
+                # would be judged on two different scales.
+                improvement = float(hist[-2]["doubt"]) - float(hist[-1]["doubt"])
             stalled = improvement is not None and improvement < epsilon
             if touches >= max_touch and stalled:
                 floor = row.get("aleatoric_floor")

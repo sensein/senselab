@@ -48,6 +48,7 @@ from senselab.audio.workflows.audio_analysis.degradation import (
     reverb_degradation,
     snr_degradation,
 )
+from senselab.audio.workflows.audio_analysis.estimates import control_doubt
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
 from senselab.audio.workflows.audio_analysis.layout import derivatives_dir, perturbation_dir
@@ -935,7 +936,12 @@ class BeliefState:
                 _attach_floor(row, meta)
                 row["status"] = "open"
                 row["last_refolded_round"] = int(round_index)
-                row["history"] = [{"round": int(round_index), "uncertainty": row["uncertainty"]}]
+                # ``doubt`` beside the entropy value: convergence measures round-over-round
+                # improvement on the quantity its gate compares (``estimates.control_doubt``), and a
+                # history in other units would judge "stalled" on a different scale from "converged".
+                row["history"] = [
+                    {"round": int(round_index), "uncertainty": row["uncertainty"], "doubt": control_doubt(row)}
+                ]
                 rows.append(row)
             state.rows[axis] = rows
         return state
@@ -968,7 +974,9 @@ class BeliefState:
                 row["p_voice"] = new["p_voice"]
             _attach_floor(row, row.get("meta") or {})
             row["last_refolded_round"] = round_idx
-            row["history"].append({"round": round_idx, "uncertainty": row["uncertainty"]})
+            row["history"].append(
+                {"round": round_idx, "uncertainty": row["uncertainty"], "doubt": control_doubt(row)}
+            )
             changed.append(row)
         return changed
 
@@ -977,10 +985,15 @@ class BeliefState:
         return self.rows.get(axis, [])
 
     def uncertainty_mass(self, axis: str, theta_low: float) -> float:
-        """Σ max(0, u − θ_low) · width — the quantity interventions try to shrink."""
+        """Σ max(0, doubt − θ_low) · width — the quantity interventions try to shrink.
+
+        Doubt (``estimates.control_doubt``), not the entropy column: ``theta_low`` is doubt-scaled,
+        so measuring the mass above it in entropy units reported residual work where the evidence
+        was already settled — 191 of 214 speaker buckets on a clean conversation.
+        """
         total = 0.0
         for row in self.axis_rows(axis):
-            u = row.get("uncertainty")
+            u = control_doubt(row)
             if u is None:
                 continue
             total += max(0.0, float(u) - theta_low) * (float(row["end"]) - float(row["start"]))
