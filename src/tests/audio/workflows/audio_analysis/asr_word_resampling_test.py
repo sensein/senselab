@@ -49,27 +49,35 @@ def test_a_doubtful_word_puts_its_doubt_where_it_is() -> None:
     assert out.get((0.0, 1.0)) is None, "a well-localised word does not reach four buckets away"
 
 
-def test_timing_doubt_reaches_the_axis_without_becoming_textual_doubt() -> None:
-    """The axis asks a *time-indexed* question, so localisation is part of its answer.
+def test_the_axis_carries_word_accuracy_and_nothing_else() -> None:
+    """One question per axis: how much do the recognizers disagree about the word sequence.
 
-    Two things have to hold at once, and an earlier version of this test asserted only the first,
-    which is how the axis came out at 0.0000 on a real run. On that recording the recognizers
-    agreed on 61 of 62 words — ``existence_confidence`` 1.0 — while ``temporal_confidence`` ranged
-    0.25 to 1.0 and carried every bit of the variation. Using existence alone as the mass threw
-    away the only informative part, and smearing zero mass wider is still zero.
+    This axis has been through two wrong answers and the shape of both is worth keeping. Bucketed
+    pairwise WER made timing jitter read as textual disagreement (0.4266 on word-identical
+    transcripts). A joint of accuracy x localisation removed the conflation but not the ambiguity:
+    0.788 could mean either half and a reader could not tell which. Localisation is now reported
+    per edge on the word, and this axis answers only the accuracy question.
 
-    - The **word's** ``existence_confidence`` stays 1.0: disagreement about *when* must never be
-      recorded as disagreement about *what*. That was the original defect and it stays fixed.
-    - The **bucket** is nonetheless doubtful: "what was said here" cannot be answered confidently
-      about a word nobody can place.
+    A word every recognizer agreed on therefore leaves the axis settled, however poorly it is
+    placed — and that is the honest reading, not a gap: there is no doubt about *what* was said.
     """
     agreed_but_smeared = _word("without", 1.2, 1.6, existence=1.0, temporal=0.1)
     out = resample_word_doubt([agreed_but_smeared], BUCKETS)
     values = [v for v in out.values() if v is not None]
 
     assert values, "the word has to reach some bucket"
-    assert max(values) > 0.5, f"a word nobody can place leaves the buckets doubtful: {out}"
-    assert max(values) <= 1.0
+    assert max(values) == pytest.approx(0.0), f"agreed text means a settled axis: {out}"
+
+
+def test_localisation_changes_neither_the_mass_nor_the_reach() -> None:
+    """Temporal agreement is excluded from this axis entirely, not merely down-weighted.
+
+    Two words identical in accuracy and opposite in localisation must produce the same axis, or the
+    number is once again answering two questions at once.
+    """
+    tight = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 1.0)], BUCKETS)
+    loose = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 0.0)], BUCKETS)
+    assert tight == loose, f"localisation moved the accuracy axis: tight={tight} loose={loose}"
 
 
 def test_a_word_agreed_and_well_placed_leaves_no_doubt() -> None:
@@ -78,25 +86,16 @@ def test_a_word_agreed_and_well_placed_leaves_no_doubt() -> None:
     assert all(v == pytest.approx(0.0) for v in out.values() if v is not None), out
 
 
-def test_a_poorly_localised_word_reaches_wider_and_never_exceeds_its_own_doubt() -> None:
-    """Temporal uncertainty sets the reach *and* enters the mass, but spreading creates neither.
+def test_a_word_deposits_its_doubt_over_its_own_span_only() -> None:
+    """No smearing: the reach is the word, so the axis stays attributable to the words in a bucket.
 
-    An earlier version asserted the mass was unchanged between the two, on the reading that
-    temporal doubt only widened the reach. That reading is what produced an axis of 0.0000 on a
-    recording where the text was agreed and only the timing varied. What has to hold instead:
-    reach still grows with temporal doubt, and no bucket ever reports more doubt than the word
-    itself carries — the projection may not manufacture any.
+    The projection may not manufacture doubt either — a bucket never reports more than the word it
+    holds carries.
     """
-    tight = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 1.0)], BUCKETS)
-    loose = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 0.0)], BUCKETS)
-
-    tight_touched = {k for k, v in tight.items() if v is not None}
-    loose_touched = {k for k, v in loose.items() if v is not None}
-    assert loose_touched > tight_touched, f"loose={loose_touched} tight={tight_touched}"
-
-    # joint doubt = 1 - existence x temporal: 0.5 for the tight word, 1.0 for the loose one.
-    assert max(v for v in tight.values() if v is not None) <= 0.5 + 1e-9
-    assert max(v for v in loose.values() if v is not None) <= 1.0 + 1e-9
+    out = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 1.0)], BUCKETS)
+    touched = {k for k, v in out.items() if v is not None}
+    assert touched == {(2.0, 3.0), (2.5, 3.5)}, touched
+    assert max(v for v in out.values() if v is not None) <= 0.5 + 1e-9
 
 
 def test_unmeasured_localisation_does_not_smear() -> None:

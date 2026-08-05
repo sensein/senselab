@@ -270,3 +270,31 @@ def test_two_transcripts_sharing_an_aligner_are_one_timing_source() -> None:
         f"two transcripts sharing one aligner are one timing source: {shared[0]}"
     )
     assert shared[0]["timing_sources"] == 1
+
+
+def test_the_two_edges_are_reported_separately() -> None:
+    """Onset and offset agreement are different findings and must not be pooled into one number.
+
+    A word agreed at its start and disputed at its end localises a boundary; a word disputed at
+    both does not localise the word. Reporting only the worse edge — which is what a single
+    ``temporal_confidence`` did — told a reader neither which edge nor whether both.
+    """
+    out = fuse_word_streams(
+        {
+            "a": [_w("hello", 1.00, 1.40)],
+            "b": [_w("hello", 1.01, 1.75)],
+        },
+        min_corroboration=MIN_CORROBORATION,
+    )
+    word = out[0]
+    assert word["onset_confidence"] > 0.9, f"the starts agree to 10 ms: {word}"
+    assert word["offset_confidence"] < word["onset_confidence"], "the ends disagree by a third of a word"
+    assert word["temporal_confidence"] == pytest.approx(word["offset_confidence"]), (
+        "the pooled figure is the worse edge"
+    )
+
+
+def test_a_lone_timing_source_reports_neither_edge() -> None:
+    """Unmeasured stays unmeasured at both edges — a renderer must draw nothing, not a green mark."""
+    out = fuse_word_streams({"a": [_w("hello", 0.0, 0.5)]}, min_corroboration=MIN_CORROBORATION)
+    assert out[0]["onset_confidence"] is None and out[0]["offset_confidence"] is None
