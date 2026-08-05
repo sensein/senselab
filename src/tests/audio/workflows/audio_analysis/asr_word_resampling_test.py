@@ -46,6 +46,7 @@ def _pass_summary(words_by_model: dict[str, list[tuple[float, float, str]]], *, 
         }
     return {"duration_s": duration_s, "asr": {"by_model": by_model}}
 
+
 BUCKETS = [(round(i * 0.5, 6), round(i * 0.5 + 1.0, 6)) for i in range(6)]
 
 
@@ -178,9 +179,7 @@ def test_the_axis_folds_the_derivative_and_nothing_else() -> None:
     scored = [b for b in harvested if b["votes"]]
     assert scored, "the harvest emitted no votes at all"
     for bucket in scored:
-        assert set(bucket["votes"]) == {"consensus_words"}, (
-            f"the asr axis has one voter; got {sorted(bucket['votes'])}"
-        )
+        assert set(bucket["votes"]) == {"consensus_words"}, f"the asr axis has one voter; got {sorted(bucket['votes'])}"
         assert set(per_signal_uncertainty(bucket)) == {"consensus_words"}
 
 
@@ -215,3 +214,35 @@ def test_the_fold_reads_the_shape_the_pipeline_actually_hands_it() -> None:
     assert provenance.get("n_words"), f"no words were folded out of the real shape: {provenance}"
     assert doubt[(0.0, 1.0)] is not None, "the first bucket holds both words and must carry a value"
     assert provenance["timing_sources"] == 2, provenance
+
+
+def test_the_fold_is_exposed_so_two_axes_can_share_one_call() -> None:
+    """The speaker axis needs these same words, and folding twice would run g2p twice for one answer.
+
+    Asserted on the result rather than on a call count: what matters is that a caller can obtain the
+    words once and hand them to both harvests, and that doing so gives the same axis values as letting
+    the harvest fold them itself.
+    """
+    from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
+    from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+
+    summary = _pass_summary(
+        {
+            "model-a": [(0.0, 0.4, "hello"), (0.4, 0.9, "there")],
+            "model-b": [(0.0, 0.4, "hello"), (0.4, 0.9, "chair")],
+        },
+        duration_s=1.0,
+    )
+    resolved = {
+        m: resolve_asr_result(b, None) for m, b in summary["asr"]["by_model"].items() if b.get("status") == "ok"
+    }
+    words, provenance = fuse_consensus_words(resolved)
+    assert words, "the fold produced no words"
+    assert provenance["operator"] == "consensus_words/resample"
+    assert all("temporal_confidence" in w for w in words), "the speaker axis reads this field"
+
+    own = harvest_asr_votes(pass_summary=summary, grid=BucketGrid(), alignment_by_model={})
+    shared = harvest_asr_votes(
+        pass_summary=summary, grid=BucketGrid(), alignment_by_model={}, fused=(words, provenance)
+    )
+    assert own == shared, "handing the fold in must not change the axis"
