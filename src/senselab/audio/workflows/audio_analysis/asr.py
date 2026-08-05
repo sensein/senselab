@@ -29,6 +29,45 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 
 
+def _consensus_word_doubt(
+    asr_resolved: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+) -> tuple[dict[tuple[float, float], float | None], dict[str, Any]]:
+    """Fold the recognizers' words once, then resample the result onto the grid (D-27).
+
+    Returns ``(doubt_by_bucket, provenance)``. The provenance travels onto every row because the
+    fold's parameters *are* its policy: a derivative whose choices are not in the artifact is the
+    default argument this design keeps removing (D-21 rule 4).
+
+    The slot parameters are the task API's own defaults, named here rather than inherited silently
+    so the recorded value and the used value cannot drift.
+    """
+    from senselab.audio.tasks.speech_to_text_ensemble import fuse_word_streams, iter_word_leaves
+
+    slot_overlap, slot_mid_tol_s = 0.3, 0.15
+    streams: dict[str, list[dict[str, Any]]] = {}
+    for model_id, resolved in asr_resolved.items():
+        words = iter_word_leaves(resolved)
+        if words:
+            streams[str(model_id)] = words
+    if not streams:
+        return ({b: None for b in buckets}, {})
+
+    fused = fuse_word_streams(streams, slot_overlap=slot_overlap, slot_mid_tol_s=slot_mid_tol_s)
+    timing_sources = sorted({str(w.get("timing_sources")) for w in fused})
+    provenance = {
+        "operator": "consensus_words/resample",
+        "sources": sorted(streams),
+        "n_words": len(fused),
+        "slot_overlap": slot_overlap,
+        "slot_mid_tol_s": slot_mid_tol_s,
+        # How many *independent* timing opinions the words had. Two recognizers sharing an aligner
+        # are one, so this can be lower than the number of sources and the row should say so.
+        "timing_sources": timing_sources[0] if len(timing_sources) == 1 else timing_sources,
+    }
+    return resample_word_doubt(fused, buckets), provenance
+
+
 def resample_word_doubt(
     words: Sequence[Mapping[str, Any]],
     buckets: Sequence[tuple[float, float]],
@@ -144,6 +183,12 @@ def harvest_asr_votes(
 
     from itertools import combinations
 
+    # One fold per pass, then resampled per bucket — not recomputed per bucket, and deliberately
+    # not "which words fell fully inside this bucket". Reach is set by how well each word is
+    # localised, so a word straddling a grid line no longer reads as two models disagreeing.
+    buckets = [(round(float(s), 6), round(float(e), 6)) for s, e, _ in grid.iter_buckets(duration_s)]
+    word_doubt, word_doubt_provenance = _consensus_word_doubt(asr_resolved, buckets)
+
     out: list[dict[str, Any]] = []
     for start, end, _idx in grid.iter_buckets(duration_s):
         votes: dict[str, dict[str, Any]] = {}
@@ -216,12 +261,22 @@ def harvest_asr_votes(
                     per_source_conf[m] = max(0.0, min(1.0, _math.exp(float(alp))))
                 except (ValueError, OverflowError):
                     pass
+        # Recorded, not voted (D-27). The pairwise phoneme distance is computed over the same
+        # transcripts the consensus derivative folds, so its source closure is a subset of that
+        # derivative's — counting both is one body of evidence twice (D-21 rule 6). It stays on the
+        # row because it is the readable form of *which pair* diverged, which the fold cannot say.
         votes["__pairwise_phoneme_distances__"] = {
             "pairs": pair_distances,
             "n_sources": len(sources),
             "sources": sources,
             "per_source_confidence": per_source_conf,
+            "scored": False,
         }
+        # The axis's one voter: the two-part word confidence, resampled onto this bucket. Absent
+        # where no word reaches, which is not the same as a bucket nobody doubts.
+        doubt = word_doubt.get((round(float(start), 6), round(float(end), 6)))
+        if doubt is not None:
+            votes["consensus_words"] = {"value": doubt, **word_doubt_provenance}
         out.append({"start": start, "end": end, "votes": votes})
     return out
 

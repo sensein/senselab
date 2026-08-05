@@ -101,3 +101,44 @@ def test_two_words_in_one_bucket_combine_by_coverage() -> None:
 def test_no_words_at_all_reports_nothing() -> None:
     """A run with no transcript has an unmeasured asr axis, not a confident one."""
     assert all(v is None for v in resample_word_doubt([], BUCKETS).values())
+
+
+def test_the_axis_reads_the_derivative_and_the_transcripts_only_witness_it() -> None:
+    """The restructure, end to end through the fold (D-27, D-21 rule 6).
+
+    The asr axis used to score three per-model signals whose values came from pairwise phoneme
+    distance over bucketed text. Those transcripts are exactly what the consensus derivative folds,
+    so scoring both is one body of evidence twice. Now the derivative is the voter and the
+    per-model texts stay on the row as the record of *what* each said — which the fold cannot say.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
+
+    bucket = {
+        "start": 0.0,
+        "end": 1.0,
+        "votes": {
+            "model-a": {"text": "hello there"},
+            "model-b": {"text": "hello thair"},
+            "__pairwise_phoneme_distances__": {"pairs": {"model-a|model-b": 0.4}, "scored": False},
+            "consensus_words": {"value": 0.3, "operator": "consensus_words/resample"},
+        },
+    }
+    per_signal = per_signal_uncertainty(bucket)
+
+    assert per_signal == {"consensus_words": pytest.approx(0.3)}, (
+        f"the axis must fold the derivative alone; got {per_signal}"
+    )
+
+
+def test_an_unscored_pairwise_block_still_reaches_the_artifact() -> None:
+    """Excluded from the fold is not removed from the record.
+
+    Dropping the block would lose which *pair* of recognizers diverged, and a consensus number
+    cannot recover that. The rule is about double-counting evidence, not about hiding it.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import _pairwise_per_signal
+
+    scored = {"__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}}}
+    unscored = {"__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}, "scored": False}}
+    assert _pairwise_per_signal(scored) == {"a": pytest.approx(0.4), "b": pytest.approx(0.4)}
+    assert _pairwise_per_signal(unscored) == {}

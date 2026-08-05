@@ -186,6 +186,13 @@ def _pairwise_per_signal(votes: Mapping[str, Any]) -> dict[str, float]:
     block = votes.get("__pairwise_phoneme_distances__")
     if not isinstance(block, Mapping):
         return {}
+    if block.get("scored") is False:
+        # Present for the record, not as evidence. The asr axis now folds the same transcripts into
+        # a consensus derivative, and the pairwise distance is computed over that derivative's own
+        # inputs — its source closure is a subset, so scoring both counts one body of evidence
+        # twice (D-21 rule 6). The block stays on the row because it names *which pair* diverged,
+        # which a fold cannot.
+        return {}
     per_model: dict[str, list[float]] = {}
     for key, distance in (block.get("pairs") or {}).items():
         if not isinstance(distance, (int, float)):
