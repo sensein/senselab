@@ -63,21 +63,26 @@ def aligned_columns(streams: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[
     if not harmonised.slots:
         return None
 
-    # Rebuild full word dicts per column: the alignment carries surface forms and each model's own
-    # span, and the fold needs the rest of the word (confidence, corroboration, timing provenance)
-    # to weigh and to measure boundary agreement. Matched back by (model, start) since a model
-    # cannot place two words at one onset.
-    index = {(model, round(float(w["start"]), 6)): w for model, words in streams.items() for w in words}
+    # Rebuild full word dicts per column by **index**, which is the word's identity. The fold needs
+    # the rest of each word — confidence, corroboration, timing provenance — to weigh it and to
+    # measure boundary agreement, and the lattice carries only surface form and span.
+    #
+    # Matching by onset instead looked equivalent and was not: forced aligners emit words sharing an
+    # onset and words of zero duration (measured on the 5-speaker clip: "Josh" at [2.72, 2.72], two
+    # words at 2.72), so an onset does not identify a word. That lookup put one word in two columns
+    # and dropped another, turning "wanted to take" into "wanted take take" — a corruption of the
+    # transcript introduced by the grouping meant to protect it.
+    ordered = {model: list(words) for model, words in streams.items()}
     columns: list[list[dict[str, Any]]] = []
     for slot in harmonised.slots:
         members: list[dict[str, Any]] = []
-        for model, span in (slot.times or {}).items():
-            if span is None:
+        for model, position in (slot.indices or {}).items():
+            if position is None:
                 continue
-            original = index.get((model, round(float(span[0]), 6)))
-            if original is None:
+            words_of_model = ordered.get(model) or []
+            if not 0 <= int(position) < len(words_of_model):
                 continue
-            members.append({**dict(original), "model": model})
+            members.append({**dict(words_of_model[int(position)]), "model": model})
         if members:
             columns.append(members)
     return columns or None
