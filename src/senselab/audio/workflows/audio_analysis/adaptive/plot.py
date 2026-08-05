@@ -7,11 +7,26 @@ Reads the persisted round artifacts (no live state needed) and renders
    reviewer can see *why* a span is uncertain (noise, silence, overlap) rather
    than only that it is;
 2. ground-truth segments (when an LS export is provided) — untranscribed spans hatched;
-3. speech_presence — final p_voice + uncertainty band;
-4. speaker — round-1 vs final uncertainty, GT speaker boundaries dashed;
-5. asr — round-1 vs final uncertainty, proposed regions, fired
+3. background mask (state) — the mask *value*: which spans are target-free, region by region;
+4. speech_presence — final p_voice + uncertainty band;
+5. speaker — round-1 vs final uncertainty, GT speaker boundaries dashed;
+6. per-speaker presence — one lane per hypothesised speaker;
+7. asr — round-1 vs final uncertainty, proposed regions, fired
    interventions, irreducible buckets hatched;
-6. fused words — text colored by confidence (green→red), speaker ticks.
+8. background_mask — round-1 vs final uncertainty, the fourth axis;
+9. fused words — text colored by confidence (green→red), speaker ticks.
+
+**Rows 3 and 8 are different objects and that is the point.** ``derivatives/`` holds values and
+``estimates/`` holds doubt about them (D-22); the mask is in both. Row 3 is the value — the
+regions, with their own confidence as alpha — and row 8 is the axis, fused per bucket like the
+other three.
+
+Row 8 was missing. This figure hand-listed three axes and drew row 3 where a reader looks for the
+fourth, so on a run whose mask derivative is a single ``target_active`` region at uncertainty 0.0
+the final figure showed one flat confident band while ``L2/round/<n>/timeline.png`` showed the
+same axis varying across 1070 buckets. Two figures disagreeing about one axis, because only one of
+them was drawing it. ``axes.AXIS_NAMES`` is the list; a row per name is what keeps it from being
+short again.
 """
 
 from __future__ import annotations
@@ -20,6 +35,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
     derivatives_dir,
@@ -29,6 +45,7 @@ from senselab.audio.workflows.audio_analysis.layout import (
     last_round,
     rounds_present,
 )
+from senselab.utils.data_structures.logging import logger
 
 
 def build_adaptive_timeline(
@@ -85,9 +102,19 @@ def build_adaptive_timeline(
         gt = load_ls_ground_truth(gt_path)
 
     fig, axes = plt.subplots(
-        8, 1, figsize=(14, 15.5), sharex=True, height_ratios=[1.3, 0.8, 0.6, 1.2, 1.2, 0.9, 1.4, 1.0]
+        9, 1, figsize=(14, 17.0), sharex=True, height_ratios=[1.3, 0.8, 0.6, 1.2, 1.2, 0.9, 1.4, 1.0, 1.0]
     )
-    ax_spec, ax_gt, ax_mask, ax_p, ax_i, ax_spk, ax_u, ax_w = axes
+    ax_spec, ax_gt, ax_mask, ax_p, ax_i, ax_spk, ax_u, ax_bm, ax_w = axes
+
+    # Every active axis owes a row. The list used to be three — presence, speaker, asr — with the
+    # mask's region strip (``ax_mask``) sitting where the fourth belongs, which is the failure
+    # ``axes.py`` was written to prevent: "Any list of three axes is wrong."
+    drawn_axis_rows = {"speech_presence": ax_p, "speaker": ax_i, "asr": ax_u, "background_mask": ax_bm}
+    unrepresented = [name for name in AXIS_NAMES if name not in drawn_axis_rows]
+    if unrepresented:
+        # A new axis reaches here as a visible gap rather than as an absence. Not an exception:
+        # a plot must not fail a run, and a run that added an axis is not a broken run.
+        logger.warning("final/timeline.png has no row for %s", ", ".join(unrepresented))
 
     # ── row 0: spectrogram ──────────────────────────────────────────────
     # The acoustic evidence every row below is derived from. Put first so a
@@ -240,7 +267,33 @@ def build_adaptive_timeline(
         loc="upper left", fontsize=7, ncol=2, title="θ_high/θ_low dotted; irreducible hatched", title_fontsize=6
     )
 
-    # ── row 5: fused words ──────────────────────────────────────────────
+    # ── row 7: background_mask, the fourth axis ─────────────────────────
+    # The doubt, not the value: row 2 draws the mask's regions and this draws the fused estimate
+    # over the same span. Where they disagree — a flat confident strip above a varying axis — the
+    # axis is the one measured across buckets, and the region's own confidence is a single number
+    # a single producer reported about itself.
+    bm_0, bm_k = (
+        _belief_or_none(out_dir, first_r, "background_mask"),
+        _belief_or_none(out_dir, last_r, "background_mask"),
+    )
+    if bm_k is not None and len(bm_k):
+        if bm_0 is not None and len(bm_0):
+            _step(ax_bm, bm_0, color="silver", label=f"round {first_r}")
+        mids_bm = (bm_k["start"] + bm_k["end"]) / 2
+        ax_bm.plot(mids_bm, bm_k["uncertainty"], color="tab:brown", lw=1.2, label=f"round {last_r} (final)")
+        ax_bm.fill_between(
+            mids_bm, 0, bm_k["uncertainty"].fillna(0), color="tab:brown", alpha=0.15, label="uncertainty"
+        )
+        ax_bm.legend(loc="upper right", fontsize=7, ncol=3)
+    else:
+        # Absent and empty are different facts, and the mask axis being absent is exactly the
+        # state this row was added to make visible.
+        ax_bm.text(duration / 2, 0.5, "no background_mask axis", ha="center", va="center", fontsize=8, color="#888888")
+    ax_bm.set_ylabel("background_mask\nuncertainty", rotation=0, ha="right", va="center")
+    ax_bm.set_ylim(-0.02, 1.02)
+    ax_bm.grid(axis="x", alpha=0.2)
+
+    # ── row 8: fused words ──────────────────────────────────────────────
     cmap_conf = plt.get_cmap("RdYlGn")
     # Word labels cycle through three text lanes (word i -> lane i % 3). Speech runs at roughly
     # three words a second, so at any readable font size consecutive labels overlap when they share
@@ -428,17 +481,24 @@ def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
 
 
 def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
-    """Draw the background mask as a four-state strip, with uncertainty as alpha.
+    """Draw the background mask *value* as a four-state strip, with its own confidence as alpha.
 
     Absent mask parquet leaves an explicitly labelled empty row rather than a silently
     blank one — "no mask was produced" and "the mask was empty" are different facts, and a
     blank strip would conflate them.
+
+    **This is the value, not the axis.** It was labelled "background mask" and drawn where a
+    reader looks for the fourth axis, so its region-level ``uncertainty`` — one number per region,
+    self-reported by the single producer that made it — read as the ``background_mask`` axis. On a
+    run whose mask is one ``target_active`` region spanning the recording at ``uncertainty`` 0.0,
+    that is a flat, fully-confident band, while the axis over the same span varies across every
+    bucket. The axis has its own row now (``ax_bm``) and this one says ``(state)``.
     """
     from matplotlib.patches import Rectangle
 
     from senselab.utils.data_structures.logging import logger
 
-    ax.set_ylabel("background\nmask", rotation=0, ha="right", va="center", fontsize=9)
+    ax.set_ylabel("background mask\n(state)", rotation=0, ha="right", va="center", fontsize=9)
     ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.set_xlim(0, duration)
@@ -592,6 +652,25 @@ def _region_mid(entry: dict[str, Any], out_dir: Path, *, axis: str | None = None
                 return None
             return (reg["core_start"] + reg["core_end"]) / 2
     return None
+
+
+def _belief_or_none(out_dir: Path, round_index: int, axis: str) -> Any:  # noqa: ANN401 — pd.DataFrame or None
+    """One round's estimate for ``axis``, or ``None`` when that round did not write it.
+
+    Separate from the strict read the three original axes use, because an axis may legitimately
+    stop early: a round that converged on the mask writes no further estimate for it, and the
+    carry-forward lives in the fold rather than on disk. A missing file is therefore a fact about
+    that round, not a broken run, and it must not take the whole figure down with it.
+    """
+    import pandas as pd
+
+    path = estimates_dir(out_dir, round_index) / f"{axis}.parquet"
+    if not path.exists():
+        return None
+    try:
+        return pd.read_parquet(path).sort_values("start")
+    except Exception:  # noqa: BLE001 — a plot must not fail a run
+        return None
 
 
 def _fused_axis(out_dir: Path, axis: str) -> Any:  # noqa: ANN401 — pd.DataFrame or None
