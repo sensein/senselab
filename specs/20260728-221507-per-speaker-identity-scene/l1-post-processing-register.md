@@ -758,3 +758,65 @@ neighbourhood), not about the fold.
 in `src/`. Leaving them in the tree leaves a second definition of the axis available to the next
 reader who goes looking; the direction-only rule they encoded now lives in `fuse`, so they should be
 deleted with their tests.
+
+---
+
+## `L1/timeline.png` — the axis figure that lived in the evidence layer (fixed)
+
+Found by asking why L1 had a timeline showing axis uncertainty at all. It did:
+`scripts/analyze_audio.py` called `build_aligned_timeline_plot(run_dir=…, fused_axes=…)` with no
+`save_path`, and `plot.py` defaulted to `evidence_dir(run_dir) / "timeline.png"` — whose own
+docstring reads *"everything measured, nothing concluded."* The figure's top three rows are each
+axis's `uncertainty` with `epistemic_uncertainty` shaded beneath. Every run wrote it.
+
+This is not the usual entry in this register. Nothing was thresholded, rescaled or reduced; the
+arithmetic was L2's and correct. **The artifact was in the wrong layer**, which is the same defect
+one level up: a conclusion presented where a reader expects a measurement.
+
+### Why it passed every guard
+
+Four mechanisms, each missing it for a different reason — worth keeping because three of them are
+still the mechanisms protecting everything else:
+
+1. **A default argument chose the layer.** The call site passed `run_dir`; the renderer picked the
+   directory. No reviewer of the call site could see which layer was written. Same shape as
+   `settled_below=0.35` (D-21 rule 4), in the write path rather than in a policy.
+2. **`contracts.py` declared the path**, as `Artifact("L1/timeline*.png", "evidence view: the
+   signals against the recording")`. The pattern was legal, so the artifact guard passed, and the
+   only characterisation of the content was that prose — which was wrong.
+3. **`MODULE_STAGE` declared `plot.py` to be `"L1"`,** on the line directly below `l1_plot.py`. So
+   the static write-scope check *also* passed: an L1 module writing an L1 path. Two independent
+   declarations agreed with each other, and both were wrong, because neither was derived from what
+   the module consumes.
+4. **`check_layering.py`'s "L1 has no axis-named artifact" tests file stems.** `timeline.png` is
+   not named for an axis; it draws three. The rule is about content, the check is about the name.
+
+And the enforcement designed to make writes checkable could not apply: `stage_io.ReportKey` states
+that a rendering *"has no target and no producer"*. The one artifact class outside the capability
+system is the one that crossed the layer.
+
+**The collision that caused it.** The comment left in `plot.py` records the history: this figure was
+writing `final/timeline.png`, the same path `adaptive/plot.py` writes, and the later write silently
+replaced it. The fix chosen then was to move it to `L1/` and relabel it "the evidence timeline" —
+resolving a name collision by moving one of the two conclusions into the evidence layer. The
+figure's first parameter is `fused_axes`; it was never the evidence timeline.
+
+### The fix
+
+- Writes `final/uncertainty_detail.png` (chunks: `final/uncertainty_detail_NNN.png`). Two
+  conclusions answering different questions get **two names**, which is what the collision needed.
+- `MODULE_STAGE["…/plot.py"] = "FINAL"`. A module's stage follows from what it consumes: a module
+  that reads an axis is downstream of every round that produced one.
+- The `L1/timeline*.png` declaration is deleted, and the recorded run-tree fixture in
+  `stage_contract_test.py` no longer contains it — the fixture is what a run *leaves*, and while
+  the declaration existed every guard in that file reported the tree clean.
+- `check_layering.py` gains an allowlist: L1 may contain `signals.png` and no other figure. Weaker
+  than a content test, and the honest limit — a PNG's layer cannot be read off the bytes, and the
+  stem test provably cannot catch this class.
+- `plot_test.py` pins the output path directly (`test_axis_figure_never_lands_in_l1`), asserted on
+  the path rather than against a declared contract, because the contract declared it.
+
+**Generalisation, and the reason this entry is here rather than in a changelog:** a declaration is
+not evidence. Three of the four guards above were *satisfied by declarations that were themselves
+the bug*. The check that caught it was a person looking at the output and asking why an axis was in
+the evidence layer — the same way every defect in `l1-signal-contract.md` was found.

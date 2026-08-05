@@ -22,6 +22,23 @@ Rows top-to-bottom:
    timestamps from the resolved (post-MMS-aligned) ASR result. Lets the reviewer see
    which models returned text where and confirm whether high asr uncertainty
    is real disagreement or punctuation/hesitation noise.
+
+**This figure is an L2 conclusion and writes to ``final/uncertainty_detail.png``.** Rows 1–3 are
+the fused axes; a fold across signals *and* perturbations is an axis (D-16), and an axis is L2's.
+It previously defaulted to ``L1/timeline.png`` — chosen here, inside the renderer, to escape a
+filename collision with the adaptive ``final/timeline.png``. That resolved the collision by
+relabelling the figure as "the evidence timeline", which it is not: the first parameter is
+``fused_axes``. Two lessons kept in the code rather than only in the spec:
+
+- **A collision between two conclusions is not fixed by moving one into the evidence layer.** It
+  is fixed by giving them different names, which is what ``uncertainty_detail`` versus
+  ``timeline`` now does.
+- **A default argument decided the layer.** The call site passed ``run_dir`` and the callee picked
+  the directory, so no reviewer of the call site could see which layer was being written. The
+  default is still here for convenience, but it now names the layer this figure belongs to.
+
+The evidence view with no conclusions on it is ``L1/signals.png`` (``l1_plot``), whose docstring
+states the rule this module was breaking.
 """
 
 from __future__ import annotations
@@ -31,7 +48,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from senselab.audio.workflows.audio_analysis.layout import belief_dir, evidence_dir, final_dir
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
 from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 from senselab.audio.workflows.audio_analysis.types import FusedAxis
 from senselab.utils.data_structures.logging import logger
@@ -341,13 +358,13 @@ def build_aligned_timeline_plot(
     child and adult voices (high f0 → narrowband would smear formants into harmonic
     bands; broadband shows formant trajectories cleanly for both ranges).
 
-    Chunked output is opt-in via ``chunk_duration_s``. It wrote ``timeline_001.png``,
-    ``timeline_002.png`` … whose panels were mostly empty, because a fixed window rarely lines
-    up with where anything happened; one figure per L2 round, drawn after fusion, replaced it.
-    When enabled, the figure is rendered once and saved
-    repeatedly with ``xlim`` adjusted to each ``chunk_duration_s``-second window. The
-    files are written as ``timeline_001.png``, ``timeline_002.png``, …. For shorter
-    audio a single ``timeline.png`` is written.
+    Chunked output is opt-in via ``chunk_duration_s``. It used to be the default and produced
+    panels that were mostly empty, because a fixed window rarely lines up with where anything
+    happened; one figure per L2 round, drawn after fusion, replaced it. When enabled, the figure
+    is rendered once and saved repeatedly with ``xlim`` adjusted to each
+    ``chunk_duration_s``-second window, as ``final/uncertainty_detail_001.png``,
+    ``final/uncertainty_detail_002.png``, …. For shorter audio a single
+    ``final/uncertainty_detail.png`` is written.
 
     Args:
         run_dir: Run directory; the figure lands in ``final/`` with the other deliverables.
@@ -803,12 +820,11 @@ def build_aligned_timeline_plot(
 
     fig.tight_layout(rect=(0, 0.02, 1, 0.97))
     if not will_chunk:
-        # L1, not final/. This is the *evidence* timeline — what each signal measured, before
-        # anything was fused — and it was writing to final/timeline.png, the same path the
-        # adaptive timeline uses. The later write silently replaced it, so a run appeared to
-        # produce one timeline and the L1 view was unrecoverable. Two different questions
-        # ("what did the signals say" vs "what did we conclude") must not share a filename.
-        out = save_path or (evidence_dir(run_dir) / "timeline.png")
+        # final/, under its own name. Rows 1-3 are fused axes, so this is a conclusion and L1 is
+        # closed to it (D-16). The collision with the adaptive `final/timeline.png` that sent this
+        # figure to L1 in the first place is resolved by the *name*: two conclusions answering
+        # different questions get two filenames, not two layers.
+        out = save_path or (final_dir(run_dir) / "uncertainty_detail.png")
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=140)
@@ -831,10 +847,11 @@ def build_aligned_timeline_plot(
         t1 = min((i + 1) * chunk_duration_s, duration_s)
         for ax in axes:
             ax.set_xlim(t0, t1)
-        # Same reasoning as the single-figure path above: these are L1 evidence views.
-        chunk_dir = evidence_dir(run_dir)
+        # Same layer as the single-figure path above: a chunk carries the same axis rows, so how
+        # long the recording is cannot decide which layer its figure belongs to.
+        chunk_dir = final_dir(run_dir)
         chunk_dir.mkdir(parents=True, exist_ok=True)
-        out_path = chunk_dir / f"timeline_{i + 1:03d}.png"
+        out_path = chunk_dir / f"uncertainty_detail_{i + 1:03d}.png"
         fig.savefig(out_path, dpi=140)
         out_paths.append(out_path)
     plt.close(fig)

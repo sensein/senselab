@@ -25,6 +25,18 @@ axis_named = [p for p in l1.rglob("*") if p.is_file() and p.stem in AXES]
 check("L1 has no axis-named artifact", not axis_named, ", ".join(p.name for p in axis_named[:3]))
 check("L1 has no stability/ (cross-pass eval is L2's)", not (l1 / "stability").exists())
 
+# The check above tests *stems*, and the violation it missed had none: `L1/timeline.png` is not
+# named for an axis, it draws three. A rendering is the one artifact class with no key and no
+# producer, so nothing else in the layering machinery can see what is inside it — which leaves an
+# allowlist of the figures L1 is permitted to contain as the only enforceable rule here.
+L1_FIGURES = {"signals.png"}
+stray_figures = [p for p in l1.rglob("*.png") if p.name not in L1_FIGURES]
+check(
+    "L1 has only its evidence figure (an axis view is L2's)",
+    not stray_figures,
+    ", ".join(p.name for p in stray_figures[:3]),
+)
+
 sig = sorted((l1 / "signals").glob("*.parquet"))
 check("L1/signals/ is populated", bool(sig), f"{len(sig)} signals")
 if sig:

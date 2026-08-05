@@ -154,13 +154,47 @@ def test_build_aligned_timeline_plot_chunks_long_audio(tmp_path: Path) -> None:
         chunk_duration_s=20.0,
     )
     assert first is not None
-    assert first.name == "timeline_001.png"
-    # L1, not final/. These draw what each *signal* measured, before anything was fused, and the
-    # single-figure form was writing to the same `final/timeline.png` the adaptive timeline uses —
-    # so the later write replaced it and the evidence view was unrecoverable. Evidence and
-    # conclusions must not share a directory, let alone a filename.
-    chunks = sorted(evidence_dir(tmp_path).glob("timeline_*.png"))
-    assert [p.name for p in chunks] == ["timeline_001.png", "timeline_002.png", "timeline_003.png"]
+    assert first.name == "uncertainty_detail_001.png"
+    # final/, not L1/. The chunks carry the same axis rows the single figure does, so they are
+    # conclusions wherever they are written; putting them under L1 made the layer a function of
+    # how long the recording happened to be.
+    chunks = sorted(final_dir(tmp_path).glob("uncertainty_detail_*.png"))
+    assert [p.name for p in chunks] == [
+        "uncertainty_detail_001.png",
+        "uncertainty_detail_002.png",
+        "uncertainty_detail_003.png",
+    ]
+    assert not list(evidence_dir(tmp_path).glob("*.png"))
+
+
+def test_axis_figure_never_lands_in_l1(tmp_path: Path) -> None:
+    """The figure draws fused axes, so no output of it may be written under ``L1/``.
+
+    The regression this pins: the default was ``evidence_dir(run_dir) / "timeline.png"``, chosen
+    inside the renderer to dodge a filename collision with the adaptive ``final/timeline.png``.
+    Relabelling a figure of L2 conclusions as "the evidence timeline" moved the violation into
+    the one artifact class — a rendering, with no key and no producer — that the write-root
+    capability cannot see. Asserted on the *output path* rather than against a declared contract,
+    because the contract declared it and the declaration was what made it look legal.
+    """
+    fused_axes = _axes(speech_presence=[_row(i * 0.5, "speech_presence", 0.4) for i in range(8)])
+    out = build_aligned_timeline_plot(run_dir=tmp_path, fused_axes=fused_axes, duration_s=4.0, grid_hop=0.5)
+
+    assert out is not None
+    assert out.parent == final_dir(tmp_path)
+    assert out.name == "uncertainty_detail.png"
+    assert not list(evidence_dir(tmp_path).rglob("*.png"))
+
+
+def test_explicit_save_path_still_wins(tmp_path: Path) -> None:
+    """A caller naming its own destination is obeyed — the default is a default, not a policy."""
+    fused_axes = _axes(speech_presence=[_row(i * 0.5, "speech_presence", 0.4) for i in range(8)])
+    dest = tmp_path / "elsewhere" / "figure.png"
+    out = build_aligned_timeline_plot(
+        run_dir=tmp_path, fused_axes=fused_axes, duration_s=4.0, grid_hop=0.5, save_path=dest
+    )
+    assert out == dest
+    assert dest.exists()
 
 
 def test_scene_quality_and_source_rows_render(tmp_path: Path) -> None:
