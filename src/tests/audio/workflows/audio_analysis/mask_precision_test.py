@@ -73,10 +73,19 @@ def test_a_word_raises_target_confidence_in_the_bucket_it_falls_in() -> None:
     rows = [
         {"start": 0.0, "end": 0.5, "target_confidence": 0.1, "uncertainty": 0.4},
         {"start": 0.5, "end": 1.0, "target_confidence": 0.1, "uncertainty": 0.4},
+        {"start": 1.0, "end": 1.5, "target_confidence": 0.1, "uncertainty": 0.4},
     ]
-    out = apply_span_evidence(rows, target_spans=[(0.6, 0.8)])
+    # 0.2 s of words in the middle bucket (40% of it); the last bucket is filled.
+    out = apply_span_evidence(rows, target_spans=[(0.6, 0.8), (1.0, 1.5)], active_at=0.6, free_at=0.2)
+
     assert out[0]["target_confidence"] == pytest.approx(0.1), "no word here, unchanged"
-    assert out[1]["target_confidence"] == pytest.approx(1.0), "a word here is direct evidence"
+    # Was ``== 1.0``. That expectation *was* the defect: any overlap, however small, pinned the
+    # bucket to absolute confidence, so every bucket of a conversation scored identically and the
+    # mask had nothing left to be uncertain about. What the rule actually owes is that a word makes
+    # the bucket target-active — above the threshold, not at the ceiling.
+    assert out[1]["target_confidence"] >= 0.6, "a word here is direct evidence the target was active"
+    assert out[1]["target_confidence"] < out[2]["target_confidence"], "partly covered is weaker than filled"
+    assert out[2]["target_confidence"] == pytest.approx(1.0), "a bucket full of words is fully confident"
 
 
 def test_span_evidence_only_raises_confidence_never_lowers_it() -> None:
@@ -93,9 +102,20 @@ def test_span_evidence_only_raises_confidence_never_lowers_it() -> None:
 
 
 def test_a_bucket_raised_by_span_evidence_becomes_more_certain_too() -> None:
-    """A direct observation resolves doubt; leaving uncertainty untouched would understate it."""
+    """A direct observation resolves doubt — in proportion to how much of the bucket it observed.
+
+    Previously ``uncertainty`` was set to ``min(u, 0.0)``, so any overlap made the bucket
+    *perfectly* certain. The claim being tested survives; the absoluteness does not, and how much
+    doubt a word resolves now depends on how much of the bucket it accounts for.
+    """
     from senselab.audio.workflows.audio_analysis.background_mask import apply_span_evidence
 
-    rows = [{"start": 0.0, "end": 0.5, "target_confidence": 0.1, "uncertainty": 0.8}]
-    out = apply_span_evidence(rows, target_spans=[(0.1, 0.2)])
-    assert out[0]["uncertainty"] < 0.8
+    rows = [
+        {"start": 0.0, "end": 0.5, "target_confidence": 0.1, "uncertainty": 0.8},
+        {"start": 0.5, "end": 1.0, "target_confidence": 0.1, "uncertainty": 0.8},
+    ]
+    out = apply_span_evidence(rows, target_spans=[(0.05, 0.45), (0.9, 1.0)], active_at=0.6, free_at=0.2)
+
+    assert out[0]["uncertainty"] < 0.8, "a bucket mostly filled with words is more certain than before"
+    assert out[0]["uncertainty"] > 0.0, "and still not certain, having observed only part of it"
+    assert out[1]["uncertainty"] > out[0]["uncertainty"], "a glancing word resolves less doubt"

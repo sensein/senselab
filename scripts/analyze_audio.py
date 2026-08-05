@@ -1081,6 +1081,8 @@ def _pass_plan(args: argparse.Namespace) -> PassPlan:
     silence. Absence-means-skip is expressed here so the library never sees a
     CLI-shaped skip set.
     """
+    from senselab.audio.workflows.audio_analysis import BucketGrid
+
     skip = set(args.skip)
     return PassPlan(
         diarization_models=() if "diarization" in skip else tuple(args.diarization_models),
@@ -1095,6 +1097,15 @@ def _pass_plan(args: argparse.Namespace) -> PassPlan:
         background_mask=not args.no_background_mask,
         task_type=args.task_type,
         mask_guard_interval_s=args.mask_guard_interval,
+        # The mask is cut on speech_presence's grid (D-24), built from the same two args the
+        # comparator builds `speech_presence_grid` from further down. Rebuilt here rather than
+        # threaded because the plan is fixed before triage while that grid is built per run; both
+        # read the same CLI values, so they cannot disagree without the CLI disagreeing with
+        # itself. Left unshared, the mask ran at BucketGrid()'s 0.5 s against presence's 0.1 s.
+        mask_grid=BucketGrid(
+            win_length=args.speech_presence_grid_win_length,
+            hop_length=args.speech_presence_grid_hop_length,
+        ),
         features="features" not in skip,
         features_win_length=args.features_win_length,
         features_hop_length=args.features_hop_length,
