@@ -29,6 +29,60 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 
 
+def _aligned_columns(streams: Mapping[str, Sequence[Mapping[str, Any]]]) -> list[list[dict[str, Any]]] | None:
+    """Group the recognizers' words by **sequence alignment**, one list per aligned position.
+
+    Time-overlap grouping cannot represent an insertion, and the consequence is not a lost filler
+    but a corrupted transcript. Measured on three recognizers reading "I uh think" where only
+    CrisperWhisper emits the filler: the filler overlaps *"think"* in the other two, joins that
+    group, loses the vote 2-to-1 and is dropped — and CrisperWhisper's own "think" cannot rejoin the
+    group its model already occupies, so it forms a second group and "think" is emitted twice.
+
+    Capturing disfluencies is the point, not a side effect: a filler one model heard and others
+    discarded is evidence about the speaker, and the axis should record that the recognizers
+    disagreed about it rather than quietly picking the majority reading of a different word.
+
+    ``harmonize_transcripts`` already does this alignment — star-shaped against the median-length
+    transcript, with insertions keyed between reference positions — and had no caller outside its
+    own tests. Returns ``None`` when the alignment cannot be formed, so the caller falls back to
+    time-overlap grouping rather than losing every word.
+    """
+    from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts
+
+    by_model = {
+        model: [(float(w["start"]), float(w["end"]), str(w["text"])) for w in words]
+        for model, words in streams.items()
+        if words
+    }
+    if len(by_model) < 2:
+        return None
+    try:
+        harmonised = harmonize_transcripts(by_model)
+    except Exception:  # noqa: BLE001 — a fold must not fail on an alignment edge case
+        return None
+    if not harmonised.slots:
+        return None
+
+    # Rebuild full word dicts per column: the alignment carries surface forms and each model's own
+    # span, and the fold needs the rest of the word (confidence, corroboration, timing provenance)
+    # to weigh and to measure boundary agreement. Matched back by (model, start) since a model
+    # cannot place two words at one onset.
+    index = {(model, round(float(w["start"]), 6)): w for model, words in streams.items() for w in words}
+    columns: list[list[dict[str, Any]]] = []
+    for slot in harmonised.slots:
+        members: list[dict[str, Any]] = []
+        for model, span in (slot.times or {}).items():
+            if span is None:
+                continue
+            original = index.get((model, round(float(span[0]), 6)))
+            if original is None:
+                continue
+            members.append({**dict(original), "model": model})
+        if members:
+            columns.append(members)
+    return columns or None
+
+
 def phoneme_similarity(a: str, b: str) -> float:
     """How close two words sound, in ``[0, 1]`` — 1.0 identical, 0.0 sharing no phoneme.
 
@@ -103,6 +157,7 @@ def _consensus_word_doubt(
         slot_overlap=slot_overlap,
         slot_mid_tol_s=slot_mid_tol_s,
         text_similarity=phoneme_similarity,
+        columns=_aligned_columns(streams),
     )
     counts = sorted({int(w["timing_sources"]) for w in fused if w.get("timing_sources") is not None})
     provenance = {
