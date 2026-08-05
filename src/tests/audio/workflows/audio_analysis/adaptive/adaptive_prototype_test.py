@@ -74,10 +74,23 @@ def test_attenuated_votes_stay_in_aggregation() -> None:
     assert all(v.status == "active" for v in store._votes.values())
 
 
-def _rows(uncertainties: list[float], win: float = 0.5) -> list[dict]:
+def _rows(doubts: list[float], win: float = 0.5) -> list[dict]:
+    """Rows carrying the quantity the gates compare against ``theta_*`` — doubt, as a probability.
+
+    These values were passed as ``uncertainty`` while region seeding read that column. The gate reads
+    ``1 - confidence`` now (``estimates.control_doubt``), because ``uncertainty`` is normalised binary
+    entropy and the thresholds are doubt-scaled; the geometry this test asserts is unchanged, so the
+    numbers stay and the column they are written to is the one the gate looks at.
+    """
     return [
-        {"start": i * win, "end": (i + 1) * win, "uncertainty": u, "status": "open"}
-        for i, u in enumerate(uncertainties)
+        {
+            "start": i * win,
+            "end": (i + 1) * win,
+            "confidence": 1.0 - d,
+            "uncertainty": d,
+            "status": "open",
+        }
+        for i, d in enumerate(doubts)
     ]
 
 

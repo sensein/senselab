@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, Region
+from senselab.audio.workflows.audio_analysis.estimates import control_doubt
 
 
 def propose_regions(
@@ -31,7 +32,10 @@ def propose_regions(
     theta_high, theta_low = float(th["theta_high"]), float(th["theta_low"])
 
     def _u(row: dict[str, Any]) -> float:
-        v = row.get("uncertainty")
+        # Doubt, not entropy: ``theta_high`` / ``theta_low`` are doubt-scaled, and comparing them
+        # against the entropy column meant "seed above 17% doubt" (see ``estimates.control_doubt``).
+        # ``-1.0`` for an unmeasured bucket, so it can never seed or extend a region.
+        v = control_doubt(row)
         return -1.0 if v is None else float(v)
 
     # 1. seed + bidirectional expansion over contiguous indices.

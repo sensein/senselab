@@ -207,6 +207,115 @@ longer exist.
   axes. It filtered by excluding known non-axis keys; it now intersects with `AXIS_NAMES`, because a
   denylist goes stale on the next key added and an allowlist cannot.
 
+## Follow-up landed: the loop's gates were reading the wrong scale
+
+Reported from the clean conversation — the speaker axis did not reflect the confidence of the
+individual speaker information. It did not, and the cause was a scale mismatch rather than a bad
+measurement.
+
+What every other reading of that clip says about its speakers:
+
+| evidence | value |
+|---|---|
+| `final/speakers.json` count posterior | **2 speakers at 0.978**, `is_multimodal: false` |
+| `speakers[0].existence_uncertainty` | **0.0**, supported by all four sources |
+| per-signal doubt on the speaker axis | median **0.0000**, mean 0.2072, 77.7% of 1257 readings ≤ 0.25 |
+
+And what the axis reported: `uncertainty` **0.666**, seeding **114 of 214** buckets as
+high-uncertainty regions and letting **23** converge.
+
+`uncertainty` is normalised **binary entropy** of the mean per-signal doubt, and entropy climbs
+steeply away from zero: `H(0.10) = 0.469`, `H(0.20) = 0.722`. `theta_high = 0.66` and
+`theta_low = 0.33` are doubt-scaled — they are the Label Studio high/low bins — so comparing them
+against entropy silently meant:
+
+    theta_high 0.66 on H  ==  "flag anything above 17.1% doubt"
+    theta_low  0.33 on H  ==  "converged only below 6.1% doubt"
+
+Thresholds nobody chose. Three consumers made that comparison: `regions.propose_regions`,
+`convergence.apply_convergence_marks` and `belief.BeliefState.uncertainty_mass`.
+
+Compounding it, most of what the loop chased was unfixable: of the speaker axis's 0.666, aleatoric
+was 0.391 and epistemic 0.275, so **59% of the mass driving region proposal was doubt no further
+measurement can remove** — the waste `statistics.py` says the decomposition exists to prevent.
+
+**Fix:** the three gates read `estimates.control_doubt`, i.e. `1 - confidence`. `confidence` is
+documented as a probability, which is the scale `theta_*` are on. Convergence's round-over-round
+improvement test reads the same quantity (the history carries `doubt` beside `uncertainty`), so
+"stalled" and "converged" are no longer judged on two different scales; and `aleatoric_floor`, built
+from `[0, 1]` degradation scores, is only now comparable to the value it floors.
+
+**Why not `epistemic_uncertainty`**, which is the reducible part and looks like the principled
+choice. It is inter-signal disagreement, so it is structurally `0.0` for a single-voter axis — and
+`asr` now has exactly one voter. Gating on it would have made that axis permanently
+un-investigatable while its doubt was real (measured mean 0.215, max 0.918 on the 48 kHz clip). A
+lone confident-but-doubtful voter is a reason to add a second, not a reason to stop looking. Each
+rule keeps its own reducibility test where the question belongs: `U1`/`U2` already gate on
+`epistemic_uncertainty` themselves.
+
+Measured effect at the gates, seeds ⇄ converged out of 214 (conversation) and 49 (48 kHz):
+
+| axis | before | after |
+|---|---|---|
+| `speaker` (conv) | 114 ⇄ 23 | **13 ⇄ 152** |
+| `speech_presence` (conv) | 0 ⇄ 109 | 0 ⇄ 214 |
+| `asr` (48 kHz) | 9 ⇄ 33 | 1 ⇄ 41 |
+| `background_mask` (conv) | 12 ⇄ 188 | 0 ⇄ 214 |
+
+`control_scale_test.py` pins it, including that genuine doubt still seeds and that a single-voter
+axis stays investigatable — the two ways a fix here could quietly disable the loop instead.
+
+### Verified on a live run
+
+`english_conversation_higgs_audio_v2`, cache warm, same input and config, gate column the only
+difference:
+
+| | before | after |
+|---|---|---|
+| termination | `no_improvement` | **`converged`** |
+| speaker bucket status | 205 open, 6 irreducible, 3 converged | **0 open**, 78 irreducible, 136 converged |
+| speech_presence status | 109 converged, 105 open | **214 converged** |
+| background_mask status | 188 converged, 26 open | **214 converged** |
+| residual mass, speaker | 9.211 | **1.278** |
+| residual mass, presence / mask | 1.066 / 0.849 | **0.0 / 0.0** |
+| interventions fired | 12 (S1×10, I1×1, I2×1) | 18 (S1×6, I1×6, I2×6) |
+
+The asr axis keeps 23 open buckets in both: those are the buckets no word reached, so they have no
+confidence and cannot converge. That is correct — an unmeasured bucket is not a settled one — and it
+is unchanged by this fix.
+
+Note the intervention mix. Fewer regions are proposed, yet *more* interventions fire: with 114 seeds
+the budget was spent re-electing streams over buckets that were never contested, and the identity
+repairs got one shot each. With 13 seeds the budget reaches them six times.
+
+### What that exposed: the per-speaker deliverables disagree on the count
+
+Words and spans of the transcript are otherwise stable — all 62 surface forms identical, mean
+confidence 0.7232 → 0.7315 — but the speaker labels changed from `['C0']` to `['R0' … 'R4']`, and one
+run now publishes three inconsistent answers about the same speakers:
+
+| deliverable | says |
+|---|---|
+| `final/speakers.json` | **2 speakers** (`S0`, `S1`), posterior 0.978, `is_multimodal: false` |
+| `final/diarization.json` | **5 clusters** (`R0`–`R4`), 7 segments |
+| `final/transcript.json` | every word labelled from `R0`–`R4` |
+
+**This is latent, not new.** `I2_recluster` reported `n_clusters: 5, n_segments: 7` in the *old* run
+too; what changed is that the repair now reaches the deliverable, where before every word was
+attributed to `C0` — one speaker, on a two-speaker recording. Both readings are wrong about the
+count; the fix changed which wrong answer is published and made the disagreement visible.
+
+The underlying issue is that `identity_repair` re-clusters against
+`speaker.recluster_cosine_threshold` (0.45) and never consults the count posterior, so a confident
+unimodal "2 speakers at 0.978" does not constrain a repair that emits 5. It is also a fourth id
+namespace — CLAUDE.md already records that `SPEAKER_00` / `C0` / `S0` must stay distinct, and `R*`
+joins them without a stated relation to `S0`.
+
+Deliberately not fixed here: whether re-clustering should be *constrained* to the modal count,
+*weighted* by the posterior, or left free with the disagreement recorded is a design decision with
+evidence attached, and the same class of choice as the coupling weight above. Next session's first
+speaker task.
+
 ## Still open, carried forward from the handoff
 
 - **Insertion preservation is unexercised on real audio.** Neither clip contains a filler, so
