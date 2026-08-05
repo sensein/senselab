@@ -124,8 +124,16 @@ def resample_word_doubt(
             continue
         duration = max(1e-6, end - start)
         existence = word.get("existence_confidence")
-        doubt = 1.0 - float(existence) if isinstance(existence, (int, float)) else 1.0
         temporal = word.get("temporal_confidence")
+        certainty = float(existence) if isinstance(existence, (int, float)) else 0.0
+        # The **joint**, not existence alone. The axis asks what was said *here*, and a word nobody
+        # can place leaves that unanswered however sure we are the word exists. Measured: on a real
+        # run existence was 1.0 for 61 of 62 words while temporal ranged 0.25-1.0, so an
+        # existence-only mass reported 0.0000 across the whole recording and discarded the only
+        # part that varied.
+        if isinstance(temporal, (int, float)):
+            certainty *= float(temporal)
+        doubt = 1.0 - certainty
         # Unmeasured -> no smear (the word's own span); measured -> reach grows with the doubt.
         slack = 0.0 if not isinstance(temporal, (int, float)) else duration * (1.0 - float(temporal))
         lo, hi = start - slack, end + slack

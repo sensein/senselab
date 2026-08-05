@@ -49,23 +49,43 @@ def test_a_doubtful_word_puts_its_doubt_where_it_is() -> None:
     assert out.get((0.0, 1.0)) is None, "a well-localised word does not reach four buckets away"
 
 
-def test_identical_text_timed_differently_is_not_textual_disagreement() -> None:
-    """The measured defect, stated as a test.
+def test_timing_doubt_reaches_the_axis_without_becoming_textual_doubt() -> None:
+    """The axis asks a *time-indexed* question, so localisation is part of its answer.
 
-    Two models agree the word was said, so existence doubt is zero, and no amount of disagreement
-    about *when* may manufacture doubt about *what*. Under the bucketed-WER scheme this exact case
-    produced a full WER in whichever buckets the two readings fell into differently.
+    Two things have to hold at once, and an earlier version of this test asserted only the first,
+    which is how the axis came out at 0.0000 on a real run. On that recording the recognizers
+    agreed on 61 of 62 words — ``existence_confidence`` 1.0 — while ``temporal_confidence`` ranged
+    0.25 to 1.0 and carried every bit of the variation. Using existence alone as the mass threw
+    away the only informative part, and smearing zero mass wider is still zero.
+
+    - The **word's** ``existence_confidence`` stays 1.0: disagreement about *when* must never be
+      recorded as disagreement about *what*. That was the original defect and it stays fixed.
+    - The **bucket** is nonetheless doubtful: "what was said here" cannot be answered confidently
+      about a word nobody can place.
     """
     agreed_but_smeared = _word("without", 1.2, 1.6, existence=1.0, temporal=0.1)
     out = resample_word_doubt([agreed_but_smeared], BUCKETS)
+    values = [v for v in out.values() if v is not None]
+
+    assert values, "the word has to reach some bucket"
+    assert max(values) > 0.5, f"a word nobody can place leaves the buckets doubtful: {out}"
+    assert max(values) <= 1.0
+
+
+def test_a_word_agreed_and_well_placed_leaves_no_doubt() -> None:
+    """The other end of the same rule: both parts certain means the bucket is settled."""
+    out = resample_word_doubt([_word("sure", 1.2, 1.6, existence=1.0, temporal=1.0)], BUCKETS)
     assert all(v == pytest.approx(0.0) for v in out.values() if v is not None), out
 
 
-def test_a_poorly_localised_word_smears_the_same_mass_wider() -> None:
-    """Temporal uncertainty sets the reach, not the amount.
+def test_a_poorly_localised_word_reaches_wider_and_never_exceeds_its_own_doubt() -> None:
+    """Temporal uncertainty sets the reach *and* enters the mass, but spreading creates neither.
 
-    Same existence doubt, two localisations: the loose one must touch strictly more buckets, and
-    neither may invent doubt the word did not carry.
+    An earlier version asserted the mass was unchanged between the two, on the reading that
+    temporal doubt only widened the reach. That reading is what produced an axis of 0.0000 on a
+    recording where the text was agreed and only the timing varied. What has to hold instead:
+    reach still grows with temporal doubt, and no bucket ever reports more doubt than the word
+    itself carries — the projection may not manufacture any.
     """
     tight = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 1.0)], BUCKETS)
     loose = resample_word_doubt([_word("what", 2.6, 2.9, 0.5, 0.0)], BUCKETS)
@@ -73,7 +93,10 @@ def test_a_poorly_localised_word_smears_the_same_mass_wider() -> None:
     tight_touched = {k for k, v in tight.items() if v is not None}
     loose_touched = {k for k, v in loose.items() if v is not None}
     assert loose_touched > tight_touched, f"loose={loose_touched} tight={tight_touched}"
-    assert max(v for v in loose.values() if v is not None) <= 0.5 + 1e-9, "reach must not inflate mass"
+
+    # joint doubt = 1 - existence x temporal: 0.5 for the tight word, 1.0 for the loose one.
+    assert max(v for v in tight.values() if v is not None) <= 0.5 + 1e-9
+    assert max(v for v in loose.values() if v is not None) <= 1.0 + 1e-9
 
 
 def test_unmeasured_localisation_does_not_smear() -> None:
