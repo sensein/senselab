@@ -205,6 +205,7 @@ def fuse_word_streams(
     min_corroboration: float = MIN_CORROBORATION,
     speaker_at: Any = None,  # noqa: ANN401 — callable (t) -> str | None
     calibrator: Any = None,  # noqa: ANN401 — callable (c) -> c' | None
+    text_similarity: Any = None,  # noqa: ANN401 — callable (a, b) -> [0, 1] | None
 ) -> list[dict[str, Any]]:
     """Fuse per-system word streams into one consensus word list (ROVER-lite).
 
@@ -267,6 +268,10 @@ def fuse_word_streams(
         min_corroboration: Floor on the corroboration weight. See :data:`MIN_CORROBORATION`.
         speaker_at: Optional ``(t) -> speaker_id | None``.
         calibrator: Optional ``(confidence) -> calibrated``.
+        text_similarity: Optional ``(text_a, text_b) -> [0, 1]`` used to grade a member's
+            agreement with the winning text instead of counting exact matches. Omitted means a
+            mismatch contributes nothing, which is the historical behaviour — the caller supplies
+            the measure so this routine stays model- and dependency-independent.
 
     Returns:
         Time-ordered ``[{text, start, end, confidence, coverage, corroboration,
@@ -322,6 +327,10 @@ def fuse_word_streams(
         total_w_uncorroborated = 0.0
         coverage_mass = 0.0
         member_corroboration: dict[str, float | None] = {}
+        # Kept so accuracy can be graded against the winner *after* it is known: a member's
+        # contribution depends on how close its text is to the winning text, which is not decidable
+        # while the votes are still being counted.
+        weighted_members: list[tuple[Mapping[str, Any], str, float]] = []
         for m in slot["members"]:
             key = _normalize_word(m["text"]) or m["text"].lower()
             corr = _corroboration_of(m, float(min_corroboration))
@@ -329,6 +338,7 @@ def fuse_word_streams(
             system_weight = weights.get(m["model"], 1.0)
             base = system_weight * float(m.get("confidence", 1.0))
             wt = base * (1.0 if corr is None else corr)
+            weighted_members.append((m, key, wt))
             total_w += wt
             total_w_uncorroborated += base
             # Coverage over the *members* rather than the model names, so the corroboration of the
@@ -358,8 +368,25 @@ def fuse_word_streams(
         if not tally or total_w <= 0 or total_w_uncorroborated <= 0:
             continue
         ranked = sorted(tally.items(), key=lambda kv: (-kv[1]["weight"], kv[0]))
-        _win_key, win = ranked[0]
-        share = win["weight"] / total_w
+        win_key, win = ranked[0]
+        # Graded agreement, not a match count. Every member contributes in proportion to how close
+        # its text is to the winning text, so a recognizer that misheard a vowel is distinguishable
+        # from one that produced a different word. Measured before this: "cat" vs "cot" and "cat"
+        # vs "elephant" both scored 0.5, because a member was either the winning string or not, and
+        # accuracy over a 62-word run took two distinct values.
+        #
+        # Exact matches score 1.0 by definition, so unanimous slots stay at exactly 1.0 and no run's
+        # agreeing numbers move. With no ``text_similarity`` supplied a mismatch scores 0.0 — the
+        # previous behaviour — rather than silently falling back to grapheme overlap, which is a
+        # different measurement and would change what the field means with nothing recording it.
+        agreement = 0.0
+        for member, member_key, member_wt in weighted_members:
+            if member_key == win_key:
+                agreement += member_wt
+            elif text_similarity is not None:
+                similarity = float(text_similarity(str(member["text"]), str(win["display"])))
+                agreement += member_wt * max(0.0, min(1.0, similarity))
+        share = agreement / total_w
         share_uncorroborated = win["weight_uncorroborated"] / total_w_uncorroborated
         # Absent is absent (D-27). ``None`` when no member reported a confidence, so the term drops
         # out of the product instead of entering it as 1.0 — which is a claim of certainty made on

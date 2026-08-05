@@ -298,3 +298,51 @@ def test_a_lone_timing_source_reports_neither_edge() -> None:
     """Unmeasured stays unmeasured at both edges — a renderer must draw nothing, not a green mark."""
     out = fuse_word_streams({"a": [_w("hello", 0.0, 0.5)]}, min_corroboration=MIN_CORROBORATION)
     assert out[0]["onset_confidence"] is None and out[0]["offset_confidence"] is None
+
+
+# ── graded accuracy: a near-miss is not a wild miss ───────────────────────────
+#
+# Measured before this change: "cat" vs "cot" scored 0.5 and "cat" vs "elephant" scored 0.5 too.
+# Members were tallied under the normalized token, so anything that was not the winning string was
+# equally not-the-winner, and accuracy could only take the plurality values 1.0 / 0.667 / 0.333.
+# That is why a whole 62-word run produced two distinct accuracy values and the axis sampling it
+# was flat.
+
+
+def _sim(a: str, b: str) -> float:
+    """A stand-in similarity: character overlap, enough to order near from far."""
+    if a == b:
+        return 1.0
+    longer = max(len(a), len(b)) or 1
+    shared = sum(1 for x, y in zip(a, b) if x == y)
+    return shared / longer
+
+
+def test_a_near_miss_scores_higher_than_an_unrelated_word() -> None:
+    """The whole point: degrees of textual disagreement have to be distinguishable.
+
+    Without a similarity the two are indistinguishable, and an axis reading accuracy cannot tell a
+    recognizer that misheard a vowel from one that produced a different word entirely.
+    """
+    near = fuse_word_streams({"m1": [_w("cat", 1.0, 1.4)], "m2": [_w("cot", 1.0, 1.4)]}, text_similarity=_sim)[0]
+    far = fuse_word_streams({"m1": [_w("cat", 1.0, 1.4)], "m2": [_w("elephant", 1.0, 1.4)]}, text_similarity=_sim)[0]
+
+    assert near["existence_confidence"] > far["existence_confidence"], (near, far)
+    assert near["text"] == "cat" and far["text"] == "cat", "the winner must not change"
+
+
+def test_full_agreement_is_still_exactly_one() -> None:
+    """Grading must not disturb the case it does not apply to, or every run's numbers move."""
+    graded = fuse_word_streams({"m1": [_w("cat", 1.0, 1.4)], "m2": [_w("cat", 1.0, 1.4)]}, text_similarity=_sim)[0]
+    assert graded["existence_confidence"] == pytest.approx(1.0)
+
+
+def test_without_a_similarity_function_matching_stays_exact() -> None:
+    """No silent fallback to grapheme similarity.
+
+    A caller that supplies no measure gets the old exact-match behaviour rather than a different
+    measure chosen on its behalf — graphemes are not phonemes, and quietly substituting one for the
+    other would change what the number means with nothing recording it.
+    """
+    out = fuse_word_streams({"m1": [_w("cat", 1.0, 1.4)], "m2": [_w("cot", 1.0, 1.4)]})[0]
+    assert out["existence_confidence"] == pytest.approx(0.5)

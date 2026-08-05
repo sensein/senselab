@@ -29,6 +29,37 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 )
 
 
+def phoneme_similarity(a: str, b: str) -> float:
+    """How close two words sound, in ``[0, 1]`` — 1.0 identical, 0.0 sharing no phoneme.
+
+    Supplied to the ensemble so word accuracy grades its disagreements instead of counting exact
+    matches. The task API stays stdlib-only and receives this as a callable, the same way it
+    receives ``calibrator`` and ``speaker_at``: g2p is a workflow dependency and does not belong
+    inside a model-independent voting routine.
+
+    ARPAbet with stress markers stripped, so ``AH0`` and ``AH1`` are one phoneme — stress is not a
+    lexical difference and counting it would penalise two recognizers that agree on the word.
+
+    Falls back to **exact match** when g2p is unavailable or produces nothing for either side, not
+    to grapheme overlap: letters are not sounds, and substituting one measure for the other would
+    change the number's meaning invisibly. A homophone pair therefore scores 1.0 where g2p works
+    and 0.0 where it does not, which is a real limitation and better than an unrecorded proxy.
+    """
+    if a == b:
+        return 1.0
+    try:
+        from senselab.audio.workflows.audio_analysis.harvesters import g2p_phonemes, normalize_arpabet
+
+        seq_a = [normalize_arpabet(p) for p in g2p_phonemes(a) if str(p).strip()]
+        seq_b = [normalize_arpabet(p) for p in g2p_phonemes(b) if str(p).strip()]
+    except Exception:  # noqa: BLE001 — a missing g2p must not fail a fold
+        return 0.0
+    if not seq_a or not seq_b:
+        return 0.0
+    denominator = max(len(seq_a), len(seq_b))
+    return max(0.0, 1.0 - _levenshtein(seq_a, seq_b) / denominator)
+
+
 def _as_plain(node: Any) -> Any:  # noqa: ANN401 — ScriptLine tree or its JSON form
     """Normalise a ScriptLine tree to the dict/list form the word walker understands.
 
@@ -67,7 +98,12 @@ def _consensus_word_doubt(
     if not streams:
         return ({b: None for b in buckets}, {})
 
-    fused = fuse_word_streams(streams, slot_overlap=slot_overlap, slot_mid_tol_s=slot_mid_tol_s)
+    fused = fuse_word_streams(
+        streams,
+        slot_overlap=slot_overlap,
+        slot_mid_tol_s=slot_mid_tol_s,
+        text_similarity=phoneme_similarity,
+    )
     counts = sorted({int(w["timing_sources"]) for w in fused if w.get("timing_sources") is not None})
     provenance = {
         "operator": "consensus_words/resample",
