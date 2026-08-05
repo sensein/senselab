@@ -3505,3 +3505,355 @@ Two refusals, the absent-vs-value rule again: a signal that **never varies** can
 `zscore` returns `None` rather than `0.0` — a zero z-score reads as "exactly average", a claim about a
 distribution that does not exist. And `excess` without a threshold **raises** rather than defaulting to
 zero, which would silently be the absolute value under another name.
+
+---
+
+## D-26. The axis input table
+
+D-22 sketched the axis policy with wildcards — `(speech, project_labels/speech_v3, (scene_labels, *, *))`
+— and said "adding the fifth axis is a block in this file plus an `axes.AXES` entry". This is that file
+enumerated against the twelve settled signals (D-20) and the derivatives of D-21, with the wildcards
+expanded to the tools that actually exist in a run.
+
+Expanding them was not clerical. Five things the wildcards were hiding, each verified against the code
+and the run artifacts rather than inferred from the earlier sections:
+
+1. **`occupancy` is the wrong target for a presence voter** (§ *The retarget*).
+2. **Two of the baseline's presence voters are one tool counted twice** — brouhaha, whole-file and
+   region-refined (§ *Same tool, twice*).
+3. **Each whisper-family recognizer voted on presence twice**, as word coverage and as
+   `no_speech_prob`, whose source closures are identical.
+4. **Two of the three default recognizers are one source.** Canary-Qwen was timed by Qwen's aligner
+   and their presence votes are byte-identical, while the axis reports three contributors
+   (§ `asr`).
+5. **A role column is missing.** A gate, a weight and a voter arrive at `fuse_axis` today as one flat
+   mapping, so nothing stops a quality measure from contributing to disagreement.
+
+Where D-22 and the code disagree, the code is recorded as the current state and D-22 is marked
+out of date — that happened twice, on `background_mask.harvested` and on `aleatoric_floor`.
+
+### Roles — the column the sketch did not have
+
+| role | how it enters the fold | what absence means |
+|---|---|---|
+| `voter` | a value **on the axis's target**; contributes to spread | `None` — did not speak. Never `0.0` |
+| `gate` | floors `confidence` and bounds the aleatoric part; **cannot** move `uncertainty` | ungated — not "gate says bad" |
+| `weight` | multiplies one voter's contribution (stability, capacity, corroboration) | weight 1.0, and `weight_basis` says so |
+| `reference` | used to compute a comparison, **not counted as a source** | the comparison is unavailable |
+
+One rule makes the table checkable, and it is D-21 rule 2 applied to the axis itself:
+
+> **Every `voter` under one axis shares a Target.** The axis's spread is then a spread of answers to
+> one question, and an input that answers a different question has to enter as a gate, a weight or a
+> reference — or be re-projected onto the axis's target, which is what the retarget below does.
+
+Under that rule an axis is a `fold` (D-21's arity table) and never a `compose`, which is what licenses
+it to report a spread at all. The baseline satisfies this for `asr` and violates it for
+`speech_presence`, where `embedding_silhouette` — a property of speaker-embedding clustering — voted on
+whether anyone was speaking.
+
+### Two slots, not one: the measure and the collapse
+
+D-22's sketch wrote `aggregator: entropy` / `label_disagreement` / `pairwise_wer` per axis. The code
+has two different things under that word, and conflating them is why the sketch reads as though each
+axis picks its own fold:
+
+| slot | what it is | where it lives today | values |
+|---|---|---|---|
+| **per-voter measure** | turns one voter's value into a per-signal uncertainty — the entropy, the label disagreement, the pairwise WER | the link stage + `fuse.per_signal_uncertainty` | per axis, in code |
+| **collapse** | combines the weighted per-signal uncertainties into `triage_score` | `aggregators.apply_aggregator` | `min`, `mean`, `harmonic_mean`, `disagreement_weighted` |
+
+`fuse_axis`'s docstring already draws the line — the collapse "does not affect `uncertainty`, which is
+the entropy measure and has no policy choice in it". So the axis tables below name **both**, and the
+collapse is the only one of the two that is currently configurable: `--uncertainty-aggregator` is a
+single **global** flag, not per axis. Making it per axis is a scoring-workflow change (item 9), and
+until it is, an axis block declaring its own collapse is aspirational and should say so.
+
+### `speech_presence` — grid `time` 100 ms / 100 ms · measure: entropy · collapse: policy (default `min`)
+
+| # | input key | role | unit at entry | source native | baseline name |
+|---|---|---|---|---|---|
+| 1 | `(speech, resample/mean, (speech, pyannote/brouhaha/VAD, p))` | voter | probability | 61.9 / 16.9 ms | `frame_brouhaha_vad` |
+| 2 | `(speech, project_labels/speech_v3, (scene_labels, MIT/ast-finetuned-audioset, p))` | voter | label mass | 0.96 / 0.48 s | `ast` |
+| 3 | `(speech, project_labels/speech_v3, (scene_labels, google/yamnet, p))` | voter | label mass | 0.96 / 0.48 s | `yamnet` |
+| 4 | `(speech, voiced_fraction/θ=0.4, (speech, opensmile/HNR, p))` | voter | proportion | 60 / 10 ms | `acoustic_hnr` |
+| 5 | `(speech, excess/binding_floor, {(loudness, pyloudnorm, p), (noise_floor, select_binding/<margin>, …)})` | voter | dB above floor | 400 / 100 ms | `acoustic_lufs` **+** `acoustic_level_above_floor` |
+| 6 | `(speech, any_speaker_active, (speaker_spans, T, p))` × 4 diarizers | voter | probability | spans | the diarizers' `covered_fraction` evidence |
+| 7 | `(speech, word_coverage, (transcript, T, p))` × 3 recognizers | voter | proportion | word spans | the recognizers' `word_overlap_s` evidence |
+| 8 | `(speech, read/no_speech_prob, (transcript, T, p))` × **1** (whisper family only) | voter † | probability | per segment | `openai/whisper-*::no_speech_prob` |
+| 9 | `(scene_score, anchor/<profile>, (snr, T, p))` × 4 SNR tools | gate | `[0, 1]` | mixed | — |
+| 10 | `(clipping, pcm, p)` | gate | proportion | 0.5 / 0.25 s | — |
+| 11 | `(stability, mean_abs_delta, ⋁ₚ(row i))` per voter | weight | the voter's units | — | `L1/stability/*` |
+| 12 | `(speech, resample/std, (speech, T, p))` per voter | variability | the voter's units | native | `frame_dispersion` |
+
+† **Row 8 shares row 7's source closure** for the same `T` — same transcript key, so by D-21 rule 6 they
+are one source contributing two quantities, not two sources agreeing. Both are kept, because a
+recognizer's own `no_speech_prob` is a measurement it is uniquely placed to make (D-20's correction),
+but they enter as **one weighted source**. The baseline counted them separately: run 2's twelve
+presence voters included `openai/whisper-large-v3-turbo` and `openai/whisper-large-v3-turbo::no_speech_prob`
+as peers, and the same for `whisper-small` — so two recognizers supplied four votes.
+
+Rows 2 and 3 are the other flagged pair: **same label map, therefore agreeing by construction** where
+the map collapses two vocabularies onto `speech` (D-20). Not excluded — weighted, and the shared
+operator variant is what makes the overlap computable rather than assumed absent.
+
+Row 5 is one voter where the baseline had two. `acoustic_lufs` is a level and
+`acoustic_level_above_floor` is that level minus the floor; as separate voters, a loud bucket votes
+twice and the floor subtraction reads as independent corroboration of the thing it was subtracted from.
+
+**Rows 6 and 7 were already voting; the fold could not read them.** Run 3's presence axis listed 8
+signals and none from its three recognizers, which looked like a harvest gap. It was not:
+`speech_presence.harvest_speech_presence_evidence` writes an `evidence[m]` block for **every** ASR
+model and **every** diarizer, and the run's own votes parquet held all three recognizers with
+non-zero `word_overlap_s`. `fuse.per_signal_uncertainty` understood only a vote carrying a *scored*
+quantity, so a vote stating a direction and scoring nothing was dropped indistinguishably from a
+model that said nothing — **7 of 14 signals**: 3 recognizers, 2 diarizers, 2 `embedding_silhouette`
+variants. Fixed in `d45aaf1d` (`is_direction_only_claim`); re-folding the stored votes moved the
+presence axis from 6.97 to 13.97 signals per bucket and its mean uncertainty from 0.5438 to 0.3415.
+
+So the table's rows 6 and 7 are a **retarget and rename of voters that exist**, not additions — which
+is the more useful statement, because it means the input change is a keying change and the numbers it
+moves have already been measured.
+
+Two things that survive as open, both bearing on rows 7 and 8:
+
+- **Row 8 is whisper-only, and that is a property of the recognizers, not of the harvest.**
+  CrisperWhisper, Canary-Qwen and Qwen3-ASR report `avg_logprob`, `no_speech_prob` and
+  `token_entropy` as `None`. All three produce word coverage (41–42 of 42 buckets, 91 words); none
+  can contribute a confidence. A run on the three defaults therefore has **no** row 8 at all, and the
+  policy has to express that as absence rather than as a zero.
+- **Whisper's own score reaches the wrong buckets.** `avg_logprob` sits on the line, and the
+  harvester falls back to line-level scalars only where no chunk overlapped the bucket — so
+  whisper's score arrives exactly where it placed no words. Recorded in `d45aaf1d` as unfixed,
+  because changing it alters the mean-of-exp pooling inputs. Until it is fixed, row 8 is
+  anti-correlated with row 7 rather than a second view of the same segment.
+
+### Same tool, twice — `frame_posterior_fine`
+
+Run 3's presence axis lists `frame_posterior_fine` beside `frame_brouhaha_vad`. `frame_posterior_fine`
+is produced by `adaptive/interventions.py:_p2_execute`, which **re-runs `pyannote/brouhaha` at a finer
+hop inside a proposed region**. Same tool, same perturbation, so the two source closures are identical:
+by rule 6 this is brouhaha counted twice, and in exactly the regions the loop chose to re-analyse
+because they were doubtful.
+
+That makes it the self-confirmation hazard `adaptive/influence.py` guards against, arriving through the
+contributor list instead of through a write: a region is re-analysed, agreement with the earlier vote
+rises, and uncertainty falls because one voter was asked the same question twice.
+
+> **A re-analysis at a finer resolution is a refinement of an existing voter, not a new voter.** It
+> replaces that voter's value where it covers, and the row records the finer operator variant.
+
+Keyed, the identity is visible without needing to know what the intervention does:
+
+```
+(speech, resample/mean,          (speech, pyannote/brouhaha/VAD, raw))   # rounds 0..n, whole run
+(speech, resample/mean@hop=fine, (speech, pyannote/brouhaha/VAD, raw))   # round n, scope region:<id>
+```
+
+Same `Source`, different `Operator` variant — which is precisely the pair the key space was designed to
+distinguish from two tools agreeing.
+
+### The retarget: `occupancy` → `speech`
+
+D-22's sketch listed `(occupancy, cover, (speaker_spans, *, *))` among `speech_presence`'s inputs.
+`occupancy` is a different target from `speech`, so an axis folding both is a `compose` reporting a
+spread — D-21 rule 3's prohibition, and the `units: "mixed"` defect one layer up.
+
+The fix is not to drop it: a diarizer covering a bucket **is** a speech claim, and it is one of the few
+voters with a genuinely different mechanism from the frame detectors. The fix is to say so in the
+target:
+
+```
+(speech, any_speaker_active, (speaker_spans, T, p))     # ← presence axis reads this
+(occupancy, cover,           (speaker_spans, T, p))     # ← speaker axis reads this, per label
+```
+
+Two `project` derivatives of one signal, each named for the question it answers. `occupancy` keeps
+existing and keeps its label structure, which the speaker axis needs and the presence axis must not
+see.
+
+What the code does today is the untargeted version of exactly this: the presence harvest writes
+`{covered_fraction, speaker_label, units: "proportion"}` under the *diarizer's model name*, so the
+same block carries a presence claim and a label, and which one the axis is reading is decided by
+whichever consumer opens it. Splitting it into two keys is the change; computing it is not.
+
+### `speaker` — grid `time` 100 ms / 100 ms · measure: cross-model label disagreement + cosine · collapse: policy
+
+| # | input key | role | unit at entry | baseline name |
+|---|---|---|---|---|
+| 1 | `(speaker_count, censored_posterior, ⋁(speaker_count, count_at, (speaker_spans, T, p)))` | voter | distribution over counts | `__overlap_count__` |
+| 2 | `(occupancy, cover, (speaker_spans, T, p))` × 4 diarizers | voter | proportion per label | the 4 `::` distances, 2 change-points, 4 silhouettes |
+| 3 | `(speaker_allocation, harmonise, ⋁(occupancy, T, p))` | reference | the `C0` label space | `__cross_diar_label_disagreement__` |
+| 4 | `estimates[<n]` of `speech_presence` | gate | `[0, 1]` | — |
+| 5 | `(stability, mean_abs_delta, ⋁ₚ(row 2))` per diarizer | weight | proportion | `L1/stability/*` |
+| 6 | tool capacity ceiling (D-19) | weight | count | — |
+
+Row 2 is where D-20's collapse lands: **twelve baseline signals become four tools on one target.** The
+four `speaker_distance` signals, two `speaker_change` signals and three `embedding_silhouette` signals
+were computations over vectors carrying unrecorded estimator choices, and the embedders are now
+diarizers emitting `speaker_spans` like the other two.
+
+Row 3 is a `reference`, not a voter, and that distinction is the one the baseline got wrong:
+`__cross_diar_label_disagreement__` appeared as a contributing *signal* when it is the operator that
+makes rows 2 comparable. A label harmonisation cannot corroborate the labels it harmonised.
+
+Row 6 is why capacity has to travel: a tool at its ceiling **cannot dissent upward**, so sortformer
+agreeing on "4 speakers" at its 4-speaker ceiling is not evidence for 4. Weight, not exclusion —
+censoring is in row 1's operator.
+
+Row 4 removes the axis's largest reported number. "Was it the same speaker?" is unanswerable where
+nobody spoke, and the run's mean speaker uncertainty of **0.7914 over 85 rows** includes buckets with
+no speech in them. Strictly earlier round only (rule 5), so the gate cannot close a cycle.
+
+### `asr` — grid `word` · measure: pairwise WER + onset variance · collapse: policy
+
+| # | input key | role | unit at entry | baseline name |
+|---|---|---|---|---|
+| 1 | `(word_spans, words_of, (transcript, T, p))` × 3 recognizers | voter | spans + text | the 3 `asr` signals |
+| 2 | `(transcript_confidence, read/avg_logprob, (transcript, T, p))` × 3 | voter ‡ | log probability | whisper `avg_logprob` |
+| 3 | `(consensus_transcript, ensemble/<method>, ⋁(word_spans, T, p))` | reference | text | — |
+| 4 | `(corroboration, cross_check, {(word_spans, ·), (speech, ·)})` | weight | `[0, 1]` | purging |
+| 5 | `(stability, mean_abs_delta, ⋁ₚ(row 1))` per recognizer | weight | WER | `L1/stability/*` |
+
+‡ Same closure as row 1 for the same `T` — one source, two quantities, as with presence rows 7/8.
+
+Row 3 is the case D-22 already named: every transcript is in the consensus's source closure, so it
+**cannot be an independent voter against the transcripts it was built from**. It earns its place as the
+reference the pairwise comparison is taken against.
+
+**Onset variance is computed by the aggregator over row 1, not supplied as an input** — that is what
+the word grid is for (D-24). The row carries `onset_estimate_s` and `onset_variance_s²`, so a word
+every model agrees on but times differently is distinguishable from a word they disagree about. The
+correlation this cannot see: two recognizers timed by one aligner have correlated onsets, and
+`timestamp_source` provenance is the only thing that reveals it — closure intersection cannot, because
+an aligner is not a `Source` (D-20).
+
+**That correlation is not hypothetical in this run.** Per-model coverage measured in `d45aaf1d`:
+Canary-Qwen and Qwen3-ASR are **byte-identical** on the presence axis, because Canary was timed by
+Qwen's aligner. Two of the three default recognizers are therefore one source on every quantity
+derived from word boundaries, and nothing in `contributing_signals` says so — the axis reports three
+contributors. This is the single strongest argument for putting `timestamp_source` in the weighting
+path rather than only in provenance: a closure test passes them as independent, and they are not.
+
+Row 2 is also `× 1` in practice for the same reason row 8 of the presence axis is: none of the three
+default recognizers reports `avg_logprob`. With the defaults, the asr axis's only evidence is
+cross-model text and boundary disagreement — and two of its three voters are the same timings.
+
+**No `scene_score` gate here, deliberately.** A quality gate on the asr axis would assert that a noisy
+recording's transcripts agree less, which is what the WER already measures directly. Quality enters as
+row 4's weight, where it bears on whether a word is corroborated, not on how much the recognizers
+differ.
+
+Dropped with `ppgs` (D-20): the PPG-vs-ASR PER sub-signal.
+
+### `background_mask` — grid `time` 100 ms / 100 ms (shares `speech_presence`'s) · measure: entropy · collapse: policy
+
+| # | input key | role | unit at entry | baseline name |
+|---|---|---|---|---|
+| — | `(target_free, mask/<task_type>, {(speech, ·), (background_source, ·), estimates[<n]})` | **value**, in `derivatives/` | region + state | `background_mask.parquet` |
+| 1 | `(target_free, from_vad/<task_type>, (speech, pyannote/brouhaha/VAD, p))` | voter | `[0, 1]` | `speech` |
+| 2 | `(target_free, from_occupancy/<task_type>, (occupancy, cover, (speaker_spans, T, p)))` | voter | `[0, 1]` | `speakers` |
+| 3 | `(target_free, from_words/<task_type>, (word_spans, words_of, (transcript, T, p)))` | voter | `[0, 1]` | `words` |
+| 4 | `(background_source, project_labels/<map>, (scene_labels, T, p))` | voter (proposed) | `[0, 1]` | — |
+| 5 | `(scene_score, anchor/<profile>, (snr, T, p))` | gate | `[0, 1]` | — |
+
+**D-22's open item is already closed in code, in the direction it pointed.** That section reads
+`axes.Axis(harvested=False)` as the mask's current state and asks whether more producers would make it
+`True`. `axes.py` now declares `harvested=True`, and `reliability._AXIS_SIGNALS` names the ensemble:
+VAD, ASR words and speaker occupancy each vote on whether the **target** was active under the declared
+task type. Run 3's mask axis has 1070 rows and 3 contributing signals at mean uncertainty 0.0949.
+D-22's paragraph should be read as answered, not open.
+
+What the table adds is row 4 and the naming. The three existing voters all derive from *foreground*
+evidence — a region is called target-free because nobody spoke, was recognised, or was diarized there
+— so they agree wherever the foreground is quiet, including where a background source is the only
+thing present. `background_source` label mass is the one candidate that can dissent on exactly that
+case, which is what the axis is for.
+
+Rows 1–3 carry `<task_type>` in the operator variant, and that is not decoration: in a breathing task
+`Breathing` maps to `people`, so a mask built from voice activity alone reports the collected signal as
+background. The task type **is** the policy, and D-21 rule 4 says a policy not in the key is a default
+argument in disguise.
+
+### The policy file, enumerated
+
+Replaces D-22's sketch. Roles are keys, so the fold cannot receive a gate as a voter:
+
+`grid` restates what `axes.AXIS_GRIDS` and `axes.DEFAULT_TIME_GRID` already declare in code, so the
+policy file does not own it — it is shown here to make each block readable on its own. `collapse` is
+the per-axis form of `--uncertainty-aggregator`, which does not exist yet (§ *Two slots*).
+
+```yaml
+axes:
+  speech_presence:
+    grid: {kind: time, window_s: 0.1, hop_s: 0.1}   # = axes.DEFAULT_TIME_GRID
+    measure: entropy                                 # in code, not configurable
+    collapse: min                                    # today: the global --uncertainty-aggregator
+    voters:
+      - (speech, resample/mean,          (speech, pyannote/brouhaha/VAD, *))
+      - (speech, project_labels/speech_v3, (scene_labels, *, *))
+      - (speech, voiced_fraction/θ=0.4,  (speech, opensmile/HNR, *))
+      - (speech, excess/binding_floor,   {(loudness, pyloudnorm, *), (noise_floor, select_binding/*, *)})
+      - (speech, any_speaker_active,     (speaker_spans, *, *))
+      - (speech, word_coverage,          (transcript, *, *))
+      - (speech, read/no_speech_prob,    (transcript, *, *))
+    gates:
+      - (scene_score, anchor/*, (snr, *, *))
+      - (clipping, pcm, *)
+    weights:  [(stability, mean_abs_delta, *)]
+  speaker:
+    grid: {kind: time, window_s: 0.1, hop_s: 0.1}
+    measure: label_disagreement
+    collapse: min
+    voters:
+      - (speaker_count, censored_posterior, *)
+      - (occupancy, cover, (speaker_spans, *, *))
+    references: [(speaker_allocation, harmonise, *)]
+    gates:      [estimates[<n]/speech_presence]
+    weights:    [(stability, mean_abs_delta, *), capacity]
+  asr:
+    grid: {kind: word}
+    measure: pairwise_wer
+    collapse: min
+    voters:
+      - (word_spans, words_of, (transcript, *, *))
+      - (transcript_confidence, read/avg_logprob, (transcript, *, *))
+    references: [(consensus_transcript, ensemble/*, *)]
+    weights:    [(corroboration, cross_check, *), (stability, mean_abs_delta, *)]
+  background_mask:
+    grid: {kind: time, window_s: 0.1, hop_s: 0.1}
+    measure: entropy
+    collapse: min
+    voters:
+      - (target_free, from_vad/<task_type>,       (speech, pyannote/brouhaha/VAD, *))
+      - (target_free, from_occupancy/<task_type>, (occupancy, cover, *))
+      - (target_free, from_words/<task_type>,     (word_spans, words_of, *))
+      - (background_source, project_labels/*,     (scene_labels, *, *))   # proposed
+    gates:   [(scene_score, anchor/*, (snr, *, *))]
+```
+
+The wildcards that remain are the ones that *should* be wildcards — "every tool measuring this target"
+— which is what target-first keying bought (D-20). The ones that had to be expanded were the ones
+hiding a role or a shared closure.
+
+### What the scoring workflow has to change
+
+Enumerated because the table is only half the piece; each is a code change, not a policy edit.
+
+| # | change | the code as it stands |
+|---|---|---|
+| 1 | `fuse_axis` takes `voters` / `gates` / `weights` / `references` instead of one flat mapping | `fuse_axis(buckets_by_pass, *, weights, aggregator, weight_basis, round_index)` — every input in `buckets_by_pass` is a voter, so a gate would contribute to spread and a reference would corroborate itself |
+| 2 | closure intersection (rule 6) runs **before** weighting, and its grouping is on the row | `measure_axis_overlap` compares two axes' `contributing_signals` by **set intersection of flat names**. It cannot see that brouhaha whole-file and brouhaha region-fine are one tool, nor that Canary and Qwen share an aligner — both need the key, not the name |
+| 3 | stability is per derivative, not per axis (D-21) | `signal_stability(harvests, *, axis, buckets_by_pass)` — the `axis=` parameter gives one signal three stabilities |
+| 4 | the `scene_score` gate reaches the **non-adaptive** fold | `_attach_floor` already derives the floor correctly from dB against `DEFAULT_ANCHORS`, absent-is-`None` — but it lives in `adaptive/belief.py` and reaches `estimates/` only via `adaptive/loop.py`. `fuse_axis` has no gate slot, so a run without the loop leaves `aleatoric_floor` empty on every row. **D-22's "floors at 0.0 on every bucket of every run" is out of date** |
+| 5 | `contributing_signals` → `contributing_derivatives`; `contributing_passes` → `contributing_perturbations` | both are written at `fuse.py:289–290` and read in five more places, including `measure_axis_overlap` and the `axis::` prefix test |
+| 6 | the `asr` fold moves onto the word grid | `axes.py` **already declares** `grid="word"` for asr; the fold does not implement it — the run produced 41 time buckets at 1.0 s / 0.5 s with every quantity `None`. The declaration and the behaviour disagree |
+| 7 | a gate with no measurement leaves `confidence` untouched | the absent-vs-zero rule, applied to the slot that does not exist yet (item 1) |
+| 8 | an intervention's finer re-run replaces its voter's value rather than adding a source | `interventions.py:_p2_execute` adds `source="frame_posterior_fine"` beside the brouhaha vote it refines |
+| 9 | `collapse` becomes per axis | `AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")` behind one global `--uncertainty-aggregator`; an axis block cannot choose its own |
+
+Items 2, 4 and 8 change numbers in every run. Items 1, 3, 5, 6, 7 and 9 change shape.
+
+**Already done, and the table depends on it:** `d45aaf1d` made direction-only votes reachable by the
+fold, which is what lets rows 6 and 7 of the presence table be voters at all — without it, retargeting
+them would have been renaming signals the fold still discarded.
