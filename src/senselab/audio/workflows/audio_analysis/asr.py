@@ -191,18 +191,24 @@ def _warn_if_grading_is_out_of_language(asr_resolved: Mapping[str, Any]) -> list
     return sorted(languages)
 
 
-def _consensus_word_doubt(
+def fuse_consensus_words(
     asr_resolved: Mapping[str, Any],
-    buckets: Sequence[tuple[float, float]],
-) -> tuple[dict[tuple[float, float], float | None], dict[str, Any]]:
-    """Fold the recognizers' words once, then resample the result onto the grid (D-27).
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fold the recognizers' words once, returning the fused words and the fold's provenance.
 
-    Returns ``(doubt_by_bucket, provenance)``. The provenance travels onto every row because the
-    fold's parameters *are* its policy: a derivative whose choices are not in the artifact is the
-    default argument this design keeps removing (D-21 rule 4).
+    Split out of :func:`_consensus_word_doubt` because **two axes read these words**: the asr axis
+    resamples their accuracy, and the speaker axis reads their ``temporal_confidence`` as
+    word-location doubt (``attribution.word_location_doubt``). The fold runs g2p phoneme similarity
+    per word pair, so doing it twice per pass would double that cost to obtain one answer — and
+    worse, would let the two axes disagree about a fold neither of them owns.
 
-    The slot parameters are the task API's own defaults, named here rather than inherited silently
-    so the recorded value and the used value cannot drift.
+    The provenance travels onto every row that uses the fold, because the fold's parameters *are* its
+    policy: a derivative whose choices are not in the artifact is the default argument this design
+    keeps removing (D-21 rule 4). The slot parameters are the task API's own defaults, named here
+    rather than inherited silently so the recorded value and the used value cannot drift.
+
+    Returns:
+        ``(fused_words, provenance)``, and ``([], {})`` when no model produced a readable word.
     """
     from senselab.audio.tasks.speech_to_text_ensemble import fuse_word_streams, iter_word_leaves
 
@@ -227,7 +233,7 @@ def _consensus_word_doubt(
             file=sys.stderr,
         )
     if not streams:
-        return ({b: None for b in buckets}, {})
+        return ([], {})
 
     grading_languages = _warn_if_grading_is_out_of_language(asr_resolved)
     fused = fuse_word_streams(
@@ -253,7 +259,24 @@ def _consensus_word_doubt(
         # leaving a reader to infer independence from the model count.
         "timing_sources": (counts[0] if len(counts) == 1 else counts) if counts else None,
     }
-    return resample_word_doubt(fused, buckets), provenance
+    return (list(fused), provenance)
+
+
+def _consensus_word_doubt(
+    asr_resolved: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+    *,
+    fused: tuple[list[dict[str, Any]], dict[str, Any]] | None = None,
+) -> tuple[dict[tuple[float, float], float | None], dict[str, Any]]:
+    """Resample the fused words' accuracy onto the grid (D-27).
+
+    ``fused`` lets a caller supply a fold it already performed — ``compute.harvest_pass`` does, so the
+    asr and speaker axes share one call rather than folding the same words twice.
+    """
+    words, provenance = fused if fused is not None else fuse_consensus_words(asr_resolved)
+    if not words:
+        return ({b: None for b in buckets}, {})
+    return resample_word_doubt(words, buckets), provenance
 
 
 def resample_word_doubt(
@@ -324,6 +347,7 @@ def harvest_asr_votes(
     pass_summary: dict[str, Any],
     grid: BucketGrid,
     alignment_by_model: dict[str, Any],
+    fused: tuple[list[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes"}`` per bucket for the asr axis.
 
@@ -336,6 +360,10 @@ def harvest_asr_votes(
     inside the fold, weighted per word by how far the others corroborate it; emitting it again
     beside the fold would count one body of evidence twice (D-21 rule 6), and it was the
     fully-contained per-bucket text read that forced this axis onto a grid of its own.
+
+    ``fused`` accepts a consensus fold the caller already performed — ``compute.harvest_pass`` shares
+    one with the speaker axis, which reads the same words' ``temporal_confidence``. Omitted, the
+    harvest folds them itself, which is what a standalone caller wants.
     """
     duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
     asr_blocks = (pass_summary.get("asr") or {}).get("by_model") or {}
@@ -346,7 +374,7 @@ def harvest_asr_votes(
     # not "which words fell fully inside this bucket". Reach is the word's own span, so a word
     # straddling a grid line no longer reads as two models disagreeing.
     buckets = [(round(float(s), 6), round(float(e), 6)) for s, e, _ in grid.iter_buckets(duration_s)]
-    word_doubt, word_doubt_provenance = _consensus_word_doubt(asr_resolved, buckets)
+    word_doubt, word_doubt_provenance = _consensus_word_doubt(asr_resolved, buckets, fused=fused)
 
     out: list[dict[str, Any]] = []
     for start, end, _idx in grid.iter_buckets(duration_s):
