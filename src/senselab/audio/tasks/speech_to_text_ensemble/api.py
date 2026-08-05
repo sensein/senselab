@@ -206,6 +206,7 @@ def fuse_word_streams(
     speaker_at: Any = None,  # noqa: ANN401 — callable (t) -> str | None
     calibrator: Any = None,  # noqa: ANN401 — callable (c) -> c' | None
     text_similarity: Any = None,  # noqa: ANN401 — callable (a, b) -> [0, 1] | None
+    columns: Any = None,  # noqa: ANN401 — Sequence[Sequence[word dict]] | None
 ) -> list[dict[str, Any]]:
     """Fuse per-system word streams into one consensus word list (ROVER-lite).
 
@@ -268,6 +269,12 @@ def fuse_word_streams(
         min_corroboration: Floor on the corroboration weight. See :data:`MIN_CORROBORATION`.
         speaker_at: Optional ``(t) -> speaker_id | None``.
         calibrator: Optional ``(confidence) -> calibrated``.
+        columns: Optional pre-grouped word columns, ``[[word_dict, ...], ...]`` — one list per
+            aligned position, each word carrying its own ``model``. Supply these from a sequence
+            alignment when insertions matter: time-overlap grouping cannot tell an inserted filler
+            from a competing reading of its neighbour, and silently drops the filler while
+            duplicating the neighbour. When given, ``slot_overlap`` and ``slot_mid_tol_s`` are
+            unused.
         text_similarity: Optional ``(text_a, text_b) -> [0, 1]`` used to grade a member's
             agreement with the winning text instead of counting exact matches. Omitted means a
             mismatch contributes nothing, which is the historical behaviour — the caller supplies
@@ -297,6 +304,27 @@ def fuse_word_streams(
     entries.sort(key=lambda e: (e["mid"], e["start"], e["model"]))
 
     slots: list[dict[str, Any]] = []
+    if columns is not None:
+        # Caller-supplied grouping, from a sequence alignment. Time-overlap slotting cannot express
+        # an insertion: when one recognizer emits a filler the others omit, the filler overlaps its
+        # *neighbour* in the other transcripts, joins that slot, loses the vote and disappears —
+        # and the word it displaced then cannot rejoin, so it is emitted a second time in a slot of
+        # its own. Measured on exactly the filler case: three models on "I uh think" produced "I",
+        # "think" (two models) and "think" (one model), with "uh" gone.
+        for members in columns:
+            if not members:
+                continue
+            n = len(members)
+            slots.append(
+                {
+                    "start": sum(float(m["start"]) for m in members) / n,
+                    "end": sum(float(m["end"]) for m in members) / n,
+                    "mid": sum((float(m["start"]) + float(m["end"])) / 2.0 for m in members) / n,
+                    "members": list(members),
+                    "models": {m["model"] for m in members},
+                }
+            )
+        entries = []
     for e in entries:
         placed = False
         for slot in slots:

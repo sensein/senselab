@@ -393,6 +393,14 @@ class TranscriptSlot:
     words: dict[str, Optional[str]]
     consensus: Optional[str]
     disagreement: float
+    times: dict[str, Optional[tuple[float, float]]] = field(default_factory=dict)
+    """``{model → (start_s, end_s)}`` as that model placed *its* word, ``None`` where it had none.
+
+    The slot's own ``start_s``/``end_s`` are the min and max across models, which cannot answer how
+    much the models disagreed about the boundary — the quantity the asr axis's onset and offset
+    confidences are built from. Keeping each model's own span is what lets a consumer fuse this
+    lattice without falling back to time-overlap grouping.
+    """
 
 
 @dataclass
@@ -526,6 +534,11 @@ def harmonize_transcripts(
                 words={m: surfaces.get(m) for m in models},
                 consensus=consensus,
                 disagreement=float(1.0 - top / len(members)) if members else 0.0,
+                # ``members[m]``, not a bare ``i``: inside this comprehension ``i`` would resolve to
+                # whatever the enclosing loop left behind, so every model reported the last member's
+                # span. It produced a lattice where one word appeared in two columns and another
+                # vanished — a wrong answer that still looked like a lattice.
+                times={m: (words[m][members[m]][0], words[m][members[m]][1]) if m in members else None for m in models},
             )
         )
 

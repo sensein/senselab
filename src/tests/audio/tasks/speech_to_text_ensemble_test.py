@@ -346,3 +346,40 @@ def test_without_a_similarity_function_matching_stays_exact() -> None:
     """
     out = fuse_word_streams({"m1": [_w("cat", 1.0, 1.4)], "m2": [_w("cot", 1.0, 1.4)]})[0]
     assert out["existence_confidence"] == pytest.approx(0.5)
+
+
+def test_an_inserted_filler_survives_and_does_not_duplicate_its_neighbour() -> None:
+    """Time-overlap grouping corrupts the transcript around a disfluency; alignment does not.
+
+    Measured on three recognizers reading "I uh think" where only CrisperWhisper emits the filler.
+    Under time-overlap slotting the filler overlaps *"think"* in the other two, joins that slot,
+    loses the vote 2-to-1 and is dropped — and CrisperWhisper's own "think" cannot rejoin a slot its
+    model already occupies, so it forms a second slot: output was "I", "think" (two models), "think"
+    (one model), with "uh" gone and "think" duplicated.
+
+    Capturing the disfluency is the goal, not a side effect: a filler one model heard is evidence
+    about the speaker, and the record should show the recognizers disagreed about *it* rather than
+    quietly publishing the majority reading of a different word.
+    """
+    columns = [
+        [
+            {"text": "I", "start": 0.0, "end": 0.2, "model": "crisper"},
+            {"text": "I", "start": 0.0, "end": 0.2, "model": "qwen"},
+        ],
+        [{"text": "uh", "start": 0.25, "end": 0.45, "model": "crisper"}],
+        [
+            {"text": "think", "start": 0.5, "end": 0.9, "model": "crisper"},
+            {"text": "think", "start": 0.3, "end": 0.9, "model": "qwen"},
+        ],
+    ]
+    streams = {
+        "crisper": [dict(w) for col in columns for w in col if w["model"] == "crisper"],
+        "qwen": [dict(w) for col in columns for w in col if w["model"] == "qwen"],
+    }
+    out = fuse_word_streams(streams, columns=columns)
+
+    assert [w["text"] for w in out] == ["I", "uh", "think"], out
+    filler = out[1]
+    assert filler["sources"] == ["crisper"], "the filler is attributed to the model that heard it"
+    assert filler["coverage"] < 1.0, "and marked as witnessed by only part of the ensemble"
+    assert sum(1 for w in out if w["text"] == "think") == 1, "the neighbour must not be duplicated"

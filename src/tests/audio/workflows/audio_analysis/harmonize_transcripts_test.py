@@ -113,3 +113,27 @@ def test_no_transcripts_yields_nothing() -> None:
     result = harmonize_transcripts({})
     assert result.slots == []
     assert result.gap_rate == {}
+
+
+def test_each_model_reports_its_own_span_in_a_slot() -> None:
+    """``times`` must be per model, or a consumer cannot measure boundary disagreement.
+
+    The first version of this field used a bare loop variable inside a comprehension, so every
+    model reported the *last* member's span. The lattice still looked like a lattice while placing
+    one word in two columns and losing another — the failure mode of a wrong answer that type-checks.
+    """
+    a = [(0.0, 0.4, "hi"), (0.5, 0.9, "there")]
+    b = [(0.02, 0.45, "hi"), (0.55, 0.95, "there")]
+    slots = harmonize_transcripts({"a": a, "b": b}).slots
+
+    assert slots[0].times["a"] == (0.0, 0.4) and slots[0].times["b"] == (0.02, 0.45)
+    assert slots[1].times["a"] == (0.5, 0.9) and slots[1].times["b"] == (0.55, 0.95)
+
+
+def test_a_model_absent_from_a_slot_reports_no_span() -> None:
+    """Absent is ``None``, so a consumer counts witnesses rather than inventing a boundary."""
+    slots = harmonize_transcripts(
+        {"a": [(0.0, 0.4, "hi"), (0.5, 0.9, "um"), (1.0, 1.4, "there")], "b": [(0.0, 0.4, "hi"), (1.0, 1.4, "there")]}
+    ).slots
+    filler = next(s for s in slots if s.words.get("a") == "um")
+    assert filler.times["a"] == (0.5, 0.9) and filler.times["b"] is None
