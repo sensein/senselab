@@ -242,7 +242,8 @@ Output:
 - `<run_dir>/L2/round<N>/uncertainty/<axis>.parquet` — the three fused axes: `uncertainty`, `epistemic_uncertainty`, `confidence`, `variability`, `triage_score`, `contributing_signals`, `contributing_passes`, `signal_weights`, `weight_basis`, `round`.
 - `<run_dir>/L2/round0/votes/<axis>.parquet` — the linked evidence at the vote level, keyed `(axis, bucket, source, pass, scope)`; what the adaptive store ingests.
 - `<run_dir>/final/disagreements.json` — top-N ranked over the fused axes by `triage_score`, axis-priority tiebreak (asr > speaker > speech_presence). No `pass` field: an axis has no pass.
-- `<run_dir>/final/timeline.png` — one line per axis with `epistemic_uncertainty` shaded beneath, plus a per-signal stability strip and a reference row.
+- `<run_dir>/final/uncertainty_detail.png` — one line per axis with `epistemic_uncertainty` shaded beneath, plus a per-signal stability strip and per-source detail rows. An axis view is a conclusion, so it lives under `final/`, never under `L1/`; the evidence figure with no conclusions on it is `L1/signals.png`.
+- `<run_dir>/final/timeline.png` — the adaptive loop's view: fused words, interventions and run state.
 - LS Labels tracks `uncertainty__{speech_presence,speaker,asr}` (attached once) plus per-pass evidence tracks `<pass>__signal__<signal>`; asr has a sibling TextArea carrying transcript consensus + dissenting models.
 
 ```bash

@@ -913,7 +913,10 @@ def _current_run_tree(root: Path) -> None:
     (root / "L1").mkdir(parents=True, exist_ok=True)
     (root / "L1" / "perturbations.json").write_text("{}")
     (root / "L1" / "signals.png").write_bytes(b"")
-    (root / "L1" / "timeline.png").write_bytes(b"")
+    # No `L1/timeline.png`: that figure's first three rows are the fused axes, so it was an L2
+    # conclusion sitting in the evidence layer, and it is now `final/uncertainty_detail.png`.
+    # Recorded here as an absence because this fixture is what a run leaves — and while the
+    # declaration existed, every guard in this file reported the tree clean.
     # One file per signal, accumulating across every perturbation — L2's only input from L1.
     _write_table(
         root / "L1" / "signals" / "brouhaha_snr_db.parquet",
@@ -1009,6 +1012,9 @@ def _current_run_tree(root: Path) -> None:
     ):
         (final / name).write_text("{}")
     (final / "timeline.png").write_bytes(b"")
+    # The axes over their per-source detail rows. Two conclusions answering different questions,
+    # so two names — which is the fix for the collision that once sent this figure to L1/.
+    (final / "uncertainty_detail.png").write_bytes(b"")
     _write_table(final / "per_speaker_presence.parquet", {"start": [0.0], "end": [0.5], "speaker": ["S0"]})
     # The extraction: the last round's estimates, byte-identical, one file per active axis.
     for axis in AXIS_NAMES:

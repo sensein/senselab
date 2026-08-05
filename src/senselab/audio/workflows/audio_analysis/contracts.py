@@ -519,8 +519,14 @@ L1 = StageContract(
             key=("perturbation", "signal", "bucket"),
             suffixes=(".parquet",),
         ),
+        # ``L1/timeline*.png`` was declared here as "evidence view: the signals against the
+        # recording". It was not: the figure's first three rows are the fused axes, and this
+        # declaration is what made an L2 conclusion in the evidence layer pass every guard.
+        # A rendering has no key and no producer, so the write-root capability cannot see it,
+        # and the only characterisation of its content was this prose — which was wrong.
+        # It now writes ``final/uncertainty_detail.png``. Declaring a path is not declaring
+        # what is in it.
         Artifact("L1/signals.png", "evidence view: what each signal measured, in its own units"),
-        Artifact("L1/timeline*.png", "evidence view: the signals against the recording, optionally chunked"),
     ),
 )
 
@@ -635,6 +641,10 @@ FINAL = StageContract(
         Artifact("final/decisions.json", "trajectory, reversals, stopping reason, every intervention"),
         Artifact("final/disagreements_resolved.json", "which flagged regions the rounds resolved"),
         Artifact("final/timeline.png", "the human-facing view"),
+        Artifact(
+            "final/uncertainty_detail*.png",
+            "the fused axes over their per-source detail rows, optionally chunked",
+        ),
         Artifact("final/summary.md", "the human-facing summary"),
         Artifact("final/summary.json", "run provenance: policy hash, model revisions, versions, budget"),
         Artifact("final/run_summary.json", "the headline numbers of the last round"),
@@ -705,7 +715,6 @@ MODULE_STAGE: Final[Mapping[str, str]] = {
     "src/senselab/audio/workflows/audio_analysis/stages.py": "L1",
     "src/senselab/audio/workflows/audio_analysis/stage_context.py": "L1",
     "src/senselab/audio/workflows/audio_analysis/l1_plot.py": "L1",
-    "src/senselab/audio/workflows/audio_analysis/plot.py": "L1",
     # L2 — one belief state, fused and iterated.
     "src/senselab/audio/workflows/audio_analysis/fuse.py": "L2_ROUND",
     "src/senselab/audio/workflows/audio_analysis/l2_plot.py": "L2_ROUND",
@@ -719,6 +728,13 @@ MODULE_STAGE: Final[Mapping[str, str]] = {
     "src/senselab/audio/workflows/audio_analysis/adaptive/fusion.py": "FINAL",
     "src/senselab/audio/workflows/audio_analysis/adaptive/ls_final.py": "FINAL",
     "src/senselab/audio/workflows/audio_analysis/adaptive/plot.py": "FINAL",
+    # Was "L1", declared one line below ``l1_plot.py`` — and that pairing is the whole defect.
+    # The two modules draw opposite things: ``l1_plot`` takes signals and refuses to plot an
+    # uncertainty row, while this module's first parameter is ``fused_axes``. Sharing a stage
+    # made writing an axis figure into ``L1/`` statically legal, so the artifact declaration and
+    # this map agreed with each other and both were wrong. A module's stage follows from what it
+    # consumes: a module that reads an axis is downstream of every round that produced one.
+    "src/senselab/audio/workflows/audio_analysis/plot.py": "FINAL",
     "src/senselab/audio/workflows/audio_analysis/summary.py": "FINAL",
     # the consumer.
     "src/senselab/audio/workflows/audio_analysis/adaptive/evaluate.py": "EVAL",
