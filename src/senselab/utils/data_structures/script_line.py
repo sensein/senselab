@@ -103,6 +103,14 @@ class ScriptLine(BaseModel):
     avg_logprob: Optional[float] = None  # mean per-token log-probability (negative)
     no_speech_prob: Optional[float] = None  # Whisper's own no-speech head, in [0, 1]
     timestamp_source: Optional[TimestampSource] = None  # who produced start/end; None = undeclared
+    # *Which* producer, by id — the recognizer for `native`, the aligner for either aligner kind.
+    # The kind alone cannot answer "did these two times come from the same place": Qwen3-ASR is
+    # `bundled_aligner` and Canary-Qwen is `external_aligner` while both are timed by
+    # Qwen/Qwen3-ForcedAligner-0.6B, so on the kind they group apart and a shared dependency reads
+    # as two agreeing witnesses. Measured: their onsets are bit-identical across all 62 words of a
+    # real run. `None` = undeclared, which consumers must treat as its own source rather than as
+    # shared — unknown provenance is not shared provenance.
+    timestamp_model: Optional[str] = None
     # Per-token softmax entropy, or a single mean when the caller pre-collapsed it.
     token_entropy: Optional[Union[List[float], float]] = None
 

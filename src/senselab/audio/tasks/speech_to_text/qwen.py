@@ -254,11 +254,18 @@ class QwenASR:
                 line_start: Optional[float] = None
                 line_end: Optional[float] = None
                 if chunks_raw:
+                    # These times are the *companion aligner's*, not the recognizer's — the
+                    # `forced_aligner` kwarg above is what produced them. Recording which model,
+                    # not merely that a bundled one ran: the workflow aligns text-only backends
+                    # (Canary) with this same aligner id, and a consumer comparing word times has
+                    # to see that as one timing source rather than two agreeing ones.
                     chunks = [
                         ScriptLine(
                             text=c["text"],
                             start=float(c["start"]),
                             end=float(c["end"]),
+                            timestamp_source="bundled_aligner" if return_timestamps else None,
+                            timestamp_model=aligner_name if return_timestamps else None,
                         )
                         for c in chunks_raw
                     ]
@@ -276,6 +283,8 @@ class QwenASR:
                         start=line_start,
                         end=line_end,
                         chunks=chunks,
+                        timestamp_source="bundled_aligner" if return_timestamps and chunks else None,
+                        timestamp_model=aligner_name if return_timestamps and chunks else None,
                     )
                 )
 

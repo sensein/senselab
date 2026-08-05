@@ -104,8 +104,6 @@ def collapse_to_speech_prob(data: np.ndarray, *, channel_format: ChannelFormat) 
     return np.clip(1.0 - np.prod(1.0 - clipped, axis=1), 0.0, 1.0)
 
 
-
-
 @dataclass
 class FramePosterior:
     """Per-frame activations for one audio — the L1 measurement, channels intact.
@@ -166,7 +164,6 @@ class FramePosterior:
         if span is None:
             return None
         return np.asarray(np.nanmean(self.activations[span[0] : span[1], :], axis=0), dtype=np.float64)
-
 
 
 def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
@@ -395,5 +392,3 @@ def _declared_classes(inference: "Inference") -> Optional[list[str]]:
     except (AttributeError, TypeError):
         return None
     return [str(c) for c in classes] if classes else None
-
-
