@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 14
+CACHE_SCHEMA_VERSION = 15
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -175,6 +175,22 @@ raw reading alone rather than a raw/enhanced mean. Measured on a two-speaker con
 SNR: the speaker axis goes from 0.227 to 0.032, with 96% of buckets at exactly zero instead of 49%.
 Every estimate row also gains a ``snr_gated_passes`` column, so a cached row is both a different
 number and a narrower schema than a reader now expects.
+
+Bumped 14 → 15 for three changes to what the axes read, each of which makes a cached row a different
+number rather than a stale one:
+
+- ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
+  geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any
+  presence signal — so no bucket could reach zero presence doubt however unanimous the evidence. A
+  cached row's ``contributing_signals`` names it and its ``confidence`` is folded over it. The
+  clustering still reaches the speaker axis as a synthetic diarizer (D-20).
+- the **speaker** axis takes no cross-axis vote (``axes.COUPLING_IS_A_GATE``). Another axis's value
+  bounds where attribution is a live question; it is not evidence about who is speaking. Cached rows
+  for rounds ≥ 1 carry ``axis::asr`` / ``axis::speech_presence`` / ``axis::background_mask`` in
+  ``contributing_signals`` and a value folded over them.
+- the adaptive loop now re-aggregates under the **same SNR gate** fusion folded round 0 with. It was
+  ungated, so every round after the baseline folded a perturbation fusion had excluded and ``final/``
+  published the pre-gate number — 0.2267 for an axis whose round 0 read 0.0487.
 
 Every number keyed to the speaker axis moves with it: region proposal, convergence, residual mass,
 the disagreements ranking and the LS bins. ``theta_low`` / ``theta_high`` were not tuned against this

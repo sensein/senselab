@@ -51,7 +51,7 @@ from senselab.audio.workflows.audio_analysis.degradation import (
 from senselab.audio.workflows.audio_analysis.estimates import control_doubt
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
 from senselab.audio.workflows.audio_analysis.fuse import SnrGate, fuse_axis
-from senselab.audio.workflows.audio_analysis.layout import derivatives_dir, perturbation_dir
+from senselab.audio.workflows.audio_analysis.layout import derivatives_dir, evidence_dir, perturbation_dir
 from senselab.audio.workflows.audio_analysis.support import (
     CORROBORATION_POOLING,
     EVIDENCE_WEIGHT_MAP,
@@ -199,6 +199,57 @@ class Vote:
         }
 
 
+def snr_gate_from_run(run_dir: Path, *, floor_db: float) -> "SnrGate | None":
+    """Rebuild the run's admission gate from what the run recorded about itself.
+
+    The loop re-aggregates the same votes fusion folded, so it has to be gated **identically** or
+    it is not a replay of the published axis — it is a second, differently-gated fold reported
+    under the same name. That is not hypothetical: the gate reached round 0 only, and the loop's
+    ungated re-aggregation folded the enhanced pass back in, so ``final/`` published 0.2267 on a
+    recording whose round 0 read 0.0487. The axis appeared not to have changed at all.
+
+    Both inputs come from the run's own artifacts rather than from a caller:
+
+    - which perturbations are gated, from ``L1/perturbations.json`` — the register records each
+      one's *declared transform*, which is exactly what ``SNR_GATED_TRANSFORMS`` is keyed on. Read
+      from there rather than re-derived, so a standalone loop run on someone else's run directory
+      cannot disagree with the fold that produced it.
+    - identity-pass SNR per bucket, from ``L1/signals/scene_quality.parquet``.
+
+    Returns ``None`` when the run has nothing to gate, which is the correct gate for a run whose
+    only perturbation is the identity.
+    """
+    import pandas as pd
+
+    from senselab.audio.workflows.audio_analysis.perturbations import (
+        IDENTITY_NAME,
+        REGISTER_FILENAME,
+        Perturbation,
+    )
+
+    register = evidence_dir(run_dir) / REGISTER_FILENAME
+    if not register.exists():
+        return None
+    try:
+        entries = (json.loads(register.read_text()).get("perturbations")) or []
+    except (OSError, json.JSONDecodeError):
+        return None
+    gated = frozenset(str(e["name"]) for e in entries if Perturbation.from_json(e).admission_requires_low_snr)
+    if not gated:
+        return None
+
+    snr: dict[tuple[float, float], float | None] = {}
+    pq = evidence_dir(run_dir) / "signals" / "scene_quality.parquet"
+    if pq.exists():
+        frame = pd.read_parquet(pq)
+        for row in frame[frame["perturbation"] == IDENTITY_NAME].itertuples():
+            payload = row.measurement
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+            snr[(round(float(row.start), 6), round(float(row.end), 6))] = (payload or {}).get("snr_brouhaha_db")
+    return SnrGate(floor_db=float(floor_db), snr_db_by_bucket=snr, gated_passes=gated)
+
+
 class VoteStore:
     """All evidence for one run, indexed by (stream, axis, bucket)."""
 
@@ -224,8 +275,15 @@ class VoteStore:
     # ── ingest ─────────────────────────────────────────────────────────
 
     @classmethod
-    def from_run_dir(cls, run_dir: Path, passes: list[str]) -> "VoteStore":
+    def from_run_dir(cls, run_dir: Path, passes: list[str], *, snr_gate: "SnrGate | None" = None) -> "VoteStore":
         """Populate round-0 votes from ``<run_dir>/L2/round/0/derivatives/votes/<axis>.parquet``.
+
+        Args:
+            run_dir: The finished run to ingest.
+            passes: The perturbations whose votes to take.
+            snr_gate: The gate fusion folded round 0 with — build it with :func:`snr_gate_from_run`
+                so this re-aggregation is a replay of the published axis rather than a second fold
+                under the same name. ``None`` re-aggregates ungated.
 
         Ingests the **linked evidence at the vote level**, which is legitimately keyed
         ``(axis, bucket, source, pass, scope)``. It used to read
@@ -249,7 +307,7 @@ class VoteStore:
         """
         import pandas as pd
 
-        store = cls()
+        store = cls(snr_gate=snr_gate)
         votes_dir = derivatives_dir(run_dir, 0) / "votes"
         for axis in AXES:
             pq = votes_dir / f"{axis}.parquet"
@@ -296,8 +354,13 @@ class VoteStore:
         round_idx: int = 0,
         policy: Any = None,  # noqa: ANN401
         unharvested: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]] | None = None,
+        snr_gate: "SnrGate | None" = None,
     ) -> "VoteStore":
         """Populate baseline-round votes directly from ``compute.harvest_pass`` outputs (T009).
+
+        ``snr_gate`` must be the gate fusion folded round 0 with (see :func:`snr_gate_from_run`), or
+        every re-aggregation here silently folds a perturbation fusion excluded — which is how
+        ``final/`` came to publish 0.2267 for an axis whose round 0 read 0.0487.
 
         ``harvests`` maps pass label → ``PassHarvest`` (duck-typed:
         ``speech_presence_evidence`` / ``speaker_votes`` / ``asr_votes`` bucket lists plus
@@ -340,7 +403,7 @@ class VoteStore:
                 "must pass their buckets as `unharvested` — an axis nobody hands in is an axis the loop carries "
                 "no belief through, and it reports as settled rather than as unasked"
             )
-        store = cls()
+        store = cls(snr_gate=snr_gate)
         for axis, by_stream in sorted(supplied.items()):
             for stream, buckets in sorted(by_stream.items()):
                 store._ingest_buckets(axis, stream, buckets, round_idx)
@@ -754,7 +817,13 @@ class VoteStore:
             "contributing_sources": sources,
             "contributing_signals": fused.get("contributing_signals") or [],
             "contributing_passes": fused.get("contributing_passes") or streams,
+            # Not defaulted to ``streams``: an empty list here means "nothing was withheld", and
+            # falling back to the stream set would claim every pass was gated out.
+            "snr_gated_passes": fused.get("snr_gated_passes") or [],
             "signal_weights": fused.get("signal_weights") or {},
+            # Carried so the loop's estimate writer can record *why* each weight was what it was,
+            # the same account ``fuse`` writes for rounds 0-2.
+            "weight_basis": fused.get("weight_basis") or {},
             "attenuated_sources": {k: round(v, 6) for k, v in sorted(weights.items())},
             "attenuation": attenuation,
         }

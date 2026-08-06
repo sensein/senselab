@@ -539,7 +539,14 @@ L2_ROUND = StageContract(
         "not read a sibling updated within the same round, or the fixed point depends on visit "
         "order."
     ),
-    reads=("L1/signals/**", "L2/round/{prev}/**"),
+    # ``perturbations.json`` is L1's *declaration* of the perturbation set, not one of its
+    # measurements — the small index later stages are meant to read. A round cannot "aggregate across
+    # perturbations", which the ``why`` above requires of it, without knowing what they were and what
+    # each one did to the audio: ``fuse.SnrGate`` admits a *repair* transform only where the
+    # recording is degraded, and which passes are repairs is a fact about their declared transform
+    # that exists nowhere else in the run. Reading it here was previously unlisted, so the loop's
+    # re-aggregation ran ungated and undid the gate fusion had applied in round 0.
+    reads=("L1/signals/**", "L1/perturbations.json", "L2/round/{prev}/**"),
     # What a round owes, and what it merely may leave. Three artifacts are owed by *every* round —
     # its belief, its account of how it got there, and its view — because every round has all
     # three; a round missing one is a round whose trajectory cannot be read. The four derivative
@@ -838,6 +845,10 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     Deviation(_DRIVER, "write", "final/summary.md", _INLINED),
     Deviation(_DRIVER, "read", "final/speakers.json", _INLINED),
     Deviation(_DRIVER, "read", "final/per_speaker_presence.parquet", _INLINED),
+    # Still a deviation, and for a different module than it looks: ``scripts/adaptive_loop.py`` is an
+    # ORCHESTRATOR, not an L2_ROUND stage, so L2_ROUND declaring this read does not cover it. The
+    # library-side read (``adaptive/belief.py``, building the SNR admission gate) *is* covered by
+    # that declaration and needs no entry here.
     Deviation(_ADAPTIVE_DRIVER, "read", "L1/perturbations.json", _INLINED),
     Deviation(
         _mod("stage_io.py"),
@@ -879,17 +890,14 @@ KNOWN_DEVIATIONS: Final[tuple[Deviation, ...]] = (
     # ── round artifacts still flattened to the L2 root ──────────────────────
     Deviation(_mod("adaptive/loop.py"), "read", "L2/disagreements.json", _AT_L2_ROOT),
     # ── L2 reads L1 outside signals/ ────────────────────────────────────────
-    Deviation(
-        _mod("adaptive/loop.py"),
-        "read",
-        "L1/perturbations.json",
-        _PAST_SIGNALS + " What it actually wants are the run's *inputs* — the source recording, "
-        "the duration, the perturbation set — which are not L1 evidence at all; they are what L1 "
-        "was given. Closes when the loop is handed them rather than reading L1's index back. "
-        "Its siblings (read_register/read_measurements, called two lines apart) reach the same "
-        "file through a helper and are invisible to the static guard for the reason its docstring "
-        "gives; this one is inline, so it is the one that shows.",
-    ),
+    # ``adaptive/loop.py`` read ``L1/perturbations.json`` was here, on the argument that the loop
+    # wanted the run's *inputs* rather than L1 evidence, and closed "when the loop is handed them".
+    # It closed the other way, and more honestly: L2_ROUND now *declares* the read, because a round
+    # that aggregates across perturbations cannot do so without knowing which they were and what
+    # each did to the audio. ``fuse.SnrGate`` needs exactly that — whether a pass is a repair
+    # transform lives in its declared ``transform`` and nowhere else in the run. Deleted rather than
+    # left as a no-op: a registered deviation matching nothing reads as a known-open violation and
+    # hides that it was resolved.
     # Two entries per read, one per branch of ``perturbation_dir``: the identity's directory and
     # any other perturbation's are different places, and reaching into either is the same
     # violation committed twice rather than one violation described twice.

@@ -369,30 +369,38 @@ def test_silhouette_is_derived_at_L2_not_measured_at_L1() -> None:
     assert "per_window_embeddings" not in params, "L1 must not be given the vectors to cluster"
 
 
-def test_link_derives_the_silhouette_vote_from_the_vectors() -> None:
-    """Given L1 vectors, the vote appears — and carries the score it was derived from."""
+def test_a_cluster_silhouette_never_votes_on_presence() -> None:
+    """It measures cluster geometry, not whether anyone spoke.
+
+    Silhouette is computed over every embedding window including silent ones, and silence embeds
+    consistently too — so well-separated silence scores well. As a presence voter it read the raw
+    coefficient as a confidence (no ramp, no anchors, unlike every other linker) and contributed a
+    near-constant 0.44 of doubt: 214 buckets, range 0.4022-0.4996, stdev 0.0227. Because
+    ``reliability.signal_stability`` measures cross-pass ``|delta|``, being constant earned it the
+    **highest** weight of all fifteen presence signals — 1.0, against 0.78-0.91 for the informative
+    ones. The result was that no bucket could reach zero presence doubt on a recording where all four
+    diarizers, all three recognizers and the brouhaha VAD read exactly 0.0000.
+    """
     rows = [_bucket({}), {"start": 3.0, "end": 3.5, "evidence": {}, "frame_dispersion": None}]
     linked = link_speech_presence(rows, per_window_embeddings={"ecapa": _two_speaker_windows()})
-    vote = linked[0]["votes"]["embedding_silhouette"]
-    assert "silhouette" in vote and 0.0 <= vote["silhouette"] <= 1.0
-    assert vote["embedding_model"] == "ecapa"
-    assert vote["native_window_s"] == pytest.approx(2.0)
+    for bucket in linked:
+        assert "embedding_silhouette" not in bucket["votes"], (
+            "the clustering is voting on presence again; it belongs to the speaker axis"
+        )
 
 
-def test_silhouette_vote_carries_the_cluster_assignment() -> None:
-    """The half of the computation that assigns labels must survive, not only the voicing score.
+def test_the_clustering_still_reaches_the_speaker_axis() -> None:
+    """Removing the presence vote must not remove the clustering — only its wrong consumer.
 
-    A later stage repairs speaker labels; if it re-clustered, the two stages could disagree about
-    the structure they are each reasoning over.
+    ``compute.harvest_pass`` injects a synthetic ``embedding_silhouette/<model>`` diarizer built from
+    this result (D-20), and its spans and cluster ids are what ``attribution.speaker_assignment_doubt``
+    reads. If this derivation disappeared, the speaker axis would quietly lose two of its four voters.
     """
-    rows = [
-        _bucket({}),
-        {"start": 4.0, "end": 4.5, "evidence": {}, "frame_dispersion": None},
-    ]
-    linked = link_speech_presence(rows, per_window_embeddings={"ecapa": _two_speaker_windows()})
-    ids = [b["votes"]["embedding_silhouette"].get("cluster_id") for b in linked]
-    assert all(i is not None for i in ids)
-    assert ids[0] != ids[1], "buckets 4 s apart sit in the two different speaker clusters"
+    from senselab.audio.workflows.audio_analysis.speech_presence_link import derive_window_clusters
+
+    derived = derive_window_clusters({"ecapa": _two_speaker_windows()})
+    assert derived is not None, "the speaker axis's clustering source is gone"
+    assert derived["clusters"]["labels"], "cluster assignments are what label repair reads"
 
 
 def test_derive_window_clusters_exposes_the_whole_result() -> None:
@@ -407,7 +415,12 @@ def test_derive_window_clusters_exposes_the_whole_result() -> None:
 
 
 def test_no_embeddings_means_no_silhouette_vote() -> None:
-    """Absent vectors drop the signal rather than contributing a neutral one."""
+    """Held as a property of the axis rather than of the absent-vector case.
+
+    It was written for "absent vectors drop the signal rather than contributing a neutral one", which
+    was the right instinct about the wrong condition: the voter contributed a near-neutral 0.44
+    whenever vectors *were* present, which is the case that mattered.
+    """
     linked = link_speech_presence([_bucket({})])
     assert "embedding_silhouette" not in linked[0]["votes"]
     assert "embedding_silhouette" not in link_speech_presence([_bucket({})], per_window_embeddings={})[0]["votes"]

@@ -13,7 +13,12 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from senselab.audio.workflows.audio_analysis.adaptive.belief import AXES, BeliefState, VoteStore
+from senselab.audio.workflows.audio_analysis.adaptive.belief import (
+    AXES,
+    BeliefState,
+    VoteStore,
+    snr_gate_from_run,
+)
 from senselab.audio.workflows.audio_analysis.adaptive.convergence import (
     apply_convergence_marks,
     build_convergence_report,
@@ -50,6 +55,7 @@ from senselab.audio.workflows.audio_analysis.layout import (
     round_dir,
 )
 from senselab.audio.workflows.audio_analysis.perturbations import read_measurements, read_register
+from senselab.audio.workflows.audio_analysis.run_config import DEFAULT_SNR_FLOOR_DB
 
 
 def run_adaptive_loop(
@@ -138,12 +144,21 @@ def run_adaptive_loop(
     # ── the baseline round: ingest + replay proof (values are re-derivable) ────────
     t0 = time.time()
     parity: dict[str, Any]
+    # The same admission gate fusion folded round 0 with, rebuilt from the run's own register and
+    # its identity-pass SNR. Without it the loop re-aggregates *ungated*: it folds the enhanced pass
+    # back into buckets fusion had excluded, so every round after the baseline undoes the gate and
+    # ``final/`` — an extraction of a loop round — publishes the ungated number. Measured: round 0
+    # read 0.0487 on the conversation clip while ``final/`` read 0.2267, the pre-gate value, so the
+    # axis looked unchanged. ``replay_check`` did not catch it, which is its own finding.
+    snr_gate = snr_gate_from_run(run_dir, floor_db=_snr_floor_from_run(run_dir))
     if harvests is not None:
         store = VoteStore.from_harvests(
-            {pl: h for pl, h in harvests.items() if pl in passes}, unharvested=unharvested_votes
+            {pl: h for pl, h in harvests.items() if pl in passes},
+            unharvested=unharvested_votes,
+            snr_gate=snr_gate,
         )
     else:
-        store = VoteStore.from_run_dir(run_dir, passes)
+        store = VoteStore.from_run_dir(run_dir, passes, snr_gate=snr_gate)
     parity = store.replay_check(aggregator=aggregator)
     fused_parity = store.fused_parity(_fused_axes_from_run(run_dir), aggregator=aggregator)
 
@@ -590,6 +605,31 @@ def _resolve_input_audio(recorded: str | None, run_dir: Path) -> str | None:
     return None
 
 
+def _snr_floor_from_run(run_dir: Path) -> float:
+    """The run's ``triage.snr_floor_db``, read from what the run recorded.
+
+    Falls back to the packaged default, which is also what ``run_config`` uses when the key is
+    absent — so a run predating the key is gated on the same number a fresh one would be, rather
+    than on nothing.
+    """
+    summary = belief_dir(run_dir).parent / "final" / "summary.json"
+    for candidate in (summary, belief_dir(run_dir) / "disagreements.json"):
+        if not candidate.exists():
+            continue
+        try:
+            doc = json.loads(candidate.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        blocks = (doc, doc.get("config") or {}, (doc.get("config") or {}).get("triage") or {}, doc.get("triage") or {})
+        for block in blocks:
+            if isinstance(block, dict) and "snr_floor_db" in block:
+                try:
+                    return float(block["snr_floor_db"])
+                except (TypeError, ValueError):
+                    pass
+    return DEFAULT_SNR_FLOOR_DB
+
+
 def _aggregator_from_run(run_dir: Path) -> str | None:
     # ``L2/disagreements.json``. The path here was the pre-L1/L2 flat one, so it never resolved
     # and every standalone run silently fell back to the "min" default — including runs whose
@@ -760,6 +800,17 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
                 "n_sources": len(r.get("contributing_sources") or []),
                 "contributing_signals": r.get("contributing_signals") or [],
                 "contributing_passes": r.get("contributing_passes") or [],
+                # See the note in ``fuse.write_final_uncertainty``: this is a whitelist too, and an
+                # omitted column is written null rather than refused.
+                "snr_gated_passes": r.get("snr_gated_passes") or [],
+                # How this round weighted its signals, and the factors behind each weight. Both
+                # were absent here, so rounds 0-2 (written by ``fuse``) carried them and rounds 3+
+                # (written here) wrote them null — the same axis's weight provenance disappearing
+                # partway along one trajectory, in one directory, under one declared artifact.
+                # Serialized as JSON exactly as ``fuse`` does it, or the two producers would write
+                # one column in two encodings.
+                "signal_weights": json.dumps(r.get("signal_weights") or {}, sort_keys=True),
+                "weight_basis": json.dumps(r.get("weight_basis") or {}, sort_keys=True),
                 **attenuation_columns(r),
             }
             for r in sorted(state.axis_rows(axis), key=lambda x: (float(x["start"]), float(x["end"])))

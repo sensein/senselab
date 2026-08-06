@@ -276,6 +276,36 @@ at the reader instead of quietly folding to nothing. The two sets agreeing is a 
 harvested, the loop's ingest enumerated three axes, and nothing compared them.
 """
 
+COUPLING_IS_A_GATE: Final[frozenset[str]] = frozenset({"speaker"})
+"""Axes for which another axis's value bounds *where the question applies*, never answers it.
+
+The speaker axis asks **who** is speaking. ``speech_presence``, ``asr`` and ``background_mask``
+answer *whether there is anything here to attribute* — a different question, and one whose answer
+cannot be evidence about identity. Coupling them in as weighted voters was measured on a clean
+two-speaker conversation: round 0 read 0.0487 from the diarizers' own agreement, round 1 read 0.1601
+once ``axis::asr`` / ``axis::speech_presence`` / ``axis::background_mask`` were injected, and round 2
+read 0.3601. The rise is entirely those three, and none of them had looked at a speaker.
+
+It is the same error the ``asr_location`` voter was: a quantity that legitimately *bounds* where
+attribution is a live question, used instead as an answer to it. Word timing became
+``attribution.word_coverage``, a gate; these become nothing at all, because the gating work is
+already done — and done better — at harvest time:
+
+- ``attribution.word_coverage`` nulls a bucket no recognized word reaches.
+- ``attribution.target_activity_doubt`` nulls a bucket the mask confidently calls ``target_free``.
+
+Both read a **claim** (a word is there; the mask's ``state``). What a coupled row carries is the
+other axis's *doubt*, which is not a presence claim at all: ``speech_presence`` doubt near zero means
+that axis is confident, not that speech is present. Gating on it would read "confidently silent" and
+"confidently speaking" as the same value. So a presence-probability gate, if one is ever wanted, has
+to read ``speech_presence_confidence`` / ``p_voice`` — and would need a threshold nobody has measured
+yet, which is why it is not here.
+
+Axes absent from this set are unaffected: ``speech_presence``, ``asr`` and ``background_mask`` still
+couple to each other as voters, where the coupled quantity and the receiving question are the same
+kind of thing.
+"""
+
 ATTENUATED_AXES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.active and a.attenuable)
 """Axes an uncorroborated speech claim may be attenuated on.
 

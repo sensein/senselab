@@ -33,7 +33,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Mapping, cast
+from typing import Any, Final, Literal, Mapping, cast
 
 from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
 
@@ -48,6 +48,15 @@ __all__ = [
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "data" / "run_config" / "default.yaml"
 
 AGGREGATORS = ("min", "mean", "harmonic_mean", "disagreement_weighted")
+DEFAULT_SNR_FLOOR_DB: Final[float] = 10.0
+"""SNR below which the recording counts as degraded — the config default for ``triage.snr_floor_db``.
+
+One declaration, because two things read it and they must agree: whether to *compute* the enhanced
+pass (``enhancement.mode: auto``) and whether a computed pass's readings are *admitted to the fold*
+(``fuse.SnrGate``). A standalone adaptive-loop run on a finished run directory falls back to this
+when the run recorded no floor, so it gates on the same number a fresh run would.
+"""
+
 ENHANCEMENT_MODES = ("auto", "always", "never")
 ALIGNERS = ("qwen", "mms")
 CLUSTERING_ALGORITHMS = ("spectral", "kmeans")
@@ -451,7 +460,7 @@ def _build(merged: Mapping[str, Any], identity: ConfigIdentity) -> RunConfig:
         enhancement_mode=str(enhancement.get("mode", "always")),
         triage_speech_threshold=float(triage.get("speech_threshold", 0.5)),
         triage_min_speech_s=float(triage.get("min_speech_s", 0.3)),
-        triage_snr_floor_db=float(triage.get("snr_floor_db", 10.0)),
+        triage_snr_floor_db=float(triage.get("snr_floor_db", DEFAULT_SNR_FLOOR_DB)),
         triage_low_snr_fraction=float(triage.get("low_snr_fraction", 0.4)),
         aggregator=str(uncertainty.get("aggregator", "min")),
         disagreements_top_n=int(uncertainty.get("disagreements_top_n", 100)),

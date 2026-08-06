@@ -197,3 +197,41 @@ def test_build_reads_the_identity_pass_snr() -> None:
 def test_build_returns_none_when_there_is_nothing_to_gate() -> None:
     """A run whose only perturbation is the identity needs no gate object at all."""
     assert SnrGate.build({"raw": _Harvest({})}, floor_db=10.0, gated_passes=frozenset()) is None
+
+
+# ── the record has to survive the writers ───────────────────────────────────
+
+
+def test_every_fold_column_the_schema_declares_is_carried_by_the_writers() -> None:
+    """The three estimate writers rebuild rows from an explicit whitelist, and omission is silent.
+
+    ``estimate_frame`` fills any declared column a row omits with null — deliberately, so "the
+    producer had nothing to say" is recordable. The cost is that a *new* fold column is dropped
+    without complaint: the SNR gate shipped with all 214 rows reading ``snr_gated_passes = None``
+    while the gating itself had worked correctly, and no unit test saw it because they all assert on
+    ``fuse_axis``'s dict rather than on what reaches the parquet.
+
+    Checked by source inspection because the failure is a *missing* line — there is nothing to call.
+    """
+    import inspect
+
+    from senselab.audio.workflows.audio_analysis import estimates, fuse
+    from senselab.audio.workflows.audio_analysis.adaptive import belief, loop
+
+    rows = fuse_axis(
+        {"raw": [_bucket(*BUCKET, 0.3)]},
+        weights={"speaker_assignment": 1.0},
+        snr_gate=None,
+    )
+    shared = set(rows[0]) & set(estimates.ESTIMATE_COLUMNS)
+    # ``round`` and ``axis`` are stamped by the declaration from the path, never carried.
+    shared -= {"round", "axis"}
+    assert shared, "the fold and the schema share no columns, so this test is checking nothing"
+
+    for module in (fuse, loop, belief):
+        source = inspect.getsource(module)
+        missing = sorted(column for column in shared if f'"{column}"' not in source)
+        assert not missing, (
+            f"{module.__name__} writes estimate rows but never names {missing}; "
+            "estimate_frame will write them null rather than refuse"
+        )

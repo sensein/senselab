@@ -102,28 +102,18 @@ PRODUCER_SWEEPS: dict[str, list[tuple[str, Sweep]]] = {
     "_link_excess": [
         ("level above the measured floor", lambda t: link._link_excess({"excess_db": -3.0 + 25.0 * t}, DEFAULT_POLICY)),
     ],
-    "_link_silhouette": [
-        ("cluster silhouette", lambda t: link._link_silhouette({"silhouette": t}, DEFAULT_POLICY)),
-    ],
     "directed_presence_vote": [
         ("P(speech)", lambda t: link.directed_presence_vote(t)),
         ("P(speech) against a moved cut", lambda t: link.directed_presence_vote(t, threshold=0.8)),
     ],
-    "_silhouette_votes_by_bucket": [
-        ("windowed p_voice", lambda t: _silhouette_vote(t)),
-    ],
 }
 
 
-def _silhouette_vote(t: float) -> dict[str, Any]:
-    """``_silhouette_votes_by_bucket``'s payload for one window scoring ``t``."""
-
-    class _Window:
-        start_s, end_s = 0.0, 2.0
-
-    rows = [{"start": 0.0, "end": 0.5}]
-    derived = {"model": "m", "windows": [_Window()], "clusters": {"p_voice": {0: t}, "labels": {0: "C0"}}}
-    return link._silhouette_votes_by_bucket(rows, derived, DEFAULT_POLICY)[0]
+# ``_silhouette_vote`` and the two sweeps over it are gone with the voter. A cluster silhouette is
+# not presence evidence: it measures cluster geometry over every window including silent ones, it
+# carried a near-constant 0.44 of doubt (stdev 0.0227 over 214 buckets), and stability-based weighting
+# gave it full weight *for* being constant. The clustering reaches the speaker axis as a first-class
+# diarizer instead (D-20). See ``speech_presence_link`` where the builder used to be.
 
 
 @pytest.mark.parametrize(
