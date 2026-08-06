@@ -223,16 +223,9 @@ Please follow the official installation instructions for your platform: [Install
 
 ## Installation
 
-**Python 3.11–3.14**, declared as `>=3.11,<3.15` in `pyproject.toml`, with one live exception: on
-**3.14 the `pii` extra cannot install**. `spacy` declares `requires_python = "<3.15,>=3.9"` — so it
-claims 3.14 — but ships wheels only for `cp310`–`cp313` **and publishes no sdist**, leaving nothing to
-install and nothing to build. Measured: every other extra (`nlp`, `text`, `video`, `senselab-ai`)
-resolves on 3.14; `--all-extras` fails, and `spacy` is the only reason.
-
-That gap is upstream and transient — it closes when spacy publishes `cp314` wheels, with no change
-here — so `requires-python` is deliberately *not* narrowed. For development the repo pins the
-interpreter in `.python-version` (**3.12**, matching CI's default), which `uv` reads, so a bare
-`uv sync` is deterministic regardless.
+**Python 3.11–3.14**, declared as `>=3.11,<3.15` in `pyproject.toml`. For development the repo pins
+the interpreter in `.python-version` (**3.12**, matching CI's default), which `uv` reads, so a bare
+`uv sync` is deterministic.
 
 Install this package via:
 
@@ -251,7 +244,7 @@ If you want to install only audio dependencies, you do:
 pip install 'senselab'
 ```
 
-The declared extras are `nlp`, `pii`, `text`, `video`, `senselab-ai`, and `all` (every one of them).
+The declared extras are `nlp`, `text`, `video`, `senselab-ai`, and `all` (every one of them).
 To pick a subset:
 ```sh
 pip install 'senselab[video,text,senselab-ai]'
@@ -291,7 +284,7 @@ the working tree. See [Development](#development) below, which builds from sourc
 
 ## Development
 
-Four steps, and the third is the one people miss:
+Three steps, and the second is the one people miss:
 
 Development installs **from source** — the checkout you are standing in. `uv sync` puts the working
 tree in the environment, so an edit is live with no reinstall; nothing here fetches `senselab` from
@@ -304,17 +297,14 @@ reading git describe, which is also why a shallow clone with no tags reports a w
 #    (3.12, matching CI's default), so no --python flag.
 uv sync --all-extras --group dev --group docs
 
-# 2. The spaCy model Presidio uses for PII detection (not a pip dependency).
-uv run python -m spacy download en_core_web_lg
-
-# 3. FFmpeg shared libraries for torchcodec. Skip this and NOTHING collects —
+# 2. FFmpeg shared libraries for torchcodec. Skip this and NOTHING collects —
 #    conftest.py aborts with "Dependencies failed to import", even for tests that
 #    never open an audio file. See System Requirements above for why the PyAV wheel
 #    does not cover it.
 bash scripts/install-ffmpeg.sh
 export LD_LIBRARY_PATH="/opt/miniforge/lib:$LD_LIBRARY_PATH"   # macOS: DYLD_LIBRARY_PATH
 
-# 4. Hooks, required before committing.
+# 3. Hooks, required before committing.
 uv run pre-commit install
 ```
 

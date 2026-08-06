@@ -47,7 +47,7 @@ and a full provenance block is written. Set ``cache.enabled: false`` to disable 
 prior entries.
 
 Install:
-    uv sync --extra text --extra video --extra senselab-ai --extra nlp --extra pii --group dev
+    uv sync --all-extras --group dev
 """
 
 from __future__ import annotations
