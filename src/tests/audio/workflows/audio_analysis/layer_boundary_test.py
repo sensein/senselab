@@ -413,6 +413,10 @@ _FUSED_AXIS_FIELDS = {
     # Which perturbations ran here and were not admitted to the fold. Distinct from a shrunken
     # ``contributing_passes``, which cannot say whether a pass was withheld or never computed.
     "snr_gated_passes",
+    # How many independent sources the row rests on, summed over its signals. An axis resting on one
+    # signal that folds four diarizers otherwise reads exactly as confident as one resting on four
+    # independent signals.
+    "n_sources",
     "signal_weights",
     "weight_basis",
     "round",

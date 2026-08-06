@@ -541,9 +541,21 @@ def harvest_speaker_votes(
             # the asr axis with zero contributing signals over a whole recording.
             bucket_dict["votes"] = {}
             continue
-        assignment = speaker_assignment_doubt(_bucket_clusters(bucket_dict))
+        clusters = _bucket_clusters(bucket_dict)
+        assignment = speaker_assignment_doubt(clusters)
         if assignment is not None:
-            votes["speaker_assignment"] = {"value": assignment, "operator": "over_speakers/entropy"}
+            votes["speaker_assignment"] = {
+                "value": assignment,
+                "operator": "over_speakers/entropy",
+                # How many independent sources stand behind this one number, and what each said.
+                # This axis has a *single* scored signal that folds every diarizer, so without these
+                # the axis reads exactly as confident as one resting on four independent signals, and
+                # ``epistemic_uncertainty`` reports 0.0 — not because the diarizers agreed but
+                # because the spread was collapsed before the fold that measures spread saw it. The
+                # same defect the asr axis had while ``consensus_words`` was its only voter.
+                "n_sources": len(clusters),
+                "source_outcomes": dict(sorted(clusters.items())),
+            }
         if doubt is not None:
             votes["target_activity"] = {"value": doubt, "operator": "mask_region/gated_on_state", "state": state}
 

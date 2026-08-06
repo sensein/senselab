@@ -172,6 +172,60 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     return out
 
 
+def per_signal_sources(bucket: Mapping[str, Any]) -> dict[str, int]:
+    """How many independent sources stand behind each signal's number in this bucket.
+
+    A signal that declares nothing counts as **one** — it is its own source. A signal that folds
+    several (a consensus over recognizers, an entropy over diarizers) says so with ``n_sources``,
+    because otherwise the fold cannot tell a number backed by four models from one backed by one,
+    and both the weighting and the reducibility of the result depend on that difference.
+
+    Args:
+        bucket: One harvested bucket, ``{"start", "end", "votes"}``.
+
+    Returns:
+        ``{signal → source count}``, only for signals the fold actually scores.
+    """
+    scored = set(per_signal_uncertainty(bucket))
+    votes = bucket.get("votes") or {}
+    out: dict[str, int] = {}
+    if not isinstance(votes, Mapping):
+        return out
+    for name in scored:
+        entry = votes.get(name)
+        count = entry.get("n_sources") if isinstance(entry, Mapping) else None
+        out[str(name)] = int(count) if isinstance(count, int) and count > 0 else 1
+    return out
+
+
+def _source_distributions_for(
+    store: Mapping[tuple[tuple[float, float], str], list[dict[str, float]]],
+    bucket: tuple[float, float],
+    signal: str,
+) -> list[dict[str, float]]:
+    """The stored per-source distributions for one (bucket, signal), or an empty list."""
+    return list(store.get((bucket, signal)) or [])
+
+
+def _source_distributions(bucket: Mapping[str, Any], signal: str) -> list[dict[str, float]]:
+    """The per-source outcome distributions behind one signal, for the reducibility split.
+
+    Each source asserted one outcome, so its distribution is a point mass. Fed to
+    ``statistics.epistemic_uncertainty``, k point masses give mean per-source entropy 0, which makes
+    the whole of the total *epistemic* — the correct reading: sources disagreeing about who is
+    speaking is doubt that further measurement can resolve, unlike a source that is itself unsure.
+
+    Returns an empty list when the signal declared no per-source outcomes, in which case the caller
+    leaves the split alone rather than inventing one.
+    """
+    votes = bucket.get("votes") or {}
+    entry = votes.get(signal) if isinstance(votes, Mapping) else None
+    outcomes = entry.get("source_outcomes") if isinstance(entry, Mapping) else None
+    if not isinstance(outcomes, Mapping) or len(outcomes) < 2:
+        return []
+    return [{str(value): 1.0} for value in outcomes.values()]
+
+
 @dataclass(frozen=True)
 class SnrGate:
     """Per-bucket admission for perturbations that only count where the audio is degraded.
@@ -296,6 +350,8 @@ def fuse_axis(
     collected: dict[tuple[float, float], dict[str, list[float]]] = {}
     passes_seen: dict[tuple[float, float], set[str]] = {}
     gated_out: dict[tuple[float, float], set[str]] = {}
+    sources: dict[tuple[float, float], dict[str, int]] = {}
+    source_dists: dict[tuple[tuple[float, float], str], list[dict[str, float]]] = {}
 
     for perturbation in sorted(buckets_by_pass):
         for bucket in buckets_by_pass[perturbation] or []:
@@ -312,6 +368,14 @@ def fuse_axis(
             passes_seen.setdefault(key, set()).add(str(perturbation))
             for signal, value in per_signal_uncertainty(bucket).items():
                 slot.setdefault(signal, []).append(value)
+            # Multiplicity, and the per-source outcomes behind a folding signal. Max across passes
+            # rather than sum: a source is the same source under a transform, so adding the passes
+            # would report four diarizers as eight.
+            for signal, count in per_signal_sources(bucket).items():
+                sources.setdefault(key, {})[signal] = max(sources.get(key, {}).get(signal, 0), count)
+                dists = _source_distributions(bucket, signal)
+                if dists and not source_dists.get((key, signal)):
+                    source_dists[(key, signal)] = dists
 
     # A bucket every pass was gated out of still owes a row: it has no fused value, and that is a
     # measurement ("nothing was admitted here"), not an absence to be skipped over.
@@ -343,6 +407,16 @@ def fuse_axis(
         )
         spread = variability(values)
         total, epistemic = epistemic_uncertainty([{"unsettled": v, "settled": 1.0 - v} for v in values])
+        # **A single signal is an identity mapping into the axis**: with one entry the weighted mean
+        # reduces to ``1 - v`` and the weight cancels, so nothing about the fold can express how well
+        # supported that number is. What it *can* express is reducibility — and the inter-signal split
+        # above returns 0.0 for one signal by definition, which reads as "none of this doubt can be
+        # reduced" when the truth may be that four sources disagree inside it. Where the lone signal
+        # declared its per-source outcomes, the split is taken over those instead.
+        if len(signals) == 1:
+            lone = _source_distributions_for(source_dists, (start, end), signals[0])
+            if lone:
+                total, epistemic = epistemic_uncertainty(lone)
         rows.append(
             {
                 "start": start,
@@ -365,6 +439,11 @@ def fuse_axis(
                 # which a shrunken ``contributing_passes`` alone cannot distinguish from a run
                 # that never computed the perturbation.
                 "snr_gated_passes": sorted(gated_out.get((start, end), ())),
+                # How many independent sources this row rests on, summed over its signals. An axis
+                # resting on one signal that folds four diarizers read exactly as confident as one
+                # resting on four independent signals; this is what says otherwise. Previously
+                # written only by the adaptive loop, so fusion's rounds left it null.
+                "n_sources": sum(sources.get((start, end), {}).get(name, 1) for name in signals),
                 "signal_weights": {s: w for s, w in zip(signals, applied)},
                 "weight_basis": {s: dict((weight_basis or {}).get(s, {})) for s in signals},
                 "round": int(round_index),

@@ -37,7 +37,7 @@ source is then only visible via ``PassHarvest.synthetic_diarization``.
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -457,6 +457,35 @@ def harvest_pass(
     return harvest, per_window_embeddings, incomparable_reasons
 
 
+def _signal_multiplicity(buckets_by_pass: Mapping[str, Sequence[Mapping[str, Any]]]) -> dict[str, int]:
+    """How many independent sources each signal folds, over every bucket and pass of one axis.
+
+    Max rather than mean or sum: a signal's source count is a property of how it is *built*, so the
+    bucket where every source reported is the one that says what it is. Buckets where a source fell
+    silent are that source being silent, not the signal having fewer of them — and summing across
+    passes would report four diarizers as eight, since a source is the same source under a transform.
+
+    Args:
+        buckets_by_pass: ``{perturbation → harvested buckets}`` for one axis.
+
+    Returns:
+        ``{signal → source count}``. A signal that declares nothing is absent, and
+        ``measured_weights`` then leaves it at full corroboration — a factor never gathered must not
+        act as a discount.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import per_signal_sources
+
+    out: dict[str, int] = {}
+    for buckets in (buckets_by_pass or {}).values():
+        for bucket in buckets or []:
+            if not isinstance(bucket, Mapping):
+                continue
+            for signal, count in per_signal_sources(bucket).items():
+                if count > out.get(signal, 0):
+                    out[signal] = count
+    return out
+
+
 def compute_uncertainty_axes(
     *,
     passes: dict[str, dict[str, Any]],
@@ -675,6 +704,7 @@ def compute_uncertainty_axes(
             instability_by_axis[axis],
             support,
             _signal_names(harvests_by_label, axis=axis),
+            multiplicity=_signal_multiplicity(buckets_by_axis_pass[axis]),
         )
         for axis in HARVESTED_AXES
     }

@@ -216,8 +216,9 @@ def measured_weights(
     signals: Any,  # noqa: ANN401 — any iterable of signal names
     *,
     min_reliability: float = MIN_RELIABILITY,
+    multiplicity: Mapping[str, int] | None = None,
 ) -> dict[str, float]:
-    """The weight a signal's doubt carries: perturbation stability x physical support.
+    """The weight a signal's doubt carries: perturbation stability x physical support x corroboration.
 
     Both factors are *measured*. The gate they replace was declared — a source kind written
     into policy — and a declared gate encodes a judgement from whichever recording motivated
@@ -235,12 +236,33 @@ def measured_weights(
 
     A signal absent from either mapping was not measured on that factor and keeps full weight
     there — a factor never gathered must not act as a discount.
+
+    **Corroboration** is the third factor, and it answers what neither of the others asks: how many
+    independent sources stand behind the signal's number. Stability asks whether a signal agrees with
+    itself under a transform; support asks whether the recording backs its claim. Both are silent on
+    a signal that folds four diarizers into one entropy sitting beside a signal that is one
+    classifier — the fold treated those as interchangeable evidence.
+
+    Measured relative to the *most corroborated signal on the same axis*, ``n_i / max_j n_j``, so it
+    is a comparison among the signals actually present rather than a curve someone picked. Two
+    consequences worth stating: where every signal has one source the factor is 1.0 for all of them
+    and changes nothing, which is the common case; and it can only ever *remove* weight from the
+    thinly-sourced, never inflate the well-sourced past its measured stability and support.
+
+    Not ``1 - 1/n``, which would zero every atomic signal, and not a hand-set table of source kinds —
+    that construct is exactly what stability and support replaced, after a *declared* source-kind gate
+    down-weighted the one clusterer that had recovered five speakers correctly.
     """
     reliability = reliability_from_stability(instability, min_reliability=min_reliability)
+    # Relative to the best-corroborated signal on this axis. Absent or all-equal counts leave every
+    # factor at 1.0, so an axis whose signals are all atomic is untouched.
+    counts = {str(k): int(v) for k, v in (multiplicity or {}).items() if isinstance(v, int) and v > 0}
+    peak = max(counts.values(), default=0)
+    corroboration = {name: counts.get(name, peak or 1) / peak for name in counts} if peak > 1 else {}
     out: dict[str, float] = {}
     for name in sorted({str(s) for s in signals}):
         claimant = name.split("::", 1)[0]
         stability = reliability.get(name, reliability.get(claimant, 1.0))
         backing = float(support.get(name, support.get(claimant, 1.0)))
-        out[name] = stability * max(0.0, min(1.0, backing))
+        out[name] = stability * max(0.0, min(1.0, backing)) * corroboration.get(name, 1.0)
     return out
