@@ -18,7 +18,7 @@ Implements I1 (boundary evidence) and I2 (re-cluster) generically:
    by ≥ half the models merge (union-find on the co-association matrix).
 5. Output refined segments/clusters (ids ``R0, R1, …`` by first appearance),
    boundary confidences, and per-bucket speaker votes; the caller shadows the
-   per-bucket ``__cross_diar_label_disagreement__`` with a recomputed value that
+   per-bucket ``per_speaker_presence`` with a recomputed value that
    includes the new voter.
 
 No parameter here is tuned to a particular file: everything comes from the
@@ -250,16 +250,3 @@ def cluster_at(refined: dict[str, Any], t: float) -> str | None:
         if seg["start"] <= t < seg["end"]:
             return str(seg["cluster_id"])
     return None
-
-
-def cross_source_disagreement(cluster_ids: list[str]) -> float | None:
-    """Fraction of source pairs disagreeing on the cluster — mirrors the speaker axis sub-signal."""
-    ids = [c for c in cluster_ids if c]
-    if len(ids) < 2:
-        return None
-    pairs = disagree = 0
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            pairs += 1
-            disagree += ids[i] != ids[j]
-    return disagree / pairs if pairs else None
