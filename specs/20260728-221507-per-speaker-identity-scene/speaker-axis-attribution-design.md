@@ -197,23 +197,41 @@ rather than manufacturing it.
 Both transcripts are byte-identical to their pre-change digests (`ad7dfa13a6971e1a`,
 `a033983bab339bf4`), and checks 2–5 pass unchanged.
 
-### Two mechanisms the later rounds expose, both already documented
+### Rounds 1–2: the cross-axis coupling saturation
 
-Rounds 1–2 are the **cross-axis coupling saturation** from `grid-unification-results.md`: the
-`axis::*` voters join at full weight against a max-doubt aggregator and inflate every axis. Nothing
-new, and the speaker axis is now simply one more place it is visible.
+Already documented in `grid-unification-results.md`: the `axis::*` voters join at full weight against
+a max-doubt aggregator and inflate every axis. Nothing new, and the speaker axis is now one more place
+it is visible. It also means the axis is *not* a function of only the three named terms in those
+rounds, which is a deviation from this design and is tracked there.
 
-Rounds 3–4 settle at 0.6082 rather than returning to round 0's 0.2878, and the cause is worth
-stating precisely: `I2_recluster` fires six times, produces **5 clusters** against a count posterior
-of **2 at 0.978**, and recomputes `per_speaker_presence` over the repaired assignments. Five clusters
-spread across the sources drop each share to ~0.2, and `H(0.2) = 0.722` — so the axis reports high
-attribution doubt *because the sources genuinely disagree about who is speaking after the repair*.
+### Rounds 3–4: `I2_recluster` was overwriting the per-speaker term, and that was a bug
 
-That is the axis working. The 2-vs-5 disagreement is the separate open item in
-`grid-unification-results.md`, and it is now **visible in the speaker axis** instead of hidden behind
-a change-detection number that was high for unrelated reasons. Fixing the re-clustering is what will
-bring the published rounds down to round 0's reading; that is a decision about how `identity_repair`
-should respect the count posterior, not about this axis.
+Rounds 3–4 initially settled at 0.6082 rather than returning to round 0's 0.2878. The cause was
+`I2_recluster` shadowing the harvest's `per_speaker_presence` vote with a value recomputed over its
+own repaired clusters: it emits **5 clusters**, five clusters spread across the sources drop each
+share to ~0.2, and `H(0.2) = 0.722`.
+
+**I first described that as the axis correctly surfacing a real disagreement. That was wrong**, on two
+counts:
+
+1. **The per-speaker answer is correct for this recording.** It is a two-person conversation; the
+   count posterior is 2 at 0.978 and unimodal; `S0`/`S1` carry existence uncertainty 0.0 and 0.022.
+   So `I2_recluster`'s 5 clusters are not competing evidence — they are simply wrong, and inflating
+   the axis with them reports doubt where the run's own accurate answer has none.
+2. **It reintroduced the defect this axis exists to remove.**
+   `final/per_speaker_presence.parquet` is built by `build_speech_presence_tracks(speaker_harvest)` —
+   from the *harvest*, never from `refined_identity` — so it still read 0.1196 while the axis read
+   0.608. A deliverable and the axis describing it must not disagree.
+
+So the overwrite is removed. `I2_recluster`'s product is the refined segmentation it writes; a repair
+that contradicts a confident count posterior belongs in the identity deliverables where the
+contradiction is visible, not folded into how sure we are who is speaking.
+
+**`I2_recluster` over-segmenting is now the open defect**, not an uncertainty signal. It cuts at 6
+change-points (local maxima above `mean + cp_k·std`, `cp_k: 1.0`) and agglomerates the pooled segment
+vectors at `recluster_cosine_threshold: 0.45`, and it never consults the count posterior — so on a
+clip whose speaker count is known to 0.978 it returns 5. Constraining it to the posterior, or gating
+it on agreeing with one, is the next speaker task.
 
 ### What the verification caught that the unit tests could not
 

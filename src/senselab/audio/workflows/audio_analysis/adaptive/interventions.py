@@ -34,10 +34,6 @@ from typing import Any
 from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights, model_family
 from senselab.audio.workflows.audio_analysis.adaptive.regions import region_buckets
-from senselab.audio.workflows.audio_analysis.attribution import (
-    SILENT_CLUSTER_ID,
-    per_speaker_attribution_doubt,
-)
 from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, OVERLAP_INFORMED_AXES
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.layout import perturbation_dir
@@ -867,44 +863,19 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 provenance={"rule": "I2_recluster", "n_clusters": repaired["n_clusters"]},
             )
         )
-        # Recompute the axis's assignment-agreement term including the new voter, and overwrite the
-        # file-scope vote deterministically (same vote id).
+        # **The axis's per-speaker term is not recomputed here.** It reads the diarization models'
+        # agreement about who is in the bucket, and ``final/per_speaker_presence.parquet`` publishes
+        # that same quantity from the *harvest* (``build_speech_presence_tracks(speaker_harvest)``,
+        # never from ``refined_identity``). Shadowing it with a value folded over these repaired
+        # clusters made the two disagree — the published axis went 0.288 -> 0.608 while the
+        # deliverable still read 0.1196 — which is the defect the attribution axis exists to remove.
         #
-        # This recomputed ``__cross_diar_label_disagreement__`` until the speaker axis stopped
-        # measuring change: that block was how the repair reached the axis, because
-        # ``per_speaker_presence`` is computed at harvest time and is stale the moment a re-cluster
-        # lands. The axis now scores the per-speaker term, so that is the one to refresh — a faithful
-        # translation of what this always meant, since both are read off the same cluster assignments.
-        clusters: dict[str, str] = {}
-        for source, payload in ctx["store"].active_votes(stream, "speaker", bk).items():
-            if source.startswith("__") or "::" in source:
-                continue
-            c = payload.get("cluster_id")
-            if c:
-                # Silent voters stay in the denominator, so a lone detection among silent models does
-                # not read as certain; both spellings of "silent" normalise to one.
-                clusters[str(source)] = SILENT_CLUSTER_ID if str(c) in ("SIL", "<silent>") else str(c)
-        value = per_speaker_attribution_doubt(clusters)
-        if value is not None:
-            ctx["store"].add_vote(
-                Vote(
-                    axis="speaker",
-                    bucket=bk,
-                    source="per_speaker_presence",
-                    stream=stream,
-                    scope="file",
-                    round=ctx["round_idx"],
-                    payload={
-                        "value": value,
-                        "operator": "max_over_speakers/entropy",
-                        "n_sources": len(clusters),
-                        "recomputed_by": "I2_recluster",
-                    },
-                    provenance={"rule": "I2_recluster"},
-                )
-            )
+        # This intervention's product is the refined segmentation above; if a 5-cluster repair against
+        # a count posterior of 2 at 0.978 is wrong, that belongs in the identity deliverables where
+        # the disagreement is visible, not folded into how sure we are who is speaking.
         touched.setdefault("speaker", set()).add(bk)
-        n_votes += 2
+        # One vote per bucket, not two: the second was the per-speaker term this no longer shadows.
+        n_votes += 1
     return {
         "n_clusters": repaired["n_clusters"],
         "n_segments": len(repaired["segments"]),
