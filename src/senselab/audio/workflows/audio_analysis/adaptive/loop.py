@@ -797,7 +797,14 @@ def _write_round_belief(out_dir: Path, round_index: int, state: BeliefState) -> 
                 # earlier one, and writing it as ``round`` is what made a round directory hold
                 # rows claiming three different rounds.
                 "last_refolded_round": r.get("last_refolded_round"),
-                "n_sources": len(r.get("contributing_sources") or []),
+                # The fold's declared multiplicity when it reached this row, falling back to the
+                # count of contributing vote sources. Two different quantities under one column name
+                # was the bug: fusion's rounds reported "sources each signal folds" and the loop's
+                # reported "vote sources in this bucket", so the number changed meaning partway along
+                # one trajectory with nothing saying so.
+                "n_sources": (
+                    r["n_sources"] if isinstance(r.get("n_sources"), int) else len(r.get("contributing_sources") or [])
+                ),
                 "contributing_signals": r.get("contributing_signals") or [],
                 "contributing_passes": r.get("contributing_passes") or [],
                 # See the note in ``fuse.write_final_uncertainty``: this is a whitelist too, and an

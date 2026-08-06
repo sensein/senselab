@@ -830,6 +830,11 @@ class VoteStore:
             "p_voice": self._folded_p_voice(axis, bucket) if axis == "speech_presence" else None,
             "contributing_sources": sources,
             "contributing_signals": fused.get("contributing_signals") or [],
+            # The fold's own count of independent sources, carried through rather than recomputed.
+            # The loop used to derive this as ``len(contributing_sources)``, which is a *different*
+            # quantity — the vote sources present in a bucket, not how many sources each signal folds
+            # — so the same column meant one thing in fusion's rounds and another in the loop's.
+            "n_sources": fused.get("n_sources"),
             "contributing_passes": fused.get("contributing_passes") or streams,
             # Not defaulted to ``streams``: an empty list here means "nothing was withheld", and
             # falling back to the stream set would claim every pass was gated out.

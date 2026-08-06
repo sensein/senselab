@@ -235,3 +235,88 @@ def test_every_fold_column_the_schema_declares_is_carried_by_the_writers() -> No
             f"{module.__name__} writes estimate rows but never names {missing}; "
             "estimate_frame will write them null rather than refuse"
         )
+
+
+# ── source multiplicity: a single signal is an identity mapping ──────────────
+
+
+def test_a_lone_signal_is_an_identity_mapping() -> None:
+    """One signal, so the weighted mean reduces to ``1 - v`` and the weight cancels.
+
+    Worth pinning because it is the premise of everything below: with a single entry, no weighting
+    scheme can change the axis's value, so how well supported that value is has to be expressed
+    somewhere other than the weight.
+    """
+    rows = fuse_axis(
+        {"raw": [{"start": 0.0, "end": 0.1, "votes": {"lone": {"value": 0.3}}}]},
+        weights={"lone": 0.05},  # a savage discount, and it must not move the value
+        snr_gate=None,
+    )
+    assert rows[0]["confidence"] == pytest.approx(0.7)
+
+
+def test_a_lone_folding_signal_reports_its_doubt_as_reducible() -> None:
+    """The defect this fixes: ``epistemic_uncertainty`` was 0.0 whenever an axis had one signal.
+
+    ``epistemic_uncertainty`` compares distributions, so with one it returns 0.0 by definition — which
+    reads as "none of this doubt can be reduced" when the truth is that four diarizers disagree
+    *inside* the number. The speaker axis sat in exactly that state: ``speaker_assignment`` folds every
+    diarizer into one entropy, and the axis reported epistemic 0.0000 across a whole recording.
+
+    Sources asserting different outcomes are point masses, so mean per-source entropy is 0 and the
+    whole total is epistemic — the correct reading, since disagreement between sources is what further
+    measurement can resolve.
+    """
+    contested = {
+        "start": 0.0,
+        "end": 0.1,
+        "votes": {
+            "speaker_assignment": {
+                "value": 1.0,
+                "n_sources": 4,
+                "source_outcomes": {"a": "C0", "b": "C0", "c": "C1", "d": "C1"},
+            }
+        },
+    }
+    row = fuse_axis({"raw": [contested]}, weights={}, snr_gate=None)[0]
+    assert (row["epistemic_uncertainty"] or 0.0) > 0.0, "a split among sources is reducible doubt"
+    assert row["n_sources"] == 4
+
+
+def test_unanimous_sources_leave_nothing_to_reduce() -> None:
+    """The converse. Four sources on one answer is not reducible doubt, it is agreement."""
+    agreed = {
+        "start": 0.0,
+        "end": 0.1,
+        "votes": {
+            "speaker_assignment": {
+                "value": 0.0,
+                "n_sources": 4,
+                "source_outcomes": {"a": "C0", "b": "C0", "c": "C0", "d": "C0"},
+            }
+        },
+    }
+    row = fuse_axis({"raw": [agreed]}, weights={}, snr_gate=None)[0]
+    assert (row["epistemic_uncertainty"] or 0.0) == pytest.approx(0.0)
+    assert row["n_sources"] == 4
+
+
+def test_a_signal_that_declares_nothing_counts_as_one_source() -> None:
+    """A signal is its own source; absence of a declaration is not absence of a source."""
+    row = fuse_axis(
+        {"raw": [{"start": 0.0, "end": 0.1, "votes": {"a": {"value": 0.2}, "b": {"value": 0.4}}}]},
+        weights={},
+        snr_gate=None,
+    )[0]
+    assert row["n_sources"] == 2
+
+
+def test_source_counts_do_not_double_across_passes() -> None:
+    """A source is the same source under a transform, so two passes must not report eight diarizers."""
+    bucket = {
+        "start": 0.0,
+        "end": 0.1,
+        "votes": {"speaker_assignment": {"value": 0.5, "n_sources": 4, "source_outcomes": {"a": "C0", "b": "C1"}}},
+    }
+    row = fuse_axis({"raw": [bucket], "enhanced": [dict(bucket)]}, weights={}, snr_gate=None)[0]
+    assert row["n_sources"] == 4, "max across passes, not sum"
