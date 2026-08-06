@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management. The interpreter comes from the repo: `.python-version` pins **3.12**, so a bare `uv sync` resolves it without a flag. `pyproject.toml` declares `requires-python = ">=3.11,<3.15"`, which is wider than the extras actually support — the `pii` extra's `spacy` has no wheels past cp313, so on a fresh clone where uv picks 3.14 the documented `uv sync` fails with a resolution error. The pin is what makes the install deterministic; the upper bound in `pyproject.toml` is still wrong and worth narrowing.
+Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management. The interpreter comes from the repo: `.python-version` pins **3.12**, so a bare `uv sync` resolves it without a flag. `pyproject.toml`'s `requires-python = ">=3.11,<3.15"` is **correct and should not be narrowed**: measured, every extra except `pii` resolves on 3.14. `spacy` is the sole blocker — it declares `<3.15` but ships wheels only for `cp310`–`cp313` and publishes **no sdist**, so `--all-extras` on 3.14 has nothing to install and nothing to build. That is an upstream gap that closes when spacy ships `cp314`. The pin is what makes a fresh clone deterministic; without it uv picks 3.14 and the documented `uv sync` fails.
 
 ## Build and Development Commands
 
