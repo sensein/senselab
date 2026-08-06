@@ -18,7 +18,7 @@ Implements I1 (boundary evidence) and I2 (re-cluster) generically:
    by ≥ half the models merge (union-find on the co-association matrix).
 5. Output refined segments/clusters (ids ``R0, R1, …`` by first appearance),
    boundary confidences, and per-bucket speaker votes; the caller shadows the
-   per-bucket ``per_speaker_presence`` with a recomputed value that
+   per-bucket ``speaker_assignment`` with a recomputed value that
    includes the new voter.
 
 No parameter here is tuned to a particular file: everything comes from the

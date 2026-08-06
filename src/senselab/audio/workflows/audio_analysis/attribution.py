@@ -9,11 +9,12 @@ doubt averaged 0.168.
 
 It now asks about **attribution**, from three terms, each a function here:
 
-- :func:`per_speaker_attribution_doubt` — do the diarization models agree about who is here?
-- :func:`word_location_doubt` — do we know where the words are? Word boundaries are what assign a
-  word to a speaker's span, so not knowing where a word starts is not knowing whose it is. This
-  consumes the per-edge temporal confidences D-27 moved onto the word, which had no consumer until
-  now.
+- :func:`speaker_assignment_doubt` — do the diarization models agree about who is here? Measured
+  over *all* the answers they gave, with no speaker privileged, because absent a target embedding the
+  question is "do we know who is talking" rather than "is this particular person here".
+- :func:`word_coverage` — is there any speech here to attribute? A **gate, not a voter**: a bucket
+  with no word in it gets no claim at all, because attributing speech requires speech. Word timing
+  bounds *where* a speaker change can be; it is not evidence about *who*.
 - :func:`target_activity_doubt` — do we know whether the target was active at all? Not knowing that
   is not knowing whether there is anyone to attribute.
 
@@ -30,9 +31,9 @@ import math
 from typing import Any, Mapping, Sequence
 
 __all__ = [
-    "per_speaker_attribution_doubt",
+    "speaker_assignment_doubt",
     "target_activity_doubt",
-    "word_location_doubt",
+    "word_coverage",
 ]
 
 SILENT_CLUSTER_ID = "SIL"
@@ -46,85 +47,116 @@ def _binary_entropy(p: float) -> float:
     return -(p * math.log(p) + (1.0 - p) * math.log(1.0 - p)) / math.log(2.0)
 
 
-def per_speaker_attribution_doubt(
+def speaker_assignment_doubt(
     clusters: Mapping[str, str],
     *,
     silent_cluster_id: str = SILENT_CLUSTER_ID,
+    target: str | None = None,
 ) -> float | None:
-    """How much the diarization models disagree about *who* is in this bucket.
+    """How spread the diarization models are over **who** is speaking in this bucket.
 
-    Per speaker present, the share of models placing them here, read as binary entropy — the same
-    quantity ``speaker.per_speaker_tracks`` publishes per speaker in
-    ``final/per_speaker_presence.parquet``, so the axis and that deliverable can no longer disagree
-    about how confident the run is. They did: the tracks reported mean doubt 0.168 on a recording the
-    axis called 0.666.
+    Normalised Shannon entropy of the models' distribution across the answers they gave, where the
+    answers are the speaker ids they assigned plus ``silent_cluster_id`` — "nobody" is one of the
+    answers to "who is here", so it is an outcome rather than an exclusion. Unanimity is ``0.0``, an
+    even split across the claimed answers is ``1.0``.
 
-    **Folded by ``max`` over the speakers present, not by mean.** If any speaker's presence here is
-    contested, attribution here is contested; averaging a contested speaker against a confidently
-    placed one lets the confident one hide the doubt.
+    **No speaker is privileged.** This was ``max`` over the speakers present of each one's *binary*
+    entropy, which picks the single most-contested speaker and reports that speaker's doubt — a
+    *targeted* reading with no target supplied, and it read as a statement about one person when the
+    question is "do we know who is talking". For two outcomes the two agree exactly (binary entropy is
+    symmetric, so ``H(p) = H(1-p)``), which is why the change is invisible on a two-speaker recording
+    and wrong in principle: with three or more answers in play the max silently elected one of them.
 
-    Models reporting silence stay in the denominator: a lone detection among four silent models is
-    exactly the case that must not read as certain.
+    ``target`` is the hook for the future targeted mode: given a reference embedding for a specific
+    speaker, the question becomes binary — is *that* speaker here — and the right measure is that one
+    speaker's binary entropy. Passing it restores exactly that, and leaving it ``None`` keeps the
+    untargeted reading. The two are different questions and must not be silently interchanged.
 
     Args:
         clusters: ``{diar model → cluster id}`` for one bucket.
-        silent_cluster_id: The id standing for "no speaker", excluded from the speakers but kept in
-            the denominator.
+        silent_cluster_id: The id standing for "no speaker". Kept as an *outcome*, not dropped: a lone
+            detection among three silent models is the case that must not read as certain, and it
+            scores 0.811 here exactly as it did under the per-speaker form.
+        target: A specific cluster id to measure instead of the whole assignment — the targeted mode.
+            ``None`` (the default) measures the spread across every answer given.
 
     Returns:
-        Doubt in ``[0, 1]``, or ``None`` when no model placed a speaker here — which is the absence
-        of a claim rather than confident attribution of nobody.
+        Doubt in ``[0, 1]``, or ``None`` when no model placed a speaker here — the absence of a claim
+        rather than confident attribution of nobody.
     """
     if not clusters:
         return None
     n_models = len(clusters)
-    active = sorted({c for c in clusters.values() if c != silent_cluster_id})
-    if not active:
+    if not [c for c in clusters.values() if c != silent_cluster_id]:
         return None
-    return max(_binary_entropy(sum(1 for c in clusters.values() if c == cluster) / n_models) for cluster in active)
+    if target is not None:
+        # Targeted: one speaker, one binary question.
+        return _binary_entropy(sum(1 for c in clusters.values() if c == target) / n_models)
+    counts: dict[str, int] = {}
+    for cluster in clusters.values():
+        counts[cluster] = counts.get(cluster, 0) + 1
+    if len(counts) == 1:
+        return 0.0
+    entropy = -sum((k / n_models) * math.log(k / n_models, 2.0) for k in counts.values())
+    # Normalised by the number of answers actually in play, so an even split reads 1.0 whether the
+    # models offered two answers or five — the same convention ``statistics.entropy_uncertainty`` uses.
+    return max(0.0, min(1.0, entropy / math.log(len(counts), 2.0)))
 
 
-def word_location_doubt(
+def word_coverage(
     words: Sequence[Mapping[str, Any]],
     buckets: Sequence[tuple[float, float]],
-) -> dict[tuple[float, float], float | None]:
-    """Per bucket, how poorly localised the words reaching it are.
+) -> dict[tuple[float, float], float]:
+    """Per bucket, the fraction of it occupied by a recognized word, in ``[0, 1]``.
 
-    ``1 - temporal_confidence`` per word, coverage-weighted over the words overlapping the bucket.
-    ``temporal_confidence`` is the fused word's own agreement about its span (the per-edge
-    ``onset_confidence`` / ``offset_confidence`` folded), so this is the run's own measure of "do we
-    know where this word is" — projected onto the axis grid the same way ``asr.resample_word_doubt``
-    projects accuracy.
+    **A measurement, not a vote.** The speaker axis reads it as a *gate*: a bucket with no word in it
+    has no speech to attribute, so the axis makes no claim there. It does not enter the fold.
 
-    This is also where the axis's *resolution* comes from: measured on the conversation clip, the
-    per-speaker term takes 3 distinct values across the recording and this one takes 79.
+    That distinction was learned the hard way. This started as ``word_location_doubt`` —
+    ``1 - temporal_confidence``, coverage-weighted — and *voted* on the axis. Measured on a clean
+    two-speaker conversation it contributed ~0.223 in every bucket, standing doubt that swamped the
+    per-speaker term: the axis read 0.295 where the per-speaker evidence said 0.0 across 86% of the
+    recording. Word-boundary jitter of a few tens of milliseconds says almost nothing about *which*
+    of two speakers said a word — speakers change on the scale of seconds — so as a vote on identity
+    it was measuring the wrong thing at the wrong scale. What word timing legitimately does is bound
+    *where a speaker change can be*, and the sharpening that buys, for this use case, is knowing when
+    there is no speech to attribute at all.
+
+    Spans are unioned before measuring, so two recognizers' overlapping words are one span of speech
+    rather than 200% coverage.
 
     Args:
-        words: Fused words carrying ``start``, ``end`` and ``temporal_confidence``.
+        words: Fused words carrying ``start`` and ``end``.
         buckets: ``(start, end)`` pairs on the axis grid.
 
     Returns:
-        ``{bucket → doubt}``, ``None`` where no word with a measured temporal confidence reaches the
-        bucket. ``None`` rather than ``0.0``: nothing was said there, so nothing localises it, and
-        zero would assert that we know exactly where a word we never heard was.
+        ``{bucket → covered fraction}``. ``0.0`` is a genuine measurement — no word occupies any of
+        this bucket — and is what the caller gates on.
     """
-    out: dict[tuple[float, float], float | None] = {}
+    spans: list[tuple[float, float]] = []
+    for word in words:
+        try:
+            start, end = float(word["start"]), float(word["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if end > start:
+            spans.append((start, end))
+    spans.sort()
+    merged: list[list[float]] = []
+    for start, end in spans:
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+
+    out: dict[tuple[float, float], float] = {}
     for bucket in buckets:
-        weighted = 0.0
-        total = 0.0
-        for word in words:
-            confidence = word.get("temporal_confidence")
-            if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-                continue
-            try:
-                start, end = float(word["start"]), float(word["end"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            overlap = min(end, bucket[1]) - max(start, bucket[0])
-            if overlap > 0:
-                weighted += overlap * max(0.0, min(1.0, 1.0 - float(confidence)))
-                total += overlap
-        out[bucket] = (weighted / total) if total > 0 else None
+        width = bucket[1] - bucket[0]
+        if width <= 0:
+            out[bucket] = 0.0
+            continue
+        covered = sum(max(0.0, min(end, bucket[1]) - max(start, bucket[0])) for start, end in merged)
+        out[bucket] = max(0.0, min(1.0, covered / width))
     return out
 
 

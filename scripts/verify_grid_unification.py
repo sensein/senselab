@@ -209,7 +209,7 @@ def check(run_dir: Path) -> list[str]:
         if doubt:
             print(f"    speaker axis doubt (1 - confidence):      mean={sum(doubt) / len(doubt):.4f}")
         print(f"    contributing voters: {sorted(names)}")
-        expected = {"per_speaker_presence", "asr_location", "target_activity"}
+        expected = {"speaker_assignment", "target_activity"}
         if not (names & expected):
             failures.append(f"[6] the speaker axis carries none of {sorted(expected)}; got {sorted(names)}")
         stale = {n for n in names if "::" in n} | {"__cross_diar_label_disagreement__", "__overlap_count__"}

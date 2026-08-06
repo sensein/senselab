@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 12
+CACHE_SCHEMA_VERSION = 13
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -152,13 +152,21 @@ scene-quality calibration profile, the convergence thresholds, the triage gates 
 ``detection_margin`` mask thresholds were all fitted at spacings that no longer exist.
 
 Bumped 11 → 12 when the speaker axis stopped measuring change and started measuring **attribution**.
-Its scored voters are ``per_speaker_presence`` / ``asr_location`` / ``target_activity`` rather than
+Its scored voters are ``speaker_assignment`` / ``target_activity`` rather than
 per-(diar × embedder) ``same_label_uncertainty`` and ``change_inconsistency_uncertainty``, so a cached
-row's ``contributing_signals`` names voters this axis no longer has and lacks the three it does. The
+row's ``contributing_signals`` names voters this axis no longer has and lacks the two it does. The
 harvest's vote payloads changed shape with it: the pair entries carry ``calibrated_same_doubt`` /
 ``calibrated_change_doubt``, ``__cross_diar_label_disagreement__`` lost its scored ``value``, the
 change-point entries carry ``change_uncertainty``, and ``__overlap_count__`` became ``overlap_count``
 so that L1 records it.
+
+Bumped 12 → 13 when word evidence became a **gate** rather than a voter, and the per-speaker term
+stopped electing a speaker. ``asr_location`` is gone from ``contributing_signals`` — a wordless bucket
+now reads ``None`` instead of carrying word-boundary jitter as identity doubt — and
+``per_speaker_presence`` was renamed ``speaker_assignment`` because it measures the diarizers' spread
+over *every* answer they gave rather than the worst single speaker's. Absent a target embedding the
+axis's question is "do we know who is talking", so a cached row named for a per-speaker reading is
+answering a question the axis no longer asks.
 
 Every number keyed to the speaker axis moves with it: region proposal, convergence, residual mass,
 the disagreements ranking and the LS bins. ``theta_low`` / ``theta_high`` were not tuned against this
