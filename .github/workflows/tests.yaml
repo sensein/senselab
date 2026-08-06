@@ -171,26 +171,8 @@ jobs:
         python-version: ${{ matrix.python-version }}
     - name: Install FFmpeg shared libraries
       run: bash scripts/install-ffmpeg.sh
-    # `--all-extras` cannot resolve on 3.14: the `pii` extra's `spacy` declares
-    # `requires_python = "<3.15,>=3.9"` but ships wheels only for cp310-cp313 and
-    # publishes no sdist, so there is nothing to install and nothing to build.
-    # Upstream issues are open to add the missing wheels; when they land, delete this
-    # step and restore the plain `--all-extras` below.
-    #
-    # Excluding `pii` costs no coverage: PII detection runs in an isolated subprocess
-    # venv (see `workflows/audio_analysis/pii.py`), so the host process never imports
-    # presidio/spacy/gliner, and neither is in `src/tests/conftest.py`'s REQUIRED_DEPS.
-    # Verified: every other extra resolves on 3.14.
-    - name: Resolve extras for this interpreter
-      id: extras
-      run: |
-        if [ "${{ matrix.python-version }}" = "3.14" ]; then
-          echo 'flags=--extra nlp --extra text --extra video --extra senselab-ai' >> "$GITHUB_OUTPUT"
-        else
-          echo 'flags=--all-extras' >> "$GITHUB_OUTPUT"
-        fi
     - name: Install dependencies with uv
-      run: uv sync ${{ steps.extras.outputs.flags }} --group dev
+      run: uv sync --all-extras --group dev
     - name: Run CPU tests
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

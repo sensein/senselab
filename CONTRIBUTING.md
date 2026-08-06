@@ -26,7 +26,7 @@ Please follow the official installation instructions for your platform: [Install
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
   - ```uv sync --extra all --group dev --group docs```
-    (there is no `articulatory` extra; the declared ones are `nlp`, `pii`, `text`, `video`, `senselab-ai`, and `all`. `uv sync --extra articulatory` errors out.)
+    (there is no `articulatory` extra; the declared ones are `nlp`, `text`, `video`, `senselab-ai`, and `all`. `uv sync --extra articulatory` errors out.)
 
 5c. **Set up your HuggingFace token** (required for some models).
 Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license.

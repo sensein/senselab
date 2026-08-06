@@ -4,16 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management. The interpreter comes from the repo: `.python-version` pins **3.12**, so a bare `uv sync` resolves it without a flag. `pyproject.toml`'s `requires-python = ">=3.11,<3.15"` is **correct and should not be narrowed**: measured, every extra except `pii` resolves on 3.14. `spacy` is the sole blocker — it declares `<3.15` but ships wheels only for `cp310`–`cp313` and publishes **no sdist**, so `--all-extras` on 3.14 has nothing to install and nothing to build. That is an upstream gap that closes when spacy ships `cp314`. The pin is what makes a fresh clone deterministic; without it uv picks 3.14 and the documented `uv sync` fails.
+Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management. The interpreter comes from the repo: `.python-version` pins **3.12**, so a bare `uv sync` resolves it without a flag. `pyproject.toml`'s `requires-python = ">=3.11,<3.15"` is correct and `--all-extras` resolves across the whole range. The pin is what makes a fresh clone deterministic; without it uv picks the newest allowed interpreter.
 
 ## Build and Development Commands
 
 ```bash
 # Install dependencies (full development setup)
-uv sync --extra text --extra video --extra senselab-ai --extra nlp --extra pii --group dev --group docs
-
-# Install the spaCy NLP model used by Presidio for PII detection
-uv run python -m spacy download en_core_web_lg
+uv sync --all-extras --group dev --group docs
 
 # Install pre-commit hooks (required before committing)
 uv run pre-commit install
