@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 19
+CACHE_SCHEMA_VERSION = 20
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -205,6 +205,14 @@ recognizers. Its votes are keyed by model id rather than by the single name ``co
 cached row's ``contributing_signals`` names a signal the axis no longer has and lacks the N it does.
 ``epistemic_uncertainty`` on that axis was structurally ``0.0`` before — the spread had been averaged
 away one layer earlier — and is now a measurement, so the number differs as well as the schema.
+
+Bumped 19 → 20 when AST stopped running at 10.24 s. Its window/hop went to 0.96 s / 0.48 s — YAMNet's
+frame — because 1024 mel frames is AST's required *input size*, not its temporal precision:
+``ASTFeatureExtractor`` zero-pads a shorter window to 1024 frames, rectangular and unattenuated. Every
+cached AST classification is a different number of windows at different spans, so nothing about a
+stored result is reusable. Measured on the 21.48 s conversation: 3 windows at Speech 0.473/0.449/0.195
+became 45 windows at 0.75-0.92 — the coarse setting cost confidence as well as resolution, because a
+10.24 s window of a conversation spreads its softmax mass across every class present in it.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any

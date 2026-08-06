@@ -42,9 +42,31 @@ derivation: |
   embedder from that pass's own clusters, and only an embedder that produced no usable band falls
   back here.
 
-  Scene windows — each classifier's native frame, so its intended temporal precision survives into
-  the output. AST: 1024 mel frames at 10 ms = 10.24 s, and its kaldi-fbank refuses chunks below
-  ~1 s. YAMNet: 0.96 s frame at 0.48 s hop per Google's model card.
+  Scene windows — AST and YAMNet on the same 0.96 s / 0.48 s grid, which is YAMNet's native frame
+  per Google's model card.
+
+  AST previously ran at 10.24 s / 10.24 s on the reasoning that this is "its native frame: 1024 mel
+  frames at 10 ms". That conflates the model's **required input size** with its **temporal
+  precision**. 1024 frames is a fixed input shape, not an analysis resolution: a shorter window is
+  zero-padded to 1024 frames by `ASTFeatureExtractor` — rectangular padding, no taper — so the
+  content is unattenuated and AST can be slid at any hop.
+
+  Measured on the 21.48 s conversation clip, the coarse setting cost both resolution and confidence:
+
+  |                     | windows | Speech score on speech |
+  |---------------------|---------|------------------------|
+  | 10.24 s / 10.24 s   | 3       | 0.473, 0.449, 0.195    |
+  | 0.96 s / 0.48 s     | 45      | 0.75 - 0.92            |
+
+  Confidence *rose* because a 10.24 s window of a conversation contains speech plus silence plus
+  everything else, so the softmax mass spreads over many classes; a 0.96 s window of speech is
+  unambiguous. And on a 4.9 s recording the old window exceeded the whole clip, so AST returned one
+  value for every bucket — flat by construction, at 0.4604 raw and 0.3987 enhanced, while carrying
+  the largest weight on the presence axis.
+
+  The "kaldi-fbank refuses chunks below ~1 s" constraint is real but does not bind here: 0.96 s is
+  ~96 mel frames, far above the minimum. It would bind at the 0.1 s reporting grid, which is why
+  these stay at the classifier's frame rather than following `grid`.
 
   ASR set — CrisperWhisper 2.0 turbo (verbatim, native word timestamps and per-word confidence),
   Canary-Qwen 2.5B (text-only, auto-aligned) and Qwen3-ASR 1.7B (native timestamps via its bundled
@@ -135,8 +157,8 @@ alignment:
   language: &asr_language
 
 scene:
-  ast_win_length: 10.24
-  ast_hop_length: 10.24
+  ast_win_length: 0.96
+  ast_hop_length: 0.48
   yamnet_win_length: 0.96
   yamnet_hop_length: 0.48
   # AudioSet classes kept per window. 50 captures essentially all of the softmax mass; the top-1

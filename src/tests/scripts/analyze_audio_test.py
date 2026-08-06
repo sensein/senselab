@@ -163,8 +163,13 @@ def test_the_packaged_config_is_the_documented_default_run(aa: types.ModuleType)
     assert "nyralabs/CrisperWhisper2.0_turbo" in cfg.asr_models
     assert "nvidia/canary-qwen-2.5b" in cfg.asr_models
     assert "Qwen/Qwen3-ASR-1.7B" in cfg.asr_models
-    # Native temporal precision per scene-classification model (FR-008).
-    assert (cfg.ast_win_length, cfg.ast_hop_length) == (10.24, 10.24)
+    # Both scene classifiers on YAMNet's native frame. AST ran at 10.24 s until 2026-08-06, on the
+    # reasoning that 1024 mel frames is "its native frame" — but that is its required *input size*,
+    # not its temporal precision: `ASTFeatureExtractor` zero-pads a shorter window to 1024 frames
+    # (rectangular, unattenuated), so AST can be slid at any hop. Pinned because the coarse setting
+    # cost both resolution and confidence — 3 windows at Speech 0.47 became 45 at 0.75-0.92 — and on
+    # a 4.9 s recording the window exceeded the clip, so AST returned one value for every bucket.
+    assert (cfg.ast_win_length, cfg.ast_hop_length) == (0.96, 0.48)
     assert (cfg.yamnet_win_length, cfg.yamnet_hop_length) == (0.96, 0.48)
     assert cfg.aggregator == "min"
     assert cfg.disagreements_top_n == 100
