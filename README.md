@@ -255,6 +255,20 @@ There is no `articulatory` extra — it was documented here and in `CONTRIBUTING
 so `uv sync --extra articulatory` fails outright and `pip install 'senselab[articulatory]'` warns and
 installs base only.
 
+### In a notebook (Colab)
+
+Tutorials install the **pre-release** into Colab's system Python, which is why they carry `--pre`
+(the released line is 1.3.0; development happens on `1.3.1aN`):
+
+```python
+!pip install -q uv
+!uv pip install --pre --system "senselab[nlp,text,video]"
+```
+
+Colab images happen to ship `ffmpeg`, so notebooks work there without installing it. The guarded
+fallback for images that do not — and the `HF_TOKEN`-from-Colab-secrets snippet — is the setup-cell
+template in [`tutorials/README.md`](tutorials/README.md).
+
 ---
 
 ## Development
@@ -262,8 +276,10 @@ installs base only.
 Four steps, and the third is the one people miss:
 
 ```bash
-# 1. Environment. The interpreter comes from .python-version (3.12), so no --python flag.
-uv sync --extra all --group dev --group docs
+# 1. Environment. --all-extras is what every CI workflow uses: it cannot go stale when an
+#    extra is added, which `--extra all` can. The interpreter comes from .python-version
+#    (3.12, matching CI's default), so no --python flag.
+uv sync --all-extras --group dev --group docs
 
 # 2. The spaCy model Presidio uses for PII detection (not a pip dependency).
 uv run python -m spacy download en_core_web_lg
