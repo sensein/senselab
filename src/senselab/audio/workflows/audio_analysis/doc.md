@@ -49,13 +49,22 @@ fold — what the adaptive loop ranks by — and is the only one an aggregator c
 Nothing here is per pass. An axis aggregates across signals *and* across passes, so a pass is an
 input dimension to the fold and appears on the output only as each row's `contributing_passes`.
 
-### The asr axis has one voter
+### The asr axis has one voter per recognizer
 
-`asr.harvest_asr_votes` emits `consensus_words` and nothing else: the recognizers' words are fused
-once per pass (`fuse_word_streams`, grouped by sequence alignment and graded phonemically by
-`asr.phoneme_similarity`), and each bucket takes the coverage-weighted mean of
-`1 - existence_confidence` over the words reaching it. A bucket no word reaches carries **no vote**
-rather than `0.0` — nothing was said there, which is not the same as nothing being in doubt.
+`asr.harvest_asr_votes` emits one entry per recognizer, keyed by model id. The words are fused once
+per pass (`fuse_word_streams`, grouped by sequence alignment and graded phonemically by
+`asr.phoneme_similarity`), and each bucket takes the coverage-weighted mean, over the words reaching
+it, of that recognizer's own `1 - member_agreement × member_confidence`
+(`asr.resample_member_doubt`). A bucket no word reaches carries **no vote** rather than `0.0` —
+nothing was said there, which is not the same as nothing being in doubt.
+
+It emitted a single `consensus_words` entry until 2026-08-06: `1 - existence_confidence`, whose
+`share` term is the recognizers' *weighted mean* agreement. A mean is not a distribution, so
+`epistemic_uncertainty` on this axis was structurally `0.0` on every run — the cross-source spread
+that term exists to measure had been collapsed one layer before the fold that measures it, and
+`reliability.signal_stability` weighted the fused series rather than the recognizers. The fold still
+runs once; what reaches the axis is its per-member decomposition, whose weighted mean is the same
+`share`, so the evidence is counted once at the resolution where the recognizers were compared.
 
 Four things used to ride beside it and all four are gone: the per-bucket text (a reconstruction of
 what `final/transcript.json` holds at word resolution, and the reason this axis needed a 1.0 s

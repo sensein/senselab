@@ -279,6 +279,76 @@ def _consensus_word_doubt(
     return resample_word_doubt(words, buckets), provenance
 
 
+def resample_member_doubt(
+    words: Sequence[Mapping[str, Any]],
+    buckets: Sequence[tuple[float, float]],
+) -> dict[str, dict[tuple[float, float], float | None]]:
+    """One series per recognizer: its own doubt about the word sequence, on the axis grid.
+
+    **The recognizers are sources, so the axis aggregates them — not their mean.** This replaces the
+    single ``consensus_words`` series. That series was ``1 - existence_confidence``, and
+    ``existence_confidence`` contains ``share``, the *weighted mean* of the recognizers' agreement
+    with the winning text. Handing an axis a mean has two costs, both measured:
+
+    - ``epistemic_uncertainty`` was structurally ``0.0`` for this axis on every run — not because the
+      recognizers agreed, but because the one number reaching the fold had no spread left in it. The
+      cross-source disagreement that term exists to measure had been averaged away one layer earlier.
+    - ``reliability.signal_stability`` weighted the fused series, so a recognizer whose answer flips
+      between perturbations could not be discounted individually.
+
+    Per recognizer and word, doubt is ``1 - agreement × member_confidence``, where ``agreement`` is
+    that recognizer's agreement with the winning text (1.0 exact, phoneme similarity otherwise) and
+    ``member_confidence`` is its own reported confidence *when it reports one* — absent is absent, so
+    the term drops out rather than reading as certainty.
+
+    **The old ``coverage`` term becomes structural.** It was ``min(1, coverage_mass / ensemble_weight)``
+    — how much of the ensemble produced anything in this slot — folded in as a multiplier. Per
+    recognizer that question needs no term: a recognizer that produced no word in a slot simply has no
+    reading there, and ``fuse.per_signal_uncertainty`` drops an absent signal rather than zero-filling
+    it. Absence is the measurement.
+
+    Args:
+        words: Fused words carrying ``start``, ``end``, ``member_agreement`` and ``member_confidence``.
+        buckets: ``(start, end)`` pairs on the axis grid.
+
+    Returns:
+        ``{model → {bucket → doubt}}``. A bucket no word of that recognizer reaches maps to ``None``:
+        it said nothing there, which is not the same as saying it is certain nothing was said.
+    """
+    contributions: dict[str, dict[tuple[float, float], list[tuple[float, float]]]] = {}
+    for word in words:
+        try:
+            start, end = float(word["start"]), float(word["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        agreements = word.get("member_agreement")
+        if not isinstance(agreements, Mapping) or not agreements:
+            continue
+        member_conf = word.get("member_confidence")
+        conf = float(member_conf) if isinstance(member_conf, (int, float)) else 1.0
+        for model, agreed in agreements.items():
+            if not isinstance(agreed, (int, float)):
+                continue
+            doubt = max(0.0, min(1.0, 1.0 - float(agreed) * conf))
+            per_model = contributions.setdefault(str(model), {b: [] for b in buckets})
+            for bucket in buckets:
+                overlap = min(end, bucket[1]) - max(start, bucket[0])
+                if overlap > 0:
+                    per_model[bucket].append((overlap, doubt))
+
+    out: dict[str, dict[tuple[float, float], float | None]] = {}
+    for model, per_bucket in contributions.items():
+        series: dict[tuple[float, float], float | None] = {}
+        for bucket, reaching in per_bucket.items():
+            if not reaching:
+                series[bucket] = None
+                continue
+            total = sum(w for w, _ in reaching)
+            series[bucket] = sum(w * d for w, d in reaching) / total if total > 0 else None
+        out[model] = series
+    return out
+
+
 def resample_word_doubt(
     words: Sequence[Mapping[str, Any]],
     buckets: Sequence[tuple[float, float]],
@@ -351,15 +421,23 @@ def harvest_asr_votes(
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes"}`` per bucket for the asr axis.
 
-    ``votes`` holds at most one entry, ``consensus_words``: ``{"value": doubt, **provenance}``,
-    where ``doubt`` is the fused word accuracy resampled onto this bucket. A bucket no word reaches
-    carries **no vote at all** rather than ``0.0`` — nothing was said there, which is not the same
-    as nothing being in doubt, and zero-filling would manufacture confidence (FR-007).
+    ``votes`` holds **one entry per recognizer**, keyed by model id: ``{"value": doubt, **provenance}``,
+    where ``doubt`` is that recognizer's disagreement with the fused word sequence, resampled onto this
+    bucket (:func:`resample_member_doubt`). A bucket no word reaches carries **no vote at all** rather
+    than ``0.0`` — nothing was said there, which is not the same as nothing being in doubt, and
+    zero-filling would manufacture confidence (FR-007).
 
-    There is deliberately no per-model entry. A recognizer's own reading of a bucket is already
-    inside the fold, weighted per word by how far the others corroborate it; emitting it again
-    beside the fold would count one body of evidence twice (D-21 rule 6), and it was the
-    fully-contained per-bucket text read that forced this axis onto a grid of its own.
+    This used to be a single ``consensus_words`` entry: ``1 - existence_confidence``, whose ``share``
+    term is the *weighted mean* of the recognizers' agreement. Handing an axis a mean made
+    ``epistemic_uncertainty`` structurally ``0.0`` here on every run — not because the recognizers
+    agreed but because the spread had been averaged away before the fold that measures spread saw it —
+    and it meant ``signal_stability`` weighted the fused series rather than the recognizers.
+
+    This is **not** the per-model entry that was removed for double-counting (D-21 rule 6). That one
+    was each recognizer's *independent* per-bucket reading (``avg_logprob``, ``token_entropy``,
+    ``alignment_ctc_score``) sitting beside the fold. These are the fold's own decomposition: their
+    weighted mean is the ``share`` the single entry carried, so the evidence is counted once, at the
+    resolution where the recognizers were actually compared.
 
     ``fused`` accepts a consensus fold the caller already performed — ``compute.harvest_pass`` shares
     one with the speaker axis, which reads the same words' ``temporal_confidence``. Omitted, the
@@ -374,13 +452,22 @@ def harvest_asr_votes(
     # not "which words fell fully inside this bucket". Reach is the word's own span, so a word
     # straddling a grid line no longer reads as two models disagreeing.
     buckets = [(round(float(s), 6), round(float(e), 6)) for s, e, _ in grid.iter_buckets(duration_s)]
-    word_doubt, word_doubt_provenance = _consensus_word_doubt(asr_resolved, buckets, fused=fused)
+    words, word_doubt_provenance = fused if fused is not None else fuse_consensus_words(asr_resolved)
+    # One series per recognizer, not one fused series. The fold still runs once — it is what aligns
+    # the streams into slots and grades each member against the winner — but what reaches the axis is
+    # the per-member decomposition rather than its weighted mean, so ``fuse_axis`` aggregates the
+    # recognizers itself and ``epistemic_uncertainty`` has a spread to measure (D-16).
+    member_doubt = resample_member_doubt(words, buckets)
 
     out: list[dict[str, Any]] = []
     for start, end, _idx in grid.iter_buckets(duration_s):
+        key = (round(float(start), 6), round(float(end), 6))
         votes: dict[str, dict[str, Any]] = {}
-        doubt = word_doubt.get((round(float(start), 6), round(float(end), 6)))
-        if doubt is not None:
-            votes["consensus_words"] = {"value": doubt, **word_doubt_provenance}
+        for model, series in sorted(member_doubt.items()):
+            doubt = series.get(key)
+            if doubt is not None:
+                # Named for the recognizer, as the presence axis already names its ASR voters, so a
+                # reader can see *which* recognizer is in doubt rather than only that something is.
+                votes[str(model)] = {"value": doubt, **word_doubt_provenance}
         out.append({"start": start, "end": end, "votes": votes})
     return out

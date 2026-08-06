@@ -69,10 +69,16 @@ def control_doubt(row: Mapping[str, Any]) -> float | None:
 
     **Why not ``epistemic_uncertainty``**, which is the reducible part and looks like the principled
     choice: it is inter-signal disagreement, so it is structurally ``0.0`` for a single-voter axis.
-    ``asr`` has exactly one voter (``consensus_words``), and gating on epistemic would make it
-    permanently un-investigatable while its doubt is real — measured mean 0.215, max 0.918. A lone
-    confident-but-doubtful voter is a reason to add a second, not a reason to stop looking. Each rule
-    keeps its own reducibility test where that question belongs: ``U1``/``U2`` gate on
+    ``asr`` used to have exactly one voter, and gating on epistemic would have
+    made it permanently un-investigatable while its doubt was real — measured mean 0.215, max 0.918.
+    "A lone confident-but-doubtful voter is a reason to add a second, not a reason to stop looking"
+    was written here as an argument for not gating; it turned out to be a description of the actual
+    defect. That axis's single voter was the recognizers' weighted *mean*
+    (``asr.resample_member_doubt`` now emits one series per recognizer instead), so its epistemic term
+    was 0.0 because the spread had been averaged away, not because the recognizers agreed.
+
+    The choice stands regardless: an axis may still legitimately have one signal, and each rule keeps
+    its own reducibility test where that question belongs — ``U1``/``U2`` gate on
     ``epistemic_uncertainty`` themselves.
 
     Args:

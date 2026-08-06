@@ -266,8 +266,8 @@ def _s1_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 def _claims_words(ctx: dict[str, Any], stream: str, region: dict[str, Any]) -> bool:
     """Did any recognizer place a word inside this region, on this stream?
 
-    Asked of the *votes*, not of a transcript: the asr axis emits ``consensus_words`` only where a
-    word actually reaches a bucket, so the vote's presence is the claim. This used to concatenate
+    Asked of the *votes*, not of a transcript: the asr axis emits a recognizer's entry only where one
+    of its words actually reaches a bucket, so the vote's presence is the claim. This used to concatenate
     each model's per-bucket ``text`` and test the string for emptiness — the same question, answered
     through a reconstruction of the transcript that existed for no other reader, and that forced the
     axis onto a 1.0 s grid so a whole word could fit inside a bucket.
