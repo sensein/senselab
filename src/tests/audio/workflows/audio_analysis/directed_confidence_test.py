@@ -130,15 +130,30 @@ def test_presence_probability_never_falls_as_evidence_for_speech_rises(producer:
     exactly the screen an inversion cannot pass.
     """
     steps = [i / 20.0 for i in range(21)]
-    curve = []
+    # An **abstention is not an inversion.** A rule whose low end is uninformative returns no vote
+    # there rather than a fabricated half-confident one, so ``None`` is a legitimate answer and the
+    # property is checked over the votes that exist. Two constraints keep that from weakening the
+    # test: at least some point must vote, and the abstentions must be a contiguous *prefix* — a hole
+    # in the middle of the sweep would mean the rule stops answering as evidence accumulates, which
+    # is a defect, not an abstention.
+    curve: list[tuple[float, float]] = []
+    abstained: list[float] = []
     for t in steps:
         payload = sweep(t)
-        assert payload is not None, f"{producer} ({label}) produced no vote at t={t}"
+        if payload is None:
+            abstained.append(t)
+            continue
         p = presence_probability(payload)
         assert p is not None, f"{producer} ({label}) produced an unreadable vote at t={t}"
-        curve.append(p)
+        curve.append((t, p))
+    assert curve, f"{producer} ({label}) abstained across the whole sweep"
+    if abstained:
+        assert abstained == steps[: len(abstained)], (
+            f"{producer} ({label}) abstained at {abstained} — not a low-end prefix, so it stopped "
+            "answering as the evidence for speech rose"
+        )
 
-    for (t_lo, p_lo), (t_hi, p_hi) in zip(list(zip(steps, curve)), list(zip(steps, curve))[1:]):
+    for (t_lo, p_lo), (t_hi, p_hi) in zip(curve, curve[1:]):
         assert p_hi >= p_lo - 1e-9, (
             f"{producer} ({label}): P(speech) fell from {p_lo:.4f} to {p_hi:.4f} while the evidence "
             f"for speech rose from {t_lo:.2f} to {t_hi:.2f}. The confidence is being read against "

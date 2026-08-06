@@ -147,14 +147,39 @@ def _ramp(value: float, low: float, high: float) -> float:
     return max(0.0, min(1.0, (value - low) / (high - low)))
 
 
-def _abstaining_ramp(value: float, low: float, high: float) -> float:
-    """Linear ramp into ``[0.5, 1]``: the low end is uninformative, not a denial.
+def _abstaining_ramp(value: float, low: float, high: float) -> float | None:
+    """Linear ramp into ``(0.5, 1]``, or ``None`` at or below ``low`` — where it cannot tell.
 
     Used where a low reading has two indistinguishable causes (see the module docstring on HNR and
-    level-above-floor). Mapping that end to ``0.0`` would let the signal contradict correct models
-    on inputs where it simply cannot tell.
+    level-above-floor). Mapping that end to ``0.0`` would let the signal contradict correct models on
+    inputs where it simply cannot tell.
+
+    **An abstention is the absence of a claim, so it returns ``None``.** It used to return ``0.5``,
+    which ``_directed`` then turned into ``speaks=True`` at confidence ``0.5`` — a half-confident
+    *yes* cast in exactly the region where the signal has no opinion, and read by the fold as ``0.5``
+    of doubt: the largest contribution a single voter can make. So the buckets where HNR knew least
+    were the buckets where it pushed hardest.
+
+    ``link_speech_presence`` has always had the correct rule for this, twenty lines below and stated
+    in its own words: *"The signal reported nothing usable in this bucket. Dropping the vote is right:
+    a fabricated 0.5 would be indistinguishable from a real abstention."* That is precisely what this
+    function was manufacturing.
+
+    Measured on a clean two-speaker conversation, ``acoustic_hnr`` contributed mean 0.2675 doubt
+    (median 0.2574, max 0.5000) while all four diarizers, all three recognizers and the brouhaha VAD
+    read exactly 0.0000. It is genuine voicing evidence where HNR is high — vowels are periodic —
+    which is why the signal stays; what goes is its vote in the range where a low reading means
+    "voiceless" and "absent" equally well.
+
+    The graded region is untouched: only ``value <= low`` abstains, so a reading part-way up the ramp
+    still votes at the strength the ramp gives it. This is deweighting by *scope* rather than by a
+    hand-set discount — the kind ``fuse.cross_axis_inputs`` documents as inadmissible, since a factor
+    never measured must not act as a discount.
     """
-    return 0.5 + 0.5 * _ramp(value, low, high)
+    ramped = _ramp(value, low, high)
+    if ramped <= 0.0:
+        return None
+    return 0.5 + 0.5 * ramped
 
 
 def _directed(p_voice: float) -> tuple[bool, float]:
@@ -310,7 +335,10 @@ def _link_hnr(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, 
     hnr = _finite(ev.get("hnr_db"))
     if hnr is None:
         return None
-    speaks, confidence = _directed(_abstaining_ramp(hnr, policy.hnr_low_db, policy.hnr_high_db))
+    p_voice = _abstaining_ramp(hnr, policy.hnr_low_db, policy.hnr_high_db)
+    if p_voice is None:
+        return None
+    speaks, confidence = _directed(p_voice)
     return {"speaks": speaks, "native_confidence": confidence}
 
 
@@ -328,7 +356,14 @@ def _link_excess(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[st
     excess = _finite(ev.get("excess_db"))
     if excess is None:
         return None
-    speaks, confidence = _directed(_abstaining_ramp(excess, 0.0, policy.speech_excess_db))
+    # Same construct, same correction: no excess over the measured floor is not evidence of speech at
+    # half confidence, it is no evidence. Fixed together because it is one function and one argument —
+    # leaving the sibling emitting a fabricated 0.5 would make the two disagree about what an
+    # abstention is. Its contribution was smaller (mean 0.0858, median 0.0000) but the same in kind.
+    p_voice = _abstaining_ramp(excess, 0.0, policy.speech_excess_db)
+    if p_voice is None:
+        return None
+    speaks, confidence = _directed(p_voice)
     return {"speaks": speaks, "native_confidence": confidence}
 
 

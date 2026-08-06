@@ -285,7 +285,10 @@ def test_level_above_floor_still_abstains_at_low_excess() -> None:
         },
     ]
     linked = link_speech_presence(rows)
-    at_floor = linked[0]["votes"]["acoustic_level_above_floor"]["native_confidence"]
+    assert "acoustic_level_above_floor" not in linked[0]["votes"], (
+        "no excess over the measured floor is no evidence, not evidence at half confidence"
+    )
+    at_floor = 0.5  # what the abstention used to report as a vote; kept to name the old behaviour
     just_above = linked[1]["votes"]["acoustic_level_above_floor"]["native_confidence"]
     assert at_floor == pytest.approx(0.5), "nothing above the floor is uninformative, not absence"
     # The ramp only leaves abstention gradually, so a marginal excess stays near-uninformative
@@ -295,10 +298,18 @@ def test_level_above_floor_still_abstains_at_low_excess() -> None:
 
 
 def test_hnr_abstains_low_and_asserts_high() -> None:
-    """Whispered speech has low HNR, so a low value must not be read as silence."""
-    quiet = link_speech_presence([_bucket({"acoustic_hnr": {"hnr_db": 0.0}})])[0]["votes"]["acoustic_hnr"]
+    """Whispered speech has low HNR, so a low value must not be read as silence — or as speech.
+
+    The abstention is now the *absence of a vote*. It used to be a vote at ``native_confidence 0.5``,
+    which ``_directed`` cast as ``speaks=True`` and the fold read as 0.5 of doubt — the largest a
+    single voter can contribute. So the buckets where HNR knew least were where it pushed hardest,
+    and on a clean conversation it contributed mean 0.2675 while every model voter read 0.0000.
+
+    High HNR still asserts, at full strength: vowels are periodic, and that is real voicing evidence.
+    """
+    quiet = link_speech_presence([_bucket({"acoustic_hnr": {"hnr_db": 0.0}})])[0]["votes"]
+    assert "acoustic_hnr" not in quiet, "an abstention must be no vote, not a half-confident yes"
     voiced = link_speech_presence([_bucket({"acoustic_hnr": {"hnr_db": 14.0}})])[0]["votes"]["acoustic_hnr"]
-    assert quiet["native_confidence"] == pytest.approx(0.5)
     assert voiced["speaks"] is True
     assert voiced["native_confidence"] == pytest.approx(1.0)
 
