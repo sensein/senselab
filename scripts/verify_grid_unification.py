@@ -190,6 +190,32 @@ def check(run_dir: Path) -> list[str]:
             if not names:
                 failures.append("[4] asr axis has zero contributing signals (the shape-mismatch failure)")
 
+    # ── 6. the speaker axis tracks the per-speaker presence it describes ──
+    print("\n[6] speaker axis vs the per-speaker presence it describes:")
+    speaker = frames.get("speaker")
+    psp_path = run_dir / "final" / "per_speaker_presence.parquet"
+    if speaker is None or not psp_path.exists():
+        print("    (no speaker axis or no per-speaker presence table)")
+    else:
+        psp = pd.read_parquet(psp_path)
+        per_bucket: dict[tuple[float, float], float] = {}
+        for row in psp.itertuples():
+            key = (round(float(row.start), 6), round(float(row.end), 6))
+            per_bucket[key] = max(per_bucket.get(key, 0.0), float(row.speech_presence_uncertainty))
+        doubt = [1.0 - float(c) for c in speaker["confidence"].dropna()]
+        names = {s for row in speaker["contributing_signals"].dropna() for s in list(row)}
+        if per_bucket:
+            print(f"    per-speaker presence doubt (max/bucket): mean={sum(per_bucket.values()) / len(per_bucket):.4f}")
+        if doubt:
+            print(f"    speaker axis doubt (1 - confidence):      mean={sum(doubt) / len(doubt):.4f}")
+        print(f"    contributing voters: {sorted(names)}")
+        expected = {"per_speaker_presence", "asr_location", "target_activity"}
+        if not (names & expected):
+            failures.append(f"[6] the speaker axis carries none of {sorted(expected)}; got {sorted(names)}")
+        stale = {n for n in names if "::" in n} | {"__cross_diar_label_disagreement__", "__overlap_count__"}
+        if names & stale:
+            failures.append(f"[6] change-detection voters are still scored: {sorted(names & stale)}")
+
     # ── 5. final/transcript.json words + confidences ──
     print("\n[5] final/transcript.json:")
     tpath = run_dir / "final" / "transcript.json"

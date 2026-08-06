@@ -168,3 +168,62 @@ not tuned against this composition. `CACHE_SCHEMA_VERSION` must be bumped.
 - The **cross-axis coupling saturation** exposed by grid unification. Same file, also separate.
 - Re-tuning `theta_low` / `theta_high` against the new composition. They need re-measuring against
   ground truth, which is the evaluation harness's job, not this change's.
+
+---
+
+## Outcome (implemented 2026-08-06)
+
+Commits `0c3bfd8f` → Task 6. Verified with `scripts/verify_grid_unification.py` on both clips,
+cache cleared, exit 0.
+
+### The axis now reflects its evidence
+
+`english_conversation_higgs_audio_v2`, per round, speaker axis:
+
+| round | `triage_score` (doubt) | contributing voters |
+|---|---|---|
+| 0 | **0.2878** | `per_speaker_presence`, `asr_location` |
+| 1 | 0.3927 | + `axis::asr`, `axis::speech_presence`, `axis::background_mask` |
+| 2 | 0.8222 | + the same three |
+| 3–4 | 0.6082 | `per_speaker_presence`, `asr_location` |
+
+**Round 0 is the design, met:** 0.288 against a predicted 0.333, composed of
+`per_speaker_presence` mean 0.1196 and `asr_location` mean 0.2228 — it tracks the clean per-speaker
+presence (0.1196) plus the real word-location doubt, against 0.666 before. The 48 kHz clip reads
+0.62, which is also correct there: its per-speaker presence doubt is genuinely 0.576 on a five-speaker
+recording with a multi-modal 1-vs-5 count posterior, so the axis is reflecting contested evidence
+rather than manufacturing it.
+
+Both transcripts are byte-identical to their pre-change digests (`ad7dfa13a6971e1a`,
+`a033983bab339bf4`), and checks 2–5 pass unchanged.
+
+### Two mechanisms the later rounds expose, both already documented
+
+Rounds 1–2 are the **cross-axis coupling saturation** from `grid-unification-results.md`: the
+`axis::*` voters join at full weight against a max-doubt aggregator and inflate every axis. Nothing
+new, and the speaker axis is now simply one more place it is visible.
+
+Rounds 3–4 settle at 0.6082 rather than returning to round 0's 0.2878, and the cause is worth
+stating precisely: `I2_recluster` fires six times, produces **5 clusters** against a count posterior
+of **2 at 0.978**, and recomputes `per_speaker_presence` over the repaired assignments. Five clusters
+spread across the sources drop each share to ~0.2, and `H(0.2) = 0.722` — so the axis reports high
+attribution doubt *because the sources genuinely disagree about who is speaking after the repair*.
+
+That is the axis working. The 2-vs-5 disagreement is the separate open item in
+`grid-unification-results.md`, and it is now **visible in the speaker axis** instead of hidden behind
+a change-detection number that was high for unrelated reasons. Fixing the re-clustering is what will
+bring the published rounds down to round 0's reading; that is a decision about how `identity_repair`
+should respect the count posterior, not about this axis.
+
+### What the verification caught that the unit tests could not
+
+`contributing_signals` still contained `__cross_diar_label_disagreement__` on a live run while
+`speaker_attribution_test.py` asserted it was gone. The tests exercise `harvest_speaker_votes`;
+`I2_recluster` is a **second producer** that added its own scored copy after re-clustering — which is
+how it propagated the repair into the axis, since `per_speaker_presence` is computed at harvest and is
+stale the moment a re-cluster lands. It now recomputes `per_speaker_presence` instead, a faithful
+translation because both read the same cluster assignments. `cross_source_disagreement` became
+uncalled and is deleted.
+
+Exactly the handoff's landmine — *verify against the pipeline, not against your own fixtures* — and
+the reason check `[6]` asserts on the voter names rather than only on the value.

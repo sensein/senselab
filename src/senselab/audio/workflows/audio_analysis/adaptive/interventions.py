@@ -34,6 +34,10 @@ from typing import Any
 from senselab.audio.workflows.audio_analysis.adaptive.belief import Vote, bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights, model_family
 from senselab.audio.workflows.audio_analysis.adaptive.regions import region_buckets
+from senselab.audio.workflows.audio_analysis.attribution import (
+    SILENT_CLUSTER_ID,
+    per_speaker_attribution_doubt,
+)
 from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, OVERLAP_INFORMED_AXES
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.layout import perturbation_dir
@@ -832,7 +836,6 @@ def _i2_trigger(region: dict[str, Any], ctx: dict[str, Any]) -> tuple[bool, dict
 def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     from senselab.audio.workflows.audio_analysis.adaptive.identity_repair import (
         cluster_at,
-        cross_source_disagreement,
     )
 
     stream = cand["trigger"]["stream"]
@@ -864,26 +867,39 @@ def _i2_execute(cand: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 provenance={"rule": "I2_recluster", "n_clusters": repaired["n_clusters"]},
             )
         )
-        # Recompute cross-source label disagreement including the new voter
-        # (overwrites the file-scope vote deterministically — same vote id).
-        ids = []
+        # Recompute the axis's assignment-agreement term including the new voter, and overwrite the
+        # file-scope vote deterministically (same vote id).
+        #
+        # This recomputed ``__cross_diar_label_disagreement__`` until the speaker axis stopped
+        # measuring change: that block was how the repair reached the axis, because
+        # ``per_speaker_presence`` is computed at harvest time and is stale the moment a re-cluster
+        # lands. The axis now scores the per-speaker term, so that is the one to refresh — a faithful
+        # translation of what this always meant, since both are read off the same cluster assignments.
+        clusters: dict[str, str] = {}
         for source, payload in ctx["store"].active_votes(stream, "speaker", bk).items():
             if source.startswith("__") or "::" in source:
                 continue
             c = payload.get("cluster_id")
-            if c and c not in ("SIL", "<silent>"):
-                ids.append(str(c))
-        value = cross_source_disagreement(ids)
+            if c:
+                # Silent voters stay in the denominator, so a lone detection among silent models does
+                # not read as certain; both spellings of "silent" normalise to one.
+                clusters[str(source)] = SILENT_CLUSTER_ID if str(c) in ("SIL", "<silent>") else str(c)
+        value = per_speaker_attribution_doubt(clusters)
         if value is not None:
             ctx["store"].add_vote(
                 Vote(
                     axis="speaker",
                     bucket=bk,
-                    source="__cross_diar_label_disagreement__",
+                    source="per_speaker_presence",
                     stream=stream,
                     scope="file",
                     round=ctx["round_idx"],
-                    payload={"value": value, "n_sources": len(ids), "recomputed_by": "I2_recluster"},
+                    payload={
+                        "value": value,
+                        "operator": "max_over_speakers/entropy",
+                        "n_sources": len(clusters),
+                        "recomputed_by": "I2_recluster",
+                    },
                     provenance={"rule": "I2_recluster"},
                 )
             )
