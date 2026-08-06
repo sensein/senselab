@@ -76,7 +76,12 @@ def test_the_change_detection_entries_are_no_longer_scored() -> None:
         read = set(per_signal_uncertainty(bucket))
         assert not {n for n in read if "::" in n}, f"a (diar::emb) pair is still scored: {read}"
         assert "__cross_diar_label_disagreement__" not in read
-        assert "__overlap_count__" not in read
+        # ``overlap_count`` is an L1 measurement now, not a synthetic block: it lost the ``__``
+        # prefix so ``_signal_rows_from_buckets`` records it, and its scored ``value`` so the fold
+        # does not read it. Under the old name-and-field it was recorded by nobody.
+        # Emitted only where the count is actually ambiguous, so its presence is conditional; what
+        # is unconditional is that the fold must not score it.
+        assert "overlap_count" not in read, "the overlap distribution must not be scored"
 
 
 def test_the_cluster_assignments_survive_for_their_other_readers() -> None:

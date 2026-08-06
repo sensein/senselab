@@ -5,7 +5,7 @@ scene classification, alignment, speaker embeddings) and emits one `[0, 1]` unce
 on each of four axes:
 
 - **speech_presence** — was there a speaker?
-- **speaker** — was it the same speaker?
+- **speaker** — who is speaking here?
 - **asr** — what was said?
 - **background_mask** — is this region free of *target* activity?
 
@@ -63,6 +63,19 @@ window — a fully-contained text read returns nothing from a bucket narrower th
 cross-ASR pairwise phoneme distance (already recorded-but-unscored, because its source closure is a
 subset of the consensus fold's), and the per-bucket `avg_logprob` / `token_entropy` /
 `alignment_ctc_score` reads.
+
+The `speaker` axis measures **attribution**: how sure we are *who* is speaking, composed by
+`attribution.py` from three voters — per-speaker presence doubt (`max` over the speakers present of
+the entropy of the model share), ASR word-location doubt (`1 - temporal_confidence`,
+coverage-weighted over the words reaching the bucket), and target-activity doubt (the mask region's
+uncertainty, only where its `state` is not `target_active`). A bucket the mask confidently calls
+`target_free` carries no vote at all: there is nobody to attribute.
+
+It asked "was it the same speaker as before?" until 2026-08-05, scored per (diar × embedder) pair
+against embedding cosine — which on a 0.1 s grid asks ten times a second against 0.5 s windows, and
+read 0.666 on a clean two-speaker conversation whose count posterior was 2 at 0.978 and whose
+per-speaker presence doubt averaged 0.168. The cosines, the calibrated readings, the change points
+and the overlap distribution all survive as **L1 measurements**; they simply stopped being scored.
 
 **Temporal agreement is excluded from this axis on purpose.** Two attempts proved a single number
 cannot carry both accuracy and localisation and stay readable: bucketed pairwise WER reported 0.4266
