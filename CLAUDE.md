@@ -212,8 +212,22 @@ with `--config`; a file with `thresholds:` / `fusion:` / `rules:` at the top lev
 rather than merged where nothing reads it. It keeps its own `policy_hash` beside the config's
 `config_hash`, because a policy change and a model change are not the same event. `enhancement.mode`
 (`auto` | `always` | `never`) plus the `triage:` block carry the round-0 frame-posterior speech gate
-and SNR enhancement gate (`always`, the default, runs both passes unconditionally — which is what
-makes raw and enhanced a perturbation *sample*); `profiles.calibration` carries the US5 scene-quality
+and SNR enhancement gate. `always`, the default, *computes* both passes unconditionally — which is
+what makes raw and enhanced a perturbation *sample* for `reliability.signal_stability` — but
+computing a pass and counting it are now two decisions: `triage.snr_floor_db` also gates
+**admission to the fold**, per bucket, via `fuse.SnrGate`. A speech-enhancement pass is a *repair*,
+and above the floor there is nothing to repair, so a downstream answer that changes there reports
+the transform rather than the recording. Measured on a clean two-speaker conversation (41–70 dB
+throughout): the raw pass put the speaker axis at exactly 0.0 in 179 of 190 buckets, the enhanced
+pass at 0.398, and the unconditional mean published 0.227 — doubt in 178 buckets where every
+diarizer agreed. The gate is on **SNR alone, never on ambiguity**: at genuinely low SNR the raw
+sources can be unanimously wrong, all fooled by the same noise, which is the case enhancement exists
+for. Each row records what was withheld in `snr_gated_passes`, because a shrunken
+`contributing_passes` cannot distinguish a pass that was held out from one that never ran. Which
+transforms are gated is declared in `perturbations.SNR_GATED_TRANSFORMS`, read off
+`Perturbation.transform` rather than the pass name — the `invariance.py` probes are deliberately
+*not* gated, since a correct model must be invariant to them at every SNR.
+`profiles.calibration` carries the US5 scene-quality
 calibration (versioned dB→[0,1] anchors, fit via `scripts/calibrate_scene_quality.py`, bridge in
 `workflows/audio_analysis/calibration.py`; its `temperature` block currently reaches no fold — see
 the note there). The

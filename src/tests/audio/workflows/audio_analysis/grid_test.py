@@ -56,6 +56,8 @@ def _fuse(grid: BucketGrid) -> dict:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     return fused_axes
 

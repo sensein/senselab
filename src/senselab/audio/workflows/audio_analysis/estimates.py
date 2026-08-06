@@ -114,6 +114,12 @@ ESTIMATE_COLUMNS: Final[tuple[str, ...]] = (
     # its contributing perturbations, it is not keyed by one.
     "contributing_signals",
     "contributing_passes",
+    # Which perturbations ran and were *not* admitted here, and so are absent from
+    # ``contributing_passes`` by decision rather than by never having existed. A repair transform
+    # is evidence only where the recording is degraded (``fuse.SnrGate``), and on a clean recording
+    # that means it is held out of nearly every bucket — a reader seeing only ``['raw']`` above
+    # cannot otherwise tell that from a run that never enhanced anything.
+    "snr_gated_passes",
     # Fusion's account of *how* it weighted, and what moved the value afterwards.
     "signal_weights",
     "weight_basis",

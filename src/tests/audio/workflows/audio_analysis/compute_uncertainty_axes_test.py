@@ -184,6 +184,8 @@ def test_compute_uncertainty_axes_happy_path() -> None:
         speaker_embedding_models=[],  # Skip embedding extraction in this synthetic test.
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
 
     # Every active axis, keyed by axis alone. An axis folds across passes, so a (pass, axis) key
@@ -261,6 +263,8 @@ def test_text_only_asr_resolves_through_alignment() -> None:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     # On the run's own 0.1 s grid, "hello" spans [0.1, 0.4]: the bucket at 0.1 is the one the word
@@ -310,6 +314,8 @@ def test_ast_yamnet_uses_floor_window_indexing() -> None:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     # Every bucket in [0, 4) should map to AST window 0 → Speech (in allowlist) → speaks=True.
@@ -348,6 +354,8 @@ def test_graceful_degrade_failed_models_do_not_raise() -> None:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     # All three axes still emit; speech_presence has at least one row.
     assert "speech_presence" in fused_axes
@@ -386,6 +394,8 @@ def test_multi_word_audioset_labels_match() -> None:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech", "Narration, monologue", "Conversation"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     assert speech_presence.rows
@@ -429,6 +439,8 @@ def test_speaker_robust_to_diar_label_naming_conventions() -> None:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speaker = fused_axes["speaker"]
     assert speaker.rows, "expected speaker rows on a 4 s clip with diar coverage"
@@ -486,6 +498,8 @@ def test_speech_presence_rows_carry_quality_columns_when_brouhaha_available(monk
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     assert speech_presence.rows
@@ -526,6 +540,8 @@ def test_speech_presence_rows_carry_source_columns() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
         scene_quality=False,
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     assert speech_presence.rows
@@ -582,6 +598,8 @@ def test_speech_presence_confidence_uncertainty_split_and_instability(monkeypatc
         aggregator="min",
         speech_presence_labels=["Speech"],
         scene_quality=False,
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     assert speech_presence.rows
@@ -619,6 +637,8 @@ def test_speech_presence_quality_null_when_scene_quality_disabled() -> None:
         aggregator="min",
         speech_presence_labels=["Speech"],
         scene_quality=False,
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     speech_presence = fused_axes["speech_presence"]
     assert speech_presence.rows
@@ -669,14 +689,25 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
     }
 
     harvests: dict[str, Any] = {}
-    _signals_before, before, _reasons, _emb = compute_uncertainty_axes(passes=passes, harvests_out=harvests, **kwargs)
+    _signals_before, before, _reasons, _emb = compute_uncertainty_axes(
+        passes=passes,
+        harvests_out=harvests,
+        **kwargs,
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
+    )
     votes = harvests["raw"].speaker_votes
 
     posterior, hypotheses, correspondence = build_speaker_identity(passes, speaker_votes=votes)
     tracks = build_speech_presence_tracks(votes)
     assert hypotheses and tracks and correspondence  # the derivation did run
 
-    _signals_after, after, _reasons2, _emb2 = compute_uncertainty_axes(passes=passes, **kwargs)
+    _signals_after, after, _reasons2, _emb2 = compute_uncertainty_axes(
+        passes=passes,
+        **kwargs,
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
+    )
     for key in before:
         rows_before = [(r["start"], r["end"], r["uncertainty"]) for r in before[key].rows]
         rows_after = [(r["start"], r["end"], r["uncertainty"]) for r in after[key].rows]
@@ -716,6 +747,8 @@ def test_the_speaker_axis_reads_the_words_the_asr_axis_folded() -> None:
         speaker_embedding_models=[],
         aggregator="min",
         speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     signals = {s for row in fused_axes["speaker"].rows for s in (row.get("contributing_signals") or ())}
     assert "speaker_assignment" in signals, f"the speaker axis lost its per-speaker voter; got {sorted(signals)}"

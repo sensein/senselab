@@ -376,6 +376,7 @@ def test_from_harvests_in_process_integration() -> None:
         fuse_axis(
             {"raw": [{"start": 0.0, "end": 1.0, "votes": store.active_votes("raw", "speaker", (0.0, 1.0))}]},
             weights={},
+            snr_gate=None,
         )[0]["uncertainty"]
     ), "the store's fold is fuse_axis, not a second implementation of it"
 
@@ -858,7 +859,7 @@ def _parity_fixture() -> tuple[Any, dict[str, list[dict[str, Any]]]]:
 
     harvests = {"raw": _harvest("raw", 0.2), "enhanced": _harvest("enhanced", 0.6)}
     store = VoteStore.from_harvests(harvests)
-    rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={})
+    rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={}, snr_gate=None)
     return store, {"speaker": rows}
 
 

@@ -589,6 +589,13 @@ def main(argv: list[str] | None = None) -> int:
     if run_enhanced_pass:
         perturbations.append(speech_enhancement_perturbation(cfg.enhancement_model))
 
+    # Which perturbations only count where the recording is actually degraded — read off each
+    # perturbation's declared transform rather than its name, so a second enhancement model called
+    # anything at all is gated and an invariance probe never is. The floor is the *same*
+    # ``triage.snr_floor_db`` that decided whether to compute the enhanced pass above: one number
+    # for "is this recording degraded enough to enhance", not two that can disagree.
+    snr_gated_passes = frozenset(p.name for p in perturbations if p.admission_requires_low_snr)
+
     pass_audio: dict[str, Audio] = {}
     pass_plan = _pass_plan(cfg)
     for perturbation in perturbations:
@@ -738,6 +745,8 @@ def main(argv: list[str] | None = None) -> int:
                 diff_speaker_floor=cfg.speaker_diff_floor,
                 cluster_cosine_threshold=cfg.speaker_cluster_cosine_threshold,
                 clustering_algorithm=cfg.clustering_algorithm,
+                snr_floor_db=cfg.triage_snr_floor_db,
+                snr_gated_passes=snr_gated_passes,
             )
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: comparator workflow failed: {exc!r}", file=sys.stderr)
@@ -961,6 +970,8 @@ def main(argv: list[str] | None = None) -> int:
                     # overwrites (the copy-back below re-reads triage_score and coupled_from).
                     scene_rows=(fused_axes["speech_presence"].rows if "speech_presence" in fused_axes else ()),
                     comparator_params=comparator_params,
+                    snr_floor_db=cfg.triage_snr_floor_db,
+                    snr_gated_passes=snr_gated_passes,
                 )
                 summaries["final_uncertainty"] = final_maps
 

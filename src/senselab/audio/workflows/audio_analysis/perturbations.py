@@ -42,6 +42,7 @@ __all__ = [
     "IDENTITY_NAME",
     "IDENTITY_TRANSFORM",
     "REGISTER_FILENAME",
+    "SNR_GATED_TRANSFORMS",
     "TRANSFORMS",
     "Perturbation",
     "apply",
@@ -70,6 +71,34 @@ TRANSFORMS: Final[Mapping[str, str]] = {
 Also the vocabulary ``StageContext.variant`` validates against: a stage that is only meaningful
 on unmodified audio (the background mask, most importantly) gates on the transform, and it now
 reads the *declared* transform rather than guessing from the directory name.
+"""
+
+SNR_GATED_TRANSFORMS: Final[frozenset[str]] = frozenset({"speech_enhanced"})
+"""Transforms whose reading only counts where the recording is actually degraded.
+
+**A speech-enhancement model is a repair, and a repair has no standing where nothing is
+broken.** Above the SNR floor there is no noise for it to remove, so any change it makes to a
+downstream answer is an artifact of the transform rather than evidence about the recording.
+Folding it in unconditionally was measured on a clean two-speaker conversation (41–70 dB SNR
+throughout): the raw pass placed the speaker axis at exactly 0.0 in 179 of 190 buckets, the
+enhanced pass at 0.398 with only 51% zeros, and averaging the two published 0.227 — the
+diarizers agreed and the axis said otherwise, in every one of the 178 buckets where nothing was
+in dispute.
+
+The gate is on **SNR alone, not on ambiguity.** Admitting the perturbation wherever the raw
+sources disagreed was measured too, and it reads better on that clip (0.0202 against 0.0317,
+because enhancement resolves five of the seven contested buckets) — but it is the wrong rule:
+at genuinely low SNR the raw sources can be unanimously *wrong*, all of them fooled by the same
+noise, and that is precisely the case enhancement exists for. An ambiguity requirement locks it
+out there. Ambiguity in a high-SNR bucket, meanwhile, is a real disagreement to be resolved on
+the recording's own evidence, not arbitrated by a transform.
+
+**Invariance probes are deliberately not listed** (see :mod:`invariance`). Gain scaling, whole-
+sample time shift and a small DC offset are chosen so that a *correct* model's answer cannot
+change, which makes them meaningful everywhere and at every SNR — gating them by degradation
+would remove the only condition under which their disagreement is unambiguously a model defect.
+The distinction is the point: enhancement is a transform a model may legitimately answer
+differently on, and an invariance probe is one where it may not.
 """
 
 REGISTER_FILENAME: Final[str] = "perturbations.json"
@@ -103,6 +132,19 @@ class Perturbation:
     def is_identity(self) -> bool:
         """Is this the untransformed recording?"""
         return self.transform == IDENTITY_TRANSFORM
+
+    @property
+    def admission_requires_low_snr(self) -> bool:
+        """Does this perturbation's reading only count where the recording is degraded?
+
+        True for the repair transforms in :data:`SNR_GATED_TRANSFORMS`. Read by
+        ``fuse.SnrGate`` to decide, per bucket, whether this perturbation's readings enter the
+        fold at all — never to decide whether to *compute* the pass, which stays the run-level
+        ``enhancement.mode`` decision. Computing it and then declining to fold it is not waste:
+        the perturbation still contributes its cross-pass ``|delta|`` to
+        ``reliability.signal_stability``, which is what sets every signal's weight.
+        """
+        return self.transform in SNR_GATED_TRANSFORMS
 
     def to_json(self) -> dict[str, Any]:
         """The register entry for this perturbation."""

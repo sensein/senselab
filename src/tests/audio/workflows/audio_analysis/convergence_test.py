@@ -241,6 +241,7 @@ def test_the_round_record_reads_fields_that_exist_on_fused_rows() -> None:
             ]
         },
         weights={"a": 1.0},
+        snr_gate=None,
     )
     record = _round_record(0, rows, untried_actions=0)
     assert record.epistemic is not None, "C1 cannot judge a value the record never read"
@@ -259,6 +260,7 @@ def test_two_rounds_with_different_values_have_different_signatures() -> None:
         return fuse_axis(
             {"p": [{"start": 0.0, "end": 0.5, "votes": {"a": {"same_label_uncertainty": value}}}]},
             weights={"a": 1.0},
+            snr_gate=None,
         )
 
     # 0.5 is maximum entropy, 0.02 near-minimum. Not 0.2 vs 0.8: `uncertainty` is the entropy of

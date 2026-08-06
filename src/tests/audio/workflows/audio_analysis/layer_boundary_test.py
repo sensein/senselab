@@ -410,6 +410,9 @@ _FUSED_AXIS_FIELDS = {
     "triage_score",
     "contributing_signals",
     "contributing_passes",
+    # Which perturbations ran here and were not admitted to the fold. Distinct from a shrunken
+    # ``contributing_passes``, which cannot say whether a pass was withheld or never computed.
+    "snr_gated_passes",
     "signal_weights",
     "weight_basis",
     "round",
@@ -429,6 +432,7 @@ def test_fuse_axis_emits_exactly_the_fields_its_consumers_read() -> None:
     rows = fuse_axis(
         {"raw": [{"start": 0.0, "end": 0.5, "votes": {"m": {"value": 0.3}}}]},
         weights={"m": 1.0},
+        snr_gate=None,
     )
     assert rows and set(rows[0]) == _FUSED_AXIS_FIELDS
 

@@ -48,7 +48,7 @@ from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
 )
-from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
+from senselab.audio.workflows.audio_analysis.fuse import SnrGate, fuse_axis
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_top1_in_window,
@@ -480,6 +480,8 @@ def compute_uncertainty_axes(
     stability_out: dict[str, Any] | None = None,
     linked_out: dict[str, Any] | None = None,
     calibration: dict[str, Any] | None = None,
+    snr_floor_db: float,
+    snr_gated_passes: frozenset[str],
 ) -> tuple[
     dict[str, dict[str, SignalResult]],
     dict[str, FusedAxis],
@@ -556,6 +558,15 @@ def compute_uncertainty_axes(
             ``calibration.profile_to_runtime``): dB→[0,1] anchors consumed by the
             quality harvest. Aggregator-side temperatures travel separately via
             ``params["calibration"]``; pass the same dict in both places.
+
+        snr_floor_db: SNR below which a repair perturbation is admitted to the fold, from
+            ``triage.snr_floor_db`` — one number shared with the run-level ``enhancement.mode:
+            auto`` decision rather than a second threshold that could drift from it.
+        snr_gated_passes: Names of the perturbations whose readings only count where the recording
+            is degraded — those whose ``Perturbation.admission_requires_low_snr`` is true. Required
+            rather than inferred from the name: "anything that is not ``raw``" would gate the
+            invariance probes too, and those are meaningful at every SNR by construction. Pass
+            ``frozenset()`` for a run with nothing to gate.
 
     Returns:
         ``(signal_results_by_pass, fused_axes, incomparable_reasons, per_window_embeddings_by_pass)``
@@ -690,6 +701,9 @@ def compute_uncertainty_axes(
     # across passes before weighting, so the passes are an input dimension here exactly as the
     # signals are — and appear on the output only as the ``contributing_passes`` column.
     basis = (weights_out or {}).get("__basis__") or {}
+    # One constructor, shared with ``fuse.write_final_uncertainty``, so the two folds of these same
+    # harvests cannot end up differently gated under one axis name.
+    snr_gate = SnrGate.build(harvests_by_label, floor_db=snr_floor_db, gated_passes=snr_gated_passes)
     fused_axes: dict[str, FusedAxis] = {}
     for axis in HARVESTED_AXES:
         rows = fuse_axis(
@@ -698,6 +712,7 @@ def compute_uncertainty_axes(
             aggregator=aggregator,
             weight_basis=basis.get(axis, {}),
             round_index=0,
+            snr_gate=snr_gate,
         )
         fused_axes[axis] = FusedAxis(
             axis=axis,  # type: ignore[arg-type]
