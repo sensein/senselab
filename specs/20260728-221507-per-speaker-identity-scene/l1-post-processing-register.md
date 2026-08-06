@@ -82,7 +82,7 @@ a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
 | 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
-| 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB | what HNR indicates voicing, and when is it uninformative? | **closed**; abstention now emits no vote (2026-08-06, below) |
+| 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB — still emitted | anchors were never fitted | **withdrawn from the presence axis** (2026-08-06, below) |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **closed** |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | *withdrawn from this axis* — see below | wrong question: geometry, not voicing | **closed by removal** |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
@@ -892,3 +892,59 @@ Still open from the same investigation: **stability-based weighting cannot disti
 "uninformative".** `reliability.signal_stability` measures cross-pass `|Δ|`, so a near-constant signal
 earns full weight — which is how `embedding_silhouette` came to outweigh every informative presence
 voter at 1.0. Removing that one signal does not fix the mechanism.
+
+
+## Item 10 — withdrawn from the presence axis (2026-08-06)
+
+`acoustic_hnr` no longer votes on **speech_presence**. HNR *is* voicing evidence — vowels are periodic
+— but the step turning dB into a probability was never fitted, and on ordinary speech it read as a
+floor rather than as a measurement.
+
+The ramp was a code literal, 2 dB to 10 dB; this register already called it "fixed" for that reason.
+Measured on `english_conversation_higgs_audio_v2`, **median HNR is 8.12 dB** — *below* the anchor
+meaning "confidently voiced" — so ordinary conversational speech read as only partly voiced. 102 of
+its 145 votes fell in the graded region, and it ended up the largest contributor on the axis:
+
+| signal | mean doubt on the presence axis |
+|---|---|
+| `acoustic_hnr` | **0.1568** |
+| `ast` | 0.1094 |
+| `acoustic_lufs` | 0.0475 |
+| `acoustic_level_above_floor` | 0.0260 |
+| four diarizers, three recognizers, brouhaha VAD | **0.0000** |
+
+Presence doubt 0.0250 → 0.0160; buckets below 0.01 from 66 of 214 to 112.
+
+**The measurement is not lost.** `harvest_speech_presence_evidence` still emits `hnr_db` in decibels,
+and `votes._signal_rows_from_buckets` records presence L1 rows from the *evidence* rather than from the
+votes — so `L1/signals/acoustic_hnr.parquet` is unchanged and any consumer wanting voicing evidence
+reads the dB directly. What is gone is the unfitted dB→probability step in between.
+
+**Open: reinstating it properly.** Fit the anchors to measured HNR on known-voiced speech and write
+them into `data/` with their derivation, the way `detection_margin` and the scene-quality profile are.
+That is what this repo's threshold rule requires and what was never done here.
+
+**A correction to what preceded this.** Silencing the abstention (the addendum above) was a real and
+separate fix — it cut HNR's mean from 0.2675 to 0.1568 by removing fabricated half-confident votes —
+but it did not deweight the signal, because the remaining doubt is the graded region and that is the
+anchors' fault. Two figures were also compared across different thresholds while this was being
+measured: "93 of 214 buckets reach zero" counted buckets below 0.01, whereas the per-run figures
+counted *exact* zeros. **Exact zero is unreachable on this axis by construction and that is correct** —
+`ast` votes in all 214 buckets with a floor of 0.0372 doubt, and a classifier reporting 95% is not
+reporting 100%. The right screen for this axis is a low threshold, not zero.
+
+## Still open, found alongside items 10 and 12
+
+**Stability-based weighting cannot distinguish "reliable" from "uninformative."**
+`reliability.signal_stability` measures cross-pass `|Δ|`, so a near-constant signal earns full weight
+— which is how `embedding_silhouette` outweighed every informative presence voter at 1.0. Removing
+individual signals does not fix the mechanism.
+
+**The background-mask axis folds the enhanced pass, while the mask itself does not.** `stages.py`
+builds the mask only on the unmodified variant, with a measured justification: the enhanced pass masked
+50% of a real recording against the unmodified pass's 17.9%, "because speech enhancement removes the
+non-speech evidence the mask reads target activity from". The mask *axis* harvests `speakers` / `speech`
+/ `words` votes from both passes, and on the 48 kHz clip its enhanced `words` voter reads mean 0.0510
+against raw's 0.0102 — 5× higher, in exactly the direction that note predicts. `fuse.SnrGate` now
+suppresses this in 40 of 49 buckets as a side effect of gating on SNR, but not in the 9 below the
+floor. The same argument that made the mask raw-only applies to its axis and has not been applied.
