@@ -23,22 +23,34 @@ def _diar(segments: list[tuple[float, float, str]]) -> dict[str, Any]:
     return {"status": "ok", "result": [segs], "cache_key": "k"}
 
 
-def _summary(**extra: object) -> dict[str, Any]:
-    """Two diarizers agreeing on one speaker for the first half and another for the second."""
+def _summary(mask_state: str | None = None, mask_uncertainty: float = 1.0) -> dict[str, Any]:
+    """Two diarizers agreeing on one speaker for the first half and another for the second.
+
+    ``mask_state`` attaches a single whole-clip mask region in that state, which is the only mask
+    shape these tests need.
+    """
     a = [(0.0, 0.5, "SPEAKER_00"), (0.5, 1.0, "SPEAKER_01")]
-    return {
+    summary: dict[str, Any] = {
         "duration_s": 1.0,
         "diarization": {"by_model": {"pyannote": _diar(a), "sortformer": _diar(a)}},
-        **extra,
     }
+    if mask_state is not None:
+        summary["background_mask"] = {
+            "status": "ok",
+            "result": {"regions": [{"start": 0.0, "end": 1.0, "state": mask_state, "uncertainty": mask_uncertainty}]},
+        }
+    return summary
 
 
-def _votes(**kwargs: object) -> list[dict[str, Any]]:
+def _votes(
+    pass_summary: dict[str, Any] | None = None,
+    fused_words: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     return harvest_speaker_votes(
-        pass_summary=kwargs.pop("pass_summary", _summary()),
+        pass_summary=pass_summary if pass_summary is not None else _summary(),
         grid=BucketGrid(),
         per_window_embeddings={},
-        **kwargs,
+        fused_words=fused_words,
     )
 
 
@@ -86,36 +98,18 @@ def test_word_location_doubt_reaches_the_axis() -> None:
 
 def test_an_indeterminate_mask_raises_attribution_doubt() -> None:
     """Not knowing whether the target was active is not knowing whether anyone is here."""
-    summary = _summary(
-        background_mask={
-            "status": "ok",
-            "result": {"regions": [{"start": 0.0, "end": 1.0, "state": "indeterminate", "uncertainty": 1.0}]},
-        }
-    )
-    buckets = _votes(pass_summary=summary)
+    buckets = _votes(pass_summary=_summary(mask_state="indeterminate", mask_uncertainty=1.0))
     assert per_signal_uncertainty(buckets[0]).get("target_activity") == pytest.approx(1.0)
 
 
 def test_a_confidently_target_free_bucket_makes_no_claim() -> None:
     """No one to attribute, so no vote at all — None, never 0.0."""
-    summary = _summary(
-        background_mask={
-            "status": "ok",
-            "result": {"regions": [{"start": 0.0, "end": 1.0, "state": "target_free", "uncertainty": 0.02}]},
-        }
-    )
-    for bucket in _votes(pass_summary=summary):
+    for bucket in _votes(pass_summary=_summary(mask_state="target_free", mask_uncertainty=0.02)):
         assert bucket["votes"] == {}, "a target-free bucket must carry no attribution vote"
         assert per_signal_uncertainty(bucket) == {}
 
 
 def test_a_target_active_mask_adds_nothing() -> None:
     """Where the mask is sure the target is active, the attribution question is simply live."""
-    summary = _summary(
-        background_mask={
-            "status": "ok",
-            "result": {"regions": [{"start": 0.0, "end": 1.0, "state": "target_active", "uncertainty": 0.1}]},
-        }
-    )
-    for bucket in _votes(pass_summary=summary):
+    for bucket in _votes(pass_summary=_summary(mask_state="target_active", mask_uncertainty=0.1)):
         assert "target_activity" not in (bucket["votes"] or {})
