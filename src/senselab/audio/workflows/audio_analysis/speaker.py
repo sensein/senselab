@@ -475,10 +475,17 @@ def harvest_speaker_votes(
         # answerable before the speaker↔label binding D-7 hands to rounds.
         j1 = count_posterior_in_window(diar_spans, start=start, end=end) if diar_spans else None
         if j1 is not None and j1["uncertainty"] is not None:
-            # Unscored: how many speakers overlap is evidence about *who*, which the per-speaker
-            # term already reads from the same spans. Kept because the distribution names which
-            # counts were in contention, which no fold can say.
-            votes["__overlap_count__"] = {
+            # **An L1 measurement, not a voter and not a synthetic block.** Unscored, because how
+            # many speakers overlap is evidence about *who*, which the per-speaker term already reads
+            # from the same spans — scoring both counts one body of evidence twice (D-21 rule 6).
+            #
+            # Named without the ``__`` prefix deliberately: ``votes._signal_rows_from_buckets`` skips
+            # ``__``-prefixed entries, so under the old name this had no reader at all once it stopped
+            # being scored — recorded-but-unread, which is exactly the
+            # ``__pairwise_phoneme_distances__`` mistake. As a plain name it lands in
+            # ``L1/<pass>/signals/overlap_count.parquet``, where a per-bucket measurement belongs, and
+            # ``count_uncertainty`` keeps it out of ``fuse._UNCERTAINTY_FIELDS``.
+            votes["overlap_count"] = {
                 "count_uncertainty": float(j1["uncertainty"]),
                 "expected_count": j1["expected_count"],
                 "p_overlap": j1["p_overlap"],

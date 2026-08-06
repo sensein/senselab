@@ -173,7 +173,13 @@ AXES: Final[tuple[Axis, ...]] = (
     ),
     Axis(
         name="speaker",
-        question="was it the same speaker as before?",
+        question="who is speaking here?",
+        # Was "was it the same speaker as before?". That framing asked a *change* question at the
+        # grid rate and validated it per (diar × embedder) pair against embeddings windowed ten
+        # times coarser, so it read 0.666 on a clean two-speaker conversation whose count posterior
+        # was 2 at 0.978 and whose per-speaker presence doubt averaged 0.168. The axis is composed
+        # from ``attribution``'s three terms now — per-speaker presence, word location, target
+        # activity. See ``speaker-axis-attribution-design.md``.
         harvested=True,
         # Evidence that no one spoke here is silent about *which* speaker it was; discounting
         # this axis on it would be an unmeasured leap.
