@@ -210,13 +210,31 @@ reads mean 0.398 with only 51% of buckets at zero: the two passes disagree on 94
 at mean `|Δ|` 0.406, and in places are anti-correlated. Speech enhancement changes who the diarizers
 think is speaking.
 
-That is an open question rather than a fixed decision, and it is a question about the *fold*, not
-about this composition: whether "who is speaking" — a fact about the recording — should be measured on
-the identity pass alone, with the enhanced pass used only as the perturbation sample that sets the
-signal's stability *weight*. There is direct precedent: the background mask runs only on the
-unmodified pass, and `signal_support` is likewise measured there, both on the argument that the
-property belongs to the recording and not to the transform. Deciding it would take the published
-figure to 0.049.
+**Decided: a repair perturbation is admitted only where there is something to repair.** The
+enhanced pass's readings enter `fuse_axis` only in buckets whose *identity-pass* SNR is below
+`triage.snr_floor_db` (`fuse.SnrGate`) — the same number that already decided whether to compute the
+pass at all under `enhancement.mode: auto`, so there is one threshold rather than two that can
+disagree. Above the floor there is no noise to remove, so a changed downstream answer reports the
+transform, not the recording. The perturbation still contributes its cross-pass `|Δ|` to
+`reliability.signal_stability`, which is its actual job: setting each signal's weight.
+
+The gate is on **SNR alone, not on ambiguity**, and the rejected alternative measured *better* on
+this clip — admitting the perturbation wherever the raw diarizers disagreed reads 0.0202 against
+0.0317, because enhancement resolves five of the seven contested buckets (at 5.6 s and 8.3–8.7 s raw
+reads 0.811 and enhanced reads 0.000). It is still the wrong rule: at genuinely low SNR the raw
+sources can be unanimously *wrong*, all of them fooled by the same noise, and that is precisely the
+case enhancement exists for. Requiring ambiguity locks it out there. Ambiguity in a high-SNR bucket
+is a real disagreement to be resolved on the recording's own evidence, not arbitrated by a transform.
+
+On this clip the gate never opens — SNR is 41–70 dB throughout — so the fold is the raw reading
+alone: **mean 0.0317, with 178 of 185 buckets at exactly zero.** The seven above 0.66 are genuine
+turn-boundary disagreements (three diarizers on `C1`, one on `C0`) at `speech_presence` confidence
+~0.92, which is the right answer to leave standing. Four further ambiguous buckets are wordless and
+already nulled by the word gate.
+
+Precedent this follows: the background mask runs only on the unmodified pass, and `signal_support` is
+likewise measured there, both on the argument that the property belongs to the recording rather than
+to the transform.
 
 **The prediction that was wrong, recorded.** Before measuring, the expectation was that
 `target_activity` would dominate the surviving high-doubt buckets. It does not: `speaker_assignment`

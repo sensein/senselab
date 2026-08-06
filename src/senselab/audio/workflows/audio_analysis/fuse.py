@@ -28,6 +28,7 @@ from typing import Any, Mapping, Optional, Sequence
 from senselab.audio.workflows.audio_analysis.aggregators import apply_aggregator
 from senselab.audio.workflows.audio_analysis.estimates import estimate_frame
 from senselab.audio.workflows.audio_analysis.influence import effective_weight
+from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 from senselab.audio.workflows.audio_analysis.statistics import epistemic_uncertainty, variability
 
 __all__ = [
@@ -171,6 +172,81 @@ def per_signal_uncertainty(bucket: Mapping[str, Any]) -> dict[str, float]:
     return out
 
 
+@dataclass(frozen=True)
+class SnrGate:
+    """Per-bucket admission for perturbations that only count where the audio is degraded.
+
+    A speech-enhancement pass is a *repair*. Above the SNR floor there is nothing for it to
+    repair, so a downstream answer that changes there reports the transform, not the recording.
+    This gate is what keeps such a pass out of the fold in exactly those buckets, while leaving
+    it free to contribute the cross-pass ``|delta|`` that ``reliability.signal_stability`` turns
+    into every signal's weight. See :data:`perturbations.SNR_GATED_TRANSFORMS` for why the gate
+    is on SNR and not on whether the raw sources happened to disagree.
+
+    Attributes:
+        floor_db: SNR at or above which a gated perturbation is not admitted. From
+            ``triage.snr_floor_db`` in the run config, so the fold and the run-level
+            ``enhancement.mode: auto`` decision are gated on one number rather than two.
+        snr_db_by_bucket: ``{(start, end) → SNR in dB}`` on the axis grid. A bucket may map to
+            ``None``: SNR was not measurable there.
+        gated_passes: Names of the perturbations this applies to — those whose
+            ``admission_requires_low_snr`` is true. Every other pass is admitted everywhere.
+    """
+
+    floor_db: float
+    snr_db_by_bucket: Mapping[tuple[float, float], float | None]
+    gated_passes: frozenset[str]
+
+    @classmethod
+    def build(
+        cls,
+        harvests: Mapping[str, Any],
+        *,
+        floor_db: float,
+        gated_passes: frozenset[str],
+    ) -> "SnrGate | None":
+        """The gate for a run, from its harvests. ``None`` when there is nothing to gate.
+
+        **One constructor for every fold in the run.** ``compute.compute_uncertainty_axes`` and
+        ``write_final_uncertainty`` both fuse the same harvests, and if they built the gate from
+        different SNR fields or different floors they would publish two differently-gated numbers
+        under one axis name — the class of defect this codebase keeps hitting, where two producers
+        of one quantity disagree and nothing says so.
+
+        SNR is read from the **identity** perturbation. How degraded a recording is is a fact about
+        the recording; measuring it on the enhanced audio would ask the repair to certify its own
+        necessity, and it would pass every time.
+        """
+        if not gated_passes:
+            return None
+        quality: Mapping[tuple[float, float], Mapping[str, Any]] = {}
+        for label, harvest in harvests.items():
+            if label == IDENTITY_NAME:
+                quality = getattr(harvest, "quality_by_bucket", None) or {}
+                break
+        return cls(
+            floor_db=float(floor_db),
+            snr_db_by_bucket={bucket: q.get("snr_brouhaha_db") for bucket, q in quality.items()},
+            gated_passes=frozenset(gated_passes),
+        )
+
+    def admits(self, perturbation: str, bucket: tuple[float, float]) -> bool:
+        """May ``perturbation``'s readings for ``bucket`` enter the fold?
+
+        An unmeasured SNR does **not** admit. The gate is the primary condition, and "we could
+        not measure the degradation" is not evidence that the recording is degraded — the same
+        rule the rest of this module follows in refusing to read ``None`` as ``0.0``. It is
+        visible rather than silent: the bucket's ``snr_gated_passes`` column names what was held
+        out, so a reader can tell a pass that was excluded from one that never ran.
+        """
+        if perturbation not in self.gated_passes:
+            return True
+        snr = self.snr_db_by_bucket.get(bucket)
+        if snr is None:
+            return False
+        return float(snr) < float(self.floor_db)
+
+
 def fuse_axis(
     buckets_by_pass: Mapping[str, Sequence[Mapping[str, Any]]],
     *,
@@ -178,11 +254,17 @@ def fuse_axis(
     aggregator: str = "mean",
     weight_basis: Mapping[str, Mapping[str, float]] | None = None,
     round_index: int = 0,
+    snr_gate: SnrGate | None,
 ) -> list[dict[str, Any]]:
     """Fuse one axis's per-signal uncertainties across signals and passes.
 
     Args:
         buckets_by_pass: ``{perturbation → per-bucket harvested votes}``.
+        snr_gate: Which perturbations may contribute in which buckets, or ``None`` for no
+            gating. **Required rather than defaulted**: a caller that silently folds a
+            speech-enhancement pass into buckets at 70 dB SNR publishes the transform's answer
+            as the recording's, and a default would let that happen by omission. Pass ``None``
+            explicitly to say the run has nothing to gate.
         weights: ``{signal → measured weight}``. A signal absent from the mapping carries
             full weight: a factor never measured must not act as a discount.
         aggregator: How to combine the weighted per-signal uncertainties into
@@ -205,20 +287,37 @@ def fuse_axis(
         Every quantity is ``None`` where no signal spoke. That is not the same as ``0.0``,
         which would assert confidence nobody expressed.
     """
-    # (start, end) → signal → [uncertainty, ...]; a signal appearing in both passes
-    # contributes both readings, because disagreement between passes is evidence too.
+    # (start, end) → signal → [uncertainty, ...]. A signal appearing under more than one
+    # perturbation contributes each reading, subject to ``snr_gate``: a repair transform is
+    # evidence only where there is something to repair. The comment here used to claim that
+    # "disagreement between passes is evidence too" — which the mean two loops below then threw
+    # away, so the disagreement was neither reported as reducible nor kept out. It is kept out
+    # now, where the gate says it does not apply, and recorded per bucket when it is.
     collected: dict[tuple[float, float], dict[str, list[float]]] = {}
     passes_seen: dict[tuple[float, float], set[str]] = {}
+    gated_out: dict[tuple[float, float], set[str]] = {}
 
     for perturbation in sorted(buckets_by_pass):
         for bucket in buckets_by_pass[perturbation] or []:
             if not isinstance(bucket, Mapping):
                 continue
             key = (round(float(bucket.get("start", 0.0)), 6), round(float(bucket.get("end", 0.0)), 6))
+            if snr_gate is not None and not snr_gate.admits(str(perturbation), key):
+                # Recorded, not dropped in silence: a bucket showing ``contributing_passes:
+                # ['raw']`` is otherwise indistinguishable from a run that never computed the
+                # perturbation at all.
+                gated_out.setdefault(key, set()).add(str(perturbation))
+                continue
             slot = collected.setdefault(key, {})
             passes_seen.setdefault(key, set()).add(str(perturbation))
             for signal, value in per_signal_uncertainty(bucket).items():
                 slot.setdefault(signal, []).append(value)
+
+    # A bucket every pass was gated out of still owes a row: it has no fused value, and that is a
+    # measurement ("nothing was admitted here"), not an absence to be skipped over.
+    for key in gated_out:
+        collected.setdefault(key, {})
+        passes_seen.setdefault(key, set())
 
     rows: list[dict[str, Any]] = []
     for start, end in sorted(collected):
@@ -261,6 +360,11 @@ def fuse_axis(
                 "triage_score": fused,
                 "contributing_signals": signals,
                 "contributing_passes": sorted(passes_seen[(start, end)]),
+                # What the SNR gate held out of *this* bucket. Empty is the common case and says
+                # "nothing was withheld"; a name here says the pass ran and was not admitted,
+                # which a shrunken ``contributing_passes`` alone cannot distinguish from a run
+                # that never computed the perturbation.
+                "snr_gated_passes": sorted(gated_out.get((start, end), ())),
                 "signal_weights": {s: w for s, w in zip(signals, applied)},
                 "weight_basis": {s: dict((weight_basis or {}).get(s, {})) for s in signals},
                 "round": int(round_index),
@@ -574,6 +678,7 @@ def fuse_axes(
     remeasure: Any = None,  # noqa: ANN401 — (axis, regions, rows_by_axis) -> {pass: buckets} | None
     unsettled_above: float = 0.6,
     return_history: bool = False,
+    snr_gate: SnrGate | None,
 ) -> Any:  # noqa: ANN401 — 2-tuple, or 3-tuple when return_history
     """Iterate every axis together, so each round can read the others (D-11).
 
@@ -659,6 +764,10 @@ def fuse_axes(
             ``L2/round<N>/`` are supposed to show what each iteration changed; without this the
             caller only ever had the final rows, every one carrying the final round index, so the
             writer emitted a single directory and the trail the layout promises did not exist.
+
+        snr_gate: Passed to every :func:`fuse_axis` fold this driver performs, including the
+            coupled re-folds of later rounds, so a perturbation held out of round 0 stays held out
+            of round 3. ``None`` for no gating.
 
     Returns:
         ``({axis → rows}, {axis → log})``, plus ``{axis → {round → rows}}`` when
@@ -769,6 +878,7 @@ def fuse_axes(
             aggregator=aggregator,
             weight_basis=basis_by_axis.get(axis),
             round_index=0,
+            snr_gate=snr_gate,
         )
         for row in rows_by_axis[axis]:
             row["coupled_from"] = []
@@ -856,6 +966,7 @@ def fuse_axes(
                 aggregator=aggregator,
                 weight_basis=basis,
                 round_index=round_index,
+                snr_gate=snr_gate,
             )
             # Which axes reached this one: directly as inputs, and — when the shared structure was
             # re-derived this round — through the derivatives every axis contributed to. Recorded
@@ -931,6 +1042,7 @@ def fuse_rounds(
     tolerance: float = 1e-3,
     speaker_assignment: Mapping[str, str] | None = None,
     untried_actions: int | None = None,
+    snr_gate: SnrGate | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """One axis on its own — :func:`fuse_axes` with a single axis and no re-derivation.
 
@@ -950,6 +1062,9 @@ def fuse_rounds(
         speaker_assignment: The ``S_k`` → channel binding, for C2.
         untried_actions: Remaining unattempted actions, for C4.
 
+        snr_gate: Which perturbations may contribute in which buckets; see :class:`SnrGate`.
+            ``None`` for no gating.
+
     Returns:
         ``(rows, log)`` for the single axis.
     """
@@ -966,6 +1081,7 @@ def fuse_rounds(
         speaker_assignment_by_axis={axis: speaker_assignment},
         untried_actions=untried_actions,
         derive=None,
+        snr_gate=snr_gate,
     )
     return rows_by_axis[axis], logs[axis]
 
@@ -1152,6 +1268,7 @@ def fold_run_axes(
     max_rounds: int = 1,
     scene_rows: Sequence[Mapping[str, Any]] = (),
     comparator_params: Mapping[str, Any] | None = None,
+    snr_gate: SnrGate | None,
 ) -> tuple[
     dict[str, list[dict[str, Any]]],
     dict[str, list[dict[str, Any]]],
@@ -1188,6 +1305,7 @@ def fold_run_axes(
         speaker_claims=speaker_claims,
         max_rounds=max_rounds,
         return_history=True,
+        snr_gate=snr_gate,
     )
     if scene_rows and "asr" in per_round:
         from senselab.audio.workflows.audio_analysis.votes import apply_scene_coupling
@@ -1210,6 +1328,8 @@ def write_final_uncertainty(
     speech_presence_policy: Any = None,  # noqa: ANN401 — SpeechPresencePolicy, imported lazily
     scene_rows: Sequence[Mapping[str, Any]] = (),
     comparator_params: Mapping[str, Any] | None = None,
+    snr_floor_db: float,
+    snr_gated_passes: frozenset[str],
 ) -> dict[str, Any]:
     """Write ``L2/round/<n>/estimates/<axis>.parquet`` for every round the fold ran.
 
@@ -1244,6 +1364,12 @@ def write_final_uncertainty(
             ``triage_score`` that did not contain it.
         comparator_params: Comparator params, for the coupling weights.
 
+        snr_floor_db: SNR below which a repair perturbation is admitted to the fold, from
+            ``triage.snr_floor_db``.
+        snr_gated_passes: Names of the perturbations whose readings only count where the recording
+            is degraded. Built into a gate via :meth:`SnrGate.build`, the same constructor
+            ``compute_uncertainty_axes`` uses, so both folds of these harvests are gated alike.
+
     Returns:
         ``{axis → written path}`` as strings, for the run summary.
     """
@@ -1277,6 +1403,7 @@ def write_final_uncertainty(
 
     rows_by_axis, logs, per_round = fold_run_axes(
         buckets_by_axis,
+        snr_gate=SnrGate.build(harvests, floor_db=snr_floor_db, gated_passes=snr_gated_passes),
         speaker_assignment=speaker_assignment,
         weights_by_axis=weights_by_axis,
         aggregator=aggregator,

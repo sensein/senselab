@@ -176,7 +176,7 @@ def test_the_axis_names_every_asr_model_that_placed_words(
 
     assert MODEL in per_signal_uncertainty(rows[0]), f"{shape}: the fold cannot read this vote"
 
-    fused = fuse_axis({"raw": rows}, weights={}, aggregator="min")
+    fused = fuse_axis({"raw": rows}, weights={}, aggregator="min", snr_gate=None)
     assert MODEL in fused[0]["contributing_signals"], f"{shape}: absent from the fused axis"
     assert fused[0]["signal_weights"][MODEL] == pytest.approx(1.0)
 
@@ -238,7 +238,7 @@ def test_a_signal_absent_from_the_evidence_is_absent_from_the_axis() -> None:
     while a model that answered contributes even when it scored nothing.
     """
     rows = link_speech_presence([_row({MODEL: _harvest(dict(SHAPES[0][1]), None)})], reporting_win_s=0.5)
-    fused = fuse_axis({"raw": rows}, weights={}, aggregator="min")
+    fused = fuse_axis({"raw": rows}, weights={}, aggregator="min", snr_gate=None)
     assert fused[0]["contributing_signals"] == [MODEL]
     assert "another/asr-model" not in fused[0]["signal_weights"]
 
@@ -264,11 +264,14 @@ def test_including_a_direction_only_voter_cannot_lower_the_triage_score() -> Non
     its budget on — is unchanged, so the fix cannot hide a region that needed attention.
     """
     doubtful = {"same_label_uncertainty": 0.8}
-    without = fuse_axis({"raw": [{"start": 0.0, "end": 0.5, "votes": {"x": doubtful}}]}, weights={}, aggregator="min")
+    without = fuse_axis(
+        {"raw": [{"start": 0.0, "end": 0.5, "votes": {"x": doubtful}}]}, weights={}, aggregator="min", snr_gate=None
+    )
     with_claim = fuse_axis(
         {"raw": [{"start": 0.0, "end": 0.5, "votes": {"x": doubtful, MODEL: {"speaks": True}}}]},
         weights={},
         aggregator="min",
+        snr_gate=None,
     )
     assert with_claim[0]["triage_score"] == pytest.approx(without[0]["triage_score"])
     assert with_claim[0]["confidence"] > without[0]["confidence"]

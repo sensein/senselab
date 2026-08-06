@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 13
+CACHE_SCHEMA_VERSION = 14
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -167,6 +167,14 @@ now reads ``None`` instead of carrying word-boundary jitter as identity doubt �
 over *every* answer they gave rather than the worst single speaker's. Absent a target embedding the
 axis's question is "do we know who is talking", so a cached row named for a per-speaker reading is
 answering a question the axis no longer asks.
+
+Bumped 13 → 14 when a repair perturbation stopped counting where there is nothing to repair. The
+enhanced pass's readings now enter ``fuse_axis`` only in buckets whose *identity-pass* SNR is below
+``triage.snr_floor_db`` (``fuse.SnrGate``), so on a clean recording almost every fused value is the
+raw reading alone rather than a raw/enhanced mean. Measured on a two-speaker conversation at 41-70 dB
+SNR: the speaker axis goes from 0.227 to 0.032, with 96% of buckets at exactly zero instead of 49%.
+Every estimate row also gains a ``snr_gated_passes`` column, so a cached row is both a different
+number and a narrower schema than a reader now expects.
 
 Every number keyed to the speaker axis moves with it: region proposal, convergence, residual mass,
 the disagreements ranking and the LS bins. ``theta_low`` / ``theta_high`` were not tuned against this

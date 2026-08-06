@@ -42,7 +42,14 @@ def test_the_two_producers_write_the_same_columns(tmp_path: Path) -> None:
         perturbation="raw",
         speaker_votes=[{"start": 0.0, "end": 0.5, "votes": {"diar_a": {"same_label_uncertainty": 0.4}}}],
     )
-    write_final_uncertainty(tmp_path, harvests={"raw": harvest}, weights_by_axis={}, aggregator="min")
+    write_final_uncertainty(
+        tmp_path,
+        harvests={"raw": harvest},
+        weights_by_axis={},
+        aggregator="min",
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
+    )
 
     store = VoteStore()
     store.add_vote(
@@ -205,6 +212,8 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
         aggregator="min",
         mask_regions=mask,
         max_rounds=fusion_rounds,
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
     )
     run_adaptive_loop(
         tmp_path,

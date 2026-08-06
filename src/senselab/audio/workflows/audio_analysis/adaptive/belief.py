@@ -50,7 +50,7 @@ from senselab.audio.workflows.audio_analysis.degradation import (
 )
 from senselab.audio.workflows.audio_analysis.estimates import control_doubt
 from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
-from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
+from senselab.audio.workflows.audio_analysis.fuse import SnrGate, fuse_axis
 from senselab.audio.workflows.audio_analysis.layout import derivatives_dir, perturbation_dir
 from senselab.audio.workflows.audio_analysis.support import (
     CORROBORATION_POOLING,
@@ -202,8 +202,17 @@ class Vote:
 class VoteStore:
     """All evidence for one run, indexed by (stream, axis, bucket)."""
 
-    def __init__(self) -> None:
-        """Create an empty store."""
+    def __init__(self, *, snr_gate: SnrGate | None = None) -> None:
+        """Create an empty store.
+
+        Args:
+            snr_gate: Which perturbations may contribute in which buckets when a bucket is
+                re-aggregated. **Must be the same gate ``compute`` folded round 0 with**, or the
+                loop's re-aggregation stops being a parity check on the published axis and starts
+                being a second, differently-gated fold reported under the same name. ``None`` means
+                no gating, which is correct for a run whose only perturbation is the identity.
+        """
+        self.snr_gate = snr_gate
         self._votes: dict[str, Vote] = {}
         self._index: dict[tuple[str, str, tuple[float, float]], list[str]] = {}
         # Per-(stream, axis, bucket) measurements that belong to the bucket rather than to any
@@ -726,6 +735,7 @@ class VoteStore:
             weights=weights,
             aggregator=aggregator,
             weight_basis={s: {"evidence_weight": w} for s, w in weights.items()},
+            snr_gate=self.snr_gate,
         )
         fused: dict[str, Any] = dict(rows[0]) if rows else {}
         sources = sorted({src for v in votes_by_pass.values() for src in v})

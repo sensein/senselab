@@ -60,7 +60,7 @@ def _weights(by_axis: dict) -> dict:
 
 
 def _run(by_axis: dict, **kw: object) -> dict:
-    rows, _logs = fuse_axes(by_axis, weights_by_axis=_weights(by_axis), max_rounds=3, **kw)  # type: ignore[arg-type]
+    rows, _logs = fuse_axes(by_axis, weights_by_axis=_weights(by_axis), max_rounds=3, **kw, snr_gate=None)  # type: ignore[arg-type]
     return rows
 
 
@@ -78,8 +78,10 @@ def test_a_settled_presence_axis_reaches_the_speaker_axis_through_the_mask() -> 
         "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
     claims = {"a": [(0.0, 0.5)]}
-    coupled, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims=claims)
-    isolated, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims=claims, derive=None)
+    coupled, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims=claims, snr_gate=None)
+    isolated, _ = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims=claims, derive=None, snr_gate=None
+    )
     assert coupled["speaker"][0]["signal_weights"]["a"] < isolated["speaker"][0]["signal_weights"]["a"]
 
 
@@ -87,7 +89,9 @@ def test_the_previous_round_s_axes_are_inputs_to_this_round() -> None:
     """All three inputs feed every round: the signals, the derivatives, and the other axes."""
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
     with_axes = _run(axes)
-    signals_only, _ = fuse_axes({"speech_presence": axes["speech_presence"]}, weights_by_axis=_weights(axes))
+    signals_only, _ = fuse_axes(
+        {"speech_presence": axes["speech_presence"]}, weights_by_axis=_weights(axes), snr_gate=None
+    )
     assert "axis::speaker" in with_axes["speech_presence"][0]["contributing_signals"]
     assert with_axes["speech_presence"][0]["uncertainty"] != signals_only["speech_presence"][0]["uncertainty"]
 
@@ -117,7 +121,9 @@ def test_the_coupling_is_recorded_on_the_rows_it_moved() -> None:
         "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
         "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
-    rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]})
+    rows, logs = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]}, snr_gate=None
+    )
     assert "speech_presence" in rows["speaker"][0]["coupled_from"]
     assert any(e.get("derivatives_refreshed") for e in logs["speaker"] if e["round"] >= 1)
 
@@ -128,7 +134,9 @@ def test_an_axis_is_not_listed_as_coupling_to_itself() -> None:
         "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
         "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
-    rows, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]})
+    rows, _ = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]}, snr_gate=None
+    )
     assert "speech_presence" not in rows["speech_presence"][0]["coupled_from"]
 
 
@@ -142,7 +150,9 @@ def test_a_round_that_revised_the_shared_structure_is_not_credited_with_the_drop
         "speech_presence": {"raw": [_b(0.0, {"p": 0.0, "q": 0.0})]},
         "speaker": {"raw": [_b(0.0, {"a": 0.9, "b": 0.1})]},
     }
-    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]})
+    _rows, logs = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, speaker_claims={"a": [(0.0, 0.5)]}, snr_gate=None
+    )
     later = [e for e in logs["speaker"] if e["round"] >= 1]
     assert later, "the coupled round must actually run"
     assert all((e["credited_epistemic_change"] or 0.0) >= 0 for e in later)
@@ -186,7 +196,9 @@ def test_several_axes_can_be_run_fully_isolated() -> None:
     otherwise the comparison changes two things at once and says nothing about the coupling.
     """
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, derive=None, couple_axes=False)
+    rows, logs = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, derive=None, couple_axes=False, snr_gate=None
+    )
     assert set(rows) == {"speaker", "speech_presence"}
     for axis_rows in rows.values():
         for row in axis_rows:
@@ -199,7 +211,9 @@ def test_isolation_is_what_the_coupling_is_measured_against() -> None:
     """Same axes, same signals, coupling the only difference."""
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
     coupled = _run(axes)
-    isolated, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, derive=None, couple_axes=False)
+    isolated, _ = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, derive=None, couple_axes=False, snr_gate=None
+    )
     assert coupled["speech_presence"][0]["uncertainty"] != isolated["speech_presence"][0]["uncertainty"]
 
 
@@ -241,7 +255,7 @@ def test_every_axis_completes_round_zero_before_any_axis_runs_round_one() -> Non
     beforehand could never have seen it.
     """
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3)
+    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, snr_gate=None)
     for axis_log in logs.values():
         assert axis_log[0]["round"] == 0
     assert {e["round"] for log in logs.values() for e in log} >= {0, 1}
@@ -254,16 +268,16 @@ def test_round_one_reads_round_zero_not_the_same_round() -> None:
     byte-reproducibility the convergence outputs promise (FR-011f).
     """
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    forward, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3)
+    forward, _ = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, snr_gate=None)
     reversed_order = {k: axes[k] for k in reversed(list(axes))}
-    backward, _ = fuse_axes(reversed_order, weights_by_axis=_weights(axes), max_rounds=3)
+    backward, _ = fuse_axes(reversed_order, weights_by_axis=_weights(axes), max_rounds=3, snr_gate=None)
     assert forward["speech_presence"][0]["uncertainty"] == pytest.approx(backward["speech_presence"][0]["uncertainty"])
 
 
 def test_c4_counts_a_pending_re_examination_as_an_untried_action() -> None:
     """A flagged region nobody has revisited is exactly the "untried action" C4 asks about."""
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3)
+    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, snr_gate=None)
     presence_log = logs["speech_presence"]
     assert presence_log[-1]["action_scope"] == "cross_axis"
     assert "c4" not in presence_log[-1]["blocking"], "the re-examination was performed, and counted"
@@ -291,7 +305,7 @@ def test_a_round_re_derives_the_mask_from_the_previous_round_s_axes() -> None:
         )
 
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, derive=_derive)
+    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, derive=_derive, snr_gate=None)
     assert seen, "the derivative stage must actually run"
     assert seen[0] == 2, "it is handed every axis's previous-round rows"
     assert any(e.get("derivatives_refreshed") for e in logs["speaker"] if e["round"] >= 1)
@@ -303,7 +317,7 @@ def test_a_stale_derivative_is_reported_as_stale_rather_than_looking_current() -
     A reader cannot otherwise tell a mask the loop refreshed from one it never revisited.
     """
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, derive=None)
+    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, derive=None, snr_gate=None)
     later = [e for e in logs["speaker"] if e["round"] >= 1]
     assert later and all(e["derivatives_refreshed"] is False for e in later)
 
@@ -318,6 +332,7 @@ def test_a_derive_hook_returning_nothing_leaves_the_derivatives_alone() -> None:
         weights_by_axis=_weights(axes),
         max_rounds=3,
         derive=lambda _rows, _current: None,
+        snr_gate=None,
     )
     later = [e for e in logs["speaker"] if e["round"] >= 1]
     assert later and all(e["derivatives_refreshed"] is False for e in later)
@@ -326,7 +341,7 @@ def test_a_derive_hook_returning_nothing_leaves_the_derivatives_alone() -> None:
 
 def test_the_single_axis_driver_is_the_same_loop_with_one_axis() -> None:
     """One round loop, not two. Two implementations could disagree about the same history."""
-    single, log = fuse_rounds({"raw": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=3)
+    single, log = fuse_rounds({"raw": [_b(0.0, {"a": 0.3})]}, weights={"a": 1.0}, max_rounds=3, snr_gate=None)
     assert len(single) == 1
     assert log[0]["round"] == 0
 
@@ -410,7 +425,7 @@ def test_a_round_can_re_measure_an_unsettled_region() -> None:
         return {"finer": [_b(0.0, {f"{axis}_refined": 0.0})]}
 
     axes = _unsettled()
-    rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, remeasure=_remeasure)
+    rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, remeasure=_remeasure, snr_gate=None)
     assert calls, "an unsettled region must reach the re-measurement hook"
     assert any("speaker_refined" in r["contributing_signals"] for r in rows["speaker"])
     assert any(e.get("remeasured") for e in logs["speaker"] if e["round"] >= 1)
@@ -425,7 +440,7 @@ def test_a_settled_region_is_not_re_measured() -> None:
         return None
 
     axes = _axes(speaker={"a": 0.0, "b": 0.0}, speech_presence={"c": 0.0, "d": 0.0})
-    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, remeasure=_remeasure)
+    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, remeasure=_remeasure, snr_gate=None)
     assert calls == [], "nothing was unsettled, so nothing needed a finer look"
 
 
@@ -438,7 +453,7 @@ def test_a_region_is_not_re_measured_twice() -> None:
         return None
 
     axes = _unsettled()
-    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=5, remeasure=_remeasure)
+    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=5, remeasure=_remeasure, snr_gate=None)
     assert calls and calls[0] > 0
     assert all(c == 0 for c in calls[2:]) or len(calls) <= 2, "a re-measured region stops being pending"
 
@@ -451,6 +466,7 @@ def test_a_re_measured_round_is_not_credited_with_the_drop_it_caused() -> None:
         weights_by_axis=_weights(axes),
         max_rounds=3,
         remeasure=lambda axis, regions, rows: {"finer": [_b(0.0, {f"{axis}_refined": 0.0})]},
+        snr_gate=None,
     )
     later = [e for e in logs["speaker"] if e["round"] >= 1]
     assert later and all((e["credited_epistemic_change"] or 0.0) >= 0 for e in later)
@@ -459,7 +475,9 @@ def test_a_re_measured_round_is_not_credited_with_the_drop_it_caused() -> None:
 def test_pending_re_measurements_block_c4() -> None:
     """A region nobody has looked at again is the untried action C4 exists to notice."""
     axes = _unsettled()
-    _rows, logs = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, remeasure=lambda a, r, rows: None)
+    _rows, logs = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, remeasure=lambda a, r, rows: None, snr_gate=None
+    )
     assert logs["speaker"][0]["action_scope"] == "remeasure"
 
 
@@ -472,9 +490,9 @@ def test_the_unsettled_threshold_is_policy_rather_than_a_literal() -> None:
         calls.append(axis)
         return None
 
-    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=2, remeasure=_hook, unsettled_above=0.99)
+    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=2, remeasure=_hook, unsettled_above=0.99, snr_gate=None)
     assert calls == []
-    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=2, remeasure=_hook, unsettled_above=0.1)
+    fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=2, remeasure=_hook, unsettled_above=0.1, snr_gate=None)
     assert calls != []
 
 
@@ -565,6 +583,7 @@ def test_cross_axis_input_cannot_create_buckets_the_axis_never_measured() -> Non
         by_axis,
         weights_by_axis={"background_mask": {"mask": 1.0}, "speaker": {"a": 1.0}},
         max_rounds=3,
+        snr_gate=None,
     )
     assert len(rows["background_mask"]) == 1, "the mask measured one bucket and must emit one"
 
@@ -578,7 +597,9 @@ def test_every_round_s_rows_are_returned_not_only_the_last() -> None:
     oscillation verdict on a real run left unanswerable.
     """
     axes = _axes(speaker={"a": 0.5, "b": 0.5}, speech_presence={"c": 0.0, "d": 0.0})
-    rows, logs, history = fuse_axes(axes, weights_by_axis=_weights(axes), max_rounds=3, return_history=True)
+    rows, logs, history = fuse_axes(
+        axes, weights_by_axis=_weights(axes), max_rounds=3, return_history=True, snr_gate=None
+    )
     assert set(history) == set(rows), "every axis carries a per-round history"
     for axis, log in logs.items():
         assert sorted(history[axis]) == [e["round"] for e in log], f"{axis}: one snapshot per round run"
@@ -603,7 +624,7 @@ def test_axes_on_different_grids_still_reach_each_other() -> None:
         "speaker": {"raw": [_b2(0.0, 0.5, {"s": 0.0}), _b2(0.5, 1.0, {"s": 0.0})]},
     }
     weights = {"asr": {"a": 1.0}, "speaker": {"s": 1.0}}
-    coupled, _ = fuse_axes(by_axis, weights_by_axis=weights, max_rounds=3)
+    coupled, _ = fuse_axes(by_axis, weights_by_axis=weights, max_rounds=3, snr_gate=None)
     assert coupled["speaker"][0]["coupled_from"] == ["asr"], "a differently-gridded axis must reach it"
 
 

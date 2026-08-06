@@ -257,12 +257,13 @@ def test_asr_axis_attenuation_reaches_its_one_voter() -> None:
     from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
 
     buckets = {"raw": [{"start": 0.0, "end": 0.1, "votes": {"consensus_words": {"value": 0.9}}}]}
-    unweighted = fuse_axis(buckets, weights={}, aggregator="mean")[0]
+    unweighted = fuse_axis(buckets, weights={}, aggregator="mean", snr_gate=None)[0]
     attenuated = fuse_axis(
         buckets,
         weights={"consensus_words": MIN_EVIDENCE_WEIGHT},
         aggregator="mean",
         weight_basis={"consensus_words": {"stability": MIN_EVIDENCE_WEIGHT, "support": 1.0}},
+        snr_gate=None,
     )[0]
     assert attenuated["triage_score"] < unweighted["triage_score"]
     assert attenuated["triage_score"] > 0.0, "the floor keeps an attenuated voter's dissent visible"
