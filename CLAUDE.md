@@ -98,7 +98,7 @@ Key audio processing capabilities in `audio/tasks/`:
 ## System Requirements
 
 - macOS requires ARM64 (Apple Silicon); Intel Macs are not supported
-- FFmpeg: **provided by the installer**, not required system-wide. The `video` extra's `av>=15` (PyAV) ships the ffmpeg shared libraries inside the venv (`av.libs/libavcodec*.so` etc.), and nothing in `src/senselab` shells out to the `ffmpeg` *binary* — "ffmpeg" appears only as a backend name handed to torchaudio/torchcodec, which link the libraries. A system-wide install is a fallback for environments without the `video` extra
+- FFmpeg must be installed system-wide, and **PyAV's bundled copy does not substitute for it**. The `video` extra's `av>=15` does ship ffmpeg shared libraries inside the venv, but under privately mangled names in `av.libs/` (`libavutil-3591eddc.so.60.8.100`). `torchcodec` `dlopen`s ffmpeg **by soname** — `libavutil.so.56` / `.57` / `.58` / `.59`, one attempt per supported major — so PyAV's copy is invisible to it and the import fails with `OSError: libavutil.so.56: cannot open shared object file`. `src/tests/conftest.py` treats that as `Dependencies failed to import — test environment is broken` and refuses to collect, so **no test runs at all** without system ffmpeg, including the pure-Python workflow tests that never touch a codec. Measured on a fresh MIT ORCD clone with every extra installed and no system ffmpeg
 - Docker required for some video models (MediaPipe-based estimators)
 - CUDA 12.8 libraries for GPU support
 - HuggingFace token (`HF_TOKEN` env var) for many models
