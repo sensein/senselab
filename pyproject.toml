@@ -95,6 +95,13 @@ senselab-ai = [
   "nbformat~=5.10",
   "nbss-upload~=0.1"
 ]
+# Everything. Declared because the README's first install command has always been
+# `pip install 'senselab[all]'`, and pip answers an unknown extra with a warning and a
+# base-only install — so the documented command quietly gave people less than they asked
+# for. Self-referential per PEP 621; keep in step when an extra is added below.
+all = [
+  "senselab[nlp,pii,text,video,senselab-ai]"
+]
 
 [project.urls]
 Homepage = "https://github.com/sensein/senselab"

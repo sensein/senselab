@@ -170,7 +170,28 @@ a background source.
 
     If you attempt to install this package on an unsupported system, the installation or execution will fail.
 
-2. `FFmpeg` is required by some audio and video dependencies (e.g., `torchaudio`). Please make sure you have `FFmpeg` properly installed on your machine before installing and using `senselab` (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
+2. **`FFmpeg` shared libraries** are required. The consumer is `torchcodec`, which `dlopen`s them at
+   import time *by soname* (`libavutil.so.56` / `.57` / `.58` / `.59`, one attempt per supported major).
+   Two consequences worth knowing before you debug this:
+
+   - **The `av` (PyAV) wheel does not satisfy it**, even though it ships ffmpeg libraries inside your
+     environment. PyAV mangles their filenames on purpose (`av.libs/libavutil-3591eddc.so.60.8.100`) so
+     they cannot collide with a system ffmpeg, which also makes them invisible to a soname lookup.
+   - **Without them, no test collects at all.** `src/tests/conftest.py` reports
+     `Dependencies failed to import — test environment is broken`, including for tests that never open
+     an audio file.
+
+   If you have no system ffmpeg, or no root, this repo installs it for you via conda-forge into a
+   prefix you choose:
+
+   ```bash
+   bash scripts/install-ffmpeg.sh                       # defaults to /opt/miniforge
+   CONDA_PREFIX=~/ffmpeg bash scripts/install-ffmpeg.sh # anywhere writable
+   export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"    # macOS: DYLD_LIBRARY_PATH
+   ```
+
+   This is what CI uses on every platform. Otherwise install ffmpeg (`<8`) system-wide — see
+   [ffmpeg.org](https://www.ffmpeg.org/download.html).
 
 3. CUDA libraries matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.8 expects cuda-12.8). To install those with conda, please do:
   - ```conda config --add channels nvidia```
@@ -201,6 +222,12 @@ Please follow the official installation instructions for your platform: [Install
 ---
 
 ## Installation
+
+**Python 3.11–3.13.** `pyproject.toml` declares `>=3.11,<3.15`, which is wider than the extras
+support: the `pii` extra's `spacy` has no wheels past cp313, so an installer that picks 3.14 fails to
+resolve. For development the repo pins the interpreter in `.python-version` (3.12), which `uv` reads,
+so a bare `uv sync` is deterministic.
+
 Install this package via:
 
 ```sh
@@ -218,9 +245,63 @@ If you want to install only audio dependencies, you do:
 pip install 'senselab'
 ```
 
-To install articulatory, video, text, and senselab-ai extras, please do:
+The declared extras are `nlp`, `pii`, `text`, `video`, `senselab-ai`, and `all` (every one of them).
+To pick a subset:
 ```sh
-pip install 'senselab[articulatory,video,text,senselab-ai]'
+pip install 'senselab[video,text,senselab-ai]'
+```
+
+There is no `articulatory` extra — it was documented here and in `CONTRIBUTING.md` but never declared,
+so `uv sync --extra articulatory` fails outright and `pip install 'senselab[articulatory]'` warns and
+installs base only.
+
+---
+
+## Development
+
+Four steps, and the third is the one people miss:
+
+```bash
+# 1. Environment. The interpreter comes from .python-version (3.12), so no --python flag.
+uv sync --extra all --group dev --group docs
+
+# 2. The spaCy model Presidio uses for PII detection (not a pip dependency).
+uv run python -m spacy download en_core_web_lg
+
+# 3. FFmpeg shared libraries for torchcodec. Skip this and NOTHING collects —
+#    conftest.py aborts with "Dependencies failed to import", even for tests that
+#    never open an audio file. See System Requirements above for why the PyAV wheel
+#    does not cover it.
+bash scripts/install-ffmpeg.sh
+export LD_LIBRARY_PATH="/opt/miniforge/lib:$LD_LIBRARY_PATH"   # macOS: DYLD_LIBRARY_PATH
+
+# 4. Hooks, required before committing.
+uv run pre-commit install
+```
+
+Then:
+
+```bash
+uv run pytest                                    # everything, with coverage
+uv run pytest src/tests/audio/tasks/preprocessing_test.py          # one file
+uv run pytest src/tests/audio/tasks/preprocessing_test.py::test_x  # one test
+uv run mypy .
+uv run ruff check          # --fix to autofix
+uv run ruff format
+uv run codespell
+```
+
+**On `pytest -n auto`.** It is tempting and it is a memory hazard: `pytest-xdist` gives each worker its
+own interpreter, and each one imports torch + transformers + speechbrain independently — measured at
+**535 MB resident per worker before a single test runs**, plus a private copy of any model weights that
+worker's tests load. On a 10-core / 32 GB laptop `-n auto` has exhausted memory. Prefer running the
+directory you changed, or cap the workers (`-n 4`). The pure-Python workflow tests are fast serially:
+`uv run pytest src/tests/audio/workflows/audio_analysis` is ~1400 tests in about 17 s.
+
+Docs build locally with:
+
+```bash
+uv run pdoc src/senselab -t docs_style/pdoc-theme --docformat google
 ```
 
 ---
