@@ -282,7 +282,9 @@ def fuse_word_streams(
 
     Returns:
         Time-ordered ``[{text, start, end, confidence, coverage, corroboration,
-        member_corroboration, sources, alternates, flags, speaker?}]``. ``corroboration`` is
+        member_agreement, member_corroboration, sources, alternates, flags, speaker?}]``.
+        ``member_agreement`` gives each recognizer's agreement with the winning text, of which
+        ``share`` (inside ``existence_confidence``) is the weighted mean. ``corroboration`` is
         ``None`` when no member of the winning text was measured; consumers must not read that as
         zero.
 
@@ -408,12 +410,25 @@ def fuse_word_streams(
         # previous behaviour — rather than silently falling back to grapheme overlap, which is a
         # different measurement and would change what the field means with nothing recording it.
         agreement = 0.0
+        # Retained per member, not only accumulated. ``share`` is the *weighted mean* of these, and a
+        # mean is not a distribution: a slot where two recognizers say the winning word and one says
+        # something else, and a slot where all three half-agree, produce the same ``share`` and are
+        # different findings. The consumer that needs them apart is the asr axis, whose
+        # ``epistemic_uncertainty`` was structurally 0.0 because the only thing reaching it was this
+        # mean — so the recognizers' disagreement, which is exactly the cross-source spread that term
+        # exists to measure, had been averaged away one layer earlier.
+        member_agreement: dict[str, float] = {}
         for member, member_key, member_wt in weighted_members:
             if member_key == win_key:
-                agreement += member_wt
+                agreed = 1.0
             elif text_similarity is not None:
-                similarity = float(text_similarity(str(member["text"]), str(win["display"])))
-                agreement += member_wt * max(0.0, min(1.0, similarity))
+                agreed = max(0.0, min(1.0, float(text_similarity(str(member["text"]), str(win["display"])))))
+            else:
+                # No similarity function supplied: a mismatch is a mismatch, the same 0.0 the
+                # accumulator below has always used. Not a silent fallback to grapheme overlap.
+                agreed = 0.0
+            member_agreement[str(member["model"])] = agreed
+            agreement += member_wt * agreed
         share = agreement / total_w
         share_uncorroborated = win["weight_uncorroborated"] / total_w_uncorroborated
         # Absent is absent (D-27). ``None`` when no member reported a confidence, so the term drops
@@ -443,6 +458,11 @@ def fuse_word_streams(
             "timing_sources": timing_sources,
             "coverage": round(coverage, 4),
             "corroboration": None if win_corr is None else round(win_corr, 6),
+            # Each recognizer's agreement with the winning text, in ``[0, 1]``: 1.0 for an exact
+            # match, the phoneme similarity otherwise. ``share`` is their weighted mean, so these are
+            # its decomposition rather than a second body of evidence — which is what lets the asr
+            # axis carry one signal per recognizer without double-counting (D-21 rule 6).
+            "member_agreement": {model: round(value, 6) for model, value in sorted(member_agreement.items())},
             "member_corroboration": {
                 model: (None if value is None else round(value, 6))
                 for model, value in sorted(member_corroboration.items())

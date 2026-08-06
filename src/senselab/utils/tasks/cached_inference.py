@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 18
+CACHE_SCHEMA_VERSION = 19
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -199,6 +199,12 @@ the enhanced pass masked 50% of a real recording against the unmodified pass's 1
 enhancement removes the non-speech evidence the mask reads — but the *axis* harvested from every
 perturbation, and on the 48 kHz clip its enhanced ``words`` voter read 0.0510 against raw's 0.0102. A
 cached row's ``contributing_passes`` names a pass this axis no longer folds.
+
+Bumped 18 → 19 when the **asr** axis stopped folding the recognizers' mean and started folding the
+recognizers. Its votes are keyed by model id rather than by the single name ``consensus_words``, so a
+cached row's ``contributing_signals`` names a signal the axis no longer has and lacks the N it does.
+``epistemic_uncertainty`` on that axis was structurally ``0.0`` before — the spread had been averaged
+away one layer earlier — and is now a measurement, so the number differs as well as the schema.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any

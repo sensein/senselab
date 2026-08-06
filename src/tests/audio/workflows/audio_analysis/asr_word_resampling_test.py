@@ -150,18 +150,15 @@ def test_no_words_at_all_reports_nothing() -> None:
     assert all(v is None for v in resample_word_doubt([], BUCKETS).values())
 
 
-def test_the_axis_folds_the_derivative_and_nothing_else() -> None:
-    """The restructure, end to end through the fold (D-27, D-21 rule 6).
+def test_the_axis_scores_one_signal_per_recognizer() -> None:
+    """The recognizers are sources, so the axis aggregates them rather than their mean (D-16).
 
-    The asr axis used to score three per-model signals whose values came from pairwise phoneme
-    distance over bucketed text. Those transcripts are exactly what the consensus derivative folds,
-    so scoring both is one body of evidence twice — and the per-bucket text is a reconstruction of
-    what ``final/transcript.json`` holds at word resolution, which is why it is gone rather than
-    kept beside the derivative as a record.
-
-    Asserted through ``harvest_asr_votes`` rather than on a hand-built bucket, because the earlier
-    version of this test constructed per-model texts and a pairwise block and then checked they were
-    ignored — a shape the harvest no longer emits, so it proved nothing about the pipeline.
+    The double-counting guard this test was written for survives and is asserted below: what must not
+    be scored is a recognizer's *independent* per-bucket reading beside the fold — ``avg_logprob``,
+    ``token_entropy``, pairwise phoneme distance over bucketed text. What is scored now is the fold's
+    own decomposition, ``member_agreement``, whose weighted mean is the ``share`` the single
+    ``consensus_words`` entry used to carry. Same evidence, counted once, at the resolution where the
+    recognizers were actually compared.
     """
     from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
 
@@ -179,8 +176,70 @@ def test_the_axis_folds_the_derivative_and_nothing_else() -> None:
     scored = [b for b in harvested if b["votes"]]
     assert scored, "the harvest emitted no votes at all"
     for bucket in scored:
-        assert set(bucket["votes"]) == {"consensus_words"}, f"the asr axis has one voter; got {sorted(bucket['votes'])}"
-        assert set(per_signal_uncertainty(bucket)) == {"consensus_words"}
+        read = set(per_signal_uncertainty(bucket))
+        assert read == {"model-a", "model-b"}, f"expected one signal per recognizer; got {sorted(read)}"
+        assert "consensus_words" not in read, "the fused mean must not be scored beside its parts"
+        for banned in ("avg_logprob", "token_entropy", "alignment_ctc_score"):
+            assert not any(banned in name for name in read), f"{banned} is scored again"
+        assert not any("__" in name for name in read), f"a synthetic block is scored: {sorted(read)}"
+
+
+def test_a_disagreeing_recognizer_produces_reducible_doubt() -> None:
+    """The point of the change: ``epistemic_uncertainty`` becomes a measurement, not a constant 0.0.
+
+    It was structurally zero on this axis for every run — not because the recognizers agreed, but
+    because the single number reaching the fold was their weighted *mean*, and a mean has no spread
+    left in it. ``epistemic_uncertainty`` needs at least two distributions to compare, so with one
+    signal it returned 0.0 by definition. The recognizers' disagreement is exactly the cross-source
+    spread that term exists to measure, and it had been averaged away one layer earlier.
+
+    Here ``model-a`` says "there" and ``model-b`` says "chair" over the same span, so the two carry
+    different doubt and the fold has something to decompose.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis, per_signal_uncertainty
+
+    harvested = harvest_asr_votes(
+        pass_summary=_pass_summary(
+            {
+                "model-a": [(0.0, 0.4, "hello"), (0.4, 0.9, "there")],
+                "model-b": [(0.0, 0.4, "hello"), (0.4, 0.9, "chair")],
+            },
+            duration_s=1.0,
+        ),
+        grid=BucketGrid(),
+        alignment_by_model={},
+    )
+    contested = [b for b in harvested if len(set(per_signal_uncertainty(b))) > 1 and b["start"] >= 0.4]
+    assert contested, "no bucket carried both recognizers over the disputed word"
+    rows = fuse_axis({"raw": contested}, weights={}, snr_gate=None)
+    assert any((r["epistemic_uncertainty"] or 0.0) > 0.0 for r in rows), (
+        "the recognizers disagree about this word and the axis reports no reducible doubt"
+    )
+
+
+def test_agreeing_recognizers_still_read_near_zero() -> None:
+    """The converse, and the honest reading: unanimity is zero doubt, not a suppressed floor.
+
+    Stated because the change adds signals, and adding signals is a way to accidentally add doubt.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
+
+    harvested = harvest_asr_votes(
+        pass_summary=_pass_summary(
+            {
+                "model-a": [(0.0, 0.4, "hello"), (0.4, 0.9, "there")],
+                "model-b": [(0.0, 0.4, "hello"), (0.4, 0.9, "there")],
+            },
+            duration_s=1.0,
+        ),
+        grid=BucketGrid(),
+        alignment_by_model={},
+    )
+    rows = fuse_axis({"raw": [b for b in harvested if b["votes"]]}, weights={}, snr_gate=None)
+    assert rows
+    for row in rows:
+        assert row["confidence"] == pytest.approx(1.0), f"agreeing recognizers at {row['start']}"
+        assert (row["epistemic_uncertainty"] or 0.0) == pytest.approx(0.0), "nothing to reduce"
 
 
 def test_the_fold_reads_the_shape_the_pipeline_actually_hands_it() -> None:
