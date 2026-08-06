@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 15
+CACHE_SCHEMA_VERSION = 16
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -178,6 +178,13 @@ number and a narrower schema than a reader now expects.
 
 Bumped 14 → 15 for three changes to what the axes read, each of which makes a cached row a different
 number rather than a stale one:
+
+Bumped 15 → 16 when an abstention became the absence of a vote. ``_abstaining_ramp`` mapped its
+uninformative end to ``0.5``, which ``_directed`` cast as ``speaks=True`` at confidence ``0.5`` — read
+by the fold as 0.5 of doubt, the most a single voter can contribute, in exactly the range where the
+signal has no opinion. ``acoustic_hnr`` and ``acoustic_level_above_floor`` now emit no vote there, so
+a cached presence row's ``contributing_signals`` lists voters that no longer speak in those buckets
+and its ``confidence`` is folded over their fabricated half-claims.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any

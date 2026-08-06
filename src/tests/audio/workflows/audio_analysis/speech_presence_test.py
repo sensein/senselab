@@ -62,10 +62,14 @@ def test_absolute_voters_dissent_from_models_claiming_speech_over_silence() -> N
     # LUFS can assert absence: -90 LUFS is unambiguous, so it contradicts the diarizer outright.
     assert votes["acoustic_lufs"]["speaks"] is False
     assert votes["acoustic_lufs"]["lufs"] < -60.0
-    # level-above-floor abstains instead. A low excess is ambiguous between silence and a source
-    # that runs through the whole recording and is therefore absorbed into its own floor.
-    assert votes["acoustic_level_above_floor"]["native_confidence"] == pytest.approx(0.5)
-    assert votes["acoustic_level_above_floor"]["excess_db"] < 3.0
+    # level-above-floor abstains instead, and an abstention is now the *absence of a vote*. A low
+    # excess is ambiguous between silence and a source that runs through the whole recording and is
+    # therefore absorbed into its own floor — so it says nothing rather than saying "speech, half
+    # confident", which is what it used to say and what the fold then read as 0.5 of doubt.
+    assert "acoustic_level_above_floor" not in votes
+    assert evidence[0]["evidence"]["acoustic_level_above_floor"]["excess_db"] < 3.0, (
+        "the measurement still travels; only the fabricated vote is gone"
+    )
 
 
 def test_absolute_voters_agree_with_models_on_audible_speech() -> None:
@@ -142,9 +146,10 @@ def test_level_above_floor_asserts_speech_presence_when_the_recording_has_quiet_
     quiet = [b for b in buckets if b["end"] <= 2.0]
     active = [b for b in buckets if b["start"] >= 2.0]
     assert quiet and active
-    quiet_nc = [b["votes"]["acoustic_level_above_floor"]["native_confidence"] for b in quiet]
+    # The pairing still holds, with abstention expressed as absence: quiet stretches cast no vote,
+    # the tone above the floor votes at full strength.
+    assert all("acoustic_level_above_floor" not in b["votes"] for b in quiet), "quiet stretches abstain"
     active_speaks = [b["votes"]["acoustic_level_above_floor"]["speaks"] for b in active]
-    assert all(nc == pytest.approx(0.5) for nc in quiet_nc), "quiet stretches abstain"
     assert all(active_speaks), "the tone is well above the measured floor"
 
 

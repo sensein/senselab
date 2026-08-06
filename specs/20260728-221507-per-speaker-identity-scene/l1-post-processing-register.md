@@ -82,7 +82,7 @@ a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
 | 7 | YAMNet | top-1 argmax over 521 labels, then `label in speech_labels` | full label→score map per 0.48 s hop | same as #6 | **closed** |
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
-| 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB | what HNR indicates voicing, and when is it uninformative? | **closed** |
+| 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB | what HNR indicates voicing, and when is it uninformative? | **closed**; abstention now emits no vote (2026-08-06, below) |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **closed** |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | *withdrawn from this axis* — see below | wrong question: geometry, not voicing | **closed by removal** |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
@@ -856,3 +856,39 @@ figure's first parameter is `fused_axes`; it was never the evidence timeline.
 not evidence. Three of the four guards above were *satisfied by declarations that were themselves
 the bug*. The check that caught it was a person looking at the output and asking why an axis was in
 the evidence layer — the same way every defect in `l1-signal-contract.md` was found.
+
+
+## Item 10 / 4 addendum — an abstention is the absence of a vote (2026-08-06)
+
+`_abstaining_ramp` mapped its uninformative end to `p_voice = 0.5`, on the sound argument that a low
+reading has two indistinguishable causes and the signal must not assert either. But `_directed(0.5)`
+returns `(speaks=True, confidence=0.5)`, and the fold reads `native_confidence` as doubt via `1 - c`.
+So a signal that had *no opinion* cast a half-confident **yes** and contributed **0.5 of doubt** — the
+largest amount a single voter can contribute. The buckets where these signals knew least were the
+buckets where they pushed hardest.
+
+`link_speech_presence` already had the correct rule twenty lines below, in its own words: *"The signal
+reported nothing usable in this bucket. Dropping the vote is right: a fabricated 0.5 would be
+indistinguishable from a real abstention."* That is precisely what `_abstaining_ramp` was
+manufacturing.
+
+Measured on `english_conversation_higgs_audio_v2`, against four diarizers, three recognizers and the
+brouhaha VAD all reading exactly 0.0000:
+
+| signal | mean doubt | median | max |
+|---|---|---|---|
+| `acoustic_hnr` | 0.2675 | 0.2574 | 0.5000 |
+| `acoustic_level_above_floor` | 0.0858 | 0.0000 | 0.5000 |
+
+Both now return `None` at or below the ramp's low anchor. **The graded region is untouched** — a
+reading part-way up still votes at the strength the ramp gives it, and high HNR still asserts at full
+strength, because vowels are periodic and that is real voicing evidence. This is deweighting by
+*scope*, not by a hand-set discount: `fuse.cross_axis_inputs` records why the latter is inadmissible.
+
+Fixed for both callers together because it is one function and one argument; leaving the sibling
+emitting a fabricated 0.5 would make the two disagree about what an abstention is.
+
+Still open from the same investigation: **stability-based weighting cannot distinguish "reliable" from
+"uninformative".** `reliability.signal_stability` measures cross-pass `|Δ|`, so a near-constant signal
+earns full weight — which is how `embedding_silhouette` came to outweigh every informative presence
+voter at 1.0. Removing that one signal does not fix the mechanism.
