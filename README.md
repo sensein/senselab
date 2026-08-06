@@ -223,10 +223,16 @@ Please follow the official installation instructions for your platform: [Install
 
 ## Installation
 
-**Python 3.11–3.13.** `pyproject.toml` declares `>=3.11,<3.15`, which is wider than the extras
-support: the `pii` extra's `spacy` has no wheels past cp313, so an installer that picks 3.14 fails to
-resolve. For development the repo pins the interpreter in `.python-version` (3.12), which `uv` reads,
-so a bare `uv sync` is deterministic.
+**Python 3.11–3.14**, declared as `>=3.11,<3.15` in `pyproject.toml`, with one live exception: on
+**3.14 the `pii` extra cannot install**. `spacy` declares `requires_python = "<3.15,>=3.9"` — so it
+claims 3.14 — but ships wheels only for `cp310`–`cp313` **and publishes no sdist**, leaving nothing to
+install and nothing to build. Measured: every other extra (`nlp`, `text`, `video`, `senselab-ai`)
+resolves on 3.14; `--all-extras` fails, and `spacy` is the only reason.
+
+That gap is upstream and transient — it closes when spacy publishes `cp314` wheels, with no change
+here — so `requires-python` is deliberately *not* narrowed. For development the repo pins the
+interpreter in `.python-version` (**3.12**, matching CI's default), which `uv` reads, so a bare
+`uv sync` is deterministic regardless.
 
 Install this package via:
 
