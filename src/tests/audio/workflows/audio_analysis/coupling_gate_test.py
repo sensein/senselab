@@ -122,3 +122,31 @@ def test_the_snr_gate_and_the_identity_filter_are_different_questions() -> None:
     assert "background_mask" in IDENTITY_ONLY_AXES
     # No SNR anywhere in the signature or the result: the filter cannot vary with degradation.
     assert passes_for_axis("background_mask", ["raw", "enhanced"]) == ["raw"]
+
+
+def test_the_loops_ingest_applies_the_identity_filter_too() -> None:
+    """The third reader. It was missed, and only the 48 kHz clip showed it.
+
+    ``buckets_for_axis``'s docstring names three readers — ``link_pass``, ``fuse``, and the loop's
+    ingest. ``IDENTITY_ONLY_AXES`` reached the first two, and ``final/`` is an extraction of a *loop*
+    round, so the reader that decides what ships was the one still folding the enhanced pass. Invisible
+    on a clean recording (``SnrGate`` excludes the enhanced pass everywhere at high SNR) and visible on
+    the 48 kHz clip, where 9 buckets dip below the floor and `final/background_mask` reported
+    ``contributing_passes: ['enhanced', 'raw']``.
+
+    Asserted on the store's ingest rather than through a full run, but *over both streams*: the filter
+    falls back to "fold whatever is available" when the identity is absent, so a per-stream question
+    always answers yes and a filter written that way does nothing. That was the first attempt.
+    """
+    from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+    from senselab.audio.workflows.audio_analysis.votes import PassHarvest
+
+    def _harvest(label: str) -> PassHarvest:
+        return PassHarvest(
+            perturbation=label,
+            background_mask_evidence=[{"start": 0.0, "end": 0.1, "votes": {"words": {"value": 0.4}}}],
+        )
+
+    store = VoteStore.from_harvests({"raw": _harvest("raw"), "enhanced": _harvest("enhanced")})
+    streams = {v.stream for v in store._votes.values() if v.axis == "background_mask"}
+    assert streams == {"raw"}, f"the mask axis ingested {streams}; the enhanced pass is not entitled"

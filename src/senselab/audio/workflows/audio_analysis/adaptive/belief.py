@@ -40,7 +40,7 @@ from typing import Any, Final, Mapping, Sequence
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName
 from senselab.audio.workflows.audio_analysis.aggregate import per_source_voice
-from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES, HARVEST_SOURCES
+from senselab.audio.workflows.audio_analysis.axes import ATTENUATED_AXES, AXIS_NAMES, HARVEST_SOURCES, passes_for_axis
 from senselab.audio.workflows.audio_analysis.degradation import (
     DEFAULT_ANCHORS,
     SNR_PREFERENCE,
@@ -407,10 +407,24 @@ class VoteStore:
         for axis, by_stream in sorted(supplied.items()):
             for stream, buckets in sorted(by_stream.items()):
                 store._ingest_buckets(axis, stream, buckets, round_idx)
+        # Computed once over **every** stream the run has, not per stream: ``passes_for_axis`` falls
+        # back to "fold whatever is available" when the identity is absent, so asking it about one
+        # stream at a time always answers yes and the filter would do nothing at all.
+        allowed_streams = {axis: set(passes_for_axis(axis, harvests)) for axis in HARVEST_SOURCES}
         for stream, harvest in harvests.items():
             # Declaration order, not set order: votes are appended to the round's append-only file
             # in insertion order, so iterating a frozenset would make the artifact vary per process.
             for axis in HARVEST_SOURCES:
+                # ``passes_for_axis`` here too. This is the **third** reader of ``buckets_for_axis``,
+                # named in that function's own docstring alongside ``link_pass`` and
+                # ``fuse.write_final_uncertainty`` — and the one that was missed when
+                # ``IDENTITY_ONLY_AXES`` landed. The omission was invisible on a clean recording,
+                # because ``SnrGate`` excludes the enhanced pass everywhere at high SNR; on the 48 kHz
+                # clip, whose SNR dips below the floor for 9 buckets, ``final/background_mask`` still
+                # reported ``contributing_passes: ['enhanced', 'raw']`` there. ``final/`` extracts a
+                # loop round, so this reader is the one that decides what ships.
+                if stream not in allowed_streams[axis]:
+                    continue
                 buckets = buckets_for_axis(harvest, axis, policy=policy)
                 for bucket in buckets:
                     bk = bucket_key(bucket["start"], bucket["end"])
