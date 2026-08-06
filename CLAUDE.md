@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management and requires Python 3.11-3.12.
+Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management. The interpreter comes from the repo: `.python-version` pins **3.12**, so a bare `uv sync` resolves it without a flag. `pyproject.toml` declares `requires-python = ">=3.11,<3.15"`, which is wider than the extras actually support — the `pii` extra's `spacy` has no wheels past cp313, so on a fresh clone where uv picks 3.14 the documented `uv sync` fails with a resolution error. The pin is what makes the install deterministic; the upper bound in `pyproject.toml` is still wrong and worth narrowing.
 
 ## Build and Development Commands
 
@@ -98,7 +98,7 @@ Key audio processing capabilities in `audio/tasks/`:
 ## System Requirements
 
 - macOS requires ARM64 (Apple Silicon); Intel Macs are not supported
-- FFmpeg must be installed system-wide
+- FFmpeg: **provided by the installer**, not required system-wide. The `video` extra's `av>=15` (PyAV) ships the ffmpeg shared libraries inside the venv (`av.libs/libavcodec*.so` etc.), and nothing in `src/senselab` shells out to the `ffmpeg` *binary* — "ffmpeg" appears only as a backend name handed to torchaudio/torchcodec, which link the libraries. A system-wide install is a fallback for environments without the `video` extra
 - Docker required for some video models (MediaPipe-based estimators)
 - CUDA 12.8 libraries for GPU support
 - HuggingFace token (`HF_TOKEN` env var) for many models
