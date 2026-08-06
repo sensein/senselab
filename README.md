@@ -255,10 +255,18 @@ There is no `articulatory` extra — it was documented here and in `CONTRIBUTING
 so `uv sync --extra articulatory` fails outright and `pip install 'senselab[articulatory]'` warns and
 installs base only.
 
-### In a notebook (Colab)
+### Released vs pre-release
 
-Tutorials install the **pre-release** into Colab's system Python, which is why they carry `--pre`
-(the released line is 1.3.0; development happens on `1.3.1aN`):
+Merging a PR into `alpha` publishes an **alpha pre-release** automatically (`release.yaml` →
+`auto shipit`); merging into `main` publishes a release. So there are two lines on PyPI, and `--pre`
+is how you choose:
+
+```sh
+pip install 'senselab[all]'          # the released line (currently 1.3.0)
+pip install --pre 'senselab[all]'    # the newest alpha from the alpha branch (1.3.1aN)
+```
+
+This is why every tutorial carries `--pre` — notebooks track the alpha branch:
 
 ```python
 !pip install -q uv
@@ -269,11 +277,20 @@ Colab images happen to ship `ffmpeg`, so notebooks work there without installing
 fallback for images that do not — and the `HF_TOKEN`-from-Colab-secrets snippet — is the setup-cell
 template in [`tutorials/README.md`](tutorials/README.md).
 
+**None of this applies to development.** `--pre` installs a *published artifact*; a developer wants
+the working tree. See [Development](#development) below, which builds from source and never fetches
+`senselab` from PyPI.
+
 ---
 
 ## Development
 
 Four steps, and the third is the one people miss:
+
+Development installs **from source** — the checkout you are standing in. `uv sync` puts the working
+tree in the environment, so an edit is live with no reinstall; nothing here fetches `senselab` from
+PyPI, and `--pre` has no role. (The version you will see, `1.3.1aN.devM`, comes from `hatch-vcs`
+reading git describe, which is also why a shallow clone with no tags reports a wrong version.)
 
 ```bash
 # 1. Environment. --all-extras is what every CI workflow uses: it cannot go stale when an
