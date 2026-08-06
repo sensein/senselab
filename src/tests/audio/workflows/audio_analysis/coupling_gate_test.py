@@ -64,3 +64,61 @@ def test_every_gated_axis_is_a_real_axis() -> None:
         f"unknown axis in COUPLING_IS_A_GATE: {COUPLING_IS_A_GATE - set(AXIS_NAMES)}"
     )
     assert "speaker" in COUPLING_IS_A_GATE
+
+
+# ── an axis about the recording as read folds only the identity ──────────────
+
+
+def test_the_mask_axis_folds_the_identity_pass_only() -> None:
+    """The mask's own stage refuses the enhanced variant; its axis used to accept it.
+
+    ``stages.py`` builds the mask on the unmodified variant alone, with the measurement behind it
+    written down: the enhanced pass masked 50% of a real recording against the unmodified pass's
+    17.9%, "because speech enhancement removes the non-speech evidence the mask reads target activity
+    from". The axis harvested ``speakers`` / ``speech`` / ``words`` from every perturbation, and on the
+    48 kHz clip its enhanced ``words`` voter read mean 0.0510 against raw's 0.0102 — 5x higher, in
+    exactly the direction that note predicts.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
+
+    assert passes_for_axis("background_mask", ["raw", "enhanced"]) == ["raw"]
+
+
+def test_the_other_axes_fold_every_perturbation() -> None:
+    """Narrow by construction: a transform may legitimately change what those axes read.
+
+    That is what makes the perturbation a *sample* rather than a contaminant, and it is what
+    ``reliability.signal_stability`` measures.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
+
+    for axis in ("speech_presence", "speaker", "asr"):
+        assert passes_for_axis(axis, ["raw", "enhanced"]) == ["raw", "enhanced"], axis
+
+
+def test_an_identity_only_axis_still_folds_when_the_identity_is_absent() -> None:
+    """An axis with no defensible pass is worse than one measured on the only pass there is."""
+    from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
+
+    assert passes_for_axis("background_mask", ["enhanced"]) == ["enhanced"]
+
+
+def test_the_identity_only_declaration_names_real_axes() -> None:
+    """A typo would silently filter nothing."""
+    from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, IDENTITY_ONLY_AXES
+
+    assert IDENTITY_ONLY_AXES <= set(AXIS_NAMES), f"unknown axis: {IDENTITY_ONLY_AXES - set(AXIS_NAMES)}"
+
+
+def test_the_snr_gate_and_the_identity_filter_are_different_questions() -> None:
+    """They must not be conflated: one is about degradation, the other about entitlement.
+
+    The gate asks "is there anything here for a repair to repair" — per bucket, on SNR. This asks "is
+    this perturbation entitled to answer this question at all", and for the mask the answer is no at
+    any SNR. Conflating them would make the mask's exclusion depend on how noisy the recording is.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import IDENTITY_ONLY_AXES, passes_for_axis
+
+    assert "background_mask" in IDENTITY_ONLY_AXES
+    # No SNR anywhere in the signature or the result: the filter cannot vary with degradation.
+    assert passes_for_axis("background_mask", ["raw", "enhanced"]) == ["raw"]

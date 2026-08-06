@@ -940,11 +940,73 @@ reporting 100%. The right screen for this axis is a low threshold, not zero.
 — which is how `embedding_silhouette` outweighed every informative presence voter at 1.0. Removing
 individual signals does not fix the mechanism.
 
-**The background-mask axis folds the enhanced pass, while the mask itself does not.** `stages.py`
+**Closed 2026-08-06 — the mask axis folds the identity pass only** (`axes.IDENTITY_ONLY_AXES`,
+applied through `axes.passes_for_axis` at both build sites so the run's fold and the loop's ingest
+cannot drift). The finding as it stood: `stages.py`
 builds the mask only on the unmodified variant, with a measured justification: the enhanced pass masked
 50% of a real recording against the unmodified pass's 17.9%, "because speech enhancement removes the
 non-speech evidence the mask reads target activity from". The mask *axis* harvests `speakers` / `speech`
 / `words` votes from both passes, and on the 48 kHz clip its enhanced `words` voter reads mean 0.0510
-against raw's 0.0102 — 5× higher, in exactly the direction that note predicts. `fuse.SnrGate` now
-suppresses this in 40 of 49 buckets as a side effect of gating on SNR, but not in the 9 below the
-floor. The same argument that made the mask raw-only applies to its axis and has not been applied.
+against raw's 0.0102 — 5× higher, in exactly the direction that note predicts. `fuse.SnrGate` suppressed
+this in 40 of 49 buckets as a side effect of gating on SNR, but not in the 9 below the floor. The two
+are deliberately kept distinct: the gate asks "is there anything here for a repair to repair" (per
+bucket, on SNR), while this asks "is this perturbation entitled to answer this question at all" — for
+the mask, no, at any SNR. An excluded perturbation still contributes its cross-pass `|Δ|` to
+`reliability.signal_stability`.
+
+
+## Investigated and deliberately NOT built — an informativeness weight (2026-08-06)
+
+The finding above ("stability-based weighting cannot distinguish reliable from uninformative") is
+real, but the obvious fix does not survive its own data. A dispersion-based discount — penalise a
+signal whose readings barely vary across buckets, since it cannot discriminate between them — was
+measured against the presence axis before being written:
+
+| signal | n | mean doubt | stdev |
+|---|---|---|---|
+| `pyannote/speaker-diarization-community-1` | 214 | 0.0000 | **0.000000** |
+| `nvidia/diar_sortformer_4spk-v1` | 214 | 0.0000 | **0.000000** |
+| `embedding_silhouette/<ecapa>`, `<resnet>` | 214 | 0.0000 | **0.000000** |
+| `nyralabs/CrisperWhisper2.0_turbo` | 214 | 0.0000 | **0.000000** |
+| `nvidia/canary-qwen-2.5b` | 214 | 0.0000 | **0.000000** |
+| `Qwen/Qwen3-ASR-1.7B` | 214 | 0.0000 | **0.000000** |
+| *(the withdrawn `embedding_silhouette`)* | 214 | 0.4441 | 0.022700 |
+
+**Seven signals have zero dispersion, and they are the axis's most trustworthy voters** — confidently
+unanimous across the recording. The useless one had *more* dispersion than any of them. A variance
+discount would have penalised the seven best voters harder than the signal it was written to demote.
+
+What actually separated them is *where* the constant sat: 0.0 means certain, 0.44 sits beside the 0.5
+"no information" point. That is not a reliability property — it is **calibration**. A signal pinned at
+0.44 is either genuinely half-sure everywhere or reporting a number that is not a doubt at all, and no
+weighting factor can distinguish those from outside; it would have to know what the quantity means.
+Both defects found on this axis were calibration defects (a silhouette coefficient read as a
+probability; an unfitted dB→probability ramp), and both were fixed at the linker.
+
+So the register keeps the finding and drops the proposed fix. Weighting is the wrong lever, and a
+plausible one here would have made the axis worse while looking principled.
+
+## Item 10 — what a proper HNR refit needs (measured 2026-08-06)
+
+Establishing *that* the anchors were wrong, independently of the fold. HNR on the raw pass of
+`english_conversation_higgs_audio_v2`, split by the pipeline's own voiced reference — whether an ASR
+word span covers the majority of the bucket:
+
+| | n | p05 | p25 | median | p75 | p95 |
+|---|---|---|---|---|---|---|
+| inside words (voiced speech) | 178 | 0.00 | 3.19 | **7.18** | 9.61 | 13.44 |
+| outside words | 36 | 0.00 | 0.00 | **0.00** | 0.00 | 7.31 |
+
+**76% of voiced-speech buckets fall below the shipped "confidently voiced" anchor of 10 dB.** The
+signal does discriminate — outside-words median 0.00 against inside-words 7.18 — so it is genuine
+evidence and refitting is the right eventual fix rather than permanent removal.
+
+**No profile was emitted from this, deliberately.** One 21-second recording, 36 outside-word buckets,
+and a coarse reference: "outside a word" includes silence and breaths, "inside a word" includes unvoiced
+consonants. `scripts/calibrate_detection_margin.py` already refuses to emit a profile with no measured
+floor, for the same reason — replacing a code literal with a differently-arbitrary number that merely
+looks calibrated is worse than leaving the signal out, because the second one is harder to notice.
+
+A real fit needs: several recordings spanning levels and noise conditions, and a voiced reference
+better than word spans (a pitch tracker's voiced decision, or hand-labelled material). Then anchors go
+into `data/` with their derivation, as `detection_margin` and the scene-quality profile do.

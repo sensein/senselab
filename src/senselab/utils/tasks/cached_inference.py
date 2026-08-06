@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 17
+CACHE_SCHEMA_VERSION = 18
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -192,6 +192,13 @@ but its 2→10 dB ramp was a code literal never fitted to voiced speech: on a cl
 contributor (mean doubt 0.1568) while every model voter read 0.0000. Presence doubt 0.0250 → 0.0160.
 The dB measurement is unchanged in ``L1/signals/acoustic_hnr.parquet`` — L1 records it from the
 evidence, not from the vote — so what a cached row differs by is the fold, not the measurement.
+
+Bumped 17 → 18 when the **background_mask** axis stopped folding the enhanced pass
+(``axes.IDENTITY_ONLY_AXES``). ``stages.py`` already built the mask on the unmodified variant alone —
+the enhanced pass masked 50% of a real recording against the unmodified pass's 17.9%, because
+enhancement removes the non-speech evidence the mask reads — but the *axis* harvested from every
+perturbation, and on the 48 kHz clip its enhanced ``words`` voter read 0.0510 against raw's 0.0102. A
+cached row's ``contributing_passes`` names a pass this axis no longer folds.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any

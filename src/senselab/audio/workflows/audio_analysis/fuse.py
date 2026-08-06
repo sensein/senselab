@@ -1385,7 +1385,7 @@ def write_final_uncertainty(
 
     import pandas as pd
 
-    from senselab.audio.workflows.audio_analysis.axes import COUPLING_IS_A_GATE, HARVEST_SOURCES
+    from senselab.audio.workflows.audio_analysis.axes import COUPLING_IS_A_GATE, HARVEST_SOURCES, passes_for_axis
     from senselab.audio.workflows.audio_analysis.speech_presence_link import DEFAULT_POLICY
     from senselab.audio.workflows.audio_analysis.votes import buckets_for_axis
 
@@ -1402,8 +1402,12 @@ def write_final_uncertainty(
     # one row per bucket like everything else. ``mask_axis_votes`` keeps its region-scoped callers —
     # ``rounds.regional_weights`` withdrawing trust regionally, and the per-region mask export —
     # because a *region* is the right unit for both. What was wrong was using it as a vote source.
+    # Same filter as ``compute``, through the same function, so the run's fold and the loop's ingest
+    # cannot end up folding different perturbations for one axis (``axes.passes_for_axis``).
     buckets_by_axis: dict[str, Mapping[str, Sequence[Mapping[str, Any]]]] = {
-        axis: {label: buckets_for_axis(h, axis, policy=policy) for label, h in harvests.items()}
+        axis: {
+            label: buckets_for_axis(harvests[label], axis, policy=policy) for label in passes_for_axis(axis, harvests)
+        }
         for axis in HARVEST_SOURCES
     }
     from senselab.audio.workflows.audio_analysis.io import merge_json
