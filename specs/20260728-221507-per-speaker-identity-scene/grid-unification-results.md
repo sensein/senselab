@@ -307,7 +307,11 @@ count; the fix changed which wrong answer is published and made the disagreement
 
 The underlying issue is that `identity_repair` re-clusters against
 `speaker.recluster_cosine_threshold` (0.45) and never consults the count posterior, so a confident
-unimodal "2 speakers at 0.978" does not constrain a repair that emits 5. It is also a fourth id
+unimodal "2 speakers at 0.978" does not constrain a repair that emits 5. **The per-speaker answer is
+the accurate one here** — it is a two-person conversation — so this is an over-segmentation defect in
+the repair, not two readings of contested evidence. Anything that treats the 5 as evidence (as the
+speaker axis briefly did, before `032d5aa3`'s follow-up) reports doubt where the run's own correct
+answer has none. It is also a fourth id
 namespace — CLAUDE.md already records that `SPEAKER_00` / `C0` / `S0` must stay distinct, and `R*`
 joins them without a stated relation to `S0`.
 

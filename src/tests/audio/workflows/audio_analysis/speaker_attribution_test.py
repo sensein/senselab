@@ -118,3 +118,30 @@ def test_a_target_active_mask_adds_nothing() -> None:
     """Where the mask is sure the target is active, the attribution question is simply live."""
     for bucket in _votes(pass_summary=_summary(mask_state="target_active", mask_uncertainty=0.1)):
         assert "target_activity" not in (bucket["votes"] or {})
+
+
+def test_no_intervention_recomputes_the_per_speaker_term() -> None:
+    """The axis follows the per-speaker presence, so nothing may overwrite that term mid-loop.
+
+    ``I2_recluster`` used to shadow the harvest's ``per_speaker_presence`` with a value recomputed
+    over its own repaired clusters. On a real run that took the published axis from 0.288 to 0.608,
+    because the repair emits 5 clusters against a count posterior of 2 at 0.978 and five clusters
+    spread across the sources drop each share to ~0.2 (``H(0.2) = 0.722``).
+
+    That reintroduced the defect this axis exists to remove: ``final/per_speaker_presence.parquet`` is
+    built by ``build_speech_presence_tracks(speaker_harvest)`` — from the *harvest*, never from
+    ``refined_identity`` — so it still read 0.1196 while the axis read 0.608. A deliverable and the
+    axis describing it must not disagree.
+
+    Read off the source because the failure is a *second producer*: the harvest-level tests here
+    cannot see a vote another module adds, which is how this shipped once already.
+    """
+    import inspect
+
+    from senselab.audio.workflows.audio_analysis.adaptive import interventions
+
+    source = inspect.getsource(interventions)
+    assert 'source="per_speaker_presence"' not in source, (
+        "an intervention is overwriting the axis's per-speaker term; the axis must follow the "
+        "per-speaker presence the run publishes"
+    )
