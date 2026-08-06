@@ -59,10 +59,13 @@ def test_each_embedder_is_calibrated_with_its_own_band() -> None:
     votes = {k: v for b in buckets for k, v in b["votes"].items() if "::" in k}
     ecapa = [v for k, v in votes.items() if k.endswith("::ecapa")]
     resnet = [v for k, v in votes.items() if k.endswith("::resnet")]
-    assert ecapa and resnet, "both embedders should produce validation votes"
+    assert ecapa and resnet, "both embedders should produce validation readings"
+    # ``calibrated_same_doubt`` was ``same_label_uncertainty``. The per-embedder band still produces
+    # it and L1 still records it; it is simply no longer scored by the fold, since the axis measures
+    # attribution rather than change.
     # Identical vectors, different bands → different calibrated uncertainties.
-    e_unc = [v.get("same_label_uncertainty") for v in ecapa if v.get("same_label_uncertainty") is not None]
-    r_unc = [v.get("same_label_uncertainty") for v in resnet if v.get("same_label_uncertainty") is not None]
+    e_unc = [v.get("calibrated_same_doubt") for v in ecapa if v.get("calibrated_same_doubt") is not None]
+    r_unc = [v.get("calibrated_same_doubt") for v in resnet if v.get("calibrated_same_doubt") is not None]
     assert e_unc and r_unc
     # 0.13 is inside ecapa's (0.10, 0.20) ramp and below resnet's same-floor of 0.80, so ecapa reads
     # partial doubt where resnet reads confident agreement. One band for both collapsed that.

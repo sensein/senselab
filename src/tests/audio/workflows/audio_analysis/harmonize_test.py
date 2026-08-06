@@ -188,9 +188,12 @@ def test_cross_model_agreement_is_recoverable_without_embeddings() -> None:
     for b in buckets:
         cross = b["votes"].get("__cross_diar_label_disagreement__")
         assert cross is not None
-        # Same timeline, different naming: the models agree, so disagreement must be 0 (or be
-        # suppressed as unmeasurable) -- never a confident 1.0 driven by string mismatch.
-        assert cross["value"] in (0.0, None), f"string-comparison disagreement resurfaced: {cross}"
+        # Same timeline, different naming: the models agree, so no pair may disagree -- never a
+        # confident mismatch driven by string comparison. Read as the pair *count* rather than the
+        # old scored ``value``: the block is unscored now (the axis's per-speaker term reads these
+        # same assignments), but the counts are what this test was always really about.
+        assert cross["n_disagree"] == 0, f"string-comparison disagreement resurfaced: {cross}"
+        assert len(set(cross["cluster_ids"].values())) == 1, f"the two models landed on different ids: {cross}"
 
 
 def test_contested_assignment_reaches_the_speaker_vote() -> None:
