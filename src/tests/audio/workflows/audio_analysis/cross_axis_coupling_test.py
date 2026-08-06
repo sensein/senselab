@@ -618,14 +618,17 @@ def test_axes_on_different_grids_still_reach_each_other() -> None:
     the last. The unit tests all passed because their fixtures put every axis on one synthetic
     grid, which is the one thing real data never does.
     """
+    # Receiver is ``speech_presence``, not ``speaker``: the speaker axis takes no cross-axis vote at
+    # all (``axes.COUPLING_IS_A_GATE``), so using it here would test the gate rather than the
+    # projection this test is about — which is how a passing assertion can stop meaning anything.
     by_axis = {
         # 1 s buckets vs 0.5 s buckets: overlapping in time, disjoint as keys.
         "asr": {"raw": [_b2(0.0, 1.0, {"a": 0.9}), _b2(1.0, 2.0, {"a": 0.9})]},
-        "speaker": {"raw": [_b2(0.0, 0.5, {"s": 0.0}), _b2(0.5, 1.0, {"s": 0.0})]},
+        "speech_presence": {"raw": [_b2(0.0, 0.5, {"s": 0.0}), _b2(0.5, 1.0, {"s": 0.0})]},
     }
-    weights = {"asr": {"a": 1.0}, "speaker": {"s": 1.0}}
+    weights = {"asr": {"a": 1.0}, "speech_presence": {"s": 1.0}}
     coupled, _ = fuse_axes(by_axis, weights_by_axis=weights, max_rounds=3, snr_gate=None)
-    assert coupled["speaker"][0]["coupled_from"] == ["asr"], "a differently-gridded axis must reach it"
+    assert coupled["speech_presence"][0]["coupled_from"] == ["asr"], "a differently-gridded axis must reach it"
 
 
 def test_a_coupled_value_is_the_overlap_weighted_mean_of_the_source() -> None:

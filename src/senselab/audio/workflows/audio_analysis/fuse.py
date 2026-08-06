@@ -606,8 +606,16 @@ def cross_axis_inputs(
 
     Returns:
         ``(buckets, contributing_axes)``, both sorted, so the fixed point cannot depend on the order
-        the axes happen to be visited (FR-011f).
+        the axes happen to be visited (FR-011f). Empty for an axis in ``axes.COUPLING_IS_A_GATE``,
+        where another axis's value bounds the question rather than answering it.
     """
+    from senselab.audio.workflows.audio_analysis.axes import COUPLING_IS_A_GATE
+
+    if axis in COUPLING_IS_A_GATE:
+        # Another axis's value bounds where this question applies; it does not answer it. See
+        # ``axes.COUPLING_IS_A_GATE`` — and note the gating itself already happened, at harvest,
+        # against *claims* rather than against these doubts.
+        return [], []
     by_key: dict[tuple[float, float], dict[str, dict[str, float]]] = {}
     contributors: set[str] = set()
     # The receiver's own grid is the lattice both axes meet on: coupling informs it and never
@@ -1377,7 +1385,7 @@ def write_final_uncertainty(
 
     import pandas as pd
 
-    from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
+    from senselab.audio.workflows.audio_analysis.axes import COUPLING_IS_A_GATE, HARVEST_SOURCES
     from senselab.audio.workflows.audio_analysis.speech_presence_link import DEFAULT_POLICY
     from senselab.audio.workflows.audio_analysis.votes import buckets_for_axis
 
@@ -1440,6 +1448,12 @@ def write_final_uncertainty(
                     "last_refolded_round": r["round"],
                     "contributing_signals": r["contributing_signals"],
                     "contributing_passes": r["contributing_passes"],
+                    # Which perturbations ran here and were held out of the fold. Carried
+                    # explicitly because this rebuild is a whitelist: a column the fold emits and
+                    # this dict omits is written null by ``estimate_frame``, which is how the gate
+                    # first shipped invisible — every row said ``(None)`` while the gating itself
+                    # had worked.
+                    "snr_gated_passes": r.get("snr_gated_passes") or [],
                     "signal_weights": json.dumps(r["signal_weights"], sort_keys=True),
                     "weight_basis": json.dumps(r["weight_basis"], sort_keys=True),
                     # Which other axes moved this value (D-11). Without it a coupled row is

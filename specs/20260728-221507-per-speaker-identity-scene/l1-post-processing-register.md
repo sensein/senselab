@@ -84,7 +84,7 @@ a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB | what HNR indicates voicing, and when is it uninformative? | **closed** |
 | 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **closed** |
-| 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | embedding vectors per window on `PassHarvest` | does clustering support a coherent speaker here, and which cluster? | **closed** |
+| 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | *withdrawn from this axis* — see below | wrong question: geometry, not voicing | **closed by removal** |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
 | 14 | `frame_dispersion` | `clip(2 × mean(std), 0, 1)` — ×2 rescale + clip | dispersion in probability units, unrescaled | how does dispersion enter a belief? | **closed** |
 | 15 | coarse-voter demotion | hand-set `coarse: True`, `weight = 0.25` when grid < 0.5 s | measured `native_window_s` / `resolution_s` per signal | how should resolution mismatch be weighted? | **closed** |
@@ -223,9 +223,45 @@ still fire in L1 and `speaks` is still what the aggregator reads. Fully closing 
 `aggregate.py`, `votes.py`, `fuse.py` and the adaptive loop. Recorded as partial rather than closed
 so the remaining half is not mistaken for done.
 
-Items 11 (`ppg_voice_fraction`) and 12 (`embedding_silhouette`) remain fully open: both are
-*derived* signals rather than tool outputs, and per D-7 they should be recomputed at L2 from L1
-embeddings and posteriors.
+Item 11 (`ppg_voice_fraction`) remains fully open: it is a *derived* signal rather than a tool
+output, and per D-7 it should be recomputed at L2 from L1 posteriors.
+
+**Item 12 (`embedding_silhouette`) closed by removal, 2026-08-06.** It is no longer a speech-presence
+voter at all, so there is no threshold left to dissolve. The row above said `closed` while this
+paragraph said `fully open`; both were describing a signal that should not have been on this axis.
+
+A silhouette coefficient measures cluster *geometry* — how well-separated the clusters are — computed
+over every embedding window including silent ones. Silence embeds consistently too, so well-separated
+silence scores well; the measure cannot distinguish "a coherent speaker is here" from "this window is
+coherently not speech". Measured on `english_conversation_higgs_audio_v2`:
+
+| | value |
+|---|---|
+| its doubt across 214 buckets | 0.4022 – 0.4996, **stdev 0.0227** |
+| its fusion weight | **1.0** — the highest of all fifteen presence signals |
+| every informative voter's weight | 0.78 – 0.91 |
+| the four diarizers / three recognizers / brouhaha VAD | **0.0000** doubt |
+| published presence doubt | 0.0682 |
+| without this voter | 0.0385, and 47 of 214 buckets can reach zero |
+| without it and `acoustic_hnr`'s abstain-at-0.5 | 0.0204, 93 of 214 |
+
+Two findings worth keeping separate from the fix:
+
+1. **`_directed(score)` with no ramp.** Every neighbouring linker anchors its measurement —
+   `_link_hnr` ramps between `policy.hnr_low_db` and `hnr_high_db`, `_link_level_above_floor`
+   likewise. This one passed a `[-1, 1]` coefficient straight through as a `[0, 1]` confidence, so an
+   ordinary good silhouette of 0.58 became 0.42 of permanent doubt.
+2. **Stability-based weighting rewards a constant.** `reliability.signal_stability` measures
+   cross-pass `|Δ|`, and a near-constant is perfectly stable, so the least informative voter earned
+   the most weight. That is not specific to this signal and is *not* fixed by removing it — any
+   future uninformative-but-stable signal will be weighted the same way. Open.
+
+Nothing was lost. The clustering already reaches the **speaker** axis as a first-class diarization
+source (D-20): `compute.harvest_pass` injects a synthetic `embedding_silhouette/<model>` diarizer
+built from `derive_window_clusters`, whose spans and cluster ids feed
+`attribution.speaker_assignment_doubt`. Asking one clustering to also vote on presence counted a
+single body of evidence twice, on the axis where it was least apt. The vote's `cluster_id` payload had
+no consumer — label reassignment reads the synthetic diarizer's spans.
 
 
 ## Findings from the full dissolve (items 1-5, 13, 15)
@@ -268,7 +304,7 @@ Translating them to `{"evidence": {"m1": {"covered_fraction": 1.0}}}` is not a m
 it forces each fixture to say which *measurement* produces the belief it was asserting, which is
 the property the layering exists to make explicit.
 
-Items 11-12 (`ppg_voice_fraction`, `embedding_silhouette`) remain open: both are still reduced
+Item 11 (`ppg_voice_fraction`) remains open; item 12 is closed by removal (above). It was reduced
 inside the harvester rather than recomputed at L2 from posteriors and embedding vectors. Per D-7
 they are derived signals, and they move once `PassHarvest` carries the underlying measurements.
 

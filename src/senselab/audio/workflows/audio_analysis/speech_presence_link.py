@@ -90,8 +90,6 @@ class SpeechPresencePolicy:
             active. Speech usually sits 12–20 dB above a room's floor.
         lufs_silence: LUFS at or below which the loudness voter is confident of absence.
         lufs_speech: LUFS at or above which it is confident of presence.
-        silhouette_threshold: Silhouette coefficient above which an embedding window is taken to
-            sit inside a coherent speaker cluster.
         coarse_voter_weight: Weight given to a voter whose native window is much wider than the
             reporting bucket, so one value repeated across many buckets cannot dominate the fold.
         coarse_window_ratio: How many times wider than the reporting bucket a voter's native
@@ -110,7 +108,6 @@ class SpeechPresencePolicy:
     speech_excess_db: float = 12.0
     lufs_silence: float = -60.0
     lufs_speech: float = -30.0
-    silhouette_threshold: float = 0.5
     coarse_voter_weight: float = 0.25
     coarse_window_ratio: float = 2.0
 
@@ -335,15 +332,6 @@ def _link_excess(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[st
     return {"speaks": speaks, "native_confidence": confidence}
 
 
-def _link_silhouette(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
-    """Cluster silhouette → does a coherent speaker sit here."""
-    score = _finite(ev.get("silhouette"))
-    if score is None:
-        return None
-    speaks, confidence = _directed(score)
-    return {"speaks": speaks, "native_confidence": confidence}
-
-
 def derive_window_clusters(
     per_window_embeddings: Mapping[str, Sequence[Any]] | None,
 ) -> dict[str, Any] | None:
@@ -382,53 +370,37 @@ def derive_window_clusters(
     return None
 
 
-def _silhouette_votes_by_bucket(
-    rows: Sequence[Mapping[str, Any]],
-    derived: Mapping[str, Any],
-    policy: SpeechPresencePolicy,
-) -> dict[int, dict[str, Any]]:
-    """Match each reporting bucket to its nearest embedding window and build its vote.
-
-    Nearest-centre rather than overlap because the embedding window (2 s by default) is usually
-    wider than the bucket, so several buckets legitimately share one window's answer. The window's
-    width rides along as ``native_window_s`` so the coarseness is visible to the demotion rule
-    rather than assumed away.
-    """
-    windows = list(derived.get("windows") or [])
-    clusters = derived.get("clusters") or {}
-    p_voice = clusters.get("p_voice") or {}
-    labels = clusters.get("labels") or {}
-    if not windows or not p_voice:
-        return {}
-    centres = [0.5 * (float(w.start_s) + float(w.end_s)) for w in windows]
-    out: dict[int, dict[str, Any]] = {}
-    for row_idx, row in enumerate(rows):
-        start, end = _finite(row.get("start")), _finite(row.get("end"))
-        if start is None or end is None:
-            continue
-        centre = 0.5 * (start + end)
-        best = min(range(len(centres)), key=lambda i: abs(centres[i] - centre))
-        if best not in p_voice:
-            continue
-        window = windows[best]
-        score = _finite(p_voice[best])
-        if score is None:
-            continue
-        speaks, confidence = _directed(score)
-        vote: dict[str, Any] = {
-            "silhouette": score,
-            "speaks": speaks,
-            "native_confidence": confidence,
-            "units": "coefficient",
-            "native_window_s": float(window.end_s) - float(window.start_s),
-            "embedding_model": derived.get("model"),
-        }
-        # Which cluster the window landed in — the half of this computation that assigns labels
-        # rather than scoring voicing. Carried so a later stage can reassign without re-clustering.
-        if best in labels:
-            vote["cluster_id"] = labels[best]
-        out[row_idx] = vote
-    return out
+# ``_silhouette_votes_by_bucket`` lived here. **A cluster silhouette is not presence evidence.**
+#
+# It answered "does a coherent speaker sit here" by reading the silhouette coefficient as a
+# confidence — ``_directed(score)`` with no ramp and no anchors, unlike every linker above it
+# (``_link_hnr`` ramps between ``policy.hnr_low_db`` and ``hnr_high_db``, ``_link_level_above_floor``
+# likewise). Three things were wrong with it, all measured on a clean two-speaker conversation:
+#
+# - **It answers a different question.** Silhouette measures cluster *geometry* — separation — over
+#   every window including silent ones. Silence embeds consistently too, so well-separated silence
+#   scores well. It cannot distinguish "a coherent speaker is here" from "this window is coherently
+#   not speech".
+# - **It carried almost no information.** 214 buckets, doubt spanning 0.4022-0.4996, stdev 0.0227 —
+#   a constant to within ±0.05. An ordinary good silhouette of 0.58 became 0.42 of standing doubt.
+# - **And the weighting rewarded it for that.** It held weight **1.0**, the highest of all fifteen
+#   presence signals, while every informative voter sat at 0.78-0.91: ``reliability.signal_stability``
+#   measures cross-pass ``|delta|``, and a near-constant is perfectly stable. The least informative
+#   voter earned the most weight.
+#
+# Together those meant **no bucket could reach zero presence doubt** however unanimous the evidence:
+# all four diarizers, all three recognizers and the brouhaha VAD read exactly 0.0000 while the axis
+# reported 0.0682. Without this voter it reads 0.0385, and 47 of 214 buckets can reach zero.
+#
+# Nothing is lost. The clustering this scored already reaches the **speaker** axis as a first-class
+# diarization source per D-20 — ``compute.harvest_pass`` injects a synthetic
+# ``embedding_silhouette/<model>`` diarizer built from :func:`derive_window_clusters`, whose spans and
+# cluster ids feed ``attribution.speaker_assignment_doubt`` directly. Asking the same clustering to
+# also vote on presence counted one body of evidence twice, on the axis where it was least apt.
+# The vote's ``cluster_id`` had no consumer: label reassignment reads the synthetic diarizer's spans.
+#
+# ``derive_window_clusters`` below stays — it is what ``compute.harvest_pass`` calls.
+# Register: ``l1-post-processing-register.md`` item 12.
 
 
 _SUFFIX_RULES = (("::no_speech_prob", _link_no_speech_prob),)
@@ -439,7 +411,6 @@ _EXACT_RULES = {
     "acoustic_hnr": _link_hnr,
     "acoustic_lufs": _link_lufs,
     "acoustic_level_above_floor": _link_excess,
-    "embedding_silhouette": _link_silhouette,
 }
 
 _FRAME_PREFIX = "frame_"
@@ -511,9 +482,6 @@ def link_speech_presence(
     Pure — the input rows are not mutated, so the adaptive loop can re-link the same harvest under
     a different policy each round and get the same answer every time.
     """
-    derived = derive_window_clusters(per_window_embeddings)
-    silhouette_votes = _silhouette_votes_by_bucket(rows or [], derived, policy) if derived else {}
-
     out: list[dict[str, Any]] = []
     for row_idx, row in enumerate(rows or []):
         evidence = row.get("evidence") or {}
@@ -533,11 +501,6 @@ def link_speech_presence(
             if _is_coarse(ev, reporting_win_s, policy):
                 vote["weight"] = policy.coarse_voter_weight
             votes[str(name)] = vote
-        silhouette = silhouette_votes.get(row_idx)
-        if silhouette is not None:
-            if _is_coarse(silhouette, reporting_win_s, policy):
-                silhouette = {**silhouette, "weight": policy.coarse_voter_weight}
-            votes["embedding_silhouette"] = silhouette
         out.append(
             {
                 "start": row.get("start"),
