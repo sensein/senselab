@@ -315,11 +315,15 @@ def test_an_uncalibratable_embedding_emits_no_speaker_claim() -> None:
     # Name the sub-signal under test rather than matching every key containing "::": the
     # separator is shared by every derived sub-signal on this axis, so a loose selector silently
     # picks up unrelated ones as they are added.
+    #
+    # ``calibrated_same_doubt`` was ``same_label_uncertainty`` until the axis stopped measuring
+    # speaker *change*. The value and this FR-007 property are unchanged; the name is no longer one
+    # ``fuse._UNCERTAINTY_FIELDS`` scores, so the reading is an L1 measurement rather than a voter.
     emitted = [
-        v["same_label_uncertainty"]
+        v["calibrated_same_doubt"]
         for bucket in votes
         for k, v in bucket["votes"].items()
-        if isinstance(v, dict) and "same_label_uncertainty" in v
+        if isinstance(v, dict) and "calibrated_same_doubt" in v
     ]
     assert emitted and all(u is None for u in emitted)
     # The raw distance is still recorded — dropping the claim must not destroy the evidence.

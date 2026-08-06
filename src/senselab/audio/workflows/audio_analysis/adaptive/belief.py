@@ -974,9 +974,7 @@ class BeliefState:
                 row["p_voice"] = new["p_voice"]
             _attach_floor(row, row.get("meta") or {})
             row["last_refolded_round"] = round_idx
-            row["history"].append(
-                {"round": round_idx, "uncertainty": row["uncertainty"], "doubt": control_doubt(row)}
-            )
+            row["history"].append({"round": round_idx, "uncertainty": row["uncertainty"], "doubt": control_doubt(row)})
             changed.append(row)
         return changed
 

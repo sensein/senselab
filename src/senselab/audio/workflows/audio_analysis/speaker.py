@@ -54,6 +54,11 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from senselab.audio.workflows.audio_analysis.attribution import (
+    per_speaker_attribution_doubt,
+    target_activity_doubt,
+    word_location_doubt,
+)
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
@@ -129,8 +134,21 @@ def harvest_speaker_votes(
     speaker_floors: Mapping[str, tuple[float, float]] | None = None,
     cluster_cosine_threshold: float = 0.5,
     change_point_bucket_reduction: str = CHANGE_POINT_BUCKET_REDUCTION,
+    fused_words: Sequence[Mapping[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes"}`` per bucket for the speaker axis.
+
+    **The axis asks "how sure are we who is speaking here?"** — attribution, not change. Its three
+    scored voters come from ``attribution``: ``per_speaker_presence`` (do the diarizers agree who is
+    here), ``asr_location`` (do we know where the words are, and so whose they are) and
+    ``target_activity`` (do we know anyone was active at all). Everything else this harvest emits is a
+    *measurement* other consumers read — the cluster assignments, the embedding cosines, the change
+    points, the overlap distribution — and is deliberately unscored, so the fold sees three voters.
+
+    It asked "was it the same speaker as before?" until 2026-08-05, scored per (diar × embedder) pair
+    against embedding cosine. On a 0.1 s grid that asks ten times a second against 0.5 s embedding
+    windows, and it read 0.666 on a conversation whose per-speaker presence doubt was 0.168. See
+    ``specs/20260728-221507-per-speaker-identity-scene/speaker-axis-attribution-design.md``.
 
     Args:
         pass_summary: Per-task summary for one pass (diarization, alignment, etc.).
@@ -155,6 +173,12 @@ def harvest_speaker_votes(
         cluster_cosine_threshold: Cosine similarity threshold for clustering
             (diar_model, raw_label) into pass-wide speaker IDs. 0.5 is roughly
             the EER for ECAPA on VoxCeleb.
+        fused_words: The consensus words from ``asr.fuse_consensus_words``, read for their
+            ``temporal_confidence`` — word boundaries are what assign a word to a speaker's span, so
+            not knowing where a word starts is not knowing whose it is. Omitted, the ``asr_location``
+            voter is simply absent and the axis degrades to its other two terms; each row's
+            ``contributing_signals`` records which voted, so the absence is visible rather than
+            silent.
 
     Returns:
         List of ``{"start", "end", "votes"}`` dicts. ``votes`` shape::
@@ -169,9 +193,9 @@ def harvest_speaker_votes(
                     "diar_model": "<diar_model>",
                     "embedding_model": "<embedding_model>",
                     "embedding_cosine_within_track": float | None,
-                    "same_label_uncertainty": float | None,
+                    "calibrated_same_doubt": float | None,
                     "embedding_cosine_to_prev_bucket": float | None,
-                    "change_inconsistency_uncertainty": float | None,
+                    "calibrated_change_doubt": float | None,
                 },
                 "__cross_diar_label_disagreement__": {
                     "value": float | None,
@@ -362,13 +386,26 @@ def harvest_speaker_votes(
                                 direction="diff",
                             )
 
+                # **L1 measurements, not L2 voters.** The cosines and their per-embedder calibrated
+                # readings all stay — ``_signal_rows_from_buckets`` copies them into
+                # ``L1/<pass>/signals/<diar::emb>.parquet``, which is where a measurement belongs, and
+                # the per-embedder band that produced them is a measured property of that embedding
+                # space.
+                #
+                # What changed is the *names*. They were ``same_label_uncertainty`` and
+                # ``change_inconsistency_uncertainty``, which are the codebase's scored-field names
+                # (``fuse._UNCERTAINTY_FIELDS``), so the fold read them as the axis's voters — asking
+                # "same speaker as before?" at the grid rate against embeddings windowed ten times
+                # coarser, which is what read 0.666 on a clean conversation whose per-speaker presence
+                # doubt was 0.168. Under these names the fold does not read them and the axis is
+                # composed from ``attribution``'s three terms instead.
                 votes[f"{m}::{emb_model_id}"] = {
                     "diar_model": m,
                     "embedding_model": emb_model_id,
                     "embedding_cosine_within_track": same_cos,
-                    "same_label_uncertainty": same_unc,
+                    "calibrated_same_doubt": same_unc,
                     "embedding_cosine_to_prev_bucket": change_cos,
-                    "change_inconsistency_uncertainty": change_unc,
+                    "calibrated_change_doubt": change_unc,
                 }
 
                 prev_emb_per_track[track_key] = (window_idx, vec)
@@ -393,8 +430,11 @@ def harvest_speaker_votes(
                     n_pairs += 1
                     if cluster_this_bucket[models_sorted[i]] != cluster_this_bucket[models_sorted[j]]:
                         n_disagree += 1
+            # ``cluster_ids`` is what ``_bucket_clusters`` reads, so the block stays. Its ``value``
+            # does not: the axis's per-speaker term is computed from these same assignments by
+            # ``attribution.per_speaker_attribution_doubt``, and scoring the pair-disagreement
+            # fraction beside it would count one body of evidence twice (D-21 rule 6).
             votes["__cross_diar_label_disagreement__"] = {
-                "value": (n_disagree / n_pairs) if n_pairs > 0 else None,
                 "n_pairs": n_pairs,
                 "n_disagree": n_disagree,
                 "cluster_ids": dict(cluster_this_bucket),
@@ -411,8 +451,11 @@ def harvest_speaker_votes(
                 if change_point_bucket_reduction == "max"
                 else int(np.argmin(np.abs(probs - float(np.mean(probs)))))
             )
+            # Unscored, for the same reason as the pair entries above: a change point is evidence
+            # about *when* the speaker changed, not about how sure we are who is speaking. It stays
+            # because ``identity_repair`` reads it to place boundaries.
             votes[f"{emb_model}::change_point"] = {
-                "value": float(series["uncertainty"][inside][best]),
+                "change_uncertainty": float(series["uncertainty"][inside][best]),
                 "p_change": float(series["p_change"][inside][best]),
                 "cosine_distance": float(series["distance"][inside][best]),
                 "boundary_s": float(series["times"][inside][best]),
@@ -432,8 +475,11 @@ def harvest_speaker_votes(
         # answerable before the speaker↔label binding D-7 hands to rounds.
         j1 = count_posterior_in_window(diar_spans, start=start, end=end) if diar_spans else None
         if j1 is not None and j1["uncertainty"] is not None:
+            # Unscored: how many speakers overlap is evidence about *who*, which the per-speaker
+            # term already reads from the same spans. Kept because the distribution names which
+            # counts were in contention, which no fold can say.
             votes["__overlap_count__"] = {
-                "value": float(j1["uncertainty"]),
+                "count_uncertainty": float(j1["uncertainty"]),
                 "expected_count": j1["expected_count"],
                 "p_overlap": j1["p_overlap"],
                 # The distribution itself, keyed by count, so a consumer can see *which* counts
@@ -448,6 +494,33 @@ def harvest_speaker_votes(
             }
 
         out.append({"start": start, "end": end, "votes": votes})
+
+    # ── the attribution voters ──
+    # Added in a second pass because two of the three are per-bucket projections of whole-pass
+    # evidence (the consensus words, the mask regions) and the third reads the cluster assignments
+    # the loop above has just finished writing.
+    buckets = [(round(float(b["start"]), 6), round(float(b["end"]), 6)) for b in out]
+    mask_doc = ((pass_summary.get("background_mask") or {}).get("result")) or {}
+    mask_regions = mask_doc.get("regions") or []
+    location = word_location_doubt(list(fused_words or ()), buckets)
+    activity = target_activity_doubt(mask_regions, buckets)
+
+    for bucket_dict in out:
+        key = (round(float(bucket_dict["start"]), 6), round(float(bucket_dict["end"]), 6))
+        votes = bucket_dict["votes"]
+        doubt, state = activity[key]
+        if state == "target_free":
+            # Nobody to attribute, so no claim at all. ``0.0`` would assert confident attribution
+            # where no attribution was made, which is a claim of a different kind.
+            bucket_dict["votes"] = {}
+            continue
+        presence = per_speaker_attribution_doubt(_bucket_clusters(bucket_dict))
+        if presence is not None:
+            votes["per_speaker_presence"] = {"value": presence, "operator": "max_over_speakers/entropy"}
+        if location[key] is not None:
+            votes["asr_location"] = {"value": location[key], "operator": "1-temporal_confidence/coverage_mean"}
+        if doubt is not None:
+            votes["target_activity"] = {"value": doubt, "operator": "mask_region/gated_on_state", "state": state}
 
     return out
 
