@@ -297,21 +297,41 @@ def test_level_above_floor_still_abstains_at_low_excess() -> None:
     assert linked[2]["votes"]["acoustic_level_above_floor"]["speaks"] is True
 
 
-def test_hnr_abstains_low_and_asserts_high() -> None:
-    """Whispered speech has low HNR, so a low value must not be read as silence — or as speech.
+def test_hnr_does_not_vote_on_presence() -> None:
+    """HNR is voicing evidence whose ramp was never fitted, so on ordinary speech it read as a floor.
 
-    The abstention is now the *absence of a vote*. It used to be a vote at ``native_confidence 0.5``,
-    which ``_directed`` cast as ``speaks=True`` and the fold read as 0.5 of doubt — the largest a
-    single voter can contribute. So the buckets where HNR knew least were where it pushed hardest,
-    and on a clean conversation it contributed mean 0.2675 while every model voter read 0.0000.
+    The 2->10 dB ramp was a code literal. Measured on a clean two-speaker conversation the median HNR
+    is **8.12 dB** — below the anchor meaning "confidently voiced" — so ordinary conversational speech
+    read as only partly voiced, and 102 of its 145 votes landed in the graded region. It became the
+    largest contributor on the axis (mean doubt 0.1568, against `ast` 0.1094 and everything else at or
+    below 0.05) while all four diarizers, all three recognizers and the brouhaha VAD read 0.0000.
 
-    High HNR still asserts, at full strength: vowels are periodic, and that is real voicing evidence.
+    Silencing the abstention was a separate and real fix — it cut HNR's mean from 0.2675 to 0.1568 —
+    but the remainder is the anchors' fault, not the abstention's.
+
+    Reinstating it as a voter means fitting the anchors to measured HNR on known-voiced speech and
+    writing them into ``data/`` with their derivation. Register item 10.
     """
-    quiet = link_speech_presence([_bucket({"acoustic_hnr": {"hnr_db": 0.0}})])[0]["votes"]
-    assert "acoustic_hnr" not in quiet, "an abstention must be no vote, not a half-confident yes"
-    voiced = link_speech_presence([_bucket({"acoustic_hnr": {"hnr_db": 14.0}})])[0]["votes"]["acoustic_hnr"]
-    assert voiced["speaks"] is True
-    assert voiced["native_confidence"] == pytest.approx(1.0)
+    for hnr_db in (0.0, 8.0, 14.0, 25.0):
+        votes = link_speech_presence([_bucket({"acoustic_hnr": {"hnr_db": hnr_db}})])[0]["votes"]
+        assert "acoustic_hnr" not in votes, f"HNR is voting on presence again at {hnr_db} dB"
+
+
+def test_the_hnr_measurement_still_travels() -> None:
+    """Removing the voter must not remove the measurement — only the unfitted dB->probability step.
+
+    L1 signal rows for this axis are built from ``harvest.speech_presence_evidence`` rather than from
+    the votes (``votes._signal_rows_from_buckets(..., "evidence", ...)``), so ``hnr_db`` still reaches
+    ``L1/signals/acoustic_hnr.parquet`` in decibels and a consumer wanting voicing evidence reads it
+    directly. Asserted here because the two are one line apart in the pipeline and it would be easy to
+    remove both.
+    """
+    rows = [_bucket({"acoustic_hnr": {"hnr_db": 8.12}})]
+    linked = link_speech_presence(rows)
+    assert linked[0]["votes"] is not None
+    assert rows[0]["evidence"]["acoustic_hnr"]["hnr_db"] == pytest.approx(8.12), (
+        "the measurement must survive in the evidence L1 records from"
+    )
 
 
 def test_link_is_pure_and_leaves_the_evidence_untouched() -> None:

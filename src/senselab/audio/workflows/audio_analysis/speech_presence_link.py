@@ -83,18 +83,6 @@ class SpeechPresencePolicy:
             above which the window reads as speech.
         frame_speech_threshold: Bucket-mean frame posterior above which a frame voter reports
             speech.
-        hnr_low_db: HNR at or below which the voter abstains (``0.5``).
-        hnr_high_db: HNR at or above which the voter is fully confident of voicing. Typical
-            conversational HNR is 8–14 dB.
-        speech_excess_db: dB above the measured noise floor at which a bucket reads as clearly
-            active. Speech usually sits 12–20 dB above a room's floor.
-        lufs_silence: LUFS at or below which the loudness voter is confident of absence.
-        lufs_speech: LUFS at or above which it is confident of presence.
-        coarse_voter_weight: Weight given to a voter whose native window is much wider than the
-            reporting bucket, so one value repeated across many buckets cannot dominate the fold.
-        coarse_window_ratio: How many times wider than the reporting bucket a voter's native
-            window must be before it is demoted. At ``2.0`` a voter is only demoted once its window
-            spans more than two reporting buckets.
     """
 
     diar_coverage_threshold: float = 0.0
@@ -103,8 +91,6 @@ class SpeechPresencePolicy:
     asr_confidence_pooling: AsrConfidencePooling = "mean_of_exp"
     label_mass_threshold: float = 0.5
     frame_speech_threshold: float = 0.5
-    hnr_low_db: float = 2.0
-    hnr_high_db: float = 10.0
     speech_excess_db: float = 12.0
     lufs_silence: float = -60.0
     lufs_speech: float = -30.0
@@ -330,16 +316,29 @@ def _link_frame(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str
     return {"speaks": speaks, "native_confidence": mean if speaks else 1.0 - mean}
 
 
-def _link_hnr(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
-    """Harmonics-to-noise ratio → voicing, abstaining at the low end (see module docstring)."""
-    hnr = _finite(ev.get("hnr_db"))
-    if hnr is None:
-        return None
-    p_voice = _abstaining_ramp(hnr, policy.hnr_low_db, policy.hnr_high_db)
-    if p_voice is None:
-        return None
-    speaks, confidence = _directed(p_voice)
-    return {"speaks": speaks, "native_confidence": confidence}
+# ``_link_hnr`` lived here. **HNR is voicing evidence, but its ramp was never fitted, so on ordinary
+# speech it read as a floor rather than as a measurement.**
+#
+# The ramp was a code literal — 2 dB to 10 dB — and the register called it "fixed" for that reason.
+# Measured on `english_conversation_higgs_audio_v2`, median HNR is **8.12 dB**: *below* the anchor that
+# means "confidently voiced", so ordinary conversational speech read as only partly voiced. 102 of its
+# 145 votes fell in the graded region, and it ended up the **largest contributor** on the presence axis
+# (mean doubt 0.1568, against `ast` 0.1094 and everything else at or below 0.05) while all four
+# diarizers, all three recognizers and the brouhaha VAD read exactly 0.0000. Removing it takes presence
+# doubt from 0.0250 to 0.0160, and buckets below 0.01 from 66 of 214 to 112.
+#
+# Making the abstention silent (see :func:`_abstaining_ramp`) was a real fix and not this one: it cut
+# HNR's mean from 0.2675 to 0.1568 by removing the fabricated half-confident votes, but the remaining
+# doubt is the graded region, which is the anchors' fault and not the abstention's.
+#
+# **The measurement is not lost.** ``harvest_speech_presence_evidence`` still emits ``hnr_db`` in
+# decibels and ``votes._signal_rows_from_buckets`` records it from the *evidence*, not from the votes —
+# so ``L1/signals/acoustic_hnr.parquet`` is unchanged and a consumer wanting voicing evidence reads the
+# dB directly. What is gone is the unfitted dB→probability step in between.
+#
+# Reinstating it as a voter means fitting the anchors to measured HNR on known-voiced speech and
+# writing them into ``data/`` with their derivation, the way ``detection_margin`` and the scene-quality
+# profile are. Recorded as the open item in ``l1-post-processing-register.md`` item 10.
 
 
 def _link_lufs(ev: Mapping[str, Any], policy: SpeechPresencePolicy) -> dict[str, Any] | None:
@@ -443,7 +442,6 @@ _SUFFIX_RULES = (("::no_speech_prob", _link_no_speech_prob),)
 _EXACT_RULES = {
     "ast": _link_label_mass,
     "yamnet": _link_label_mass,
-    "acoustic_hnr": _link_hnr,
     "acoustic_lufs": _link_lufs,
     "acoustic_level_above_floor": _link_excess,
 }

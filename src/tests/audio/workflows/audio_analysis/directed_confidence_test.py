@@ -93,9 +93,10 @@ PRODUCER_SWEEPS: dict[str, list[tuple[str, Sweep]]] = {
             lambda t: link._link_frame({"frame_mean": t}, replace(DEFAULT_POLICY, frame_speech_threshold=0.8)),
         ),
     ],
-    "_link_hnr": [
-        ("harmonics-to-noise ratio", lambda t: link._link_hnr({"hnr_db": -5.0 + 25.0 * t}, DEFAULT_POLICY)),
-    ],
+    # ``_link_hnr`` is gone: HNR is voicing evidence, but its 2->10 dB ramp was a code literal never
+    # fitted to voiced speech, and on a clip whose median HNR is 8.12 dB it read ordinary speech as
+    # only partly voiced — making it the largest contributor on the presence axis. The dB measurement
+    # still travels in ``L1/signals/acoustic_hnr.parquet``; the unfitted dB->probability step does not.
     "_link_lufs": [
         ("loudness", lambda t: link._link_lufs({"lufs": -90.0 + 80.0 * t}, DEFAULT_POLICY)),
     ],
@@ -224,4 +225,7 @@ def test_the_census_finds_the_producers_it_claims_to() -> None:
     producers = _confidence_producers()
     assert ("speech_presence_link.py", "_link_frame") in producers
     assert ("speech_presence_link.py", "directed_presence_vote") in producers
-    assert len(producers) >= 8
+    # Was ``>= 8``, lowered with ``_link_hnr``'s removal. Kept as a floor rather than an equality so
+    # the census stays a guard against a *new* unaudited producer, not a count that has to be edited
+    # every time one is legitimately retired.
+    assert len(producers) >= 7

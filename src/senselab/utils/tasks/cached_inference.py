@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 16
+CACHE_SCHEMA_VERSION = 17
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -185,6 +185,13 @@ by the fold as 0.5 of doubt, the most a single voter can contribute, in exactly 
 signal has no opinion. ``acoustic_hnr`` and ``acoustic_level_above_floor`` now emit no vote there, so
 a cached presence row's ``contributing_signals`` lists voters that no longer speak in those buckets
 and its ``confidence`` is folded over their fabricated half-claims.
+
+Bumped 16 → 17 when ``acoustic_hnr`` stopped voting on **speech_presence**. HNR is voicing evidence,
+but its 2→10 dB ramp was a code literal never fitted to voiced speech: on a clip whose median HNR is
+8.12 dB, ordinary conversational speech read as only partly voiced, and it became the axis's largest
+contributor (mean doubt 0.1568) while every model voter read 0.0000. Presence doubt 0.0250 → 0.0160.
+The dB measurement is unchanged in ``L1/signals/acoustic_hnr.parquet`` — L1 records it from the
+evidence, not from the vote — so what a cached row differs by is the fold, not the measurement.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any
