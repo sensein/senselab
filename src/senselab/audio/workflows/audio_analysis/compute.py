@@ -43,7 +43,7 @@ import numpy as np
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.audio_analysis.asr import harvest_asr_votes
-from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, HARVESTED_AXES
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, HARVESTED_AXES, passes_for_axis
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     extract_per_window_embeddings,
@@ -641,8 +641,14 @@ def compute_uncertainty_axes(
     if linked_out is not None:
         linked_out.clear()
         linked_out.update(linked_by_pass)
+    # ``passes_for_axis`` rather than every pass: an axis whose question is about the recording as read
+    # folds only the identity (``axes.IDENTITY_ONLY_AXES``). The mask's own stage already refuses the
+    # enhanced variant; its axis used to accept it.
     buckets_by_axis_pass = {
-        axis: {label: linked.buckets_by_axis.get(axis, []) for label, linked in linked_by_pass.items()}
+        axis: {
+            label: linked_by_pass[label].buckets_by_axis.get(axis, [])
+            for label in passes_for_axis(axis, linked_by_pass)
+        }
         for axis in HARVESTED_AXES
     }
 

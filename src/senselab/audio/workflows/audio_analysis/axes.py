@@ -20,7 +20,9 @@ Adding ``task`` is one edit: an :data:`AXES` entry. Nothing else in the pipeline
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Iterable, Literal
+
+from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
 
 __all__ = [
     "ATTENUATED_AXES",
@@ -276,6 +278,33 @@ at the reader instead of quietly folding to nothing. The two sets agreeing is a 
 harvested, the loop's ingest enumerated three axes, and nothing compared them.
 """
 
+IDENTITY_ONLY_AXES: Final[frozenset[str]] = frozenset({"background_mask"})
+"""Axes whose question is about the recording as read, so only the identity perturbation answers it.
+
+``background_mask`` asks whether a region is free of **target** activity. ``stages.py`` already builds
+the mask itself on the unmodified variant alone, and states the measurement behind that: the enhanced
+pass masked 50% of a real recording against the unmodified pass's 17.9%, "because speech enhancement
+removes the non-speech evidence the mask reads target activity from. A mask built there is
+misleadingly generous -- it reports 'safe for background claims' precisely where the background was
+destroyed."
+
+That argument was never applied to the mask's **axis**, which harvested ``speakers`` / ``speech`` /
+``words`` from every perturbation. On the 48 kHz validation clip its enhanced ``words`` voter read mean
+0.0510 against raw's 0.0102 -- 5x higher, in exactly the direction the note predicts, because
+enhancement changes what the recognizers find. ``fuse.SnrGate`` happened to suppress it in 40 of 49
+buckets by gating on SNR, but not in the 9 below the floor, so the axis was partly built on a pass its
+own mask refuses to use.
+
+This is *not* the SNR gate and does not overlap with it. The gate asks "is there anything here for a
+repair to repair"; this asks "is this perturbation entitled to answer this question at all", and for
+the mask the answer is no at any SNR. A perturbation excluded here still contributes its cross-pass
+``|delta|`` to ``reliability.signal_stability``, which is what sets each signal's weight.
+
+The other three axes are unaffected: ``speech_presence``, ``speaker`` and ``asr`` ask about content
+that a transform may legitimately change the reading of, which is what makes the perturbation a
+sample rather than a contaminant.
+"""
+
 COUPLING_IS_A_GATE: Final[frozenset[str]] = frozenset({"speaker"})
 """Axes for which another axis's value bounds *where the question applies*, never answers it.
 
@@ -357,3 +386,28 @@ which direction it went and what it did with a word spanning two buckets. Today 
 in the cross-axis ranking, which is how an asr finding and a presence finding could be ranked against
 each other with nothing stating how their spans were reconciled.
 """
+
+
+def passes_for_axis(axis: str, available: Iterable[str]) -> list[str]:
+    """Which perturbations' buckets ``axis`` folds, out of those a run has.
+
+    One function for both build sites -- ``compute.compute_uncertainty_axes`` and
+    ``fuse.write_final_uncertainty`` each assemble ``{axis -> {pass -> buckets}}`` -- because two
+    producers of one filter is how the mask came to be folded per bucket by L2 and rebuilt from one
+    vote per region by the loop.
+
+    Falls back to everything available when the identity is absent: an axis with no defensible pass is
+    worse than one measured on the only pass there is, and a run without the identity is already
+    outside what :mod:`perturbations` describes.
+
+    Args:
+        axis: The axis being folded.
+        available: The perturbation names this run harvested.
+
+    Returns:
+        The subset to fold, in the order given.
+    """
+    names = list(available)
+    if axis not in IDENTITY_ONLY_AXES:
+        return names
+    return [n for n in names if n == IDENTITY_NAME] or names
