@@ -1,45 +1,17 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repository.
+
+**Setup, installation and the test/lint commands live in [README.md](README.md#development).**
+That file is the source of truth and is verified against a clean clone; this file does not repeat it.
+What is here is the rest: how the code is organised, the conventions that are not obvious from
+reading it, and the traps that have cost real time.
 
 ## Project Overview
 
-Senselab is a Python package for processing and analyzing behavioral data (primarily voice/speech, but also text and video) using reproducible pipelines. It uses uv for dependency management. The interpreter comes from the repo: `.python-version` pins **3.12**, so a bare `uv sync` resolves it without a flag. `pyproject.toml`'s `requires-python = ">=3.11,<3.15"` is correct and `--all-extras` resolves across the whole range. The pin is what makes a fresh clone deterministic; without it uv picks the newest allowed interpreter.
-
-## Build and Development Commands
-
-```bash
-# Install dependencies (full development setup)
-uv sync --all-extras --group dev --group docs
-
-# Install pre-commit hooks (required before committing)
-uv run pre-commit install
-
-# Run all tests with coverage
-uv run pytest
-
-# Run a single test file
-uv run pytest src/tests/audio/tasks/preprocessing_test.py
-
-# Run a specific test function
-uv run pytest src/tests/audio/tasks/preprocessing_test.py::test_function_name -v
-
-# Run tests in parallel
-uv run pytest -n auto
-
-# Type checking
-uv run mypy .
-
-# Linting
-uv run ruff check
-uv run ruff check --fix  # auto-fix issues
-
-# Spell checking
-uv run codespell
-
-# Generate documentation locally
-uv run pdoc src/senselab -t docs_style/pdoc-theme --docformat google
-```
+Senselab processes and analyses behavioural data — primarily voice and speech, also text and
+video — through reproducible pipelines. uv for dependency management; the interpreter is pinned in
+`.python-version` (3.12, matching CI).
 
 ## Architecture
 
@@ -86,19 +58,33 @@ Key audio processing capabilities in `audio/tasks/`:
 
 ## Code Style
 
-- Google-style docstrings (enforced by ruff with `convention = "google"`)
-- Line length: 120 characters
-- Type hints required (mypy with pydantic plugin)
-- Tests located in `src/tests/` mirroring the package structure
-- Test files must be named `*_test.py`
+- Google-style docstrings (enforced by ruff, `convention = "google"`)
+- Line length 120; type hints required (mypy with the pydantic plugin)
+- Tests in `src/tests/` mirroring the package, named `*_test.py`
+- **Explain *why* in comments and docstrings, not *what*.** The codebase's convention is that a
+  non-obvious choice records the measurement or failure that drove it, so a later reader can
+  disagree with the reasoning rather than guess at it. Several sections below are that convention
+  applied to the module docs.
 
-## System Requirements
+## Traps that have cost time
 
-- macOS requires ARM64 (Apple Silicon); Intel Macs are not supported
-- FFmpeg must be installed system-wide, and **PyAV's bundled copy does not substitute for it**. The `video` extra's `av>=15` does ship ffmpeg shared libraries inside the venv, but under privately mangled names in `av.libs/` (`libavutil-3591eddc.so.60.8.100`). `torchcodec` `dlopen`s ffmpeg **by soname** — `libavutil.so.56` / `.57` / `.58` / `.59`, one attempt per supported major — so PyAV's copy is invisible to it and the import fails with `OSError: libavutil.so.56: cannot open shared object file`. `src/tests/conftest.py` treats that as `Dependencies failed to import — test environment is broken` and refuses to collect, so **no test runs at all** without system ffmpeg, including the pure-Python workflow tests that never touch a codec. Measured on a fresh MIT ORCD clone with every extra installed and no system ffmpeg
-- Docker required for some video models (MediaPipe-based estimators)
-- CUDA 12.8 libraries for GPU support
-- HuggingFace token (`HF_TOKEN` env var) for many models
+- **Do not run `pytest -n auto`.** Each xdist worker is a separate interpreter that imports torch +
+  transformers + speechbrain independently — **535 MB resident per worker before any test runs**,
+  plus a private copy of any model weights that worker loads. It has exhausted a 32 GB machine.
+  Measured on a 16-core node, `-n 16` also buys nothing on the fast suites: 68 s against 70 s
+  serial, because the import cost equals the test time. Run the directory you changed instead.
+- **`uv sync` is subtractive.** It removes extras not named in the command, so always pass the full
+  set (`--all-extras`).
+- **Cache invalidation is free.** Bump `CACHE_SCHEMA_VERSION` in
+  `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
+  `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
+  more than recomputing one, and the wipe is automatic on every host.
+- **Thresholds belong in `data/` with a written derivation, never as code literals.** Two defects
+  this session came from literals that were never fitted: a silhouette coefficient read directly as
+  a probability, and a 2→10 dB HNR ramp under which ordinary voiced speech (median 8.12 dB) read as
+  only partly voiced. Regenerate a profile from measured verdicts; do not hand-edit one.
+- **Pre-alpha: rename and replace outright.** No parallel fields, no aliases, no deprecation
+  shims.
 
 ## CUDA host configuration
 
@@ -153,264 +139,52 @@ Reports are written to `artifacts/scalene/<target>_<timestamp>.html` (standalone
 
 See `specs/20260503-235625-scalene-profiling/quickstart.md` for the full option reference, and `scripts/profile_imports.py` for the separate cold-start import-time profiler.
 
-## Audio analysis script + ASR backend extensions
+## Audio analysis: the uncertainty workflow
 
-`scripts/analyze_audio.py` runs senselab's full task suite (diarization, AST, YAMNet, quality features, ASR, speaker embeddings) on an audio file with and without speech enhancement, with content-addressable caching plus full provenance and a hierarchical Label Studio export bundle.
-
-**The CLI is two arguments.** Everything else is one versioned config with its derivation written beside each value: `src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`.
+Two entry points over one module, `senselab.audio.workflows.audio_analysis`:
 
 ```bash
-# Full default pass (cache reused on subsequent runs)
-uv run python scripts/analyze_audio.py path/to/audio.wav
+# Analyse: every model on the recording, content-addressably cached. Two arguments.
+uv run python scripts/analyze_audio.py audio.wav [--out DIR]
 
-# Somewhere else
-uv run python scripts/analyze_audio.py audio.wav --out artifacts/experiment_3
-
-# Change a value: a YAML with only the keys you are changing, deep-merged over the packaged one.
-# The merged mapping's hash is stamped into every artifact, so the run can be named.
-cat > one_asr.yaml <<'EOF'
-models:
-  asr: [openai/whisper-large-v3-turbo]
-stages:
-  align_asr: false
-EOF
-uv run python scripts/analyze_audio.py audio.wav --config one_asr.yaml
+# Adapt: the uncertainty-driven intervention loop over a completed run directory.
+uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run>/
 ```
 
-There are deliberately **no per-knob flags**. Seventy existed; the recipes in this file differed only
-in flags whose right value a reader had no basis to choose, and the shipped defaults of the four grid
-flags put the four uncertainty axes on four spacings sharing zero bucket keys — which disabled every
-cross-axis coupling in the pipeline while reporting that it had run. Adding a flag back is adding an
-unmeasured decision with a public interface; add a config key with its derivation instead. The
-config's `{name, version, config_hash, sources}` travels into `final/summary.json`, the comparator
-params on every fused row, and `disagreements.json`.
-
-New senselab APIs landed alongside the script:
-
-- `senselab.audio.tasks.forced_alignment` — multilingual MMS aligner (`facebook/mms-1b-all`) covering ~1100 languages. Pass `aligner_model=MMS_MODEL_ID` to `align_transcriptions`. Japanese / Chinese transcripts are auto-romanized via `uroman` (install via `uv sync --extra nlp`).
-- `senselab.audio.tasks.speech_to_text.canary_qwen` — NVIDIA Canary-Qwen 2.5B (text-only) via NeMo SALM in an isolated `nemo-canary-qwen` venv. Auto-routed when the model id matches `nvidia/canary-`.
-- `senselab.audio.tasks.speech_to_text.qwen` — Alibaba Qwen3-ASR 1.7B / 3B via the `qwen-asr` Python wrapper in an isolated `qwen-asr` venv, with the bundled `Qwen3-ForcedAligner-0.6B` companion enabled by default for native word-level timestamps. Auto-routed when the model id matches `Qwen/Qwen3-ASR`.
-- IBM Granite Speech 3.3 8B — text-only via the existing HF pipeline path; the script's auto-align stage adds per-segment MMS timestamps downstream.
-
-ASR cache and alignment cache are separable: re-running with a different aligner does not invalidate the (slow) ASR result. See `specs/20260506-154425-audio-analysis-asr-extensions/` for the full design.
-
-### Adaptive uncertainty loop (acts on the three axes)
-
-`scripts/adaptive_loop.py` runs a deterministic, budgeted intervention loop over a completed
-analyze_audio run dir: ingests the 9 uncertainty parquets into a provenance-tagged vote store
-(re-aggregation is pure — parity-checked against the stored parquets), proposes high-uncertainty
-regions per axis, executes a policy-ranked catalog (stream election, hallucination adjudication,
-cache-replay/live ASR escalation, embedding change-point + re-cluster identity repair, gated
-segmentation-3.0 overlap detection), and fuses a consensus transcript / refined diarization /
-presence track with a byte-reproducible decision log (`final/iterations.json`,
-`final/convergence.json`, `final/timeline.png`). Policy (thresholds/budgets/model pools) is the
-`adaptive:` **section of the run config** — `data/run_config/default.yaml`, override the whole file
-with `--config`; a file with `thresholds:` / `fusion:` / `rules:` at the top level is *refused*
-rather than merged where nothing reads it. It keeps its own `policy_hash` beside the config's
-`config_hash`, because a policy change and a model change are not the same event. `enhancement.mode`
-(`auto` | `always` | `never`) plus the `triage:` block carry the round-0 frame-posterior speech gate
-and SNR enhancement gate. `always`, the default, *computes* both passes unconditionally — which is
-what makes raw and enhanced a perturbation *sample* for `reliability.signal_stability` — but
-computing a pass and counting it are now two decisions: `triage.snr_floor_db` also gates
-**admission to the fold**, per bucket, via `fuse.SnrGate`. A speech-enhancement pass is a *repair*,
-and above the floor there is nothing to repair, so a downstream answer that changes there reports
-the transform rather than the recording. Measured on a clean two-speaker conversation (41–70 dB
-throughout): the raw pass put the speaker axis at exactly 0.0 in 179 of 190 buckets, the enhanced
-pass at 0.398, and the unconditional mean published 0.227 — doubt in 178 buckets where every
-diarizer agreed. The gate is on **SNR alone, never on ambiguity**: at genuinely low SNR the raw
-sources can be unanimously wrong, all fooled by the same noise, which is the case enhancement exists
-for. Each row records what was withheld in `snr_gated_passes`, because a shrunken
-`contributing_passes` cannot distinguish a pass that was held out from one that never ran. Which
-transforms are gated is declared in `perturbations.SNR_GATED_TRANSFORMS`, read off
-`Perturbation.transform` rather than the pass name — the `invariance.py` probes are deliberately
-*not* gated, since a correct model must be invariant to them at every SNR.
-`profiles.calibration` carries the US5 scene-quality
-calibration (versioned dB→[0,1] anchors, fit via `scripts/calibrate_scene_quality.py`, bridge in
-`workflows/audio_analysis/calibration.py`; its `temperature` block currently reaches no fold — see
-the note there). The
-comparator is split into `harvest_pass` (model-touching, `compute.py`) + `aggregate_pass` (pure,
-`votes.py`); `compute_uncertainty_axes` is a compatible wrapper (`mutate_passes=False` for the
-side-effect-free API). Design/spec/results: `specs/20260723-225523-dynamic-uncertainty-workflow/`
-(tasks.md Phase 8 lists the open follow-ups; README "Adaptive audio analysis" has the user runbook).
-
-### Three-axis uncertainty workflow
-
-The reusable comparator lives at `senselab.audio.workflows.audio_analysis`. The CLI script `scripts/analyze_audio.py` is a thin wrapper: per-task pipeline → one call to `compute_uncertainty_axes(...)` → parquet writers + LS bundle + disagreements index + timeline plot.
-
-The workflow emits four per-bucket uncertainty time series — `speech_presence` (was there a speaker?), `speaker` (**who** is speaking here?), `asr` (what was said?) and `background_mask` (is this region free of target activity?) — each in `[0, 1]`. Every model whose output naturally encodes an axis votes; `fuse.fuse_axis` is the **one** fold, weighting each signal by its measured perturbation stability and physical support and collapsing via `uncertainty.aggregator`.
-
-**Every axis is on one grid** (`axes.DEFAULT_TIME_GRID`, 0.1 s window == 0.1 s hop), so row *i* of one axis is row *i* of another and a cross-axis join needs no reconciliation. Measured before it was: 242 / 242 / 19 / 8 rows on 0.1/0.02, 0.1/0.02, 0.25/0.25 and 1.0/0.5, sharing **zero** bucket keys — so coupling did nothing and every round came out byte-identical. Window equals hop deliberately: a 0.1 s window at a 0.02 s hop reports five near-duplicate rows per window, and nothing in the output said so.
-
-The `speaker` axis measures **attribution**, composed by `attribution.py` from three voters: per-speaker presence doubt (`max` over the speakers present of the entropy of the model share — the same quantity `final/per_speaker_presence.parquet` publishes), ASR word-location doubt (`1 - temporal_confidence` over the words reaching the bucket, since word boundaries are what assign a word to a speaker's span), and target-activity doubt (the mask region's uncertainty, only where its `state` is not `target_active`). A bucket the mask confidently calls `target_free` carries no vote: there is nobody to attribute. It asked "was it the same speaker as before?" until 2026-08-05 — a change question asked at the grid rate against embeddings windowed ten times coarser, which read 0.666 on a clean two-speaker conversation whose per-speaker presence doubt was 0.168. The cosines, calibrated readings, change points and overlap distribution survive as L1 measurements.
-
-The `asr` axis has **one voter per recognizer**, keyed by model id. The words are fused once per pass (`fuse_word_streams`, graded phonemically by `asr.phoneme_similarity`) and each bucket takes the coverage-weighted mean, over the words reaching it, of that recognizer's own `1 - member_agreement × member_confidence` (`asr.resample_member_doubt`). It emitted a single `consensus_words` series until 2026-08-06 — `1 - existence_confidence`, whose `share` term is the recognizers' *weighted mean* agreement. A mean is not a distribution, so `epistemic_uncertainty` on this axis was structurally `0.0` on every run: the cross-source spread that term exists to measure had been collapsed one layer before the fold that measures it, and `signal_stability` weighted the fused series rather than the recognizers. The fold still runs once — it is what aligns the streams and grades each member against the winner — and what reaches the axis is its per-member decomposition, whose weighted mean is the same `share`, so the evidence is counted once at the resolution where the recognizers were actually compared. There is no per-bucket text — that was a reconstruction of what `final/transcript.json` holds at word resolution, and it is what forced this axis onto a 1.0 s grid, since a fully-contained text read returns nothing from a bucket narrower than a word. Localisation lives on the word (`onset_confidence` / `offset_confidence`), not in the axis number.
-
-**L1 measures, L2 decides.** L1 reports what a tool produced, in that tool's units, at its own
-resolution: no thresholds, no rescaling to `[0, 1]` against an anchor, no reduction across a
-dimension the tool reported separately, no selection among estimators. Every interpretation lives
-at L2, where it is named and can be changed without re-running a model. Concretely for the
-speech-presence axis: `speech_presence.harvest_speech_presence_evidence` emits measurements
-(segment `covered_fraction`, transcript `word_overlap_s`, per-chunk `avg_logprobs`, `excess_db`,
-`frame_mean` + `channel_means`), and `speech_presence_link.link_speech_presence` turns them into
-votes under a `SpeechPresencePolicy` recorded in each row's provenance. Consumers that need beliefs
-(`support.py`, `fuse.py`, `adaptive/belief.py`) call `speech_presence_link.votes_for_harvest`;
-`PassHarvest.speech_presence_evidence` holds the measurements. Scene quality follows the same
-split: `quality.harvest_quality_measurements` (dB / hertz / proportion) →
-`degradation.scene_degradation` (anchored scores). Remaining violations and their status are
-tracked one-by-one in
-`specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md`; the governing
-design and its decisions D-1 – D-16 are in the sibling `layered-architecture.md`.
-
-**An uncertainty axis IS an aggregator** (D-16). It aggregates across signals *and* across
-passes, so there is no such thing as a per-pass axis — a pass is an input dimension to the fold,
-never an index on its output. Passes are a *perturbation sample*: a signal whose answer flips
-between them has not earned its weight, which is what `reliability.signal_stability` measures,
-per signal, and what sets each signal's fusion weight. L1 emits
-`L1/<pass>/signals/<signal>.parquet` in native units and nothing under `L1/` is named for an
-axis; the single fold is `fuse.fuse_axis`, which receives every pass at once and reports the pass
-dimension only as each row's `contributing_passes` column.
-
-Output:
-
-- `<run_dir>/L1/<pass>/signals/<signal>.parquet` — one row per (signal, bucket), the measurement in the tool's own units; units / window / hop / model / revision in `schema.metadata`.
-- `<run_dir>/L1/stability/<signal>.parquet` + `signals.json` — cross-pass `|Δ|` per bucket and the run-level mean that sets each signal's fusion weight.
-- `<run_dir>/L1/passes.json` — the small index later stages read (duration, audio signature, input path).
-- `<run_dir>/L2/round<N>/uncertainty/<axis>.parquet` — the four fused axes, all on one grid: `uncertainty`, `epistemic_uncertainty`, `confidence`, `variability`, `triage_score`, `contributing_signals`, `contributing_passes`, `signal_weights`, `weight_basis`, `round`.
-- `<run_dir>/L2/round0/votes/<axis>.parquet` — the linked evidence at the vote level, keyed `(axis, bucket, source, pass, scope)`; what the adaptive store ingests.
-- `<run_dir>/final/disagreements.json` — top-N ranked over the fused axes by `triage_score`, axis-priority tiebreak (asr > speaker > speech_presence). No `pass` field: an axis has no pass.
-- `<run_dir>/final/uncertainty_detail.png` — one line per axis with `epistemic_uncertainty` shaded beneath, plus a per-signal stability strip and per-source detail rows. An axis view is a conclusion, so it lives under `final/`, never under `L1/`; the evidence figure with no conclusions on it is `L1/signals.png`.
-- `<run_dir>/final/timeline.png` — the adaptive loop's view: fused words, interventions and run state.
-- LS Labels tracks `uncertainty__<axis>` (attached once) plus per-pass evidence tracks `<pass>__signal__<signal>`. **No transcript TextArea**: the words are published at word resolution in `final/transcript.json` and rendered as `final__consensus_transcript__text` by `adaptive.ls_final`, so the bundle carries one rendering of the transcript rather than two at two resolutions.
+**The CLI is two arguments.** Everything else is one versioned config with each value's derivation
+written beside it: `src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`.
+Override with a partial YAML deep-merged over the packaged one; the merged mapping's hash is stamped
+into every artifact.
 
 ```bash
-# Default — runs the full pipeline including the workflow
-uv run python scripts/analyze_audio.py audio.wav
-
-# Standalone use of the workflow API (no script)
-uv run python -c "
-from senselab.audio.workflows.audio_analysis import BucketGrid, compute_uncertainty_axes
-signals, fused_axes, incomparable, embeddings = compute_uncertainty_axes(
-    passes=passes_summary,    # the dict produced by analyze_audio's per-task run_pass
-    grid=BucketGrid(),         # = axes.DEFAULT_TIME_GRID; every axis is on it, no per-axis override
-    params={...},
-    audio={'raw_16k': audio},
-    speaker_embedding_models=['speechbrain/spkrec-ecapa-voxceleb'],
-    aggregator='min',
-    speech_presence_labels=['Speech', 'Conversation', 'Narration, monologue'],
-)
-"
-
-# Skip the workflow entirely, or switch the aggregator from "max-doubtful" (default min) to
-# "average-doubt": both are run-config keys, not flags.
 cat > variant.yaml <<'EOF'
-stages:
-  comparisons: false
+models:
+  asr: [openai/whisper-large-v3-turbo]
 uncertainty:
   aggregator: mean
 EOF
 uv run python scripts/analyze_audio.py audio.wav --config variant.yaml
 ```
 
-See `specs/20260508-173136-compare-uncertainty/` for the full design (spec.md, plan.md, contracts/cli.md, contracts/uncertainty-row.parquet.md, contracts/disagreements.json.md, contracts/ls-bundle.md, quickstart.md).
+There are deliberately **no per-knob flags**. Seventy existed, and the shipped defaults of the four
+grid flags put the four axes on four spacings sharing zero bucket keys — disabling every cross-axis
+coupling while reporting that it had run. Adding a flag back is adding an unmeasured decision with a
+public interface; add a config key with its derivation instead.
 
-### Background scene characterization and per-speaker identity
+**The design and its reasoning live in the module's own docs**, which pdoc renders and which stay
+next to the code they describe:
 
-Background sound sources are detected by **per-band noise-floor subtraction**, not by
-amplification. Measurement drove that: neither scene classifier normalizes input level
-(both are amplitude-sensitive), and amplification changes no signal-to-noise ratio — it
-moves a source and the residual foreground together. What gain fixes is a classifier's
-absolute floor; what it cannot fix is a source buried under leaked foreground.
+- [`workflows/audio_analysis/doc.md`](src/senselab/audio/workflows/audio_analysis/doc.md) — one grid,
+  one fold, L1-measures/L2-decides, the four axes and their voters, outputs, public API, the
+  background-scene and per-speaker-identity design.
+- `specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md` — decisions D-1…D-27.
+- `specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md` — every L1/L2
+  boundary violation, one row each, with its status and the measurement behind it. **Open items are
+  tracked here, not in this file.**
+- `specs/20260508-173136-compare-uncertainty/` — the comparator's contracts.
+- `specs/20260506-154425-audio-analysis-asr-extensions/` — the ASR backend extensions
+  (Canary-Qwen, Qwen3-ASR, MMS alignment) and the separable ASR/alignment caches.
 
-```bash
-# Probe whether the classifiers self-normalize. Cached checkpoints only, never downloads.
-uv run python scripts/probe_classifier_levels.py --input clip.wav --out artifacts/level_probe/
-
-# Full run with the mask and background characterization
-# task.type: speech in the run config selects what counts as the participant's own activity
-uv run python scripts/analyze_audio.py clip.wav
-```
-
-Key pieces, and the reasoning that shaped each:
-
-- **`noise_floor.py`** — bias-corrected per-band floor. A tenth-percentile estimate sits
-  ~9.8 dB below the true mean noise power; uncorrected, every relative-dB gate is that much
-  more permissive. Uses a 100 ms frame: the floor is a long-term percentile and needs
-  *frequency* resolution, not time resolution — a 25 ms frame cannot resolve below ~140 Hz,
-  where mains hum and ventilation live. A source running through the whole clip is absorbed
-  into its own band floor, so `detect_stationary_sources` compares bands against their
-  neighbours instead (ECMA-74 prominence, ≥9 dB).
-- **`sources.py`** — the corroborated **3 / 6 / 10 dB** ladder above the band floor, plus
-  four fabrication guards. The failure mode is not a missed source but a *fabricated* one:
-  amplified noise floor produces confident water-like labels indistinguishable from genuine
-  broadband noise.
-- **`background_mask.py`** — regions free of **target** activity (not free of speech).
-  What counts as target comes from `task.type`: in a breathing task, speech detection is
-  silent during the target event, and since AudioSet maps `Breathing` to `people`, a mask
-  built from voice activity alone reports the collected signal as a background source.
-- **`foreground.py`** — suppression depth is the binding constraint, measured by
-  *projection* rather than level. Two residuals at identical power license opposite
-  conclusions (leaked speech vs genuine background).
-- **`speaker_identity.py`** — speaker-count posterior keeping multi-modal disagreement, with
-  source reliability **derived from perturbation evidence** rather than assigned. The raw
-  and enhanced passes are the same recording under a transform, so they already constitute a
-  stability sample; a source that flips between them has not earned its weight.
-- **`adaptive/influence.py`, `adaptive/provenance.py`** — uncertainty-gated mutual influence,
-  with the self-confirmation guard: uncertainty falling *because a value was overwritten* is
-  not a confidence gain.
-
-Thresholds live in `data/detection_margin/<version>.json` with a written derivation, never
-as code literals. Regenerate one from measured verdicts rather than editing it by hand:
-
-```bash
-uv run python scripts/calibrate_detection_margin.py \
-    --level-verdicts artifacts/level_probe/level-verdicts.json \
-    --out src/senselab/audio/workflows/audio_analysis/data/detection_margin/<name>.json
-```
-
-It refuses to emit a profile with no measured floor, one whose confident tier sits above
-every measured classifier floor (a threshold already known unreachable on that host), or one
-carrying an unmarked provisional figure. `profile_version` is the *schema* version and is
-never restamped; the profile's identity is `calibrated_as` plus its filename.
-
-Outputs: `<pass>/background_mask.{parquet,json}`, `<pass>/noise_floor.parquet`,
-`<pass>/background_sources.parquet`, `<pass>/suppression.json`, `final/speakers.json`,
-`final/per_speaker_presence.parquet`, plus `<pass>__background__mask` and
-`<pass>__speaker__presence` tracks in the Label Studio bundle. Design and evidence:
-`specs/20260728-221507-per-speaker-identity-scene/`.
-
-Three id namespaces stay distinct because all three once rendered as `S0`: a model's own
-speaker labels (`SPEAKER_00`, `spk0`), the pass-wide cluster that harmonises labels across
-diar models (`C0`), and the fused speaker id in `final/speakers.json` (`S0`).
-
-## Active Technologies
-- N/A (CI/CD configuration only — YAML, JSON) + Intuit Auto (v11.2.1), hatch-vcs, GitHub Actions (20260418-104204-alpha-prerelease-process)
-- Bash (setup script), YAML (GitHub Actions workflows) + machulav/ec2-github-runner@v2.5.2, aws-actions/configure-aws-credentials@v6, aws CLI, gh CLI (20260418-120722-aws-gpu-test-setup)
-- N/A (ephemeral instances) (20260418-120722-aws-gpu-test-setup)
-- Python 3.11-3.12, Bash + orch, transformers, speechbrain, pyannote-audio, coqui-tts, ppgs/espnet, sentence-transformers (20260419-133236-test-classification-deps)
-- Python 3.11-3.14 (Colab uses 3.12) + papermill (notebook execution), senselab (the library being tutorialized) (20260420-212321-fix-colab-tutorials)
-- N/A (notebooks are files in the repo) (20260420-212321-fix-colab-tutorials)
-- Python 3.11-3.12 (Colab uses 3.12) + senselab (the library being tutorialized), papermill (CI execution), ipywebrtc or JS widgets (recording) (20260423-213942-pedagogical-tutorials)
-- Python 3.11-3.12 (Colab uses 3.12) + senselab, transformers (for text sentiment pipeline) (20260424-152323-improve-ser-tutorial)
-- YAML (GitHub Actions), Markdown + pdoc, JamesIves/github-pages-deploy-action@v4, peter-evans/create-or-update-commen (20260424-232054-docs-pr-preview)
-- GitHub Pages (`docs` branch) (20260424-232054-docs-pr-preview)
-- Python 3.11-3.12 + s3prl (subprocess venv), speechbrain, pyannote-audio, nemo_toolkit (subprocess venv), transformers (20260428-101838-expand-speech-models)
-- Python 3.11-3.12 + ransformers (HuggingFace audio-classification pipeline), existing senselab classification module (20260429-201758-auditory-scene-analysis)
-- Python 3.11-3.12 (managed via uv) + stdlib only (subprocess, json, time, re, pathlib) — the profiling script itself has no heavy deps; it invokes senselab imports in child processes (20260501-154228-optimize-import-times)
-- File-based (Markdown report output to `artifacts/`) (20260501-154228-optimize-import-times)
-- Python 3.11-3.14 (managed via uv) — matches senselab's `requires-python` + scalene (new optional dep, opt-in via `--group profiling`); jupyter nbconvert (already present transitively via `senselab-ai` extra) (20260503-235625-scalene-profiling)
-- File-based — HTML/JSON reports written to `artifacts/scalene/` (20260503-235625-scalene-profiling)
-- Python 3.11–3.14 (managed via uv) — matches senselab's `requires-python`. (20260506-154425-audio-analysis-asr-extensions)
-- File-based — JSON outputs under `artifacts/analyze_audio/`; persistent cache under `artifacts/analyze_audio_cache/`; subprocess venvs under `~/.cache/senselab/venvs/{nemo-canary-qwen,qwen-asr}/`. (20260506-154425-audio-analysis-asr-extensions)
-- Python 3.11–3.14 (managed via uv) — matches senselab's `requires-python`. + senselab (the merged audio analysis module from PR #510), pandas + pyarrow (already in the active venv via the prior PR's features pipeline), `jiwer` for WER (already in the `[nlp]` extra), `g2p-en` or similar small G2P library for grapheme→phoneme on the ASR side (new, ~1 MB). (20260508-173136-compare-uncertainty)
-- File-based — parquet under `<run_dir>/<pass>/comparisons/<task>.parquet` and `<run_dir>/<pass>/comparisons/cross_stream/<a>_vs_<b>.parquet`; JSON for `<run_dir>/disagreements.json`; XML/JSON appendage to the existing LS bundle. (20260508-173136-compare-uncertainty)
-- Python 3.11–3.14 (managed via uv), matches senselab's `requires-python`. (20260508-173136-compare-uncertainty)
-- file-based — (20260508-173136-compare-uncertainty)
-- Python 3.11–3.14 (matches senselab's `requires-python = ">=3.11,<3.15"`). + `uv` (managed installer), `torch>=2.8,<2.9`, `torchaudio>=2.8,<2.9` (currently pinned at the subprocess-venv definitions), `nemo_toolkit[asr,tts]`, `qwen-asr`. Fix introduces no new runtime dependency. (20260512-204619-fix-canary-cuda-conflict)
-- File-based — venvs live under `~/.cache/senselab/venvs/<name>/`, marker file `.senselab-installed` records the current resolved requirement set. (20260512-204619-fix-canary-cuda-conflict)
-- Python 3.11–3.12 (repo `requires-python = ">=3.11,<3.15"`), managed via uv + pyannote-audio (existing — adds `segmentation-3.0` raw-scores + `brouhaha` via `Model`/`Inference`), transformers (AST + Whisper token logits), torchaudio + torchaudio-squim (existing), librosa (promote from transitive → explicit), numpy/scipy (calibration), pandas/pyarrow (existing parquet), jiwer (existing) (20260722-175022-scene-quality-utterance)
-- File-based — parquet under `<run_dir>/<pass>/uncertainty/{presence,identity,utterance}.parquet`; checked-in category map JSON and calibration profile JSON under the package; validation artifacts under `artifacts/` (20260722-175022-scene-quality-utterance)
-- Python 3.11–3.14 (repo `requires-python = ">=3.11,<3.15"`), managed via `uv` + numpy, scipy, pandas + pyarrow (parquet), torch/torchaudio, transformers (AST), TensorFlow Hub (YAMNet), pyannote-audio (diarization, brouhaha SNR/C50), speechbrain (embeddings, enhancement), librosa (**promote transitive → explicit**: `pcen`, `A_weighting`), pyloudnorm (**new**, BS.1770 LUFS; numpy/scipy only) (20260728-221507-per-speaker-identity-scene)
-- File-based — parquet under `<run_dir>/<pass>/uncertainty/` and `<run_dir>/final/`, JSON for convergence/decision logs, content-addressable cache under `artifacts/analyze_audio_cache/` (20260728-221507-per-speaker-identity-scene)
-
-## Recent Changes
-- 20260418-104204-alpha-prerelease-process: Added N/A (CI/CD configuration only — YAML, JSON) + Intuit Auto (v11.2.1), hatch-vcs, GitHub Actions
+Three id namespaces stay distinct because all three once rendered as `S0`: a model's own speaker
+labels (`SPEAKER_00`, `spk0`), the pass-wide cluster harmonising labels across diarizers (`C0`), and
+the fused speaker id in `final/speakers.json` (`S0`). Identity repair adds a fourth, `R*`.

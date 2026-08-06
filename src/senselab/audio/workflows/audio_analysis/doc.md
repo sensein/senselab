@@ -149,6 +149,75 @@ Its `temperature` and `token_entropy_reference_nats` fields currently reach **no
 consumers were the uncalled per-axis aggregators — and are kept validated rather than dropped so
 fitted values survive until `fuse_axis` takes them.
 
+## Background scene characterization and per-speaker identity
+
+Background sound sources are detected by **per-band noise-floor subtraction**, not by
+amplification. Measurement drove that: neither scene classifier normalizes input level
+(both are amplitude-sensitive), and amplification changes no signal-to-noise ratio — it
+moves a source and the residual foreground together. What gain fixes is a classifier's
+absolute floor; what it cannot fix is a source buried under leaked foreground.
+
+```bash
+# Probe whether the classifiers self-normalize. Cached checkpoints only, never downloads.
+uv run python scripts/probe_classifier_levels.py --input clip.wav --out artifacts/level_probe/
+
+# Full run with the mask and background characterization
+# task.type: speech in the run config selects what counts as the participant's own activity
+uv run python scripts/analyze_audio.py clip.wav
+```
+
+Key pieces, and the reasoning that shaped each:
+
+- **`noise_floor.py`** — bias-corrected per-band floor. A tenth-percentile estimate sits
+  ~9.8 dB below the true mean noise power; uncorrected, every relative-dB gate is that much
+  more permissive. Uses a 100 ms frame: the floor is a long-term percentile and needs
+  *frequency* resolution, not time resolution — a 25 ms frame cannot resolve below ~140 Hz,
+  where mains hum and ventilation live. A source running through the whole clip is absorbed
+  into its own band floor, so `detect_stationary_sources` compares bands against their
+  neighbours instead (ECMA-74 prominence, ≥9 dB).
+- **`sources.py`** — the corroborated **3 / 6 / 10 dB** ladder above the band floor, plus
+  four fabrication guards. The failure mode is not a missed source but a *fabricated* one:
+  amplified noise floor produces confident water-like labels indistinguishable from genuine
+  broadband noise.
+- **`background_mask.py`** — regions free of **target** activity (not free of speech).
+  What counts as target comes from `task.type`: in a breathing task, speech detection is
+  silent during the target event, and since AudioSet maps `Breathing` to `people`, a mask
+  built from voice activity alone reports the collected signal as a background source.
+- **`foreground.py`** — suppression depth is the binding constraint, measured by
+  *projection* rather than level. Two residuals at identical power license opposite
+  conclusions (leaked speech vs genuine background).
+- **`speaker_identity.py`** — speaker-count posterior keeping multi-modal disagreement, with
+  source reliability **derived from perturbation evidence** rather than assigned. The raw
+  and enhanced passes are the same recording under a transform, so they already constitute a
+  stability sample; a source that flips between them has not earned its weight.
+- **`adaptive/influence.py`, `adaptive/provenance.py`** — uncertainty-gated mutual influence,
+  with the self-confirmation guard: uncertainty falling *because a value was overwritten* is
+  not a confidence gain.
+
+Thresholds live in `data/detection_margin/<version>.json` with a written derivation, never
+as code literals. Regenerate one from measured verdicts rather than editing it by hand:
+
+```bash
+uv run python scripts/calibrate_detection_margin.py \
+    --level-verdicts artifacts/level_probe/level-verdicts.json \
+    --out src/senselab/audio/workflows/audio_analysis/data/detection_margin/<name>.json
+```
+
+It refuses to emit a profile with no measured floor, one whose confident tier sits above
+every measured classifier floor (a threshold already known unreachable on that host), or one
+carrying an unmarked provisional figure. `profile_version` is the *schema* version and is
+never restamped; the profile's identity is `calibrated_as` plus its filename.
+
+Outputs: `<pass>/background_mask.{parquet,json}`, `<pass>/noise_floor.parquet`,
+`<pass>/background_sources.parquet`, `<pass>/suppression.json`, `final/speakers.json`,
+`final/per_speaker_presence.parquet`, plus `<pass>__background__mask` and
+`<pass>__speaker__presence` tracks in the Label Studio bundle. Design and evidence:
+`specs/20260728-221507-per-speaker-identity-scene/`.
+
+Three id namespaces stay distinct because all three once rendered as `S0`: a model's own
+speaker labels (`SPEAKER_00`, `spk0`), the pass-wide cluster that harmonises labels across
+diar models (`C0`), and the fused speaker id in `final/speakers.json` (`S0`).
+
 ## Importable pipeline: stages, cache, adaptive loop (T051 / T040)
 
 The per-task pipeline used to live only inside `scripts/analyze_audio.py`. It is
