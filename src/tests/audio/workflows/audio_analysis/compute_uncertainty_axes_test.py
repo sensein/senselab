@@ -686,3 +686,36 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
     speaker = before["speaker"]
     assert speaker.rows
     assert all(r["uncertainty"] is None or 0.0 <= r["uncertainty"] <= 1.0 for r in speaker.rows)
+
+
+def test_the_speaker_axis_reads_the_words_the_asr_axis_folded() -> None:
+    """One fold per pass, shared. The speaker axis's location term must actually arrive.
+
+    Both axes read the same fused words: the asr axis resamples their accuracy, the speaker axis their
+    temporal confidence. If ``harvest_pass`` fails to thread them, the speaker axis silently loses a
+    voter — the same class of silent-omission failure that once left the asr axis with zero
+    contributing signals.
+    """
+    diar_segs = [(0.0, 1.0, "SPEAKER_00"), (1.0, 4.0, "SPEAKER_01")]
+    raw_pass = {
+        "duration_s": 4.0,
+        "diarization": {"by_model": {"pyannote": _diar_block(diar_segs), "sortformer": _diar_block(diar_segs)}},
+        "asr": {
+            "by_model": {
+                "whisper": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "world")]),
+                "granite": _asr_block_with_chunks([(0.0, 1.0, "hello"), (1.0, 4.0, "planet")]),
+            }
+        },
+    }
+    _signals, fused_axes, _incomparable, _emb = compute_uncertainty_axes(
+        passes={"raw": raw_pass},
+        grid=BucketGrid(),
+        params={},
+        audio={"raw": _silent_audio(4.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+    )
+    signals = {s for row in fused_axes["speaker"].rows for s in (row.get("contributing_signals") or ())}
+    assert "asr_location" in signals, f"the speaker axis lost its location voter; got {sorted(signals)}"
+    assert "per_speaker_presence" in signals

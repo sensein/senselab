@@ -387,6 +387,22 @@ def harvest_pass(
         df = cluster.get("empirical_diff_speaker_floor")
         if isinstance(sf, (int, float)) and isinstance(df, (int, float)) and df > sf:
             speaker_floors[str(cluster["embedding_model"])] = (float(sf), float(df))
+    # ── the consensus word fold, once per pass ──
+    # Two axes read these words: the asr axis resamples their accuracy, and the speaker axis reads
+    # their ``temporal_confidence`` as word-location doubt (word boundaries are what assign a word to
+    # a speaker's span). The fold runs g2p per word pair, so folding it twice would double that cost
+    # for one answer — and would let the two axes disagree about a fold neither of them owns.
+    from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
+    from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
+
+    asr_blocks = (harvest_summary.get("asr") or {}).get("by_model") or {}
+    asr_resolved = {
+        m: resolve_asr_result(b, align_by_model.get(m))
+        for m, b in asr_blocks.items()
+        if isinstance(b, dict) and b.get("status") == "ok"
+    }
+    consensus_fold = fuse_consensus_words(asr_resolved)
+
     speaker_votes = harvest_speaker_votes(
         pass_summary=harvest_summary,
         grid=grid,
@@ -395,6 +411,7 @@ def harvest_pass(
         diff_speaker_floor=diff_speaker_floor,
         speaker_floors=speaker_floors,
         cluster_cosine_threshold=cluster_cosine_threshold,
+        fused_words=consensus_fold[0],
     )
 
     # ── asr harvest ──
@@ -402,6 +419,7 @@ def harvest_pass(
         pass_summary=harvest_summary,
         grid=grid,
         alignment_by_model=align_by_model,
+        fused=consensus_fold,
     )
 
     harvest = PassHarvest(
