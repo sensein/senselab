@@ -60,7 +60,7 @@ def test_agreeing_diarizers_read_low_even_across_a_speaker_change() -> None:
     assert buckets, "the harvest produced no buckets"
     for bucket in buckets:
         doubt = per_signal_uncertainty(bucket)
-        assert doubt.get("per_speaker_presence") == pytest.approx(0.0), (
+        assert doubt.get("speaker_assignment") == pytest.approx(0.0), (
             f"agreeing models must carry no attribution doubt at {bucket['start']}"
         )
 
@@ -93,12 +93,46 @@ def test_the_cluster_assignments_survive_for_their_other_readers() -> None:
     assert cluster_active_time(buckets), "cluster ranking lost its input"
 
 
-def test_word_location_doubt_reaches_the_axis() -> None:
-    """A poorly localised word raises attribution doubt: we do not know whose it is."""
+def test_words_gate_the_axis_and_never_vote_on_it() -> None:
+    """Word timing says when there is speech to attribute; it is not evidence about *who*.
+
+    It voted, as ``1 - temporal_confidence``, and contributed ~0.223 of standing doubt in every
+    bucket — swamping a per-speaker term that read 0.0 across 86% of a clean recording. Boundary
+    jitter of tens of milliseconds cannot tell you which of two speakers said a word.
+    """
     words = [{"start": 0.0, "end": 0.5, "temporal_confidence": 0.2}]
     buckets = _votes(fused_words=words)
-    first = per_signal_uncertainty(buckets[0])
-    assert first.get("asr_location") == pytest.approx(0.8)
+    for bucket in buckets:
+        assert "asr_location" not in (bucket["votes"] or {}), "word timing must not vote on identity"
+    # The word covers [0.0, 0.5], so those buckets keep their per-speaker claim...
+    assert "speaker_assignment" in (buckets[0]["votes"] or {})
+    # ...and the wordless remainder of the clip makes no claim at all.
+    assert buckets[-1]["votes"] == {}, "a bucket with no words has no speech to attribute"
+
+
+def test_a_wordless_bucket_makes_no_claim() -> None:
+    """The sharpening, as one property: 22 of 29 flagged buckets on a real clip were inter-turn gaps.
+
+    Four diarizers disagreeing about exactly where a turn ends is not doubt about *who* is speaking —
+    in a gap between turns there is no speaker to get wrong.
+    """
+    for bucket in _votes(fused_words=[{"start": 0.0, "end": 0.2}]):
+        if bucket["start"] >= 0.2:
+            # Wordless: the whole bucket is cleared, so no measurement rides through either.
+            assert bucket["votes"] == {}, f"at {bucket['start']}"
+        else:
+            # Worded: exactly one scored voter, alongside the unscored measurements.
+            assert set(per_signal_uncertainty(bucket)) == {"speaker_assignment"}, f"at {bucket['start']}"
+
+
+def test_no_asr_at_all_leaves_the_axis_intact() -> None:
+    """Unmeasured is not measured-empty: a run without ASR keeps its speaker axis.
+
+    ``fused_words=None`` means the stage did not run. Gating on that would null every bucket and
+    delete the axis on any run with ``stages.asr: false``.
+    """
+    buckets = _votes(fused_words=None)
+    assert any("speaker_assignment" in (b["votes"] or {}) for b in buckets)
 
 
 def test_an_indeterminate_mask_raises_attribution_doubt() -> None:
@@ -123,7 +157,7 @@ def test_a_target_active_mask_adds_nothing() -> None:
 def test_no_intervention_recomputes_the_per_speaker_term() -> None:
     """The axis follows the per-speaker presence, so nothing may overwrite that term mid-loop.
 
-    ``I2_recluster`` used to shadow the harvest's ``per_speaker_presence`` with a value recomputed
+    ``I2_recluster`` used to shadow the harvest's ``speaker_assignment`` with a value recomputed
     over its own repaired clusters. On a real run that took the published axis from 0.288 to 0.608,
     because the repair emits 5 clusters against a count posterior of 2 at 0.978 and five clusters
     spread across the sources drop each share to ~0.2 (``H(0.2) = 0.722``).
@@ -141,7 +175,7 @@ def test_no_intervention_recomputes_the_per_speaker_term() -> None:
     from senselab.audio.workflows.audio_analysis.adaptive import interventions
 
     source = inspect.getsource(interventions)
-    assert 'source="per_speaker_presence"' not in source, (
+    assert 'source="speaker_assignment"' not in source, (
         "an intervention is overwriting the axis's per-speaker term; the axis must follow the "
         "per-speaker presence the run publishes"
     )

@@ -689,12 +689,13 @@ def test_the_three_axes_are_unchanged_by_the_per_speaker_derivation() -> None:
 
 
 def test_the_speaker_axis_reads_the_words_the_asr_axis_folded() -> None:
-    """One fold per pass, shared. The speaker axis's location term must actually arrive.
+    """One fold per pass, shared. The words must actually reach the speaker axis's gate.
 
-    Both axes read the same fused words: the asr axis resamples their accuracy, the speaker axis their
-    temporal confidence. If ``harvest_pass`` fails to thread them, the speaker axis silently loses a
-    voter — the same class of silent-omission failure that once left the asr axis with zero
-    contributing signals.
+    Both axes read the same fused words: the asr axis resamples their accuracy, the speaker axis uses
+    their coverage to decide where there is speech to attribute at all. If ``harvest_pass`` fails to
+    thread them the gate goes inert — and if it threads an empty list as though ASR had run, the gate
+    nulls every bucket and deletes the axis. Both failures are silent, which is why this asserts on
+    the axis's contents rather than on the call.
     """
     diar_segs = [(0.0, 1.0, "SPEAKER_00"), (1.0, 4.0, "SPEAKER_01")]
     raw_pass = {
@@ -717,5 +718,9 @@ def test_the_speaker_axis_reads_the_words_the_asr_axis_folded() -> None:
         speech_presence_labels=["Speech"],
     )
     signals = {s for row in fused_axes["speaker"].rows for s in (row.get("contributing_signals") or ())}
-    assert "asr_location" in signals, f"the speaker axis lost its location voter; got {sorted(signals)}"
-    assert "per_speaker_presence" in signals
+    assert "speaker_assignment" in signals, f"the speaker axis lost its per-speaker voter; got {sorted(signals)}"
+    assert "asr_location" not in signals, "word timing gates the axis; it must not vote on identity"
+    # The words span [0.0, 4.0] here, so the gate keeps every bucket. A wordless bucket would carry no
+    # claim at all — that property is pinned in speaker_attribution_test.py.
+    measured = [r for r in fused_axes["speaker"].rows if r["uncertainty"] is not None]
+    assert measured, "the gate nulled every bucket even though words cover the clip"

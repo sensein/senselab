@@ -55,9 +55,9 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from senselab.audio.workflows.audio_analysis.attribution import (
-    per_speaker_attribution_doubt,
+    speaker_assignment_doubt,
     target_activity_doubt,
-    word_location_doubt,
+    word_coverage,
 )
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
@@ -138,12 +138,14 @@ def harvest_speaker_votes(
 ) -> list[dict[str, Any]]:
     """Yield ``{"start", "end", "votes"}`` per bucket for the speaker axis.
 
-    **The axis asks "how sure are we who is speaking here?"** — attribution, not change. Its three
-    scored voters come from ``attribution``: ``per_speaker_presence`` (do the diarizers agree who is
-    here), ``asr_location`` (do we know where the words are, and so whose they are) and
-    ``target_activity`` (do we know anyone was active at all). Everything else this harvest emits is a
-    *measurement* other consumers read — the cluster assignments, the embedding cosines, the change
-    points, the overlap distribution — and is deliberately unscored, so the fold sees three voters.
+    **The axis asks "how sure are we who is speaking here?"** — attribution, not change. Its two
+    scored voters come from ``attribution``: ``speaker_assignment`` (do the diarizers agree who is
+    here, measured over *all* the answers they gave, since absent a target embedding no speaker is
+    privileged) and ``target_activity`` (do we know anyone was active at all). Both are gated by
+    ``word_coverage``: a bucket with no words has no speech to attribute and gets no claim.
+    Everything else this emits is a *measurement* other consumers read — the cluster assignments, the
+    embedding cosines, the change points, the overlap distribution — and is deliberately unscored, so
+    the fold sees two voters.
 
     It asked "was it the same speaker as before?" until 2026-08-05, scored per (diar × embedder) pair
     against embedding cosine. On a 0.1 s grid that asks ten times a second against 0.5 s embedding
@@ -173,12 +175,13 @@ def harvest_speaker_votes(
         cluster_cosine_threshold: Cosine similarity threshold for clustering
             (diar_model, raw_label) into pass-wide speaker IDs. 0.5 is roughly
             the EER for ECAPA on VoxCeleb.
-        fused_words: The consensus words from ``asr.fuse_consensus_words``, read for their
-            ``temporal_confidence`` — word boundaries are what assign a word to a speaker's span, so
-            not knowing where a word starts is not knowing whose it is. Omitted, the ``asr_location``
-            voter is simply absent and the axis degrades to its other two terms; each row's
-            ``contributing_signals`` records which voted, so the absence is visible rather than
-            silent.
+        fused_words: The consensus words from ``asr.fuse_consensus_words``, used as a **gate** rather
+            than as a voter: a bucket no word occupies has no speech to attribute, so the axis makes
+            no claim there. Word timing bounds *where* a speaker change can be; it is not evidence
+            about *who*, and folding it in as doubt swamped the per-speaker term with ~0.223 of
+            standing jitter (see ``attribution.word_coverage``). Empty or ``None`` disables the gate
+            entirely: with no word measured anywhere, a bucket's emptiness carries no information, and
+            gating on it would delete the axis rather than sharpen it.
 
     Returns:
         List of ``{"start", "end", "votes"}`` dicts. ``votes`` shape::
@@ -432,7 +435,7 @@ def harvest_speaker_votes(
                         n_disagree += 1
             # ``cluster_ids`` is what ``_bucket_clusters`` reads, so the block stays. Its ``value``
             # does not: the axis's per-speaker term is computed from these same assignments by
-            # ``attribution.per_speaker_attribution_doubt``, and scoring the pair-disagreement
+            # ``attribution.speaker_assignment_doubt``, and scoring the pair-disagreement
             # fraction beside it would count one body of evidence twice (D-21 rule 6).
             votes["__cross_diar_label_disagreement__"] = {
                 "n_pairs": n_pairs,
@@ -509,7 +512,7 @@ def harvest_speaker_votes(
     buckets = [(round(float(b["start"]), 6), round(float(b["end"]), 6)) for b in out]
     mask_doc = ((pass_summary.get("background_mask") or {}).get("result")) or {}
     mask_regions = mask_doc.get("regions") or []
-    location = word_location_doubt(list(fused_words or ()), buckets)
+    coverage = word_coverage(list(fused_words or ()), buckets)
     activity = target_activity_doubt(mask_regions, buckets)
 
     for bucket_dict in out:
@@ -521,11 +524,26 @@ def harvest_speaker_votes(
             # where no attribution was made, which is a claim of a different kind.
             bucket_dict["votes"] = {}
             continue
-        presence = per_speaker_attribution_doubt(_bucket_clusters(bucket_dict))
-        if presence is not None:
-            votes["per_speaker_presence"] = {"value": presence, "operator": "max_over_speakers/entropy"}
-        if location[key] is not None:
-            votes["asr_location"] = {"value": location[key], "operator": "1-temporal_confidence/coverage_mean"}
+        if fused_words and coverage[key] <= 0.0:
+            # **No words here, so no speech to attribute.** Word timing is used to *sharpen* the
+            # question rather than to vote on it: its one job is telling us when there is nothing to
+            # be uncertain about. Measured on a clean two-speaker conversation, 22 of the 29 buckets
+            # the axis flagged were wordless — the inter-turn silence where the four diarizers
+            # disagree about exactly where the boundary falls. There is no speaker to get wrong in a
+            # gap between turns, so the axis makes no claim rather than reporting the disagreement.
+            #
+            # Gated on the fold having produced **at least one word anywhere**, which is what makes
+            # this bucket's emptiness a measurement rather than an absence of measurement. Two
+            # failures it rules out, both of which null the entire axis silently: a run with
+            # ``stages.asr: false`` (``harvest_pass`` hands over ``[]``, not ``None``, so an
+            # ``is not None`` check does not catch it — an existing test did), and a fold that read no
+            # words because every result shape was unconvertible, which is the defect that once left
+            # the asr axis with zero contributing signals over a whole recording.
+            bucket_dict["votes"] = {}
+            continue
+        assignment = speaker_assignment_doubt(_bucket_clusters(bucket_dict))
+        if assignment is not None:
+            votes["speaker_assignment"] = {"value": assignment, "operator": "over_speakers/entropy"}
         if doubt is not None:
             votes["target_activity"] = {"value": doubt, "operator": "mask_region/gated_on_state", "state": state}
 

@@ -43,17 +43,32 @@ This is a separate defect from the threshold-scale bug fixed in `a38d5292`. That
 
 `harvest_speaker_votes` keeps emitting each model's cluster assignment per bucket — `per_speaker_tracks`,
 `cluster_active_time`, `label_correspondence_rows`, `speaker_claims_from_votes` and
-`build_speaker_identity` all read it — but the axis's **scored** voters become three:
+`build_speaker_identity` all read it — but the axis's **scored** voters become two, with word evidence acting as a gate rather than a third:
 
-| voter | value | measured (conversation clip) |
+| voter | value | measured (conversation clip, raw pass) |
 |---|---|---|
-| `per_speaker_presence` | `max` over the speakers present in the bucket of `speech_presence_uncertainty` (binary entropy of the model share) | mean 0.120, 3 distinct |
-| `asr_location` | coverage-weighted mean of `1 - temporal_confidence` over the words reaching the bucket | mean 0.220, 79 distinct |
+| `speaker_assignment` | normalised Shannon entropy of the diarizers' distribution over the answers they gave (their cluster ids, plus `SIL` as its own answer) | mean 0.049, 94% exactly 0 |
 | `target_activity` | the mask **region's** `uncertainty`, **only where its `state != "target_active"`** | 1.0 over the 25 indeterminate buckets (12% of the clip) |
+| *(gate)* `word_coverage` | fraction of the bucket a fused word occupies; `0.0` clears the bucket's votes so the axis reads `None` | 23 buckets nulled |
 
-**`max` over speakers, not mean.** If any speaker's presence in this bucket is contested, attribution
-in this bucket is contested; averaging that against a confidently-placed speaker would let one
-certain speaker hide doubt about another. Approved explicitly.
+**No speaker is privileged.** This started as `max` over the speakers present of each one's *binary*
+entropy, on the argument that a confidently-placed speaker must not hide doubt about a contested one —
+approved on that basis, then corrected: absent a target embedding the axis's question is "do we know
+who is talking", and a max elects the single most-contested speaker and reports *that speaker's*
+doubt. It is a targeted reading with no target supplied, and the artifact read as a claim about one
+person. Measured across the two validation clips the correction moves almost nothing, because binary
+entropy is symmetric (`H(p) = H(1-p)`) so the two forms **coincide exactly whenever only two answers
+are in play** — only one bucket in the conversation clip had three. That is the point: it was wrong in
+principle while invisible in the numbers, which is the class of defect that ships.
+
+`speaker_assignment_doubt` takes an optional `target`, which restores the binary per-speaker measure.
+It is the seam for the future mode where a reference embedding is supplied and the question genuinely
+*is* about one person. The two questions are different and must not silently stand in for each other.
+
+**`SIL` stays an answer, not an exclusion.** "Nobody is here" is one of the things a diarizer can say
+about who is here, so it is an outcome in the distribution. Dropping it would make a lone detection
+among three silent models read as unanimous; keeping it scores that case 0.811, exactly as the
+per-speaker form did.
 
 **Why `asr_location` belongs here.** Word boundaries are what assign words to a speaker's span, so
 not knowing where a word starts is not knowing whose it is. This is the quantity D-27 deliberately
@@ -182,17 +197,30 @@ cache cleared, exit 0.
 
 | round | `triage_score` (doubt) | contributing voters |
 |---|---|---|
-| 0 | **0.2878** | `per_speaker_presence`, `asr_location` |
+| 0 | **0.2271** | `speaker_assignment` |
 | 1 | 0.3927 | + `axis::asr`, `axis::speech_presence`, `axis::background_mask` |
 | 2 | 0.8222 | + the same three |
-| 3–4 | 0.6082 | `per_speaker_presence`, `asr_location` |
+| 3–4 | 0.6082 | `speaker_assignment` |
 
-**Round 0 is the design, met:** 0.288 against a predicted 0.333, composed of
-`per_speaker_presence` mean 0.1196 and `asr_location` mean 0.2228 — it tracks the clean per-speaker
-presence (0.1196) plus the real word-location doubt, against 0.666 before. The 48 kHz clip reads
-0.62, which is also correct there: its per-speaker presence doubt is genuinely 0.576 on a five-speaker
-recording with a multi-modal 1-vs-5 count posterior, so the axis is reflecting contested evidence
-rather than manufacturing it.
+**Round 0, and the one thing still averaging the reading up.** The votes are as designed: on the raw
+pass `speaker_assignment` is **exactly 0.0 in 179 of 190 buckets (94%)**, taking only three distinct
+values (`0.0`, `0.811`, `1.0`) — the diarizers agree, and the axis now says so. The published 0.2271
+is higher than that because `fuse_axis` averages each signal **across passes**, and the enhanced pass
+reads mean 0.398 with only 51% of buckets at zero: the two passes disagree on 94 of 185 shared buckets
+at mean `|Δ|` 0.406, and in places are anti-correlated. Speech enhancement changes who the diarizers
+think is speaking.
+
+That is an open question rather than a fixed decision, and it is a question about the *fold*, not
+about this composition: whether "who is speaking" — a fact about the recording — should be measured on
+the identity pass alone, with the enhanced pass used only as the perturbation sample that sets the
+signal's stability *weight*. There is direct precedent: the background mask runs only on the
+unmodified pass, and `signal_support` is likewise measured there, both on the argument that the
+property belongs to the recording and not to the transform. Deciding it would take the published
+figure to 0.049.
+
+**The prediction that was wrong, recorded.** Before measuring, the expectation was that
+`target_activity` would dominate the surviving high-doubt buckets. It does not: `speaker_assignment`
+accounts for 18 of the 21.
 
 Both transcripts are byte-identical to their pre-change digests (`ad7dfa13a6971e1a`,
 `a033983bab339bf4`), and checks 2–5 pass unchanged.
@@ -207,7 +235,7 @@ rounds, which is a deviation from this design and is tracked there.
 ### Rounds 3–4: `I2_recluster` was overwriting the per-speaker term, and that was a bug
 
 Rounds 3–4 initially settled at 0.6082 rather than returning to round 0's 0.2878. The cause was
-`I2_recluster` shadowing the harvest's `per_speaker_presence` vote with a value recomputed over its
+`I2_recluster` shadowing the harvest's `speaker_assignment` vote with a value recomputed over its
 own repaired clusters: it emits **5 clusters**, five clusters spread across the sources drop each
 share to ~0.2, and `H(0.2) = 0.722`.
 
@@ -238,8 +266,8 @@ it on agreeing with one, is the next speaker task.
 `contributing_signals` still contained `__cross_diar_label_disagreement__` on a live run while
 `speaker_attribution_test.py` asserted it was gone. The tests exercise `harvest_speaker_votes`;
 `I2_recluster` is a **second producer** that added its own scored copy after re-clustering — which is
-how it propagated the repair into the axis, since `per_speaker_presence` is computed at harvest and is
-stale the moment a re-cluster lands. It now recomputes `per_speaker_presence` instead, a faithful
+how it propagated the repair into the axis, since `speaker_assignment` is computed at harvest and is
+stale the moment a re-cluster lands. It now recomputes `speaker_assignment` instead, a faithful
 translation because both read the same cluster assignments. `cross_source_disagreement` became
 uncalled and is deleted.
 

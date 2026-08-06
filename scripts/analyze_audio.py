@@ -197,7 +197,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-
 def pick_device(arg: str) -> DeviceType | None:
     """Resolve --device into a senselab DeviceType, or None for per-task auto.
 
@@ -547,9 +546,7 @@ def main(argv: list[str] | None = None) -> int:
         "scene_window": {
             "ast": {"win_length": cfg.ast_win_length, "hop_length": cfg.ast_hop_length},
             "yamnet": {"win_length": cfg.yamnet_win_length, "hop_length": cfg.yamnet_hop_length},
-            "comparable": (
-                cfg.ast_win_length == cfg.yamnet_win_length and cfg.ast_hop_length == cfg.yamnet_hop_length
-            ),
+            "comparable": (cfg.ast_win_length == cfg.yamnet_win_length and cfg.ast_hop_length == cfg.yamnet_hop_length),
         },
         "passes": {},
     }

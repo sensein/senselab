@@ -382,7 +382,7 @@ adaptive:
     default_source_kind: independent
     weights:
       speaker_to_diarization: 1.0
-      diarization_to_per_speaker_presence: 1.0
+      diarization_to_speaker_assignment: 1.0
       background_mask_to_speech_presence: 0.6
       asr_to_speaker_attribution: 0.5
 

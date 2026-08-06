@@ -136,7 +136,7 @@ influence:
     derived: 0.4                 # < 1.0 is mandatory (FR-011c)
   weights:
     identity_to_diarization: 1.0
-    diarization_to_per_speaker_presence: 1.0
+    diarization_to_speaker_assignment: 1.0
     background_mask_to_presence: 0.6
     utterance_to_speaker_attribution: 0.5
 
