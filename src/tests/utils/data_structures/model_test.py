@@ -26,8 +26,16 @@ def test_check_hf_repo_exists_true() -> None:
 
 
 def test_check_hf_repo_exists_false() -> None:
-    """Test HF repo does not exist."""
-    with patch("senselab.utils.dependencies.ensure_hf_model", side_effect=Exception("not found")):
+    """A definitive not-found error means the repo does not exist (False).
+
+    A generic/transient error (e.g. a 429) is deliberately NOT reported as
+    missing — check_hf_repo_exists re-raises it — so this uses the concrete
+    RepositoryNotFoundError that signals a genuinely absent repo.
+    """
+    from huggingface_hub.errors import RepositoryNotFoundError
+
+    not_found = RepositoryNotFoundError("not found", response=MagicMock(status_code=404, headers={}))
+    with patch("senselab.utils.dependencies.ensure_hf_model", side_effect=not_found):
         assert check_hf_repo_exists("invalid_repo") is False
 
 
