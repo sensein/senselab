@@ -59,18 +59,28 @@ def _pipeline_sources() -> list[Path]:
 def real_run_dir() -> Path:
     """The newest completed run under ``artifacts/analyze_audio/``.
 
-    A run counts as complete when it has both an ``L1/`` and an ``L2/`` directory — the two the
-    layout guards are about. Skips rather than passing when there is none, because a layout guard
-    with nothing to walk reports exactly what a layout guard that found no violation reports.
+    A run counts as complete when it has a written ``L1/signals/*.parquet`` **and** a ``final/``
+    directory — not merely ``L1/`` and ``L2/``, which is what this asked for until 2026-08-07. A run
+    still executing satisfies the weaker test within seconds of starting, because ``L1/raw/`` is
+    created long before any signal is written. Running the suite beside a pipeline therefore selected
+    the in-flight directory as "newest" and failed on ``no per-signal measurement under
+    L1/<pass>/signals/`` — a guard reporting a violation it had manufactured by looking too early.
+
+    Skips rather than passing when there is none, because a layout guard with nothing to walk reports
+    exactly what a layout guard that found no violation reports.
     """
     candidates = (
-        [p for p in RUNS_DIR.iterdir() if p.is_dir() and (p / "L1").is_dir() and (p / "L2").is_dir()]
+        [
+            p
+            for p in RUNS_DIR.iterdir()
+            if p.is_dir() and any((p / "L1" / "signals").glob("*.parquet")) and (p / "final").is_dir()
+        ]
         if RUNS_DIR.is_dir()
         else []
     )
     if not candidates:
         pytest.skip(
-            f"no completed run under {RUNS_DIR} (need one with L1/ and L2/). "
+            f"no completed run under {RUNS_DIR} (need one with L1/signals/ and final/). "
             "These guards read what the pipeline actually wrote; with no run they would pass "
             "vacuously. Produce one with: uv run python scripts/analyze_audio.py <audio>"
         )
