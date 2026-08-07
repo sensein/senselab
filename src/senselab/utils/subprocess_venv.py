@@ -883,6 +883,7 @@ def call_in_venv(
                     capture_output=True,
                     text=True,
                     timeout=timeout,
+                    env=_clean_subprocess_env(),
                 )
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError(f"Venv '{name}' timed out after {timeout}s") from exc

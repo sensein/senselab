@@ -678,3 +678,65 @@ def test_an_operators_own_ca_bundle_is_left_alone(monkeypatch: pytest.MonkeyPatc
     env = _clean_subprocess_env()
     assert env["SSL_CERT_FILE"] == "/etc/pki/corp/ca-bundle.pem"
     assert env["REQUESTS_CA_BUNDLE"] == "/etc/pki/corp/ca-bundle.pem"
+
+
+def test_every_worker_spawn_goes_through_the_shared_env_helper() -> None:
+    """A helper only helps the call sites that call it.
+
+    `_clean_subprocess_env` existed, and six of the twenty-one venv-python spawns did not use it:
+    `voice_cloning/coqui.clone_voices` and `features_extraction/ppg` each hand-rolled their own copy
+    of the MPLBACKEND filter, while `voice_cloning/sparc`, `features_extraction/sparc`,
+    `compatibility_test_runner`, and `subprocess_venv`'s own shim passed no `env` at all and
+    inherited `os.environ` wholesale. So the CA-bundle fix landed in one place and four backends kept
+    failing — `voice_cloning_test` still raised CERTIFICATE_VERIFY_FAILED on ORCD after the helper
+    was already correct, and `subprocess_venv_test` passed the whole time because it tested the
+    helper rather than its callers.
+
+    A duplicated env dict is the kind of thing that reads as harmless at every individual call site,
+    so this asserts the invariant structurally instead: launching a venv interpreter means passing an
+    `env`, and building one from `os.environ` happens in exactly one module.
+    """
+    import ast
+    import pathlib
+
+    import senselab
+
+    # From the package itself, so moving this test file cannot silently point the scan at nothing.
+    pkg = pathlib.Path(senselab.__file__).resolve().parent
+    assert pkg.is_dir(), pkg
+
+    missing_env: list[str] = []
+    hand_rolled: list[str] = []
+    for source in sorted(pkg.rglob("*.py")):
+        text = source.read_text()
+        rel = source.relative_to(pkg.parent)
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            # Every env built from os.environ belongs to the one helper.
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in ("items", "copy")
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "environ"
+                and source.name != "subprocess_venv.py"
+            ):
+                hand_rolled.append(f"{rel}:{node.lineno}")
+            # A spawn of the venv interpreter must be handed an env.
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "run"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.args
+                and isinstance(node.args[0], ast.List)
+                and node.args[0].elts
+                and isinstance(node.args[0].elts[0], ast.Name)
+                and node.args[0].elts[0].id == "python"
+            ):
+                continue
+            if not any(kw.arg == "env" for kw in node.keywords):
+                missing_env.append(f"{rel}:{node.lineno}")
+
+    assert not missing_env, "venv-python spawns with no env (they inherit os.environ): " + ", ".join(missing_env)
+    assert not hand_rolled, "env built from os.environ outside subprocess_venv.py: " + ", ".join(hand_rolled)

@@ -243,6 +243,7 @@ class SparcFeatureExtractor:
                 capture_output=True,
                 text=True,
                 timeout=600,
+                env=_clean_subprocess_env(),
             )
 
             output = parse_subprocess_result(result, "SPARC")

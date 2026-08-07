@@ -7,7 +7,6 @@ torch/Python. It runs in an isolated subprocess venv managed by uv.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -21,7 +20,12 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    venv_python,
+)
 
 # Try to import the phoneme inventory from the ppgs library.
 # ppgs runs in a subprocess venv and may not be importable in the main env.
@@ -169,9 +173,7 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
             }
         )
 
-        # Scrub MPLBACKEND so the subprocess venv's matplotlib doesn't
-        # choke on Jupyter's inline backend which isn't installed there.
-        sub_env = {k: v for k, v in os.environ.items() if k != "MPLBACKEND"}
+        sub_env = _clean_subprocess_env()
 
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
