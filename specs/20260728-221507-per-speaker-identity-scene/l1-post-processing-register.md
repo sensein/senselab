@@ -83,11 +83,11 @@ a named `SpeechPresencePolicy`). `PassHarvest.speech_presence_votes` became
 | 8 | `acoustic_loudness` | per-pass **percentile band** p10→p75 → `[0,1]` → direction flip | replaced by absolute `lufs` (D-3) | what loudness counts as audible here? | **closed** |
 | 9 | `acoustic_spectral_activity` | per-pass percentile band on `spectralFlux_sma3` | replaced by `level_above_floor_db` (D-3) | what excess above the measured floor counts as activity? | **closed** |
 | 10 | `acoustic_hnr` | fixed 2→10 dB ramp; low maps to `p = 0.5` (abstain) | `hnr_db`, units dB — still emitted | anchors were never fitted | **withdrawn from the presence axis** (2026-08-06, below) |
-| 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **closed** |
+| 11 | `ppg_voice_fraction` | per-frame argmax, count `!= "<silent>"`, ÷ n, then `>= 0.5` | `mean_silence_posterior` + dispersion + frame count | what silence posterior means speech? | **open** — reduced in the harvester, not recomputed at L2 (D-7) |
 | 12 | `embedding_silhouette` | cluster all windows, silhouette coefficient, `>= 0.5` | *withdrawn from this axis* — see below | wrong question: geometry, not voicing | **closed by removal** |
 | 13 | frame posteriors | bucket-mean over frames, then `>= 0.5` | `frame_mean`, `frame_std`, `channel_means`, `resolution_s` | how do frames aggregate to a bucket, and where is the cut? | **closed** |
 | 14 | `frame_dispersion` | `clip(2 × mean(std), 0, 1)` — ×2 rescale + clip | dispersion in probability units, unrescaled | how does dispersion enter a belief? | **closed** |
-| 15 | coarse-voter demotion | hand-set `coarse: True`, `weight = 0.25` when grid < 0.5 s | measured `native_window_s` / `resolution_s` per signal | how should resolution mismatch be weighted? | **closed** |
+| 15 | coarse-voter demotion | hand-set `coarse: True`, `weight = 0.25` when grid < 0.5 s | measured `native_window_s` / `resolution_s` per signal | how should resolution mismatch be weighted? | **partial** — detection is measured, the magnitude is still `0.25` |
 | 16 | segmentation-3.0 reduction | noisy-or over per-speaker channels (was `max`) | per-speaker activation matrix, channels intact | how do per-speaker activations combine? | **closed** |
 
 Item 16 is the sharpest case, and its diagnosis changed once measured. The model reports one
@@ -788,12 +788,12 @@ of what made it look like the shape that worked. Whether a segment's score shoul
 buckets its own words landed in is a separate decision about the scalar fallback (item 4's
 neighbourhood), not about the fold.
 
-### Still open
+### Closed 2026-08-07
 
-`aggregate.aggregate_speech_presence`, `aggregate_speaker` and `aggregate_asr` still have no caller
-in `src/`. Leaving them in the tree leaves a second definition of the axis available to the next
-reader who goes looking; the direction-only rule they encoded now lives in `fuse`, so they should be
-deleted with their tests.
+`aggregate.aggregate_speech_presence`, `aggregate_speaker` and `aggregate_asr` are **deleted**, with
+their tests. `aggregate.py`'s module docstring records what they were and why they went: three
+complete, tested folds with no production caller, i.e. a second definition of each axis sitting in the
+tree for the next reader to find. The direction-only rule they encoded lives in `fuse`.
 
 ---
 
@@ -933,12 +933,31 @@ counted *exact* zeros. **Exact zero is unreachable on this axis by construction 
 `ast` votes in all 214 buckets with a floor of 0.0372 doubt, and a classifier reporting 95% is not
 reporting 100%. The right screen for this axis is a low threshold, not zero.
 
-## Still open, found alongside items 10 and 12
+## Banked 2026-08-07 — weighting a signal by how informative it is
 
 **Stability-based weighting cannot distinguish "reliable" from "uninformative."**
 `reliability.signal_stability` measures cross-pass `|Δ|`, so a near-constant signal earns full weight
 — which is how `embedding_silhouette` outweighed every informative presence voter at 1.0. Removing
 individual signals does not fix the mechanism.
+
+**Banked rather than open**, on the grounds that a signal with zero dispersion carries no
+discriminative information *by definition* — the axis is per-bucket, and a constant cannot tell one
+bucket from another. So there is nothing to discover about *whether* such a signal informs the axis;
+the only live question is whether **dispersion is the right measure of it**, and what has been
+gathered says it is not:
+
+- Seven presence signals have dispersion **exactly 0.000000** — all four diarizers/embedders and all
+  three recognizers, constant at doubt 0.0000 — and they are the axis's most trustworthy voters. The
+  withdrawn `embedding_silhouette` had *more* dispersion (0.0227) than any of them. A dispersion
+  discount would have penalised the seven best voters harder than the one it was written to demote.
+- Both concrete instances turned out to have causes upstream of weighting, and both were fixed there:
+  `embedding_silhouette` was a cluster coefficient read as a probability (item 12), and `ast` was flat
+  only because a 10.24 s window met a 4.9 s recording (run config, 2026-08-06). After both, no flat
+  uninformative signal remains on any axis.
+
+Unbanking it needs a measure that separates "constant because the recording is uniform" from
+"constant because the signal is not responding", tested on a signal actually in the tree — and
+neither instance survives to test against.
 
 **Closed 2026-08-06 — the mask axis folds the identity pass only** (`axes.IDENTITY_ONLY_AXES`,
 applied through `axes.passes_for_axis` at both build sites so the run's fold and the loop's ingest
