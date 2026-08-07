@@ -101,7 +101,34 @@ aws ec2 terminate-instances --profile senselab --instance-id i-XXXXXXXXX
 |------|-------------|
 | `AWS_KEY_ID` | IAM access key with EC2 permissions |
 | `AWS_KEY_SECRET` | Corresponding secret access key |
-| `GH_TOKEN` | GitHub PAT with `repo` scope |
+| `GH_TOKEN` | GitHub PAT that can manage self-hosted runners — see below |
+
+#### What `GH_TOKEN` must be able to do
+
+`machulav/ec2-github-runner` drives the runner lifecycle through three endpoints, and all three are
+**self-hosted-runner** endpoints rather than Actions endpoints:
+
+| when | endpoint |
+|------|----------|
+| `mode: start` | `POST /repos/{owner}/{repo}/actions/runners/registration-token` |
+| polling for the runner to come online | `GET /repos/{owner}/{repo}/actions/runners` |
+| `mode: stop` | `DELETE /repos/{owner}/{repo}/actions/runners/{id}` |
+
+- **Fine-grained PAT**: repository permission **`Administration` → Read and write**, scoped to this
+  repository. That is the only one needed. `Actions: read/write` is *not* sufficient and is the usual
+  wrong guess — runner management lives under Administration.
+- **Classic PAT**: `repo` scope, which is what this table used to say and which covers only the
+  classic case.
+
+Two failure modes that both surface as `Bad credentials` / `GitHub Registration Token receiving
+error` from the `Start EC2 runner` step, with the AWS step passing just before it:
+
+- the PAT has expired — fine-grained tokens expire by default, and a year-old one will have;
+- the repository is organisation-owned and the org has not approved the fine-grained PAT, so it is
+  rejected regardless of its permissions.
+
+`stop-runner` uses the same secret, so a token that can start but not stop leaves the EC2 instance
+running and billing. Check both jobs after rotating.
 
 ### Variables (Settings → Variables → Actions)
 

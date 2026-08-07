@@ -197,8 +197,10 @@ def test_classify_audios_windowed_basic() -> None:
     for win, (exp_start, exp_end) in zip(windows, expected_times):
         assert win["start"] == pytest.approx(exp_start, abs=1e-6)
         assert win["end"] == pytest.approx(exp_end, abs=1e-6)
-        assert len(win["labels"]) == 3
-        assert len(win["scores"]) == 3
+        # One dict per label rather than two aligned lists, for the reason ``_classify_windowed``
+        # records: the pairing cannot come apart if it is never split.
+        assert len(win["label_scores"]) == 3
+        assert all(len(pair) == 1 for pair in win["label_scores"]), "one label per entry"
         # Provenance captured
         assert win["win_length"] == 1.0
         assert win["hop_length"] == 0.5
@@ -372,9 +374,15 @@ def test_load_config_cached_round_trips_once(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_scene_results_to_segments() -> None:
     """Test conversion of windowed results to segment format."""
+    # ``label_scores``: one single-entry dict per label, in rank order — the shape the windowed
+    # classifiers emit and ``label_scores.top_label`` reads. This fixture built the older pair of
+    # aligned ``labels`` / ``scores`` lists, which ``top_label`` finds nothing in, so every segment
+    # came back ``"unknown"`` and the failure looked like a defect in the conversion rather than a
+    # fixture describing a shape nothing produces. The lists were replaced precisely because a score
+    # was one slice away from drifting off the label it belonged to.
     window_results = [
-        {"start": 0.0, "end": 1.0, "labels": ["Speech", "Music"], "scores": [0.8, 0.2]},
-        {"start": 0.5, "end": 1.5, "labels": ["Music", "Speech"], "scores": [0.6, 0.4]},
+        {"start": 0.0, "end": 1.0, "label_scores": [{"Speech": 0.8}, {"Music": 0.2}]},
+        {"start": 0.5, "end": 1.5, "label_scores": [{"Music": 0.6}, {"Speech": 0.4}]},
     ]
     segments = scene_results_to_segments(window_results)
 
