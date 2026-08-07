@@ -1,8 +1,8 @@
 # Feature Specification: Alpha Prerelease Process
 
-**Feature Branch**: `20260418-104204-alpha-prerelease-process`  
-**Created**: 2026-04-18  
-**Status**: Draft  
+**Feature Branch**: `20260418-104204-alpha-prerelease-process`
+**Created**: 2026-04-18
+**Status**: Draft
 **Input**: User description: "write a new spec to create a prerelease process off a dedicated branch (alpha) for senselab. this should branch off main. the pre-release process should use the same setup as ~/software/neuronets/nobrainer."
 
 ## User Scenarios & Testing *(mandatory)*

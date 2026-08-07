@@ -1,8 +1,8 @@
 # Feature Specification: Optimize Import Times
 
-**Feature Branch**: `20260501-154228-optimize-import-times`  
-**Created**: 2026-05-01  
-**Status**: Draft  
+**Feature Branch**: `20260501-154228-optimize-import-times`
+**Created**: 2026-05-01
+**Status**: Draft
 **Input**: User description: "let's optimize import times. take each import block from the tutorials and evaluate how much time it takes, and check where bottlenecks in import exist."
 
 ## User Scenarios & Testing *(mandatory)*

@@ -1,8 +1,8 @@
 # Feature Specification: Scalene-Based Profiling Tooling
 
-**Feature Branch**: `20260503-235625-scalene-profiling`  
-**Created**: 2026-05-03  
-**Status**: Draft  
+**Feature Branch**: `20260503-235625-scalene-profiling`
+**Created**: 2026-05-03
+**Status**: Draft
 **Input**: User description: "can we first add scalene based proper profiling to senselab without changing anything so we can use that to profile any part of the codebase not just imports."
 
 ## Clarifications

@@ -154,7 +154,7 @@ alignment:
   qwen_native_timestamps: true                      # false forces the script's own align stage
   # ISO 639-1 ('en') or 639-3 ('eng'); null falls back to each model's documented default. Anchored
   # so the aligner and the loop's live re-ASR cannot be pinned to different languages.
-  language: &asr_language
+  language:
 
 scene:
   ast_win_length: 0.96
@@ -474,8 +474,10 @@ adaptive:
   - openai/whisper-base          # full installs may list the run's own backends instead
   u1_backend: auto               # T047: "auto" = senselab task API first, HF-pipeline fallback
                                  # (recorded in iterations.json); "senselab" / "pipeline" pin one path
-  language: *asr_language        # ASR language pin for U1 — the same one the aligner uses
-  enhancement_model: *enhancement_model    # on-demand enhanced stream
+  language:
+                                 # ASR language pin for U1 — the same one the aligner uses
+  enhancement_model: *enhancement_model
+                                           # on-demand enhanced stream
   speech_presence:               # P2 fine-grid speech_presence re-analysis
     coarse_share_threshold: 0.5  # fire P2 when >= this share of active votes are coarse
   speaker:                       # I1/I2 speaker repair (stored or live embeddings)

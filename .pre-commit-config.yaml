@@ -16,6 +16,10 @@ repos:
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests
+    # `run_config.py` reads the packaged YAML, and this hook's mypy runs in an isolated env —
+    # so the stubs the dev group provides are not visible to it. Without this the hook fails
+    # with `Library stubs not installed for "yaml"` while a local `uv run mypy .` passes.
+    - types-PyYAML
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
   hooks:

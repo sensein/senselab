@@ -219,3 +219,5 @@ visualize/
 # Build output.
 dist/
 
+# matplotlib's font cache — machine-local, and it was committed by accident once
+.matplotlib/
