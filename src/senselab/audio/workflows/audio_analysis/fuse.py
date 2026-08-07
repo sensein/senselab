@@ -207,6 +207,19 @@ def _source_distributions_for(
     return list(store.get((bucket, signal)) or [])
 
 
+def _source_names(bucket: Mapping[str, Any], signal: str) -> set[str]:
+    """Which sources a folding signal rests on, by name — what ``_evidence_of`` expands to.
+
+    Distinct from ``n_sources``, which is a count: a count cannot say whether the four diarizers
+    behind ``speaker_assignment`` are the same four already voting on ``speech_presence``, and that
+    is precisely the question the overlap measure asks.
+    """
+    votes = bucket.get("votes") or {}
+    entry = votes.get(signal) if isinstance(votes, Mapping) else None
+    outcomes = entry.get("source_outcomes") if isinstance(entry, Mapping) else None
+    return {str(k) for k in outcomes} if isinstance(outcomes, Mapping) else set()
+
+
 def _source_distributions(bucket: Mapping[str, Any], signal: str) -> list[dict[str, float]]:
     """The per-source outcome distributions behind one signal, for the reducibility split.
 
@@ -352,6 +365,7 @@ def fuse_axis(
     gated_out: dict[tuple[float, float], set[str]] = {}
     sources: dict[tuple[float, float], dict[str, int]] = {}
     source_dists: dict[tuple[tuple[float, float], str], list[dict[str, float]]] = {}
+    source_names: dict[tuple[float, float], dict[str, set[str]]] = {}
 
     for perturbation in sorted(buckets_by_pass):
         for bucket in buckets_by_pass[perturbation] or []:
@@ -376,6 +390,9 @@ def fuse_axis(
                 dists = _source_distributions(bucket, signal)
                 if dists and not source_dists.get((key, signal)):
                     source_dists[(key, signal)] = dists
+                named = _source_names(bucket, signal)
+                if named:
+                    source_names.setdefault(key, {}).setdefault(signal, set()).update(named)
 
     # A bucket every pass was gated out of still owes a row: it has no fused value, and that is a
     # measurement ("nothing was admitted here"), not an absence to be skipped over.
@@ -444,6 +461,11 @@ def fuse_axis(
                 # resting on four independent signals; this is what says otherwise. Previously
                 # written only by the adaptive loop, so fusion's rounds left it null.
                 "n_sources": sum(sources.get((start, end), {}).get(name, 1) for name in signals),
+                # ``{signal → the sources it folds}``, so ``measure_axis_overlap`` can see through a
+                # fold instead of comparing renamed signals that collide with nothing.
+                "signal_sources": {
+                    name: sorted(source_names.get((start, end), {}).get(name, {name})) for name in signals
+                },
                 "signal_weights": {s: w for s, w in zip(signals, applied)},
                 "weight_basis": {s: dict((weight_basis or {}).get(s, {})) for s in signals},
                 "round": int(round_index),
@@ -739,13 +761,56 @@ def measure_axis_overlap(
         Overlap in ``[0, 1]``, or ``None`` when the source contributed no evidence of its own —
         which applies **no** discount, because a factor never measured must not act as one.
     """
-    target = {s for r in target_rows or () for s in (r.get("contributing_signals") or ())}
-    source = {
-        s for r in source_rows or () for s in (r.get("contributing_signals") or ()) if not str(s).startswith("axis::")
-    }
+    target = _evidence_of(target_rows)
+    source = _evidence_of(source_rows, drop_coupled=True)
     if not source:
         return None
     return len(target & source) / len(source)
+
+
+def _evidence_of(rows: Sequence[Mapping[str, Any]], *, drop_coupled: bool = False) -> set[str]:
+    """The **sources** an axis's rows rest on, seeing through folds.
+
+    Expanding to sources rather than stopping at signal names is what makes this measure honest. A
+    folding signal renames its sources out of visibility: ``speaker_assignment`` is an entropy over
+    four diarizers, and the mask's ``speakers`` / ``speech`` / ``words`` are folds too. Compared by
+    name, those collide with nothing — so the coupled inputs whose evidence is *wholly already
+    counted* were the ones entering at full weight, while ``axis::asr``, honestly named after its
+    recognizers, was correctly zeroed.
+
+    Measured on the 4.9 s validation clip, where ``speaker``'s four sources are all four also
+    ``speech_presence`` signals:
+
+    | coupling                     | name overlap | weight | source overlap | weight |
+    |------------------------------|--------------|--------|----------------|--------|
+    | ``speech_presence <- asr``   | 1.00         | 0.00   | 1.00           | 0.00   |
+    | ``speech_presence <- speaker`` | **0.00**   | **1.00** | **1.00**     | **0.00** |
+
+    A complete inversion on the second row: the axis whose evidence presence already holds entirely
+    was the one it trusted most.
+
+    ``n_sources`` alone cannot do this — a count says how many, not which — so the expansion reads
+    ``source_outcomes``, the per-source map the same commit added for the reducibility split.
+
+    Args:
+        rows: An axis's estimate rows.
+        drop_coupled: Exclude signals a previous round's coupling contributed. Counting them would
+            let the measure feed on its own output and drift with every round.
+
+    Returns:
+        The set of source identifiers, with folding signals replaced by what they fold and atomic
+        signals standing for themselves.
+    """
+    out: set[str] = set()
+    for row in rows or ():
+        for signal in row.get("contributing_signals") or ():
+            name = str(signal)
+            if drop_coupled and name.startswith("axis::"):
+                continue
+            by_signal = row.get("signal_sources")
+            expanded = by_signal.get(name) if isinstance(by_signal, Mapping) else None
+            out |= {str(x) for x in expanded} if expanded else {name}
+    return out
 
 
 def fuse_axes(
