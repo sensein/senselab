@@ -96,6 +96,14 @@ class SpeechPresencePolicy:
     lufs_speech: float = -30.0
     coarse_voter_weight: float = 0.25
     coarse_window_ratio: float = 2.0
+    # Carried here rather than in a second policy object because they travel together — all of them
+    # answer "what turns a measurement into a belief" — and one config block feeding one policy is
+    # what keeps the recorded value and the used value from drifting apart.
+    mask_speech_threshold: float = 0.5
+    mask_word_coverage_threshold: float = 0.0
+    mask_occupancy_threshold: float = 0.0
+    asr_slot_overlap: float = 0.3
+    asr_slot_mid_tol_s: float = 0.15
 
 
 DEFAULT_POLICY = SpeechPresencePolicy()

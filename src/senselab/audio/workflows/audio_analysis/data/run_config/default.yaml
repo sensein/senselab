@@ -177,6 +177,14 @@ speaker:
   same_floor: 0.30
   diff_floor: 0.70
   cluster_cosine_threshold: 0.5
+  # Cosine similarity below which two models' speaker centroids are not the same voice, used by the
+  # second matcher in label harmonisation (H2/D-6). Where the overlap matcher and the centroid matcher
+  # disagree, that disagreement *is* the assignment uncertainty — so this value decides how often the
+  # two are allowed to disagree.
+  centroid_min_similarity: 0.5
+  # Posterior mass at which a speaker count counts as *supported* by a source, for the multi-modal
+  # count report.
+  supported_threshold: 0.5
   clustering_algorithm: spectral    # spectral | kmeans; spectral falls back per-k automatically
 
 task:
@@ -241,6 +249,102 @@ uncertainty:
     w_q: 0.5
     w_s: 0.25
 
+# ── L1 → L2 linking: what turns a measurement into a belief ──────────────────
+#
+# Every value here was a dataclass default in `speech_presence_link.SpeechPresencePolicy`, reachable
+# only by editing Python. `policy_from_params` has always been able to read them from the run params;
+# nothing ever filled them, so `DEFAULT_POLICY` was the dataclass and the config could not move a
+# single threshold. These are the decisions that turn L1's measurements into L2's votes, which makes
+# them exactly the kind of thing the config exists to carry.
+#
+# Values are unchanged from those defaults, deliberately: this move is about *where* they are declared.
+linking:
+  # A diarizer's segment counts as a claim on a bucket at any overlap. Zero because the segment is the
+  # model's own assertion of extent — requiring more would be re-cutting its answer.
+  diar_coverage_threshold: 0.0
+  # Likewise for ASR word overlap, in seconds.
+  word_overlap_threshold_s: 0.0
+  # Whisper-family `no_speech_prob` above which the chunk is read as non-speech.
+  no_speech_threshold: 0.5
+  # How per-chunk log-probabilities become one bucket confidence. `mean_of_exp` averages the
+  # per-chunk confidences — each chunk is an independent "am I confident here?" vote;
+  # `exp_of_mean` exponentiates the mean log-probability. By Jensen's inequality the first is
+  # always >= the second whenever the chunks disagree, so these are different statistics and one
+  # has to be named. mean_of_exp | exp_of_mean.
+  asr_confidence_pooling: mean_of_exp
+  # Share of a scene classifier's label mass on speech labels needed to read the window as speech.
+  label_mass_threshold: 0.5
+  # Frame-posterior mean above which a bucket is read as speech.
+  frame_speech_threshold: 0.5
+  # dB above the measured noise floor at which level counts as activity. The low end of this ramp
+  # abstains rather than denying — a low excess is ambiguous between silence and a source that runs
+  # through the whole recording and is absorbed into its own floor estimate.
+  speech_excess_db: 12.0
+  # Absolute loudness anchors. LUFS *may* assert absence: -60 is unambiguous silence, -30 is
+  # conversational. This is the one acoustic voter allowed to contradict a model outright.
+  lufs_silence: -60.0
+  lufs_speech: -30.0
+  # A voter whose native analysis window exceeds `coarse_window_ratio` x the reporting window has one
+  # value spanning many buckets, and is demoted to `coarse_voter_weight`.
+  #
+  # ⚠ `coarse_voter_weight` is UNDERIVED — a hand-set magnitude on an otherwise measured demotion.
+  # Detection reads the declared `native_window_s`; the penalty does not. Register item 15 is
+  # **partial** for this reason, and asks for `native_window_s / resolution_s` instead. Measured cost:
+  # on a 4.9 s clip, `ast` (10.24 s window, wider than the recording, so one observation) and `yamnet`
+  # (0.96 s, five observations) received the identical 0.25.
+  coarse_voter_weight: 0.25
+  coarse_window_ratio: 2.0
+
+  # Background-mask thresholds. A reading above these says the *target* was active, before the
+  # task-type polarity flip. Zero for words and speaker occupancy because any overlap is the model's
+  # own claim of extent, as above.
+  mask_speech_threshold: 0.5
+  mask_word_coverage_threshold: 0.0
+  mask_occupancy_threshold: 0.0
+
+  # Word-slot alignment for the ASR consensus fold. `slot_overlap` is the fraction two words must
+  # share to be candidates for the same slot; `slot_mid_tol_s` is how far their midpoints may differ.
+  # These were the task API's own defaults, named here rather than inherited silently so the recorded
+  # value and the used value cannot drift.
+  asr_slot_overlap: 0.3
+  asr_slot_mid_tol_s: 0.15
+
+# ── measurement geometry and anchors that are not per-signal ──────────────────
+quality:
+  # The scene-quality analysis frame. Not the reporting grid: these are the window and hop the SNR /
+  # reverb / bandwidth estimators run at, and they are recorded in each run's provenance so a measured
+  # value can be read back at the resolution it was taken.
+  analysis_win_length: 0.5
+  analysis_hop_length: 0.25
+  # Percentile of per-band energy taken as the noise floor. A tenth-percentile estimate sits ~9.8 dB
+  # below the true mean noise power, and `acoustic._FLOOR_BIAS_DB` corrects for exactly that — the two
+  # travel together, so changing this one without re-deriving the bias makes every relative-dB gate
+  # that much more permissive.
+  floor_percentile: 10.0
+  # Ceiling on the gain the scene-quality calibration may apply when normalising a level. A cap rather
+  # than a target: amplification changes no signal-to-noise ratio, so unbounded gain buys nothing and
+  # risks clipping.
+  max_gain_cap_db: 10.0
+
+# ── how uncertainty is binned for review ─────────────────────────────────────
+labelstudio:
+  # The high/low bins the Label Studio bundle colours by, and the same scale `theta_low` / `theta_high`
+  # are written on. Doubt below `low` reads as settled, above `high` as unsettled. These are review
+  # ergonomics, not measurements — they decide what a human is shown first.
+  low_threshold: 0.33
+  high_threshold: 0.66
+
+# ── how far a signal's claim must be corroborated ─────────────────────────────
+support:
+  # A signal whose independent evidence spans less than this is not measured against — an evidence set
+  # with no spread cannot distinguish a supported claim from an unsupported one.
+  min_evidence_spread: 0.15
+  # Pooled evidence below this counts as *low*, i.e. as failing to corroborate a claim.
+  evidence_low_threshold: 0.20
+  # Fraction of a signal's claims that must fall in low-evidence buckets before its support is
+  # discounted at all. Without it a single unlucky bucket would attenuate a signal across a whole run.
+  min_low_fraction: 0.02
+
 profiles:
   # null → the bundled profile for each. Paths or names, resolved by their own loaders, which record
   # what they resolved to.
@@ -252,6 +356,13 @@ rounds:
   # Total adaptive rounds including the baseline. 1 = baseline only: no interventions and no
   # rounds/>=2, though final/ is still emitted from the round-1 belief.
   max_rounds: 3
+  # Change in epistemic uncertainty below which a round counts as having improved nothing. 1e-3 is a
+  # convergence tolerance, not a belief about the data: it is the scale at which two folds of the same
+  # evidence differ by float arithmetic rather than by measurement.
+  epistemic_tolerance: 0.001
+  # How many rounds of history the cycle detector compares. A loop that revisits the same state every
+  # third round is oscillating, not converging, and 4 is the shortest window that can see it.
+  cycle_window: 4
 
 # ── the adaptive loop's policy ───────────────────────────────────────────────
 #

@@ -694,6 +694,11 @@ def main(argv: list[str] | None = None) -> int:
                 "w_q": cfg.asr_scene_coupling_w_q,
                 "w_s": cfg.asr_scene_coupling_w_s,
             },
+            # The L1→L2 linking thresholds. ``policy_from_params`` has always read this key and
+            # nothing ever wrote it, so every threshold came from a dataclass default and the config
+            # could not move one. It picks out the keys ``SpeechPresencePolicy`` declares and ignores
+            # the rest, so the mask and asr-slot values below travel in the same block harmlessly.
+            "speech_presence_policy": dict(cfg.linking),
         }
         # US5 (T039): load + validate the calibration profile and thread its flat
         # runtime form into BOTH consumers — the harvest (quality dB→[0,1] anchors,
