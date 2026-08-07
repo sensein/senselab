@@ -228,13 +228,26 @@ def test_every_fold_column_the_schema_declares_is_carried_by_the_writers() -> No
     shared -= {"round", "axis"}
     assert shared, "the fold and the schema share no columns, so this test is checking nothing"
 
-    for module in (fuse, loop, belief):
-        source = inspect.getsource(module)
+    # Scoped to the *row-building* functions, not the whole module. Checking module text let
+    # ``n_sources`` pass while ``write_final_uncertainty``'s rebuild omitted it — the name appeared
+    # in ``fuse_axis`` a few hundred lines above, so the substring was present and the column still
+    # came out null in every parquet. Found by reading a run, which is one time too many.
+    builders = [
+        (fuse.write_final_uncertainty, "fuse.write_final_uncertainty"),
+        (loop._write_round_belief, "loop._write_round_belief"),
+    ]
+    for fn, label in builders:
+        source = inspect.getsource(fn)
         missing = sorted(column for column in shared if f'"{column}"' not in source)
         assert not missing, (
-            f"{module.__name__} writes estimate rows but never names {missing}; "
-            "estimate_frame will write them null rather than refuse"
+            f"{label} builds estimate rows but never names {missing}; estimate_frame writes them "
+            "null rather than refusing, so the column is silently absent from every run"
         )
+    # ``belief`` hands its rows to the loop rather than to ``estimate_frame``, so it is checked for
+    # the columns it must *carry through* rather than for the whole declared set.
+    belief_source = inspect.getsource(belief)
+    for column in ("n_sources", "snr_gated_passes", "signal_weights", "weight_basis"):
+        assert f'"{column}"' in belief_source, f"belief.py drops {column} before the loop can write it"
 
 
 # ── source multiplicity: a single signal is an identity mapping ──────────────
