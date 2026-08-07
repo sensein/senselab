@@ -165,7 +165,11 @@ def test_the_final_map_carries_its_attribution(tmp_path) -> None:  # noqa: ANN00
     frame = pd.read_parquet(written["speaker"])
     row = frame.iloc[0]
     assert sorted(row["contributing_signals"]) == ["a", "b"]
-    assert sorted(row["contributing_passes"]) == ["enhanced", "raw"]
+    # ``['raw']``, not both: this fixture's evidence is ``speaker_votes``, and the speaker axis folds
+    # the identity pass only (``axes.IDENTITY_ONLY_AXES``) because who is speaking is a fact about the
+    # recording. The provenance this test is about — the signals and weights behind the number — is
+    # unaffected by how many passes fed it.
+    assert sorted(row["contributing_passes"]) == ["raw"]
     assert json.loads(row["signal_weights"]) == {"a": 1.0, "b": 0.1}
 
 

@@ -337,6 +337,7 @@ def test_policy_hash_stable_and_override(tmp_path: Path) -> None:
 def test_from_harvests_in_process_integration() -> None:
     """T044/T009: PassHarvest → VoteStore without a parquet round-trip; parity with aggregate_pass."""
     from senselab.audio.workflows.audio_analysis.adaptive.belief import VoteStore
+    from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
     from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
@@ -845,22 +846,35 @@ def test_the_deliverable_presence_track_is_the_last_round_byte_for_byte(tmp_path
 
 def _parity_fixture() -> tuple[Any, dict[str, list[dict[str, Any]]]]:
     """A two-pass store plus the axes ``fuse_axis`` produces from the same votes."""
+    from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
     from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
     from senselab.audio.workflows.audio_analysis.votes import PassHarvest
 
+    # On the **asr** axis, not speaker. Both tests below are about store-vs-L2 parity and about a
+    # dropped signal being reported — neither is speaker-specific — and `speaker` is identity-only
+    # (``axes.IDENTITY_ONLY_AXES``), so it folds one pass and has no enhanced-pass vote for the
+    # drop test to drop. `asr` asks about content a transform may legitimately change, so it folds
+    # both and exercises the two-pass path these tests exist for.
     def _harvest(label: str, value: float) -> PassHarvest:
         return PassHarvest(
             perturbation=label,
-            speaker_votes=[
-                {"start": 0.0, "end": 1.0, "votes": {"diar_a": {"same_label_uncertainty": value}}},
-                {"start": 1.0, "end": 2.0, "votes": {"diar_a": {"same_label_uncertainty": 1.0 - value}}},
+            asr_votes=[
+                {"start": 0.0, "end": 1.0, "votes": {"rec_a": {"value": value}}},
+                {"start": 1.0, "end": 2.0, "votes": {"rec_a": {"value": 1.0 - value}}},
             ],
         )
 
     harvests = {"raw": _harvest("raw", 0.2), "enhanced": _harvest("enhanced", 0.6)}
     store = VoteStore.from_harvests(harvests)
-    rows = fuse_axis({label: h.speaker_votes for label, h in harvests.items()}, weights={}, snr_gate=None)
-    return store, {"speaker": rows}
+    # Through ``passes_for_axis``, as both production folds do. Building the L2 side from every pass
+    # by hand while the store filters is a fixture that compares two different bodies of evidence and
+    # calls the difference a parity failure.
+    rows = fuse_axis(
+        {label: harvests[label].asr_votes for label in passes_for_axis("asr", harvests)},
+        weights={},
+        snr_gate=None,
+    )
+    return store, {"asr": rows}
 
 
 def test_the_store_and_l2_fold_the_same_evidence_to_the_same_number() -> None:
@@ -872,7 +886,7 @@ def test_the_store_and_l2_fold_the_same_evidence_to_the_same_number() -> None:
     is a difference in evidence — which is the thing worth catching.
     """
     store, fused = _parity_fixture()
-    report = store.fused_parity(fused, aggregator="min")["speaker"]
+    report = store.fused_parity(fused, aggregator="min")["asr"]
     assert report["compared"] == 2, "a check that compares nothing reports the same zero as one that passes"
     assert report["mismatches"] == 0 and report["not_in_l2"] == 0
 
@@ -884,9 +898,9 @@ def test_a_signal_the_ingest_drops_is_reported_as_a_mismatch() -> None:
     on one path, filed it as a measurement on the other — and no test or artifact said so.
     """
     store, fused = _parity_fixture()
-    dropped = [v for v in store.votes_for("enhanced", "speaker", (0.0, 1.0))]
+    dropped = [v for v in store.votes_for("enhanced", "asr", (0.0, 1.0))]
     assert dropped, "fixture must have an enhanced-pass vote to drop"
     for vote in dropped:
         vote.status = "shadowed"
-    report = store.fused_parity(fused, aggregator="min")["speaker"]
+    report = store.fused_parity(fused, aggregator="min")["asr"]
     assert report["mismatches"] >= 1, "losing one pass's signal must not fold to the same number"

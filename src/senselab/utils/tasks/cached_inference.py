@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 21
+CACHE_SCHEMA_VERSION = 22
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -220,6 +220,14 @@ compares *sources* rather than signal names, with ``speaker_assignment`` and the
 ``speech``/``words``/``speakers`` declaring what they fold. Cached rows for rounds >= 1 carry
 ``axis::*`` in ``contributing_signals`` and values folded over them — on the 4.9 s clip asr read
 0.3088 at round 2 against 0.0395 at round 0, and the mask 0.2645 against 0.0037.
+
+Bumped 21 → 22 when the **speaker** axis became identity-only (``axes.IDENTITY_ONLY_AXES``). Who is
+speaking is a fact about the recording, so a transform's opinion of it no longer folds into the value.
+On an 11.26 s recording at median −1.5 dB SNR — where ``SnrGate`` admits the enhanced pass in 105 of
+110 buckets, correctly — the raw pass had all four diarizers unanimously on ``C0`` while the enhanced
+pass split them 2–2, and the fused axis read 0.500 against a deliverable reading confidence 1.0000.
+Every cached speaker row on any recording with sub-floor buckets folds a pass this axis no longer
+reads.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any

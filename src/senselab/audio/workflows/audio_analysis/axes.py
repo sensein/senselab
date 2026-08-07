@@ -278,7 +278,7 @@ at the reader instead of quietly folding to nothing. The two sets agreeing is a 
 harvested, the loop's ingest enumerated three axes, and nothing compared them.
 """
 
-IDENTITY_ONLY_AXES: Final[frozenset[str]] = frozenset({"background_mask"})
+IDENTITY_ONLY_AXES: Final[frozenset[str]] = frozenset({"background_mask", "speaker"})
 """Axes whose question is about the recording as read, so only the identity perturbation answers it.
 
 ``background_mask`` asks whether a region is free of **target** activity. ``stages.py`` already builds
@@ -300,9 +300,37 @@ repair to repair"; this asks "is this perturbation entitled to answer this quest
 the mask the answer is no at any SNR. A perturbation excluded here still contributes its cross-pass
 ``|delta|`` to ``reliability.signal_stability``, which is what sets each signal's weight.
 
-The other three axes are unaffected: ``speech_presence``, ``speaker`` and ``asr`` ask about content
-that a transform may legitimately change the reading of, which is what makes the perturbation a
-sample rather than a contaminant.
+``speaker`` was added 2026-08-07, on the same argument and a decisive measurement. **Who is speaking
+is a fact about the recording**, and folding a transform's opinion of it produced an axis that
+contradicted its own deliverable.
+
+Measured on an 11.26 s recording whose SNR is genuinely low — min −7.4 dB, median −1.5 dB, 105 of 110
+buckets below ``triage.snr_floor_db`` — so ``fuse.SnrGate`` admits the enhanced pass almost
+everywhere, which is what it is for. At 9.8–10.3 s:
+
+| source | reading |
+|---|---|
+| all four diarizers, raw pass | ``C0`` unanimously, ``speaker_assignment`` **0.000** |
+| the same four, enhanced pass | 2–2 split, ``speaker_assignment`` **1.000** |
+| the fused axis | **0.500** |
+| ``final/per_speaker_presence.parquet`` | speaker ``S0``, confidence **1.0000**, uncertainty **0.0000**, 4 sources |
+
+The deliverable and the axis describing it disagreed, which
+``speaker_attribution_test.test_no_intervention_recomputes_the_per_speaker_term`` already forbids —
+it was written when ``I2_recluster`` caused the same contradiction by overwriting the term.
+
+**Reporting the divergence as epistemic instead would not have fixed it.** The deliverable is built by
+``build_speech_presence_tracks(speaker_harvest)`` from the *raw* harvest, so it folds one pass by
+construction; an axis folding two can never agree with it however well it labels the disagreement. And
+making the deliverable fold both is not coherent — there is no answer to "whose ``S0``, raw's or
+enhanced's". Either both fold both passes or both fold raw, and only the second is buildable.
+
+The enhanced pass keeps its actual job here: its cross-pass ``|Δ|`` is what
+``reliability.signal_stability`` turns into this signal's weight. What it no longer does is vote on
+who was speaking.
+
+``speech_presence`` and ``asr`` are unaffected: they ask about content a transform may legitimately
+change the reading of, which is what makes the perturbation a sample rather than a contaminant.
 """
 
 COUPLING_IS_A_GATE: Final[frozenset[str]] = frozenset({"speaker", "asr", "background_mask"})

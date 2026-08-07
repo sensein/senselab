@@ -122,16 +122,36 @@ def test_the_mask_axis_folds_the_identity_pass_only() -> None:
     assert passes_for_axis("background_mask", ["raw", "enhanced"]) == ["raw"]
 
 
-def test_the_other_axes_fold_every_perturbation() -> None:
+def test_the_content_axes_fold_every_perturbation() -> None:
     """Narrow by construction: a transform may legitimately change what those axes read.
 
     That is what makes the perturbation a *sample* rather than a contaminant, and it is what
-    ``reliability.signal_stability`` measures.
+    ``reliability.signal_stability`` measures. ``speech_presence`` and ``asr`` ask about content;
+    ``speaker`` and ``background_mask`` ask about the recording, and are identity-only.
     """
     from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
 
-    for axis in ("speech_presence", "speaker", "asr"):
+    for axis in ("speech_presence", "asr"):
         assert passes_for_axis(axis, ["raw", "enhanced"]) == ["raw", "enhanced"], axis
+
+
+def test_the_speaker_axis_folds_the_identity_pass_only() -> None:
+    """Who is speaking is a fact about the recording, not about a transform of it.
+
+    The regression, as a number. On an 11.26 s recording at median −1.5 dB SNR — so ``SnrGate`` admits
+    the enhanced pass in 105 of 110 buckets, correctly — the raw pass had all four diarizers
+    unanimously on ``C0`` (``speaker_assignment`` 0.000) while the enhanced pass split them 2–2
+    (1.000). The fused axis read **0.500** for those buckets, and
+    ``final/per_speaker_presence.parquet`` read speaker ``S0`` at confidence **1.0000**, uncertainty
+    **0.0000**, from four sources — a deliverable and the axis describing it disagreeing, which
+    ``speaker_attribution_test.test_no_intervention_recomputes_the_per_speaker_term`` forbids.
+
+    Labelling the divergence epistemic would not have reconciled them: the deliverable is built from
+    the *raw* harvest by construction, so an axis folding two passes can never agree with it.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import passes_for_axis
+
+    assert passes_for_axis("speaker", ["raw", "enhanced"]) == ["raw"]
 
 
 def test_an_identity_only_axis_still_folds_when_the_identity_is_absent() -> None:
