@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 20
+CACHE_SCHEMA_VERSION = 21
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -213,6 +213,13 @@ cached AST classification is a different number of windows at different spans, s
 stored result is reusable. Measured on the 21.48 s conversation: 3 windows at Speech 0.473/0.449/0.195
 became 45 windows at 0.75-0.92 — the coarse setting cost confidence as well as resolution, because a
 10.24 s window of a conversation spreads its softmax mass across every class present in it.
+
+Bumped 20 → 21 for the coupling changes. Cross-axis inputs are gated for ``asr`` and
+``background_mask`` as well as ``speaker`` (``axes.COUPLING_IS_A_GATE``), and evidence overlap now
+compares *sources* rather than signal names, with ``speaker_assignment`` and the mask's
+``speech``/``words``/``speakers`` declaring what they fold. Cached rows for rounds >= 1 carry
+``axis::*`` in ``contributing_signals`` and values folded over them — on the 4.9 s clip asr read
+0.3088 at round 2 against 0.0395 at round 0, and the mask 0.2645 against 0.0037.
 
 - ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
   geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any

@@ -352,6 +352,12 @@ def harvest_pass(
     _speech_by_bucket: dict[tuple[float, float], float] = {}
     _words_by_bucket: dict[tuple[float, float], float] = {}
     _occupancy_by_bucket: dict[tuple[float, float], float] = {}
+    # Which presence signals each mask reading maxes over. Recorded because the mask's three
+    # "signals" are folds of presence's own evidence, and a fold renames its sources out of
+    # visibility: ``measure_axis_overlap`` compares what an axis rests on, so without this the
+    # coupling ``speech_presence <- axis::background_mask`` reads overlap 0.00 and enters at full
+    # weight while being, in substance, presence's own evidence returning under another name.
+    _mask_sources: dict[str, dict[tuple[float, float], set[str]]] = {"speech": {}, "words": {}, "speakers": {}}
     for row in speech_presence_evidence:
         key = (round(float(row["start"]), 6), round(float(row["end"]), 6))
         for name, ev in (row.get("evidence") or {}).items():
@@ -359,10 +365,13 @@ def harvest_pass(
                 continue
             if "frame_mean" in ev and ev["frame_mean"] is not None:
                 _speech_by_bucket[key] = max(_speech_by_bucket.get(key, 0.0), float(ev["frame_mean"]))
+                _mask_sources["speech"].setdefault(key, set()).add(str(name))
             elif ev.get("word_overlap_s") is not None:
                 _words_by_bucket[key] = max(_words_by_bucket.get(key, 0.0), float(ev["word_overlap_s"]))
+                _mask_sources["words"].setdefault(key, set()).add(str(name))
             elif ev.get("covered_fraction") is not None:
                 _occupancy_by_bucket[key] = max(_occupancy_by_bucket.get(key, 0.0), float(ev["covered_fraction"]))
+                _mask_sources["speakers"].setdefault(key, set()).add(str(name))
     background_mask_evidence = harvest_background_mask_evidence(
         duration_s=float(harvest_summary.get("duration_s", 0.0) or 0.0),
         grid=grid,
@@ -370,6 +379,7 @@ def harvest_pass(
         speech_by_bucket=_speech_by_bucket,
         word_coverage_by_bucket=_words_by_bucket,
         speaker_occupancy_by_bucket=_occupancy_by_bucket,
+        sources_by_bucket=_mask_sources,
     )
 
     # ── speaker harvest ──

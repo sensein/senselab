@@ -39,21 +39,57 @@ def test_the_speaker_axis_takes_no_cross_axis_vote() -> None:
     assert contributors == [], "and must not be recorded as having contributed one"
 
 
-def test_the_other_axes_still_couple() -> None:
-    """Narrow by construction: where the coupled quantity and the question match, coupling stands."""
-    for axis in ("speech_presence", "asr", "background_mask"):
+def test_only_speech_presence_still_receives_coupled_votes() -> None:
+    """The gate covers three axes; presence is the one whose question a coupled axis can answer.
+
+    ``asr`` asks what words were said — presence bounds where that is live, speaker answers neither.
+    ``background_mask`` asks whether the target was active, and its own voters are folds of the same
+    diarizers, VAD and recognizers the other axes read, so coupling returns its evidence under
+    another name.
+
+    ``speech_presence`` asks whether there was a speaker, and the mask's verdict bears on it directly:
+    target-free implies no target speech. Its other two inputs are zeroed by measured overlap rather
+    than by this gate, which is the right division — redundancy is measurable, relevance is not.
+    """
+    for axis in ("asr", "background_mask", "speaker"):
         buckets, contributors = cross_axis_inputs(axis, _previous(), own_keys=KEYS)
-        assert buckets, f"{axis} lost its coupling"
-        assert contributors, f"{axis} lost its contributor record"
+        assert buckets == [] and contributors == [], f"{axis} is receiving coupled votes"
+    buckets, contributors = cross_axis_inputs("speech_presence", _previous(), own_keys=KEYS)
+    assert buckets and contributors, "presence lost the one coupling that answers its question"
+
+
+def test_relevance_and_redundancy_are_different_gates() -> None:
+    """Why the measured overlap cannot replace this gate, stated as the case that separates them.
+
+    ``asr <- axis::speaker`` reads overlap **0.00** and is right to: asr's sources are three
+    recognizers, speaker's are four diarizers, and the evidence really is independent. Overlap asks
+    *is this already counted*; it cannot ask *does this answer my question*. Independent-and-irrelevant
+    is the failure these axes had, and a signal answering a different question must not enter at any
+    weight however novel its evidence.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis, measure_axis_overlap
+
+    def fused(votes: dict[str, Any]) -> list[dict[str, Any]]:
+        return fuse_axis({"raw": [{"start": 0.0, "end": 0.1, "votes": votes}]}, weights={}, snr_gate=None)
+
+    speaker = fused(
+        {"speaker_assignment": {"value": 0.5, "n_sources": 2, "source_outcomes": {"diar_a": "C0", "diar_b": "C1"}}}
+    )
+    asr = fused({"rec_a": {"value": 0.1}, "rec_b": {"value": 0.2}})
+    assert measure_axis_overlap(asr, speaker) == pytest.approx(0.0), (
+        "the evidence is genuinely independent, so overlap cannot be the thing that keeps it out"
+    )
+    assert "asr" in COUPLING_IS_A_GATE, "so relevance has to"
 
 
 def test_a_coupled_vote_would_have_been_scored() -> None:
     """Shows the fold *does* read these, so returning nothing is what keeps them out.
 
     Without this, the test above passes just as well if ``per_signal_uncertainty`` had never scored
-    ``axis::*`` in the first place — and then it would be asserting nothing.
+    ``axis::*`` in the first place — and then it would be asserting nothing. Asked of
+    ``speech_presence``, the one axis still receiving coupled votes.
     """
-    buckets, _ = cross_axis_inputs("asr", _previous(), own_keys=KEYS)
+    buckets, _ = cross_axis_inputs("speech_presence", _previous(), own_keys=KEYS)
     read = per_signal_uncertainty(buckets[0])
     assert {name for name in read if name.startswith("axis::")}, (
         "cross-axis inputs are not scored at all, so this whole mechanism is misdescribed"

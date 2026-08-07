@@ -67,6 +67,7 @@ def harvest_background_mask_evidence(
     speech_by_bucket: Optional[Mapping[tuple[float, float], float]] = None,
     word_coverage_by_bucket: Optional[Mapping[tuple[float, float], float]] = None,
     speaker_occupancy_by_bucket: Optional[Mapping[tuple[float, float], float]] = None,
+    sources_by_bucket: Optional[Mapping[str, Mapping[tuple[float, float], set[str]]]] = None,
 ) -> list[dict[str, Any]]:
     """Per-bucket votes on whether the **target** was active, one per source that measured.
 
@@ -77,6 +78,11 @@ def harvest_background_mask_evidence(
         speech_by_bucket: ``{bucket → speech probability}``.
         word_coverage_by_bucket: ``{bucket → seconds of ASR word overlap}``.
         speaker_occupancy_by_bucket: ``{bucket → fraction of the bucket a speaker covers}``.
+        sources_by_bucket: ``{reading → {bucket → contributing presence signals}}``. Each of the
+            three readings is a **max over presence signals**, which makes it a fold; declaring
+            what it folds is what lets ``fuse.measure_axis_overlap`` see that this axis rests on
+            evidence ``speech_presence`` already holds. Omitted, the votes carry no declaration
+            and the coupling is compared by name, finds nothing in common, and takes full weight.
 
     Returns:
         ``[{"start", "end", "task_type", "votes"}, …]`` in time order, where ``votes`` maps a source to
@@ -103,6 +109,7 @@ def harvest_background_mask_evidence(
         "words": word_coverage_by_bucket or {},
         "speakers": speaker_occupancy_by_bucket or {},
     }
+    by_source = sources_by_bucket or {}
     thresholds = {
         "speech": _SPEECH_THRESHOLD,
         "words": _WORD_COVERAGE_THRESHOLD,
@@ -118,13 +125,23 @@ def harvest_background_mask_evidence(
             if value is None:
                 continue  # this source said nothing here; silence is not a vote
             positive = float(value) > thresholds[source]
+            verdict = positive if polarity[source] else not positive
             votes[source] = {
                 # Does this reading say the *target* was active? The polarity flip is the task gate.
-                "target_active": positive if polarity[source] else not positive,
+                "target_active": verdict,
                 # The measurement itself, so the interpretation can be redone without re-measuring.
                 "reading": float(value),
                 "same_label_uncertainty": _uncertainty(source, float(value)),
             }
+            # Which presence signals this reading is a max over. Each of these three "signals" is a
+            # fold, and a fold renames its sources out of visibility — so without declaring them,
+            # ``fuse.measure_axis_overlap`` compares the name ``speakers`` against presence's signal
+            # list, finds nothing in common, and lets the mask couple into presence at full weight
+            # while carrying presence's own diarizers, recognizers and frame posteriors.
+            contributing = sorted(by_source.get(source, {}).get(key) or ())
+            if contributing:
+                votes[source]["n_sources"] = len(contributing)
+                votes[source]["source_outcomes"] = {name: str(verdict) for name in contributing}
         if votes:
             out.append({"start": start, "end": end, "task_type": task, "votes": votes})
     return out

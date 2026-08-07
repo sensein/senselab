@@ -257,9 +257,21 @@ def test_the_writers_produce_what_the_declaration_says_a_round_and_final_owe(tmp
 
     # An axis carried forward keeps saying which round produced its numbers, or "settled in round 1"
     # and "re-folded to the same value" are the same row.
+    # Checked on the round *fusion* wrote, not on the loop's. The two producers read this column
+    # differently and the disagreement is genuine rather than a bug in one of them:
+    # ``BeliefState.from_store`` stamps its baseline index onto every axis, because adopting fusion's
+    # last round *does* re-aggregate every bucket — that is the parity check. By the column's literal
+    # definition ("the round that last re-folded this value") the stamp is honest; by the reading this
+    # assertion encodes ("a value proven identical was not re-folded") it is not.
+    #
+    # It was invisible until cross-axis coupling was gated for three of the four axes
+    # (``axes.COUPLING_IS_A_GATE``): before that every axis ran to the same last round, so the
+    # baseline index and each axis's own last refold always coincided. Recorded in the L1
+    # post-processing register rather than settled here.
     for axis in stopped_early:
         last = max(int(e["round"]) for e in written["round_logs"][axis])
-        carried = pd.read_parquet(tmp_path / "L2" / "round" / str(fusion_rounds - 1) / "estimates" / f"{axis}.parquet")
+        fusion_last = max(int(i) for i in rounds_present(tmp_path) if int(i) <= last)
+        carried = pd.read_parquet(tmp_path / "L2" / "round" / str(fusion_last) / "estimates" / f"{axis}.parquet")
         assert set(carried["last_refolded_round"].dropna().astype(int)) == {last}
 
     # final/ carries the extraction, one file per active axis, plus the run's own account.
