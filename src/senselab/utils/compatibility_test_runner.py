@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from senselab.utils.compatibility import COMPATIBILITY_MATRIX, CompatibilityEntry, VersionRange
-from senselab.utils.subprocess_venv import ensure_venv, venv_python
+from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, venv_python
 
 logger = logging.getLogger("senselab")
 
@@ -173,6 +173,7 @@ def _probe_function(
             capture_output=True,
             text=True,
             timeout=60,
+            env=_clean_subprocess_env(),
         )
         actual_passed = result.returncode == 0
         error = result.stderr.strip() if not actual_passed else None
