@@ -232,7 +232,7 @@ def test_every_fold_column_the_schema_declares_is_carried_by_the_writers() -> No
     # ``n_sources`` pass while ``write_final_uncertainty``'s rebuild omitted it — the name appeared
     # in ``fuse_axis`` a few hundred lines above, so the substring was present and the column still
     # came out null in every parquet. Found by reading a run, which is one time too many.
-    builders = [
+    builders: list[tuple[Any, str]] = [
         (fuse.write_final_uncertainty, "fuse.write_final_uncertainty"),
         (loop._write_round_belief, "loop._write_round_belief"),
     ]

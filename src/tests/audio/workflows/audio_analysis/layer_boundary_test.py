@@ -417,6 +417,12 @@ _FUSED_AXIS_FIELDS = {
     # signal that folds four diarizers otherwise reads exactly as confident as one resting on four
     # independent signals.
     "n_sources",
+    # ``{signal → the sources it folds}``, read by ``measure_axis_overlap`` so it compares evidence
+    # rather than names — a folding signal renames its sources out of visibility, which is how the
+    # coupled input whose evidence the receiver already held *entirely* came to enter at full weight.
+    # Deliberately **not** in ``ESTIMATE_COLUMNS``: it is consumed inside the round loop and
+    # ``write_final_uncertainty``'s rebuild does not pass it, so no producer writes it to a parquet.
+    "signal_sources",
     "signal_weights",
     "weight_basis",
     "round",

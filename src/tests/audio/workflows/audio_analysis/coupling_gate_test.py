@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, COUPLING_IS_A_GATE
 from senselab.audio.workflows.audio_analysis.fuse import cross_axis_inputs, per_signal_uncertainty
 
@@ -150,3 +152,67 @@ def test_the_loops_ingest_applies_the_identity_filter_too() -> None:
     store = VoteStore.from_harvests({"raw": _harvest("raw"), "enhanced": _harvest("enhanced")})
     streams = {v.stream for v in store._votes.values() if v.axis == "background_mask"}
     assert streams == {"raw"}, f"the mask axis ingested {streams}; the enhanced pass is not entitled"
+
+
+# ── evidence overlap must see through a fold ─────────────────────────────────
+
+
+def _fused(votes: dict[str, Any]) -> list[dict[str, Any]]:
+    from senselab.audio.workflows.audio_analysis.fuse import fuse_axis
+
+    return fuse_axis({"raw": [{"start": 0.0, "end": 0.1, "votes": votes}]}, weights={}, snr_gate=None)
+
+
+def test_overlap_sees_through_a_folding_signal() -> None:
+    """A fold renames its sources out of visibility, and the measure was comparing names.
+
+    ``measure_axis_overlap`` discounts a cross-axis input by how much of its evidence the receiver
+    already holds — the *measured* successor to a deleted constant. Compared by signal name it worked
+    wherever names collided (``speech_presence <- axis::asr`` read overlap 1.00 and was correctly
+    zeroed, because asr's signals are recognizers that also vote on presence) and inverted wherever a
+    fold intervened.
+
+    Measured on the 4.9 s validation clip, ``speaker``'s one signal ``speaker_assignment`` is an
+    entropy over four diarizers — **all four of which are ``speech_presence`` signals**. By name it
+    collided with nothing, so overlap read 0.00 and the axis whose evidence presence already held
+    *entirely* entered at full weight 1.00. Expanding to sources reads 1.00, and the weight goes to
+    zero.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import measure_axis_overlap
+
+    speaker = _fused(
+        {
+            "speaker_assignment": {
+                "value": 0.5,
+                "n_sources": 2,
+                "source_outcomes": {"pyannote": "C0", "sortformer": "C1"},
+            }
+        }
+    )
+    presence = _fused({"pyannote": {"value": 0.1}, "sortformer": {"value": 0.2}, "lufs": {"value": 0.3}})
+    assert measure_axis_overlap(presence, speaker) == pytest.approx(1.0), (
+        "the receiver already holds every source behind this fold; overlap must say so"
+    )
+
+
+def test_an_atomic_signal_still_stands_for_itself() -> None:
+    """Signals that fold nothing are unchanged — the expansion must not invent sources."""
+    from senselab.audio.workflows.audio_analysis.fuse import measure_axis_overlap
+
+    a = _fused({"x": {"value": 0.2}, "y": {"value": 0.3}})
+    b = _fused({"y": {"value": 0.4}, "z": {"value": 0.5}})
+    # b's sources are {y, z}; a holds y. Half of b's evidence is already present.
+    assert measure_axis_overlap(a, b) == pytest.approx(0.5)
+
+
+def test_a_disjoint_fold_keeps_its_weight() -> None:
+    """Narrow by construction: seeing through a fold must not zero every coupled input.
+
+    A fold whose sources the receiver does *not* hold is genuinely new information and keeps full
+    weight — otherwise this would be the hand-set discount the measure exists to replace.
+    """
+    from senselab.audio.workflows.audio_analysis.fuse import measure_axis_overlap
+
+    folded = _fused({"f": {"value": 0.5, "n_sources": 2, "source_outcomes": {"m1": "A", "m2": "B"}}})
+    other = _fused({"unrelated": {"value": 0.1}})
+    assert measure_axis_overlap(other, folded) == pytest.approx(0.0)
