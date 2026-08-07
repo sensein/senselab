@@ -65,7 +65,16 @@ def apply_convergence_marks(
             if len(hist) >= 2:
                 # Measured on the same quantity the gate compares, or "stalled" and "converged"
                 # would be judged on two different scales.
-                improvement = float(hist[-2]["doubt"]) - float(hist[-1]["doubt"])
+                #
+                # Both entries guarded because ``doubt`` is ``float | None``: it is ``None`` whenever
+                # the axis could not score that bucket in that round — no comparable ASR words in the
+                # window, common on sparse or gappy speech — and a bucket can flip ``None``↔float
+                # across rounds. If either end is ``None`` the improvement across them is *unmeasured*,
+                # which is not the same as "stalled", and ``float(None)`` would raise. Carried over from
+                # the fix alpha made to the per-pass version of this loop.
+                prev_u, last_u = hist[-2].get("doubt"), hist[-1].get("doubt")
+                if prev_u is not None and last_u is not None:
+                    improvement = float(prev_u) - float(last_u)
             stalled = improvement is not None and improvement < epsilon
             if touches >= max_touch and stalled:
                 floor = row.get("aleatoric_floor")

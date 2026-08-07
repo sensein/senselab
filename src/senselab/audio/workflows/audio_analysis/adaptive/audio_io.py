@@ -183,10 +183,16 @@ def _enhance(wav: Any, ctx: dict[str, Any]) -> tuple[Any | None, str | None]:  #
     try:
         import torch
         from speechbrain.inference.separation import SepformerSeparation
+
+        from senselab.utils.dependencies import resolve_model
     except ImportError as exc:
         return None, f"enhancement_backend_unavailable ({getattr(exc, 'name', exc)}; {senselab_reason})"
     try:
-        model = SepformerSeparation.from_hparams(source=model_id, run_opts={"device": "cpu"})
+        # Stage once (download-once via the heartbeat lock) + load from the local
+        # snapshot dir so SpeechBrain makes no per-file Hub HEAD (429 source under
+        # batch). SpeechBrain has no revision arg -> pin via the snapshot path.
+        _, _snapshot = resolve_model(str(model_id), "main")
+        model = SepformerSeparation.from_hparams(source=str(_snapshot), run_opts={"device": "cpu"})
         with torch.no_grad():
             est = model.separate_batch(torch.from_numpy(wav).unsqueeze(0))
         out = est[0, :, 0].cpu().numpy().astype("float32")

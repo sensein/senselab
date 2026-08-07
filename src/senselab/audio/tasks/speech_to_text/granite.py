@@ -67,6 +67,8 @@ class GraniteSpeechASR:
         import torch
         from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 
+        from senselab.utils.dependencies import resolve_model
+
         model_name = model.path_or_uri if model is not None else "ibm-granite/granite-speech-3.3-8b"
         device_type = (
             device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.MPS, DeviceType.CPU])[0]
@@ -81,8 +83,13 @@ class GraniteSpeechASR:
 
         cache_key = f"{model_name}@{device_type.value}"
         if cache_key not in cls._cache:
-            processor = AutoProcessor.from_pretrained(model_name)
-            mdl = AutoModelForSpeechSeq2Seq.from_pretrained(model_name, dtype=dtype)
+            # Resolve the ref to an immutable SHA once (download-once via the
+            # cross-process heartbeat lock) and pin both loads to it, so a cached
+            # model makes no per-call Hub HEAD — the 429 source under parallel batch.
+            revision = (model.revision if model is not None else None) or "main"
+            sha, _ = resolve_model(str(model_name), revision)
+            processor = AutoProcessor.from_pretrained(model_name, revision=sha)
+            mdl = AutoModelForSpeechSeq2Seq.from_pretrained(model_name, revision=sha, dtype=dtype)
             if device_type == DeviceType.CUDA and torch.cuda.is_available():
                 mdl = mdl.cuda()
             elif device_type == DeviceType.MPS and torch.backends.mps.is_available():

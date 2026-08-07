@@ -15,6 +15,7 @@ from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
+from senselab.utils.dependencies import resolve_model
 
 # Phase 2: head-load diagnostic for the standard pipeline path.
 # The PR-#511 family of bugs (random-init head silently produces ~uniform softmax)
@@ -99,17 +100,23 @@ class HuggingFaceAudioClassifier:
         # and batch_size are call-time parameters passed at pipe() invocation.
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
+            # Resolve the ref to an immutable commit SHA once (download-once via
+            # the cross-process heartbeat lock), then pin BOTH loads to it. A full
+            # commit SHA triggers huggingface_hub's commit-hash shortcut, so cached
+            # files load with no per-call Hub HEAD — the request that rate-limits
+            # (429) when a parallel batch loads this model across many processes.
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
             # Phase 2: load the model explicitly so we can inspect ``loading_info``
             # for the silent-random-head failure mode that motivated PR #511.
             # ``pipeline()`` accepts a pre-loaded model + feature_extractor, so this
             # only adds the inspection without a second download.
             loaded, loading_info = AutoModelForAudioClassification.from_pretrained(  # type: ignore[call-overload]
                 str(model.path_or_uri),
-                revision=model.revision,
+                revision=sha,
                 output_loading_info=True,
             )
             _check_head_loaded_cleanly(loading_info, model)
-            feature_extractor = AutoFeatureExtractor.from_pretrained(str(model.path_or_uri), revision=model.revision)
+            feature_extractor = AutoFeatureExtractor.from_pretrained(str(model.path_or_uri), revision=sha)
             loaded = loaded.to(device.value)
             cls._pipelines[key] = cast(
                 Pipeline,

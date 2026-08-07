@@ -9,7 +9,12 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import concatenate_audios, evenly_segment_audios
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
-from senselab.utils.dependencies import retry_on_transient_error, speechbrain_loading_cwd, speechbrain_savedir
+from senselab.utils.dependencies import (
+    resolve_model,
+    retry_on_transient_error,
+    speechbrain_loading_cwd,
+    speechbrain_savedir,
+)
 
 try:
     from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
@@ -56,12 +61,17 @@ class SpeechBrainEnhancer:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
+            # Stage once (download-once via the cross-process heartbeat lock) and
+            # load from the local snapshot dir so SpeechBrain makes no per-file Hub
+            # HEAD — the 429 source under parallel batch load. SpeechBrain has no
+            # ``revision`` arg, so we pin via the immutable snapshot path.
+            _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
             savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
             with speechbrain_loading_cwd(savedir):
                 try:
                     cls._models[key] = retry_on_transient_error(
                         enhance_model.from_hparams,
-                        source=model.path_or_uri,
+                        source=str(snapshot_path),
                         savedir=str(savedir),
                         run_opts={"device": device.value},
                     )
@@ -69,7 +79,7 @@ class SpeechBrainEnhancer:
                     logger.info("Trying SepformerSeparation model after SpectralMaskEnhancement failed: %s", e)
                     cls._models[key] = retry_on_transient_error(
                         separator.from_hparams,
-                        source=model.path_or_uri,
+                        source=str(snapshot_path),
                         savedir=str(savedir),
                         run_opts={"device": device.value},
                     )

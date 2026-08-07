@@ -6,6 +6,7 @@ from transformers import Pipeline, pipeline
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
+from senselab.utils.dependencies import load_hf_resilient
 
 
 class HuggingFaceTTS:
@@ -33,13 +34,18 @@ class HuggingFaceTTS:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
+            # Resolve once (download-once via the heartbeat lock) + pin the SHA so a
+            # cached model makes no per-call Hub HEAD (the 429 source under batch).
+            # load_hf_resilient injects revision=<sha> into the pipeline kwargs.
             cls._pipelines[key] = cast(
                 Pipeline,
-                pipeline(  # type: ignore[call-overload]
+                load_hf_resilient(
+                    pipeline,
                     task="text-to-speech",
                     model=model.path_or_uri,
-                    revision=model.revision,
                     device=device.value,
+                    repo_id=str(model.path_or_uri),
+                    revision=model.revision or "main",
                 ),
             )
         return cls._pipelines[key]

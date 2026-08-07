@@ -6,6 +6,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
+from senselab.utils.dependencies import resolve_model
 
 
 class HFFactory:
@@ -29,13 +30,16 @@ class HFFactory:
         """
         key = f"{model.path_or_uri}-{model.revision}"
         if key not in cls._tokenizers:
-            # AutoTokenizer.from_pretrained is typed as a union over backend
-            # classes; the cache holds the PreTrainedTokenizer interface we use.
+            # Resolve once (download-once via the heartbeat lock) + pin the SHA so a
+            # cached model makes no per-call Hub HEAD (the 429 source under batch).
+            # AutoTokenizer.from_pretrained is typed as a union over backend classes;
+            # the cache holds the PreTrainedTokenizer interface we use.
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
             cls._tokenizers[key] = cast(
                 PreTrainedTokenizer,
                 AutoTokenizer.from_pretrained(
                     pretrained_model_name_or_path=model.path_or_uri,
-                    revision=model.revision,
+                    revision=sha,
                     use_fast=True,
                 ),
             )
@@ -59,9 +63,10 @@ class HFFactory:
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
 
         if key not in cls._models:
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
             m = AutoModel.from_pretrained(
                 model.path_or_uri,
-                revision=model.revision,
+                revision=sha,
                 low_cpu_mem_usage=True,
             ).eval()
             if device == DeviceType.CUDA:

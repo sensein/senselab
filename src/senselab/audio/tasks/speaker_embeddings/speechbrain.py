@@ -7,7 +7,12 @@ import torch.nn.functional as F
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
-from senselab.utils.dependencies import retry_on_transient_error, speechbrain_loading_cwd, speechbrain_savedir
+from senselab.utils.dependencies import (
+    resolve_model,
+    retry_on_transient_error,
+    speechbrain_loading_cwd,
+    speechbrain_savedir,
+)
 
 try:
     from speechbrain.inference.speaker import EncoderClassifier
@@ -52,11 +57,19 @@ class SpeechBrainEmbeddings:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._models:
+            # Stage the model once (download-once via the cross-process heartbeat
+            # lock) and load from the resulting local snapshot dir. SpeechBrain's
+            # ``from_hparams`` treats a local ``source`` as local files, so it makes
+            # no per-file Hub HEAD — the request that rate-limits (429) when a
+            # parallel batch loads this model across many processes. SpeechBrain has
+            # no ``revision`` argument, so we pin by pointing ``source`` at the
+            # immutable snapshot path rather than the mutable repo id.
+            _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
             savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
             with speechbrain_loading_cwd(savedir):
                 cls._models[key] = retry_on_transient_error(
                     EncoderClassifier.from_hparams,
-                    source=model.path_or_uri,
+                    source=str(snapshot_path),
                     savedir=str(savedir),
                     run_opts={"device": device.value},
                 )

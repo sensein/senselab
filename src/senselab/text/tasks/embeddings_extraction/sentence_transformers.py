@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 import torch
 
 from senselab.utils.data_structures import DeviceType, SentenceTransformersModel, _select_device_and_dtype
+from senselab.utils.dependencies import resolve_model
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -45,9 +46,12 @@ class SentenceTransformerFactory:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:
+            # Resolve once (download-once via the heartbeat lock) + pin the SHA so a
+            # cached model makes no per-call Hub HEAD (the 429 source under batch).
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main")
             cls._pipelines[key] = SentenceTransformer(
                 model_name_or_path=str(model.path_or_uri),
-                revision=model.revision,
+                revision=sha,
                 device=device.value,
             )
         return cls._pipelines[key]

@@ -53,6 +53,7 @@ import json
 import subprocess
 from typing import Any, Optional
 
+from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _PII_VENV = "pii-detection"
@@ -514,6 +515,12 @@ def detect_pii_via_subprocess(
     )
 
     env = _clean_subprocess_env()
+    if "gliner" in detectors_resolved and gliner_model:
+        # Stage the GLiNER model once (cross-process, via the heartbeat lock) and run
+        # the worker offline so its GLiNER.from_pretrained makes no per-call Hub
+        # version check — the 429 source under parallel batch. Only when gliner is
+        # actually requested (presidio uses spaCy, not the HF Hub).
+        env = hf_subprocess_env(str(gliner_model), "main", base_env=env)
     result = subprocess.run(
         [python, "-c", _PII_WORKER_SCRIPT],
         input=input_json,

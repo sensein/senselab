@@ -17,7 +17,7 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
-from senselab.utils.dependencies import retry_on_transient_error
+from senselab.utils.dependencies import resolve_model, retry_on_transient_error
 
 try:
     from pyannote.audio import Pipeline
@@ -70,11 +70,17 @@ class PyannoteVAD:
         )
         key = f"{model.path_or_uri}-{model.revision}-{device}"
         if key not in cls._pipelines:
+            # Resolve once (download-once via the cross-process heartbeat lock) and
+            # pin the load to the immutable SHA so a cached model makes no per-call
+            # Hub HEAD — the 429 source under parallel batch. Also fixes the latent
+            # ``revision=f"{None}"`` ("None" string) when ``model.revision`` is unset.
+            token = get_huggingface_token()
+            sha, _ = resolve_model(str(model.path_or_uri), model.revision or "main", token=token)
             pipeline = retry_on_transient_error(
                 Pipeline.from_pretrained,
                 checkpoint=f"{model.path_or_uri}",
-                revision=f"{model.revision}",
-                token=get_huggingface_token(),
+                revision=sha,
+                token=token,
             )
             if not pipeline:
                 raise ValueError(f"Pyannote VAD model {model.path_or_uri} not found.")

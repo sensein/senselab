@@ -360,11 +360,15 @@ def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "
     device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
     key = f"{model.path_or_uri}-{model.revision}-{device}"
     if key not in _inference_cache:
-        ensure_hf_model(str(model.path_or_uri), revision=model.revision, token=get_huggingface_token())
+        # ensure_hf_model stages once (cross-process heartbeat lock) AND returns the
+        # resolved immutable SHA; pin the load to it so a cached model makes no
+        # per-call Hub HEAD — the 429 source under parallel batch. (Previously it
+        # staged but then passed the mutable ref to from_pretrained, re-tripping HEAD.)
+        sha = ensure_hf_model(str(model.path_or_uri), revision=model.revision or "main", token=get_huggingface_token())
         loaded = retry_on_transient_error(
             Model.from_pretrained,
             model.path_or_uri,
-            revision=model.revision,
+            revision=sha,
             token=get_huggingface_token(),
         )
         if loaded is None:

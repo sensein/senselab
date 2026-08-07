@@ -112,11 +112,22 @@ def _transcribe_crop_pipeline(
 ) -> tuple[list[dict[str, Any]] | None, str | None]:
     try:
         from transformers import pipeline  # noqa: PLC0415
+
+        from senselab.utils.dependencies import load_hf_resilient  # noqa: PLC0415
     except ImportError as exc:
         return None, f"asr_backend_unavailable ({getattr(exc, 'name', exc)})"
     try:
         if model_id not in _ASR_PIPELINE_CACHE:
-            _ASR_PIPELINE_CACHE[model_id] = pipeline("automatic-speech-recognition", model=model_id, device="cpu")
+            # Resolve once (heartbeat lock) + pin revision=<sha> so a cached model
+            # makes no per-call Hub HEAD (429 source under batch).
+            _ASR_PIPELINE_CACHE[model_id] = load_hf_resilient(
+                pipeline,
+                "automatic-speech-recognition",
+                model=model_id,
+                device="cpu",
+                repo_id=str(model_id),
+                revision="main",
+            )
         asr = _ASR_PIPELINE_CACHE[model_id]
         kwargs: dict[str, Any] = {"return_timestamps": "word"}
         if language:

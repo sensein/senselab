@@ -25,6 +25,7 @@ from senselab.utils.data_structures import (
 )
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
+from senselab.utils.dependencies import load_hf_resilient
 
 
 def _attach_token_confidence(script_lines: List[ScriptLine], confidences: List[Dict[str, Any]]) -> None:
@@ -115,10 +116,15 @@ class HuggingFaceASR:
             # When the caller asked for return_timestamps=False, the safest
             # path across all three is to OMIT the kwarg and let each
             # pipeline class default to its no-timestamps mode.
+            # NOTE: ``revision`` is deliberately NOT passed here. ``load_hf_resilient``
+            # resolves the requested ref to an immutable commit SHA once and injects
+            # ``revision=<sha>`` (no ``local_files_only`` — it would leak into
+            # ``pipeline``'s generate kwargs), so huggingface_hub's commit-hash
+            # shortcut loads from cache with no per-call Hub version check (the 429
+            # source). ``token`` here is used for resolution and forwarded to ``pipeline``.
             pipeline_kwargs: Dict[str, Any] = {
                 "task": "automatic-speech-recognition",
                 "model": model.path_or_uri,
-                "revision": model.revision,
                 "max_new_tokens": max_new_tokens,
                 "chunk_length_s": chunk_length_s,
                 "batch_size": batch_size,
@@ -129,7 +135,12 @@ class HuggingFaceASR:
                 pipeline_kwargs["return_timestamps"] = return_timestamps
             cls._pipelines[key] = cast(
                 Pipeline,
-                pipeline(**pipeline_kwargs),  # type: ignore[call-overload]
+                load_hf_resilient(
+                    pipeline,
+                    repo_id=str(model.path_or_uri),
+                    revision=model.revision or "main",
+                    **pipeline_kwargs,  # type: ignore[arg-type]
+                ),
             )
         return cls._pipelines[key]
 
