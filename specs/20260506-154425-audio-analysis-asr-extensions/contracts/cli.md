@@ -138,7 +138,7 @@ Override per-language with a config dict if needed; the common case is zero-conf
 # Default — Whisper, Granite, Canary-Qwen, Qwen3-ASR all run; Granite + Canary auto-align.
 uv run python scripts/analyze_audio.py path/to/audio.wav
 
-# Same audio, fix the aligner — re-uses ASR cache, reruns just alignment.
+# Same audio, fix the aligner — reuses ASR cache, reruns just alignment.
 uv run python scripts/analyze_audio.py path/to/audio.wav \
     --aligner-model facebook/mms-1b-fl102
 

@@ -1,8 +1,8 @@
 """Level 1 emits signals; level 2 produces the final uncertainty maps.
 
 Level 1 harvests per-signal values and each signal's *own* uncertainty. It must not decide
-the answer: the fold it was doing per pass is a within-pass diagnostic that pre-empts the
-aggregation, and pre-empting it is how one saturated sub-signal came to pin an axis while
+the answer: the fold it was doing per pass is a within-pass diagnostic that preempts the
+aggregation, and preempting it is how one saturated sub-signal came to pin an axis while
 every other signal disagreed.
 
 Level 2 aggregates across all signals and all passes, weighting each by what was measured
