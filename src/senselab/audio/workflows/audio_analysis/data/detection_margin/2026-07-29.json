@@ -1,148 +1,148 @@
 {
-  "profile_version": "1",
-  "margins_db": {
-    "reject_below": 3.0,
-    "candidate": 3.0,
-    "probable": 6.0,
-    "confident": 10.0
-  },
-  "level": {
-    "target_lufs": -23.0,
-    "true_peak_ceiling_dbtp": -1.0,
-    "gain_cap_db": 10.0,
-    "reject_below_pregain_dbfs": -45.0,
-    "stable_band_dbfs": [
-      -35.0,
-      -15.0
-    ]
-  },
-  "noise_floor": {
-    "quantile": 0.1,
-    "floor_frame_s": 0.1,
-    "window_s": 20.0,
-    "max_iterations": 3,
-    "event_exclusion_db": 6.0,
-    "band_smoothing_bins": 5,
-    "top_percentile_cap": 0.95,
-    "condition_on_target_activity": true,
-    "freeze_inside_events": true,
-    "recorder_margin_db": 3.0
-  },
-  "guards": {
-    "flatness_max": 0.3,
-    "min_occupancy": 0.4,
-    "min_duration_s": {
-      "default": 0.2
+    "profile_version": "1",
+    "margins_db": {
+        "reject_below": 3.0,
+        "candidate": 3.0,
+        "probable": 6.0,
+        "confident": 10.0
     },
-    "hysteresis": {
-      "trigger_tier": "confident",
-      "extend_tier": "probable"
+    "level": {
+        "target_lufs": -23.0,
+        "true_peak_ceiling_dbtp": -1.0,
+        "gain_cap_db": 10.0,
+        "reject_below_pregain_dbfs": -45.0,
+        "stable_band_dbfs": [
+            -35.0,
+            -15.0
+        ]
     },
-    "min_distance_separation_db": 6.0,
-    "prominence_ratio_db": 9.0,
-    "quarantined_labels": [
-      "White noise",
-      "Pink noise",
-      "Noise",
-      "Static",
-      "Environmental noise",
-      "Hum",
-      "Mains hum",
-      "Hiss",
-      "Throbbing",
-      "Waterfall",
-      "Water",
-      "Gurgling",
-      "Spray",
-      "Sine wave",
-      "Silence",
-      "Inside, small room"
-    ]
-  },
-  "mask": {
-    "guard_interval_s": 0.5,
-    "negligible_fraction": 0.05,
-    "min_region_s": 1.0,
-    "max_padding_fraction": 0.5,
-    "target_active_confidence": 0.6,
-    "target_free_confidence": 0.2,
-    "max_free_uncertainty": 0.5,
-    "target_event_types_by_task": {
-      "speech": [
-        "speech",
-        "breath",
-        "mouth_noise"
-      ],
-      "breath": [
-        "speech",
-        "breath"
-      ],
-      "cough": [
-        "speech",
-        "cough",
-        "throat_clear"
-      ]
+    "noise_floor": {
+        "quantile": 0.1,
+        "floor_frame_s": 0.1,
+        "window_s": 20.0,
+        "max_iterations": 3,
+        "event_exclusion_db": 6.0,
+        "band_smoothing_bins": 5,
+        "top_percentile_cap": 0.95,
+        "condition_on_target_activity": true,
+        "freeze_inside_events": true,
+        "recorder_margin_db": 3.0
     },
-    "fallback_target_event_types": [
-      "speech",
-      "breath",
-      "cough",
-      "mouth_noise"
-    ]
-  },
-  "derivation": {
-    "human_basis": [
-      {
-        "claim": "minimum measurability ~+3 dB",
-        "source": "ISO 1996-2:2017",
-        "status": "verified"
-      },
-      {
-        "claim": "10 dB octave / 13 dB third-octave above masked threshold",
-        "source": "ISO 7731",
-        "status": "verified"
-      },
-      {
-        "claim": "+5 adverse / +10 significant over background",
-        "source": "BS 4142",
-        "status": "verified"
-      },
-      {
-        "claim": "TNR >= 8 dB, PR >= 9 dB for tone prominence",
-        "source": "ECMA-74 17th ed.",
-        "status": "verified"
-      },
-      {
-        "claim": "partial-masking transition -3 to +15 dB",
-        "source": "Moore/Glasberg partial loudness",
-        "status": "provisional",
-        "note": "Surfaced in indexed text; primary source paywalled. Corroborates the ladder, does not set it."
-      }
-    ],
-    "machine_basis": [
-      {
-        "claim": "short-window reliable floor 5-10 dB SNR",
-        "source": "level probe (measured)",
-        "status": "verified"
-      },
-      {
-        "claim": "long-window reliable floor 15-20 dB SNR non-speech",
-        "source": "level probe (measured)",
-        "status": "verified"
-      },
-      {
-        "claim": "noise-family label contamination from ~20 dB SNR",
-        "source": "level probe (measured)",
-        "status": "verified"
-      },
-      {
-        "claim": "short-window silence floor ~-60 dBFS, learned not arithmetic",
-        "source": "level probe (measured)",
-        "status": "verified"
-      }
-    ],
-    "agreement_note": "Human criteria place confident identification near +10 dB; the short-window classifier's measured reliable floor is 5-10 dB SNR. The +10 dB confident tier satisfies both simultaneously (SC-017).",
-    "derived_statistics_status": "provisional",
-    "derived_statistics_note": "The exponential-periodogram bias correction 1/(-ln(1-q)), the per-bin sigma of 5.57 dB, and the patch-variance collapse are straightforward chi-squared results but were not found stated in this form in the literature. Validate on synthetic noise before relying on them."
-  }
+    "guards": {
+        "flatness_max": 0.3,
+        "min_occupancy": 0.4,
+        "min_duration_s": {
+            "default": 0.2
+        },
+        "hysteresis": {
+            "trigger_tier": "confident",
+            "extend_tier": "probable"
+        },
+        "min_distance_separation_db": 6.0,
+        "prominence_ratio_db": 9.0,
+        "quarantined_labels": [
+            "White noise",
+            "Pink noise",
+            "Noise",
+            "Static",
+            "Environmental noise",
+            "Hum",
+            "Mains hum",
+            "Hiss",
+            "Throbbing",
+            "Waterfall",
+            "Water",
+            "Gurgling",
+            "Spray",
+            "Sine wave",
+            "Silence",
+            "Inside, small room"
+        ]
+    },
+    "mask": {
+        "guard_interval_s": 0.5,
+        "negligible_fraction": 0.05,
+        "min_region_s": 1.0,
+        "max_padding_fraction": 0.5,
+        "target_active_confidence": 0.6,
+        "target_free_confidence": 0.2,
+        "max_free_uncertainty": 0.5,
+        "target_event_types_by_task": {
+            "speech": [
+                "speech",
+                "breath",
+                "mouth_noise"
+            ],
+            "breath": [
+                "speech",
+                "breath"
+            ],
+            "cough": [
+                "speech",
+                "cough",
+                "throat_clear"
+            ]
+        },
+        "fallback_target_event_types": [
+            "speech",
+            "breath",
+            "cough",
+            "mouth_noise"
+        ]
+    },
+    "derivation": {
+        "human_basis": [
+            {
+                "claim": "minimum measurability ~+3 dB",
+                "source": "ISO 1996-2:2017",
+                "status": "verified"
+            },
+            {
+                "claim": "10 dB octave / 13 dB third-octave above masked threshold",
+                "source": "ISO 7731",
+                "status": "verified"
+            },
+            {
+                "claim": "+5 adverse / +10 significant over background",
+                "source": "BS 4142",
+                "status": "verified"
+            },
+            {
+                "claim": "TNR >= 8 dB, PR >= 9 dB for tone prominence",
+                "source": "ECMA-74 17th ed.",
+                "status": "verified"
+            },
+            {
+                "claim": "partial-masking transition -3 to +15 dB",
+                "source": "Moore/Glasberg partial loudness",
+                "status": "provisional",
+                "note": "Surfaced in indexed text; primary source paywalled. Corroborates the ladder, does not set it."
+            }
+        ],
+        "machine_basis": [
+            {
+                "claim": "short-window reliable floor 5-10 dB SNR",
+                "source": "level probe (measured)",
+                "status": "verified"
+            },
+            {
+                "claim": "long-window reliable floor 15-20 dB SNR non-speech",
+                "source": "level probe (measured)",
+                "status": "verified"
+            },
+            {
+                "claim": "noise-family label contamination from ~20 dB SNR",
+                "source": "level probe (measured)",
+                "status": "verified"
+            },
+            {
+                "claim": "short-window silence floor ~-60 dBFS, learned not arithmetic",
+                "source": "level probe (measured)",
+                "status": "verified"
+            }
+        ],
+        "agreement_note": "Human criteria place confident identification near +10 dB; the short-window classifier's measured reliable floor is 5-10 dB SNR. The +10 dB confident tier satisfies both simultaneously (SC-017).",
+        "derived_statistics_status": "provisional",
+        "derived_statistics_note": "The exponential-periodogram bias correction 1/(-ln(1-q)), the per-bin sigma of 5.57 dB, and the patch-variance collapse are straightforward chi-squared results but were not found stated in this form in the literature. Validate on synthetic noise before relying on them."
+    }
 }
