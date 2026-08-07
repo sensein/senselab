@@ -58,7 +58,9 @@ repos:
   rev: v2.4.1
   hooks:
   - id: codespell
-    args: [--skip=*.ipynb, --ignore-words-list, AER]
+    # AER: alignment error rate. FPR: false-positive rate. PASE: Problem-Agnostic Speech
+    # Encoder, a model name. All three are terms codespell reads as misspellings of other words.
+    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE']
     additional_dependencies:
     - tomli
 - repo: local
