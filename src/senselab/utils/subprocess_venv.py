@@ -508,12 +508,40 @@ def venv_python(venv_dir: Path) -> str:
 
 
 def _clean_subprocess_env() -> dict:
-    """Return a copy of os.environ without keys that break subprocess venvs.
+    """Return a copy of os.environ fit for a subprocess venv.
 
-    Strips MPLBACKEND (matplotlib_inline backend not available in subprocesses)
-    and other notebook-specific env vars that cause errors in isolated venvs.
+    Strips MPLBACKEND (matplotlib_inline's backend is not available in subprocesses) and points TLS
+    verification at a CA bundle that exists.
+
+    **Why the CA bundle needs saying explicitly.** These venvs run on the uv-managed interpreter, which
+    is python-build-standalone: statically linked, and with no usable system CA path compiled in. So
+    ``ssl.create_default_context()`` finds no trust store and every ``urlopen`` inside a worker fails
+    with ``CERTIFICATE_VERIFY_FAILED`` — on a host whose network is fine and where ``curl`` to the same
+    URL succeeds, because curl uses the system bundle and Python does not. Measured on MIT ORCD:
+
+        coqui venv python 3.11.15
+        urlopen as-is                        URLError CERTIFICATE_VERIFY_FAILED
+        urlopen with SSL_CERT_FILE=certifi   OK
+
+    The bundle certifi ships was already installed in that venv as a transitive dependency; nothing
+    told Python to use it. Passing the *parent's* bundle is enough — a CA bundle is a file, not a
+    per-interpreter object — which fixes all sixteen call sites from one place.
+
+    An operator's existing ``SSL_CERT_FILE`` / ``REQUESTS_CA_BUNDLE`` is left alone: a host behind a
+    corporate CA has already answered this question, and overriding it would break exactly the setup
+    that took the trouble to configure it.
     """
-    return {k: v for k, v in os.environ.items() if k not in ("MPLBACKEND",)}
+    env = {k: v for k, v in os.environ.items() if k not in ("MPLBACKEND",)}
+    if not env.get("SSL_CERT_FILE") or not env.get("REQUESTS_CA_BUNDLE"):
+        try:
+            import certifi
+
+            bundle = certifi.where()
+        except Exception:  # noqa: BLE001 — certifi absent is not a reason to fail the call
+            return env
+        env.setdefault("SSL_CERT_FILE", bundle)
+        env.setdefault("REQUESTS_CA_BUNDLE", bundle)
+    return env
 
 
 # ── Subprocess result parsing with error propagation ──────────────────
