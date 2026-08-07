@@ -1537,6 +1537,7 @@ def write_final_uncertainty(
                     # first shipped invisible — every row said ``(None)`` while the gating itself
                     # had worked.
                     "snr_gated_passes": r.get("snr_gated_passes") or [],
+                    "n_sources": r.get("n_sources"),
                     "signal_weights": json.dumps(r["signal_weights"], sort_keys=True),
                     "weight_basis": json.dumps(r["weight_basis"], sort_keys=True),
                     # Which other axes moved this value (D-11). Without it a coupled row is
