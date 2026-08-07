@@ -105,6 +105,7 @@ def harvest_pass(
     clustering_algorithm: str = "spectral",
     task_type: str | None = None,
     calibration: dict[str, Any] | None = None,
+    speech_presence_policy: Any = None,  # noqa: ANN401 — SpeechPresencePolicy
 ) -> tuple[PassHarvest, dict[str, list[WindowEmbedding]], dict[str, str]]:
     """Run every model-touching step for one pass and return its harvested votes.
 
@@ -380,6 +381,7 @@ def harvest_pass(
         word_coverage_by_bucket=_words_by_bucket,
         speaker_occupancy_by_bucket=_occupancy_by_bucket,
         sources_by_bucket=_mask_sources,
+        policy=speech_presence_policy,
     )
 
     # ── speaker harvest ──
@@ -594,6 +596,9 @@ def compute_uncertainty_axes(
             value so no existing caller's tuple arity changes; the adaptive loop's
             in-process path (T040) needs the harvests the parquets were built from.
         calibration: Optional flat runtime calibration dict (US5 — see
+        speech_presence_policy: The run's L1→L2 linking policy, from the config's ``linking:``
+            block. Supplies the background mask's three thresholds. ``None`` uses the module
+            defaults, which are the same values.
             ``calibration.profile_to_runtime``): dB→[0,1] anchors consumed by the
             quality harvest. Aggregator-side temperatures travel separately via
             ``params["calibration"]``; pass the same dict in both places.
@@ -636,6 +641,9 @@ def compute_uncertainty_axes(
             grid=grid,
             speaker_embedding_models=speaker_embedding_models,
             speech_presence_labels=speech_presence_labels,
+            # The same policy the link phase applies, so the mask's thresholds and the presence
+            # votes' thresholds cannot come from two different places.
+            speech_presence_policy=policy_from_params(params),
             scene_quality=scene_quality,
             sound_sources=sound_sources,
             embedding_window_s=embedding_window_s,

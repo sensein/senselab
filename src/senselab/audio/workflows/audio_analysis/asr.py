@@ -193,6 +193,8 @@ def _warn_if_grading_is_out_of_language(asr_resolved: Mapping[str, Any]) -> list
 
 def fuse_consensus_words(
     asr_resolved: Mapping[str, Any],
+    *,
+    policy: Any = None,  # noqa: ANN401 — SpeechPresencePolicy, duck-typed
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Fold the recognizers' words once, returning the fused words and the fold's provenance.
 
@@ -207,12 +209,21 @@ def fuse_consensus_words(
     keeps removing (D-21 rule 4). The slot parameters are the task API's own defaults, named here
     rather than inherited silently so the recorded value and the used value cannot drift.
 
+    Args:
+        asr_resolved: ``{model → resolved ASR result}``.
+        policy: The run's L1→L2 linking policy, supplying the slot-alignment parameters from the
+            config's ``linking:`` block. ``None`` uses the task API's defaults, the same values.
+
     Returns:
         ``(fused_words, provenance)``, and ``([], {})`` when no model produced a readable word.
     """
     from senselab.audio.tasks.speech_to_text_ensemble import fuse_word_streams, iter_word_leaves
 
-    slot_overlap, slot_mid_tol_s = 0.3, 0.15
+    # From the policy where one was supplied, else the task API's own defaults — the same values.
+    # They live in the run config's ``linking:`` block as ``asr_slot_overlap`` / ``asr_slot_mid_tol_s``,
+    # named there rather than inherited silently so the recorded value and the used value cannot drift.
+    slot_overlap = float(getattr(policy, "asr_slot_overlap", 0.3)) if policy is not None else 0.3
+    slot_mid_tol_s = float(getattr(policy, "asr_slot_mid_tol_s", 0.15)) if policy is not None else 0.15
     streams: dict[str, list[dict[str, Any]]] = {}
     unreadable: list[str] = []
     for model_id, resolved in asr_resolved.items():

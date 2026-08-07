@@ -183,6 +183,20 @@ class RunConfig:
     enhancement_mode: str
     triage_speech_threshold: float
     triage_min_speech_s: float
+    # ── linking: what turns an L1 measurement into an L2 vote ──
+    # Every one of these was a ``SpeechPresencePolicy`` dataclass default, reachable only by editing
+    # Python. ``policy_from_params`` could always read them from the run params and nothing ever
+    # filled them, so the config could not move a single threshold.
+    # ── the five sections D2 moved out of module-level constants ──
+    # Each was a module constant with a written rationale and no way to change it but editing Python.
+    # Grouped by the question they answer rather than by the module they came from, since a reader
+    # asking "how is support measured" should not have to know it lived in ``support.py``.
+    rounds_policy: Mapping[str, Any]
+    speaker_policy: Mapping[str, Any]
+    quality_policy: Mapping[str, Any]
+    labelstudio_policy: Mapping[str, Any]
+    support_policy: Mapping[str, Any]
+    linking: Mapping[str, Any]
     triage_snr_floor_db: float
     triage_low_snr_fraction: float
 
@@ -460,6 +474,14 @@ def _build(merged: Mapping[str, Any], identity: ConfigIdentity) -> RunConfig:
         enhancement_mode=str(enhancement.get("mode", "always")),
         triage_speech_threshold=float(triage.get("speech_threshold", 0.5)),
         triage_min_speech_s=float(triage.get("min_speech_s", 0.3)),
+        # Values keep their YAML type: most are floats, ``asr_confidence_pooling`` is a named
+        # statistic. Coercing everything to float would have turned that one into a crash at load.
+        linking={str(k): v for k, v in _section(merged, "linking").items()},
+        rounds_policy={str(k): v for k, v in _section(merged, "rounds").items()},
+        speaker_policy={str(k): v for k, v in _section(merged, "speaker").items()},
+        quality_policy={str(k): v for k, v in _section(merged, "quality").items()},
+        labelstudio_policy={str(k): v for k, v in _section(merged, "labelstudio").items()},
+        support_policy={str(k): v for k, v in _section(merged, "support").items()},
         triage_snr_floor_db=float(triage.get("snr_floor_db", DEFAULT_SNR_FLOOR_DB)),
         triage_low_snr_fraction=float(triage.get("low_snr_fraction", 0.4)),
         aggregator=str(uncertainty.get("aggregator", "min")),

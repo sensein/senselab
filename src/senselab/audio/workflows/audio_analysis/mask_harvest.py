@@ -68,6 +68,7 @@ def harvest_background_mask_evidence(
     word_coverage_by_bucket: Optional[Mapping[tuple[float, float], float]] = None,
     speaker_occupancy_by_bucket: Optional[Mapping[tuple[float, float], float]] = None,
     sources_by_bucket: Optional[Mapping[str, Mapping[tuple[float, float], set[str]]]] = None,
+    policy: Any = None,  # noqa: ANN401 — SpeechPresencePolicy, duck-typed to avoid a cycle
 ) -> list[dict[str, Any]]:
     """Per-bucket votes on whether the **target** was active, one per source that measured.
 
@@ -78,6 +79,10 @@ def harvest_background_mask_evidence(
         speech_by_bucket: ``{bucket → speech probability}``.
         word_coverage_by_bucket: ``{bucket → seconds of ASR word overlap}``.
         speaker_occupancy_by_bucket: ``{bucket → fraction of the bucket a speaker covers}``.
+        policy: The run's L1→L2 linking policy, supplying the three ``mask_*`` thresholds from the
+            config's ``linking:`` block. ``None`` falls back to this module's defaults, which are the
+            same values — a caller that has no policy is not silently given different behaviour.
+            Duck-typed rather than imported to avoid a cycle with ``speech_presence_link``.
         sources_by_bucket: ``{reading → {bucket → contributing presence signals}}``. Each of the
             three readings is a **max over presence signals**, which makes it a fold; declaring
             what it folds is what lets ``fuse.measure_axis_overlap`` see that this axis rests on
@@ -110,10 +115,13 @@ def harvest_background_mask_evidence(
         "speakers": speaker_occupancy_by_bucket or {},
     }
     by_source = sources_by_bucket or {}
+    # From the policy where the caller supplied one, falling back to the module defaults. The three
+    # live in the run config's ``linking:`` block under ``mask_*`` names; a threshold reachable only
+    # by editing Python is a decision with no record in the artifact that depended on it.
     thresholds = {
-        "speech": _SPEECH_THRESHOLD,
-        "words": _WORD_COVERAGE_THRESHOLD,
-        "speakers": _OCCUPANCY_THRESHOLD,
+        "speech": float(getattr(policy, "mask_speech_threshold", _SPEECH_THRESHOLD)),
+        "words": float(getattr(policy, "mask_word_coverage_threshold", _WORD_COVERAGE_THRESHOLD)),
+        "speakers": float(getattr(policy, "mask_occupancy_threshold", _OCCUPANCY_THRESHOLD)),
     }
 
     out: list[dict[str, Any]] = []
