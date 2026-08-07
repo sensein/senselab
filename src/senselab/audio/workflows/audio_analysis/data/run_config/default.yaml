@@ -195,9 +195,33 @@ enhancement:
   mode: always
 
 triage:
+  # Round-0 gates. `speech_threshold` / `min_speech_s` decide whether any speech was found at all;
+  # the two SNR values decide when the recording counts as degraded.
   speech_threshold: 0.5
   min_speech_s: 0.3
+
+  # ⚠ UNDERIVED. `snr_floor_db` is a **judgement, not a measurement**, and is recorded as such rather
+  # than given a derivation it does not have. Nothing was fitted to choose 10 dB; it is the
+  # conventional boundary at which broadband noise becomes audibly intrusive in speech, and no
+  # measurement in this repo supports that number over 8 or 12.
+  #
+  # It now carries more weight than when it was written. Originally it only decided whether to
+  # *compute* the enhanced pass (`enhancement.mode: auto`). It also decides, per bucket, whether a
+  # repair perturbation's readings are **admitted to the fold** (`fuse.SnrGate`) — so it changes
+  # published axis values, not just runtime.
+  #
+  # Measured consequence of the arbitrariness, on `audio_48khz_mono_16bits`: that recording's SNR
+  # spans 8.6-11.7 dB, so a 10 dB floor slices it mid-distribution — 9 buckets admit the enhanced
+  # pass and 40 do not. At 8 dB none would; at 12 dB all would. The split is an artifact of where the
+  # number sits, not a distinction between degraded and clean regions.
+  #
+  # Closing this means what closed `detection_margin`: measure the SNR at which enhancement starts to
+  # *change downstream answers*, on recordings spanning conditions, and write the anchors into
+  # `data/` with the verdicts behind them. See `scripts/calibrate_detection_margin.py` for the shape
+  # such a profile takes, and its refusal to emit one from insufficient measurement.
   snr_floor_db: 10.0
+  # Fraction of speech buckets that must fall below the floor for `enhancement.mode: auto` to run the
+  # enhanced pass. Also underived, and less consequential: it gates computation only, never a value.
   low_snr_fraction: 0.4
 
 uncertainty:
