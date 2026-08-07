@@ -1010,3 +1010,27 @@ looks calibrated is worse than leaving the signal out, because the second one is
 A real fit needs: several recordings spanning levels and noise conditions, and a voiced reference
 better than word spans (a pitch tracker's voiced decision, or hand-labelled material). Then anchors go
 into `data/` with their derivation, as `detection_margin` and the scene-quality profile do.
+
+
+## Open — the two producers read `last_refolded_round` differently (2026-08-07)
+
+`BeliefState.from_store` stamps `last_refolded_round = round_index` on **every** axis when the loop
+adopts fusion's last round as its baseline. Fusion stamps the round in which that axis was last
+actually re-folded, which for a converged axis is earlier.
+
+Both are defensible readings of the same column, which is why this is recorded rather than fixed:
+
+- the loop's baseline genuinely **does** re-aggregate every bucket — that is the parity check it
+  exists to perform — so "the round that last re-folded this value" is literally true of it;
+- but the value it produced is *identical by construction*, and a reader distinguishing "settled in
+  round 1" from "re-folded to the same number in round 2" gets the wrong answer.
+
+Invisible until `axes.COUPLING_IS_A_GATE` was extended to `asr` and `background_mask`
+(2026-08-07). Before that every axis ran to the same last round, so the loop's baseline index and
+each axis's own last refold always coincided, and the overwrite could not be observed.
+
+Closing it means deciding what the column asserts — that a fold *ran*, or that a value *changed* —
+and making both producers say the same thing. `estimates.py`'s module docstring argues for the
+second ("carrying a value forward and re-folding it to the same number are the same row" is given
+as the defect the column exists to prevent), which suggests the loop's baseline should preserve
+each axis's incoming stamp rather than assert its own.

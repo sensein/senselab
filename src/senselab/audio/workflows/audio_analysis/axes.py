@@ -305,7 +305,7 @@ that a transform may legitimately change the reading of, which is what makes the
 sample rather than a contaminant.
 """
 
-COUPLING_IS_A_GATE: Final[frozenset[str]] = frozenset({"speaker"})
+COUPLING_IS_A_GATE: Final[frozenset[str]] = frozenset({"speaker", "asr", "background_mask"})
 """Axes for which another axis's value bounds *where the question applies*, never answers it.
 
 The speaker axis asks **who** is speaking. ``speech_presence``, ``asr`` and ``background_mask``
@@ -330,9 +330,28 @@ that axis is confident, not that speech is present. Gating on it would read "con
 to read ``speech_presence_confidence`` / ``p_voice`` — and would need a threshold nobody has measured
 yet, which is why it is not here.
 
-Axes absent from this set are unaffected: ``speech_presence``, ``asr`` and ``background_mask`` still
-couple to each other as voters, where the coupled quantity and the receiving question are the same
-kind of thing.
+**Extended to ``asr`` and ``background_mask``** once the same test was applied to them, and the
+measured gate was shown unable to reach the question:
+
+- ``asr`` asks *what words were said*. ``speech_presence`` bounds where that is a live question and
+  does not answer it; ``speaker`` answers neither. Measured on the 4.9 s clip, coupling took asr from
+  0.0395 at round 0 to **0.3088** at round 2 — an 8x excursion — driven by ``axis::speaker`` and
+  ``axis::background_mask`` at full weight.
+- ``background_mask`` asks *was the target active*. Its own voters are folds of the same diarizers,
+  VAD and recognizers the other axes read, so the coupled inputs are its own evidence returning under
+  another name. Round 2 read **0.2645** against round 0's 0.0037.
+
+``measure_axis_overlap`` cannot substitute here, and the distinction matters. Overlap measures
+*redundancy* — how much of the source's evidence the receiver already holds — and it correctly zeroes
+``speech_presence <- axis::speaker`` (1.00) because speaker's four diarizers are all presence signals.
+But asr's sources are three recognizers, so ``asr <- axis::speaker`` honestly reads 0.00: the evidence
+really is independent. Independent and *irrelevant* are different failures, and only the second is
+what these axes suffer from. A signal that answers a different question should not enter at any
+weight, however novel its evidence.
+
+``speech_presence`` is the one axis still receiving coupled votes. It asks *was there a speaker*, and
+the mask's verdict genuinely bears on it: target-free implies no target speech. Its other two inputs
+are already zeroed on overlap.
 """
 
 ATTENUATED_AXES: Final[tuple[str, ...]] = tuple(a.name for a in AXES if a.active and a.attenuable)
