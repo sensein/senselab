@@ -8,7 +8,7 @@ from speechbrain.inference.separation import SepformerSeparation as separator
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement import driftse, enhance_audios
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel
 
 
 def test_upstream_is_pinned_to_a_full_commit_sha() -> None:
@@ -54,6 +54,47 @@ def test_torch_is_named_explicitly_so_ensure_venv_routes_cuda() -> None:
     named = {r.split(">=")[0].split("==")[0].strip().lower() for r in driftse._DRIFTSE_REQUIREMENTS}
     assert "torch" in named
     assert "torchaudio" in named
+
+
+def test_worker_script_compiles_standalone() -> None:
+    """Assert the worker script string is syntactically valid standalone Python.
+
+    The worker is a string literal executed by another interpreter, so a
+    syntax error in it surfaces only at first inference — after the venv build
+    and the model download. Compiling it here makes that a unit-test failure.
+    """
+    compile(driftse._WORKER_SCRIPT, "<driftse worker>", "exec")
+
+
+def test_worker_never_imports_util_inference() -> None:
+    """Assert the worker never imports upstream's util/inference.py.
+
+    util/inference.py imports pesq and pystoi, which are deliberately not in
+    the venv. enhancement.py does not import it and neither may the worker.
+    """
+    assert "util.inference" not in driftse._WORKER_SCRIPT
+    assert "from util import inference" not in driftse._WORKER_SCRIPT
+
+
+def test_worker_loads_the_checkpoint_with_weights_only() -> None:
+    """Assert the worker loads the checkpoint with weights_only=True.
+
+    Upstream omits weights_only. The checkpoint is a foreign pickle from an
+    unlicensed research repository; loading it with the unrestricted unpickler is
+    arbitrary code execution at enhancement time.
+    """
+    assert "weights_only=True" in driftse._WORKER_SCRIPT
+
+
+def test_empty_input_returns_empty_without_spawning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assert an empty audio list returns [] without touching the Hub or a venv.
+
+    Constructing the HFModel below would otherwise perform a real Hub
+    existence check against a private repo; that check is mocked here per
+    this project's rule against unmocked HFModel construction in tests.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
 
 
 @pytest.fixture
