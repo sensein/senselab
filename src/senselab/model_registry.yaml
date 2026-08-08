@@ -211,9 +211,10 @@
   model_id: BUT-FIT/diarizen-wavlm-large-s80-md
   parameters: WavLM-large + Conformer
   training_data: BUT-FIT proprietary
+  license: CC BY-NC 4.0 — non-commercial only
   recommended_for: >-
     Diarization only, no transcription (via subprocess venv installing DiariZen's
-    forked pyannote-audio; weights CC BY-NC 4.0 — non-commercial only)
+    forked pyannote-audio)
 
 # Speech Emotion Recognition
 - name: SUPERB SER (IEMOCAP)
