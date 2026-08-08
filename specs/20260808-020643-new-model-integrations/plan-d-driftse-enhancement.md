@@ -26,7 +26,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 
 ## Preconditions
 
-Branch `feat/new-model-integrations` already exists, cut from the merged `alpha` (PR #547, `79b37d93`); run Plan A's Task 1 first to verify it. Task 2 below needs a HuggingFace **write** token for the `sensein` org — an operator step, not something the implementing agent can do with a read-scoped session token.
+Branch `feat/new-model-integrations` already exists, cut from the merged `alpha` (PR #547, `79b37d93`); run Plan A's Task 1 first to verify it. **Task 2's mirror is already done** — `sensein/driftse-distilhubert-three-layers` is live and private — so an implementer needs only read access to that repo, or `SENSELAB_DRIFTSE_CHECKPOINT` pointing at a local file.
 
 ## Upstream facts this plan depends on
 
@@ -205,6 +205,9 @@ _DRIFTSE_REPO_URL = "https://github.com/LiangXu123/DriftSE.git"
 _DRIFTSE_COMMIT = "695a64db187500fa0d7bae23912680bd5d4df613"
 
 _DRIFTSE_HF_REPO = "sensein/driftse-distilhubert-three-layers"
+# Pinned so a re-upload cannot change what this backend runs. The repo is private
+# pending the upstream licence answer; callers without access use the env override.
+_DRIFTSE_HF_REVISION = "76a9448aae12e4c232b1d52c24899d0835db5782"
 _DRIFTSE_CHECKPOINT_ENV = "SENSELAB_DRIFTSE_CHECKPOINT"
 ```
 
@@ -244,14 +247,30 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Mirror the checkpoint (operator step)
+### Task 2: Mirror the checkpoint — **DONE (2026-08-08)**, except the licence request
 
-**This task cannot be completed by an agent with a read-scoped HuggingFace token.** It needs a write token for the `sensein` org. If you are an agent, stop here, report the commands below to the user, and continue to Task 3 using the `SENSELAB_DRIFTSE_CHECKPOINT` local-path fallback — every later task works without the mirror.
+The mirror exists. Only Step 1 below, the upstream licence request, is outstanding.
+
+**Produced:** `sensein/driftse-distilhubert-three-layers`, **private**, at revision
+`76a9448aae12e4c232b1d52c24899d0835db5782`.
+
+| File | SHA-256 | Size |
+|---|---|---|
+| `last.ckpt` | `6f476a95cf747748b066405870e575cba3ee42927d6cb516a9b3f88da88abbb6` | 1137.9 MB |
+| `config.json` | `c61e97dfd618ff681be14493e3e43fc72312e95096a77a1dec0e968937b3e2f0` | 1.8 KB |
+| `last_pesq_sisdr_ccmse.ckpt` | `d5d62e08c3f6a57d1d9ba61bda1a7dadc38b5f62fad5cd8d9f1e0c25a39aa0c6` | 1137.9 MB |
+| `config_pesq_sisdr_ccmse.json` | `c0611e016c08b6b26864abb42159cf38cf65361ad1b6e26a4ac5dff561849aaf` | 1.9 KB |
+
+Three notes from doing it, which change what later tasks should assume:
+
+1. **The Google Drive archive is 11 GB and holds seven variants**, not one. Beyond the config-default `distillhubert_three_layers_with_z`, it contains the `DriftSE†` variant (`distillhubert_three_layers_pesq_sisdr_ccmse_with_z`) that carries the best published numbers on both benchmark tables. Both were mirrored, because re-downloading 11 GB to fetch the second later would be worse than storing it now. **The backend still pins `last.ckpt`** — the `†` file is available, not wired.
+2. **Each checkpoint contains both `model` and `ema` state dicts**, plus `optimizer`, `scheduler`, `epoch`, `step`, and an embedded `config`. Upstream's `enhancement.py` loads `checkpoint["model"]`, so Task 3's worker does too — that is what reproduces the published numbers. This is the **opposite** of the sibling unasdiff codebase, whose loader returns its `ema` copy, so the difference is easy to get backwards. Do not "fix" Task 3 to use `ema` without measuring.
+3. Both files load cleanly under `torch.load(..., weights_only=True)`, confirming Task 3's deviation is viable and not merely desirable.
 
 **Files:** none in this repository.
 
 **Interfaces:**
-- Produces: `sensein/driftse-distilhubert-three-layers` containing `last.ckpt` and `config.json`, at a revision the backend pins.
+- Produces: `sensein/driftse-distilhubert-three-layers` at the revision above, which Task 3 pins.
 
 - [ ] **Step 1: Open the upstream license request first**
 
@@ -277,47 +296,11 @@ Before mirroring anything, ask. Post to https://github.com/LiangXu123/DriftSE/is
 
 Record the issue URL in `doc.md` (Task 6).
 
-- [ ] **Step 2: Download the released checkpoint**
+- [x] **Steps 2–6: download, stage, create the private repo, write the card, record the revision — done**
 
-```bash
-mkdir -p ~/driftse-mirror && cd ~/driftse-mirror
-uv run --with gdown python -m gdown 1ekzJQidIojhjlj6oaUzQBKp4Pil6jIz7 -O logs.zip
-unzip logs.zip
-find . -name "last.ckpt"
-```
+Carried out on 2026-08-08. The repo is private, the model card records the provenance and the unresolved licence, and the revision and per-file SHA-256 digests are in the table above.
 
-Expected: `./logs/distillhubert_three_layers_with_z/last.ckpt`.
-
-- [ ] **Step 3: Fetch the matching config**
-
-```bash
-gh api repos/LiangXu123/DriftSE/contents/config/with_z/v2_drift2_distillhubert_three_layers.json?ref=695a64db187500fa0d7bae23912680bd5d4df613 \
-  --jq '.content' | base64 -d > config.json
-```
-
-- [ ] **Step 4: Create the mirror, private**
-
-```bash
-hf auth login   # needs a write token for the sensein org
-hf repo create sensein/driftse-distilhubert-three-layers --private
-hf upload sensein/driftse-distilhubert-three-layers \
-  logs/distillhubert_three_layers_with_z/last.ckpt last.ckpt
-hf upload sensein/driftse-distilhubert-three-layers config.json config.json
-```
-
-Private, not public: a private mirror gives the checkpoint a pinned revision and content hash — which is what run provenance needs — **without** redistributing weights whose license is unresolved.
-
-- [ ] **Step 5: Write a model card recording provenance**
-
-The card must state: the paper and its citation, that the weights originate from the authors' Google Drive release, the upstream commit pinned by the backend, and that the license is unresolved pending the issue from Step 1.
-
-- [ ] **Step 6: Record the revision**
-
-```bash
-hf api repos/sensein/driftse-distilhubert-three-layers/revision/main --jq '.sha'
-```
-
-Give this SHA to Task 3, which pins it.
+**Keep it private.** The card says so and this plan says so: a private mirror gives the checkpoint a pinned revision and content hash — which is what run provenance needs — **without** redistributing weights whose licence is unresolved. Making it public is a decision that waits on Step 1's answer.
 
 ---
 
