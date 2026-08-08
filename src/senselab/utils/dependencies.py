@@ -568,8 +568,16 @@ def hf_subprocess_env(
     try:
         for rid, rev in repos:
             resolve_model(rid, rev, token=token)
-    except Exception:
-        return env  # a model is missing/undownloadable -> let the child try online
+    except Exception as exc:
+        # A model is missing/undownloadable -> let the child try online instead
+        # of failing outright, but say so: silently dropping the offline flag
+        # here means the child reverts to the exact per-call Hub version-check
+        # path (the 429 source) this function exists to remove.
+        logger.warning(
+            f"hf_subprocess_env: failed to stage {rid!r}@{rev!r} for offline use ({exc}); "
+            "the worker will fall back to online Hub loading for all referenced repos."
+        )
+        return env
     for var in _HF_OFFLINE_ENV_VARS:
         env[var] = "1"
     return env
