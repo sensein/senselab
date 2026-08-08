@@ -21,6 +21,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 - **Every Python command runs through `uv run`.**
 - **Never run `pytest -n auto`.**
 - **Run `uv run ruff format` before any push.**
+- **Never `git add -A` unqualified.** Always limit it with a pathspec (`git add -A -- src/ docs/ pyproject.toml uv.lock`). The repository root can hold untracked local secrets — a developer-supplied API token sitting beside the checkout is the case that prompted this — and an unqualified `git add -A` would stage one. `git status` is not a safeguard: an agent running these steps does not read it before committing.
 - **Thresholds belong in `data/` with a written derivation, never as code literals.** The permutation-alignment threshold in Task 5 is the one number this plan introduces; it is derived by measurement there, not chosen.
 
 ## Preconditions
@@ -237,7 +238,7 @@ Expected: `use_flash = False`, a `try: from flash_attn import flash_attn_func`, 
 ```bash
 uv run ruff format src/senselab/audio/tasks/source_separation/ src/tests/
 uv run mypy src/senselab/audio/tasks/source_separation/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(source_separation): scaffolding, pinned upstream, FSD class map
 
 The sound prior's 41 trained labels sit in a 50-wide embedding; the map records
@@ -479,7 +480,7 @@ Expected: PASS, 4 tests.
 ```bash
 uv run ruff format src/senselab/audio/tasks/source_separation/ src/tests/
 uv run mypy src/senselab/audio/tasks/source_separation/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(source_separation): unasdiff worker and single-window driver
 
 Upstream ships only benchmark scripts, so the driver is ours. It reimplements
@@ -619,7 +620,7 @@ Expected: PASS, 11 tests.
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(source_separation): separate_audios with three modes
 
 source_classes is required for any mode using the sound prior: index 0 is
@@ -755,7 +756,7 @@ Expected: PASS.
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(source_separation): long-form chunking with permutation alignment
 
 Upstream trains on fixed 4 s windows and has no long-form path. Separating
@@ -844,7 +845,7 @@ Cover, in this order: the paper and what it does; that senselab writes the drive
 ```bash
 uv run ruff format --check src/ && uv run ruff check src/ && uv run mypy src/senselab/
 uv run pytest src/tests/audio/tasks/source_separation_test.py -v 2>&1 | tail -20
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "docs(source_separation): register unasdiff and document the driver
 
 doc.md records why p_sample_loop_group's ground-truth argument is not an oracle,
