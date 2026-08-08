@@ -26,8 +26,16 @@ def main() -> None:
     for task, task_models in tasks.items():
         title = task.replace("_", " ").title()
         print(f"## {title}\n")
-        print("| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |")
-        print("|-------|--------|----------|---------------|------------|-----------------|")
+        # `license` is an optional key: only models whose weights carry a restriction
+        # narrower than every other entry's default (e.g. DiariZen's CC BY-NC 4.0) set
+        # it, so most tasks render without the column at all rather than a page of "—".
+        has_license = any("license" in m for m in task_models)
+        if has_license:
+            print("| Model | Source | Model ID | Embedding Dim | Parameters | License | Recommended For |")
+            print("|-------|--------|----------|---------------|------------|---------|-----------------|")
+        else:
+            print("| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |")
+            print("|-------|--------|----------|---------------|------------|-----------------|")
         for m in task_models:
             name = m["name"]
             source = m["source"]
@@ -35,7 +43,11 @@ def main() -> None:
             emb = m.get("embedding_dim", "—")
             params = m.get("parameters", "—")
             rec = m.get("recommended_for", "—")
-            print(f"| {name} | {source} | {model_id} | {emb} | {params} | {rec} |")
+            if has_license:
+                license_ = m.get("license", "—")
+                print(f"| {name} | {source} | {model_id} | {emb} | {params} | {license_} | {rec} |")
+            else:
+                print(f"| {name} | {source} | {model_id} | {emb} | {params} | {rec} |")
         print()
 
 

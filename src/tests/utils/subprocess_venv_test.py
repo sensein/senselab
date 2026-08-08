@@ -681,9 +681,10 @@ def test_an_operators_own_ca_bundle_is_left_alone(monkeypatch: pytest.MonkeyPatc
 
 
 def test_cache_dir_path_does_not_create_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A test's skip gate must be able to ask *where* a venv would live without
-    creating anything: at import time, on a read-only or sandboxed HOME, the
-    mkdir in _cache_dir() would fail and take collection down with it.
+    """A test's skip gate must be able to ask *where* a venv would live without creating anything.
+
+    At import time, on a read-only or sandboxed HOME, the mkdir in _cache_dir() would fail
+    and take collection down with it.
     """
     target = tmp_path / "does-not-exist-yet"
     monkeypatch.setenv("SENSELAB_VENV_CACHE", str(target))
@@ -693,8 +694,7 @@ def test_cache_dir_path_does_not_create_the_directory(tmp_path: Path, monkeypatc
 
 
 def test_cache_dir_creates_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_cache_dir() keeps its creating behaviour — callers that are about to
-    build a venv rely on it."""
+    """_cache_dir() keeps its creating behaviour — callers that are about to build a venv rely on it."""
     target = tmp_path / "created-on-demand"
     monkeypatch.setenv("SENSELAB_VENV_CACHE", str(target))
 
@@ -703,8 +703,10 @@ def test_cache_dir_creates_the_directory(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_cache_dir_path_honours_the_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate must match where the venv is actually built, or it skips on a
-    host that has the venv and runs on a host that does not."""
+    """The gate must match where the venv is actually built.
+
+    Otherwise it skips on a host that has the venv and runs on a host that does not.
+    """
     monkeypatch.setenv("SENSELAB_VENV_CACHE", str(tmp_path / "elsewhere"))
     assert str(tmp_path / "elsewhere") == str(subprocess_venv._cache_dir_path())
 
