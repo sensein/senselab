@@ -30,11 +30,13 @@ _NEMO_REQUIREMENTS = [
     # librosa -> numba -> llvmlite 0.36.0 (no Python 3.12 support). See qwen.py.
     "numba>=0.60",
 ]
-# NOTE: The `lightning` package was removed from PyPI (April 2026).
-# NeMo requires it but pytorch-lightning is not a drop-in replacement.
-# Existing cached venvs that were created when `lightning` was available
-# will continue to work. New venv creation may fail until NeMo fixes
-# their dependency on `lightning` vs `pytorch-lightning`.
+# NOTE: `lightning` 2.6.2/2.6.3 were pulled from PyPI as malware (quarantined,
+# not merely removed) around April 2026. `lightning` itself is still on PyPI —
+# 2.6.5 is current — so `lightning>=2.0.1` (NeMo's own pin) resolves cleanly;
+# only those two specific releases are unavailable. Verified current as of this
+# writing. DiariZen (diarizen.py) is the third venv in this repo depending on
+# `lightning` (alongside this one and speech_to_text/nemo.py) — re-check this
+# note there too before trusting it stale-dated.
 _NEMO_PYTHON = "3.12"
 
 # Worker script — runs inside the isolated venv

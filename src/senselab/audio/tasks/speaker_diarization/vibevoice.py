@@ -39,7 +39,12 @@ try:
     from transformers import AutoProcessor, VibeVoiceAsrForConditionalGeneration
 
     VIBEVOICE_AVAILABLE = True
-except ImportError:
+except (ImportError, RuntimeError):
+    # RuntimeError alongside ImportError: api.py imports this module unconditionally,
+    # so a non-ImportError failure inside a transformers submodule (the pattern
+    # audio.py/video.py/ppg.py/frame_posteriors.py already guard against) would
+    # otherwise take down `import senselab.audio.tasks.speaker_diarization` for
+    # Pyannote users too.
     VIBEVOICE_AVAILABLE = False
 
 
@@ -169,8 +174,8 @@ def diarize_audios_with_vibevoice(
         >>> from senselab.audio.data_structures import Audio
         >>> from senselab.utils.data_structures import DeviceType
         >>> a1 = Audio(filepath=Path("sample1.wav").resolve())
-        >>> lines = diarize_audios_with_vibevoice([a1], device=DeviceType.CPU)
-        >>> len(lines) == 1
+        >>> lines = diarize_audios_with_vibevoice([a1], device=DeviceType.CPU)  # doctest: +SKIP
+        >>> len(lines) == 1  # doctest: +SKIP
         True
     """
     if model is None:

@@ -453,10 +453,11 @@ def test_diarize_audios_with_child_adult(resampled_mono_audio_sample: Audio) -> 
     from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
 
     # Upstream's own chunking loop only analyzes whole 10s windows (strict
-    # `start + 10 < length`), so anything <= 10s produces zero windows and an
-    # empty result — indistinguishable from "no adult/child speech detected."
-    # Concatenate the ~4.9s fixture 3x (~14.8s) so this test can actually tell
-    # a broken backend from a too-short clip.
+    # `start + 10 < length`), so anything <= 10s now raises ValueError up front
+    # (see diarize_audios_with_child_adult) rather than silently returning an
+    # empty, indistinguishable-from-"no speech" result. Concatenate the ~4.9s
+    # fixture 3x (~14.8s) so this test exercises the real backend instead of
+    # tripping that guard.
     long_audio = concatenate_audios([resampled_mono_audio_sample] * 3)
     model: HFModel = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
     results = diarize_audios_with_child_adult(audios=[long_audio], model=model, device=DeviceType.CUDA)
@@ -478,3 +479,29 @@ def test_diarize_audios_with_child_adult_requires_cuda(monkeypatch: pytest.Monke
     model: HFModel = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
     with pytest.raises(RuntimeError, match="requires CUDA"):
         diarize_audios_with_child_adult(audios=[], model=model, device=DeviceType.CPU)
+
+
+def test_diarize_audios_with_child_adult_rejects_short_clips(
+    monkeypatch: pytest.MonkeyPatch, resampled_mono_audio_sample: Audio
+) -> None:
+    """A clip <= 10s must raise ValueError, not silently return `[]`.
+
+    Upstream's chunking loop analyzes zero windows for such a clip, which would
+    otherwise be indistinguishable from "no adult/child speech present" — the
+    worst failure mode for a backend whose purpose is "was an adult voice
+    present." No CUDA/venv needed: the guard runs before the subprocess is
+    spawned, so the device-selection call is mocked out here purely to reach it
+    without real GPU hardware.
+    """
+    from senselab.audio.tasks.speaker_diarization import child_adult as child_adult_module
+    from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
+
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr(
+        child_adult_module, "_select_device_and_dtype", lambda **kwargs: (DeviceType.CUDA, torch.float32)
+    )
+    model: HFModel = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
+
+    # Fixture is ~4.9s, well under the 10s floor.
+    with pytest.raises(ValueError, match="10s"):
+        diarize_audios_with_child_adult(audios=[resampled_mono_audio_sample], model=model, device=DeviceType.CUDA)

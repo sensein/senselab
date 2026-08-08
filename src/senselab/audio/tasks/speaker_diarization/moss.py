@@ -112,6 +112,11 @@ try:
             # a different failure mode than "no speech" that parse_transcript()
             # alone can't signal since it just returns whatever prefix parsed.
             "truncated": result["generated_tokens"] >= max_new_tokens,
+            # Lets the host tell "genuine silence" (model emitted ~nothing) apart
+            # from "parse_transcript() couldn't parse a real transcript" (the
+            # realistic shape of an upstream format change) — both would otherwise
+            # collapse to the same empty `segments` list.
+            "raw_text_len": len((result["text"] or "").strip()),
         })
 
     print(json.dumps({"results": all_results}))
@@ -150,7 +155,16 @@ def diarize_audios_with_moss(
 
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
-        `speaker` (e.g. `"S01"`), `start`, `end`, and `text`.
+        `speaker` (e.g. `"S01"`), `start`, `end`, and `text`. Empty for an audio that
+        was genuinely silent or produced no parseable transcript (logged as a
+        warning, not raised) — unless *every* audio in the batch produced a
+        non-empty transcript that failed to parse, which raises instead (see
+        Raises).
+
+    Raises:
+        RuntimeError: If every audio in the batch produced a non-empty transcript
+            that ``parse_transcript()`` could not parse into any segments —
+            treated as a broken transcript-format contract, not silent no-speech.
 
     Example:
         >>> from pathlib import Path
@@ -205,12 +219,27 @@ def diarize_audios_with_moss(
         output = parse_subprocess_result(result, "MOSS-Transcribe-Diarize")
 
         results: List[List[ScriptLine]] = []
-        for i, audio_result in enumerate(output.get("results", [])):
+        parse_failures = 0
+        audio_results = output.get("results", [])
+        for i, audio_result in enumerate(audio_results):
             if audio_result.get("truncated"):
                 logger.warning(
                     f"MOSS-Transcribe-Diarize hit max_new_tokens={max_new_tokens} on "
                     f"{audio_paths[i]!r} without generating an end token; the transcript "
                     "is likely truncated. Pass a higher max_new_tokens for longer recordings."
+                )
+            segments = audio_result.get("segments", [])
+            if not segments and audio_result.get("raw_text_len", 0) > 0:
+                # The model emitted a non-empty transcript, but parse_transcript()
+                # produced no segments from it — the realistic shape of an upstream
+                # transcript-format change, not genuine silence. Without raw_text_len,
+                # this and true silence both collapse to the same empty `segments`.
+                parse_failures += 1
+                logger.warning(
+                    f"MOSS-Transcribe-Diarize emitted a non-empty transcript for "
+                    f"{audio_paths[i]!r} that parse_transcript() could not parse into any "
+                    "segments; this looks like a broken transcript-format contract rather "
+                    "than an absence of speech."
                 )
             script_lines = [
                 ScriptLine(
@@ -219,8 +248,21 @@ def diarize_audios_with_moss(
                     end=float(seg.get("end", 0.0)),
                     text=seg.get("text"),
                 )
-                for seg in audio_result.get("segments", [])
+                for seg in segments
             ]
             results.append(sorted(script_lines, key=lambda x: x.start or 0.0))
+
+        if audio_results and parse_failures == len(audio_results):
+            # Every audio in the batch produced a non-empty transcript that failed to
+            # parse — far more likely a broken parse_transcript() contract (e.g. an
+            # upstream output-format change) than every clip happening to be silent.
+            # Raising here keeps that distinguishable from a legitimate empty-segments
+            # result, which would otherwise be recorded as a "status-ok" outcome.
+            raise RuntimeError(
+                f"MOSS-Transcribe-Diarize produced a non-empty transcript that failed to parse "
+                f"into any segments for all {len(audio_results)} audio(s) in this batch; this "
+                "looks like a broken parse_transcript() contract rather than an absence of "
+                "speech. See the preceding warning(s) for the affected audios."
+            )
 
         return results
