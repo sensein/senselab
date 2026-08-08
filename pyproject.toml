@@ -107,6 +107,7 @@ dev = [
   "pytest-xdist[psutil]~=3.8.0",
   "pytest-mock~=3.14",
   "pytest-cov~=7.0",
+  "pytest-timeout~=2.4",
   "mypy~=1.9",
   "pre-commit~=4.0",
   "ruff~=0.3",
@@ -146,6 +147,19 @@ pythonpath = [
 testpaths = [
   "src/tests"
 ]
+# A hung test must fail with a traceback, not consume the job.
+#
+# macOS-tests was cancelled twice — once at GitHub's 6-hour ceiling, once at the 90-minute cap added
+# after it — both times because a single test went silent mid-suite (66 minutes with no output on
+# run 31237438671). Neither cancellation says which test or where it was stuck, and the same test
+# passes in 9 s in isolation and on every other platform, so the log was the only evidence and it
+# had none.
+#
+# 900 s is set by the slowest *legitimate* test, not by taste: the HF dataset conversion in
+# `dataset_test` takes 558 s of network on a warm laptop, so anything near it would fail honest work.
+# The default signal method is deliberate — `thread` kills the whole process, losing every test after
+# the hang, while SIGALRM raises inside the stuck test and lets the suite carry on and report.
+timeout = 900
 
 [tool.mypy]
 ignore_missing_imports = true
