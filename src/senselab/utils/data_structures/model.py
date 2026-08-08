@@ -329,7 +329,13 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         'openai/whisper-tiny'
     """
     if task == "diarization":
-        if model_id.startswith("nvidia/diar_sortformer"):
+        if (
+            model_id.startswith("nvidia/diar_sortformer")
+            or model_id.startswith("microsoft/VibeVoice-ASR")
+            or model_id.startswith("AlexXu811/whisper-child-adult")
+            or model_id.startswith("OpenMOSS-Team/MOSS-Transcribe-Diarize")
+            or model_id.startswith("BUT-FIT/diarizen")
+        ):
             return HFModel(path_or_uri=model_id)
         return PyannoteAudioModel(path_or_uri=model_id)
     if task == "asr":
