@@ -28,8 +28,10 @@
   <ul>
     <li><a href="#quick-start">Quick start</a></li>
     <li><a href="#adaptive-audio-analysis-uncertainty-driven">Adaptive audio analysis (uncertainty-driven)</a></li>
+    <li><a href="#background-scene-characterization">Background scene characterization</a></li>
     <li><a href="#system-requirements">⚠️ System Requirements</a></li>
     <li><a href="#installation">Installation</a></li>
+    <li><a href="#development">Development</a></li>
     <li><a href="#senselab-ai-our-ai-based-chatbot">senselab AI (our AI-based chatbot)</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#funding">Funding</a></li>
@@ -143,11 +145,10 @@ of hiding it. Design + results: <code>specs/20260723-225523-dynamic-uncertainty-
 
 <div class="pdoc-code codehilite">
 <pre><span></span><code><span class="c1"># Step 1 — analyze: run every model on the recording (results are content-addressably</span>
-<span class="c1"># cached, so re-runs are cheap). `--enhancement auto` adds a triage round 0 that skips</span>
-<span class="c1"># the speech-enhancement pass on clean audio and stops early on silent recordings.</span>
-uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/analyze_audio.py<span class="w"> </span>path/to/recording.wav<span class="w"> </span>--enhancement<span class="w"> </span>auto
-<span class="c1"># → artifacts/analyze_audio/&lt;name&gt;_&lt;timestamp&gt;/  (per-task JSONs, 9 uncertainty</span>
-<span class="c1">#   parquets, Label Studio bundle, disagreements.json, timeline.png)</span>
+<span class="c1"># cached, so re-runs are cheap). Two arguments: the audio, and where results go.</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/analyze_audio.py<span class="w"> </span>path/to/recording.wav
+<span class="c1"># → artifacts/analyze_audio/&lt;name&gt;_&lt;timestamp&gt;/  (L1 per-signal parquets, L2 fused</span>
+<span class="c1">#   axes, Label Studio bundle, disagreements.json, final/ deliverables)</span>
 
 <span class="c1"># Step 2 — adapt: run the uncertainty-driven loop over that run directory.</span>
 uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/adaptive_loop.py<span class="w"> </span>artifacts/analyze_audio/&lt;run_dir&gt;<span class="w"> </span><span class="se">\</span>
@@ -156,16 +157,33 @@ uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </sp
 </code></pre>
 </div>
 
+<p><strong><code>analyze_audio.py</code> takes an audio file and <code>--out</code>, and nothing else.</strong> Every other value — the
+model ids, the bucket grid, the aggregator, the task type, the triage and enhancement gates, which
+stages run — lives in one versioned file with its derivation recorded beside it:
+<code>src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml</code>. To change something,
+write a YAML holding only the keys you are changing and pass <code>--config my.yaml</code>; it deep-merges over
+the packaged one, and the merged mapping's hash is stamped into every artifact's provenance, so a run
+can always be named. There are deliberately no per-knob flags: the seventy that preceded this
+differed in ways a reader had no basis to choose between, and the <em>shipped defaults</em> of the four grid
+flags put the four uncertainty axes on four spacings that shared no bucket keys — silently disabling
+every cross-axis coupling in the pipeline.</p>
+
 <p>The loop writes, under the run directory (or <code>--out</code>):</p>
 
 <ul>
 <li><code>final/transcript.json</code> — consensus word-level transcript (family-weighted voting across all ASR
 models) with speaker attribution, per-word confidence, and alternates where models disagree;</li>
-<li><code>final/diarization.json</code> + <code>final/presence.parquet</code> — refined speaker segments (embedding
-change-point + re-clustering repair) and the fused speech-presence track;</li>
-<li><code>final/convergence.json</code> + <code>final/iterations.json</code> — what the loop did and why: every intervention
-(fired / deferred / blocked) with trigger values and measured uncertainty deltas, budget
-accounting, and regions marked <code>converged</code> / <code>irreducible</code> (with a machine-readable reason);</li>
+<li><code>final/diarization.json</code> — refined speaker segments (embedding change-point + re-clustering
+repair);</li>
+<li><code>final/estimates/&lt;axis&gt;.parquet</code> — the last round's estimate of every active axis, extracted
+verbatim from <code>L2/round/&lt;last&gt;/estimates/</code>. A number in <code>final/</code> that is not in the last round
+was computed at the wrong stage, so this directory only copies;</li>
+<li><code>final/speakers.json</code> + <code>final/per_speaker_presence.parquet</code> — the speaker-count posterior with
+its per-speaker hypotheses, and one presence track per hypothesised speaker;</li>
+<li><code>final/decisions.json</code> — what the loop did and why: every intervention (fired / deferred /
+blocked) with trigger values and measured uncertainty deltas, budget accounting, and regions
+marked <code>converged</code> / <code>irreducible</code> (with a machine-readable reason). Each round's own slice of
+this is in its <code>L2/round/&lt;n&gt;/summary.json</code>;</li>
 <li><code>final/timeline.png</code> — ground truth (if given) vs presence / identity / utterance uncertainty per
 round, interventions, and the confidence-colored fused words;</li>
 <li><code>final/labelstudio_{tasks,config}.{json,xml}</code> + <code>disagreements_resolved.json</code> — the original Label
@@ -173,15 +191,45 @@ Studio bundle with <code>final__*</code> consensus tracks added, and the round-1
 their resolutions.</li>
 </ul>
 
-<p>Useful knobs (all thresholds/budgets/models live in a versioned policy file —
-<code>src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml</code> — overridable via
-<code>--policy my_policy.yaml</code>): <code>--max-rounds</code>, <code>--aggregator</code>, per-run intervention budgets, ASR
-reserve/escalation pools, and identity-repair parameters. Runs are <strong>deterministic</strong>: identical
-inputs + policy produce byte-identical decision logs. <code>HF_TOKEN</code> enables the gated
+<p>All thresholds, budgets and model pools live in the <code>adaptive:</code> section of that same run config —
+round count, aggregator, per-run intervention budgets, ASR reserve/escalation pools, identity-repair
+parameters — and it keeps its own <code>policy_hash</code> beside the config's <code>config_hash</code>, because a policy
+change and a model change are not the same event. <code>scripts/adaptive_loop.py</code> takes <code>--config</code> too.
+Runs are <strong>deterministic</strong>: identical inputs + config produce byte-identical decision logs. <code>HF_TOKEN</code> enables the gated
 <code>pyannote/segmentation-3.0</code> overlap detector; without it the loop degrades gracefully and records
-the skipped intervention in <code>convergence.json → next_actions</code>.</p>
+the skipped intervention in <code>final/decisions.json → convergence.next_actions</code>.</p>
 
 <hr />
+
+<h2 id="background-scene-characterization">Background scene characterization</h2>
+
+<p>Detects background sound sources — people, machines, environment — beneath a
+near-microphone foreground speaker, and reports <strong>how far above the noise floor</strong> each one
+sits so a marginal finding is never mistaken for a confident one.</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="c1"># `task.type` in the run config selects what counts as the participant&#39;s own activity.</span>
+uv<span class="w"> </span>run<span class="w"> </span>python<span class="w"> </span>scripts/analyze_audio.py<span class="w"> </span>recording.wav
+</code></pre>
+</div>
+
+<p>Three things worth knowing before reading the output:</p>
+
+<p><strong>Detection is floor subtraction, not amplification.</strong> Amplification moves a source and the
+leaked foreground together, so it changes no signal-to-noise ratio. It is capped at 10 dB
+and used only to keep a classifier's absolute floor from destroying quiet content.</p>
+
+<p><strong>Every finding carries its margin above the band noise floor</strong>, on a 3 / 6 / 10 dB ladder
+corroborated independently by human masked-threshold criteria, a dozen bioacoustics and
+noise-standard traditions, and the classifiers' own measured detection floors.</p>
+
+<p><strong>A null result is attributable.</strong> Suppression depth is reported alongside, so "no
+background found" is distinguishable from "suppression was too shallow to look".</p>
+
+<p>The background mask marks where claims are trustworthy without relying on suppression at
+all. <code>task.type</code> matters: in a breathing or cough task the target event <em>is</em> a non-speech
+vocal sound, and a mask built from voice activity alone would report the collected signal as
+a background source.</p>
 
 <h2 id="system-requirements">⚠️ System Requirements</h2>
 
@@ -210,7 +258,31 @@ the skipped intervention in <code>convergence.json → next_actions</code>.</p>
 </ul>
 
 <p>If you attempt to install this package on an unsupported system, the installation or execution will fail.</p></li>
-<li><p><code>FFmpeg</code> is required by some audio and video dependencies (e.g., <code>torchaudio</code>). Please make sure you have <code>FFmpeg</code> properly installed on your machine before installing and using <code><a href="">senselab</a></code> (see <a href="https://www.ffmpeg.org/download.html">here</a> for detailed platform-dependent instructions).</p></li>
+<li><p><strong><code>FFmpeg</code> shared libraries</strong> are required. The consumer is <code>torchcodec</code>, which <code>dlopen</code>s them at
+import time <em>by soname</em> (<code>libavutil.so.56</code> / <code>.57</code> / <code>.58</code> / <code>.59</code>, one attempt per supported major).
+Two consequences worth knowing before you debug this:</p>
+
+<ul>
+<li><strong>The <code>av</code> (PyAV) wheel does not satisfy it</strong>, even though it ships ffmpeg libraries inside your
+environment. PyAV mangles their filenames on purpose (<code>av.libs/libavutil-3591eddc.so.60.8.100</code>) so
+they cannot collide with a system ffmpeg, which also makes them invisible to a soname lookup.</li>
+<li><strong>Without them, no test collects at all.</strong> <code>src/tests/conftest.py</code> reports
+<code>Dependencies failed to import — test environment is broken</code>, including for tests that never open
+an audio file.</li>
+</ul>
+
+<p>If you have no system ffmpeg, or no root, this repo installs it for you via conda-forge into a
+prefix you choose:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>bash<span class="w"> </span>scripts/install-ffmpeg.sh<span class="w">                       </span><span class="c1"># defaults to /opt/miniforge</span>
+<span class="nv">CONDA_PREFIX</span><span class="o">=</span>~/ffmpeg<span class="w"> </span>bash<span class="w"> </span>scripts/install-ffmpeg.sh<span class="w"> </span><span class="c1"># anywhere writable</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CONDA_PREFIX</span><span class="s2">/lib:</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span><span class="w">    </span><span class="c1"># macOS: DYLD_LIBRARY_PATH</span>
+</code></pre>
+</div>
+
+<p>This is what CI uses on every platform. Otherwise install ffmpeg (<code>&lt;8</code>) system-wide — see
+<a href="https://www.ffmpeg.org/download.html">ffmpeg.org</a>.</p></li>
 <li><p>CUDA libraries matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.8 expects cuda-12.8). To install those with conda, please do:</p>
 
 <ul>
@@ -251,6 +323,10 @@ Please follow the official installation instructions for your platform: <a href=
 
 <h2 id="installation">Installation</h2>
 
+<p><strong>Python 3.11–3.14</strong>, declared as <code>&gt;=3.11,&lt;3.15</code> in <code>pyproject.toml</code>. For development the repo pins
+the interpreter in <code>.python-version</code> (<strong>3.12</strong>, matching CI's default), which <code>uv</code> reads, so a bare
+<code>uv sync</code> is deterministic.</p>
+
 <p>Install this package via:</p>
 
 <div class="pdoc-code codehilite">
@@ -272,10 +348,99 @@ Please follow the official installation instructions for your platform: <a href=
 </code></pre>
 </div>
 
-<p>To install articulatory, video, text, and senselab-ai extras, please do:</p>
+<p>The declared extras are <code>nlp</code>, <code>text</code>, <code>video</code>, <code>senselab-ai</code>, and <code>all</code> (every one of them).
+To pick a subset:</p>
 
 <div class="pdoc-code codehilite">
-<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[articulatory,video,text,senselab-ai]&#39;</span>
+<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[video,text,senselab-ai]&#39;</span>
+</code></pre>
+</div>
+
+<p>There is no <code>articulatory</code> extra — it was documented here and in <code>CONTRIBUTING.md</code> but never declared,
+so <code>uv sync --extra articulatory</code> fails outright and <code>pip install 'senselab[articulatory]'</code> warns and
+installs base only.</p>
+
+<h3 id="released-vs-pre-release">Released vs pre-release</h3>
+
+<p>Merging a PR into <code>alpha</code> publishes an <strong>alpha pre-release</strong> automatically (<code>release.yaml</code> →
+<code>auto shipit</code>); merging into <code>main</code> publishes a release. So there are two lines on PyPI, and <code>--pre</code>
+is how you choose:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">&#39;senselab[all]&#39;</span><span class="w">          </span><span class="c1"># the released line (currently 1.3.0)</span>
+pip<span class="w"> </span>install<span class="w"> </span>--pre<span class="w"> </span><span class="s1">&#39;senselab[all]&#39;</span><span class="w">    </span><span class="c1"># the newest alpha from the alpha branch (1.3.1aN)</span>
+</code></pre>
+</div>
+
+<p>This is why every tutorial carries <code>--pre</code> — notebooks track the alpha branch:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="err">!</span><span class="n">pip</span> <span class="n">install</span> <span class="o">-</span><span class="n">q</span> <span class="n">uv</span>
+<span class="err">!</span><span class="n">uv</span> <span class="n">pip</span> <span class="n">install</span> <span class="o">--</span><span class="n">pre</span> <span class="o">--</span><span class="n">system</span> <span class="s2">&quot;senselab[nlp,text,video]&quot;</span>
+</code></pre>
+</div>
+
+<p>Colab images happen to ship <code>ffmpeg</code>, so notebooks work there without installing it. The guarded
+fallback for images that do not — and the <code>HF_TOKEN</code>-from-Colab-secrets snippet — is the setup-cell
+template in <a href="tutorials/README.md"><code>tutorials/README.md</code></a>.</p>
+
+<p><strong>None of this applies to development.</strong> <code>--pre</code> installs a <em>published artifact</em>; a developer wants
+the working tree. See <a href="#development">Development</a> below, which builds from source and never fetches
+<code><a href="">senselab</a></code> from PyPI.</p>
+
+<hr />
+
+<h2 id="development">Development</h2>
+
+<p>Three steps, and the second is the one people miss:</p>
+
+<p>Development installs <strong>from source</strong> — the checkout you are standing in. <code>uv sync</code> puts the working
+tree in the environment, so an edit is live with no reinstall; nothing here fetches <code><a href="">senselab</a></code> from
+PyPI, and <code>--pre</code> has no role. (The version you will see, <code>1.3.1aN.devM</code>, comes from <code>hatch-vcs</code>
+reading git describe, which is also why a shallow clone with no tags reports a wrong version.)</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="c1"># 1. Environment. --all-extras is what every CI workflow uses: it cannot go stale when an</span>
+<span class="c1">#    extra is added, which `--extra all` can. The interpreter comes from .python-version</span>
+<span class="c1">#    (3.12, matching CI&#39;s default), so no --python flag.</span>
+uv<span class="w"> </span>sync<span class="w"> </span>--all-extras<span class="w"> </span>--group<span class="w"> </span>dev<span class="w"> </span>--group<span class="w"> </span>docs
+
+<span class="c1"># 2. FFmpeg shared libraries for torchcodec. Skip this and NOTHING collects —</span>
+<span class="c1">#    conftest.py aborts with &quot;Dependencies failed to import&quot;, even for tests that</span>
+<span class="c1">#    never open an audio file. See System Requirements above for why the PyAV wheel</span>
+<span class="c1">#    does not cover it.</span>
+bash<span class="w"> </span>scripts/install-ffmpeg.sh
+<span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;/opt/miniforge/lib:</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span><span class="w">   </span><span class="c1"># macOS: DYLD_LIBRARY_PATH</span>
+
+<span class="c1"># 3. Hooks, required before committing.</span>
+uv<span class="w"> </span>run<span class="w"> </span>pre-commit<span class="w"> </span>install
+</code></pre>
+</div>
+
+<p>Then:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w">                                    </span><span class="c1"># everything, with coverage</span>
+uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>src/tests/audio/tasks/preprocessing_test.py<span class="w">          </span><span class="c1"># one file</span>
+uv<span class="w"> </span>run<span class="w"> </span>pytest<span class="w"> </span>src/tests/audio/tasks/preprocessing_test.py::test_x<span class="w">  </span><span class="c1"># one test</span>
+uv<span class="w"> </span>run<span class="w"> </span>mypy<span class="w"> </span>.
+uv<span class="w"> </span>run<span class="w"> </span>ruff<span class="w"> </span>check<span class="w">          </span><span class="c1"># --fix to autofix</span>
+uv<span class="w"> </span>run<span class="w"> </span>ruff<span class="w"> </span>format
+uv<span class="w"> </span>run<span class="w"> </span>codespell
+</code></pre>
+</div>
+
+<p><strong>On <code>pytest -n auto</code>.</strong> It is tempting and it is a memory hazard: <code>pytest-xdist</code> gives each worker its
+own interpreter, and each one imports torch + transformers + speechbrain independently — measured at
+<strong>535 MB resident per worker before a single test runs</strong>, plus a private copy of any model weights that
+worker's tests load. On a 10-core / 32 GB laptop <code>-n auto</code> has exhausted memory. Prefer running the
+directory you changed, or cap the workers (<code>-n 4</code>). The pure-Python workflow tests are fast serially:
+<code>uv run pytest src/tests/audio/workflows/audio_analysis</code> is ~1400 tests in about 17 s.</p>
+
+<p>Docs build locally with:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>uv<span class="w"> </span>run<span class="w"> </span>pdoc<span class="w"> </span>src/senselab<span class="w"> </span>-t<span class="w"> </span>docs_style/pdoc-theme<span class="w"> </span>--docformat<span class="w"> </span>google
 </code></pre>
 </div>
 

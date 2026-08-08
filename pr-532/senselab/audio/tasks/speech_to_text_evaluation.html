@@ -228,28 +228,28 @@ As for WER, CER is not a percentage as can go higher than 1.</p>
 
     </div>
     <a class="headerlink" href="#calculate_cer"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_cer-124"><a href="#calculate_cer-124"><span class="linenos">124</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_cer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-</span><span id="calculate_cer-125"><a href="#calculate_cer-125"><span class="linenos">125</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Character Error Rate (CER) between the reference and hypothesis.</span>
-</span><span id="calculate_cer-126"><a href="#calculate_cer-126"><span class="linenos">126</span></a>
-</span><span id="calculate_cer-127"><a href="#calculate_cer-127"><span class="linenos">127</span></a><span class="sd">    Args:</span>
-</span><span id="calculate_cer-128"><a href="#calculate_cer-128"><span class="linenos">128</span></a><span class="sd">        reference (str): The ground truth text.</span>
-</span><span id="calculate_cer-129"><a href="#calculate_cer-129"><span class="linenos">129</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
-</span><span id="calculate_cer-130"><a href="#calculate_cer-130"><span class="linenos">130</span></a>
-</span><span id="calculate_cer-131"><a href="#calculate_cer-131"><span class="linenos">131</span></a><span class="sd">    Returns:</span>
-</span><span id="calculate_cer-132"><a href="#calculate_cer-132"><span class="linenos">132</span></a><span class="sd">        float: The CER score.</span>
-</span><span id="calculate_cer-133"><a href="#calculate_cer-133"><span class="linenos">133</span></a>
-</span><span id="calculate_cer-134"><a href="#calculate_cer-134"><span class="linenos">134</span></a><span class="sd">    Examples:</span>
-</span><span id="calculate_cer-135"><a href="#calculate_cer-135"><span class="linenos">135</span></a><span class="sd">        &gt;&gt;&gt; calculate_cer(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
-</span><span id="calculate_cer-136"><a href="#calculate_cer-136"><span class="linenos">136</span></a><span class="sd">        0.45454545454545453</span>
-</span><span id="calculate_cer-137"><a href="#calculate_cer-137"><span class="linenos">137</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="calculate_cer-138"><a href="#calculate_cer-138"><span class="linenos">138</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
-</span><span id="calculate_cer-139"><a href="#calculate_cer-139"><span class="linenos">139</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="calculate_cer-140"><a href="#calculate_cer-140"><span class="linenos">140</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
-</span><span id="calculate_cer-141"><a href="#calculate_cer-141"><span class="linenos">141</span></a>        <span class="p">)</span>
-</span><span id="calculate_cer-142"><a href="#calculate_cer-142"><span class="linenos">142</span></a>    <span class="n">cer_value</span> <span class="o">=</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">cer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
-</span><span id="calculate_cer-143"><a href="#calculate_cer-143"><span class="linenos">143</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">cer_value</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-</span><span id="calculate_cer-144"><a href="#calculate_cer-144"><span class="linenos">144</span></a>        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">cer_value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;cer&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">))</span>  <span class="c1"># Extract CER if returned in a dictionary</span>
-</span><span id="calculate_cer-145"><a href="#calculate_cer-145"><span class="linenos">145</span></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">cer_value</span><span class="p">)</span>  <span class="c1"># Ensure output is always a float</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_cer-160"><a href="#calculate_cer-160"><span class="linenos">160</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_cer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="calculate_cer-161"><a href="#calculate_cer-161"><span class="linenos">161</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Character Error Rate (CER) between the reference and hypothesis.</span>
+</span><span id="calculate_cer-162"><a href="#calculate_cer-162"><span class="linenos">162</span></a>
+</span><span id="calculate_cer-163"><a href="#calculate_cer-163"><span class="linenos">163</span></a><span class="sd">    Args:</span>
+</span><span id="calculate_cer-164"><a href="#calculate_cer-164"><span class="linenos">164</span></a><span class="sd">        reference (str): The ground truth text.</span>
+</span><span id="calculate_cer-165"><a href="#calculate_cer-165"><span class="linenos">165</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
+</span><span id="calculate_cer-166"><a href="#calculate_cer-166"><span class="linenos">166</span></a>
+</span><span id="calculate_cer-167"><a href="#calculate_cer-167"><span class="linenos">167</span></a><span class="sd">    Returns:</span>
+</span><span id="calculate_cer-168"><a href="#calculate_cer-168"><span class="linenos">168</span></a><span class="sd">        float: The CER score.</span>
+</span><span id="calculate_cer-169"><a href="#calculate_cer-169"><span class="linenos">169</span></a>
+</span><span id="calculate_cer-170"><a href="#calculate_cer-170"><span class="linenos">170</span></a><span class="sd">    Examples:</span>
+</span><span id="calculate_cer-171"><a href="#calculate_cer-171"><span class="linenos">171</span></a><span class="sd">        &gt;&gt;&gt; calculate_cer(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
+</span><span id="calculate_cer-172"><a href="#calculate_cer-172"><span class="linenos">172</span></a><span class="sd">        0.45454545454545453</span>
+</span><span id="calculate_cer-173"><a href="#calculate_cer-173"><span class="linenos">173</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="calculate_cer-174"><a href="#calculate_cer-174"><span class="linenos">174</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
+</span><span id="calculate_cer-175"><a href="#calculate_cer-175"><span class="linenos">175</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="calculate_cer-176"><a href="#calculate_cer-176"><span class="linenos">176</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
+</span><span id="calculate_cer-177"><a href="#calculate_cer-177"><span class="linenos">177</span></a>        <span class="p">)</span>
+</span><span id="calculate_cer-178"><a href="#calculate_cer-178"><span class="linenos">178</span></a>    <span class="n">cer_value</span> <span class="o">=</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">cer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
+</span><span id="calculate_cer-179"><a href="#calculate_cer-179"><span class="linenos">179</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">cer_value</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
+</span><span id="calculate_cer-180"><a href="#calculate_cer-180"><span class="linenos">180</span></a>        <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">cer_value</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;cer&quot;</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">))</span>  <span class="c1"># Extract CER if returned in a dictionary</span>
+</span><span id="calculate_cer-181"><a href="#calculate_cer-181"><span class="linenos">181</span></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">cer_value</span><span class="p">)</span>  <span class="c1"># Ensure output is always a float</span>
 </span></pre></div>
 
 
@@ -292,25 +292,25 @@ As for WER, CER is not a percentage as can go higher than 1.</p>
 
     </div>
     <a class="headerlink" href="#calculate_mer"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_mer-61"><a href="#calculate_mer-61"><span class="linenos">61</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_mer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-</span><span id="calculate_mer-62"><a href="#calculate_mer-62"><span class="linenos">62</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Match Error Rate (MER) between the reference and hypothesis.</span>
-</span><span id="calculate_mer-63"><a href="#calculate_mer-63"><span class="linenos">63</span></a>
-</span><span id="calculate_mer-64"><a href="#calculate_mer-64"><span class="linenos">64</span></a><span class="sd">    Args:</span>
-</span><span id="calculate_mer-65"><a href="#calculate_mer-65"><span class="linenos">65</span></a><span class="sd">        reference (str): The ground truth text.</span>
-</span><span id="calculate_mer-66"><a href="#calculate_mer-66"><span class="linenos">66</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
-</span><span id="calculate_mer-67"><a href="#calculate_mer-67"><span class="linenos">67</span></a>
-</span><span id="calculate_mer-68"><a href="#calculate_mer-68"><span class="linenos">68</span></a><span class="sd">    Returns:</span>
-</span><span id="calculate_mer-69"><a href="#calculate_mer-69"><span class="linenos">69</span></a><span class="sd">        float: The MER score.</span>
-</span><span id="calculate_mer-70"><a href="#calculate_mer-70"><span class="linenos">70</span></a>
-</span><span id="calculate_mer-71"><a href="#calculate_mer-71"><span class="linenos">71</span></a><span class="sd">    Examples:</span>
-</span><span id="calculate_mer-72"><a href="#calculate_mer-72"><span class="linenos">72</span></a><span class="sd">        &gt;&gt;&gt; calculate_mer(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
-</span><span id="calculate_mer-73"><a href="#calculate_mer-73"><span class="linenos">73</span></a><span class="sd">        0.5</span>
-</span><span id="calculate_mer-74"><a href="#calculate_mer-74"><span class="linenos">74</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="calculate_mer-75"><a href="#calculate_mer-75"><span class="linenos">75</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
-</span><span id="calculate_mer-76"><a href="#calculate_mer-76"><span class="linenos">76</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="calculate_mer-77"><a href="#calculate_mer-77"><span class="linenos">77</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
-</span><span id="calculate_mer-78"><a href="#calculate_mer-78"><span class="linenos">78</span></a>        <span class="p">)</span>
-</span><span id="calculate_mer-79"><a href="#calculate_mer-79"><span class="linenos">79</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">mer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_mer-97"><a href="#calculate_mer-97"><span class="linenos"> 97</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_mer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="calculate_mer-98"><a href="#calculate_mer-98"><span class="linenos"> 98</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Match Error Rate (MER) between the reference and hypothesis.</span>
+</span><span id="calculate_mer-99"><a href="#calculate_mer-99"><span class="linenos"> 99</span></a>
+</span><span id="calculate_mer-100"><a href="#calculate_mer-100"><span class="linenos">100</span></a><span class="sd">    Args:</span>
+</span><span id="calculate_mer-101"><a href="#calculate_mer-101"><span class="linenos">101</span></a><span class="sd">        reference (str): The ground truth text.</span>
+</span><span id="calculate_mer-102"><a href="#calculate_mer-102"><span class="linenos">102</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
+</span><span id="calculate_mer-103"><a href="#calculate_mer-103"><span class="linenos">103</span></a>
+</span><span id="calculate_mer-104"><a href="#calculate_mer-104"><span class="linenos">104</span></a><span class="sd">    Returns:</span>
+</span><span id="calculate_mer-105"><a href="#calculate_mer-105"><span class="linenos">105</span></a><span class="sd">        float: The MER score.</span>
+</span><span id="calculate_mer-106"><a href="#calculate_mer-106"><span class="linenos">106</span></a>
+</span><span id="calculate_mer-107"><a href="#calculate_mer-107"><span class="linenos">107</span></a><span class="sd">    Examples:</span>
+</span><span id="calculate_mer-108"><a href="#calculate_mer-108"><span class="linenos">108</span></a><span class="sd">        &gt;&gt;&gt; calculate_mer(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
+</span><span id="calculate_mer-109"><a href="#calculate_mer-109"><span class="linenos">109</span></a><span class="sd">        0.5</span>
+</span><span id="calculate_mer-110"><a href="#calculate_mer-110"><span class="linenos">110</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="calculate_mer-111"><a href="#calculate_mer-111"><span class="linenos">111</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
+</span><span id="calculate_mer-112"><a href="#calculate_mer-112"><span class="linenos">112</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="calculate_mer-113"><a href="#calculate_mer-113"><span class="linenos">113</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
+</span><span id="calculate_mer-114"><a href="#calculate_mer-114"><span class="linenos">114</span></a>        <span class="p">)</span>
+</span><span id="calculate_mer-115"><a href="#calculate_mer-115"><span class="linenos">115</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">mer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -353,26 +353,26 @@ As for WER, CER is not a percentage as can go higher than 1.</p>
 
     </div>
     <a class="headerlink" href="#calculate_wer"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wer-39"><a href="#calculate_wer-39"><span class="linenos">39</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-</span><span id="calculate_wer-40"><a href="#calculate_wer-40"><span class="linenos">40</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Error Rate (WER) between the reference and hypothesis.</span>
-</span><span id="calculate_wer-41"><a href="#calculate_wer-41"><span class="linenos">41</span></a>
-</span><span id="calculate_wer-42"><a href="#calculate_wer-42"><span class="linenos">42</span></a><span class="sd">    Args:</span>
-</span><span id="calculate_wer-43"><a href="#calculate_wer-43"><span class="linenos">43</span></a><span class="sd">        reference (str): The ground truth text.</span>
-</span><span id="calculate_wer-44"><a href="#calculate_wer-44"><span class="linenos">44</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
-</span><span id="calculate_wer-45"><a href="#calculate_wer-45"><span class="linenos">45</span></a>
-</span><span id="calculate_wer-46"><a href="#calculate_wer-46"><span class="linenos">46</span></a><span class="sd">    Returns:</span>
-</span><span id="calculate_wer-47"><a href="#calculate_wer-47"><span class="linenos">47</span></a><span class="sd">        float: The WER score.</span>
-</span><span id="calculate_wer-48"><a href="#calculate_wer-48"><span class="linenos">48</span></a>
-</span><span id="calculate_wer-49"><a href="#calculate_wer-49"><span class="linenos">49</span></a><span class="sd">    Examples:</span>
-</span><span id="calculate_wer-50"><a href="#calculate_wer-50"><span class="linenos">50</span></a><span class="sd">        &gt;&gt;&gt; calculate_wer(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
-</span><span id="calculate_wer-51"><a href="#calculate_wer-51"><span class="linenos">51</span></a><span class="sd">        0.5</span>
-</span><span id="calculate_wer-52"><a href="#calculate_wer-52"><span class="linenos">52</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="calculate_wer-53"><a href="#calculate_wer-53"><span class="linenos">53</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
-</span><span id="calculate_wer-54"><a href="#calculate_wer-54"><span class="linenos">54</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="calculate_wer-55"><a href="#calculate_wer-55"><span class="linenos">55</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
-</span><span id="calculate_wer-56"><a href="#calculate_wer-56"><span class="linenos">56</span></a>        <span class="p">)</span>
-</span><span id="calculate_wer-57"><a href="#calculate_wer-57"><span class="linenos">57</span></a>
-</span><span id="calculate_wer-58"><a href="#calculate_wer-58"><span class="linenos">58</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wer-75"><a href="#calculate_wer-75"><span class="linenos">75</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wer</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="calculate_wer-76"><a href="#calculate_wer-76"><span class="linenos">76</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Error Rate (WER) between the reference and hypothesis.</span>
+</span><span id="calculate_wer-77"><a href="#calculate_wer-77"><span class="linenos">77</span></a>
+</span><span id="calculate_wer-78"><a href="#calculate_wer-78"><span class="linenos">78</span></a><span class="sd">    Args:</span>
+</span><span id="calculate_wer-79"><a href="#calculate_wer-79"><span class="linenos">79</span></a><span class="sd">        reference (str): The ground truth text.</span>
+</span><span id="calculate_wer-80"><a href="#calculate_wer-80"><span class="linenos">80</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
+</span><span id="calculate_wer-81"><a href="#calculate_wer-81"><span class="linenos">81</span></a>
+</span><span id="calculate_wer-82"><a href="#calculate_wer-82"><span class="linenos">82</span></a><span class="sd">    Returns:</span>
+</span><span id="calculate_wer-83"><a href="#calculate_wer-83"><span class="linenos">83</span></a><span class="sd">        float: The WER score.</span>
+</span><span id="calculate_wer-84"><a href="#calculate_wer-84"><span class="linenos">84</span></a>
+</span><span id="calculate_wer-85"><a href="#calculate_wer-85"><span class="linenos">85</span></a><span class="sd">    Examples:</span>
+</span><span id="calculate_wer-86"><a href="#calculate_wer-86"><span class="linenos">86</span></a><span class="sd">        &gt;&gt;&gt; calculate_wer(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
+</span><span id="calculate_wer-87"><a href="#calculate_wer-87"><span class="linenos">87</span></a><span class="sd">        0.5</span>
+</span><span id="calculate_wer-88"><a href="#calculate_wer-88"><span class="linenos">88</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="calculate_wer-89"><a href="#calculate_wer-89"><span class="linenos">89</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
+</span><span id="calculate_wer-90"><a href="#calculate_wer-90"><span class="linenos">90</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="calculate_wer-91"><a href="#calculate_wer-91"><span class="linenos">91</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
+</span><span id="calculate_wer-92"><a href="#calculate_wer-92"><span class="linenos">92</span></a>        <span class="p">)</span>
+</span><span id="calculate_wer-93"><a href="#calculate_wer-93"><span class="linenos">93</span></a>
+</span><span id="calculate_wer-94"><a href="#calculate_wer-94"><span class="linenos">94</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wer</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -415,25 +415,25 @@ As for WER, CER is not a percentage as can go higher than 1.</p>
 
     </div>
     <a class="headerlink" href="#calculate_wil"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wil-82"><a href="#calculate_wil-82"><span class="linenos"> 82</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wil</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-</span><span id="calculate_wil-83"><a href="#calculate_wil-83"><span class="linenos"> 83</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Lost (WIL) between the reference and hypothesis.</span>
-</span><span id="calculate_wil-84"><a href="#calculate_wil-84"><span class="linenos"> 84</span></a>
-</span><span id="calculate_wil-85"><a href="#calculate_wil-85"><span class="linenos"> 85</span></a><span class="sd">    Args:</span>
-</span><span id="calculate_wil-86"><a href="#calculate_wil-86"><span class="linenos"> 86</span></a><span class="sd">        reference (str): The ground truth text.</span>
-</span><span id="calculate_wil-87"><a href="#calculate_wil-87"><span class="linenos"> 87</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
-</span><span id="calculate_wil-88"><a href="#calculate_wil-88"><span class="linenos"> 88</span></a>
-</span><span id="calculate_wil-89"><a href="#calculate_wil-89"><span class="linenos"> 89</span></a><span class="sd">    Returns:</span>
-</span><span id="calculate_wil-90"><a href="#calculate_wil-90"><span class="linenos"> 90</span></a><span class="sd">        float: The WIL score.</span>
-</span><span id="calculate_wil-91"><a href="#calculate_wil-91"><span class="linenos"> 91</span></a>
-</span><span id="calculate_wil-92"><a href="#calculate_wil-92"><span class="linenos"> 92</span></a><span class="sd">    Examples:</span>
-</span><span id="calculate_wil-93"><a href="#calculate_wil-93"><span class="linenos"> 93</span></a><span class="sd">        &gt;&gt;&gt; calculate_wil(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
-</span><span id="calculate_wil-94"><a href="#calculate_wil-94"><span class="linenos"> 94</span></a><span class="sd">        0.75</span>
-</span><span id="calculate_wil-95"><a href="#calculate_wil-95"><span class="linenos"> 95</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="calculate_wil-96"><a href="#calculate_wil-96"><span class="linenos"> 96</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
-</span><span id="calculate_wil-97"><a href="#calculate_wil-97"><span class="linenos"> 97</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="calculate_wil-98"><a href="#calculate_wil-98"><span class="linenos"> 98</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
-</span><span id="calculate_wil-99"><a href="#calculate_wil-99"><span class="linenos"> 99</span></a>        <span class="p">)</span>
-</span><span id="calculate_wil-100"><a href="#calculate_wil-100"><span class="linenos">100</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wil</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wil-118"><a href="#calculate_wil-118"><span class="linenos">118</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wil</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="calculate_wil-119"><a href="#calculate_wil-119"><span class="linenos">119</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Lost (WIL) between the reference and hypothesis.</span>
+</span><span id="calculate_wil-120"><a href="#calculate_wil-120"><span class="linenos">120</span></a>
+</span><span id="calculate_wil-121"><a href="#calculate_wil-121"><span class="linenos">121</span></a><span class="sd">    Args:</span>
+</span><span id="calculate_wil-122"><a href="#calculate_wil-122"><span class="linenos">122</span></a><span class="sd">        reference (str): The ground truth text.</span>
+</span><span id="calculate_wil-123"><a href="#calculate_wil-123"><span class="linenos">123</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
+</span><span id="calculate_wil-124"><a href="#calculate_wil-124"><span class="linenos">124</span></a>
+</span><span id="calculate_wil-125"><a href="#calculate_wil-125"><span class="linenos">125</span></a><span class="sd">    Returns:</span>
+</span><span id="calculate_wil-126"><a href="#calculate_wil-126"><span class="linenos">126</span></a><span class="sd">        float: The WIL score.</span>
+</span><span id="calculate_wil-127"><a href="#calculate_wil-127"><span class="linenos">127</span></a>
+</span><span id="calculate_wil-128"><a href="#calculate_wil-128"><span class="linenos">128</span></a><span class="sd">    Examples:</span>
+</span><span id="calculate_wil-129"><a href="#calculate_wil-129"><span class="linenos">129</span></a><span class="sd">        &gt;&gt;&gt; calculate_wil(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
+</span><span id="calculate_wil-130"><a href="#calculate_wil-130"><span class="linenos">130</span></a><span class="sd">        0.75</span>
+</span><span id="calculate_wil-131"><a href="#calculate_wil-131"><span class="linenos">131</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="calculate_wil-132"><a href="#calculate_wil-132"><span class="linenos">132</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
+</span><span id="calculate_wil-133"><a href="#calculate_wil-133"><span class="linenos">133</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="calculate_wil-134"><a href="#calculate_wil-134"><span class="linenos">134</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
+</span><span id="calculate_wil-135"><a href="#calculate_wil-135"><span class="linenos">135</span></a>        <span class="p">)</span>
+</span><span id="calculate_wil-136"><a href="#calculate_wil-136"><span class="linenos">136</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wil</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -476,25 +476,25 @@ As for WER, CER is not a percentage as can go higher than 1.</p>
 
     </div>
     <a class="headerlink" href="#calculate_wip"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wip-103"><a href="#calculate_wip-103"><span class="linenos">103</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wip</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-</span><span id="calculate_wip-104"><a href="#calculate_wip-104"><span class="linenos">104</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Preserved (WIP) between the reference and hypothesis.</span>
-</span><span id="calculate_wip-105"><a href="#calculate_wip-105"><span class="linenos">105</span></a>
-</span><span id="calculate_wip-106"><a href="#calculate_wip-106"><span class="linenos">106</span></a><span class="sd">    Args:</span>
-</span><span id="calculate_wip-107"><a href="#calculate_wip-107"><span class="linenos">107</span></a><span class="sd">        reference (str): The ground truth text.</span>
-</span><span id="calculate_wip-108"><a href="#calculate_wip-108"><span class="linenos">108</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
-</span><span id="calculate_wip-109"><a href="#calculate_wip-109"><span class="linenos">109</span></a>
-</span><span id="calculate_wip-110"><a href="#calculate_wip-110"><span class="linenos">110</span></a><span class="sd">    Returns:</span>
-</span><span id="calculate_wip-111"><a href="#calculate_wip-111"><span class="linenos">111</span></a><span class="sd">        float: The WIP score.</span>
-</span><span id="calculate_wip-112"><a href="#calculate_wip-112"><span class="linenos">112</span></a>
-</span><span id="calculate_wip-113"><a href="#calculate_wip-113"><span class="linenos">113</span></a><span class="sd">    Examples:</span>
-</span><span id="calculate_wip-114"><a href="#calculate_wip-114"><span class="linenos">114</span></a><span class="sd">        &gt;&gt;&gt; calculate_wip(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
-</span><span id="calculate_wip-115"><a href="#calculate_wip-115"><span class="linenos">115</span></a><span class="sd">        0.25</span>
-</span><span id="calculate_wip-116"><a href="#calculate_wip-116"><span class="linenos">116</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="calculate_wip-117"><a href="#calculate_wip-117"><span class="linenos">117</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
-</span><span id="calculate_wip-118"><a href="#calculate_wip-118"><span class="linenos">118</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
-</span><span id="calculate_wip-119"><a href="#calculate_wip-119"><span class="linenos">119</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
-</span><span id="calculate_wip-120"><a href="#calculate_wip-120"><span class="linenos">120</span></a>        <span class="p">)</span>
-</span><span id="calculate_wip-121"><a href="#calculate_wip-121"><span class="linenos">121</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wip</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="calculate_wip-139"><a href="#calculate_wip-139"><span class="linenos">139</span></a><span class="k">def</span><span class="w"> </span><span class="nf">calculate_wip</span><span class="p">(</span><span class="n">reference</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="calculate_wip-140"><a href="#calculate_wip-140"><span class="linenos">140</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Calculate the Word Information Preserved (WIP) between the reference and hypothesis.</span>
+</span><span id="calculate_wip-141"><a href="#calculate_wip-141"><span class="linenos">141</span></a>
+</span><span id="calculate_wip-142"><a href="#calculate_wip-142"><span class="linenos">142</span></a><span class="sd">    Args:</span>
+</span><span id="calculate_wip-143"><a href="#calculate_wip-143"><span class="linenos">143</span></a><span class="sd">        reference (str): The ground truth text.</span>
+</span><span id="calculate_wip-144"><a href="#calculate_wip-144"><span class="linenos">144</span></a><span class="sd">        hypothesis (str): The predicted text.</span>
+</span><span id="calculate_wip-145"><a href="#calculate_wip-145"><span class="linenos">145</span></a>
+</span><span id="calculate_wip-146"><a href="#calculate_wip-146"><span class="linenos">146</span></a><span class="sd">    Returns:</span>
+</span><span id="calculate_wip-147"><a href="#calculate_wip-147"><span class="linenos">147</span></a><span class="sd">        float: The WIP score.</span>
+</span><span id="calculate_wip-148"><a href="#calculate_wip-148"><span class="linenos">148</span></a>
+</span><span id="calculate_wip-149"><a href="#calculate_wip-149"><span class="linenos">149</span></a><span class="sd">    Examples:</span>
+</span><span id="calculate_wip-150"><a href="#calculate_wip-150"><span class="linenos">150</span></a><span class="sd">        &gt;&gt;&gt; calculate_wip(&quot;hello world&quot;, &quot;hello duck&quot;)</span>
+</span><span id="calculate_wip-151"><a href="#calculate_wip-151"><span class="linenos">151</span></a><span class="sd">        0.25</span>
+</span><span id="calculate_wip-152"><a href="#calculate_wip-152"><span class="linenos">152</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="calculate_wip-153"><a href="#calculate_wip-153"><span class="linenos">153</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">JIWER_AVAILABLE</span><span class="p">:</span>
+</span><span id="calculate_wip-154"><a href="#calculate_wip-154"><span class="linenos">154</span></a>        <span class="k">raise</span> <span class="ne">ModuleNotFoundError</span><span class="p">(</span>
+</span><span id="calculate_wip-155"><a href="#calculate_wip-155"><span class="linenos">155</span></a>            <span class="s2">&quot;`jiwer` is not installed. Please install senselab audio dependencies using `pip install senselab`.&quot;</span>
+</span><span id="calculate_wip-156"><a href="#calculate_wip-156"><span class="linenos">156</span></a>        <span class="p">)</span>
+</span><span id="calculate_wip-157"><a href="#calculate_wip-157"><span class="linenos">157</span></a>    <span class="k">return</span> <span class="n">jiwer</span><span class="o">.</span><span class="n">wip</span><span class="p">(</span><span class="n">reference</span><span class="p">,</span> <span class="n">hypothesis</span><span class="p">)</span>
 </span></pre></div>
 
 
