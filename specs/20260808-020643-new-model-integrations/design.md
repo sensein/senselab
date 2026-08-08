@@ -1,7 +1,18 @@
 # New model integrations: diarization backends, standalone PII, DriftSE, unasdiff
 
-Status: design approved, not yet implemented.
+Status: design approved, implementation plans written, not yet implemented.
 Date: 2026-08-08.
+
+Implementation plans, one per workstream — each independently landable, in this order:
+
+| Plan | Workstream | Tasks |
+|---|---|---|
+| [`plan-a-diarization-backends.md`](plan-a-diarization-backends.md) | A — four diarization backends from #537 | 7 |
+| [`plan-b-pii-detection-task.md`](plan-b-pii-detection-task.md) | B — standalone PII detection from #542 | 8 |
+| [`plan-d-driftse-enhancement.md`](plan-d-driftse-enhancement.md) | D — DriftSE one-step enhancement | 6 |
+| [`plan-c-unasdiff-separation.md`](plan-c-unasdiff-separation.md) | C — unasdiff source separation | 6 |
+
+Plan A's Task 1 creates the shared branch and verifies the precondition below; the other three build on it.
 
 Four independent additions to the task layer, delivered on one branch as four commits. None of
 them touch `scripts/analyze_audio.py` or `audio/workflows/audio_analysis/`. Every one is a
