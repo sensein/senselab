@@ -186,7 +186,7 @@
   source: microsoft
   model_id: microsoft/VibeVoice-ASR-HF
   parameters: 7B
-  training_data: Microsoft proprietary
+  training_data: Not specified upstream — see model card
   recommended_for: Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended)
 
 - name: USC-SAIL Child-Adult Classifier
@@ -194,7 +194,7 @@
   source: usc-sail
   model_id: AlexXu811/whisper-child-adult
   parameters: Whisper-base + LoRA
-  training_data: Simulated child-adult conversations
+  training_data: Not specified upstream — see model card
   recommended_for: Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only)
 
 - name: MOSS-Transcribe-Diarize
@@ -202,7 +202,7 @@
   source: OpenMOSS-Team
   model_id: OpenMOSS-Team/MOSS-Transcribe-Diarize
   parameters: 0.9B
-  training_data: OpenMOSS proprietary
+  training_data: Not specified upstream — see model card
   recommended_for: Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6)
 
 - name: DiariZen
@@ -210,7 +210,7 @@
   source: BUT-FIT
   model_id: BUT-FIT/diarizen-wavlm-large-s80-md
   parameters: WavLM-large + Conformer
-  training_data: BUT-FIT proprietary
+  training_data: AMI, AISHELL-4, AliMeeting, NOTSOFAR-1 (public compound meeting corpora; published recipe, not proprietary)
   license: CC BY-NC 4.0 — non-commercial only
   recommended_for: >-
     Diarization only, no transcription (via subprocess venv installing DiariZen's

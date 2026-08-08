@@ -20,9 +20,12 @@ _DIARIZEN_PREFIXES = ("BUT-FIT/diarizen",)
 
 # Backends dispatched above whose "speaker" label is a role (e.g. CHILD/ADULT/
 # OVERLAP), not a speaker identity. Single source of truth for this distinction:
-# clustering.py/identity.py/presence.py import it from here (rather than each
-# restating the literal) so adding a second role-only backend here can't
-# silently miss excluding it from identity clustering / presence voting too.
+# once ported from PR #537 (see the module docstrings' "Not wired into
+# audio_analysis" sections), clustering.py/identity.py/presence.py will import
+# it from here (rather than each restating the literal) so adding a second
+# role-only backend here can't silently miss excluding it from identity
+# clustering / presence voting too. No consumer imports this yet on this
+# branch — it is not dead code, it is pre-wired for that port.
 ROLE_LABEL_ONLY_PREFIXES = _CHILD_ADULT_PREFIXES
 
 
@@ -53,8 +56,9 @@ def diarize_audios(
 ) -> List[List[ScriptLine]]:
     """Diarize a batch of `Audio` objects, returning per-speaker time segments.
 
-    Supports **Pyannote** (default), **NVIDIA Sortformer**, **VibeVoice-ASR-HF**, and
-    **USC-SAIL child-adult** (HF-identified) backends:
+    Supports **Pyannote** (default), **NVIDIA Sortformer**, **VibeVoice-ASR-HF**,
+    **USC-SAIL child-adult**, **MOSS-Transcribe-Diarize**, and **DiariZen**
+    (HF-identified) backends:
     - If `model` is a `PyannoteAudioModel`, uses Pyannote (typically expects **mono, 16 kHz**).
       Optional `num_speakers` or (`min_speakers`, `max_speakers`) are honored.
     - If `model` is an `HFModel` and `model.path_or_uri` starts with `"nvidia/diar_sortformer"`,
@@ -104,8 +108,15 @@ def diarize_audios(
         exclusive (bool):
             Pyannote only. ``True`` (default) returns a partition, where concurrent speech has been
             resolved away and no consumer can detect overlap. ``False`` returns the overlapping
-            view. Sortformer emits per-speaker activity and always preserves concurrency, so this
-            does not apply to it.
+            view. Ignored by every other backend, none of which return an exclusive partition
+            regardless of this argument: NVIDIA Sortformer emits per-speaker activity and always
+            preserves concurrency; VibeVoice-ASR-HF and MOSS-Transcribe-Diarize emit whatever
+            segments their own transcript-parsing produces, with no partition step; DiariZen's
+            EEND + VBx pipeline emits genuinely overlapping turns by design; and the USC-SAIL
+            child-adult classifier emits an explicit ``OVERLAP`` label for frames it can't assign
+            to a single role. Unlike the speaker-count hints above, no warning is raised when
+            ``exclusive`` is passed to one of these — it defaults to ``True``, so there is no way
+            to tell an explicit pass from the default.
         max_new_tokens (int | None):
             Generation budget for the joint ASR+diarization backends
             (VibeVoice-ASR-HF, MOSS-Transcribe-Diarize only — ignored otherwise).

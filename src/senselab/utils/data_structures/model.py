@@ -320,9 +320,13 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         ValueError: If ``task`` is not recognized.
 
     Note:
-        The diarization branch duplicates ``diarize_audios``'s internal dispatch
-        (Sortformer ids are HF, everything else is pyannote). That duplication is
-        pre-existing and worth collapsing into one source of truth eventually.
+        The diarization branch duplicates ``diarize_audios``'s internal dispatch:
+        five separate prefix conditions (Sortformer, VibeVoice-ASR-HF, USC-SAIL
+        child-adult, MOSS-Transcribe-Diarize, DiariZen — everything else falls
+        through to Pyannote) each independently repeated here and in
+        ``speaker_diarization/api.py``'s ``elif`` chain. That duplication is
+        pre-existing and worth collapsing into one source of truth eventually;
+        the two tables must be kept in sync by hand until then.
 
     Example:
         >>> model_for_task("openai/whisper-tiny", task="asr").path_or_uri

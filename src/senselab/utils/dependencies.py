@@ -565,19 +565,22 @@ def hf_subprocess_env(
     """
     env = dict(os.environ if base_env is None else base_env)
     repos: list[Tuple[str, str]] = [(str(repo_id), revision), *(also or [])]
-    try:
-        for rid, rev in repos:
+    for rid, rev in repos:
+        try:
             resolve_model(rid, rev, token=token)
-    except Exception as exc:
-        # A model is missing/undownloadable -> let the child try online instead
-        # of failing outright, but say so: silently dropping the offline flag
-        # here means the child reverts to the exact per-call Hub version-check
-        # path (the 429 source) this function exists to remove.
-        logger.warning(
-            f"hf_subprocess_env: failed to stage {rid!r}@{rev!r} for offline use ({exc}); "
-            "the worker will fall back to online Hub loading for all referenced repos."
-        )
-        return env
+        except Exception as exc:
+            # A model is missing/undownloadable -> let the child try online instead
+            # of failing outright, but say so: silently dropping the offline flag
+            # here means the child reverts to the exact per-call Hub version-check
+            # path (the 429 source) this function exists to remove. `rid`/`rev` are
+            # bound to the pair that actually failed here, inside the loop — reading
+            # the loop variables after the loop exits would be correct only by
+            # accident of `repos` being non-empty by construction.
+            logger.warning(
+                f"hf_subprocess_env: failed to stage {rid!r}@{rev!r} for offline use ({exc}); "
+                "the worker will fall back to online Hub loading for all referenced repos."
+            )
+            return env
     for var in _HF_OFFLINE_ENV_VARS:
         env[var] = "1"
     return env

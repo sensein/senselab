@@ -205,13 +205,15 @@ def diarize_audios_with_child_adult(
 
     **More audio is dropped than just a trailing partial window.** Upstream's own
     loop advances in 10s steps only while ``start + 10 < length`` (strict ``<``),
-    so: a clip <= 10s analyzes **zero** windows (empty result, indistinguishable
-    from "no adult present" — see ``Returns``); and even longer clips always drop
-    their final 10s block, e.g. a 20.0s clip only analyzes 0-10s, not 0-20s.
+    so even clips longer than 10s always drop their final 10s block, e.g. a 20.0s
+    clip only analyzes 0-10s, not 0-20s. A clip <= 10s would analyze **zero**
+    windows under that same rule — indistinguishable from "no adult present" — so
+    this raises ``ValueError`` up front for any such clip rather than returning a
+    fabricated empty result (see ``Raises``).
 
     Args:
         audios (list[Audio]):
-            Audio clips to classify.
+            Audio clips to classify. Each must be longer than 10s (see ``Raises``).
         model (HFModel | None):
             Defaults to ``HFModel(path_or_uri="AlexXu811/whisper-child-adult")``.
         device (DeviceType | None):
@@ -220,12 +222,13 @@ def diarize_audios_with_child_adult(
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
         `speaker` (`"CHILD"` / `"ADULT"` / `"OVERLAP"`), `start`, and `end`. An empty
-        list means either no adult/child speech was detected *or* the clip was too
-        short to produce any analyzed window (<= 10s) — the two are indistinguishable
-        from the result alone; see the chunking caveat above.
+        list means no adult/child speech was detected in an analyzed window.
 
     Raises:
         RuntimeError: If CUDA is not available/compatible.
+        ValueError: If any input clip is <= 10s long (see the chunking caveat
+            above) — a fabricated "no speech" result is worse than an explicit
+            failure for a backend whose purpose is "was an adult voice present."
 
     Example (requires a CUDA-capable machine):
         >>> from pathlib import Path
@@ -240,7 +243,9 @@ def diarize_audios_with_child_adult(
         model = HFModel(path_or_uri=_CHILD_ADULT_HF_REPO)
 
     try:
-        resolved_device, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA])
+        # Return value unused: this call exists only for its ValueError when CUDA
+        # isn't available, same as diarizen.py's bare call.
+        _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA])
     except ValueError as exc:
         raise RuntimeError(
             "USC-SAIL child-adult classifier requires CUDA: the upstream model "
@@ -262,6 +267,20 @@ def diarize_audios_with_child_adult(
         tmp = Path(tmpdir)
         audio_paths = []
         for i, audio in enumerate(audios):
+            # Upstream's chunking loop advances only while `start + 10 < length`
+            # (strict `<`), so a clip <= 10s analyzes zero windows and this backend
+            # would otherwise return `[]` — indistinguishable from "no child/adult
+            # speech present." For a backend whose purpose is "was an adult voice
+            # present," a fabricated "no" is worse than an explicit failure, so this
+            # raises instead of silently producing an empty, misleading result.
+            duration = audio.waveform.shape[-1] / audio.sampling_rate
+            if duration <= 10:
+                raise ValueError(
+                    f"USC-SAIL child-adult classifier: audio at index {i} is {duration:.2f}s long, "
+                    "but upstream's chunking loop only analyzes whole 10s windows under the strict "
+                    "`start + 10 < length` rule, so a clip <= 10s produces zero analyzed windows. "
+                    "Provide a clip longer than 10s."
+                )
             path = str(tmp / f"audio_{i}.wav")
             audio.save_to_file(path)
             audio_paths.append(path)
