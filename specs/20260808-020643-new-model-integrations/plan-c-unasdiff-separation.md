@@ -272,7 +272,10 @@ The mirror exists. Only Step 1 below, the upstream licence request, is outstandi
 
 **Step 3's verification passed:** both priors load under `torch.load(..., weights_only=True)` and both contain `model`, `ema`, and `opt` keys. Task 3's loader uses `ema`, which is therefore present and correct — no fallback branch is needed. Note that Plan D's DriftSE checkpoints go the *other* way (upstream loads `model` there), so the two backends genuinely differ and neither should be made to match the other.
 
-- [ ] **Step 1: Open the upstream license request**
+- [x] **Step 1: Open the upstream licence request — DONE**
+
+Posted 2026-08-08: <https://github.com/RunwuShi/unasdiff/issues/1>. Until it is answered, the mirror stays private. The drafted text is kept below for the record.
+
 
 Post to https://github.com/RunwuShi/unasdiff/issues:
 

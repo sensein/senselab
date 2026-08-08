@@ -466,7 +466,8 @@ vendoring in the first place:
    **Neither may be made public before its upstream licence question is answered.** That is stated in
    each model card as well as here, because the decision will be made by whoever reads one of them,
    not necessarily by whoever created them.
-3. **An upstream issue for each**, asking for an explicit license and, ideally, a HuggingFace weights
+3. **An upstream issue for each** — posted 2026-08-08, [DriftSE#2](https://github.com/LiangXu123/DriftSE/issues/2)
+   and [unasdiff#1](https://github.com/RunwuShi/unasdiff/issues/1) — asking for an explicit license and, ideally, a HuggingFace weights
    mirror. For DriftSE the issue also notes that the codebase is built on SGMSE+ (MIT) without
    carrying that license statement forward, which the authors will likely want to fix regardless.
 4. `doc.md` in each module records the status, so the answer is visible where the decision is.

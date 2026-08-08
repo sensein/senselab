@@ -272,7 +272,10 @@ Three notes from doing it, which change what later tasks should assume:
 **Interfaces:**
 - Produces: `sensein/driftse-distilhubert-three-layers` at the revision above, which Task 3 pins.
 
-- [ ] **Step 1: Open the upstream license request first**
+- [x] **Step 1: Open the upstream licence request — DONE**
+
+Posted 2026-08-08: <https://github.com/LiangXu123/DriftSE/issues/2>. Until it is answered, the mirror stays private. The drafted text is kept below for the record.
+
 
 Before mirroring anything, ask. Post to https://github.com/LiangXu123/DriftSE/issues:
 
