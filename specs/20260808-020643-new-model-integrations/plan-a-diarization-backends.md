@@ -515,22 +515,69 @@ uv run python -c "import transformers; print(transformers.__version__)"
 
 Expected: a version `>= 5.3`. `uv.lock` is modified.
 
-- [ ] **Step 3: Run the whole HuggingFace blast radius, serially**
+- [ ] **Step 3: Prove the bump is inert for this resolution, then run only what can actually fail**
 
-This is the point of the task. `transformers` is not a diarization-only dependency.
+**This step was rewritten during execution on 2026-08-08.** The original text said to run
+`speech_to_text`, `classification`, `speaker_embeddings`, `ssl_embeddings`, `text` and `utils` and
+compare against "Task 1's baseline". Three things were wrong with it, and the correction is more
+useful than the original:
+
+1. **Two of the six paths do not exist.** `speaker_embeddings` is a single file
+   (`speaker_embeddings_test.py`), and there is no `ssl_embeddings` test directory at all.
+2. **There was no baseline to compare against.** Task 1 baselined only
+   `speaker_diarization_test.py`, so "no new failures relative to Task 1's baseline" was
+   unverifiable for every other directory.
+3. **The run does not test the bump.** Measured: it reached 3 % in ~25 minutes — a ~14-hour
+   projection — while pulling model weights that took the machine from 14 GB to 8.6 GB free. And it
+   would have proven nothing, because `transformers` **already resolves to 5.5.4**, which satisfies
+   both `>=5.0` and `>=5.3`. The floor bump cannot change what is installed in this environment; it
+   only forbids resolving something older. Re-running the model zoo exercises an unchanged
+   `transformers` against downloaded weights.
+
+What the bump can actually break is **resolution** — a fresh environment that previously could
+select 5.0–5.2 now cannot — and **imports**, if any module used an API that moved. Test those:
 
 ```bash
-uv run pytest \
-  src/tests/audio/tasks/speech_to_text \
-  src/tests/audio/tasks/classification \
-  src/tests/audio/tasks/speaker_embeddings \
-  src/tests/audio/tasks/ssl_embeddings \
-  src/tests/text \
-  src/tests/utils \
-  -v 2>&1 | tail -40
+# a. Resolution: identical before and after means the bump is inert here.
+uv run python -c "import transformers; print(transformers.__version__)"   # before edit
+# ...make the pyproject edit, then:
+uv sync --all-extras
+uv run python -c "import transformers; print(transformers.__version__)"   # after edit
+git diff --stat uv.lock
 ```
 
-Expected: no *new* failures relative to Task 1's baseline. If something breaks, it is a real regression from the floor bump — fix it here or report that the bump is not viable. Do not proceed to Task 6 with a broken blast radius.
+```bash
+# b. Imports: every senselab module that touches transformers, loaded for real. Catches an
+#    API that moved, which is the only import-level way this bump bites.
+uv run python -c "
+import importlib, pkgutil, senselab, sys
+failed = []
+for m in pkgutil.walk_packages(senselab.__path__, 'senselab.'):
+    try:
+        importlib.import_module(m.name)
+    except Exception as exc:
+        failed.append((m.name, f'{type(exc).__name__}: {exc}'))
+print('modules imported:', len(list(pkgutil.walk_packages(senselab.__path__, 'senselab.'))))
+for name, err in failed:
+    print('FAILED', name, err)
+sys.exit(1 if failed else 0)
+"
+```
+
+```bash
+# c. The fast, download-free suites, before and after the edit, compared like with like.
+uv run pytest src/tests/utils src/tests/audio/tasks/speaker_diarization_test.py -v
+```
+
+Expected: the resolved `transformers` version is **identical** before and after; `uv.lock` changes
+only where the constraint is recorded; every module imports; and the fast suites are unchanged.
+
+If the resolved version *does* change, the bump is not inert and the full model-zoo run becomes
+justified — but it is a deliberate, separately-scheduled job on a machine with the disk for it, not
+a step wedged into this task.
+
+**Do not run the full `speech_to_text` / `classification` suites here.** They are a model-zoo
+integration run: hours long, tens of GB of downloads, and orthogonal to what this task changes.
 
 - [ ] **Step 4: Commit**
 
