@@ -457,6 +457,15 @@ vendoring in the first place:
 2. **Weights mirrors stay private** under the `sensein` org until upstream answers. A private mirror
    gives the checkpoints a pinned revision and content hash — which is what provenance in the parquet
    output needs — without redistributing them.
+
+   Both now exist, created 2026-08-08, both private, both with per-file SHA-256 recorded in their
+   plans:
+   - `sensein/driftse-distilhubert-three-layers` @ `76a9448aae12e4c232b1d52c24899d0835db5782`
+   - `sensein/unasdiff-diffusion-priors` @ `8d7c32204d1ba31cd9fca3cd64313fd711949b58`
+
+   **Neither may be made public before its upstream licence question is answered.** That is stated in
+   each model card as well as here, because the decision will be made by whoever reads one of them,
+   not necessarily by whoever created them.
 3. **An upstream issue for each**, asking for an explicit license and, ideally, a HuggingFace weights
    mirror. For DriftSE the issue also notes that the codebase is built on SGMSE+ (MIT) without
    carrying that license statement forward, which the authors will likely want to fix regardless.

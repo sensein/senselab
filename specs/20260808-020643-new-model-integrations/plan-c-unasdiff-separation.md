@@ -26,7 +26,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 
 ## Preconditions
 
-Branch `feat/new-model-integrations` already exists, cut from the merged `alpha` (PR #547, `79b37d93`); run Plan A's Task 1 first to verify it. Task 2 needs a HuggingFace write token for `sensein` — an operator step. Every later task works without it via `SENSELAB_UNASDIFF_CHECKPOINTS`.
+Branch `feat/new-model-integrations` already exists, cut from the merged `alpha` (PR #547, `79b37d93`); run Plan A's Task 1 first to verify it. **Task 2's mirror is already done** — `sensein/unasdiff-diffusion-priors` is live and private — so an implementer needs only read access to that repo, or `SENSELAB_UNASDIFF_CHECKPOINTS` pointing at a local directory.
 
 ## Upstream facts this plan depends on
 
@@ -205,6 +205,9 @@ _UNASDIFF_REQUIREMENTS = [
 _UNASDIFF_REPO_URL = "https://github.com/RunwuShi/unasdiff.git"
 _UNASDIFF_COMMIT = "5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa"
 _UNASDIFF_HF_REPO = "sensein/unasdiff-diffusion-priors"
+# Pinned so a re-upload cannot change what this backend runs. The repo is private
+# pending the upstream licence answer; callers without access use the env override.
+_UNASDIFF_HF_REVISION = "8d7c32204d1ba31cd9fca3cd64313fd711949b58"
 _UNASDIFF_CHECKPOINTS_ENV = "SENSELAB_UNASDIFF_CHECKPOINTS"
 
 _TARGET_SR = 16000
@@ -253,9 +256,21 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Mirror the two priors (operator step)
+### Task 2: Mirror the two priors — **DONE (2026-08-08)**, except the licence request
 
-Same shape as Plan D, Task 2. **An agent with a read-scoped token cannot complete this** — report the commands and continue using `SENSELAB_UNASDIFF_CHECKPOINTS`.
+The mirror exists. Only Step 1 below, the upstream licence request, is outstanding.
+
+**Produced:** `sensein/unasdiff-diffusion-priors`, **private**, at revision
+`8d7c32204d1ba31cd9fca3cd64313fd711949b58`.
+
+| File | SHA-256 | Size |
+|---|---|---|
+| `speech_source.pt` | `158060ea1e7c83a926063c15528e3f26e92f13d4ed32499158e59e4cebc36bb0` | 596.5 MB |
+| `sound_source.pt` | `2f30c1178ab11e8f875e49589913fc0dc463d0a9f7bf6c290400fa66e304470b` | 597.0 MB |
+| `atten_unet_vctk.toml` | `4a98c204d24c976f2fe05bde82c4b9b7c67a2608c247c5b90f8217e78f3f76e5` | 674 B |
+| `atten_unet_fsd.toml` | `cf11d2a53bc9202418d0f9bcb3963b58b15fb6df9107790b43f56f976fb9d12b` | 672 B |
+
+**Step 3's verification passed:** both priors load under `torch.load(..., weights_only=True)` and both contain `model`, `ema`, and `opt` keys. Task 3's loader uses `ema`, which is therefore present and correct — no fallback branch is needed. Note that Plan D's DriftSE checkpoints go the *other* way (upstream loads `model` there), so the two backends genuinely differ and neither should be made to match the other.
 
 - [ ] **Step 1: Open the upstream license request**
 
@@ -277,45 +292,11 @@ Post to https://github.com/RunwuShi/unasdiff/issues:
 >
 > Until then we clone at a pinned commit at run time and vendor nothing.
 
-- [ ] **Step 2: Download both priors**
+- [x] **Steps 2–5: download, verify, create the private repo, write the card — done**
 
-```bash
-mkdir -p ~/unasdiff-mirror && cd ~/unasdiff-mirror
-uv run --with gdown python -m gdown 1zd7dwY52MvwiyvbxM6kupK8hww6NlSj6 -O speech_source.pt
-uv run --with gdown python -m gdown 1A9eh4lfrP5m3zGos6xPcG_1r07_Kx7-V -O sound_source.pt
-```
+Carried out on 2026-08-08. The card records the provenance, the two separate label spaces, the `model`/`ema` distinction, and the authors' own same-class-separation caveat. Revision and digests are in the table above.
 
-- [ ] **Step 3: Verify each is a checkpoint with `model` and `ema` keys**
-
-```bash
-uv run python -c "
-import torch
-for name in ('speech_source.pt', 'sound_source.pt'):
-    ckpt = torch.load(name, map_location='cpu', weights_only=True)
-    print(name, sorted(ckpt.keys()))
-"
-```
-
-Expected: each prints keys including `model` and `ema`. The driver uses **`ema`** — if a checkpoint lacks it, the worker's loader needs a documented fallback rather than a `KeyError` at first inference.
-
-- [ ] **Step 4: Fetch the two configs and create the mirror, private**
-
-```bash
-for cfg in atten_unet_vctk atten_unet_fsd; do
-  gh api "repos/RunwuShi/unasdiff/contents/config/$cfg/config.toml?ref=5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa" \
-    --jq '.content' | base64 -d > "$cfg.toml"
-done
-hf auth login   # write token for the sensein org
-hf repo create sensein/unasdiff-diffusion-priors --private
-for f in speech_source.pt sound_source.pt atten_unet_vctk.toml atten_unet_fsd.toml; do
-  hf upload sensein/unasdiff-diffusion-priors "$f" "$f"
-done
-hf api repos/sensein/unasdiff-diffusion-priors/revision/main --jq '.sha'
-```
-
-- [ ] **Step 5: Write the model card**
-
-State: the paper and citation; that the weights come from the authors' Google Drive release; the pinned upstream commit; that the license is unresolved; and — because a user will otherwise try it first — the authors' own caveat that the approach is poorly suited to same-class (speech–speech) separation.
+**Keep it private** until Step 1 is answered — a private mirror gives the priors a pinned revision and content hash without redistributing weights whose licence is unresolved.
 
 ---
 
