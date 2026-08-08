@@ -2,16 +2,24 @@
 
 Not wired into ``audio_analysis``
 ---------------------------------
-This VibeVoice-ASR-HF backend is reachable through :func:`diarize_audios` and deliberately **not**
-through ``scripts/analyze_audio.py --diarization-models``. The guards that keep a
-role-label backend out of embedding clustering, out of the identity axis's
-cross-diarizer agreement vote, and out of presence live in
+This VibeVoice-ASR-HF backend is reachable through :func:`diarize_audios` and
+deliberately **not** through ``scripts/analyze_audio.py --diarization-models``. Two
+hazard classes motivate that split: a **role-label** backend, whose ``speaker``
+output names a role (e.g. ``CHILD``/``ADULT``/``OVERLAP``) rather than a speaker
+identity, would build a per-role centroid blending distinct speakers under one
+label and snap ambiguous frames to whichever centroid is nearest; a
+**speaker-identity** backend with its own unreconciled labelling scheme would feed
+those labels straight into cross-diarizer agreement and embedding clustering
+before they are harmonized against the pass-wide cluster IDs those steps key on,
+reading as spurious disagreement against every real diarization model. This
+backend falls in the second class — it assigns its own per-audio ``Speaker`` tags
+parsed out of its structured JSON output, with no reconciliation against the
+pass-wide cluster IDs, so wiring it into ``--diarization-models`` as-is would feed
+unreconciled labels straight into cross-diarizer consensus and embedding
+clustering. The guards for both hazard classes live in
 ``workflows/audio_analysis/{clustering,identity,presence}.py``, which this branch
-does not carry. Without them a role-label backend in ``--diarization-models`` would
-build a ``CHILD`` centroid blending two different children, snap ``OVERLAP`` to
-whichever centroid is nearest, and read as spurious disagreement against every real
-diarization model. Port those guards from PR #537 before wiring any of these four
-into the workflow.
+does not carry. Port those guards from PR #537 before wiring any of the four new
+backends into the workflow.
 """
 
 import json
