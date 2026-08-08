@@ -12,7 +12,8 @@ Implementation plans, one per workstream — each independently landable, in thi
 | [`plan-d-driftse-enhancement.md`](plan-d-driftse-enhancement.md) | D — DriftSE one-step enhancement | 6 |
 | [`plan-c-unasdiff-separation.md`](plan-c-unasdiff-separation.md) | C — unasdiff source separation | 6 |
 
-Plan A's Task 1 creates the shared branch and verifies the precondition below; the other three build on it.
+All four share the branch `feat/new-model-integrations`, which already exists off the merged `alpha`.
+Plan A's Task 1 verifies it and records the baseline test state; the other three build on it.
 
 Four independent additions to the task layer, delivered on one branch as four commits. None of
 them touch `scripts/analyze_audio.py` or `audio/workflows/audio_analysis/`. Every one is a
@@ -26,8 +27,10 @@ time as the integration would mean publishing axis values derived from models no
 
 ## Branch and ordering
 
-Base: `alpha`, **after** the `20260728-221507-per-speaker-identity-scene` refactor merges into it.
-Both cherry-pick sources (#537, #542) target `alpha`, so this base is what makes them apply.
+Base: `alpha`. The `20260728-221507-per-speaker-identity-scene` refactor merged into it as PR #547
+(`79b37d93`), so the branch `feat/new-model-integrations` is cut from the merged `alpha` and carries
+the run-config refactor. Both cherry-pick sources (#537, #542) also target `alpha`, which is what
+makes their hunks apply.
 
 Commit order is risk-ascending, so that a workstream blocked on an upstream answer cannot hold back
 the ones that are not:

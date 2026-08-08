@@ -25,7 +25,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 
 ## Preconditions
 
-Branch `feat/new-model-integrations` exists (Plan A, Task 1). This plan can run before or after Plan A's remaining tasks; it touches no file Plan A touches.
+Branch `feat/new-model-integrations` already exists, cut from the merged `alpha` (PR #547, `79b37d93`). Run Plan A's Task 1 first to verify it and record the baseline. This plan can otherwise run before or after Plan A's remaining tasks; it touches no file Plan A touches.
 
 ## File Structure
 

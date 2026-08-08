@@ -24,7 +24,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 
 ## Preconditions
 
-This plan **cannot start** until the `20260728-221507-per-speaker-identity-scene` refactor has merged into `alpha`. Task 1 verifies this and stops if it has not.
+**Met.** The `20260728-221507-per-speaker-identity-scene` refactor merged into `alpha` as PR #547 (`79b37d93`), and `4071eed9 refactor(config)` is an ancestor of `origin/alpha`. The branch `feat/new-model-integrations` already exists, branched from the merged `alpha` and carrying this spec and its four plans. Task 1 re-verifies rather than waits.
 
 ## File Structure
 
@@ -47,41 +47,46 @@ This plan **cannot start** until the `20260728-221507-per-speaker-identity-scene
 
 ---
 
-### Task 1: Branch off the merged alpha and verify the preconditions
+### Task 1: Verify the branch and record the baseline
 
 **Files:**
-- Create: none (branch only)
+- Create: none
 
 **Interfaces:**
 - Consumes: nothing
-- Produces: a branch named `feat/new-model-integrations` off the merged `alpha`, which every later task and every other plan (B, C, D) builds on.
+- Produces: a verified `feat/new-model-integrations` at or ahead of the merged `alpha`, which every later task and every other plan (B, C, D) builds on, plus a recorded baseline test state for Task 5 to compare against.
 
-- [ ] **Step 1: Fetch and confirm the refactor is in alpha**
+- [ ] **Step 1: Confirm you are on the branch and it descends from the merged alpha**
 
 ```bash
 cd /Users/satra/software/sensein/senselab
 git fetch origin --prune
-git log --oneline origin/alpha | head -20
+git rev-parse --abbrev-ref HEAD
+git merge-base --is-ancestor origin/alpha HEAD && echo "branch contains origin/alpha"
+git merge-base --is-ancestor 4071eed9 HEAD && echo "branch contains the run_config refactor"
 ```
 
-Expected: the log contains `refactor(config): 29 decisions move out of module constants and into the run config` (commit `4071eed9` or its merge equivalent). If it does **not**, stop — this plan's precondition is unmet. Report that and do nothing else.
+Expected: `feat/new-model-integrations`, then both confirmations. If the branch does **not** contain `origin/alpha`, rebase onto it before continuing — `alpha` has moved since the branch was cut:
+
+```bash
+git rebase origin/alpha
+```
 
 - [ ] **Step 2: Confirm the run_config lives where later plans expect**
 
 ```bash
-git show origin/alpha:src/senselab/audio/workflows/audio_analysis/run_config.py > /dev/null && echo "run_config present"
+test -f src/senselab/audio/workflows/audio_analysis/run_config.py && echo "run_config present"
 ```
 
 Expected: `run_config present`.
 
-- [ ] **Step 3: Create the branch**
+- [ ] **Step 3: Confirm the working tree is clean before touching anything**
 
 ```bash
-git switch -c feat/new-model-integrations origin/alpha
 git status --short
 ```
 
-Expected: branch created, working tree clean.
+Expected: no output. The only files the branch carries beyond `alpha` are this spec and its four plans.
 
 - [ ] **Step 4: Record the baseline test state**
 
