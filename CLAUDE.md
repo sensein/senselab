@@ -73,6 +73,13 @@ Key audio processing capabilities in `audio/tasks/`:
   plus a private copy of any model weights that worker loads. It has exhausted a 32 GB machine.
   Measured on a 16-core node, `-n 16` also buys nothing on the fast suites: 68 s against 70 s
   serial, because the import cost equals the test time. Run the directory you changed instead.
+  There is a second, independent reason: **`ensure_venv` takes no lock** and does
+  `shutil.rmtree(venv_dir)` before installing, so two workers that want the same subprocess venv
+  delete each other's tree mid-install. The macOS CI job carried `-n auto` and hung for 5.5 hours
+  until GitHub's 6-hour ceiling killed it (run 31218624423) — all three workers stalled at the same
+  instant, nothing completed afterwards. Every CI job now runs serially and the macOS job carries
+  `timeout-minutes: 90`, so the next hang costs minutes. The missing lock is still there; adding one
+  is the real fix if a parallel suite is ever wanted.
 - **`uv sync` is subtractive.** It removes extras not named in the command, so always pass the full
   set (`--all-extras`).
 - **Cache invalidation is free.** Bump `CACHE_SCHEMA_VERSION` in
