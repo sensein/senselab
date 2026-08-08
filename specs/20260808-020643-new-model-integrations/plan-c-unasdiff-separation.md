@@ -25,7 +25,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 
 ## Preconditions
 
-Branch `feat/new-model-integrations` exists (Plan A, Task 1). Task 2 needs a HuggingFace write token for `sensein` — an operator step. Every later task works without it via `SENSELAB_UNASDIFF_CHECKPOINTS`.
+Branch `feat/new-model-integrations` already exists, cut from the merged `alpha` (PR #547, `79b37d93`); run Plan A's Task 1 first to verify it. Task 2 needs a HuggingFace write token for `sensein` — an operator step. Every later task works without it via `SENSELAB_UNASDIFF_CHECKPOINTS`.
 
 ## Upstream facts this plan depends on
 
