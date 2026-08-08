@@ -6,9 +6,54 @@ import pytest
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.speech_enhancement import enhance_audios
+from senselab.audio.tasks.speech_enhancement import driftse, enhance_audios
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+
+
+def test_upstream_is_pinned_to_a_full_commit_sha() -> None:
+    """Assert the DriftSE upstream pin is a full 40-char commit SHA.
+
+    A branch name or short SHA would let an upstream force-push change what
+    this backend runs without any change here. The repository is unlicensed and
+    unpackaged, so the pin is the only version contract available.
+    """
+    assert len(driftse._DRIFTSE_COMMIT) == 40
+    assert all(c in "0123456789abcdef" for c in driftse._DRIFTSE_COMMIT)
+
+
+def test_training_and_metric_dependencies_are_not_installed() -> None:
+    """Assert the DriftSE venv requirements omit training/metric-only packages.
+
+    Upstream's requirements.txt lists these for training and scoring. The
+    inference path imports none of them, and pesq/scoreq in particular are slow
+    and fragile to build. util/inference.py imports pesq — the worker must never
+    import util.inference.
+    """
+    excluded = {
+        "pesq",
+        "pystoi",
+        "scoreq",
+        "torch-pesq",
+        "asteroid-filterbanks",
+        "wandb",
+        "pytorch-optimizer",
+        "torchinfo",
+    }
+    named = {r.split(">=")[0].split("==")[0].strip().lower() for r in driftse._DRIFTSE_REQUIREMENTS}
+    assert not (named & excluded), f"training-only deps in the inference venv: {named & excluded}"
+
+
+def test_torch_is_named_explicitly_so_ensure_venv_routes_cuda() -> None:
+    """Assert torch and torchaudio are named explicitly in the DriftSE requirements.
+
+    ensure_venv's CUDA auto-detection triggers on an explicit torch pin. Left
+    transitive, the resolve skips CUDA-aware routing and can land a CPU-only
+    wheel on a GPU host.
+    """
+    named = {r.split(">=")[0].split("==")[0].strip().lower() for r in driftse._DRIFTSE_REQUIREMENTS}
+    assert "torch" in named
+    assert "torchaudio" in named
 
 
 @pytest.fixture
