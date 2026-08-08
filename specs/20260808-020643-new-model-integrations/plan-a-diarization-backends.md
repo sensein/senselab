@@ -23,6 +23,37 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 - Core floor becomes `transformers>=5.3` (Task 5). This is every HuggingFace backend in the package, not just diarization.
 - Upstream attribution: the final commit carries `Co-Authored-By: Evan Ng <evan.ng@sickkids.ca>`.
 
+## Known follow-ups, carried out of execution (2026-08-08)
+
+Plan A executed to completion. Final whole-branch review verdict: **Ship with follow-ups, no
+Critical findings**. Two items were adjudicated as real-but-not-blocking and are recorded here
+rather than fixed, so they are not lost when the scratch workspace is deleted.
+
+1. **`child_adult.py` — the short-clip guard is ordered after `ensure_venv`.**
+   The final review asked for a `ValueError` on clips ≤ 10 s, because upstream's loop advances only
+   while `start + 10 < length` and a shorter clip silently returns `[]` — indistinguishable from
+   "no adult present". The guard was added and is correct: it fires for *every* input clip and
+   names both the measured duration and the window rule. But it sits inside the per-audio loop,
+   which runs after `venv_dir = ensure_venv(...)`. The pre-existing CUDA check still correctly
+   precedes `ensure_venv`, so a CPU host rejects immediately; a **CUDA host** handed a too-short
+   clip as its first-ever child-adult call pays a 438 MB venv build before the rejection.
+   **Ruling: park.** The behaviour is correct and the cost is one-time — the venv is cached
+   afterwards, and any real use of this backend needs it built anyway. Fix by hoisting a duration
+   pass above `ensure_venv`; roughly five lines.
+
+2. **Four copies of the result-parse loop.** `nvidia.py`, `child_adult.py`, `diarizen.py` and
+   MOSS's variant each iterate `output.get("results", [])` directly, so a worker returning fewer
+   entries than it was given yields a short list and a caller doing `zip(audios, results)` silently
+   drops audios. `parse_subprocess_result` already covers "no output" and "worker raised"; only the
+   partial case is uncovered.
+   **Ruling: park.** It is a refactor touching a pre-existing file rather than a defect fix. One
+   `_script_lines_from_segments(output, audios)` helper with a `len(results) == len(audios)`
+   assertion closes all four.
+
+A third, cheaper follow-up worth filing: a single test that `ast.parse`s every `_WORKER_SCRIPT`
+string literal in the package. Guarding only the four new ones would make the invariant look
+enforced when ~13 sites share the same exposure.
+
 ## Preconditions
 
 **Met.** The `20260728-221507-per-speaker-identity-scene` refactor merged into `alpha` as PR #547 (`79b37d93`), and `4071eed9 refactor(config)` is an ancestor of `origin/alpha`. The branch `feat/new-model-integrations` already exists, branched from the merged `alpha` and carrying this spec and its four plans. Task 1 re-verifies rather than waits.
