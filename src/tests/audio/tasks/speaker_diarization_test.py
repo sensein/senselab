@@ -235,7 +235,7 @@ def test_diarize_audios_dispatches_to_the_right_backend(
     for name, mock in mocks.items():
         monkeypatch.setattr(diarization_api, name, mock)
 
-    model = HFModel(path_or_uri=model_id)
+    model: HFModel = HFModel(path_or_uri=model_id)
     audios = [Audio(waveform=torch.rand(1, 16000), sampling_rate=16000)]
 
     result = diarize_audios(audios=audios, model=model, max_new_tokens=222)
