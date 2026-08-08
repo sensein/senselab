@@ -64,8 +64,29 @@ def test_transcript_signature_matches_pre_refactor_digest() -> None:
 
 
 def test_schema_version_is_pinned() -> None:
-    """Bumping this wipes every user's cache — it must be a deliberate, reviewed act."""
-    assert CACHE_SCHEMA_VERSION == 2
+    """Bumping this wipes every user's cache, so every bump must carry its written reason.
+
+    The pin is against the **documented history**, not a literal. Twice now a bare
+    ``assert CACHE_SCHEMA_VERSION == N`` has lagged the constant — it read 4 against 5, was
+    corrected to 7, and was sitting at 7 against 8 when this was rewritten — because a literal in
+    a test is a second copy of the number with nothing forcing it to agree. Deriving the expected
+    value from the ``Bumped N → M`` chain in the module docstring means a bump *cannot* pass
+    without a reason beside it, and the pin cannot silently lag: the reason and the constant are
+    one artifact.
+    """
+    import inspect
+    import re
+
+    from senselab.utils.tasks import cached_inference
+
+    # The history lives in the constant's *attribute* docstring, which has no runtime object, so
+    # this reads the source. That is the point: the reason has to be written where the number is.
+    source = inspect.getsource(cached_inference)
+    bumps = [(int(a), int(b)) for a, b in re.findall(r"Bumped (\d+) → (\d+)", source)]
+    assert bumps, "every bump must be narrated in the module docstring"
+    for (_, landed), (departed, _) in zip(bumps, bumps[1:]):
+        assert landed == departed, f"the bump chain skips from {landed} to {departed}"
+    assert CACHE_SCHEMA_VERSION == bumps[-1][1], "the constant and its written history disagree"
 
 
 def test_param_order_does_not_change_the_key() -> None:
@@ -342,7 +363,7 @@ def _fake_audio(values: list[float], sr: int = 16000) -> SimpleNamespace:
 
 
 def test_audio_signature_is_stable_for_identical_content() -> None:
-    """Same PCM + rate → same signature, regardless of object identity."""
+    """Same PCM + rate → same signature, regardless of object speaker."""
     a = _fake_audio([0.1, 0.2, 0.3])
     b = _fake_audio([0.1, 0.2, 0.3])
     assert audio_signature(a) == audio_signature(b)

@@ -3,7 +3,7 @@
 This module defines `ScriptLine`, a lightweight, validated container for
 transcripts and diarization segments. A `ScriptLine` may represent:
 
-- a top-level utterance (with optional `speaker`, `start`, `end`),
+- a top-level asr (with optional `speaker`, `start`, `end`),
 - a container with nested `chunks` (each a `ScriptLine`),
 - or both (text + timing + nested chunks).
 
@@ -42,9 +42,14 @@ Examples:
             world [0.60 - 1.20]
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 from pydantic import BaseModel, ValidationInfo, field_validator, model_validator
+
+TimestampSource = Literal["native", "bundled_aligner", "external_aligner"]
+"""Where a line's `start`/`end` came from. Closed rather than free text: the asr axis compares word
+times across models, and that comparison is only sound if every source is one the consumer knows
+how to treat — a new backend inventing its own label would silently read as independent."""
 
 
 class ScriptLine(BaseModel):
@@ -59,6 +64,14 @@ class ScriptLine(BaseModel):
         avg_logprob (float | None): Mean per-token log-probability, when the ASR
             backend reports one (Whisper today); `None` otherwise.
         no_speech_prob (float | None): Backend's own no-speech probability in `[0, 1]`.
+        timestamp_source (TimestampSource | None): Who produced `start`/`end` — the recognizer
+            itself (`native`), a companion aligner shipped with it (`bundled_aligner`), an
+            external forced aligner (`external_aligner`), or `None` when the backend did not
+            declare. Declared here rather than inferred downstream: whether a model reports word
+            times is a fact it knows for certain, and consumers were reverse-engineering it by
+            probing for `chunks`. It also carries a dependency the ASR axis needs — two models
+            whose times come from the *same* aligner agree partly for reasons that have nothing
+            to do with the audio, so that agreement is not independent corroboration.
         token_entropy (list[float] | float | None): Per-token softmax entropy, or a
             single pre-collapsed mean.
 
@@ -89,6 +102,15 @@ class ScriptLine(BaseModel):
     # confidence the model never reported.
     avg_logprob: Optional[float] = None  # mean per-token log-probability (negative)
     no_speech_prob: Optional[float] = None  # Whisper's own no-speech head, in [0, 1]
+    timestamp_source: Optional[TimestampSource] = None  # who produced start/end; None = undeclared
+    # *Which* producer, by id — the recognizer for `native`, the aligner for either aligner kind.
+    # The kind alone cannot answer "did these two times come from the same place": Qwen3-ASR is
+    # `bundled_aligner` and Canary-Qwen is `external_aligner` while both are timed by
+    # Qwen/Qwen3-ForcedAligner-0.6B, so on the kind they group apart and a shared dependency reads
+    # as two agreeing witnesses. Measured: their onsets are bit-identical across all 62 words of a
+    # real run. `None` = undeclared, which consumers must treat as its own source rather than as
+    # shared — unknown provenance is not shared provenance.
+    timestamp_model: Optional[str] = None
     # Per-token softmax entropy, or a single mean when the caller pre-collapsed it.
     token_entropy: Optional[Union[List[float], float]] = None
 
@@ -203,7 +225,7 @@ class ScriptLine(BaseModel):
         """Return the deepest chunk nodes (typically words) in temporal order.
 
         A leaf is a node with no ``chunks``. For a word-aligned transcript
-        (utterance → words) this yields the word lines; for a flat line it
+        (asr → words) this yields the word lines; for a flat line it
         yields the line itself. Consolidates the recursive walks previously
         re-implemented across forced_alignment, plotting, and the audio
         analysis workflow (architecture-review T049); for *serialized* trees

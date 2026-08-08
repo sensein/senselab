@@ -1,0 +1,645 @@
+"""Per-band noise-floor estimation (T056-T059, FR-021a to FR-021i).
+
+Detection works by subtracting a locally estimated per-band floor and applying one margin
+threshold to what remains — not by amplification. That is what makes the different-distances
+problem tractable: after subtraction a near source and a far source are each judged against
+their own band floor, so a single threshold holds at every distance. The approach is taken
+from established detection practice (ecoacoustics, marine and terrestrial bioacoustics),
+where the design goal is stated directly: after per-bin floor subtraction, power fluctuates
+around 0 dB during silence and is considerably higher during an event, so one absolute
+threshold suffices.
+
+Four properties, each ruling out a simpler estimator:
+
+**Percentile, not mean or minimum.** A low percentile tolerates high event occupancy — a
+tenth percentile survives up to 90% of a band's frames being event — where a mean absorbs
+events by construction and a raw minimum carries a large downward bias.
+
+**Bias-corrected.** A ``q``-quantile of exponentially distributed noise power sits a
+calculable factor below the mean: about 9.8 dB for a tenth percentile. Uncorrected, every
+relative-dB gate is that much more permissive, and the failure looks like generosity rather
+than a bug. The correction is validated against synthetic noise in the tests.
+
+**Patch-aggregated, never per-bin.** A single time-frequency bin's log-power has a spread of
+about 5.6 dB, so 3 sigma is ~17 dB and a few-dB threshold on one bin is meaningless. Over a
+~1 s patch the spread falls below a few tenths of a dB, making the same threshold many sigma.
+
+**Conditioned on target activity.** Every published estimator assumes the floor is
+independent of the events. A suppression residual violates that — artifact level correlates
+with the removed talker's level — so one unconditioned floor over-gates quiet stretches and
+under-gates busy ones. Estimating per activity stratum is the mitigation, and it has **no
+published precedent**: validate before relying on it.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Any, Literal, Mapping, Sequence
+
+import numpy as np
+
+from senselab.audio.workflows.audio_analysis.calibration import quantile_bias_correction_db
+from senselab.utils.data_structures.logging import logger
+
+__all__ = [
+    "NoiseFloorEstimate",
+    "band_excess_db",
+    "cross_recording_baseline",
+    "foreground_background_ratio_db",
+    "detect_stationary_sources",
+    "estimate_recorder_floor_db",
+    "prominence_ratio_db",
+    "resolvable_bands",
+    "binding_floor",
+    "estimate_band_floor_db",
+    "estimate_noise_floor",
+    "third_octave_bands",
+]
+
+_THIRD_OCTAVE_RATIO = 2.0 ** (1.0 / 3.0)
+"""Band edge ratio. Third-octave by definition, not a fitted value."""
+
+_BASE_CENTER_HZ = 1000.0
+_LOWEST_CENTER_HZ = 25.0
+
+TargetActivity = Literal["active", "quiet", "all"]
+
+
+def third_octave_bands(sampling_rate: int, *, lowest_center_hz: float = _LOWEST_CENTER_HZ) -> list[tuple[float, float]]:
+    """Third-octave band edges from ``lowest_center_hz`` up to Nyquist.
+
+    Per-band rather than broadband because environmental and microphone noise are heavily
+    low-frequency weighted: a broadband floor is set by the low bands and leaves mid- and
+    high-band events ungated. Room-acoustics and ecoacoustics practice agree on this
+    unanimously.
+    """
+    nyquist = sampling_rate / 2.0
+    half = _THIRD_OCTAVE_RATIO**0.5
+    bands: list[tuple[float, float]] = []
+    n = int(round(3.0 * math.log2(lowest_center_hz / _BASE_CENTER_HZ)))
+    while True:
+        center = _BASE_CENTER_HZ * (2.0 ** (n / 3.0))
+        lo, hi = center / half, center * half
+        if lo >= nyquist:
+            break
+        if hi > nyquist:
+            break
+        bands.append((lo, hi))
+        n += 1
+    return bands
+
+
+@dataclass(frozen=True)
+class NoiseFloorEstimate:
+    """One band's floor for one activity stratum, with the provenance to reproduce it."""
+
+    band_hz: tuple[float, float]
+    floor_db: float | None
+    quantile: float
+    bias_correction_db: float
+    window_s: float
+    iterations: int
+    target_activity: TargetActivity
+    frames: int
+    recorder_floor_db: float | None = None
+    binding: str = "perceptual"
+    status: str = "ok"
+    """Why a floor is absent, when it is.
+
+    ``ok`` -- measured. ``no_energy`` -- the band resolves but carries no measurable energy,
+    which a high-passed recording produces at the bottom of the range. A bare ``NaN`` would
+    collapse those two into one unreadable fact, and "we could not measure here" reads very
+    differently from "there is nothing here".
+    """
+
+    def to_row(self) -> dict[str, Any]:
+        """Row for ``noise_floor.parquet`` per ``contracts/background-sources.md``."""
+        return {
+            "band_low_hz": self.band_hz[0],
+            "band_high_hz": self.band_hz[1],
+            "target_activity": self.target_activity,
+            "floor_db": self.floor_db,
+            "quantile": self.quantile,
+            "bias_correction_db": self.bias_correction_db,
+            "window_s": self.window_s,
+            "iterations": self.iterations,
+            "frames": self.frames,
+            "recorder_floor_db": self.recorder_floor_db,
+            "binding": self.binding,
+            "status": self.status,
+        }
+
+
+def estimate_band_floor_db(
+    frame_power: np.ndarray,
+    *,
+    quantile: float = 0.10,
+    max_iterations: int = 3,
+    event_exclusion_db: float = 6.0,
+    apply_bias_correction: bool = True,
+) -> tuple[float | None, int]:
+    """Estimate one band's noise floor in dB from its per-frame power.
+
+    Iterates: take the ``quantile`` of surviving frames, exclude frames exceeding it by
+    ``event_exclusion_db``, re-estimate. The exclusion threshold follows published
+    noise-tracking practice, where the same 6 dB-ish figure appears independently in several
+    estimators.
+
+    Args:
+        frame_power: Per-frame **linear** band power.
+        quantile: Floor quantile, in ``(0, 0.5]``.
+        max_iterations: Cap on event-exclusion passes.
+        event_exclusion_db: Excess above the running floor that marks a frame as event.
+        apply_bias_correction: Whether to correct the quantile's downward bias. Off only
+            for tests that need to observe the uncorrected value.
+
+    Returns:
+        ``(floor_db, iterations)``; ``floor_db`` is ``None`` when there are no frames.
+    """
+    power = np.asarray(frame_power, dtype=np.float64)
+    power = power[np.isfinite(power) & (power > 0.0)]
+    if power.size == 0:
+        return None, 0
+
+    # The correction is always applied *inside* the loop, because the exclusion reference
+    # must be an estimate of the noise mean; using the raw quantile there re-introduces the
+    # runaway described below. `apply_bias_correction` only affects the returned value, so a
+    # caller comparing the two observes the correction alone rather than the correction plus
+    # a different iteration trajectory.
+    correction_db = quantile_bias_correction_db(quantile)
+    correction_lin = 10.0 ** (correction_db / 10.0)
+
+    surviving = power
+    floor_lin = float(np.quantile(surviving, quantile)) * correction_lin
+    iterations = 1
+    for _ in range(max(0, max_iterations - 1)):
+        # Compare against the *corrected* floor -- an estimate of the noise mean -- not the
+        # raw quantile. Excluding relative to the raw quantile removes most of the noise
+        # distribution itself (a tenth-percentile-plus-6 dB cut discards roughly two thirds
+        # of exponentially distributed noise), and re-taking a low quantile of the truncated
+        # remainder drives the estimate down every pass. That runaway reads as a very quiet
+        # floor, which makes every margin permissive.
+        limit = floor_lin * (10.0 ** (event_exclusion_db / 10.0))
+        kept = surviving[surviving <= limit]
+        if kept.size < max(8, int(0.05 * power.size)):
+            # Too few frames left to estimate from; stop rather than chase the floor into a
+            # handful of samples.
+            break
+        new_floor = float(np.quantile(kept, quantile)) * correction_lin
+        iterations += 1
+        converged = abs(10.0 * math.log10(new_floor / floor_lin)) < 0.1
+        floor_lin, surviving = new_floor, kept
+        if converged:
+            break
+
+    floor_db = 10.0 * math.log10(floor_lin)
+    return (floor_db if apply_bias_correction else floor_db - correction_db), iterations
+
+
+def _band_frame_power(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    bands: Sequence[tuple[float, float]],
+    *,
+    frame_s: float,
+    hop_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(band_power[n_bands, n_frames], frame_start_sample)``."""
+    n_fft = 1 << int(math.ceil(math.log2(max(32, int(frame_s * sampling_rate)))))
+    hop = max(1, int(hop_s * sampling_rate))
+    window = np.hanning(n_fft)
+    starts = np.arange(0, max(1, len(waveform) - n_fft + 1), hop)
+    if starts.size == 0:
+        starts = np.array([0])
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sampling_rate)
+
+    spec = np.empty((len(starts), n_fft // 2 + 1))
+    for i, s in enumerate(starts):
+        seg = waveform[s : s + n_fft]
+        if seg.size < n_fft:
+            seg = np.pad(seg, (0, n_fft - seg.size))
+        spec[i] = np.abs(np.fft.rfft(seg * window)) ** 2
+
+    out = np.zeros((len(bands), len(starts)))
+    for b, (lo, hi) in enumerate(bands):
+        mask = (freqs >= lo) & (freqs < hi)
+        out[b] = spec[:, mask].mean(axis=1) if mask.any() else 0.0
+    return out, starts
+
+
+def resolvable_bands(
+    bands: Sequence[tuple[float, float]],
+    sampling_rate: int,
+    *,
+    frame_s: float = 0.025,
+    min_bins: int = 1,
+) -> list[tuple[float, float]]:
+    """Drop bands the analysis FFT cannot resolve.
+
+    Third-octave bands narrow with frequency while FFT bin spacing is constant, so the
+    lowest bands can be narrower than a single bin: at 16 kHz with a 25 ms frame the spacing
+    is 31.25 Hz while the 22-28 Hz band spans 5.7 Hz. Those bands contain no bins at all.
+
+    Emitting them anyway produces a ``NaN`` floor, which is the worst outcome available — it
+    looks like a measurement that happened to be missing rather than a band that could never
+    have been measured, and it propagates silently into any comparison. Dropping them with
+    the count recorded keeps the distinction visible.
+    """
+    n_fft = 1 << int(math.ceil(math.log2(max(32, int(frame_s * sampling_rate)))))
+    freqs = np.fft.rfftfreq(n_fft, d=1.0 / sampling_rate)
+    # Count the bins that actually land in the band rather than comparing its width to the
+    # spacing. Width is only a proxy: a band wide enough in principle can still fall between
+    # two bin centres and contain none, which is how three NaN floors survived a width test.
+    return [(lo, hi) for lo, hi in bands if int(((freqs >= lo) & (freqs < hi)).sum()) >= min_bins]
+
+
+def estimate_noise_floor(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    *,
+    target_active: np.ndarray | None = None,
+    profile: Mapping[str, Any] | None = None,
+    recorder_floor_db: float | None = None,
+) -> list[NoiseFloorEstimate]:
+    """Estimate the per-band noise floor, optionally split by target activity.
+
+    Args:
+        waveform: Mono samples.
+        sampling_rate: Sample rate in Hz.
+        target_active: Per-sample boolean target-activity mask. When given, floors are
+            estimated separately for active and quiet strata (FR-021h) — the mitigation for
+            a residual floor that correlates with the removed talker's level, which has no
+            published precedent and should be validated rather than trusted.
+        profile: Detection-margin profile; the bundled default is used when omitted.
+        recorder_floor_db: Estimated capture-chain self-noise, when known.
+
+    Returns:
+        One :class:`NoiseFloorEstimate` per band per stratum.
+    """
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+
+    cfg = dict((profile or load_detection_margin_profile()).get("noise_floor") or {})
+    quantile = float(cfg.get("quantile", 0.10))
+    # A long analysis frame, deliberately. The floor is a long-term percentile, so it gains
+    # nothing from fine time resolution -- but frequency resolution decides which bands
+    # exist at all. Third-octave bands narrow with frequency while FFT spacing is constant,
+    # so a 25 ms frame (31 Hz spacing at 16 kHz) cannot resolve anything below ~140 Hz,
+    # which is where mains hum and ventilation fundamentals live: precisely the stationary
+    # sources this estimator most needs to see.
+    frame_s = float(cfg.get("floor_frame_s", 0.100))
+    max_iterations = int(cfg.get("max_iterations", 3))
+    exclusion = float(cfg.get("event_exclusion_db", 6.0))
+    window_s = float(cfg.get("window_s", 20.0))
+    margin = float(cfg.get("recorder_margin_db", 3.0))
+
+    wav = np.asarray(waveform, dtype=np.float64).squeeze()
+    all_bands = third_octave_bands(sampling_rate)
+    bands = resolvable_bands(all_bands, sampling_rate, frame_s=frame_s)
+    if len(bands) < len(all_bands):
+        logger.debug(
+            "noise floor: %d of %d third-octave bands are narrower than the FFT bin spacing "
+            "and were dropped rather than reported as NaN",
+            len(all_bands) - len(bands),
+            len(all_bands),
+        )
+    power, starts = _band_frame_power(wav, sampling_rate, bands, frame_s=0.025, hop_s=0.010)
+
+    if target_active is None:
+        strata: list[tuple[TargetActivity, np.ndarray]] = [("all", np.ones(power.shape[1], dtype=bool))]
+    else:
+        active = np.asarray(target_active, dtype=bool)
+        frame_active = np.array([bool(active[s : s + 1].any()) if s < active.size else False for s in starts])
+        strata = [("quiet", ~frame_active), ("active", frame_active)]
+
+    rows: list[NoiseFloorEstimate] = []
+    correction = quantile_bias_correction_db(quantile)
+    for stratum, mask in strata:
+        if target_active is not None and not mask.any():
+            continue
+        for b, band in enumerate(bands):
+            floor_db, iters = estimate_band_floor_db(
+                power[b, mask],
+                quantile=quantile,
+                max_iterations=max_iterations,
+                event_exclusion_db=exclusion,
+            )
+            rows.append(
+                NoiseFloorEstimate(
+                    status="ok" if floor_db is not None else "no_energy",
+                    band_hz=band,
+                    floor_db=floor_db,
+                    quantile=quantile,
+                    bias_correction_db=correction,
+                    window_s=window_s,
+                    iterations=iters,
+                    target_activity=stratum,
+                    frames=int(mask.sum()),
+                    recorder_floor_db=recorder_floor_db,
+                    binding=binding_floor(
+                        band_floor_db=floor_db, recorder_floor_db=recorder_floor_db, margin_db=margin
+                    ),
+                )
+            )
+    return rows
+
+
+def band_excess_db(band_power: float, *, floor_db: float) -> float:
+    """Excess of ``band_power`` (linear) over ``floor_db``, in dB.
+
+    Negative values are returned rather than clamped: a sub-floor measurement is
+    information, and clamping would hide a floor estimate that ran high.
+    """
+    if band_power <= 0.0:
+        return -math.inf
+    return 10.0 * math.log10(band_power) - float(floor_db)
+
+
+def binding_floor(
+    *,
+    band_floor_db: float | None,
+    recorder_floor_db: float | None,
+    margin_db: float,
+) -> str:
+    """Which limit binds for this band: ``"recorder"`` or ``"perceptual"`` (FR-022a).
+
+    For consumer-grade capture the microphone's own self-noise frequently sits above the
+    level of a quiet room, so content near human threshold was never recorded at all. Where
+    that is the case the honest statement is "your microphone could not hear it" — both more
+    defensible and more useful than a perceptual claim the recording cannot support.
+    """
+    if band_floor_db is None or recorder_floor_db is None:
+        return "perceptual"
+    return "recorder" if (band_floor_db - float(recorder_floor_db)) < float(margin_db) else "perceptual"
+
+
+# ── stationary sources (T068, FR-021i) ─────────────────────────────────
+#
+# A source present throughout a recording defeats the estimator above, and not by
+# accident: it *is* the tenth percentile of its own band, so it is absorbed into the
+# floor and its excess over that floor reads ~0 dB. Air conditioning, ventilation,
+# mains hum, a music bed -- exactly the "background that exists throughout the clip"
+# case, and exactly the sources a background characterizer most wants to name.
+#
+# The escape is to stop comparing a band against its own history and compare it
+# against its NEIGHBOURS instead. A steady narrowband source is prominent relative to
+# adjacent third-octave bands even when it is perfectly steady in time, and that
+# comparison is unaffected by how much of the recording it occupies.
+#
+# Standards-grounded rather than invented: ECMA-74 / ISO 7779 define a discrete tone
+# as prominent at a Prominence Ratio of about 9 dB (the critical band containing the
+# tone against its two neighbours) or a Tone-to-Noise Ratio of about 8 dB. Those are
+# the same figures the margin ladder's upper tier converged on, from a different
+# tradition.
+#
+# SCOPE OF THIS DETECTOR, stated precisely because the neighbouring claim is easy to
+# overstate. Prominence catches *narrowband* stationary sources -- mains hum, a tonal
+# compressor whine, a fan blade rate. A **broadband** stationary source raises every
+# band together (ventilation hiss, room rumble, a dense music bed), so a neighbour
+# comparison sees nothing.
+#
+# What that does NOT mean: it does not mean a structured or content-bearing background
+# is unmeasurable. Its level, spectral shape, and ratio to the near-field foreground are
+# all measurable -- see `foreground_background_ratio_db`. The single narrow thing an
+# uncalibrated lone recording cannot do is *attribute* a smooth broadband floor to
+# equipment versus room, because both are steady, broadband and spectrally smooth.
+#
+# And that attribution is recoverable from a cohort: across recordings from one rig the
+# equipment contribution is the part common to all of them while the room contribution
+# varies, so `cross_recording_baseline` separates the two. `binding_floor` reports which
+# limit applies once either that or an equipment specification is supplied.
+
+
+def prominence_ratio_db(band_floors_db: Sequence[float | None], index: int) -> float | None:
+    """Prominence of one band's level against its immediate neighbours, in dB.
+
+    This is what detects a source the same-band floor cannot see: a steady tone or hum is
+    prominent against adjacent bands regardless of how many frames it occupies, whereas a
+    broadband noise floor is not prominent against anything.
+
+    Args:
+        band_floors_db: Per-band levels, ascending in frequency. ``None`` entries are skipped.
+        index: Band to test.
+
+    Returns:
+        Prominence in dB, or ``None`` when there are not two usable neighbours.
+    """
+    if not 0 < index < len(band_floors_db) - 1:
+        return None
+    here = band_floors_db[index]
+    lo, hi = band_floors_db[index - 1], band_floors_db[index + 1]
+    if here is None or lo is None or hi is None:
+        return None
+    # Neighbour reference in the power domain: averaging dB would understate a single loud
+    # neighbour and overstate prominence.
+    neighbour = 10.0 * math.log10(0.5 * (10.0 ** (float(lo) / 10.0) + 10.0 ** (float(hi) / 10.0)))
+    return float(here) - neighbour
+
+
+def estimate_recorder_floor_db(floors: Sequence[NoiseFloorEstimate]) -> float | None:
+    """Crude in-recording proxy for the capture chain's own noise floor.
+
+    Takes the quietest band floor, on the reasoning that the band where the room
+    contributes least is the band closest to what the microphone itself contributes.
+
+    **This is a lower bound on the recorder floor, not a measurement of it.** If the room
+    contributes across the whole spectrum — which is what ventilation does — the quietest
+    band is still room plus microphone, and this over-estimates how quiet the equipment is.
+    Prefer an operator-supplied value from the equipment specification or a silent
+    calibration recording; this exists so that ``binding_floor`` has something to work with
+    when none was supplied.
+    """
+    levels = [r.floor_db for r in floors if r.floor_db is not None]
+    return min(levels) if levels else None
+
+
+def detect_stationary_sources(
+    floors: Sequence[NoiseFloorEstimate],
+    *,
+    profile: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Find sources present throughout the recording, from the *unsubtracted* floors.
+
+    Runs on the floor estimates themselves rather than on residual excess, because a
+    throughout-the-clip source has no excess over its own floor to find — it is the floor.
+
+    Args:
+        floors: Per-band estimates from :func:`estimate_noise_floor`.
+        profile: Detection-margin profile supplying ``guards.prominence_ratio_db``.
+
+    Returns:
+        One record per prominent band, each carrying its prominence and the tier it earns.
+        Empty when nothing stands out — a genuinely flat floor has no stationary source in
+        it, and reporting one would be the fabrication this feature guards against.
+    """
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+
+    resolved = profile or load_detection_margin_profile()
+    guards = dict(resolved.get("guards") or {})
+    threshold = float(guards.get("prominence_ratio_db", 9.0))
+
+    by_stratum: dict[str, list[NoiseFloorEstimate]] = {}
+    for row in floors:
+        by_stratum.setdefault(row.target_activity, []).append(row)
+
+    out: list[dict[str, Any]] = []
+    for stratum, rows in sorted(by_stratum.items()):
+        ordered = sorted(rows, key=lambda r: r.band_hz[0])
+        levels = [r.floor_db for r in ordered]
+        for i, row in enumerate(ordered):
+            prominence = prominence_ratio_db(levels, i)
+            if prominence is None or prominence < threshold:
+                continue
+            out.append(
+                {
+                    "band_low_hz": row.band_hz[0],
+                    "band_high_hz": row.band_hz[1],
+                    "target_activity": stratum,
+                    "level_db": row.floor_db,
+                    "prominence_db": prominence,
+                    "threshold_db": threshold,
+                    "stationary_pass": True,
+                    "binding_floor": row.binding,
+                }
+            )
+    return out
+
+
+# ── foreground-referenced SNR ──────────────────────────────────────────
+#
+# The operative quantity in this setting. Capture is near-field, so a foreground sound
+# sits far above the background, and the ratio between them is measurable per band
+# whatever the background *contains*: structure and content do not obstruct measuring
+# a level. That distinction matters because it is easy to overstate the limitation
+# above -- what an uncalibrated single recording cannot do is *attribute* the floor to
+# equipment versus room. It can still say how far the background sits below the
+# foreground, and how that ratio varies across bands and across recordings.
+#
+# Blank recordings are the exception: with no foreground there is no reference, which
+# has to be reported rather than silently yielding an infinite or zero ratio.
+
+
+def foreground_background_ratio_db(
+    waveform: np.ndarray,
+    sampling_rate: int,
+    *,
+    target_active: np.ndarray,
+    foreground_percentile: float = 90.0,
+    profile: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-band ratio between the near-field foreground level and the background floor.
+
+    The foreground reference is a **high percentile** of band power over target-active
+    frames, not their floor. Using the active stratum's floor would measure the quiet part
+    *within* active frames — which understates the ratio severely: on a real recording it
+    reported a median of +5.6 dB where the broadband foreground-to-background separation was
+    15–35 dB.
+
+    The background reference is the target-free stratum's bias-corrected floor. Their
+    difference is a per-band signal-to-background ratio that holds whatever the background
+    is made of: structure and content do not obstruct measuring a level.
+
+    Args:
+        waveform: Mono samples.
+        sampling_rate: Sample rate in Hz.
+        target_active: Per-sample boolean target-activity mask.
+        foreground_percentile: Percentile of active-frame band power taken as the foreground
+            level. High rather than mean, so brief loud target events are not averaged away
+            by the silence between them.
+        profile: Detection-margin profile.
+
+    Returns:
+        One record per band. Empty when either stratum is absent — a blank recording has no
+        foreground to reference against, and reporting a ratio there would invent one.
+    """
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+
+    cfg = dict((profile or load_detection_margin_profile()).get("noise_floor") or {})
+    quantile = float(cfg.get("quantile", 0.10))
+
+    wav = np.asarray(waveform, dtype=np.float64).squeeze()
+    active = np.asarray(target_active, dtype=bool)
+    bands = third_octave_bands(sampling_rate)
+    power, starts = _band_frame_power(wav, sampling_rate, bands, frame_s=0.025, hop_s=0.010)
+    frame_active = np.array([bool(active[s]) if s < active.size else False for s in starts])
+    if not frame_active.any() or not (~frame_active).any():
+        return []
+
+    out: list[dict[str, Any]] = []
+    for b, band in enumerate(bands):
+        fg = power[b, frame_active]
+        bg_floor, _ = estimate_band_floor_db(power[b, ~frame_active], quantile=quantile)
+        if fg.size == 0 or bg_floor is None:
+            continue
+        fg_db = 10.0 * math.log10(max(float(np.percentile(fg, foreground_percentile)), 1e-30))
+        out.append(
+            {
+                "band_low_hz": band[0],
+                "band_high_hz": band[1],
+                "foreground_db": fg_db,
+                "background_db": bg_floor,
+                "ratio_db": fg_db - bg_floor,
+                "foreground_percentile": foreground_percentile,
+            }
+        )
+    return out
+
+
+# ── cross-recording baseline ───────────────────────────────────────────
+#
+# The reference a single recording lacks, supplied by a cohort. Across recordings from
+# one rig the equipment contribution is the part common to all of them, while the room
+# contribution varies. So the per-band minimum across recordings approximates the
+# equipment floor, and each recording's excess over that minimum is its own room
+# contribution -- which is what makes a broadband stationary source nameable after all,
+# given more than one recording to compare.
+
+
+def cross_recording_baseline(
+    per_recording_floors: Mapping[str, Sequence[NoiseFloorEstimate]],
+) -> dict[str, Any]:
+    """Separate the common (equipment) floor from per-recording (room) contributions.
+
+    Args:
+        per_recording_floors: Recording id → its per-band floor estimates. Two or more
+            recordings from the same capture setup.
+
+    Returns:
+        ``{"bands": [...], "recordings": {...}}``. Each band carries the common floor and
+        the spread across recordings; each recording carries its per-band excess over the
+        common floor. ``bands`` is empty with fewer than two recordings, since a single
+        recording cannot distinguish common from particular.
+    """
+    usable = {rid: rows for rid, rows in per_recording_floors.items() if rows}
+    if len(usable) < 2:
+        return {
+            "bands": [],
+            "recordings": {},
+            "note": "at least two recordings are required to separate common from particular",
+        }
+
+    levels: dict[tuple[float, float], dict[str, float]] = {}
+    for rid, rows in usable.items():
+        for row in rows:
+            if row.floor_db is not None:
+                levels.setdefault(row.band_hz, {})[rid] = float(row.floor_db)
+
+    bands: list[dict[str, Any]] = []
+    excess: dict[str, list[dict[str, Any]]] = {rid: [] for rid in usable}
+    for band in sorted(levels):
+        by_rid = levels[band]
+        if len(by_rid) < 2:
+            continue
+        common = min(by_rid.values())
+        bands.append(
+            {
+                "band_low_hz": band[0],
+                "band_high_hz": band[1],
+                "common_floor_db": common,
+                "spread_db": max(by_rid.values()) - common,
+                "recordings": len(by_rid),
+            }
+        )
+        for rid, level in by_rid.items():
+            excess[rid].append({"band_low_hz": band[0], "band_high_hz": band[1], "room_excess_db": level - common})
+    return {"bands": bands, "recordings": excess}

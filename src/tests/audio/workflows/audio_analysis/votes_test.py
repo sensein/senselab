@@ -1,91 +1,122 @@
-"""Unit tests for the pure aggregate half of the harvest/aggregate split (votes.py)."""
+"""Unit tests for the pure link half of the harvest/link split (votes.py).
+
+``link_pass`` produces two things and neither is an axis: the L1 per-signal rows, and the belief
+buckets L2 fuses. The fold that used to happen here — once per pass, per axis — is a category
+error and now lives only in ``fuse.fuse_axis``, which sees every pass at once.
+"""
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.aggregate import aggregate_presence, aggregate_utterance
-from senselab.audio.workflows.audio_analysis.types import UncertaintyRow
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+from senselab.audio.workflows.audio_analysis.compute import _apply_scene_coupling
+from senselab.audio.workflows.audio_analysis.degradation import DEFAULT_ANCHORS
+from senselab.audio.workflows.audio_analysis.types import FusedAxis
 from senselab.audio.workflows.audio_analysis.votes import (
     DEFAULT_UTTERANCE_SCENE_COUPLING,
     PassHarvest,
-    aggregate_pass,
-    compute_pass_deltas,
     intensity_mask,
+    link_pass,
     mask_from_pvoice,
 )
 
 
 def _harvest() -> PassHarvest:
     return PassHarvest(
-        pass_label="raw_16k",
-        presence_votes=[
-            {  # confident speech → low uncertainty, p_voice 1.0
+        perturbation="raw",
+        speech_presence_evidence=[
+            {
                 "start": 0.0,
                 "end": 0.5,
-                "votes": {"m1": {"speaks": True, "native_confidence": None}, "m2": {"speaks": True}},
+                "evidence": {"m1": {"covered_fraction": 1.0}, "m2": {"covered_fraction": 1.0}},
             },
-            {  # split vote + instability → OR formula on presence_uncertainty column
+            {
                 "start": 0.5,
                 "end": 1.0,
-                "votes": {"m1": {"speaks": True}, "m2": {"speaks": False}},
-                "frame_instability": 0.5,
+                "evidence": {"m1": {"covered_fraction": 1.0}, "m2": {"covered_fraction": 0.0}},
+                "frame_dispersion": 0.5,
             },
         ],
-        identity_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.8}}}],
-        utterance_votes=[
+        speaker_votes=[{"start": 0.0, "end": 1.0, "votes": {"__cross_diar_label_disagreement__": {"value": 0.8}}}],
+        # What ``harvest_asr_votes`` actually emits: one voter, the consensus word fold, and no
+        # per-model text. The fixture used to carry two per-model texts plus a pairwise-distance
+        # block — three keys the harvest no longer produces, so the test was asserting that the link
+        # handles a shape nothing hands it.
+        asr_votes=[
             {
                 "start": 0.0,
                 "end": 1.0,
                 "votes": {
-                    "a": {"text": "hi", "avg_logprob": None},
-                    "b": {"text": "hi", "avg_logprob": None},
-                    "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.25}, "per_source_confidence": {}},
+                    "consensus_words": {
+                        "value": 0.25,
+                        "operator": "consensus_words/resample",
+                        "sources": ["a", "b"],
+                        "n_words": 2,
+                    }
                 },
             }
         ],
-        quality_by_bucket={(0.0, 0.5): {"quality_snr": 0.1, "_raw": {"snr_db": 22.0}}},
-        source_by_bucket={(0.0, 0.5): {"src_speech": 0.9, "src_dominant": "speech", "_raw": {}}},
-        grids={
-            "presence": {"win_length": 0.5, "hop_length": 0.5},
-            "identity": {"win_length": 1.0, "hop_length": 1.0},
-            "utterance": {"win_length": 1.0, "hop_length": 1.0},
-        },
+        # L1 measurements in dB; 23 dB against the 25/5 dB anchors scores 0.1 at L2.
+        quality_by_bucket={(0.0, 0.5): {"snr_brouhaha_db": 23.0, "c50_brouhaha_db": 28.0}},
+        source_by_bucket={(0.0, 0.5): {"src_speech": 0.9, "src_dominant": "speech", "_raw": {"speech": 0.9}}},
+        # Every axis, and the same pair for each — which is what ``harvest_pass`` records now. The
+        # fixture named three axes at two different spacings, which is the arrangement that shared no
+        # bucket keys on real audio.
+        grids={axis: {"win_length": 1.0, "hop_length": 1.0} for axis in AXIS_NAMES},
         provenance_extras={"scene_quality": {"enabled": True}},
     )
 
 
-def test_aggregate_pass_matches_pure_aggregators_and_columns() -> None:
-    """Row values must equal the pure per-axis aggregators; additive columns attach."""
-    results = aggregate_pass(_harvest(), aggregator="min", params={"p": 1})
-    pres = results["presence"].rows
-    assert len(pres) == 2
-    assert pres[0].aggregated_uncertainty == pytest.approx(
-        aggregate_presence({"m1": {"speaks": True}, "m2": {"speaks": True}})
-    )
-    assert pres[0].quality_snr == 0.1 and pres[0].src_dominant == "speech"
-    assert "__quality__" in pres[0].model_votes and "__quality__" not in pres[0].contributing_models
-    # OR formula: u=1.0 (50/50 split), instability 0.5 → presence_uncertainty = 1-(1-1)(1-0.5) = 1.0
-    assert pres[1].aggregated_uncertainty == pytest.approx(1.0)
-    assert pres[1].presence_uncertainty == pytest.approx(1.0)
-    assert pres[1].raw_aggregated_uncertainty == pres[1].aggregated_uncertainty  # OR never leaks into primary
+def test_link_pass_emits_per_signal_rows_in_native_units() -> None:
+    """One row per (signal, bucket), carrying the tool's own measurement — no fold, no axis."""
+    linked = link_pass(_harvest(), params={"p": 1})
 
-    ident = results["identity"].rows[0]
-    assert ident.aggregated_uncertainty == pytest.approx(0.8)
-    # intensity mask = mean over the two presence buckets: p=1.0 → 1.0; p=0.5 → 1.0 (>=0.5)
-    assert ident.intensity_weight == pytest.approx(1.0)
-    assert ident.raw_aggregated_uncertainty == pytest.approx(0.8)  # mask kept out of primary
+    assert set(linked.signal_results) >= {"m1", "m2", "consensus_words", "scene_quality", "frame_dispersion"}
+    m1 = linked.signal_results["m1"]
+    assert m1.perturbation == "raw"
+    assert [(r.start, r.end) for r in m1.rows] == [(0.0, 0.5), (0.5, 1.0)]
+    assert m1.rows[0].measurement == {"covered_fraction": 1.0}
 
-    utt = results["utterance"].rows[0]
-    # The fixture's presence bucket carries quality_snr=0.1, so FR-019 coupling
-    # applies: reported = raw × (1 + w_q·0.1) = raw × 1.05. The pre-coupling number
-    # stays on raw_aggregated_uncertainty.
-    utt_raw = aggregate_utterance(_harvest().utterance_votes[0]["votes"], aggregator="min")
-    assert utt_raw is not None
-    assert utt.raw_aggregated_uncertainty == pytest.approx(utt_raw)
-    expected_coupling = 1.0 + DEFAULT_UTTERANCE_SCENE_COUPLING["w_q"] * 0.1
-    assert utt.scene_quality_coupling == pytest.approx(expected_coupling)
-    assert utt.aggregated_uncertainty == pytest.approx(utt_raw * expected_coupling)
-    assert results["presence"].provenance["scene_quality"] == {"enabled": True}
-    assert results["utterance"].provenance["grid"] == {"win_length": 1.0, "hop_length": 1.0}
+    # Native units, not a rescaled score.
+    scene = linked.signal_results["scene_quality"].rows[0]
+    assert scene.measurement["snr_brouhaha_db"] == 23.0
+    assert "quality_snr" not in scene.measurement
+
+    # Frame dispersion is persisted as a signal, so the artifact-driven path can read it.
+    assert linked.signal_results["frame_dispersion"].rows[0].measurement["frame_dispersion"] == pytest.approx(0.5)
+
+
+def test_link_pass_records_the_policy_that_read_the_measurements() -> None:
+    """Every threshold that shaped a belief is named in the provenance the run records."""
+    linked = link_pass(_harvest(), params={"p": 1})
+    assert "speech_presence_policy" in linked.provenance
+    assert linked.provenance["scene_quality"] == {"enabled": True}
+    assert linked.provenance["grids"]["asr"] == {"win_length": 1.0, "hop_length": 1.0}
+
+
+def test_link_pass_emits_belief_buckets_per_axis_but_no_axis_value() -> None:
+    """The buckets L2 fuses come out; a per-pass axis number does not.
+
+    Four keys, not three. ``background_mask`` is harvested per bucket like the rest and was absent
+    from this dict, so the votes file the artifact-driven adaptive path ingests was written empty
+    for it and then overwritten by the driver with one vote per mask *region*: L2 folded 1070
+    buckets and the loop carried one. The keys are :data:`axes.HARVEST_SOURCES` now, so an axis
+    cannot be missing from here while being declared harvested.
+    """
+    from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
+
+    linked = link_pass(_harvest(), params={})
+    assert set(linked.buckets_by_axis) == set(HARVEST_SOURCES)
+    assert set(HARVEST_SOURCES) == {"speech_presence", "speaker", "asr", "background_mask"}
+    assert len(linked.buckets_by_axis["speech_presence"]) == 2
+    for buckets in linked.buckets_by_axis.values():
+        for bucket in buckets:
+            assert "within_pass_uncertainty" not in bucket
+
+
+def test_link_pass_derives_quality_scores_at_l2_not_l1() -> None:
+    """The anchored [0,1] score is a fusion decision; L1 keeps only the dB reading."""
+    linked = link_pass(_harvest(), params={})
+    assert linked.quality_scores[(0.0, 0.5)]["quality_snr"] == pytest.approx(0.1)
 
 
 def test_intensity_mask_ramp_and_overlap_average() -> None:
@@ -93,154 +124,109 @@ def test_intensity_mask_ramp_and_overlap_average() -> None:
     assert mask_from_pvoice(0.8) == 1.0
     assert mask_from_pvoice(0.25) == pytest.approx(0.5)
     assert intensity_mask(0.0, 1.0, [(0.0, 0.5, 1.0), (0.5, 1.0, 0.0)]) == pytest.approx(0.5)
-    assert intensity_mask(0.0, 1.0, []) == 1.0  # no presence evidence → no masking
+    assert intensity_mask(0.0, 1.0, []) == 1.0  # no speech_presence evidence → no masking
 
 
-def _row(start: float, end: float, u: float | None, axis: str = "utterance") -> UncertaintyRow:
-    return UncertaintyRow(
-        start=start,
-        end=end,
-        axis=axis,  # type: ignore[arg-type]
-        aggregated_uncertainty=u,
-        contributing_models=["m"],
-        model_votes={"m": {"text": "x"}},
-        comparison_status="ok" if u is not None else "incomparable",
-        raw_aggregated_uncertainty=u,
-        intensity_weight=1.0,
-    )
+# ── Scene→asr coupling, now applied at L2 on the fused axis (FR-019) ───────────
 
 
-def test_compute_pass_deltas_pairing() -> None:
-    """|raw − enh| on shared buckets; one_sided rows for unpaired; incomparable on None."""
-    raw = [_row(0.0, 1.0, 0.2), _row(1.0, 2.0, None), _row(2.0, 3.0, 0.5)]
-    enh = [_row(0.0, 1.0, 0.7), _row(1.0, 2.0, 0.4)]
-    deltas = compute_pass_deltas(raw, enh, "utterance", "min")
-    assert [d.comparison_status for d in deltas] == ["ok", "incomparable", "one_sided"]
-    assert deltas[0].aggregated_uncertainty == pytest.approx(0.5)
-    assert "raw_16k::m" in deltas[0].model_votes and "enhanced_16k::m" in deltas[0].model_votes
-    assert deltas[2].aggregated_uncertainty is None
-
-
-# ── Scene→utterance coupling (T033, FR-019) ───────────────────────────
-
-
-def _coupling_harvest(
+def _fused(
     *,
     quality_snr: float | None = None,
     src_machine: float | None = None,
     src_environment: float | None = None,
-) -> PassHarvest:
-    """One 1 s utterance bucket over two 0.5 s presence buckets carrying scene columns."""
-    quality: dict[tuple[float, float], dict[str, object]] = {}
-    sources: dict[tuple[float, float], dict[str, object]] = {}
-    for bucket in ((0.0, 0.5), (0.5, 1.0)):
+    triage: float = 0.4,
+) -> dict[str, FusedAxis]:
+    """One 1 s fused asr bucket over two 0.5 s fused presence buckets carrying scene columns."""
+    presence_rows = []
+    for start, end in ((0.0, 0.5), (0.5, 1.0)):
+        row: dict[str, object] = {"start": start, "end": end, "uncertainty": 0.0}
         if quality_snr is not None:
-            quality[bucket] = {"quality_snr": quality_snr, "_raw": {}}
-        if src_machine is not None or src_environment is not None:
-            sources[bucket] = {
-                "src_machine": src_machine,
-                "src_environment": src_environment,
-                "_raw": {},
-            }
-    return PassHarvest(
-        pass_label="raw_16k",
-        presence_votes=[
-            {"start": 0.0, "end": 0.5, "votes": {"m1": {"speaks": True}}},
-            {"start": 0.5, "end": 1.0, "votes": {"m1": {"speaks": True}}},
-        ],
-        utterance_votes=[
-            {
-                "start": 0.0,
-                "end": 1.0,
-                "votes": {
-                    "a": {"text": "hi"},
-                    "b": {"text": "hi"},
-                    "__pairwise_phoneme_distances__": {"pairs": {"a|b": 0.4}, "per_source_confidence": {}},
-                },
-            }
-        ],
-        quality_by_bucket=quality,
-        source_by_bucket=sources,
-        grids={"utterance": {"win_length": 1.0, "hop_length": 1.0}},
-    )
+            row["quality_snr"] = quality_snr
+        if src_machine is not None:
+            row["src_machine"] = src_machine
+        if src_environment is not None:
+            row["src_environment"] = src_environment
+        presence_rows.append(row)
+    return {
+        "speech_presence": FusedAxis(axis="speech_presence", rows=presence_rows),
+        "asr": FusedAxis(axis="asr", rows=[{"start": 0.0, "end": 1.0, "triage_score": triage}]),
+    }
 
 
-def test_poor_quality_raises_reported_utterance_uncertainty() -> None:
-    """FR-019: degraded audio must push utterance uncertainty up, visibly."""
-    clean = aggregate_pass(_coupling_harvest(quality_snr=0.0), aggregator="min", params={})
-    noisy = aggregate_pass(_coupling_harvest(quality_snr=1.0), aggregator="min", params={})
-    clean_row = clean["utterance"].rows[0]
-    noisy_row = noisy["utterance"].rows[0]
-    assert noisy_row.aggregated_uncertainty is not None and clean_row.aggregated_uncertainty is not None
-    assert noisy_row.aggregated_uncertainty > clean_row.aggregated_uncertainty
+def test_poor_quality_raises_the_asr_triage_score() -> None:
+    """FR-019: degraded audio must push asr triage up, visibly."""
+    clean = _fused(quality_snr=0.0)
+    noisy = _fused(quality_snr=1.0)
+    _apply_scene_coupling(clean, {})
+    _apply_scene_coupling(noisy, {})
+    assert noisy["asr"].rows[0]["triage_score"] > clean["asr"].rows[0]["triage_score"]
 
 
-def test_coupling_multiplier_is_recorded_not_hidden() -> None:
-    """The multiplier lands on its own column so the adjustment is auditable."""
-    row = aggregate_pass(_coupling_harvest(quality_snr=1.0), aggregator="min", params={})["utterance"].rows[0]
-    assert row.scene_quality_coupling is not None
-    assert row.scene_quality_coupling > 1.0
+def test_coupling_multiplier_and_pre_coupling_value_are_recorded() -> None:
+    """The multiplier and the un-coupled number land on the row, so the adjustment is auditable."""
+    axes = _fused(quality_snr=1.0)
+    _apply_scene_coupling(axes, {})
+    row = axes["asr"].rows[0]
+    expected = 1.0 + DEFAULT_UTTERANCE_SCENE_COUPLING["w_q"]
+    assert row["scene_quality_coupling"] == pytest.approx(expected)
+    assert row["triage_score_pre_coupling"] == pytest.approx(0.4)
+    assert row["coupled_from"] == ["scene_quality"]
+    assert axes["asr"].provenance["asr_scene_coupling"]["applies_to"] == "triage_score"
 
 
-def test_pre_coupling_value_preserved() -> None:
-    """raw_aggregated_uncertainty and model_votes keep the un-coupled number."""
-    harvest = _coupling_harvest(quality_snr=1.0)
-    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
-    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
-    assert row.raw_aggregated_uncertainty == pytest.approx(expected)
-    assert row.model_votes["__utterance_pre_coupling__"]["value"] == pytest.approx(expected)
-    assert row.aggregated_uncertainty != pytest.approx(expected)
+def test_entropy_uncertainty_is_not_coupled() -> None:
+    """Coupling is a policy fold; the entropy measure has no policy in it and must not move."""
+    axes = _fused(quality_snr=1.0)
+    axes["asr"].rows[0]["uncertainty"] = 0.3
+    _apply_scene_coupling(axes, {})
+    assert axes["asr"].rows[0]["uncertainty"] == pytest.approx(0.3)
 
 
-def test_clean_scene_leaves_uncertainty_untouched() -> None:
+def test_clean_scene_leaves_triage_untouched() -> None:
     """Zero degradation and no competing source → coupling exactly 1.0."""
-    harvest = _coupling_harvest(quality_snr=0.0, src_machine=0.0, src_environment=0.0)
-    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
-    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
-    assert row.scene_quality_coupling == pytest.approx(1.0)
-    assert row.aggregated_uncertainty == pytest.approx(expected)
+    axes = _fused(quality_snr=0.0, src_machine=0.0, src_environment=0.0)
+    _apply_scene_coupling(axes, {})
+    assert axes["asr"].rows[0]["scene_quality_coupling"] == pytest.approx(1.0)
+    assert axes["asr"].rows[0]["triage_score"] == pytest.approx(0.4)
 
 
 def test_absent_scene_columns_are_a_no_op() -> None:
     """Scene features disabled → identical values to the pre-feature behavior (SC-008)."""
-    harvest = _coupling_harvest()  # no quality, no sources
-    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
-    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
-    assert row.aggregated_uncertainty == pytest.approx(expected)
-    assert row.scene_quality_coupling == pytest.approx(1.0)
+    axes = _fused()
+    _apply_scene_coupling(axes, {})
+    assert axes["asr"].rows[0]["scene_quality_coupling"] == pytest.approx(1.0)
+    assert axes["asr"].rows[0]["triage_score"] == pytest.approx(0.4)
 
 
-def test_competing_non_speech_source_raises_uncertainty() -> None:
-    """A machine / environment source competing with speech raises uncertainty."""
-    quiet = aggregate_pass(_coupling_harvest(src_machine=0.0, src_environment=0.0), aggregator="min", params={})[
-        "utterance"
-    ].rows[0]
-    noisy = aggregate_pass(_coupling_harvest(src_machine=0.6, src_environment=0.4), aggregator="min", params={})[
-        "utterance"
-    ].rows[0]
-    assert noisy.aggregated_uncertainty is not None and quiet.aggregated_uncertainty is not None
-    assert noisy.aggregated_uncertainty > quiet.aggregated_uncertainty
+def test_competing_non_speech_source_raises_triage() -> None:
+    """A machine / environment source competing with speech raises the triage score."""
+    quiet = _fused(src_machine=0.0, src_environment=0.0)
+    noisy = _fused(src_machine=0.6, src_environment=0.4)
+    _apply_scene_coupling(quiet, {})
+    _apply_scene_coupling(noisy, {})
+    assert noisy["asr"].rows[0]["triage_score"] > quiet["asr"].rows[0]["triage_score"]
 
 
-def test_coupled_uncertainty_clamped_to_one() -> None:
+def test_coupled_triage_clamped_to_one() -> None:
     """The multiplier can't push the reported value out of [0, 1]."""
-    harvest = _coupling_harvest(quality_snr=1.0, src_machine=1.0, src_environment=1.0)
-    harvest.utterance_votes[0]["votes"]["__pairwise_phoneme_distances__"]["pairs"]["a|b"] = 0.95
-    row = aggregate_pass(harvest, aggregator="min", params={})["utterance"].rows[0]
-    assert row.aggregated_uncertainty == pytest.approx(1.0)
+    axes = _fused(quality_snr=1.0, src_machine=1.0, src_environment=1.0, triage=0.95)
+    _apply_scene_coupling(axes, {})
+    assert axes["asr"].rows[0]["triage_score"] == pytest.approx(1.0)
 
 
 def test_coupling_weights_configurable_via_params() -> None:
     """Operators can retune (or disable) the coupling without a code change."""
-    harvest = _coupling_harvest(quality_snr=1.0)
-    expected = aggregate_utterance(harvest.utterance_votes[0]["votes"], aggregator="min")
-    off = aggregate_pass(harvest, aggregator="min", params={"utterance_scene_coupling": {"w_q": 0.0, "w_s": 0.0}})[
-        "utterance"
-    ].rows[0]
-    assert off.scene_quality_coupling == pytest.approx(1.0)
-    assert off.aggregated_uncertainty == pytest.approx(expected)
+    off = _fused(quality_snr=1.0)
+    _apply_scene_coupling(off, {"asr_scene_coupling": {"w_q": 0.0, "w_s": 0.0}})
+    assert off["asr"].rows[0]["scene_quality_coupling"] == pytest.approx(1.0)
+    assert off["asr"].rows[0]["triage_score"] == pytest.approx(0.4)
 
-    strong = aggregate_pass(harvest, aggregator="min", params={"utterance_scene_coupling": {"w_q": 2.0, "w_s": 0.0}})[
-        "utterance"
-    ].rows[0]
-    assert strong.scene_quality_coupling == pytest.approx(3.0)
+    strong = _fused(quality_snr=1.0)
+    _apply_scene_coupling(strong, {"asr_scene_coupling": {"w_q": 2.0, "w_s": 0.0}})
+    assert strong["asr"].rows[0]["scene_quality_coupling"] == pytest.approx(3.0)
+
+
+def test_default_anchors_are_the_l2_calibration_not_an_l1_constant() -> None:
+    """The dB→[0,1] anchors belong to the scoring step, so they are named where scoring happens."""
+    assert DEFAULT_ANCHORS["snr_clean_db"] > DEFAULT_ANCHORS["snr_floor_db"]

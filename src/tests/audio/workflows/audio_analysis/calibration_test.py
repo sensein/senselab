@@ -62,7 +62,7 @@ def test_profile_round_trip_and_validation(tmp_path: Path) -> None:
         "snr": {"type": "linear_db_to_unit", "clean_db": 22.0, "floor_db": 3.0},
         "reverb_c50": {"type": "linear_db_to_unit", "clean_db": 28.0, "floor_db": -4.0},
         "bandwidth": {"nyquist_ref_hz": 8000.0, "rolloff_pct": 0.95},
-        "temperature": {"presence": 1.2, "utterance": 0.8},
+        "temperature": {"speech_presence": 1.2, "asr": 0.8},
         "token_entropy_reference_nats": 2.5,
     }
     path = tmp_path / "profile.json"
@@ -73,20 +73,19 @@ def test_profile_round_trip_and_validation(tmp_path: Path) -> None:
     runtime = profile_to_runtime(loaded)
     assert runtime["snr_clean_db"] == 22.0 and runtime["snr_floor_db"] == 3.0
     assert runtime["c50_clean_db"] == 28.0 and runtime["c50_floor_db"] == -4.0
-    assert runtime["temperature"] == {"presence": 1.2, "utterance": 0.8}
-    assert runtime["token_entropy_reference_nats"] == 2.5  # passthrough reaches aggregate.py
-
-    # The runtime dict speaks aggregate.py's temperature convention.
-    from senselab.audio.workflows.audio_analysis.aggregate import _axis_temperature
-
-    assert _axis_temperature(runtime, "utterance") == pytest.approx(0.8)
+    # Carried through the bridge and validated, but read by no fold today: the aggregators that
+    # consumed them had no production caller and are gone, and ``fuse.fuse_axis`` takes no
+    # temperature. Asserting the passthrough keeps the fitted values reaching the runtime dict, so
+    # wiring them into the fold later is one edit rather than a refit.
+    assert runtime["temperature"] == {"speech_presence": 1.2, "asr": 0.8}
+    assert runtime["token_entropy_reference_nats"] == 2.5
 
     with pytest.raises(ValueError, match="version"):
         validate_profile({**profile, "version": "0"})
     with pytest.raises(ValueError, match="clean_db must exceed"):
         validate_profile({**profile, "snr": {"type": "linear_db_to_unit", "clean_db": 3.0, "floor_db": 22.0}})
     with pytest.raises(ValueError, match="temperature"):
-        validate_profile({**profile, "temperature": {"presence": 0.0}})
+        validate_profile({**profile, "temperature": {"speech_presence": 0.0}})
 
 
 def test_linear_db_to_unit_anchors_and_monotonicity() -> None:
@@ -102,14 +101,20 @@ def test_linear_db_to_unit_anchors_and_monotonicity() -> None:
 
 
 def test_estimator_sweep_monotonic_reported_vs_true() -> None:
-    """T035/SC-007 (env-gated): reported quality_snr rises monotonically as true SNR falls."""
+    """T035/SC-007 (env-gated): degradation rises monotonically as true SNR falls.
+
+    Crosses the L1/L2 boundary deliberately: L1 measures dB, L2 scores it. Monotonicity has to
+    survive both, since either layer could destroy it — L1 by saturating the measurement, L2 by
+    picking anchors outside the swept range.
+    """
     torch = pytest.importorskip("torch")
     pytest.importorskip("librosa")
     import numpy as np
 
     from senselab.audio.data_structures import Audio
+    from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.quality import harvest_quality_scores
+    from senselab.audio.workflows.audio_analysis.quality import harvest_quality_measurements
 
     rng = np.random.default_rng(0)
     sr = 16000
@@ -124,8 +129,11 @@ def test_estimator_sweep_monotonic_reported_vs_true() -> None:
         noise *= np.sqrt(speech_power / (10 ** (true_snr_db / 10)) / max(1e-12, float(np.mean(noise**2))))
         mixed = np.clip(speech + noise, -1, 1)
         audio = Audio(waveform=torch.from_numpy(mixed).unsqueeze(0), sampling_rate=sr)
-        rows = harvest_quality_scores(audio=audio, brouhaha=None, grid=BucketGrid(0.5, 0.5), calibration=None)
-        vals = [r["quality_snr"] for r in rows if r.get("quality_snr") is not None]
+        rows = harvest_quality_measurements(audio=audio, brouhaha=None, grid=BucketGrid(0.5, 0.5))
+        scored = [scene_degradation(r, sampling_rate=sr) for r in rows]
+        # No Brouhaha here, so the documented fallback should be in use and say so.
+        assert {s["snr_source"] for s in scored} == {"snr_spectral_gating_db"}
+        vals = [s["quality_snr"] for s in scored if s.get("quality_snr") is not None]
         assert vals, f"no quality_snr at true SNR {true_snr_db}"
         reported.append(float(np.median(vals)))
     assert reported == sorted(reported), f"degradation not monotone vs falling SNR: {reported}"

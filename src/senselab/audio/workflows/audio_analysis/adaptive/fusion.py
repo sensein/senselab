@@ -4,7 +4,7 @@ Post-T050 the fusion *math* lives in the reusable task package
 ``senselab.audio.tasks.speech_to_text_ensemble`` (``fuse_word_streams`` /
 ``load_calibrator`` / ``iter_word_leaves`` are re-exported here for the loop's
 callers); this module keeps the workflow-specific parts — artifact word-stream
-collection, policy → weights/params translation, speaker & presence lookups
+collection, policy → weights/params translation, speaker & speech_presence lookups
 from the belief state, and the ``final/`` artifact writers.
 """
 
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from senselab.audio.tasks.speech_to_text_ensemble import (  # noqa: F401 — re-exported for loop callers
     fuse_word_streams,
@@ -21,6 +21,7 @@ from senselab.audio.tasks.speech_to_text_ensemble import (  # noqa: F401 — re-
 )
 from senselab.audio.workflows.audio_analysis.adaptive.belief import bucket_key
 from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weights
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
 
 # ── word-stream extraction ───────────────────────────────────────────────
 
@@ -28,13 +29,13 @@ from senselab.audio.workflows.audio_analysis.adaptive.policy import family_weigh
 def collect_word_streams(
     asr_by_model: dict[str, dict[str, Any]],
     align_by_model: dict[str, dict[str, Any]],
-    *,
-    purged_spans: list[tuple[float, float, str]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """Per-model timestamped word lists; alignment result wins for text-only models.
 
-    ``purged_spans`` = (start, end, model) spans adjudicated as hallucinations —
-    those words are excluded from fusion (C10 consequence).
+    This function removes nothing. It used to drop every word of a model overlapping a span P3 had
+    adjudicated, which left no record anywhere downstream — and made a word's survival depend on
+    whether the intervention had been admitted within budget. Doubt about a word is now carried as
+    a measured weight on the word itself (``adaptive.corroboration.apply_corroboration``).
     """
     streams: dict[str, list[dict[str, Any]]] = {}
     for model, block in asr_by_model.items():
@@ -47,12 +48,6 @@ def collect_word_streams(
         if not words:
             continue
         words.sort(key=lambda w: (w["start"], w["end"]))
-        if purged_spans:
-            words = [
-                w
-                for w in words
-                if not any(m == model and w["start"] < e and w["end"] > s for (s, e, m) in purged_spans)
-            ]
         streams[model] = words
     return streams
 
@@ -65,7 +60,6 @@ def fuse_words(
     *,
     policy: dict[str, Any],
     speaker_at: Any = None,  # noqa: ANN401 — callable (t) -> str | None
-    p_voice_at: Any = None,  # noqa: ANN401 — callable (t) -> float | None
     calibrator: Any = None,  # noqa: ANN401 — callable (c) -> c' | None
 ) -> list[dict[str, Any]]:
     """Policy-driven wrapper over the reusable transcript-ensemble task (T050).
@@ -74,8 +68,20 @@ def fuse_words(
     model-family weights (FR-008) and the fusion slot/margin parameters — and
     delegates the voting math to
     :func:`senselab.audio.tasks.speech_to_text_ensemble.fuse_word_streams`.
+
+    Per-word corroboration is read off the words themselves (stamped by
+    :func:`~senselab.audio.workflows.audio_analysis.adaptive.corroboration.apply_corroboration`),
+    not passed here: fusion must not consult the intervention log, or budget admission decides
+    what reaches the transcript.
     """
     fus = policy["fusion"]
+    # Alignment-grouped columns and phoneme-graded agreement, on the path that writes the
+    # deliverable. Wiring only the axis left the transcript itself still grouping by time overlap
+    # and matching exactly — so a filler one recognizer heard would still have lost a vote against
+    # its neighbour and vanished from ``final/transcript.json``, which is the artifact the
+    # requirement is about. Both helpers are pure functions.
+    from senselab.audio.workflows.audio_analysis.asr import aligned_columns, phoneme_similarity
+
     return fuse_word_streams(
         word_streams,
         weights=family_weights(sorted(word_streams), policy),
@@ -83,25 +89,78 @@ def fuse_words(
         slot_mid_tol_s=float(fus["slot_mid_tol_s"]),
         winner_margin=float(fus["winner_margin"]),
         alternate_min_share=float(fus["alternate_min_share"]),
+        min_corroboration=float(fus["corroboration"]["min_corroboration"]),
         speaker_at=speaker_at,
-        p_voice_at=p_voice_at,
         calibrator=calibrator,
+        columns=aligned_columns(word_streams),
+        text_similarity=phoneme_similarity,
     )
+
+
+def rollup_segments(words: list[dict[str, Any]], *, min_corroboration: float) -> tuple[list[dict[str, Any]], list[int]]:
+    """Readable utterance rollup, plus the indices of words withheld from it.
+
+    A word is included iff its ``corroboration`` is ``None`` (unmeasured — absent is not zero) or
+    at least ``min_corroboration``. Withheld words stay in ``words[]`` with their measurement and
+    their sources; only the concatenated ``text`` omits them.
+
+    This is the one decision that remains, and it is deliberately at the rendering layer. Keeping
+    an uncorroborated word in the readable transcript would let it *win*: the deliverable would
+    assert it and the text consumers downstream (PII, sentiment, summary) would ingest it. Dropping
+    it from ``words[]`` would be the erasure this work removed. The split keeps the evidence
+    inspectable, carrying the number that excluded it, and makes the exclusion re-decidable by
+    re-reading one file — no model re-run.
+
+    Args:
+        words: Fused words, time-ordered.
+        min_corroboration: Rollup threshold.
+
+    Returns:
+        ``(segments, withheld_word_indices)``.
+    """
+    segments: list[dict[str, Any]] = []
+    withheld: list[int] = []
+    for index, w in enumerate(words):
+        corroboration = w.get("corroboration")
+        if corroboration is not None and float(corroboration) < float(min_corroboration):
+            withheld.append(index)
+            continue
+        if segments and w.get("speaker") == segments[-1]["speaker"] and w["start"] - segments[-1]["end"] <= 0.5:
+            seg = segments[-1]
+            seg["end"] = w["end"]
+            seg["text"] += " " + w["text"]
+            seg["min_word_confidence"] = min(seg["min_word_confidence"], w["confidence"])
+        else:
+            segments.append(
+                {
+                    "start": w["start"],
+                    "end": w["end"],
+                    "speaker": w.get("speaker"),
+                    "text": w["text"],
+                    "min_word_confidence": w["confidence"],
+                }
+            )
+    return segments, withheld
 
 
 # ── lookups from belief state ────────────────────────────────────────────
 
 
 def make_speaker_lookup(store: Any, state: Any, stream: str) -> Any:  # noqa: ANN401
-    """(t) → majority unified cluster_id across active diarization votes at t."""
-    rows = state.axis_rows(stream, "identity")
+    """(t) → majority unified cluster_id across active diarization votes at t.
+
+    The buckets come from the axis (one set, folded across passes); the *labels* come from one
+    pass's votes, because a cluster label is a statement a model made about a pass and the
+    transcript being attributed was built from that pass.
+    """
+    rows = state.axis_rows("speaker")
 
     def lookup(t: float) -> str | None:
         for row in rows:
             if row["start"] <= t < row["end"]:
                 bk = bucket_key(row["start"], row["end"])
                 counts: dict[str, int] = {}
-                for source, payload in store.active_votes(stream, "identity", bk).items():
+                for source, payload in store.active_votes(stream, "speaker", bk).items():
                     if source.startswith("__") or "::" in source:
                         continue
                     cid = payload.get("cluster_id")
@@ -115,9 +174,9 @@ def make_speaker_lookup(store: Any, state: Any, stream: str) -> Any:  # noqa: AN
     return lookup
 
 
-def make_p_voice_lookup(state: Any, stream: str) -> Any:  # noqa: ANN401
-    """(t) → presence p_voice at t from the presence belief rows."""
-    rows = state.axis_rows(stream, "presence")
+def make_p_voice_lookup(state: Any) -> Any:  # noqa: ANN401
+    """(t) → speech_presence p_voice at t from the speech_presence belief rows."""
+    rows = state.axis_rows("speech_presence")
 
     def lookup(t: float) -> float | None:
         best = None
@@ -134,6 +193,36 @@ def make_p_voice_lookup(state: Any, stream: str) -> Any:  # noqa: ANN401
 # ── final artifact writers ───────────────────────────────────────────────
 
 
+def attenuation_columns(row: dict[str, Any]) -> dict[str, Any]:
+    """The three columns that make a withdrawal readable from a parquet row.
+
+    Shared by the per-round belief files and ``final/`` so the two cannot drift into describing the
+    same withdrawal differently — the complaint being answered here is precisely that a fact held
+    in memory reached no file at all.
+
+    ``n_attenuated_sources`` exists because ``n_sources`` cannot serve. Attenuation deliberately
+    keeps the source contributing, so the count is identical either side of it and an attenuated
+    bucket read exactly like an unanimous one. The other two are JSON because the payload is a
+    per-source mapping and a list of provenance records; flattening either into columns would fix
+    an arity the run does not have.
+
+    Args:
+        row: One belief row, as produced by ``VoteStore.reaggregate_bucket``.
+
+    Returns:
+        ``n_attenuated_sources`` / ``attenuated_sources`` / ``attenuation``. An unattenuated bucket
+        gets ``0``, ``"{}"`` and ``"[]"`` rather than nulls, so "nothing was withdrawn here" is
+        stated rather than inferred from a gap.
+    """
+    weights = row.get("attenuated_sources") or {}
+    detail = row.get("attenuation") or []
+    return {
+        "n_attenuated_sources": len(weights),
+        "attenuated_sources": json.dumps(weights, sort_keys=True, default=str),
+        "attenuation": json.dumps(detail, default=str),
+    }
+
+
 def build_final_outputs(
     *,
     out_dir: Path,
@@ -143,13 +232,19 @@ def build_final_outputs(
     stream: str,
     policy: dict[str, Any],
     generated_from_round: int,
+    corroboration_provenance: dict[str, Any],
     refined_identity: dict[str, Any] | None = None,
     calibrated: bool = False,
     timestamps_meta: dict[str, Any] | None = None,
     language: str | None = None,
-) -> dict[str, Any]:
-    """Write final/{transcript,diarization}.json (+.rttm) + final/presence.parquet; return transcript doc."""
-    final = out_dir / "final"
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Write the final deliverables and return ``(transcript, diarization)``.
+
+    Both documents come back rather than only the transcript, so a caller that needs the
+    diarization does not have to read ``final/diarization.json`` off disk — which would make a
+    deliverable an input to the stage standing next to the one that wrote it.
+    """
+    final = final_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
 
     base_speaker_lookup = make_speaker_lookup(store, state, stream)
@@ -160,26 +255,20 @@ def build_final_outputs(
             return cluster_at(refined_identity, t) or base_speaker_lookup(t)
     else:
         speaker_lookup = base_speaker_lookup
-    p_voice_lookup = make_p_voice_lookup(state, stream)
+    p_voice_lookup = make_p_voice_lookup(state)
 
-    # transcript.json — segments rollup on speaker change or >0.5 s word gap.
-    segments: list[dict[str, Any]] = []
-    for w in words:
-        if segments and w.get("speaker") == segments[-1]["speaker"] and w["start"] - segments[-1]["end"] <= 0.5:
-            seg = segments[-1]
-            seg["end"] = w["end"]
-            seg["text"] += " " + w["text"]
-            seg["min_word_confidence"] = min(seg["min_word_confidence"], w["confidence"])
-        else:
-            segments.append(
-                {
-                    "start": w["start"],
-                    "end": w["end"],
-                    "speaker": w.get("speaker"),
-                    "text": w["text"],
-                    "min_word_confidence": w["confidence"],
-                }
-            )
+    # transcript.json — segments rollup on speaker change or >0.5 s word gap, minus the words
+    # whose measured corroboration falls below the rendering threshold. They stay in `words[]`.
+    segment_min = float((policy["fusion"]["corroboration"])["segment_min_corroboration"])
+    segments, withheld = rollup_segments(words, min_corroboration=segment_min)
+    corroboration_doc = {
+        **corroboration_provenance,
+        "segment_min_corroboration": segment_min,
+        "n_words_withheld_from_segments": len(withheld),
+        # Indices into `words[]`, so the rollup is reproducible as a pure function of `words[]`
+        # plus one number — the exclusion can be re-decided without re-running a model.
+        "withheld_word_indices": withheld,
+    }
     transcript = {
         "calibrated": calibrated,
         "policy_hash": policy.get("policy_hash"),
@@ -187,13 +276,14 @@ def build_final_outputs(
         "stream": stream,
         "language": language,
         "timestamps": timestamps_meta or {"timestamps_source": "member_vote"},
+        "corroboration": corroboration_doc,
         "words": words,
         "segments": segments,
     }
     (final / "transcript.json").write_text(json.dumps(transcript, indent=2))
 
     # diarization.json — refined I2 segments when available (real boundary
-    # confidences from change-point prominence); else merge identity buckets
+    # confidences from change-point prominence); else merge speaker buckets
     # by majority cluster where voiced.
     diar_segments: list[dict[str, Any]] = []
     clusters: dict[str, dict[str, Any]] = {}
@@ -213,7 +303,7 @@ def build_final_outputs(
             c["total_speech_s"] = round(c["total_speech_s"] + (seg["end"] - seg["start"]), 6)
             c["n_segments"] += 1
     else:
-        for row in state.axis_rows(stream, "identity"):
+        for row in state.axis_rows("speaker"):
             mid = (row["start"] + row["end"]) / 2.0
             cid = speaker_lookup(mid)
             pv = p_voice_lookup(mid)
@@ -240,16 +330,16 @@ def build_final_outputs(
             clusters[seg["cluster_id"]]["n_segments"] += 1
     # contracts/final-outputs.md: member_labels (refined cluster ↔ diar-model raw
     # labels via vote co-occurrence) + per-segment overlap flag (I4 posterior).
-    identity_rows = state.axis_rows(stream, "identity")
+    speaker_rows = state.axis_rows("speaker")
     member_labels: dict[str, dict[str, set]] = {}
     for seg in diar_segments:
         labels_for_cluster = member_labels.setdefault(str(seg["cluster_id"]), {})
-        for row in identity_rows:
+        for row in speaker_rows:
             mid = (row["start"] + row["end"]) / 2.0
             if not (seg["start"] <= mid < seg["end"]):
                 continue
             bk = bucket_key(row["start"], row["end"])
-            for source, payload in store.active_votes(stream, "identity", bk).items():
+            for source, payload in store.active_votes(stream, "speaker", bk).items():
                 if source.startswith(("__", "embedding_")) or "::" in source:
                     continue
                 raw_label = payload.get("speaker_label")
@@ -257,7 +347,7 @@ def build_final_outputs(
                     labels_for_cluster.setdefault(source, set()).add(str(raw_label))
         seg["overlap"] = any(
             (row.get("overlap_posterior") or 0.0) >= 0.5
-            for row in identity_rows
+            for row in speaker_rows
             if seg["start"] <= (row["start"] + row["end"]) / 2.0 < seg["end"]
         )
     for cluster in clusters.values():
@@ -279,35 +369,115 @@ def build_final_outputs(
         for seg in diar_segments
     ]
     (final / "diarization.rttm").write_text("\n".join(rttm_lines) + ("\n" if rttm_lines else ""))
+    return transcript, diarization
 
-    # presence.parquet — final presence belief.
+
+def extract_final_estimates(out_dir: Path, round_index: int) -> tuple[Path, ...]:
+    """Copy round ``round_index``'s estimates to ``final/estimates/`` — verbatim (D-17).
+
+    This is what ``final/`` is: an extraction. The deliverable presence track used to be *rebuilt*
+    here from the belief state, into ``L2/speech_presence.parquet``, with columns
+    (``speech_presence_confidence``, ``overlap_posterior``) that no round carried — so the number
+    a consumer acted on was not the number any round believed, and there was nowhere to look to
+    see when it had been decided. The columns now live on the estimate row and this function only
+    moves bytes.
+
+    One artifact per active axis, from the axis declaration rather than a list here. The four
+    per-axis declarations this replaces named ``speech_presence``, ``asr`` and
+    ``background_mask`` — and *not* ``speaker``, so the deliverable set was itself a list of
+    three axes with the fourth missing, which is the failure ``axes.AXES`` exists to make
+    impossible.
+
+    Args:
+        out_dir: Run directory.
+        round_index: The round to extract. The last one, always: an earlier round would make the
+            deliverable a re-reading of the trajectory rather than the answer.
+
+    Returns:
+        The paths written, in axis order. An axis the round wrote nothing for is skipped and named
+        by the conformance guard rather than silently absent.
+    """
+    import pyarrow.parquet as pq
+
+    from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+    from senselab.audio.workflows.audio_analysis.layout import estimates_dir
+
+    source = estimates_dir(out_dir, round_index)
+    dest = final_dir(out_dir) / "estimates"
+    dest.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for axis in AXIS_NAMES:
+        origin = source / f"{axis}.parquet"
+        if not origin.exists():
+            continue
+        pq.write_table(pq.read_table(origin), dest / f"{axis}.parquet")
+        written.append(dest / f"{axis}.parquet")
+    return tuple(written)
+
+
+def write_speaker_outputs(
+    out_dir: Path,
+    *,
+    posterior: Any,  # noqa: ANN401 — SpeakerCountPosterior
+    hypotheses: Sequence[Any],
+    correspondence: Sequence[Any] = (),
+    tracks: Sequence[Any] = (),
+    profile_version: str = "",
+    influence_profile: str = "",
+    generated_from_round: int = 0,
+) -> tuple[Path, Path]:
+    """Write ``final/speakers.json`` and ``final/per_speaker_presence.parquet`` (T102).
+
+    Where the docstring always said, and where they now go. Both were written to the ``L2`` root
+    instead — flattened per-run quantities with no round to belong to — so ``final/`` carried no
+    per-speaker output at all while two declarations for it sat unproduced, and every consumer
+    reached into the belief tree for a deliverable.
+
+    Replaces the single per-bucket speaker scalar rather than sitting beside it: two names
+    for one quantity is how schemas rot, and nothing on the way to alpha needs backwards
+    compatibility.
+
+    Args:
+        out_dir: Run directory.
+        posterior: The speaker-count posterior.
+        hypotheses: One entry per hypothesized speaker.
+        correspondence: Source-label to hypothesis mappings.
+        tracks: Per-speaker speech_presence rows.
+        profile_version: Detection-margin profile in force.
+        influence_profile: Influence profile in force.
+        generated_from_round: Round the outputs were fused from.
+
+    Returns:
+        ``(speakers_json_path, speech_presence_parquet_path)``.
+    """
     import pandas as pd
 
-    pres_rows = [
-        {
-            "start": r["start"],
-            "end": r["end"],
-            "aggregated_uncertainty": r.get("aggregated_uncertainty"),
-            "epistemic": r.get("epistemic"),
-            "aleatoric_floor": r.get("aleatoric_floor"),
-            "status": r.get("status"),
-            "irreducible_reason": r.get("irreducible_reason"),
-            "round": r.get("round"),
-            # contracts/final-outputs.md columns (T042). `presence_confidence` is
-            # the calibrated P(speech); it *replaces* the old `p_voice` column
-            # rather than sitting beside it — nothing on the way to alpha needs
-            # backwards compatibility, and two names for one quantity is how
-            # schemas rot.
-            "presence_confidence": r.get("presence_confidence", r.get("p_voice")),
-            # Which pass S1 elected for this span; falls back to the fusion stream
-            # when no per-region election ran.
-            "elected_stream": (r.get("meta") or {}).get("elected_stream", stream),
-            # Written by I4 / P2 when per-class segmentation posteriors were
-            # available; None elsewhere (the column exists either way so the
-            # schema is stable).
-            "overlap_posterior": r.get("overlap_posterior", (r.get("meta") or {}).get("overlap_posterior")),
-        }
-        for r in state.axis_rows(stream, "presence")
+    final = final_dir(out_dir)
+    final.mkdir(parents=True, exist_ok=True)
+
+    doc = {
+        "profile_version": profile_version,
+        "influence_profile": influence_profile,
+        "generated_from_round": generated_from_round,
+        "count_posterior": posterior.to_json(),
+        "speakers": [h.to_json() for h in hypotheses],
+        "label_correspondence": [c.to_json() for c in correspondence],
+    }
+    speakers_path = final / "speakers.json"
+    speakers_path.write_text(json.dumps(doc, indent=2) + "\n")
+
+    columns = [
+        "speaker_id",
+        "start",
+        "end",
+        "speech_presence_confidence",
+        "speech_presence_uncertainty",
+        "overlap_with",
+        "contributing_sources",
+        "resolution_kind",
     ]
-    pd.DataFrame(pres_rows).to_parquet(final / "presence.parquet", index=False)
-    return transcript
+    rows = [t.to_row() for t in tracks]
+    frame = pd.DataFrame(rows, columns=columns) if rows else pd.DataFrame({c: [] for c in columns})
+    speech_presence_path = final / "per_speaker_presence.parquet"
+    frame.to_parquet(speech_presence_path, index=False)
+    return speakers_path, speech_presence_path

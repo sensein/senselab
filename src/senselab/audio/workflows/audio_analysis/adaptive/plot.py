@@ -7,11 +7,26 @@ Reads the persisted round artifacts (no live state needed) and renders
    reviewer can see *why* a span is uncertain (noise, silence, overlap) rather
    than only that it is;
 2. ground-truth segments (when an LS export is provided) — untranscribed spans hatched;
-3. presence — final p_voice + uncertainty band;
-4. identity — round-1 vs final uncertainty, GT speaker boundaries dashed;
-5. utterance — round-1 vs final uncertainty, proposed regions, fired
+3. background mask (state) — the mask *value*: which spans are target-free, region by region;
+4. speech_presence — final p_voice + uncertainty band;
+5. speaker — round-1 vs final uncertainty, GT speaker boundaries dashed;
+6. per-speaker presence — one lane per hypothesised speaker;
+7. asr — round-1 vs final uncertainty, proposed regions, fired
    interventions, irreducible buckets hatched;
-6. fused words — text colored by confidence (green→red), speaker ticks.
+8. background_mask — round-1 vs final uncertainty, the fourth axis;
+9. fused words — text colored by confidence (green→red), speaker ticks.
+
+**Rows 3 and 8 are different objects and that is the point.** ``derivatives/`` holds values and
+``estimates/`` holds doubt about them (D-22); the mask is in both. Row 3 is the value — the
+regions, with their own confidence as alpha — and row 8 is the axis, fused per bucket like the
+other three.
+
+Row 8 was missing. This figure hand-listed three axes and drew row 3 where a reader looks for the
+fourth, so on a run whose mask derivative is a single ``target_active`` region at uncertainty 0.0
+the final figure showed one flat confident band while ``L2/round/<n>/timeline.png`` showed the
+same axis varying across 1070 buckets. Two figures disagreeing about one axis, because only one of
+them was drawing it. ``axes.AXIS_NAMES`` is the list; a row per name is what keeps it from being
+short again.
 """
 
 from __future__ import annotations
@@ -20,9 +35,33 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    derivatives_dir,
+    estimates_dir,
+    evidence_dir,
+    final_dir,
+    last_round,
+    rounds_present,
+)
+from senselab.utils.data_structures.logging import logger
 
-def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title: str = "") -> Path | None:
-    """Render ``<out_dir>/final/timeline.png``; returns the path (None on failure)."""
+
+def build_adaptive_timeline(
+    out_dir: Path,
+    *,
+    transcript: dict[str, Any],
+    gt_path: Path | None = None,
+    title: str = "",
+) -> Path | None:
+    """Render ``<out_dir>/final/timeline.png``; returns the path (None on failure).
+
+    ``transcript`` is required. The figure renders the converged answer, and its caller has just
+    produced that answer, so it hands it over; the fallback that read ``final/transcript.json``
+    when the argument was omitted made a deliverable an input to the stage that writes the
+    deliverable next to it — and, being a default, it was the path the standalone driver took.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -31,22 +70,29 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     from matplotlib.patches import Rectangle
 
     out_dir = Path(out_dir)
-    final = out_dir / "final"
-    transcript = json.loads((final / "transcript.json").read_text())
-    stream = transcript.get("stream", "raw_16k")
-    iterations = json.loads((final / "iterations.json").read_text())["entries"]
-    convergence = json.loads((final / "convergence.json").read_text())
+    final = final_dir(out_dir)
+    final.mkdir(parents=True, exist_ok=True)
+    stream = transcript.get("stream", "raw")
+    # One document, in final/, where the account of the run now lives. Two reads of the L2 root
+    # became one read of this stage's own deliverable — which a stage is entitled to, its outputs
+    # being its state, and which the L2 root never was.
+    decisions = json.loads((final / "decisions.json").read_text())
+    iterations = decisions["interventions"]
+    convergence = decisions["convergence"]
 
-    rounds_dir = out_dir / "rounds"
-    round_ids = sorted(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
+    # Numeric order, from the layout helper: the old ``sorted(glob("round*"))[-1]`` put
+    # ``round10`` before ``round2``, so the "last round" overlay read round 9 on any run past ten.
+    round_ids = list(rounds_present(out_dir))
     first_r, last_r = round_ids[0], round_ids[-1]
 
     def _belief(round_idx: int, axis: str) -> "pd.DataFrame":
-        df = pd.read_parquet(rounds_dir / str(round_idx) / "belief" / f"{axis}.parquet")
-        return df[df["stream"] == stream].sort_values("start")
+        # No stream filter: the estimate holds one row per bucket, already folded across
+        # perturbations by the writer under a recorded policy. Filtering here picked one
+        # perturbation's reading and called it the run's, which is a fold nobody wrote down.
+        return pd.read_parquet(estimates_dir(out_dir, round_idx) / f"{axis}.parquet").sort_values("start")
 
-    pres, ident_0, ident_k = _belief(last_r, "presence"), _belief(first_r, "identity"), _belief(last_r, "identity")
-    utt_0, utt_k = _belief(first_r, "utterance"), _belief(last_r, "utterance")
+    pres, ident_0, ident_k = _belief(last_r, "speech_presence"), _belief(first_r, "speaker"), _belief(last_r, "speaker")
+    utt_0, utt_k = _belief(first_r, "asr"), _belief(last_r, "asr")
     duration = float(pres["end"].max()) if len(pres) else 5.0
 
     gt = None
@@ -55,14 +101,41 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
 
         gt = load_ls_ground_truth(gt_path)
 
-    fig, axes = plt.subplots(6, 1, figsize=(14, 13), sharex=True, height_ratios=[1.3, 0.8, 1.2, 1.2, 1.4, 1.0])
-    ax_spec, ax_gt, ax_p, ax_i, ax_u, ax_w = axes
+    fig, axes = plt.subplots(
+        9, 1, figsize=(14, 17.0), sharex=True, height_ratios=[1.3, 0.8, 0.6, 1.2, 1.2, 0.9, 1.4, 1.0, 1.0]
+    )
+    ax_spec, ax_gt, ax_mask, ax_p, ax_i, ax_spk, ax_u, ax_bm, ax_w = axes
+
+    # Every active axis owes a row. The list used to be three — presence, speaker, asr — with the
+    # mask's region strip (``ax_mask``) sitting where the fourth belongs, which is the failure
+    # ``axes.py`` was written to prevent: "Any list of three axes is wrong."
+    drawn_axis_rows = {"speech_presence": ax_p, "speaker": ax_i, "asr": ax_u, "background_mask": ax_bm}
+    unrepresented = [name for name in AXIS_NAMES if name not in drawn_axis_rows]
+    if unrepresented:
+        # A new axis reaches here as a visible gap rather than as an absence. Not an exception:
+        # a plot must not fail a run, and a run that added an axis is not a broken run.
+        logger.warning("final/timeline.png has no row for %s", ", ".join(unrepresented))
 
     # ── row 0: spectrogram ──────────────────────────────────────────────
     # The acoustic evidence every row below is derived from. Put first so a
     # reviewer can see *why* a span is uncertain (noise, silence, overlap)
     # rather than only that it is.
     _draw_spectrogram(ax_spec, out_dir, duration)
+
+    # ── row 2: background mask ──────────────────────────────────────────
+    # Sits directly under the ground truth and above the axes, because it says
+    # *where the background findings below can be trusted at all*: a target-free
+    # span has no foreground to leak, so a claim there does not depend on
+    # suppression depth. Reading an uncertainty row without knowing which spans
+    # were target-free invites treating a leakage artifact as a finding.
+    _draw_background_mask(ax_mask, out_dir, duration)
+
+    # ── per-speaker speech_presence ────────────────────────────────────────────
+    # Directly under the speaker axis, because it is what that axis's number could not
+    # say: whether a high value means "we disagree about who spoke" or "we disagree about
+    # how many people are here". One lane per hypothesised speaker makes the count visible
+    # at a glance, and the header carries the posterior when it is multi-modal.
+    _draw_per_speaker(ax_spk, out_dir, duration)
 
     # ── row 1: ground truth ─────────────────────────────────────────────
     ax_gt.set_ylabel("ground\ntruth", rotation=0, ha="right", va="center")
@@ -93,28 +166,46 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     else:
         ax_gt.text(duration / 2, 0.5, "no ground truth provided", ha="center", va="center", fontsize=8, alpha=0.6)
 
-    # ── row 2: presence ─────────────────────────────────────────────────
+    # ── row 2: speech_presence ─────────────────────────────────────────────────
     mids_p = (pres["start"] + pres["end"]) / 2
     ax_p.plot(mids_p, pres["p_voice"], color="tab:blue", lw=1.2, label="p_voice (final)")
-    ax_p.fill_between(
-        mids_p, 0, pres["aggregated_uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty"
-    )
+    ax_p.fill_between(mids_p, 0, pres["uncertainty"].fillna(0), color="tab:red", alpha=0.18, label="uncertainty")
     ax_p.axhline(0.5, color="grey", lw=0.6, ls=":")
-    ax_p.set_ylabel("presence", rotation=0, ha="right", va="center")
+    ax_p.set_ylabel("speech_presence", rotation=0, ha="right", va="center")
     ax_p.set_ylim(-0.02, 1.02)
     ax_p.legend(loc="upper right", fontsize=7, ncol=2)
 
-    # ── row 3: identity ─────────────────────────────────────────────────
+    # ── row 3: speaker ─────────────────────────────────────────────────
     _step(ax_i, ident_0, color="silver", label=f"round {first_r}")
     _step(ax_i, ident_k, color="tab:purple", label=f"round {last_r} (final)")
     if gt:
         for b in [s["start"] for s in gt["segments"][1:]]:
             ax_i.axvline(b, color="black", lw=0.8, ls="--", alpha=0.6)
-    ax_i.set_ylabel("identity\nuncertainty", rotation=0, ha="right", va="center")
+    # The L2 fused speaker axis, beside the belief store's. Two different numbers sharing a name
+    # (item 27); the fused one is the only one cross-axis coupling can reach, so omitting it makes
+    # coupling look broken when it is simply not what this row was drawing.
+    fused_spk = _fused_axis(out_dir, "speaker")
+    if fused_spk is not None and len(fused_spk):
+        mids = (fused_spk["start"] + fused_spk["end"]) / 2
+        ax_i.plot(
+            mids,
+            fused_spk["uncertainty"],
+            color="tab:green",
+            lw=1.1,
+            ls="-.",
+            label="L2 fused (coupled)",
+        )
+    ax_i.set_ylabel("speaker\nuncertainty", rotation=0, ha="right", va="center")
     ax_i.set_ylim(-0.02, 1.05)
-    ax_i.legend(loc="lower right", fontsize=7, ncol=2, title="GT boundaries dashed", title_fontsize=6)
+    ax_i.legend(
+        loc="lower right",
+        fontsize=7,
+        ncol=3,
+        title="belief store vs L2 fused — different quantities (item 27)",
+        title_fontsize=6,
+    )
 
-    # ── row 4: utterance + regions + interventions ─────────────────────
+    # ── row 4: asr + regions + interventions ─────────────────────
     _step(ax_u, utt_0, color="silver", label=f"round {first_r}")
     _step(ax_u, utt_k, color="tab:red", label=f"round {last_r} (final)")
     for _, row in utt_k.iterrows():
@@ -133,11 +224,15 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
             )
     seen_regions = set()
     for r_idx in round_ids:
-        regions_file = rounds_dir / str(r_idx) / "regions.json"
+        regions_file = derivatives_dir(out_dir, r_idx) / "regions.json"
         if not regions_file.exists():
             continue
         for reg in json.loads(regions_file.read_text()):
-            if reg["axis"] != "utterance" or reg["stream"] != stream:
+            # No stream filter: a region is a span of the recording, proposed from an axis that
+            # already folds across passes. Filtering by one dropped every region on the run's
+            # other pass from the figure, which is the same collapse the store used to force on
+            # every reader — invisibly, because a missing overlay looks like a quiet stretch.
+            if reg["axis"] != "asr":
                 continue
             span = (round(reg["core_start"], 3), round(reg["core_end"], 3))
             if span in seen_regions:
@@ -153,7 +248,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
             continue
         reg_delta = next(iter((e.get("delta") or {}).values()), None)
         d_txt = f" Δ{reg_delta['delta']:+.2f}" if reg_delta else ""
-        x = _region_mid(e, rounds_dir, axis="utterance")
+        x = _region_mid(e, out_dir, axis="asr")
         if x is not None:
             ax_u.annotate(
                 f"{e['rule'].split('_')[0]} r{e['round']}{d_txt}",
@@ -164,7 +259,7 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
                 bbox={"boxstyle": "round,pad=0.15", "fc": "white", "ec": "darkred", "lw": 0.5, "alpha": 0.85},
             )
             y_note -= 0.14
-    ax_u.set_ylabel("utterance\nuncertainty", rotation=0, ha="right", va="center")
+    ax_u.set_ylabel("asr\nuncertainty", rotation=0, ha="right", va="center")
     ax_u.set_ylim(-0.02, 1.08)
     ax_u.axhline(0.66, color="tab:red", lw=0.6, ls=":", alpha=0.7)
     ax_u.axhline(0.33, color="tab:green", lw=0.6, ls=":", alpha=0.7)
@@ -172,28 +267,108 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
         loc="upper left", fontsize=7, ncol=2, title="θ_high/θ_low dotted; irreducible hatched", title_fontsize=6
     )
 
-    # ── row 5: fused words ──────────────────────────────────────────────
-    cmap_conf = plt.get_cmap("RdYlGn")
-    for w in transcript["words"]:
-        mid = (w["start"] + w["end"]) / 2
-        conf = float(w.get("confidence") or 0.0)
-        ax_w.add_patch(
-            Rectangle(
-                (w["start"], 0.25),
-                max(0.02, w["end"] - w["start"]),
-                0.5,
-                facecolor=cmap_conf(conf),
-                alpha=0.8,
-                edgecolor="black",
-                linewidth=0.4,
-            )
+    # ── row 7: background_mask, the fourth axis ─────────────────────────
+    # The doubt, not the value: row 2 draws the mask's regions and this draws the fused estimate
+    # over the same span. Where they disagree — a flat confident strip above a varying axis — the
+    # axis is the one measured across buckets, and the region's own confidence is a single number
+    # a single producer reported about itself.
+    bm_0, bm_k = (
+        _belief_or_none(out_dir, first_r, "background_mask"),
+        _belief_or_none(out_dir, last_r, "background_mask"),
+    )
+    if bm_k is not None and len(bm_k):
+        if bm_0 is not None and len(bm_0):
+            _step(ax_bm, bm_0, color="silver", label=f"round {first_r}")
+        mids_bm = (bm_k["start"] + bm_k["end"]) / 2
+        ax_bm.plot(mids_bm, bm_k["uncertainty"], color="tab:brown", lw=1.2, label=f"round {last_r} (final)")
+        ax_bm.fill_between(
+            mids_bm, 0, bm_k["uncertainty"].fillna(0), color="tab:brown", alpha=0.15, label="uncertainty"
         )
-        ax_w.text(mid, 0.87, w["text"], ha="center", va="center", fontsize=7, rotation=35)
-        ax_w.text(mid, 0.5, f"{conf:.2f}", ha="center", va="center", fontsize=5.5)
+        ax_bm.legend(loc="upper right", fontsize=7, ncol=3)
+    else:
+        # Absent and empty are different facts, and the mask axis being absent is exactly the
+        # state this row was added to make visible.
+        ax_bm.text(duration / 2, 0.5, "no background_mask axis", ha="center", va="center", fontsize=8, color="#888888")
+    ax_bm.set_ylabel("background_mask\nuncertainty", rotation=0, ha="right", va="center")
+    ax_bm.set_ylim(-0.02, 1.02)
+    ax_bm.grid(axis="x", alpha=0.2)
+
+    # ── row 8: fused words ──────────────────────────────────────────────
+    cmap_conf = plt.get_cmap("RdYlGn")
+    # Word labels cycle through three text lanes (word i -> lane i % 3). Speech runs at roughly
+    # three words a second, so at any readable font size consecutive labels overlap when they share
+    # one lane; rotating them 35 degrees traded one kind of illegibility for another. Staggering
+    # gives each label three words' worth of horizontal room and lets the text sit upright.
+    text_lanes = (0.78, 0.50, 0.22)
+    for idx, w in enumerate(transcript["words"]):
+        mid = (w["start"] + w["end"]) / 2
+        # **Accuracy only.** The box used to be coloured by ``confidence``, which is the joint of
+        # word accuracy and temporal agreement — so a word every recognizer agreed on read amber
+        # purely because two aligners placed it differently, and nothing distinguished that from a
+        # word they disputed. One colour cannot answer two questions.
+        accuracy = w.get("existence_confidence")
+        accuracy = float(accuracy) if isinstance(accuracy, (int, float)) else float(w.get("confidence") or 0.0)
+        lane = idx % len(text_lanes)
+        ax_w.text(
+            mid,
+            text_lanes[lane],
+            w["text"],
+            ha="center",
+            va="center",
+            fontsize=7,
+            zorder=2,
+            bbox={
+                "boxstyle": "round,pad=0.2",
+                "facecolor": cmap_conf(accuracy),
+                "edgecolor": "black",
+                "linewidth": 0.3,
+                "alpha": 0.9,
+            },
+        )
+        # The two temporal halves, at the edges they describe. A mark at the onset and one at the
+        # offset, each coloured by agreement about *that* boundary, so "we know the word and not
+        # where it starts" is visible as such rather than folded into the label's colour. Absent
+        # (one timing source) draws nothing: an unmeasured edge must not render as a confident one.
+        for edge_time, edge_key in ((w["start"], "onset_confidence"), (w["end"], "offset_confidence")):
+            edge_conf = w.get(edge_key)
+            if not isinstance(edge_conf, (int, float)):
+                continue
+            # Sized against the whole recording, not against a word. At 0.024 s these were ~2 px
+            # on a 21 s x-axis — present in the data and unreadable on the page, which is the same
+            # as not showing them. Width scales with the recording so the mark stays visible at any
+            # duration, and the height spans the lane so it reads as a boundary marker rather than
+            # as another small box competing with the label.
+            mark_w = max(0.02, duration * 0.004)
+            ax_w.add_patch(
+                Rectangle(
+                    (float(edge_time) - mark_w / 2.0, text_lanes[lane] - 0.085),
+                    mark_w,
+                    0.17,
+                    facecolor=cmap_conf(float(edge_conf)),
+                    edgecolor="black",
+                    linewidth=0.4,
+                    alpha=0.95,
+                    zorder=1,
+                )
+            )
         if w.get("alternates"):
             alt_txt = "|".join(a["text"] for a in w["alternates"][:2])
-            ax_w.text(mid, 0.12, alt_txt, ha="center", fontsize=5, color="grey")
-    ax_w.set_ylabel("fused words\n(conf color)", rotation=0, ha="right", va="center")
+            ax_w.text(mid, text_lanes[lane] - 0.09, alt_txt, ha="center", va="center", fontsize=5, color="grey")
+    # A colorbar, because a colour scale with no key requires the reader to guess which end is
+    # confident. Horizontal and inset so it costs no row height.
+    if transcript["words"]:
+        cax = ax_w.inset_axes((0.35, 1.02, 0.3, 0.05))
+        fig.colorbar(
+            plt.cm.ScalarMappable(norm=plt.Normalize(0.0, 1.0), cmap=cmap_conf),
+            cax=cax,
+            orientation="horizontal",
+        )
+        cax.tick_params(labelsize=5, length=2, pad=1)
+        # Naming both users of the scale, because the row now carries two quantities on it: the
+        # label's fill is the word's accuracy and the two edge marks are agreement about that
+        # boundary. Calling it "word confidence" was accurate about neither once they were split.
+        cax.set_title("label fill = word accuracy · edge marks = onset/offset agreement", fontsize=6, pad=2)
+    ax_w.set_ylabel("fused words", rotation=0, ha="right", va="center")
     ax_w.set_ylim(0, 1.1)
     ax_w.set_yticks([])
     ax_w.set_xlabel("time (s)")
@@ -213,11 +388,223 @@ def build_adaptive_timeline(out_dir: Path, *, gt_path: Path | None = None, title
     return dest
 
 
+_MASK_STATE_STYLE = {
+    # Green reads as "usable" and grey as "unknown" without needing the legend;
+    # target-active is deliberately muted so the eye lands on the usable spans.
+    "target_free": ("#2e7d32", "target-free"),
+    # Target absent, something else audible — the state a background claim is actually *made*
+    # from, since a silent stretch characterises nothing. It was missing from this table, so it
+    # fell through to the ``indeterminate`` default and every such region rendered as "cannot
+    # tell": on a clip whose only finding was a 5.5 s non-target span, the mask row showed
+    # nothing but grey. Blue rather than another green, because it answers a different question
+    # from ``target_free`` — the two are kept apart everywhere else for the same reason.
+    "nontarget_active": ("#1565c0", "non-target active"),
+    "indeterminate": ("#9e9e9e", "cannot tell"),
+    "target_active": ("#c8c8c8", "target active"),
+}
+
+
+def _draw_per_speaker(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
+    """Draw one speech_presence lane per hypothesised speaker, with the count posterior in view.
+
+    This is the row the single speaker scalar could not provide. A high speaker
+    uncertainty is ambiguous between disagreement about *who* spoke and disagreement about
+    *how many* people are present; lanes plus the posterior separate the two.
+    """
+    import json as _json
+
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    from senselab.utils.data_structures.logging import logger
+
+    ax.set_ylabel("per-speaker\npresence", rotation=0, ha="right", va="center", fontsize=9)
+    ax.set_xlim(0, duration)
+    ax.set_yticks([])
+
+    final = final_dir(out_dir)
+    final.mkdir(parents=True, exist_ok=True)
+    speakers_path, speech_presence_path = final / "speakers.json", final / "per_speaker_presence.parquet"
+    if not speakers_path.exists() or not speech_presence_path.exists():
+        ax.text(
+            0.5,
+            0.5,
+            "no per-speaker speaker output",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#888888",
+        )
+        ax.set_ylim(0, 1)
+        return
+
+    try:
+        import pandas as pd
+
+        doc = _json.loads(speakers_path.read_text())
+        rows = pd.read_parquet(speech_presence_path).to_dict("records")
+    except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
+        logger.debug("per-speaker outputs unreadable: %s", exc)
+        ax.set_ylim(0, 1)
+        return
+
+    speaker_ids = sorted({str(r["speaker_id"]) for r in rows}) or [
+        str(s["speaker_id"]) for s in doc.get("speakers", [])
+    ]
+    if not speaker_ids:
+        ax.text(
+            0.5,
+            0.5,
+            "no speaker hypotheses",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#888888",
+        )
+        ax.set_ylim(0, 1)
+        return
+
+    lanes = {sid: i for i, sid in enumerate(speaker_ids)}
+    ax.set_ylim(-0.5, len(speaker_ids) - 0.5)
+    ax.set_yticks(list(lanes.values()))
+    ax.set_yticklabels(speaker_ids, fontsize=7)
+    cmap = plt.get_cmap("tab10")
+
+    for row in rows:
+        conf = row.get("speech_presence_confidence")
+        if conf is None:
+            continue
+        lane = lanes.get(str(row["speaker_id"]))
+        if lane is None:
+            continue
+        unc = float(row.get("speech_presence_uncertainty") or 0.0)
+        ax.add_patch(
+            Rectangle(
+                (float(row["start"]), lane - 0.35),
+                max(float(row["end"]) - float(row["start"]), 1e-6),
+                0.7,
+                facecolor=cmap(lane % 10),
+                edgecolor="none",
+                # Height encodes confidence, transparency encodes uncertainty about it --
+                # a faint short bar is a speaker the analysis is unsure about twice over.
+                alpha=max(0.12, float(conf) * (1.0 - 0.6 * unc)),
+            )
+        )
+
+    cp = doc.get("count_posterior") or {}
+    probs = cp.get("probabilities") or {}
+    if probs:
+        summary = "  ".join(f"{k}:{float(v):.2f}" for k, v in sorted(probs.items()))
+        flag = "  MULTI-MODAL" if cp.get("is_multimodal") else ""
+        ax.text(
+            0.005,
+            0.97,
+            f"speaker-count posterior  {summary}{flag}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=6.5,
+            color="#b00020" if cp.get("is_multimodal") else "#444444",
+        )
+
+
+def _draw_background_mask(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401 — matplotlib Axes
+    """Draw the background mask *value* as a four-state strip, with its own confidence as alpha.
+
+    Absent mask parquet leaves an explicitly labelled empty row rather than a silently
+    blank one — "no mask was produced" and "the mask was empty" are different facts, and a
+    blank strip would conflate them.
+
+    **This is the value, not the axis.** It was labelled "background mask" and drawn where a
+    reader looks for the fourth axis, so its region-level ``uncertainty`` — one number per region,
+    self-reported by the single producer that made it — read as the ``background_mask`` axis. On a
+    run whose mask is one ``target_active`` region spanning the recording at ``uncertainty`` 0.0,
+    that is a flat, fully-confident band, while the axis over the same span varies across every
+    bucket. The axis has its own row now (``ax_bm``) and this one says ``(state)``.
+    """
+    from matplotlib.patches import Rectangle
+
+    from senselab.utils.data_structures.logging import logger
+
+    ax.set_ylabel("background mask\n(state)", rotation=0, ha="right", va="center", fontsize=9)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlim(0, duration)
+
+    # ``L2/background_mask.parquet`` — one named path. Every previous form of this read was a
+    # glob, and every one of them drifted: first against the flat layout, then one level short of
+    # ``L1/<pass>/``. A glob that matches nothing is indistinguishable from a stage that produced
+    # nothing, and this row said "no background mask" on runs whose mask had found regions.
+    rows: list[dict[str, Any]] = []
+    candidate = belief_dir(out_dir) / "background_mask.parquet"
+    if candidate.exists():
+        try:
+            import pandas as pd
+
+            rows = pd.read_parquet(candidate).to_dict("records")
+        except Exception as exc:  # noqa: BLE001 — a plot must not fail a run
+            logger.debug("background mask unreadable at %s: %s", candidate, exc)
+
+    if not rows:
+        ax.text(
+            0.5,
+            0.5,
+            "no background mask",
+            transform=ax.transAxes,
+            ha="center",
+            va="center",
+            fontsize=8,
+            color="#888888",
+        )
+        return
+
+    seen: set[str] = set()
+    for row in rows:
+        state = str(row.get("state", "indeterminate"))
+        color, label = _MASK_STATE_STYLE.get(state, _MASK_STATE_STYLE["indeterminate"])
+        start, end = float(row["start"]), float(row["end"])
+        # Confident spans read solid; uncertain ones fade. A washed-out green is a
+        # region whose "usable" claim is itself shaky.
+        unc = float(row.get("uncertainty") or 0.0)
+        alpha = 0.85 if state == "target_active" else max(0.15, 0.85 * (1.0 - unc))
+        ax.add_patch(
+            Rectangle(
+                (start, 0.2),
+                max(end - start, 1e-6),
+                0.6,
+                facecolor=color,
+                edgecolor="none",
+                alpha=alpha,
+                label=label if label not in seen else None,
+            )
+        )
+        seen.add(label)
+        if float(row.get("guard_trimmed_s") or 0.0) > 0.0:
+            # Hatch what the guard interval removed, so a shrunken mask is visibly
+            # the guard's doing rather than an absence of quiet audio.
+            ax.add_patch(
+                Rectangle(
+                    (start, 0.2),
+                    max(end - start, 1e-6),
+                    0.6,
+                    facecolor="none",
+                    edgecolor="#555555",
+                    hatch="///",
+                    linewidth=0.0,
+                    alpha=0.5,
+                )
+            )
+    if seen:
+        ax.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.6)
+
+
 def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa: ANN401
     """Render the run's input audio as a dB-scaled STFT on ``ax``.
 
     Best-effort and self-contained: the audio path comes from the run's
-    ``summary.json`` (``input_audio``), re-rooted if the run came from another
+    ``L1/perturbations.json`` (``source_audio``), re-rooted if the run came from another
     machine. Any failure leaves an annotated empty axis rather than losing the
     whole figure — the spectrogram is context, not the point of the plot.
     """
@@ -225,12 +612,15 @@ def _draw_spectrogram(ax: Any, out_dir: Path, duration: float) -> None:  # noqa:
     try:
         import numpy as np
 
-        from senselab.audio.workflows.audio_analysis.adaptive.loop import _resolve_input_audio
+        from senselab.audio.workflows.audio_analysis.adaptive.loop import (
+            _register_source_audio,
+            _resolve_input_audio,
+        )
 
-        summary = json.loads((out_dir / "summary.json").read_text())
-        path = _resolve_input_audio(summary.get("input_audio"), out_dir)
+        # The input path is evidence about the run, not a deliverable.
+        path = _resolve_input_audio(_register_source_audio(out_dir), out_dir)
         if not path:
-            raise FileNotFoundError("input_audio not recorded in summary.json")
+            raise FileNotFoundError("source_audio not recorded in L1/perturbations.json")
 
         from senselab.audio.data_structures import Audio
         from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
@@ -278,14 +668,12 @@ def _step(ax: Any, df: Any, *, color: str, label: str) -> None:  # noqa: ANN401
     if not len(df):
         return
     mids = (df["start"] + df["end"]) / 2
-    ax.plot(
-        mids, df["aggregated_uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5
-    )
+    ax.plot(mids, df["uncertainty"], drawstyle="steps-mid", color=color, lw=1.4, label=label, marker="o", ms=2.5)
 
 
-def _region_mid(entry: dict[str, Any], rounds_dir: Path, *, axis: str | None = None) -> float | None:
+def _region_mid(entry: dict[str, Any], out_dir: Path, *, axis: str | None = None) -> float | None:
     """Midpoint of the region an iteration entry acted on; optionally filter by region axis."""
-    regions_file = rounds_dir / str(entry["round"]) / "regions.json"
+    regions_file = derivatives_dir(out_dir, int(entry["round"])) / "regions.json"
     if not regions_file.exists():
         return None
     for reg in json.loads(regions_file.read_text()):
@@ -294,3 +682,55 @@ def _region_mid(entry: dict[str, Any], rounds_dir: Path, *, axis: str | None = N
                 return None
             return (reg["core_start"] + reg["core_end"]) / 2
     return None
+
+
+def _belief_or_none(out_dir: Path, round_index: int, axis: str) -> Any:  # noqa: ANN401 — pd.DataFrame or None
+    """One round's estimate for ``axis``, or ``None`` when that round did not write it.
+
+    Separate from the strict read the three original axes use, because an axis may legitimately
+    stop early: a round that converged on the mask writes no further estimate for it, and the
+    carry-forward lives in the fold rather than on disk. A missing file is therefore a fact about
+    that round, not a broken run, and it must not take the whole figure down with it.
+    """
+    import pandas as pd
+
+    path = estimates_dir(out_dir, round_index) / f"{axis}.parquet"
+    if not path.exists():
+        return None
+    try:
+        return pd.read_parquet(path).sort_values("start")
+    except Exception:  # noqa: BLE001 — a plot must not fail a run
+        return None
+
+
+def _fused_axis(out_dir: Path, axis: str) -> Any:  # noqa: ANN401 — pd.DataFrame or None
+    """The L2 fused axis for ``axis``, from the last round that wrote one.
+
+    A *different quantity* from the belief store this figure otherwise draws, and drawn beside it
+    deliberately (register item 27). They share a name and nothing else: different grids, different
+    provenance — the belief store ingests L1's per-pass axis folds — and only the fused one is
+    reachable by D-11's cross-axis coupling. Showing one and labelling it "speaker uncertainty"
+    invites the reading that per-speaker presence failed to move it, when in fact the coupled
+    quantity was never on the figure.
+
+    **This function is scaffolding for a defect, and should be deleted rather than maintained.**
+    The layered design has exactly one axis lineage: L1 emits per-signal measurements, L2 fuses
+    them, `final/` holds the result. A second speaker axis exists only because L1 emits a per-pass
+    axis fold it is not supposed to compute (item 25) and the belief store was built to ingest it.
+    Remove that fold and the belief store has nothing to read but L2's axes — one number, and no
+    reason for this comparison to exist.
+
+    Returns ``None`` when no fused parquet exists, so older runs still render.
+    """
+    import pandas as pd
+
+    last = last_round(out_dir)
+    if last is None:
+        return None
+    path = estimates_dir(out_dir, last) / f"{axis}.parquet"
+    if not path.exists():
+        return None
+    try:
+        return pd.read_parquet(path).sort_values("start")
+    except Exception:  # noqa: BLE001 — a plot must not fail a run
+        return None

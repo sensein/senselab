@@ -96,7 +96,7 @@ class HuggingFaceAudioClassifier:
         device, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
-        # Cache by model identity + device only. top_k, function_to_apply,
+        # Cache by model speaker + device only. top_k, function_to_apply,
         # and batch_size are call-time parameters passed at pipe() invocation.
         key = f"{model.path_or_uri}-{model.revision}-{device.value}"
         if key not in cls._pipelines:

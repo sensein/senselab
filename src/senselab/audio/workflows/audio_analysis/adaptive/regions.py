@@ -5,30 +5,37 @@ from __future__ import annotations
 from typing import Any
 
 from senselab.audio.workflows.audio_analysis.adaptive.types import AxisName, Region
+from senselab.audio.workflows.audio_analysis.estimates import control_doubt
 
 
 def propose_regions(
     rows: list[dict[str, Any]],
     *,
     axis: AxisName,
-    stream: str,
     policy: dict[str, Any],
     round_idx: int,
     duration_s: float,
 ) -> list[Region]:
     """Seed at ≥ θ_high, expand while ≥ θ_low, merge small gaps, pad, rank by mass.
 
-    Rows must be time-ordered on one (stream, axis). Only ``status == "open"``
-    rows can seed; closed rows still participate in expansion so a region keeps
-    its natural extent. Region ids are deterministic: ``r<round>_<axis>_<idx>``
-    with idx assigned in start order (FR-025).
+    Rows must be time-ordered on one axis, and there is one set of them: a region is a span of the
+    recording the run is unsure about, not a span of one pass. Proposing per (pass, axis) produced
+    two overlapping regions for one ambiguity, each spending budget separately, and made the
+    intervention catalogue's target a property of which pass happened to look worse.
+
+    Only ``status == "open"`` rows can seed; closed rows still participate in expansion so a region
+    keeps its natural extent. Region ids are deterministic: ``r<round>_<axis>_<idx>`` with idx
+    assigned in start order (FR-025).
     """
     th = policy["thresholds"]
     rg = policy["regions"]
     theta_high, theta_low = float(th["theta_high"]), float(th["theta_low"])
 
     def _u(row: dict[str, Any]) -> float:
-        v = row.get("aggregated_uncertainty")
+        # Doubt, not entropy: ``theta_high`` / ``theta_low`` are doubt-scaled, and comparing them
+        # against the entropy column meant "seed above 17% doubt" (see ``estimates.control_doubt``).
+        # ``-1.0`` for an unmeasured bucket, so it can never seed or extend a region.
+        v = control_doubt(row)
         return -1.0 if v is None else float(v)
 
     # 1. seed + bidirectional expansion over contiguous indices.
@@ -74,7 +81,6 @@ def propose_regions(
         regions.append(
             {
                 "axis": axis,
-                "stream": stream,
                 "core_start": start,
                 "core_end": end,
                 "crop_start": max(0.0, start - pad),
@@ -90,9 +96,8 @@ def propose_regions(
     regions.sort(key=lambda r: (-r["uncertainty_mass"], r["core_start"]))
     regions = regions[: int(rg["top_n_per_round"])]
     regions.sort(key=lambda r: r["core_start"])
-    stream_tag = stream.split("_", 1)[0]  # raw_16k → raw
     for idx, r in enumerate(regions):
-        r["region_id"] = f"r{round_idx}_{stream_tag}_{axis}_{idx}"
+        r["region_id"] = f"r{round_idx}_{axis}_{idx}"
     return regions
 
 

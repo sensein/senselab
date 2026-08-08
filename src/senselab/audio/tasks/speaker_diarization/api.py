@@ -17,6 +17,7 @@ def diarize_audios(
     min_speakers: Optional[int] = None,
     max_speakers: Optional[int] = None,
     device: Optional[DeviceType] = None,
+    exclusive: bool = True,
 ) -> List[List[ScriptLine]]:
     """Diarize a batch of `Audio` objects, returning per-speaker time segments.
 
@@ -42,6 +43,11 @@ def diarize_audios(
             NVIDIA Sortformer is limited to 4 speakers.
         device (DeviceType | None):
             Preferred device (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).
+        exclusive (bool):
+            Pyannote only. ``True`` (default) returns a partition, where concurrent speech has been
+            resolved away and no consumer can detect overlap. ``False`` returns the overlapping
+            view. Sortformer emits per-speaker activity and always preserves concurrency, so this
+            does not apply to it.
 
     Returns:
         list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries
@@ -81,6 +87,7 @@ def diarize_audios(
             num_speakers=num_speakers,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
+            exclusive=exclusive,
         )
     elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar"):
         return diarize_audios_with_nvidia_sortformer(

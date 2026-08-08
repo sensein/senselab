@@ -3,13 +3,13 @@
 Brouhaha (Lavechin et al., 2022, arXiv:2210.13248) predicts, per frame and in a
 single forward pass:
 
-- **VAD** — speech-presence probability in ``[0, 1]``;
+- **VAD** — speech-speech_presence probability in ``[0, 1]``;
 - **SNR** — estimated signal-to-noise ratio in dB;
 - **C50** — room-acoustics clarity in dB (higher = less reverberant).
 
 The scene-quality workflow uses the SNR/C50 heads for the ``quality_snr`` /
 ``quality_reverb`` degradation scores and the VAD head as a second frame-level
-speech-presence voter.
+speech-speech_presence voter.
 
 **Why a subprocess venv.** The ``pyannote/brouhaha`` checkpoint is not loadable
 by our main environment: its custom multitask model class lives in the
@@ -21,8 +21,15 @@ backends), isolated from the main install. The model is gated on HuggingFace;
 the worker reads ``HF_TOKEN`` from the environment (preserved across the
 subprocess boundary).
 
-Long recordings are split into overlapping ~10 s chunks in the parent process
-and stitched back into one continuous per-frame timeline via
+Inference uses upstream's ``BrouhahaInference``, which slides the model's trained 6 s window and
+overlap-adds — the path brouhaha's authors ship for this model. An earlier revision here forced
+``window="whole"``, which pyannote warns against for frame-based models and which measured worse
+on every axis: 5.5 dB of SNR error at a true 10 dB against sliding's 0.33 dB, memory growing
+linearly with duration rather than staying bounded, and the authors' own ``slide()`` override
+never executing. It also did not achieve its stated purpose — brouhaha's VAD head is
+high-recall and reads near 1.0 through short pauses regardless of windowing.
+
+Frames arrive as one continuous timelineand stitched back into one continuous per-frame timeline via
 ``stitch_frames`` — flat memory, native ~17 ms resolution (shared with the
 segmentation-3.0 extractor).
 """
@@ -76,8 +83,6 @@ _BROUHAHA_PYTHON = "3.11"
 _BROUHAHA_MAX_CUDA_VERSION = (12, 1)
 
 # Chunking for long recordings (mirrors the segmentation extractor's grid).
-_CHUNK_S = 10.0
-_CHUNK_STEP_S = 8.0
 
 # Multitask output channel order (frames, 3): [VAD, SNR dB, C50 dB].
 _VAD_CHANNEL = 0
@@ -102,7 +107,16 @@ try:
     dev = "cuda" if args["device"] == "cuda" and torch.cuda.is_available() else "cpu"
 
     model = Model.from_pretrained(args["model_name"], use_auth_token=token)
-    inference = Inference(model, window="whole", device=torch.device(dev))
+    # Upstream's own inference class, which defaults to sliding. Three measurements say this
+    # rather than window="whole": pyannote warns that "whole" on a frame-based model "might
+    # lead to bad results and huge memory consumption"; at a true 10 dB SNR sliding errs by
+    # 0.33 dB against whole's 5.5 dB, because the model is trained at duration=6 s and whole
+    # fed it 21.5 s; and whole's memory grows linearly with duration (~494 MB above baseline
+    # at 120 s) while sliding is bounded by batch_size x 6 s. BrouhahaInference also overrides
+    # slide(), so under "whole" the code brouhaha's authors ship for this model never ran.
+    from brouhaha.inference import BrouhahaInference
+
+    inference = BrouhahaInference(model, device=torch.device(dev))
     try:
         hop = float(model.receptive_field.step)
     except Exception:
@@ -138,7 +152,7 @@ class BrouhahaFrames:
     """Per-frame Brouhaha outputs for one audio.
 
     Attributes:
-        vad: ``(num_frames,)`` speech-presence probability in ``[0, 1]``.
+        vad: ``(num_frames,)`` speech-speech_presence probability in ``[0, 1]``.
         snr_db: ``(num_frames,)`` estimated SNR in dB.
         c50_db: ``(num_frames,)`` estimated C50 (clarity) in dB.
         frame_hop_s: seconds between consecutive frame starts.
@@ -213,19 +227,13 @@ def extract_brouhaha_frames(
         out_dir = tmp / "out"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Chunk each audio in the parent via senselab's sliding-window generator
-        # (overlapping ~10 s windows); the worker runs whole-window inference per
-        # chunk and the parent stitches. A clip <= one window yields a single chunk.
+        # One spec per audio: sliding inference produces a continuous per-frame timeline over
+        # a file of any length at flat memory, so parent-side chunking has nothing to add.
         chunk_specs: list[dict] = []
         for ai, audio in enumerate(audios):
-            sr = int(audio.sampling_rate)
-            win_samples = int(_CHUNK_S * sr)
-            step_samples = max(1, int(_CHUNK_STEP_S * sr))
-            for k, chunk in enumerate(audio.window_generator(win_samples, step_samples)):
-                start_s = (k * step_samples) / sr
-                path = str(tmp / f"audio_{ai}_{int(round(start_s * 1000))}.wav")
-                chunk.save_to_file(path)
-                chunk_specs.append({"path": path, "start_s": start_s, "audio_idx": ai})
+            path = str(tmp / f"audio_{ai}.wav")
+            audio.save_to_file(path)
+            chunk_specs.append({"path": path, "start_s": 0.0, "audio_idx": ai})
 
         input_json = json.dumps(
             {

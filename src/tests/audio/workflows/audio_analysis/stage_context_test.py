@@ -26,7 +26,7 @@ from senselab.utils.tasks.cached_inference import audio_signature, cache_store
 
 
 def _ctx(**kwargs: object) -> StageContext:
-    base: dict[str, object] = {"pass_label": "raw_16k", "audio_signature": "a" * 64, "senselab_ver": "1.2.3"}
+    base: dict[str, object] = {"perturbation": "raw", "audio_signature": "a" * 64, "senselab_ver": "1.2.3"}
     base.update(kwargs)
     return StageContext(**base)  # type: ignore[arg-type]
 
@@ -43,7 +43,12 @@ def test_stage_versions_are_pinned() -> None:
         "features": 1,
         "asr": 1,
         "alignment": 1,
-        "ppgs": 1,
+        # Scene-quality level work. Each declares its own counter rather than
+        # borrowing another stage's invalidation fate.
+        "background_mask": 1,
+        "noise_floor": 1,
+        "background_sources": 1,
+        "level_probe": 1,
     }
 
 
@@ -118,10 +123,15 @@ def test_align_key_tracks_the_transcript() -> None:
 
 def test_provenance_records_the_stage_code_version() -> None:
     """The whole point of STAGE_VERSIONS is that a stale replay is diagnosable."""
+    from senselab.utils.tasks.cached_inference import CACHE_SCHEMA_VERSION
+
     prov = _ctx().provenance_for("asr", "whisper", {"device": "auto"})
     assert prov["code_version"] == "asr@1"
-    assert prov["cache_schema_version"] == 2
-    assert prov["pass"] == "raw_16k"
+    # Compared against the constant, not a literal: the point of the assertion is that the
+    # recorded version tracks the real one, and a literal turns every legitimate bump into a
+    # test edit that says nothing.
+    assert prov["cache_schema_version"] == CACHE_SCHEMA_VERSION
+    assert prov["pass"] == "raw"
     assert prov["device"] == "auto"
 
 
@@ -136,7 +146,7 @@ def test_provenance_joins_to_build_cache_index(tmp_path: Path) -> None:
 
     audio = SimpleNamespace(waveform=torch.tensor([[0.1, 0.2, 0.3]]), sampling_rate=16000)
     sig = audio_signature(audio)
-    ctx = StageContext(pass_label="raw_16k", audio_signature=sig, cache_dir=tmp_path, senselab_ver="v")
+    ctx = StageContext(perturbation="raw", audio_signature=sig, cache_dir=tmp_path, senselab_ver="v")
 
     key = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
     cache_store(
@@ -172,7 +182,7 @@ def test_pass_plan_defaults_to_running_nothing_expensive() -> None:
     plan = PassPlan()
     assert plan.diarization_models == () and plan.asr_models == ()
     assert plan.ast_model is None and plan.yamnet_model is None
-    assert plan.features is False and plan.ppg is False
+    assert plan.features is False
 
 
 def test_pass_plan_is_frozen() -> None:
@@ -184,7 +194,7 @@ def test_pass_plan_is_frozen() -> None:
 def test_stage_context_is_frozen() -> None:
     """Same reasoning: the run environment must not drift between stages."""
     with pytest.raises(Exception):  # noqa: B017
-        _ctx().pass_label = "other"  # type: ignore[misc]
+        _ctx().perturbation = "other"  # type: ignore[misc]
 
 
 # ── import weight ─────────────────────────────────────────────────────

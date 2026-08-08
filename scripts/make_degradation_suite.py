@@ -10,7 +10,7 @@ Variants (all spans recorded in manifest.json):
 - ``noise``:   additive white noise burst over one span
 - ``clip``:    hard digital clipping over one span
 - ``lowpass``: telephone-band (~3.4 kHz) filtering over one span
-- ``silence``: the span is zeroed (tests presence + FR-004 interactions)
+- ``silence``: the span is zeroed (tests speech_presence + FR-004 interactions)
 - ``music``:   additive synthetic "music" (chord of sines) — hallucination bait (SC-006)
 
 Usage:

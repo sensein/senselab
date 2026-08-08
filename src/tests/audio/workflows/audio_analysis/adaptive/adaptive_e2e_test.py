@@ -16,7 +16,7 @@ These need real artifacts, so they skip unless the relevant env vars point at da
 
 Run e.g.::
 
-    SENSELAB_ADAPTIVE_E2E_RUN_DIR=artifacts/e2e_runs/<run> uv run pytest \
+    SENSELAB_ADAPTIVE_E2E_RUN_DIR=artifacts/analyze_audio/<run> uv run pytest \
         src/tests/audio/workflows/audio_analysis/adaptive/adaptive_e2e_test.py -v
 """
 
@@ -43,11 +43,14 @@ def test_t037_determinism_byte_identical(tmp_path: Path) -> None:
     # backends — pin cache-replay-only behavior (live re-ASR + overlap
     # detection off, DSP audio loader, no U3 bundle download) so the test is
     # fast and environment-independent.
-    policy_override = tmp_path / "policy.yaml"
-    policy_override.write_text(
-        'fusion:\n  consensus_alignment: "off"\n'
-        "audio_io_backend: dsp\n"
-        "rules:\n  U1_region_reasr: {enabled: false}\n  I4_overlap_detection: {enabled: false}\n"
+    # Nested under ``adaptive:``, because the policy is a section of the run config now — a file with
+    # these keys at the top level is refused rather than merged where nothing reads it.
+    config_override = tmp_path / "config.yaml"
+    config_override.write_text(
+        "adaptive:\n"
+        '  fusion:\n    consensus_alignment: "off"\n'
+        "  audio_io_backend: dsp\n"
+        "  rules:\n    U1_region_reasr: {enabled: false}\n    I4_overlap_detection: {enabled: false}\n"
     )
     outs = []
     for name in ("a", "b"):
@@ -56,7 +59,7 @@ def test_t037_determinism_byte_identical(tmp_path: Path) -> None:
             run_dir,
             cache_dir=cache_dir if cache_dir.is_dir() else None,
             out_dir=out,
-            policy_path=policy_override,
+            config_path=config_override,
         )
         outs.append(out)
     for fname in ("final/iterations.json", "final/convergence.json"):

@@ -10,7 +10,12 @@ JSON-cache deserialization produces.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from senselab.audio.tasks.classification.label_scores import label_scores
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
@@ -27,19 +32,61 @@ def seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
 # ── Diarization ───────────────────────────────────────────────────────
 
 
-def diar_speaks_in_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
-    """True if any diarization segment overlaps ``[win_start, win_end)``."""
+def _union_length(spans: list[tuple[float, float]]) -> float:
+    """Total length covered by ``spans``, counting overlaps once.
+
+    Shared by the diarization and transcript coverage measures because both answer "how much of
+    this bucket is claimed", and summing instead of unioning would let two simultaneous speakers —
+    or two aligners' word spans — report more than a bucket's worth.
+    """
+    if not spans:
+        return 0.0
+    ordered = sorted(spans)
+    covered = 0.0
+    cur_lo, cur_hi = ordered[0]
+    for lo, hi in ordered[1:]:
+        if lo > cur_hi:
+            covered += cur_hi - cur_lo
+            cur_lo, cur_hi = lo, hi
+        else:
+            cur_hi = max(cur_hi, hi)
+    return covered + (cur_hi - cur_lo)
+
+
+def diar_covered_fraction(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
+    """Fraction of ``[win_start, win_end)`` covered by any diarization segment.
+
+    Replaces the ``speaks`` bool this used to reduce to. A segment overlapping 5% of a bucket and
+    one covering all of it are not the same evidence, and a bool cannot tell them apart — which
+    matters most at segment boundaries, exactly where speaker uncertainty is highest.
+
+    Returns:
+        Coverage in ``[0, 1]``, or ``None`` when the window is empty or the model produced no
+        segments — an absent model is not a model reporting zero coverage.
+    """
     if not result:
-        return False
+        return None
+    span = float(win_end) - float(win_start)
+    if span <= 0:
+        return None
     segments = result[0] if isinstance(result, list) and result else []
+    if not segments:
+        return None
+    # Union of overlaps, not their sum: overlapping segments from two speakers must not report
+    # more than a bucket's worth of coverage.
+    spans: list[tuple[float, float]] = []
     for seg in segments:
-        s = seg_attr(seg, "start")
-        e = seg_attr(seg, "end")
-        if s is None or e is None:
+        s_attr = seg_attr(seg, "start")
+        e_attr = seg_attr(seg, "end")
+        if s_attr is None or e_attr is None:
             continue
-        if float(s) < win_end and float(e) > win_start:
-            return True
-    return False
+        lo = max(float(win_start), float(s_attr))
+        hi = min(float(win_end), float(e_attr))
+        if hi > lo:
+            spans.append((lo, hi))
+    if not spans:
+        return 0.0
+    return max(0.0, min(1.0, _union_length(spans) / span))
 
 
 def diar_speaker_label_in_window(result: Any, win_start: float, win_end: float) -> str | None:  # noqa: ANN401
@@ -82,7 +129,7 @@ def asr_has_timestamps(result: Any) -> bool:  # noqa: ANN401
     """True if any ScriptLine actually carries a timestamp.
 
     Requires a non-null ``start`` on a chunk or on the line itself. The mere
-    *presence* of chunks is not evidence of timing: a chunked-but-untimed
+    *speech_presence* of chunks is not evidence of timing: a chunked-but-untimed
     transcript has no usable times, and treating it as timestamped would make the
     alignment stage skip exactly the input it exists to fix. ``analyze_audio.py``
     carried a looser duplicate that returned True whenever ``chunks`` was
@@ -123,27 +170,106 @@ def resolve_asr_result(asr_block: dict[str, Any], align_block: dict[str, Any] | 
     return asr_res
 
 
-def token_overlaps_window(result: Any, win_start: float, win_end: float) -> bool:  # noqa: ANN401
-    """True if any transcript chunk's timestamp overlaps the window."""
+def asr_bucket_chunk_evidence(result: Any, win_start: float, win_end: float) -> dict[str, Any]:  # noqa: ANN401
+    """What an ASR model reported over one bucket, in its own units and unpooled.
+
+    Replaces the three belief-producing readers this call site used to need
+    (``token_overlaps_window``, ``whisper_bucket_confidence``, ``whisper_bucket_no_speech_prob``),
+    each of which reduced before returning. In particular the confidence reader pooled per-chunk
+    log-probabilities as ``mean(exp(x))``, which by Jensen's inequality is not the same statistic as
+    ``exp(mean(x))`` — a choice worth making explicitly, at L2, rather than inside a getter.
+
+    Returns:
+        ``{"word_overlap_s", "n_words", "avg_logprobs", "no_speech_probs", "claim_span_s",
+        "segment_span_s"}``. Coverage is a union over word spans clipped to the bucket, so
+        overlapping spans cannot exceed its width. The two lists hold one entry per contributing
+        chunk, in the model's own log / probability domains.
+
+        The two span fields are **unclipped** unions, and exist so the coarseness of the claim is
+        measured rather than declared: ``claim_span_s`` is how wide the transcript evidence
+        reaching this bucket actually is, and ``segment_span_s`` the same for the segments whose
+        scalars were pooled. A voter's window is only "coarse" relative to the grid it is reported
+        on, so L2 needs the number rather than a hand-set flag.
+
+    Scalars fall back to the segment level when a line carries no chunk overlapping the bucket
+    (post-aligned text-only ASR exposes them only per segment), while coverage does not — a line
+    whose chunks all fall outside the bucket has placed no word inside it, whatever its own span
+    says.
+    """
+    spans: list[tuple[float, float]] = []
+    claim_spans: list[tuple[float, float]] = []
+    segment_spans: list[tuple[float, float]] = []
+    n_words = 0
+    avg_logprobs: list[float] = []
+    no_speech_probs: list[float] = []
+    empty: dict[str, Any] = {
+        "word_overlap_s": 0.0,
+        "n_words": 0,
+        "avg_logprobs": [],
+        "no_speech_probs": [],
+        "claim_span_s": None,
+        "segment_span_s": None,
+    }
     if not result:
-        return False
+        return empty
+
     items = result if isinstance(result, list) else [result]
     for line in items:
         chunks = seg_attr(line, "chunks") or []
-        if chunks:
-            for c in chunks:
-                cs = seg_attr(c, "start")
-                ce = seg_attr(c, "end")
-                if cs is None or ce is None:
-                    continue
-                if float(cs) < win_end and float(ce) > win_start:
-                    return True
-        else:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is not None and le is not None and float(ls) < win_end and float(le) > win_start:
-                return True
-    return False
+        chunk_seen_any = False
+        for c in chunks:
+            cs = seg_attr(c, "start")
+            ce = seg_attr(c, "end")
+            if cs is None or ce is None:
+                continue
+            if float(cs) < win_end and float(ce) > win_start:
+                chunk_seen_any = True
+                n_words += 1
+                spans.append((max(float(win_start), float(cs)), min(float(win_end), float(ce))))
+                claim_spans.append((float(cs), float(ce)))
+                _collect_chunk_scalars(c, avg_logprobs, no_speech_probs)
+        ls = seg_attr(line, "start")
+        le = seg_attr(line, "end")
+        if chunk_seen_any:
+            if ls is not None and le is not None:
+                segment_spans.append((float(ls), float(le)))
+            continue
+        if ls is None or le is None:
+            # No timestamps at all: the scalars still describe this bucket as well as any other,
+            # which is what the aligner exists to fix. No coverage and no span are claimed.
+            _collect_chunk_scalars(line, avg_logprobs, no_speech_probs)
+            continue
+        if float(ls) < win_end and float(le) > win_start:
+            _collect_chunk_scalars(line, avg_logprobs, no_speech_probs)
+            segment_spans.append((float(ls), float(le)))
+            if not chunks:
+                n_words += 1
+                spans.append((max(float(win_start), float(ls)), min(float(win_end), float(le))))
+                claim_spans.append((float(ls), float(le)))
+    return {
+        "word_overlap_s": _union_length(spans),
+        "n_words": n_words,
+        "avg_logprobs": avg_logprobs,
+        "no_speech_probs": no_speech_probs,
+        "claim_span_s": _union_length(claim_spans) if claim_spans else None,
+        "segment_span_s": _union_length(segment_spans) if segment_spans else None,
+    }
+
+
+def _collect_chunk_scalars(item: Any, avg_logprobs: list[float], no_speech_probs: list[float]) -> None:  # noqa: ANN401
+    """Append a chunk's or segment's native scalars, skipping fields it does not expose."""
+    avg = seg_attr(item, "avg_logprob")
+    if avg is not None:
+        try:
+            avg_logprobs.append(float(avg))
+        except (TypeError, ValueError):
+            pass
+    nsp = seg_attr(item, "no_speech_prob")
+    if nsp is not None:
+        try:
+            no_speech_probs.append(float(nsp))
+        except (TypeError, ValueError):
+            pass
 
 
 def asr_text_in_window(
@@ -163,7 +289,7 @@ def asr_text_in_window(
         fully_contained: When ``True``, only include chunks whose ``[start, end]`` lies
             entirely within ``[win_start, win_end)``. The default ``False`` keeps the
             traditional overlap rule (chunk crosses into the window). Used by the
-            utterance axis (with True) so partial words straddling a window boundary
+            asr axis (with True) so partial words straddling a window boundary
             don't pollute the WER score on either side.
     """
     if not result:
@@ -179,7 +305,7 @@ def asr_text_in_window(
     def _walk(node: Any) -> None:  # noqa: ANN401
         # Recurse into ``.chunks`` until we hit a leaf (no inner chunks). Post-
         # MMS-aligned text-only ASR (Granite, Canary) emits a 3-level nesting:
-        # outer line → utterance ScriptLine → word ScriptLines. Whisper / Qwen
+        # outer line → asr ScriptLine → word ScriptLines. Whisper / Qwen
         # are 2-level (line → words). The leaf is what we want to bucket on.
         chunks = seg_attr(node, "chunks") or []
         if chunks:
@@ -207,55 +333,6 @@ def asr_text_in_window(
 # ── Whisper-style native confidence ───────────────────────────────────
 
 
-def asr_alignment_score_in_window(
-    result: Any,  # noqa: ANN401
-    win_start: float,
-    win_end: float,
-) -> float | None:
-    """Mean MMS-CTC posterior score across alignment leaf chunks overlapping the window.
-
-    The forced-alignment dict carries a ``score`` field at every level (char →
-    word → sentence → line) — the mean per-frame CTC posterior probability the
-    Wav2Vec2-CTC model assigned to that token's path through its trellis. We
-    aggregate at the leaf (character) level and average over leaves whose
-    timestamps overlap ``[win_start, win_end)``.
-
-    Returns the mean score in ``[0, 1]`` (higher = more confident) or ``None``
-    when no alignment leaf overlaps the bucket.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    scores: list[float] = []
-
-    def _walk(node: Any) -> None:  # noqa: ANN401
-        chunks = seg_attr(node, "chunks") or []
-        if chunks:
-            for c in chunks:
-                _walk(c)
-            return
-        cs = seg_attr(node, "start")
-        ce = seg_attr(node, "end")
-        if cs is None or ce is None:
-            return
-        # Overlap rule.
-        if not (float(cs) < win_end and float(ce) > win_start):
-            return
-        s = seg_attr(node, "score")
-        if s is None:
-            return
-        try:
-            scores.append(float(s))
-        except (TypeError, ValueError):
-            return
-
-    for line in items:
-        _walk(line)
-    if not scores:
-        return None
-    return sum(scores) / len(scores)
-
-
 def whisper_chunk_confidence(chunk: Any) -> tuple[float | None, float | None]:  # noqa: ANN401
     """Return (confidence, no_speech_prob) from a Whisper chunk dict / ScriptLine.
 
@@ -272,209 +349,6 @@ def whisper_chunk_confidence(chunk: Any) -> tuple[float | None, float | None]:  
             confidence = None
     no_speech = float(nsp) if nsp is not None else None
     return confidence, no_speech
-
-
-def whisper_bucket_confidence(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean Whisper-native confidence over chunks overlapping the window.
-
-    Falls back to the segment-level avg_logprob when chunks are absent (e.g.
-    post-aligned text-only ASR). Returns None when no native signal is available
-    (FR-007 — drop, do not zero-impute).
-
-    Note: this returns the arithmetic mean of per-chunk ``exp(avg_logprob)`` —
-    appropriate for the presence axis where each chunk is treated as an independent
-    "is the model confident here?" vote. Do NOT take ``log()`` of this value to
-    recover an avg_logprob — by Jensen's inequality
-    ``log(mean(exp(x))) > mean(x)``. Use ``whisper_bucket_avg_logprob`` instead.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    confidences: list[float] = []
-    for line in items:
-        chunks = seg_attr(line, "chunks") or []
-        chunk_seen_any = False
-        for c in chunks:
-            cs = seg_attr(c, "start")
-            ce = seg_attr(c, "end")
-            if cs is None or ce is None:
-                continue
-            if float(cs) < win_end and float(ce) > win_start:
-                chunk_seen_any = True
-                conf, _ = whisper_chunk_confidence(c)
-                if conf is not None:
-                    confidences.append(conf)
-        if not chunk_seen_any:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                conf, _ = whisper_chunk_confidence(line)
-                if conf is not None:
-                    confidences.append(conf)
-    if not confidences:
-        return None
-    return sum(confidences) / len(confidences)
-
-
-def whisper_bucket_no_speech_prob(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean Whisper ``no_speech_prob`` over chunks overlapping the window.
-
-    Whisper exports a per-segment ``no_speech_prob`` from its silence head —
-    the cleanest single-scalar VAD signal Whisper itself produces. ``∈ [0, 1]``
-    where higher means the model thinks this region is silence. Returned to
-    the presence harvester as a direct voice-presence voter.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    nsps: list[float] = []
-    for line in items:
-        chunks = seg_attr(line, "chunks") or []
-        chunk_seen_any = False
-        for c in chunks:
-            cs = seg_attr(c, "start")
-            ce = seg_attr(c, "end")
-            if cs is None or ce is None:
-                continue
-            if float(cs) < win_end and float(ce) > win_start:
-                chunk_seen_any = True
-                _, nsp = whisper_chunk_confidence(c)
-                if nsp is not None:
-                    nsps.append(nsp)
-        if not chunk_seen_any:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                _, nsp = whisper_chunk_confidence(line)
-                if nsp is not None:
-                    nsps.append(nsp)
-    if not nsps:
-        return None
-    return sum(nsps) / len(nsps)
-
-
-def whisper_bucket_avg_logprob(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean of raw per-chunk ``avg_logprob`` over chunks overlapping the window.
-
-    Returns the arithmetic mean of negative logprobs — equivalent to the geometric
-    mean of per-chunk confidences when later exponentiated. This is the unbiased
-    way to aggregate Whisper's native logprob to a bucket scale; the utterance
-    aggregator computes ``1 − exp(avg_logprob)`` once on the bucket value.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-    logprobs: list[float] = []
-    for line in items:
-        chunks = seg_attr(line, "chunks") or []
-        chunk_seen_any = False
-        for c in chunks:
-            cs = seg_attr(c, "start")
-            ce = seg_attr(c, "end")
-            if cs is None or ce is None:
-                continue
-            if float(cs) < win_end and float(ce) > win_start:
-                chunk_seen_any = True
-                avg = seg_attr(c, "avg_logprob")
-                if avg is not None:
-                    try:
-                        logprobs.append(float(avg))
-                    except (TypeError, ValueError):
-                        continue
-        if not chunk_seen_any:
-            ls = seg_attr(line, "start")
-            le = seg_attr(line, "end")
-            if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-                avg = seg_attr(line, "avg_logprob")
-                if avg is not None:
-                    try:
-                        logprobs.append(float(avg))
-                    except (TypeError, ValueError):
-                        continue
-    if not logprobs:
-        return None
-    return sum(logprobs) / len(logprobs)
-
-
-def _collapse_token_entropy(raw: Any) -> float | None:  # noqa: ANN401 — float | list | junk
-    """Collapse a ``token_entropy`` field to a scalar mean, or ``None`` if unusable."""
-    if raw is None:
-        return None
-    if isinstance(raw, (list, tuple)):
-        values: list[float] = []
-        for item in raw:
-            try:
-                values.append(float(item))
-            except (TypeError, ValueError):
-                continue
-        return sum(values) / len(values) if values else None
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
-
-
-def mean_token_entropy_in_window(result: Any, win_start: float, win_end: float) -> float | None:  # noqa: ANN401
-    """Mean per-token softmax entropy (nats) attributable to ``[win_start, win_end)``.
-
-    Two shapes are handled, in priority order:
-
-    1. **Word-level** — when transcript chunks carry their own ``token_entropy``,
-       each word is assigned to exactly one bucket by its timestamp *midpoint*
-       (the contract's rule), so a word is never counted twice across
-       overlapping buckets.
-    2. **Line-level** — the Whisper capture seam attaches one entropy sequence per
-       generated sequence, with no per-token timestamps to distribute it by. Those
-       lines contribute their whole-sequence mean to every bucket they overlap.
-
-    Word-level wins when present so a coarse line value can't double-count against
-    the finer per-word evidence.
-
-    Args:
-        result: One ``ScriptLine``-like object or a list of them (Pydantic objects or
-            cache-deserialized dicts).
-        win_start: Bucket start in seconds (inclusive).
-        win_end: Bucket end in seconds (exclusive).
-
-    Returns:
-        The mean entropy in nats, or ``None`` when no contributing source reported
-        token entropy for this window.
-    """
-    if not result:
-        return None
-    items = result if isinstance(result, list) else [result]
-
-    word_values: list[float] = []
-    line_values: list[float] = []
-    for line in items:
-        for chunk in seg_attr(line, "chunks") or []:
-            value = _collapse_token_entropy(seg_attr(chunk, "token_entropy"))
-            if value is None:
-                continue
-            cs = seg_attr(chunk, "start")
-            ce = seg_attr(chunk, "end")
-            if cs is None or ce is None:
-                continue
-            midpoint = (float(cs) + float(ce)) / 2.0
-            if win_start <= midpoint < win_end:
-                word_values.append(value)
-
-        value = _collapse_token_entropy(seg_attr(line, "token_entropy"))
-        if value is None:
-            continue
-        ls = seg_attr(line, "start")
-        le = seg_attr(line, "end")
-        if ls is None or le is None or (float(ls) < win_end and float(le) > win_start):
-            line_values.append(value)
-
-    if word_values:
-        return sum(word_values) / len(word_values)
-    if line_values:
-        return sum(line_values) / len(line_values)
-    return None
-
-
-# ── Scene classification (AST / YAMNet) ───────────────────────────────
 
 
 def classification_windows(result: Any) -> list[Any]:  # noqa: ANN401
@@ -498,8 +372,9 @@ def classification_window_top1(window: Any) -> tuple[str | None, float | None, f
     """
     if not isinstance(window, dict):
         return None, None, None
-    labels = window.get("labels") or []
-    scores = window.get("scores") or []
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
     if not labels or not scores:
         return None, None, None
     label = str(labels[0])
@@ -536,6 +411,15 @@ def g2p_phonemes(text: str) -> list[str]:
     import nltk
     from g2p_en import G2p  # type: ignore[import-untyped]
 
+    from senselab.audio.tasks.speech_to_text_evaluation.utils import strip_nonlexical_tokens
+
+    # A bracketed marker is an annotation, not a word. Running G2P on "[cough]" yields
+    # phonemes for something nobody said, which then get aligned against real acoustics
+    # and compared as if they were a transcription disagreement.
+    text = strip_nonlexical_tokens(text)
+    if not text.strip():
+        return []
+
     g = getattr(g2p_phonemes, "_cached_g2p", None)
     if g is None:
         try:
@@ -553,274 +437,19 @@ def g2p_phonemes(text: str) -> list[str]:
     return [str(p).strip() for p in seq if str(p).strip() and not str(p).isspace()]
 
 
-def arpabet_to_ppg_inventory(phoneme: str) -> str:
-    """Translate a g2p_en ARPAbet phoneme to the lowercase no-stress format used by ``ppgs``.
+def normalize_arpabet(phoneme: str) -> str:
+    """Normalise a g2p_en ARPAbet phoneme: lowercase, stress markers stripped.
 
     g2p_en returns uppercase ARPAbet with stress markers (``"AH0"``, ``"EY1"``).
-    The ``ppgs`` library uses lowercase ARPAbet without stress markers
+    Named for the ``ppgs`` inventory it once targeted; the normalisation outlived that consumer
+    because it is what makes two ASRs' phoneme sequences comparable — ``AH0`` and ``AH1`` are the
+    same phoneme, and counting them as a difference would inflate every pairwise distance.
+
+    The format is lowercase ARPAbet without stress markers
     (``"ah"``, ``"ey"``) plus ``"<silent>"`` for non-speech frames. Mapping:
     ``.lower().rstrip("0123456789")``.
     """
     return phoneme.lower().rstrip("0123456789")
-
-
-def ppg_argmax_per_frame(
-    ppg_result: Any,  # noqa: ANN401
-    phoneme_labels: list[str] | tuple[str, ...] | None,
-    duration_s: float,
-) -> tuple[list[str], float]:
-    """Pre-compute the per-frame argmax phoneme sequence from a PPG tensor.
-
-    Args:
-        ppg_result: The output of ``extract_ppgs_from_audios`` — typically a list of
-            tensors per audio. Each tensor is shaped ``(phonemes, frames)`` or
-            ``(1, phonemes, frames)`` per the ``ppgs`` library convention; we
-            normalize to ``(frames, phonemes)`` then argmax along the phoneme axis.
-        phoneme_labels: The PPG inventory (e.g. lowercase ARPAbet + ``<silent>``).
-            When ``None``, falls back to the 40-phoneme ppgs default inventory.
-        duration_s: Audio duration in seconds. ``frame_hop = duration_s / n_frames``.
-
-    Returns:
-        ``(per_frame_phonemes, frame_hop_s)``. Empty list and 0.0 hop on bad input.
-    """
-    if not ppg_result or duration_s <= 0:
-        return [], 0.0
-    labels = list(phoneme_labels) if phoneme_labels else list(_DEFAULT_PPG_LABELS)
-    n_phonemes = len(labels)
-    # Outer list = per-audio; we always pass a single audio.
-    ppg = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else ppg_result
-    arr = _to_2d_frame_major(ppg, n_phonemes=n_phonemes)
-    if arr is None or arr.shape[0] == 0:
-        return [], 0.0
-    n_frames = int(arr.shape[0])
-    frame_hop = duration_s / n_frames
-
-    # Argmax along phoneme axis.
-    indices = arr.argmax(axis=-1) if hasattr(arr, "argmax") else None
-    if indices is None:
-        return [], 0.0
-
-    per_frame: list[str] = []
-    for raw_idx in indices.tolist() if hasattr(indices, "tolist") else list(indices):
-        idx = int(raw_idx)
-        per_frame.append(labels[idx] if 0 <= idx < len(labels) else "<unk>")
-    return per_frame, frame_hop
-
-
-def ppg_argmax_confidence_per_frame(
-    ppg_result: Any,  # noqa: ANN401
-    phoneme_labels: list[str] | tuple[str, ...] | None,
-    duration_s: float,
-) -> tuple[list[float], float]:
-    """Pre-compute the per-frame ARGMAX POSTERIOR (max softmax value) of the PPG.
-
-    Parallel to ``ppg_argmax_per_frame`` but returns the value at the argmax
-    instead of the label. PPG outputs are softmax probabilities per phoneme per
-    frame; argmax probability is the model's confidence in its top-1 phoneme.
-    Aggregating these in a bucket window gives a per-bucket PPG-confidence
-    signal complementary to the ASR alignment score.
-
-    Returns ``(per_frame_argmax_probs, frame_hop_s)``. Empty list and 0.0 hop
-    on bad input.
-    """
-    if not ppg_result or duration_s <= 0:
-        return [], 0.0
-    labels = list(phoneme_labels) if phoneme_labels else list(_DEFAULT_PPG_LABELS)
-    n_phonemes = len(labels)
-    ppg = ppg_result[0] if isinstance(ppg_result, list) and ppg_result else ppg_result
-    arr = _to_2d_frame_major(ppg, n_phonemes=n_phonemes)
-    if arr is None or arr.shape[0] == 0:
-        return [], 0.0
-    n_frames = int(arr.shape[0])
-    frame_hop = duration_s / n_frames
-    if not hasattr(arr, "max"):
-        return [], 0.0
-    max_per_frame = arr.max(axis=-1)
-    flat = max_per_frame.tolist() if hasattr(max_per_frame, "tolist") else list(max_per_frame)
-    return [float(v) for v in flat], frame_hop
-
-
-def ppg_mean_confidence_in_window(
-    ppg_argmax_confidence_per_frame_seq: list[float],
-    ppg_frame_hop: float,
-    win_start: float,
-    win_end: float,
-) -> float | None:
-    """Mean per-frame PPG argmax probability over frames inside ``[win_start, win_end)``.
-
-    Higher value (closer to 1.0) → PPG is more confident in its phoneme decoding
-    for this bucket. Lower value → many frames have flat / spread posteriors,
-    which usually correlates with non-speech audio or ambiguous phonetic content.
-    """
-    if not ppg_argmax_confidence_per_frame_seq or ppg_frame_hop <= 0 or win_end <= win_start:
-        return None
-    first_frame = max(0, int(win_start / ppg_frame_hop))
-    last_frame = min(int(math.ceil(win_end / ppg_frame_hop)), len(ppg_argmax_confidence_per_frame_seq))
-    if last_frame <= first_frame:
-        return None
-    slice_ = ppg_argmax_confidence_per_frame_seq[first_frame:last_frame]
-    if not slice_:
-        return None
-    return sum(slice_) / len(slice_)
-
-
-def _to_2d_frame_major(t: Any, *, n_phonemes: int) -> Any:  # noqa: ANN401
-    """Normalize a PPG tensor / array to ``(frames, phonemes)``.
-
-    ``extract_ppgs_from_audios`` returns ``(1, phonemes, frames)`` or
-    ``(phonemes, frames)``; sometimes the cache round-trip leaves a list-of-lists.
-    Cached entries from analyze_audio's wrapper serialize tensors as
-    ``{"_tensor_shape": [...], "_dtype": "torch.float32", "values": [...]}`` — we
-    recognise that shape and rebuild the array.
-
-    Disambiguates orientation by matching against the caller-supplied ``n_phonemes``
-    (the actual inventory size from the PPG block, not a hard-coded default).
-
-    Returns ``None`` on shapes we can't safely interpret. When neither dim matches
-    ``n_phonemes`` exactly, falls back to "phoneme axis is the smaller dim" — but
-    raises a ``ValueError`` if the shape is ambiguous (square, both dims tiny) so
-    the caller surfaces the problem rather than silently producing garbage argmax.
-    """
-    import numpy as np
-
-    if t is None:
-        return None
-    if isinstance(t, dict) and "_tensor_shape" in t and "values" in t:
-        # Cache-restored tensor → reconstruct the numpy array.
-        try:
-            arr = np.asarray(t["values"]).reshape(t["_tensor_shape"])
-        except (ValueError, TypeError) as exc:
-            raise ValueError(
-                f"PPG cached tensor reconstruction failed (shape={t.get('_tensor_shape')!r}): {exc!r}"
-            ) from exc
-    else:
-        arr = np.asarray(t.detach().cpu()) if hasattr(t, "detach") else np.asarray(t)
-    while arr.ndim > 2 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim != 2:
-        return None
-    rows, cols = arr.shape
-    if rows == n_phonemes and cols != n_phonemes:
-        return arr.T  # (phonemes, frames) → (frames, phonemes)
-    if cols == n_phonemes and rows != n_phonemes:
-        return arr  # already (frames, phonemes)
-    if rows == n_phonemes and cols == n_phonemes:
-        # Square against the inventory size — assume the conventional
-        # ppgs layout ``(phonemes, frames)`` and transpose.
-        return arr.T
-    # Neither dim matches the inventory exactly — heuristic fallback, but only when
-    # the shape is unambiguous. ``frames`` is typically ≥10× ``phonemes`` for any
-    # audio longer than ~0.4 s @ 100 Hz frame rate.
-    if max(rows, cols) < 4 * min(rows, cols):
-        raise ValueError(
-            f"PPG tensor shape {arr.shape} is ambiguous against inventory size "
-            f"{n_phonemes}; cannot determine frame vs phoneme axis."
-        )
-    return arr.T if rows < cols else arr
-
-
-def ppg_argmax_runs_in_window(
-    ppg_per_frame_phonemes: list[str],
-    ppg_frame_hop: float,
-    win_start: float,
-    win_end: float,
-) -> list[tuple[float, float, str]]:
-    """Return ``[(start, end, phoneme), ...]`` for argmax runs inside the window.
-
-    Walks the per-frame argmax sequence inside ``[win_start, win_end)``, collapses
-    consecutive frames sharing the same phoneme into a single run, and reports the
-    run's time span. ``<silent>`` runs are kept (they're a valid phoneme in the PPG
-    inventory). Used both by the utterance edit-distance metric (just the phoneme
-    sequence) and by the plot's PPG row (which renders the time-spans as bars).
-    """
-    if not ppg_per_frame_phonemes or ppg_frame_hop <= 0 or win_end <= win_start:
-        return []
-    # ``last_frame`` is exclusive. Use ``ceil`` so a window whose end lands
-    # mid-frame still includes that frame; ``int()`` would silently drop the
-    # final partial frame and over time elide many frames from the PER signal.
-    first_frame = max(0, int(win_start / ppg_frame_hop))
-    last_frame = min(int(math.ceil(win_end / ppg_frame_hop)), len(ppg_per_frame_phonemes))
-    if last_frame <= first_frame:
-        return []
-    runs: list[tuple[float, float, str]] = []
-    cur_phon = ppg_per_frame_phonemes[first_frame]
-    cur_start_frame = first_frame
-    for f in range(first_frame + 1, last_frame):
-        if ppg_per_frame_phonemes[f] != cur_phon:
-            runs.append((cur_start_frame * ppg_frame_hop, f * ppg_frame_hop, cur_phon))
-            cur_phon = ppg_per_frame_phonemes[f]
-            cur_start_frame = f
-    runs.append((cur_start_frame * ppg_frame_hop, last_frame * ppg_frame_hop, cur_phon))
-    return runs
-
-
-def asr_phoneme_sequence_in_window(
-    asr_result: Any,  # noqa: ANN401
-    win_start: float,
-    win_end: float,
-    *,
-    fully_contained: bool = True,
-) -> list[str]:
-    """Return the ARPAbet phoneme sequence (PPG-format) for the ASR words in the window.
-
-    Two modes:
-
-    - ``fully_contained=True`` (default): keep only words whose ``[start, end]``
-      lies entirely inside the window. The whole word's phoneme sequence
-      contributes. Used by callers that prefer "all-or-nothing per word".
-    - ``fully_contained=False``: per-phoneme overlap. Each word's phonemes are
-      distributed uniformly across the word's time span (one slot per phoneme,
-      ``slot_dur = word_dur / n_phonemes``). A phoneme is kept when its slot
-      midpoint falls inside the bucket. This is the right rule for
-      PPG-vs-ASR PER comparison: PPG argmax includes every audio frame in the
-      window, so the ASR side must also reflect "phonemes that occur during
-      this time" rather than "whole words that fit". Without this, boundary
-      words artificially deflate the ASR sequence and inflate PER.
-
-    All output phonemes are translated to PPG inventory format
-    (``arpabet_to_ppg_inventory``).
-    """
-    if not asr_result:
-        return []
-    items = asr_result if isinstance(asr_result, list) else [asr_result]
-    out: list[str] = []
-
-    def _walk(node: Any) -> None:  # noqa: ANN401
-        # Recurse into ``.chunks`` until we hit a leaf (post-MMS-aligned
-        # text-only ASR is line → utterance → words; Whisper / Qwen are
-        # line → words). Apply the bucket containment rule at the leaf.
-        chunks = seg_attr(node, "chunks") or []
-        if chunks:
-            for c in chunks:
-                _walk(c)
-            return
-        cs = seg_attr(node, "start")
-        ce = seg_attr(node, "end")
-        text = seg_attr(node, "text") or ""
-        if cs is None or ce is None or not text.strip():
-            return
-        cs_f, ce_f = float(cs), float(ce)
-        if fully_contained:
-            if cs_f >= win_start and ce_f <= win_end:
-                out.extend(arpabet_to_ppg_inventory(p) for p in g2p_phonemes(text.strip()))
-            return
-        # Overlap mode: distribute the word's phonemes uniformly across its
-        # time span and keep those whose midpoint is inside the bucket.
-        if cs_f >= win_end or ce_f <= win_start:
-            return
-        phonemes = g2p_phonemes(text.strip())
-        if not phonemes:
-            return
-        word_dur = max(ce_f - cs_f, 1e-9)
-        slot_dur = word_dur / len(phonemes)
-        for i, p in enumerate(phonemes):
-            mid = cs_f + (i + 0.5) * slot_dur
-            if win_start <= mid < win_end:
-                out.append(arpabet_to_ppg_inventory(p))
-
-    for line in items:
-        _walk(line)
-    return out
 
 
 def _levenshtein(a: list[str], b: list[str]) -> int:
@@ -843,61 +472,10 @@ def _levenshtein(a: list[str], b: list[str]) -> int:
     return prev[-1]
 
 
-def ppg_sequence_per_in_window(
-    ppg_per_frame_phonemes: list[str],
-    ppg_frame_hop: float,
-    asr_result: Any,  # noqa: ANN401
-    win_start: float,
-    win_end: float,
-) -> float | None:
-    """Phoneme-sequence edit-distance rate between ASR and PPG over ``[win_start, win_end)``.
+SILENCE_LABEL = "<silent>"
+"""The label a harvester uses for "nobody here".
 
-    Builds two sequences:
-
-    - **PPG side**: argmax phoneme per frame inside the window, deduped to runs
-      (consecutive frames sharing a phoneme collapse to one entry). ``<silent>``
-      runs are stripped — they're not real phonemes in the ASR sequence.
-    - **ASR side**: g2p_en applied to each fully-contained ASR chunk in the window,
-      translated to PPG inventory format.
-
-    Returns ``edit_distance / max(len(asr), len(ppg))`` clipped to ``[0, 1]``, or
-    ``None`` when both sides are empty (no signal). Less sensitive to small time
-    misalignments than the per-frame approach because the deduped sequence ignores
-    duration and only compares phoneme order.
-    """
-    if not ppg_per_frame_phonemes or ppg_frame_hop <= 0 or win_end <= win_start:
-        return None
-    runs = ppg_argmax_runs_in_window(ppg_per_frame_phonemes, ppg_frame_hop, win_start, win_end)
-    ppg_seq = [p for _, _, p in runs if p != "<silent>"]
-    # PPG argmax includes EVERY frame in the window — even frames covering
-    # words that straddle the bucket boundary. To compare apples to apples,
-    # the ASR phoneme sequence must include the same boundary words. Use the
-    # overlap rule (not ``fully_contained``) so we don't artificially deflate
-    # the ASR side and inflate the resulting PER.
-    asr_seq = asr_phoneme_sequence_in_window(asr_result, win_start, win_end, fully_contained=False)
-    if not asr_seq:
-        # No fully-contained ASR words in this bucket. We CANNOT score
-        # PPG-vs-ASR PER for this ASR model on this bucket — return None so
-        # the aggregator drops the sub-signal rather than penalising the
-        # model with a spurious 1.0 (used to inflate utterance uncertainty
-        # whenever a text-only ASR's transcript didn't quite land inside a
-        # bucket boundary).
-        return None
-    if not ppg_seq:
-        # PPG is silent throughout the bucket but ASR has phonemes — that IS
-        # a real disagreement (the audio model says no speech, the language
-        # model transcribed text). Saturate at 1.0.
-        return 1.0
-    distance = _levenshtein(asr_seq, ppg_seq)
-    denom = max(len(asr_seq), len(ppg_seq))
-    return min(1.0, distance / denom) if denom > 0 else None
-
-
-# Default PPG inventory — ppgs 0.0.9 lowercase ARPAbet + ``<silent>``.
-# Pinned here so the harvester is callable without senselab's PPG task installed.
-_DEFAULT_PPG_LABELS = (
-    "aa", "ae", "ah", "ao", "aw", "ay", "b", "ch", "d", "dh",
-    "eh", "er", "ey", "f", "g", "hh", "ih", "iy", "jh", "k",
-    "l", "m", "n", "ng", "ow", "oy", "p", "r", "s", "sh",
-    "t", "th", "uh", "uw", "v", "w", "y", "z", "zh", "<silent>",
-)  # fmt: skip
+Spelled from the PPG inventory's non-speech class, which is where it came from, and it outlived that
+inventory because ``speaker_claims_from_votes`` needs it: a model reporting silence has *claimed
+nothing*, and treating that as a claim would let the mask discount a model for agreeing with it.
+Named once so the label and the readers that compare against it cannot drift apart."""

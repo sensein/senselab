@@ -261,11 +261,18 @@ class QwenASR:
                 line_start: Optional[float] = None
                 line_end: Optional[float] = None
                 if chunks_raw:
+                    # These times are the *companion aligner's*, not the recognizer's — the
+                    # `forced_aligner` kwarg above is what produced them. Recording which model,
+                    # not merely that a bundled one ran: the workflow aligns text-only backends
+                    # (Canary) with this same aligner id, and a consumer comparing word times has
+                    # to see that as one timing source rather than two agreeing ones.
                     chunks = [
                         ScriptLine(
                             text=c["text"],
                             start=float(c["start"]),
                             end=float(c["end"]),
+                            timestamp_source="bundled_aligner" if return_timestamps else None,
+                            timestamp_model=aligner_name if return_timestamps else None,
                         )
                         for c in chunks_raw
                     ]
@@ -283,6 +290,8 @@ class QwenASR:
                         start=line_start,
                         end=line_end,
                         chunks=chunks,
+                        timestamp_source="bundled_aligner" if return_timestamps and chunks else None,
+                        timestamp_model=aligner_name if return_timestamps and chunks else None,
                     )
                 )
 
@@ -313,7 +322,7 @@ class QwenASR:
 
         Returns:
             ``List[List[ScriptLine]]`` mirroring ``align_transcriptions``: one
-            inner list per input audio, holding a single utterance ``ScriptLine``
+            inner list per input audio, holding a single asr ``ScriptLine``
             whose ``chunks`` are the aligned word spans.
         """
         aligner_name = aligner_model or _DEFAULT_FORCED_ALIGNER
@@ -359,11 +368,11 @@ class QwenASR:
                     continue
                 starts = [c.start for c in chunks if c.start is not None]
                 ends = [c.end for c in chunks if c.end is not None]
-                utterance = ScriptLine(
+                asr = ScriptLine(
                     text=" ".join(c.text or "" for c in chunks).strip(),
                     start=min(starts) if starts else None,
                     end=max(ends) if ends else None,
                     chunks=chunks,
                 )
-                aligned.append([utterance])
+                aligned.append([asr])
             return aligned

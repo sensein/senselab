@@ -61,12 +61,190 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 2
+CACHE_SCHEMA_VERSION = 22
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
 changed shape, so every pre-existing entry is unreadable by construction. The
 wipe is automatic on every host, not a manual ``rm -rf``.
+
+Bumped 2 → 3 for the scene-quality level work: AST classification scores are no
+longer softmaxed across all 527 AudioSet classes (the head is multi-label, and
+the competition was structurally suppressing secondary background categories),
+and the YAMNet path now applies gain before serializing its temp WAV. Both change
+stored classification output, so every pre-existing entry is stale rather than
+merely re-derivable.
+
+Bumped 3 → 4 as that work continued: every stage outcome now carries the audio
+variant and gain it was computed from, the noise-floor estimate gained a ``status``
+field and moved to a 100 ms analysis frame (changing which bands exist at all), and
+the background mask and source stages emit new shapes. Rather than reason about which
+subset of entries survives, wipe — cache invalidation is free, and a stale entry that
+*looks* readable is far more expensive than recomputing one.
+
+Bumped 4 → 7 across the L2 round rework: the fused rows gained a ``coupled_from``
+column, ``background_mask`` became a fourth emitted axis, and the per-round log gained
+``action_scope`` / ``derivatives_refreshed`` / ``remeasured`` / ``repeating_states``.
+A round's *inputs* changed too — every round after the first now reads the previous
+round's axes and re-derived derivatives — so a cached outcome is not merely missing
+columns, it answers a different question.
+
+Bumped 7 → 8 when the per-pass axis was removed. ``L1/<pass>/uncertainty/<axis>.parquet``
+and ``L1/stability/raw_vs_enhanced/<axis>.parquet`` no longer exist; L1 emits
+``L1/<pass>/signals/<signal>.parquet`` in native units, stability is keyed by signal, the
+linked evidence is written to ``L2/round0/votes/<axis>.parquet``, and ``final/summary.json``
+no longer inlines ``passes``. Nothing needs to read an old parquet — cache invalidation is
+the free lever, and a stale entry that *looks* readable is far more expensive than
+recomputing one.
+
+Bumped 8 → 9 for the D-17 restructure. The run tree changed shape three ways at once:
+a pass became a **perturbation**, so ``L1/raw/`` and ``L1/perturbation/<k>/`` replace
+``L1/raw_16k/`` and ``L1/enhanced_16k/`` and ``L1/perturbations.json`` replaces
+``L1/passes.json``; per-perturbation signal files collapsed into
+``L1/signals/<signal>.parquet`` carrying a ``perturbation`` column; and the two round
+trees became one, ``L2/round/<n>/{estimates,derivatives}``, with the adaptive loop
+adopting fusion's numbering instead of running its own 1-based one. A cached outcome
+still carries ``"pass": "raw_16k"`` in its provenance and joins on a directory that no
+longer exists, so it does not merely lack a column — it describes a run this pipeline
+cannot produce.
+
+Bumped 9 → 10 when the D-17 restructure was finished. Four changes, each of which makes an
+older entry answer a different question:
+
+- ``background_mask`` is a **participant**, not a spectator. Its votes are keyed by the
+  perturbation they were measured under (the identity) rather than by a fabricated
+  perturbation called ``"mask"`` that no ingest path could match, so the axis now carries a
+  belief through every round, proposes regions, and is marked by convergence. A cached run's
+  convergence report says ``background_mask: 0 buckets, residual mass 0.0``, which reads as
+  *settled* and means *never asked*.
+- ``L2/round/<n>/estimates/<axis>.parquet`` has one schema for both producers
+  (``estimates.ESTIMATE_COLUMNS``), where fusion's rounds and the loop's rounds previously
+  wrote different columns under the same name. Rows from either old shape are missing columns
+  a reader now expects and carry none of the two that moved onto them.
+- every round writes ``summary.json`` and ``timeline.png``, and fusion's per-round fold log
+  moved out of ``L2/rounds.json`` into each round's summary.
+- ``final/`` is an extraction. ``final/estimates/<axis>.parquet`` (every active axis),
+  ``final/speakers.json``, ``final/per_speaker_presence.parquet`` and ``final/decisions.json``
+  replace ``L2/speech_presence.parquet``, ``L2/speakers.json``,
+  ``L2/per_speaker_presence.parquet``, ``L2/convergence.json`` and ``L2/iterations.json``.
+  A consumer pointed at the old locations finds nothing there.
+
+Bumped 10 → 11 when the four axes moved onto one grid. **Every axis's row count and every number
+downstream of it changes**, so this is the widest invalidation on this list:
+
+- the grid. ``speech_presence`` and ``background_mask`` ran at a 0.1 s window on a 0.02 s hop,
+  ``speaker`` at 0.25/0.25, ``asr`` at 1.0/0.5 — four grids sharing zero bucket keys. Every axis is
+  now on ``axes.DEFAULT_TIME_GRID`` (0.1 s, window == hop), so a cached row's ``(start, end)`` names
+  a bucket the run no longer has.
+- the asr axis has **one** voter, ``consensus_words``, and no per-bucket text. Gone with it:
+  ``__pairwise_phoneme_distances__``, and the per-bucket ``avg_logprob`` / ``token_entropy`` /
+  ``alignment_ctc_score`` reads. A cached asr vote carries five keys the fold no longer reads and
+  lacks the one it does.
+- the fused asr rows lost ``consensus_votes``, and the LS bundle lost the
+  ``uncertainty__asr__text`` TextArea it fed. The words are published at word resolution in
+  ``final/transcript.json`` and rendered by ``adaptive.ls_final``.
+- the run is configured by ``data/run_config/default.yaml``, whose identity is stamped into every
+  artifact's provenance. A cached entry predates that field, so a run replaying it could not say
+  what configured it.
+
+Anything fitted or tuned against the old grids must be **re-measured, not carried over**: the
+scene-quality calibration profile, the convergence thresholds, the triage gates and the
+``detection_margin`` mask thresholds were all fitted at spacings that no longer exist.
+
+Bumped 11 → 12 when the speaker axis stopped measuring change and started measuring **attribution**.
+Its scored voters are ``speaker_assignment`` / ``target_activity`` rather than
+per-(diar × embedder) ``same_label_uncertainty`` and ``change_inconsistency_uncertainty``, so a cached
+row's ``contributing_signals`` names voters this axis no longer has and lacks the two it does. The
+harvest's vote payloads changed shape with it: the pair entries carry ``calibrated_same_doubt`` /
+``calibrated_change_doubt``, ``__cross_diar_label_disagreement__`` lost its scored ``value``, the
+change-point entries carry ``change_uncertainty``, and ``__overlap_count__`` became ``overlap_count``
+so that L1 records it.
+
+Bumped 12 → 13 when word evidence became a **gate** rather than a voter, and the per-speaker term
+stopped electing a speaker. ``asr_location`` is gone from ``contributing_signals`` — a wordless bucket
+now reads ``None`` instead of carrying word-boundary jitter as identity doubt — and
+``per_speaker_presence`` was renamed ``speaker_assignment`` because it measures the diarizers' spread
+over *every* answer they gave rather than the worst single speaker's. Absent a target embedding the
+axis's question is "do we know who is talking", so a cached row named for a per-speaker reading is
+answering a question the axis no longer asks.
+
+Bumped 13 → 14 when a repair perturbation stopped counting where there is nothing to repair. The
+enhanced pass's readings now enter ``fuse_axis`` only in buckets whose *identity-pass* SNR is below
+``triage.snr_floor_db`` (``fuse.SnrGate``), so on a clean recording almost every fused value is the
+raw reading alone rather than a raw/enhanced mean. Measured on a two-speaker conversation at 41-70 dB
+SNR: the speaker axis goes from 0.227 to 0.032, with 96% of buckets at exactly zero instead of 49%.
+Every estimate row also gains a ``snr_gated_passes`` column, so a cached row is both a different
+number and a narrower schema than a reader now expects.
+
+Bumped 14 → 15 for three changes to what the axes read, each of which makes a cached row a different
+number rather than a stale one:
+
+Bumped 15 → 16 when an abstention became the absence of a vote. ``_abstaining_ramp`` mapped its
+uninformative end to ``0.5``, which ``_directed`` cast as ``speaks=True`` at confidence ``0.5`` — read
+by the fold as 0.5 of doubt, the most a single voter can contribute, in exactly the range where the
+signal has no opinion. ``acoustic_hnr`` and ``acoustic_level_above_floor`` now emit no vote there, so
+a cached presence row's ``contributing_signals`` lists voters that no longer speak in those buckets
+and its ``confidence`` is folded over their fabricated half-claims.
+
+Bumped 16 → 17 when ``acoustic_hnr`` stopped voting on **speech_presence**. HNR is voicing evidence,
+but its 2→10 dB ramp was a code literal never fitted to voiced speech: on a clip whose median HNR is
+8.12 dB, ordinary conversational speech read as only partly voiced, and it became the axis's largest
+contributor (mean doubt 0.1568) while every model voter read 0.0000. Presence doubt 0.0250 → 0.0160.
+The dB measurement is unchanged in ``L1/signals/acoustic_hnr.parquet`` — L1 records it from the
+evidence, not from the vote — so what a cached row differs by is the fold, not the measurement.
+
+Bumped 17 → 18 when the **background_mask** axis stopped folding the enhanced pass
+(``axes.IDENTITY_ONLY_AXES``). ``stages.py`` already built the mask on the unmodified variant alone —
+the enhanced pass masked 50% of a real recording against the unmodified pass's 17.9%, because
+enhancement removes the non-speech evidence the mask reads — but the *axis* harvested from every
+perturbation, and on the 48 kHz clip its enhanced ``words`` voter read 0.0510 against raw's 0.0102. A
+cached row's ``contributing_passes`` names a pass this axis no longer folds.
+
+Bumped 18 → 19 when the **asr** axis stopped folding the recognizers' mean and started folding the
+recognizers. Its votes are keyed by model id rather than by the single name ``consensus_words``, so a
+cached row's ``contributing_signals`` names a signal the axis no longer has and lacks the N it does.
+``epistemic_uncertainty`` on that axis was structurally ``0.0`` before — the spread had been averaged
+away one layer earlier — and is now a measurement, so the number differs as well as the schema.
+
+Bumped 19 → 20 when AST stopped running at 10.24 s. Its window/hop went to 0.96 s / 0.48 s — YAMNet's
+frame — because 1024 mel frames is AST's required *input size*, not its temporal precision:
+``ASTFeatureExtractor`` zero-pads a shorter window to 1024 frames, rectangular and unattenuated. Every
+cached AST classification is a different number of windows at different spans, so nothing about a
+stored result is reusable. Measured on the 21.48 s conversation: 3 windows at Speech 0.473/0.449/0.195
+became 45 windows at 0.75-0.92 — the coarse setting cost confidence as well as resolution, because a
+10.24 s window of a conversation spreads its softmax mass across every class present in it.
+
+Bumped 20 → 21 for the coupling changes. Cross-axis inputs are gated for ``asr`` and
+``background_mask`` as well as ``speaker`` (``axes.COUPLING_IS_A_GATE``), and evidence overlap now
+compares *sources* rather than signal names, with ``speaker_assignment`` and the mask's
+``speech``/``words``/``speakers`` declaring what they fold. Cached rows for rounds >= 1 carry
+``axis::*`` in ``contributing_signals`` and values folded over them — on the 4.9 s clip asr read
+0.3088 at round 2 against 0.0395 at round 0, and the mask 0.2645 against 0.0037.
+
+Bumped 21 → 22 when the **speaker** axis became identity-only (``axes.IDENTITY_ONLY_AXES``). Who is
+speaking is a fact about the recording, so a transform's opinion of it no longer folds into the value.
+On an 11.26 s recording at median −1.5 dB SNR — where ``SnrGate`` admits the enhanced pass in 105 of
+110 buckets, correctly — the raw pass had all four diarizers unanimously on ``C0`` while the enhanced
+pass split them 2–2, and the fused axis read 0.500 against a deliverable reading confidence 1.0000.
+Every cached speaker row on any recording with sub-floor buckets folds a pass this axis no longer
+reads.
+
+- ``embedding_silhouette`` is no longer a **speech_presence** voter. A silhouette measures cluster
+  geometry, not voicing, and it contributed a near-constant 0.44 of doubt at the highest weight of any
+  presence signal — so no bucket could reach zero presence doubt however unanimous the evidence. A
+  cached row's ``contributing_signals`` names it and its ``confidence`` is folded over it. The
+  clustering still reaches the speaker axis as a synthetic diarizer (D-20).
+- the **speaker** axis takes no cross-axis vote (``axes.COUPLING_IS_A_GATE``). Another axis's value
+  bounds where attribution is a live question; it is not evidence about who is speaking. Cached rows
+  for rounds ≥ 1 carry ``axis::asr`` / ``axis::speech_presence`` / ``axis::background_mask`` in
+  ``contributing_signals`` and a value folded over them.
+- the adaptive loop now re-aggregates under the **same SNR gate** fusion folded round 0 with. It was
+  ungated, so every round after the baseline folded a perturbation fusion had excluded and ``final/``
+  published the pre-gate number — 0.2267 for an axis whose round 0 read 0.0487.
+
+Every number keyed to the speaker axis moves with it: region proposal, convergence, residual mass,
+the disagreements ranking and the LS bins. ``theta_low`` / ``theta_high`` were not tuned against this
+composition and must be re-measured rather than carried over.
 """
 
 

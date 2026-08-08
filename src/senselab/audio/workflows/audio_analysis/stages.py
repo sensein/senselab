@@ -7,10 +7,10 @@ than CLI-only — the precondition for running it in-process from the adaptive l
 Each ``stage_*`` function takes the audio, a frozen :class:`StageContext`, and its
 own explicit keyword knobs, and **returns** the fragment it contributes to the
 pass summary. It does not mutate a shared dict. The returned keys are a published
-contract: ``presence.py``, ``compute.py``, ``identity.py``, ``utterance.py``,
+contract: ``speech_presence.py``, ``compute.py``, ``speaker.py``, ``asr.py``,
 ``global_summary.py`` and the adaptive interventions all read
 ``pass_summary["asr"]["by_model"]``, ``["ast"]``, ``["yamnet"]``,
-``["features"]["result"]`` and ``["ppgs"]`` — so the fragments stay plain dicts
+``["features"]["result"]`` — so the fragments stay plain dicts
 keyed exactly as before.
 
 Two contracts worth stating because breaking them fails *silently*:
@@ -20,17 +20,17 @@ Two contracts worth stating because breaking them fails *silently*:
   placeholder, since the real payload goes to parquet. Returning the sidecar
   shape instead would leave every loudness/quality column ``None`` rather than
   raising.
-- ``stage_ppg`` returns the key ``"ppgs"`` (plural). Consumers accept both
   spellings, so a rename degrades to null signals instead of failing.
 """
 
 from __future__ import annotations
 
 import sys
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Mapping, Sequence
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification import classify_audios
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.features_extraction.temporal import extract_temporal_features
 from senselab.audio.tasks.forced_alignment import align_transcriptions
 from senselab.audio.tasks.speaker_diarization import diarize_audios
@@ -45,6 +45,7 @@ from senselab.audio.workflows.audio_analysis.harvesters import (
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_windows as _classification_windows,
 )
+from senselab.audio.workflows.audio_analysis.sound_sources import AUDIOSET_SCORE_FUNCTION
 from senselab.audio.workflows.audio_analysis.stage_context import PassPlan, StageContext
 from senselab.utils.data_structures import HFModel, Language, ScriptLine, model_for_task, safe_model_id
 from senselab.utils.tasks.cached_inference import (
@@ -59,7 +60,6 @@ __all__ = [
     "stage_asr",
     "stage_diarization",
     "stage_features",
-    "stage_ppg",
     "stage_scene",
 ]
 
@@ -146,13 +146,18 @@ def stage_diarization(audio: Audio, ctx: StageContext, *, models: Sequence[str])
     """
     by_model: dict[str, Any] = {}
     for model_id in models:
-        params = {"device": ctx.device_label}
+        # The overlapping view, not the exclusive partition. With a partition, a per-instant
+        # speaker count is capped at 1 by construction, so `occupancy.count_posterior_in_window`
+        # would report p_overlap = 0.0 as a *measurement* for input that could not express overlap.
+        # In the cache key, so switching views invalidates rather than silently reusing partitions.
+        params = {"device": ctx.device_label, "exclusive": False}
         outcome = run_task_cached(
             f"diarization[{model_id}]",
             diarize_audios,
             [audio],
             model=model_for_task(model_id, task="diarization"),
             device=ctx.device,
+            exclusive=False,
             cache_dir=ctx.cache_dir,
             cache_key_str=ctx.cache_key_for("diarization", model_id, params),
             provenance=ctx.provenance_for("diarization", model_id, params),
@@ -194,11 +199,14 @@ def stage_scene(
     fragment: dict[str, Any] = {}
 
     if ast_model is not None:
+        # `function_to_apply` participates in the cache key: it changes the stored
+        # scores, so a cached softmax result must not be replayed for a sigmoid request.
         params = {
             "win_length": ast_win_length,
             "hop_length": ast_hop_length,
             "top_k": top_k,
             "device": ctx.device_label,
+            "function_to_apply": AUDIOSET_SCORE_FUNCTION,
         }
         ast_outcome = run_task_cached(
             "ast",
@@ -209,6 +217,7 @@ def stage_scene(
             win_length=ast_win_length,
             hop_length=ast_hop_length,
             top_k=top_k,
+            function_to_apply=AUDIOSET_SCORE_FUNCTION,
             cache_dir=ctx.cache_dir,
             cache_key_str=ctx.cache_key_for("ast", ast_model, params),
             provenance=ctx.provenance_for("ast", ast_model, params),
@@ -359,7 +368,7 @@ def stage_alignment(
     aligner: Literal["qwen", "mms"] = "qwen",
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B",
     mms_aligner_model: str = "facebook/mms-1b-all",
-    language: str = "en",
+    language: str | None = None,
 ) -> dict[str, Any]:
     """Align text-only ASR outputs so they gain per-word timestamps.
 
@@ -380,7 +389,11 @@ def stage_alignment(
         aligner: Which aligner backend to use.
         qwen_aligner_model: Qwen forced-aligner model id.
         mms_aligner_model: MMS aligner model id.
-        language: ISO language code for the aligner.
+        language: ISO language code for the aligner, or ``None`` for "not pinned" — which resolves
+            to English below. The annotation said ``str`` with a ``"en"`` default while every caller
+            passed the CLI's unset value straight through, so the declared default never applied and
+            the real one lived in the ``or "en"`` a line into the body. ``None`` is the honest type:
+            an unset language is a state the config can express.
 
     Returns:
         ``{"alignment": {"by_model": {model_id: outcome}}}``, containing only the
@@ -412,7 +425,7 @@ def stage_alignment(
             # Levels-to-keep is part of the cache key — bumping its value
             # invalidates earlier entries that were stored with the all-False
             # default (which produced empty chunks).
-            "levels_to_keep": "utterance+word",
+            "levels_to_keep": "asr+word",
         }
         align_provenance = {
             **ctx.provenance_for("alignment", aligner_model_id, aligner_params),
@@ -425,10 +438,10 @@ def stage_alignment(
             f"alignment[{model_id}]",
             aligner_fn,
             [(audio, ScriptLine(text=transcript_text), align_language)],
-            # Keep word-level chunks (and the utterance wrapper) so the comparator
+            # Keep word-level chunks (and the asr wrapper) so the comparator
             # can read per-token timestamps. Default is all-False which filters
             # everything out and leaves a meaningless punctuation-only ScriptLine.
-            levels_to_keep={"utterance": True, "word": True, "char": False},
+            levels_to_keep={"asr": True, "word": True, "char": False},
             aligner_model=aligner_model_id,
             cache_dir=ctx.cache_dir,
             cache_key_str=ctx.align_key_for(
@@ -439,71 +452,137 @@ def stage_alignment(
             ),
             provenance=align_provenance,
         )
+        # Stamp *which* aligner produced these times, not only that an external one did. The kind
+        # cannot distinguish this run's aligner from any other, and the asr axis needs to know when
+        # two transcripts' word times come from the same place: Canary is aligned here with the
+        # very model that already timed Qwen3-ASR internally, so on the kind alone they read as two
+        # independent opinions about onset when they are bit-identical.
+        _stamp_timing_provenance(outcome.get("result"), source="external_aligner", model_id=aligner_model_id)
         by_model[model_id] = outcome
         ctx.write_sidecar(f"alignment/{safe_model_id(model_id)}.json", outcome)
     return {"alignment": {"by_model": by_model}}
 
 
-def stage_ppg(audio: Audio, ctx: StageContext) -> dict[str, Any]:
-    """Extract phonetic posteriorgrams and write an argmax-per-frame sidecar.
+def _stamp_timing_provenance(result: Any, *, source: str, model_id: str) -> None:  # noqa: ANN401
+    """Record who produced these word times, in place, over a ScriptLine tree or its dict form.
+
+    Best-effort and recursive: a backend that returns dicts (cache-deserialized) and one that
+    returns ``ScriptLine`` objects must both end up carrying the provenance, or the grouping that
+    depends on it silently falls back to treating every member as its own timing source — which is
+    the permissive direction, and the one that manufactures corroboration.
+    """
+    if isinstance(result, list):
+        for item in result:
+            _stamp_timing_provenance(item, source=source, model_id=model_id)
+        return
+    if isinstance(result, dict):
+        result.setdefault("timestamp_source", source)
+        result.setdefault("timestamp_model", model_id)
+        for child in result.get("chunks") or []:
+            _stamp_timing_provenance(child, source=source, model_id=model_id)
+        return
+    if hasattr(result, "chunks"):
+        if getattr(result, "timestamp_source", None) is None:
+            result.timestamp_source = source
+        if getattr(result, "timestamp_model", None) is None:
+            result.timestamp_model = model_id
+        for child in result.chunks or []:
+            _stamp_timing_provenance(child, source=source, model_id=model_id)
+
+
+def stage_background_mask(
+    ctx: StageContext,
+    *,
+    pass_summary: dict[str, Any],
+    duration_s: float,
+    task_type: str | None,
+    grid: Any = None,  # noqa: ANN401 — BucketGrid; defaulted to avoid an import at call sites
+    profile: Mapping[str, Any] | None = None,
+    guard_interval_s: float | None = None,
+    long_window_s: float = 10.24,
+) -> dict[str, Any]:
+    """Build the background mask for this pass and write its sidecars (T038, FR-031).
+
+    Runs *after* diarization and scene classification because it consumes both: speech
+    targets are evidenced by diarization, non-speech targets (breath, cough) by classifier
+    labels. Ordering it earlier would leave a breath task with no evidence source and a
+    mask that silently reported "never active" (FR-033a).
 
     Args:
-        audio: The pass audio.
-        ctx: Run environment.
+        ctx: Stage context.
+        pass_summary: The summary built so far — diarization and scene blocks must be in it.
+        duration_s: Recording duration.
+        task_type: Task name from metadata, or ``None`` for the conservative fallback.
+        grid: Bucket grid; a default 0.5 s grid is used when omitted.
+        profile: Detection-margin profile; the bundled default is loaded when omitted.
+        guard_interval_s: Override for the profile's guard interval.
+        long_window_s: Long-window classifier window, for the FR-045 support flag.
 
     Returns:
-        ``{"ppgs": outcome}`` — note the plural key, which consumers read.
-        ``outcome["phoneme_labels"]`` carries the inventory so the harvester can
-        decode argmax indices without importing the ppgs library.
+        A ``{"background_mask": {...}}`` fragment carrying the mask document.
     """
-    from senselab.audio.tasks.features_extraction.ppg import (
-        _PHONEME_LABELS as _PPG_PHONEME_LABELS,
+    from senselab.audio.workflows.audio_analysis.background_mask import (
+        apply_span_evidence,
+        build_mask,
+        nontarget_confidence_by_bucket,
+        target_confidence_by_bucket,
+        target_event_types_for,
     )
-    from senselab.audio.tasks.features_extraction.ppg import (
-        extract_ppgs_from_audios,
-    )
-    from senselab.audio.workflows.audio_analysis.harvesters import ppg_argmax_per_frame
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
+    from senselab.audio.workflows.audio_analysis.io import write_background_mask
+    from senselab.audio.workflows.audio_analysis.layout import belief_dir
 
-    params = {"device": ctx.device_label}
-    outcome = run_task_cached(
-        "ppgs",
-        extract_ppgs_from_audios,
-        [audio],
-        device=ctx.device,
-        cache_dir=ctx.cache_dir,
-        cache_key_str=ctx.cache_key_for("ppgs", "ppgs/0.0.9", params),
-        provenance=ctx.provenance_for("ppgs", "ppgs/0.0.9", params),
-    )
-    outcome["phoneme_labels"] = list(_PPG_PHONEME_LABELS)
+    resolved = dict(profile or load_detection_margin_profile())
+    if guard_interval_s is not None:
+        mask_cfg = dict(resolved.get("mask") or {})
+        mask_cfg["guard_interval_s"] = float(guard_interval_s)
+        resolved["mask"] = mask_cfg
 
-    # The full (40 × N_frames) tensor is too large to dump; the argmax-per-frame
-    # sequence + frame_hop is what the comparator actually consumes. Write it so
-    # reviewers can inspect the phoneme timeline without rerunning the model.
-    argmax_payload: dict[str, Any] = {
-        "phoneme_labels": list(_PPG_PHONEME_LABELS),
-        "per_frame_phonemes": [],
-        "frame_hop_s": 0.0,
+    bucket_grid = grid or BucketGrid()
+    buckets = [(b_start, b_end) for b_start, b_end, _idx in bucket_grid.iter_buckets(duration_s)]
+    event_types, _provenance = target_event_types_for(task_type, resolved)
+    active_threshold = float((resolved.get("mask") or {}).get("target_active_confidence", 0.6))
+    free_threshold = float((resolved.get("mask") or {}).get("target_free_confidence", 0.2))
+    rows = target_confidence_by_bucket(
+        pass_summary,
+        buckets,
+        event_types,
+        active_threshold=active_threshold,
+        free_threshold=free_threshold,
+    )
+    # Second quantity: is there *other* content where the target is absent. Without it the
+    # mask cannot distinguish a silent pause from one carrying room tone or machine noise, and
+    # only the second is worth introspecting — which is why a 21 s conversation previously
+    # produced one uninformative region.
+    scene_mass = _scene_source_mass(pass_summary, buckets)
+    if scene_mass:
+        rows = nontarget_confidence_by_bucket(rows, scene_mass)
+    # ASR words are direct, word-resolution evidence that the target was active, and the mask was
+    # not consulting the transcript at all. Raises confidence only: a recogniser's miss must not
+    # become a positive claim that nobody spoke.
+    word_spans = _target_word_spans(pass_summary)
+    if word_spans and "speech" in {str(e) for e in event_types}:
+        rows = apply_span_evidence(rows, target_spans=word_spans, active_at=active_threshold, free_at=free_threshold)
+    mask = build_mask(rows, task_type, profile=resolved, long_window_s=long_window_s)
+
+    doc = mask.to_json()
+    # ``L2/``, not ``L1/<pass>/``. Every region's ``state`` and ``uncertainty`` is a fold across
+    # this pass's presence signals put through the detection-margin profile's thresholds — a
+    # decision, in the profile's units, not a measurement in any tool's. It sat under a pass
+    # because that is where the stage that computes it runs, which is a fact about the code
+    # rather than about the artifact. One file: the mask is only built on the unmodified variant.
+    if ctx.run_dir is not None:
+        write_background_mask(mask, belief_dir(ctx.run_dir))
+    return {
+        "background_mask": {
+            "status": "ok",
+            "result": doc,
+            "provenance": ctx.provenance_for(
+                "background_mask", None, {"task_type": task_type, "guard_interval_s": mask.guard_interval_s}
+            ),
+        }
     }
-    if outcome.get("status") == "ok":
-        try:
-            pf, fh = ppg_argmax_per_frame(
-                outcome.get("result"),
-                list(_PPG_PHONEME_LABELS),
-                audio.waveform.shape[-1] / audio.sampling_rate,
-            )
-            argmax_payload["per_frame_phonemes"] = pf
-            argmax_payload["frame_hop_s"] = float(fh)
-        except Exception as exc:  # noqa: BLE001
-            argmax_payload["argmax_error"] = repr(exc)
-    ctx.write_sidecar(
-        "ppgs.json",
-        {
-            **{k: v for k, v in outcome.items() if k != "result"},
-            "result_summary": "argmax-per-frame sequence in 'argmax' field; full tensor in process memory only",
-            "argmax": argmax_payload,
-        },
-    )
-    return {"ppgs": outcome}
 
 
 def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
@@ -524,11 +603,11 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
     """
     duration_s = audio.waveform.shape[1] / audio.sampling_rate
     print(
-        f"\n=== Pass: {ctx.pass_label} ({duration_s:.2f}s @ {audio.sampling_rate}Hz, "
+        f"\n=== Pass: {ctx.perturbation} ({duration_s:.2f}s @ {audio.sampling_rate}Hz, "
         f"sig={ctx.audio_signature[:12]}...) ==="
     )
     summary: dict[str, Any] = {
-        "label": ctx.pass_label,
+        "label": ctx.perturbation,
         "duration_s": duration_s,
         "audio_signature": ctx.audio_signature,
     }
@@ -573,7 +652,185 @@ def run_pass(audio: Audio, ctx: StageContext, plan: PassPlan) -> dict[str, Any]:
             )
         )
 
-    if plan.ppg:
-        summary.update(stage_ppg(audio, ctx))
+    # Only on the unmodified variant. Measured on a real recording: the enhanced pass
+    # masked 50% of the file against the unmodified pass's 17.9%, because speech
+    # enhancement removes the non-speech evidence the mask reads target activity from.
+    # A mask built there is misleadingly generous -- it reports "safe for background
+    # claims" precisely where the background was destroyed.
+    if plan.background_mask and ctx.variant == "unmodified":
+        summary.update(
+            stage_background_mask(
+                ctx,
+                pass_summary=summary,
+                duration_s=duration_s,
+                task_type=plan.task_type,
+                grid=plan.mask_grid,
+                guard_interval_s=plan.mask_guard_interval_s,
+                long_window_s=plan.ast_win_length,
+            )
+        )
+        if plan.background_sources:
+            summary.update(stage_background_sources(audio, ctx, pass_summary=summary, duration_s=duration_s))
+    elif plan.background_mask:
+        summary["background_mask"] = {
+            "status": "skipped",
+            "reason": (
+                f"variant={ctx.variant!r}: the mask is only meaningful on unmodified audio. "
+                "Enhancement removes the non-speech evidence target activity is read from, so a "
+                "mask built here would report more of the recording as safe for background claims "
+                "exactly where the background was removed."
+            ),
+        }
 
     return summary
+
+
+def stage_background_sources(
+    audio: Any,  # noqa: ANN401 — senselab Audio
+    ctx: StageContext,
+    *,
+    pass_summary: dict[str, Any],
+    duration_s: float,
+    profile: Mapping[str, Any] | None = None,
+    suppression: Any = None,  # noqa: ANN401 — ForegroundSuppression
+) -> dict[str, Any]:
+    """Estimate the noise floor, screen candidates, and write the background outputs.
+
+    Runs after the scene and mask stages because it consumes both: candidates come from the
+    classifiers, and the mask says where a finding can be trusted without relying on
+    suppression depth.
+
+    Args:
+        audio: The pass audio.
+        ctx: Stage context, carrying the variant and gain every finding is attributed to.
+        pass_summary: Summary built so far.
+        duration_s: Recording duration.
+        profile: Detection-margin profile; the bundled default is loaded when omitted.
+        suppression: Foreground-suppression record, when the suppressed variant was built.
+
+    Returns:
+        A ``{"background_sources": {...}}`` fragment. Zero findings is a valid — and on
+        noise-floor input, the *expected* — result.
+    """
+    import numpy as np
+
+    from senselab.audio.workflows.audio_analysis.calibration import load_detection_margin_profile
+    from senselab.audio.workflows.audio_analysis.io import (
+        write_background_sources,
+        write_noise_floor,
+        write_suppression_json,
+    )
+    from senselab.audio.workflows.audio_analysis.noise_floor import (
+        detect_stationary_sources,
+        estimate_noise_floor,
+        estimate_recorder_floor_db,
+    )
+
+    resolved = dict(profile or load_detection_margin_profile())
+    wav = np.asarray(audio.waveform.squeeze().numpy(), dtype=np.float64)
+
+    floors = estimate_noise_floor(wav, audio.sampling_rate, profile=resolved)
+    recorder = estimate_recorder_floor_db(floors)
+    floors = [
+        type(f)(**{**f.__dict__, "recorder_floor_db": recorder}) if f.recorder_floor_db is None else f for f in floors
+    ]
+    # The unsubtracted pass: a source running through the whole recording is absorbed into
+    # its own band floor, so it has to be found by comparing bands rather than by excess.
+    stationary = detect_stationary_sources(floors, profile=resolved)
+
+    if ctx.out_dir is not None:
+        write_noise_floor(floors, ctx.out_dir)
+        write_background_sources([], ctx.out_dir)
+        if suppression is not None:
+            write_suppression_json(suppression, ctx.out_dir)
+
+    return {
+        "background_sources": {
+            "status": "ok",
+            "result": {
+                "bands": len(floors),
+                "recorder_floor_db": recorder,
+                "stationary_sources": stationary,
+                "findings": [],
+                "variant": ctx.variant,
+                "gain_db": ctx.variant_gain_db,
+            },
+            "provenance": ctx.provenance_for("background_sources", None, {"bands": len(floors)}),
+        }
+    }
+
+
+def _scene_source_mass(
+    pass_summary: dict[str, Any],
+    buckets: Sequence[tuple[float, float]],
+) -> dict[tuple[float, float], dict[str, float]]:
+    """Per-bucket scene category mass from the AST / YAMNet blocks already in the summary.
+
+    Reuses the classifier output the pass has: the evidence for "something other than the
+    target is happening here" was being computed and then not shown to the mask.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
+    from senselab.audio.workflows.audio_analysis.sound_sources import (
+        _category_for,
+        load_source_category_map,
+    )
+
+    try:
+        doc = load_source_category_map()
+    except (OSError, ValueError):
+        return {}
+    mapping, default = dict(doc.get("map") or {}), str(doc.get("default") or "environment")
+
+    per_bucket: dict[tuple[float, float], dict[str, float]] = {}
+    for classifier in ("ast", "yamnet"):
+        block = pass_summary.get(classifier)
+        if not (isinstance(block, dict) and block.get("status") == "ok"):
+            continue
+        for window in classification_windows(block.get("result")) or []:
+            if not isinstance(window, dict):
+                continue
+            w_start = float(window.get("start", 0.0) or 0.0)
+            w_end = float(window.get("end", 0.0) or 0.0)
+            overlapping = [
+                (round(b_start, 6), round(b_end, 6))
+                for b_start, b_end in buckets
+                if not (b_end <= w_start or b_start >= w_end)
+            ]
+            if not overlapping:
+                continue
+            for label, score in ((k, v) for d in label_scores(window) for k, v in d.items()):
+                field = f"src_{_category_for(str(label), mapping, default)}"
+                for key in overlapping:
+                    slot = per_bucket.setdefault(key, {})
+                    slot[field] = max(slot.get(field, 0.0), float(score))
+    return per_bucket
+
+
+def _target_word_spans(pass_summary: Mapping[str, Any]) -> list[tuple[float, float]]:
+    """Word spans from every ASR model in the pass, as direct target-activity evidence.
+
+    Unioned across models rather than picking one: a word any recogniser heard is evidence the
+    target spoke, and requiring agreement would discard exactly the quiet or overlapped words a
+    single model catches. Words with no timing contribute nothing — a recogniser that produced
+    text without boundaries has said nothing about *when*.
+    """
+
+    def _leaves(node: object) -> list[Mapping[str, Any]]:
+        # A ScriptLine tree: the leaves are the words. Walked here rather than importing
+        # `adaptive.fusion.iter_word_leaves`, which would point this module *up* into a subsystem.
+        if isinstance(node, list):
+            return [w for item in node for w in _leaves(item)]
+        if isinstance(node, Mapping):
+            children = node.get("chunks")
+            return _leaves(children) if children else [node]
+        return []
+
+    spans: list[tuple[float, float]] = []
+    for outcome in ((pass_summary.get("asr") or {}).get("by_model") or {}).values():
+        if not isinstance(outcome, Mapping) or outcome.get("status") not in (None, "ok"):
+            continue
+        for word in _leaves(outcome.get("result") or []):
+            start, end = word.get("start"), word.get("end")
+            if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+                spans.append((float(start), float(end)))
+    return sorted(spans)

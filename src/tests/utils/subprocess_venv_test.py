@@ -636,3 +636,107 @@ def test_all_three_subprocess_backends_route_through_same_torch_index(
         assert not any(
             s == "torchaudio" or s.startswith("torchaudio>") or s.startswith("torchaudio=") for s in stage_two
         ), f"{label} backend leaked a torchaudio spec into Stage 2"
+
+
+# ── TLS trust for the isolated venvs ────────────────────────────────────────
+
+
+def test_subprocess_env_points_tls_at_a_bundle_that_exists() -> None:
+    """The uv-managed interpreter these venvs run on has no usable system CA path.
+
+    python-build-standalone is statically linked, so `ssl.create_default_context()` finds no trust
+    store and every `urlopen` inside a worker fails with `CERTIFICATE_VERIFY_FAILED` — on a host whose
+    network is fine and where `curl` to the same URL succeeds, because curl uses the system bundle and
+    Python does not. Measured on MIT ORCD: the coqui venv's Python failed as-is and succeeded with
+    `SSL_CERT_FILE` pointed at the certifi bundle already installed in that same venv.
+
+    The failure surfaced two layers away, as a `RuntimeError` re-raised by
+    `parse_subprocess_result` from the worker's structured error, which is why it read as a Coqui
+    problem rather than a trust-store one.
+    """
+    import os
+
+    from senselab.utils.subprocess_venv import _clean_subprocess_env
+
+    env = _clean_subprocess_env()
+    bundle = env.get("SSL_CERT_FILE")
+    assert bundle, "a worker with no CA bundle cannot verify TLS on a standalone interpreter"
+    assert os.path.exists(bundle), f"SSL_CERT_FILE points at a file that does not exist: {bundle}"
+    assert env.get("REQUESTS_CA_BUNDLE") == bundle, "requests-based workers need the same bundle"
+
+
+def test_an_operators_own_ca_bundle_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A host behind a corporate CA has already answered this question.
+
+    Overriding it would break precisely the setup that took the trouble to configure it, so the
+    defaults are applied only when the variables are unset.
+    """
+    from senselab.utils.subprocess_venv import _clean_subprocess_env
+
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/pki/corp/ca-bundle.pem")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/pki/corp/ca-bundle.pem")
+    env = _clean_subprocess_env()
+    assert env["SSL_CERT_FILE"] == "/etc/pki/corp/ca-bundle.pem"
+    assert env["REQUESTS_CA_BUNDLE"] == "/etc/pki/corp/ca-bundle.pem"
+
+
+def test_every_worker_spawn_goes_through_the_shared_env_helper() -> None:
+    """A helper only helps the call sites that call it.
+
+    `_clean_subprocess_env` existed, and six of the twenty-one venv-python spawns did not use it:
+    `voice_cloning/coqui.clone_voices` and `features_extraction/ppg` each hand-rolled their own copy
+    of the MPLBACKEND filter, while `voice_cloning/sparc`, `features_extraction/sparc`,
+    `compatibility_test_runner`, and `subprocess_venv`'s own shim passed no `env` at all and
+    inherited `os.environ` wholesale. So the CA-bundle fix landed in one place and four backends kept
+    failing — `voice_cloning_test` still raised CERTIFICATE_VERIFY_FAILED on ORCD after the helper
+    was already correct, and `subprocess_venv_test` passed the whole time because it tested the
+    helper rather than its callers.
+
+    A duplicated env dict is the kind of thing that reads as harmless at every individual call site,
+    so this asserts the invariant structurally instead: launching a venv interpreter means passing an
+    `env`, and building one from `os.environ` happens in exactly one module.
+    """
+    import ast
+    import pathlib
+
+    import senselab
+
+    # From the package itself, so moving this test file cannot silently point the scan at nothing.
+    pkg = pathlib.Path(senselab.__file__).resolve().parent
+    assert pkg.is_dir(), pkg
+
+    missing_env: list[str] = []
+    hand_rolled: list[str] = []
+    for source in sorted(pkg.rglob("*.py")):
+        text = source.read_text()
+        rel = source.relative_to(pkg.parent)
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            # Every env built from os.environ belongs to the one helper.
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in ("items", "copy")
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "environ"
+                and source.name != "subprocess_venv.py"
+            ):
+                hand_rolled.append(f"{rel}:{node.lineno}")
+            # A spawn of the venv interpreter must be handed an env.
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "run"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "subprocess"
+                and node.args
+                and isinstance(node.args[0], ast.List)
+                and node.args[0].elts
+                and isinstance(node.args[0].elts[0], ast.Name)
+                and node.args[0].elts[0].id == "python"
+            ):
+                continue
+            if not any(kw.arg == "env" for kw in node.keywords):
+                missing_env.append(f"{rel}:{node.lineno}")
+
+    assert not missing_env, "venv-python spawns with no env (they inherit os.environ): " + ", ".join(missing_env)
+    assert not hand_rolled, "env built from os.environ outside subprocess_venv.py: " + ", ".join(hand_rolled)

@@ -3,7 +3,7 @@
 Consumes the LS JSON export format (list of tasks, ``annotations[].result``
 with paired ``labels``/``textarea`` items sharing region ids) and scores:
 
-- **presence**: bucket-level accuracy/precision/recall of ``presence_confidence ≥ 0.5``
+- **speech_presence**: bucket-level accuracy/precision/recall of ``speech_presence_confidence ≥ 0.5``
   against labeled speech spans; mean uncertainty inside vs outside speech.
 - **transcript**: WER of the fused consensus (and each contributing model)
   against the concatenated GT texts, computed only over words whose midpoint
@@ -11,8 +11,8 @@ with paired ``labels``/``textarea`` items sharing region ids) and scores:
   from both sides — the annotator's own uncertainty is not a reference).
 - **diarization**: greedy cluster↔GT-speaker mapping by time overlap +
   speaker-attribution accuracy over fused words; speaker-count comparison.
-- **boundary/uncertainty checks**: identity uncertainty at GT speaker
-  boundaries vs within segments; utterance uncertainty + fused word confidence
+- **boundary/uncertainty checks**: speaker uncertainty at GT speaker
+  boundaries vs within segments; asr uncertainty + fused word confidence
   inside the untranscribed GT span vs elsewhere (the region a human could not
   transcribe should be where the pipeline is least certain).
 """
@@ -25,6 +25,11 @@ from typing import Any
 
 from senselab.audio.workflows.audio_analysis.aggregate import _normalize_transcript_for_wer
 from senselab.audio.workflows.audio_analysis.harvesters import _levenshtein
+
+# ``final_dir`` alone. Every other layout helper this module imported named a place in the belief
+# tree, and EVAL consumes the deliverable: the shortest statement of that rule is an import list
+# with nowhere else in it.
+from senselab.audio.workflows.audio_analysis.layout import final_dir
 
 _TOKEN_EQUIV = {"u": "you"}  # annotator shorthand normalization, reported separately
 
@@ -65,24 +70,29 @@ def evaluate_against_ground_truth(
 ) -> dict[str, Any]:
     """Score final outputs in ``out_dir`` against the LS ground truth; write eval.json."""
     gt = load_ls_ground_truth(gt_path)
-    final = Path(out_dir) / "final"
+    # The evaluator scores the deliverable and nothing else. Every read here is of ``final/``,
+    # which is what makes it a consumer of the answer rather than a stage that builds it — it
+    # used to reach into ``L2/`` for the presence track, the baseline round's uncertainty mass
+    # and the last round's speaker axis, and each of those was a scorer scoring an intermediate.
+    final = final_dir(out_dir)
     transcript = json.loads((final / "transcript.json").read_text())
     diarization = json.loads((final / "diarization.json").read_text())
     import pandas as pd
 
-    presence = pd.read_parquet(final / "presence.parquet")
+    estimates = final / "estimates"
+    speech_presence = pd.read_parquet(estimates / "speech_presence.parquet")
 
     speech_spans = [(s["start"], s["end"]) for s in gt["segments"]]
     transcribed = [(s["start"], s["end"]) for s in gt["segments"] if s["text"]]
     untranscribed = [(s["start"], s["end"]) for s in gt["segments"] if not s["text"]]
 
-    # ── presence ─────────────────────────────────────────────────────────
+    # ── speech_presence ─────────────────────────────────────────────────────────
     tp = fp = fn = tn = 0
     unc_speech: list[float] = []
     unc_sil: list[float] = []
-    for _, row in presence.iterrows():
+    for _, row in speech_presence.iterrows():
         mid = (float(row["start"]) + float(row["end"])) / 2.0
-        pv = row.get("presence_confidence")
+        pv = row.get("speech_presence_confidence")
         if pv is None or pv != pv:
             continue
         gt_speech = _in_any(mid, speech_spans)
@@ -91,10 +101,10 @@ def evaluate_against_ground_truth(
         fp += (not gt_speech) and pred
         fn += gt_speech and (not pred)
         tn += (not gt_speech) and (not pred)
-        u = row.get("aggregated_uncertainty")
+        u = row.get("uncertainty")
         if u is not None and u == u:
             (unc_speech if gt_speech else unc_sil).append(float(u))
-    presence_eval = {
+    speech_presence_eval = {
         "buckets": tp + fp + fn + tn,
         "accuracy": round((tp + tn) / max(1, tp + fp + fn + tn), 4),
         "precision": round(tp / max(1, tp + fp), 4),
@@ -174,40 +184,50 @@ def evaluate_against_ground_truth(
         vals = [w["confidence"] for w in transcript["words"] if _in_any((w["start"] + w["end"]) / 2.0, spans)]
         return round(sum(vals) / len(vals), 4) if vals else None
 
-    rows2 = json.loads((Path(out_dir) / "rounds").joinpath("1", "summary.json").read_text())
+    # The trajectory, from the deliverable that now carries it. This read the baseline round's
+    # ``summary.json`` out of the belief tree, which is a scorer reconstructing the run's history
+    # from an intermediate; ``final/decisions.json`` is the run's own account of it.
+    decisions = json.loads((final / "decisions.json").read_text())
+    trajectory = (decisions.get("convergence") or {}).get("rounds") or []
     localization = {
         "untranscribed_gt_spans": untranscribed,
         "fused_confidence_in_untranscribed": _mean_conf(untranscribed),
         "fused_confidence_in_transcribed": _mean_conf(transcribed),
-        "round1_uncertainty_mass": rows2.get("uncertainty_mass"),
+        # The mass the *first* recorded round entered with. ``None`` when the run recorded no
+        # round, which is a missing measurement and not a mass of zero.
+        "baseline_uncertainty_mass": (trajectory[0].get("uncertainty_mass") or {}).get("before")
+        if trajectory
+        else None,
     }
     # Identity uncertainty at GT speaker boundaries vs inside segments.
     try:
         import pandas as pd  # noqa: PLC0415
 
-        last_round = max(int(p.name) for p in (Path(out_dir) / "rounds").iterdir() if p.name.isdigit())
-        ident = pd.read_parquet(Path(out_dir) / "rounds" / str(last_round) / "belief" / "identity.parquet")
-        ident = ident[ident["stream"] == transcript.get("stream", "raw_16k")]
+        # One row per bucket, folded across perturbations by the writer. The filter this replaces
+        # took the transcript's stream, which scored the run against whichever perturbation the
+        # transcript came from rather than against the belief the run published — and it read the
+        # last round's estimate out of ``L2/`` rather than the deliverable extracted from it.
+        ident = pd.read_parquet(estimates / "speaker.parquet")
         boundaries = [g["start"] for g in gt["segments"][1:]]
         at_b: list[float] = []
         inside: list[float] = []
         for _, row in ident.iterrows():
-            u = row.get("aggregated_uncertainty")
+            u = row.get("uncertainty")
             if u is None or u != u:
                 continue
             if any(row["start"] <= b < row["end"] for b in boundaries):
                 at_b.append(float(u))
             elif _in_any((row["start"] + row["end"]) / 2.0, speech_spans):
                 inside.append(float(u))
-        localization["identity_uncertainty_at_gt_boundaries"] = round(sum(at_b) / len(at_b), 4) if at_b else None
-        localization["identity_uncertainty_within_segments"] = round(sum(inside) / len(inside), 4) if inside else None
+        localization["speaker_uncertainty_at_gt_boundaries"] = round(sum(at_b) / len(at_b), 4) if at_b else None
+        localization["speaker_uncertainty_within_segments"] = round(sum(inside) / len(inside), 4) if inside else None
     except (OSError, ValueError):
         pass
 
     eval_doc = {
         "ground_truth": str(gt_path),
         "gt_segments": gt["segments"],
-        "presence": presence_eval,
+        "speech_presence": speech_presence_eval,
         "transcript": transcript_eval,
         "diarization": diarization_eval,
         "localization": localization,

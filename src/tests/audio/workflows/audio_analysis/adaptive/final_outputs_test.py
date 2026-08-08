@@ -1,0 +1,245 @@
+"""Final per-speaker outputs (T094, contracts/speaker-speaker.md).
+
+These artifacts are what an analyst reads. SC-002 requires that the count disagreement be
+resolvable *from these files alone* — without opening intermediate per-bucket artifacts —
+so anything needed for that has to be present here.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from senselab.audio.workflows.audio_analysis.adaptive.fusion import write_speaker_outputs
+from senselab.audio.workflows.audio_analysis.layout import final_dir
+from senselab.audio.workflows.audio_analysis.speaker_identity import (
+    PerSpeakerPresenceTrack,
+    SourceCountClaim,
+    SourceLabelCorrespondence,
+    SpeakerHypothesis,
+    speaker_count_posterior,
+)
+
+
+def _posterior():  # noqa: ANN202 — test helper
+    return speaker_count_posterior(
+        [
+            SourceCountClaim("pyannote", 1, support=1.0),
+            SourceCountClaim("sortformer", 1, support=1.0),
+            SourceCountClaim("embedding_silhouette", 5, support=0.5),
+        ],
+        gates={"independent": 1.0, "derived": 0.4},
+    )
+
+
+def _hypotheses():  # noqa: ANN202
+    return [
+        SpeakerHypothesis(
+            speaker_id="S0",
+            existence_uncertainty=0.18,
+            supporting_sources=["pyannote", "embedding_silhouette"],
+            source_support={"pyannote": 1.0, "embedding_silhouette": 0.3},
+            first_seen=0.08,
+            last_seen=4.84,
+            total_active_s=2.31,
+            converged=True,
+        )
+    ]
+
+
+def _write(tmp_path: Path, **kw: object):  # noqa: ANN202
+    return write_speaker_outputs(
+        tmp_path,
+        posterior=_posterior(),
+        hypotheses=_hypotheses(),
+        correspondence=[SourceLabelCorrespondence("pyannote", "SPEAKER_00", "S0", 1.0, cluster_id="c0")],
+        tracks=[PerSpeakerPresenceTrack("S0", 0.0, 0.5, 0.9, 0.1, contributing_sources=["pyannote"])],
+        **kw,  # type: ignore[arg-type]
+    )
+
+
+def test_both_artifacts_are_written(tmp_path: Path) -> None:
+    """The pair, not one or the other."""
+    speakers, speech_presence = _write(tmp_path)
+    assert speakers.exists() and speech_presence.exists()
+
+
+def test_count_disagreement_is_readable_from_the_file_alone(tmp_path: Path) -> None:
+    """SC-002: an analyst must not have to open intermediate artifacts.
+
+    Both competing counts and the sources backing each are present in one document.
+    """
+    speakers, _ = _write(tmp_path)
+    doc = json.loads(speakers.read_text())
+    cp = doc["count_posterior"]
+    assert set(cp["probabilities"]) == {"1", "5"}
+    assert cp["support"]["1"] == ["pyannote", "sortformer"]
+    assert cp["support"]["5"] == ["embedding_silhouette"]
+    assert cp["is_multimodal"] is True
+
+
+def test_probabilities_sum_to_one_after_serialization(tmp_path: Path) -> None:
+    """Rounding for readability must not break the distribution."""
+    speakers, _ = _write(tmp_path)
+    probs = json.loads(speakers.read_text())["count_posterior"]["probabilities"]
+    assert sum(probs.values()) == pytest.approx(1.0, abs=1e-5)
+
+
+def test_every_supported_count_appears_in_probabilities(tmp_path: Path) -> None:
+    """Support and probabilities cannot disagree about which counts exist."""
+    speakers, _ = _write(tmp_path)
+    cp = json.loads(speakers.read_text())["count_posterior"]
+    assert set(cp["support"]) <= set(cp["probabilities"])
+
+
+def test_source_support_is_recorded_per_hypothesis(tmp_path: Path) -> None:
+    """FR-007: a consumer must be able to weight a hypothesis by what backs it."""
+    speakers, _ = _write(tmp_path)
+    spk = json.loads(speakers.read_text())["speakers"][0]
+    assert all(0.0 <= v <= 1.0 for v in spk["source_support"].values())
+    assert spk["has_supported_evidence"] is True
+
+
+def test_label_correspondence_is_auditable(tmp_path: Path) -> None:
+    """FR-005: which source label became which hypothesis, and via which cluster."""
+    speakers, _ = _write(tmp_path)
+    entry = json.loads(speakers.read_text())["label_correspondence"][0]
+    assert entry["source_label"] == "SPEAKER_00"
+    assert entry["speaker_id"] == "S0"
+    assert entry["cluster_id"] == "c0"
+
+
+def test_speech_presence_parquet_carries_every_contract_column(tmp_path: Path) -> None:
+    """final/per_speaker_presence.parquet columns."""
+    _, speech_presence = _write(tmp_path)
+    df = pd.read_parquet(speech_presence)
+    for col in (
+        "speaker_id",
+        "start",
+        "end",
+        "speech_presence_confidence",
+        "speech_presence_uncertainty",
+        "overlap_with",
+        "contributing_sources",
+        "resolution_kind",
+    ):
+        assert col in df.columns, f"missing {col}"
+
+
+def test_empty_tracks_still_write_a_typed_parquet(tmp_path: Path) -> None:
+    """An absent file would make "no speakers" indistinguishable from "never ran"."""
+    write_speaker_outputs(tmp_path, posterior=_posterior(), hypotheses=[], correspondence=[], tracks=[])
+    df = pd.read_parquet(final_dir(tmp_path) / "per_speaker_presence.parquet")
+    assert len(df) == 0
+    assert "speaker_id" in df.columns
+
+
+def test_profile_versions_are_recorded(tmp_path: Path) -> None:
+    """A result must be attributable to the policy that produced it."""
+    speakers, _ = _write(tmp_path, profile_version="detection-margin/2026-07-29", influence_profile="influence/default")
+    doc = json.loads(speakers.read_text())
+    assert doc["profile_version"] == "detection-margin/2026-07-29"
+    assert doc["influence_profile"] == "influence/default"
+
+
+def test_outputs_are_byte_identical_across_repeated_writes(tmp_path: Path) -> None:
+    """SC-004 / SC-029: determinism, including key ordering inside the posterior."""
+    a, _ = _write(tmp_path / "a")
+    b, _ = _write(tmp_path / "b")
+    assert a.read_bytes() == b.read_bytes()
+
+
+# ── reproducibility across whole derivations (T094b, FR-010 / SC-004) ──
+
+
+def _speaker_votes() -> list[dict]:
+    """Two diar models, agreeing for two buckets and splitting on the third."""
+    per_bucket = [{"a": "Sx", "b": "Sx"}, {"a": "Sx", "b": "Sx"}, {"a": "Sx", "b": "Sy"}]
+    out = []
+    for i, clusters in enumerate(per_bucket):
+        votes: dict[str, object] = {
+            m: {"speaker_label": f"{m}-{c}", "cluster_id": c, "speaker_changed_from_prev": None}
+            for m, c in clusters.items()
+        }
+        votes["__cross_diar_label_disagreement__"] = {"cluster_ids": dict(clusters)}
+        out.append({"start": i * 0.5, "end": (i + 1) * 0.5, "votes": votes})
+    return out
+
+
+def _passes_for_two_speakers() -> dict:
+    return {
+        label: {
+            "duration_s": 1.5,
+            "diarization": {
+                "by_model": {
+                    "a": {"status": "ok", "result": [[{"start": 0.0, "end": 1.5, "speaker": "SPEAKER_00"}]]},
+                    "b": {
+                        "status": "ok",
+                        "result": [
+                            [
+                                {"start": 0.0, "end": 1.0, "speaker": "SPEAKER_00"},
+                                {"start": 1.0, "end": 1.5, "speaker": "SPEAKER_01"},
+                            ]
+                        ],
+                    },
+                }
+            },
+        }
+        for label in ("raw", "enhanced")
+    }
+
+
+def test_the_whole_derivation_reproduces_byte_for_byte(tmp_path: Path) -> None:
+    """FR-010 / SC-004: identical inputs must give identical files, not merely equal values.
+
+    The existing repeated-write test fixes the objects and varies only serialization. This
+    one re-derives them from the passes and the harvested votes, which is where run-to-run
+    drift would actually come from — dict iteration order in the clustering, ranking ties,
+    or set ordering in the correspondence rows.
+    """
+    from senselab.audio.workflows.audio_analysis.speaker_identity import (
+        build_speaker_identity,
+        build_speech_presence_tracks,
+    )
+
+    passes, votes = _passes_for_two_speakers(), _speaker_votes()
+    written = []
+    for run in ("first", "second"):
+        out = tmp_path / run
+        posterior, hypotheses, correspondence = build_speaker_identity(passes, speaker_votes=votes)
+        speakers, speech_presence = write_speaker_outputs(
+            out,
+            posterior=posterior,
+            hypotheses=hypotheses,
+            correspondence=correspondence,
+            tracks=build_speech_presence_tracks(votes),
+        )
+        written.append((speakers.read_bytes(), speech_presence.read_bytes()))
+
+    assert written[0][0] == written[1][0]
+    assert written[0][1] == written[1][1]
+
+
+def test_the_derivation_actually_produced_something_to_compare(tmp_path: Path) -> None:
+    """Guards the test above: two identical empty files would also compare equal."""
+    from senselab.audio.workflows.audio_analysis.speaker_identity import (
+        build_speaker_identity,
+        build_speech_presence_tracks,
+    )
+
+    votes = _speaker_votes()
+    posterior, hypotheses, correspondence = build_speaker_identity(_passes_for_two_speakers(), speaker_votes=votes)
+    _s, speech_presence = write_speaker_outputs(
+        tmp_path,
+        posterior=posterior,
+        hypotheses=hypotheses,
+        correspondence=correspondence,
+        tracks=build_speech_presence_tracks(votes),
+    )
+    frame = pd.read_parquet(speech_presence)
+    assert not frame.empty
+    assert set(frame["speaker_id"]) == {"S0", "S1"}
+    assert correspondence and all(c.cluster_id for c in correspondence)

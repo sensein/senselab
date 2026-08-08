@@ -16,6 +16,10 @@ repos:
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests
+    # `run_config.py` reads the packaged YAML, and this hook's mypy runs in an isolated env —
+    # so the stubs the dev group provides are not visible to it. Without this the hook fails
+    # with `Library stubs not installed for "yaml"` while a local `uv run mypy .` passes.
+    - types-PyYAML
 - repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
   rev: v2.15.0
   hooks:
@@ -54,7 +58,9 @@ repos:
   rev: v2.4.1
   hooks:
   - id: codespell
-    args: [--skip=*.ipynb, --ignore-words-list, AER]
+    # AER: alignment error rate. FPR: false-positive rate. PASE: Problem-Agnostic Speech
+    # Encoder, a model name. All three are terms codespell reads as misspellings of other words.
+    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE']
     additional_dependencies:
     - tomli
 - repo: local

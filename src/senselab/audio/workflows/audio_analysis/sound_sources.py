@@ -1,4 +1,4 @@
-"""Background sound-source categorization for the presence axis.
+"""Background sound-source categorization for the speech_presence axis.
 
 Maps the AudioSet class scores emitted by AST and YAMNet into four coarse
 categories — ``speech``, ``people`` (non-speech human sounds), ``machine``
@@ -9,7 +9,7 @@ mass of each plus the dominant category.
 The mapping is a checked-in, versioned JSON (``data/audioset_source_map.json``)
 authored by walking each AudioSet class to its top-level ontology ancestor, so
 every class the classifiers can emit resolves to exactly one category (SC-003).
-This is additive to the presence rows and independent of the existing top-1
+This is additive to the speech_presence rows and independent of the existing top-1
 ``speech_presence_labels`` / YAMNet-veto uses, which are unaffected.
 """
 
@@ -20,12 +20,32 @@ from functools import lru_cache
 from importlib import resources
 from typing import Any, Optional
 
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
 from senselab.utils.data_structures.logging import logger
 
 SOURCE_CATEGORIES = ("speech", "people", "machine", "environment")
 _MAP_RESOURCE = "audioset_source_map.json"
+
+AUDIOSET_SCORE_FUNCTION = "sigmoid"
+"""Output transform for AudioSet classification heads (FR-017c).
+
+AudioSet is a **multi-label** task: many classes can be simultaneously present, and a
+527-class head trained on it emits per-class evidence, not a choice among alternatives.
+Reading it through a softmax makes the classes compete, which suppresses secondary classes
+multiplicatively — so a background source at fixed underlying evidence gets a
+systematically smaller share of :func:`_window_category_masses` than it should, and the
+suppression is worst exactly when a dominant source is present. That is the case this
+feature exists to handle, so the competition is not an acceptable approximation.
+
+Per-window normalization below cancels the *scale* difference between a softmax and a
+sigmoid, but not the competition structure — hence fixing the transform rather than
+post-hoc rescaling.
+
+Ranking is unaffected: both transforms are monotone in the logit, so ``top_k`` selects the
+same labels either way. Only the mass proportions change.
+"""
 
 # Classes seen at runtime that are missing from the map — warn once each.
 _warned_unmapped: set[str] = set()
@@ -67,12 +87,50 @@ def _native_grid(block: dict[str, Any]) -> tuple[float, float]:
     return win_length, hop_length
 
 
+def window_label_mass(window: Any, labels_of_interest: set[str]) -> Optional[float]:  # noqa: ANN401
+    """Share of one classification window's score mass falling on a subset of labels.
+
+    Args:
+        window: One ``classify_audios`` window dict with ``labels`` and ``scores``.
+        labels_of_interest: The label subset to sum, e.g. the speech-related AudioSet classes.
+
+    Returns:
+        The subset's share of total mass in ``[0, 1]``, or ``None`` when the window carried no
+        scores.
+
+    Replaces ``top-1 label in subset``, which was a threshold disguised as a lookup. AST and
+    YAMNet emit several hundred class scores; taking the argmax and asking whether it happens to
+    be a speech label throws away everything else. A window whose top label is ``Music`` at 0.40
+    with ``Speech`` second at 0.38 voted a confident *no speech* — discarding 0.38 of speech
+    evidence. Mass over the subset keeps it, and which labels count as speech stays a task
+    parameter rather than being folded into a boolean.
+    """
+    if not isinstance(window, dict):
+        return None
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
+    if not labels or not scores:
+        return None
+    subset = 0.0
+    total = 0.0
+    for label, score in zip(labels, scores):
+        s = max(float(score), 0.0)
+        total += s
+        if str(label) in labels_of_interest:
+            subset += s
+    if total <= 0:
+        return None
+    return subset / total
+
+
 def _window_category_masses(window: Any, mapping: dict[str, str], default: str) -> Optional[dict[str, float]]:  # noqa: ANN401
     """Sum one classification window's scores into the four category masses (normalized)."""
     if not isinstance(window, dict):
         return None
-    labels = window.get("labels") or []
-    scores = window.get("scores") or []
+    pairs = label_scores(window)
+    labels = [next(iter(d)) for d in pairs]
+    scores = [next(iter(d.values())) for d in pairs]
     if not labels or not scores:
         return None
     masses = {c: 0.0 for c in SOURCE_CATEGORIES}
@@ -115,7 +173,7 @@ def harvest_source_categories(
     pass_summary: dict[str, Any],
     grid: BucketGrid,
 ) -> list[dict[str, Any]]:
-    """Return one source-category dict per presence bucket on ``grid``.
+    """Return one source-category dict per speech_presence bucket on ``grid``.
 
     Combines AST + YAMNet (mean of whichever classifiers are available) into the
     four category masses, normalizes them to sum ~1, and reports the dominant

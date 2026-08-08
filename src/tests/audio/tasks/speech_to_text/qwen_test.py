@@ -7,7 +7,7 @@ through ``transcribe_audios`` triggers a one-time install of the
 
 When the venv is locally available these tests verify only the senselab
 API contract for the new backend — return type, ScriptLine shape,
-presence/absence of word-level chunks driven by ``return_timestamps`` —
+speech_presence/absence of word-level chunks driven by ``return_timestamps`` —
 not transcription quality. We use a real-speech fixture from
 ``src/tests/data_for_testing/`` so the worker subprocess has a valid
 WAV to feed to the ASR model.

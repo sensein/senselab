@@ -70,11 +70,10 @@ It runs in two steps:
 
 ```bash
 # Step 1 — analyze: run every model on the recording (results are content-addressably
-# cached, so re-runs are cheap). `--enhancement auto` adds a triage round 0 that skips
-# the speech-enhancement pass on clean audio and stops early on silent recordings.
-uv run python scripts/analyze_audio.py path/to/recording.wav --enhancement auto
-# → artifacts/analyze_audio/<name>_<timestamp>/  (per-task JSONs, 9 uncertainty
-#   parquets, Label Studio bundle, disagreements.json, timeline.png)
+# cached, so re-runs are cheap). Two arguments: the audio, and where results go.
+uv run python scripts/analyze_audio.py path/to/recording.wav
+# → artifacts/analyze_audio/<name>_<timestamp>/  (L1 per-signal parquets, L2 fused
+#   axes, Label Studio bundle, disagreements.json, final/ deliverables)
 
 # Step 2 — adapt: run the uncertainty-driven loop over that run directory.
 uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
@@ -82,30 +81,76 @@ uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
     --ground-truth path/to/labelstudio_export.json   # optional: scores vs human labels
 ```
 
+**`analyze_audio.py` takes an audio file and `--out`, and nothing else.** Every other value — the
+model ids, the bucket grid, the aggregator, the task type, the triage and enhancement gates, which
+stages run — lives in one versioned file with its derivation recorded beside it:
+`src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`. To change something,
+write a YAML holding only the keys you are changing and pass `--config my.yaml`; it deep-merges over
+the packaged one, and the merged mapping's hash is stamped into every artifact's provenance, so a run
+can always be named. There are deliberately no per-knob flags: the seventy that preceded this
+differed in ways a reader had no basis to choose between, and the *shipped defaults* of the four grid
+flags put the four uncertainty axes on four spacings that shared no bucket keys — silently disabling
+every cross-axis coupling in the pipeline.
+
 The loop writes, under the run directory (or `--out`):
 
 - `final/transcript.json` — consensus word-level transcript (family-weighted voting across all ASR
   models) with speaker attribution, per-word confidence, and alternates where models disagree;
-- `final/diarization.json` + `final/presence.parquet` — refined speaker segments (embedding
-  change-point + re-clustering repair) and the fused speech-presence track;
-- `final/convergence.json` + `final/iterations.json` — what the loop did and why: every intervention
-  (fired / deferred / blocked) with trigger values and measured uncertainty deltas, budget
-  accounting, and regions marked `converged` / `irreducible` (with a machine-readable reason);
+- `final/diarization.json` — refined speaker segments (embedding change-point + re-clustering
+  repair);
+- `final/estimates/<axis>.parquet` — the last round's estimate of every active axis, extracted
+  verbatim from `L2/round/<last>/estimates/`. A number in `final/` that is not in the last round
+  was computed at the wrong stage, so this directory only copies;
+- `final/speakers.json` + `final/per_speaker_presence.parquet` — the speaker-count posterior with
+  its per-speaker hypotheses, and one presence track per hypothesised speaker;
+- `final/decisions.json` — what the loop did and why: every intervention (fired / deferred /
+  blocked) with trigger values and measured uncertainty deltas, budget accounting, and regions
+  marked `converged` / `irreducible` (with a machine-readable reason). Each round's own slice of
+  this is in its `L2/round/<n>/summary.json`;
 - `final/timeline.png` — ground truth (if given) vs presence / identity / utterance uncertainty per
   round, interventions, and the confidence-colored fused words;
 - `final/labelstudio_{tasks,config}.{json,xml}` + `disagreements_resolved.json` — the original Label
   Studio bundle with `final__*` consensus tracks added, and the round-1 disagreements annotated with
   their resolutions.
 
-Useful knobs (all thresholds/budgets/models live in a versioned policy file —
-`src/senselab/audio/workflows/audio_analysis/adaptive/policy/default.yaml` — overridable via
-`--policy my_policy.yaml`): `--max-rounds`, `--aggregator`, per-run intervention budgets, ASR
-reserve/escalation pools, and identity-repair parameters. Runs are **deterministic**: identical
-inputs + policy produce byte-identical decision logs. `HF_TOKEN` enables the gated
+All thresholds, budgets and model pools live in the `adaptive:` section of that same run config —
+round count, aggregator, per-run intervention budgets, ASR reserve/escalation pools, identity-repair
+parameters — and it keeps its own `policy_hash` beside the config's `config_hash`, because a policy
+change and a model change are not the same event. `scripts/adaptive_loop.py` takes `--config` too.
+Runs are **deterministic**: identical inputs + config produce byte-identical decision logs. `HF_TOKEN` enables the gated
 `pyannote/segmentation-3.0` overlap detector; without it the loop degrades gracefully and records
-the skipped intervention in `convergence.json → next_actions`.
+the skipped intervention in `final/decisions.json → convergence.next_actions`.
 
 ---
+
+## Background scene characterization
+
+Detects background sound sources — people, machines, environment — beneath a
+near-microphone foreground speaker, and reports **how far above the noise floor** each one
+sits so a marginal finding is never mistaken for a confident one.
+
+```bash
+# `task.type` in the run config selects what counts as the participant's own activity.
+uv run python scripts/analyze_audio.py recording.wav
+```
+
+Three things worth knowing before reading the output:
+
+**Detection is floor subtraction, not amplification.** Amplification moves a source and the
+leaked foreground together, so it changes no signal-to-noise ratio. It is capped at 10 dB
+and used only to keep a classifier's absolute floor from destroying quiet content.
+
+**Every finding carries its margin above the band noise floor**, on a 3 / 6 / 10 dB ladder
+corroborated independently by human masked-threshold criteria, a dozen bioacoustics and
+noise-standard traditions, and the classifiers' own measured detection floors.
+
+**A null result is attributable.** Suppression depth is reported alongside, so "no
+background found" is distinguishable from "suppression was too shallow to look".
+
+The background mask marks where claims are trustworthy without relying on suppression at
+all. `task.type` matters: in a breathing or cough task the target event *is* a non-speech
+vocal sound, and a mask built from voice activity alone would report the collected signal as
+a background source.
 
 ## ⚠️ System Requirements
 1. **If on macOS, this package requires an ARM64 architecture** due to PyTorch 2.2.2+ dropping support for x86-64 on macOS.
@@ -125,7 +170,28 @@ the skipped intervention in `convergence.json → next_actions`.
 
     If you attempt to install this package on an unsupported system, the installation or execution will fail.
 
-2. `FFmpeg` is required by some audio and video dependencies (e.g., `torchaudio`). Please make sure you have `FFmpeg` properly installed on your machine before installing and using `senselab` (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
+2. **`FFmpeg` shared libraries** are required. The consumer is `torchcodec`, which `dlopen`s them at
+   import time *by soname* (`libavutil.so.56` / `.57` / `.58` / `.59`, one attempt per supported major).
+   Two consequences worth knowing before you debug this:
+
+   - **The `av` (PyAV) wheel does not satisfy it**, even though it ships ffmpeg libraries inside your
+     environment. PyAV mangles their filenames on purpose (`av.libs/libavutil-3591eddc.so.60.8.100`) so
+     they cannot collide with a system ffmpeg, which also makes them invisible to a soname lookup.
+   - **Without them, no test collects at all.** `src/tests/conftest.py` reports
+     `Dependencies failed to import — test environment is broken`, including for tests that never open
+     an audio file.
+
+   If you have no system ffmpeg, or no root, this repo installs it for you via conda-forge into a
+   prefix you choose:
+
+   ```bash
+   bash scripts/install-ffmpeg.sh                       # defaults to /opt/miniforge
+   CONDA_PREFIX=~/ffmpeg bash scripts/install-ffmpeg.sh # anywhere writable
+   export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"    # macOS: DYLD_LIBRARY_PATH
+   ```
+
+   This is what CI uses on every platform. Otherwise install ffmpeg (`<8`) system-wide — see
+   [ffmpeg.org](https://www.ffmpeg.org/download.html).
 
 3. CUDA libraries matching the CUDA version expected by the PyTorch wheels (e.g., the latest pytorch 2.8 expects cuda-12.8). To install those with conda, please do:
   - ```conda config --add channels nvidia```
@@ -156,6 +222,11 @@ Please follow the official installation instructions for your platform: [Install
 ---
 
 ## Installation
+
+**Python 3.11–3.14**, declared as `>=3.11,<3.15` in `pyproject.toml`. For development the repo pins
+the interpreter in `.python-version` (**3.12**, matching CI's default), which `uv` reads, so a bare
+`uv sync` is deterministic.
+
 Install this package via:
 
 ```sh
@@ -173,9 +244,93 @@ If you want to install only audio dependencies, you do:
 pip install 'senselab'
 ```
 
-To install articulatory, video, text, and senselab-ai extras, please do:
+The declared extras are `nlp`, `text`, `video`, `senselab-ai`, and `all` (every one of them).
+To pick a subset:
 ```sh
-pip install 'senselab[articulatory,video,text,senselab-ai]'
+pip install 'senselab[video,text,senselab-ai]'
+```
+
+There is no `articulatory` extra — it was documented here and in `CONTRIBUTING.md` but never declared,
+so `uv sync --extra articulatory` fails outright and `pip install 'senselab[articulatory]'` warns and
+installs base only.
+
+### Released vs pre-release
+
+Merging a PR into `alpha` publishes an **alpha pre-release** automatically (`release.yaml` →
+`auto shipit`); merging into `main` publishes a release. So there are two lines on PyPI, and `--pre`
+is how you choose:
+
+```sh
+pip install 'senselab[all]'          # the released line (currently 1.3.0)
+pip install --pre 'senselab[all]'    # the newest alpha from the alpha branch (1.3.1aN)
+```
+
+This is why every tutorial carries `--pre` — notebooks track the alpha branch:
+
+```python
+!pip install -q uv
+!uv pip install --pre --system "senselab[nlp,text,video]"
+```
+
+Colab images happen to ship `ffmpeg`, so notebooks work there without installing it. The guarded
+fallback for images that do not — and the `HF_TOKEN`-from-Colab-secrets snippet — is the setup-cell
+template in [`tutorials/README.md`](tutorials/README.md).
+
+**None of this applies to development.** `--pre` installs a *published artifact*; a developer wants
+the working tree. See [Development](#development) below, which builds from source and never fetches
+`senselab` from PyPI.
+
+---
+
+## Development
+
+Three steps, and the second is the one people miss:
+
+Development installs **from source** — the checkout you are standing in. `uv sync` puts the working
+tree in the environment, so an edit is live with no reinstall; nothing here fetches `senselab` from
+PyPI, and `--pre` has no role. (The version you will see, `1.3.1aN.devM`, comes from `hatch-vcs`
+reading git describe, which is also why a shallow clone with no tags reports a wrong version.)
+
+```bash
+# 1. Environment. --all-extras is what every CI workflow uses: it cannot go stale when an
+#    extra is added, which `--extra all` can. The interpreter comes from .python-version
+#    (3.12, matching CI's default), so no --python flag.
+uv sync --all-extras --group dev --group docs
+
+# 2. FFmpeg shared libraries for torchcodec. Skip this and NOTHING collects —
+#    conftest.py aborts with "Dependencies failed to import", even for tests that
+#    never open an audio file. See System Requirements above for why the PyAV wheel
+#    does not cover it.
+bash scripts/install-ffmpeg.sh
+export LD_LIBRARY_PATH="/opt/miniforge/lib:$LD_LIBRARY_PATH"   # macOS: DYLD_LIBRARY_PATH
+
+# 3. Hooks, required before committing.
+uv run pre-commit install
+```
+
+Then:
+
+```bash
+uv run pytest                                    # everything, with coverage
+uv run pytest src/tests/audio/tasks/preprocessing_test.py          # one file
+uv run pytest src/tests/audio/tasks/preprocessing_test.py::test_x  # one test
+uv run mypy .
+uv run ruff check          # --fix to autofix
+uv run ruff format
+uv run codespell
+```
+
+**On `pytest -n auto`.** It is tempting and it is a memory hazard: `pytest-xdist` gives each worker its
+own interpreter, and each one imports torch + transformers + speechbrain independently — measured at
+**535 MB resident per worker before a single test runs**, plus a private copy of any model weights that
+worker's tests load. On a 10-core / 32 GB laptop `-n auto` has exhausted memory. Prefer running the
+directory you changed, or cap the workers (`-n 4`). The pure-Python workflow tests are fast serially:
+`uv run pytest src/tests/audio/workflows/audio_analysis` is ~1400 tests in about 17 s.
+
+Docs build locally with:
+
+```bash
+uv run pdoc src/senselab -t docs_style/pdoc-theme --docformat google
 ```
 
 ---

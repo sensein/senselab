@@ -23,6 +23,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Mapping
 
+from senselab.audio.workflows.audio_analysis.perturbations import TRANSFORMS
 from senselab.utils.tasks.cached_inference import (
     CACHE_SCHEMA_VERSION,
     align_cache_key,
@@ -37,6 +38,15 @@ if TYPE_CHECKING:  # pragma: no cover — avoids a runtime torch+transformers im
 __all__ = ["STAGE_VERSIONS", "PassPlan", "StageContext", "stage_code_version"]
 
 
+_VARIANT_NAMES: Final[tuple[str, ...]] = tuple(TRANSFORMS)
+"""Recognized audio variants — exactly the declared perturbation transforms.
+
+The variant *is* the transform the perturbation declared, so there is one list rather than two
+that have to agree. ``level.py`` carries its own copy for import weight (it pulls numpy; this
+module is deliberately importable without it), and ``perturbations`` is a plain dataclass module
+with no such cost, so this one can be the real thing."""
+
+
 STAGE_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
     {
         "diarization": 1,
@@ -45,7 +55,10 @@ STAGE_VERSIONS: Final[Mapping[str, int]] = MappingProxyType(
         "features": 1,
         "asr": 1,
         "alignment": 1,
-        "ppgs": 1,
+        "background_mask": 1,
+        "noise_floor": 1,
+        "background_sources": 1,
+        "level_probe": 1,
     }
 )
 """Per-stage cache-invalidation counters, keyed by the task string used in cache keys.
@@ -59,7 +72,7 @@ one module. Coarse and deliberate beats automatic and wrong.
 
 Library-side changes are already covered by ``senselab_version`` in the key, so
 these numbers only need to move for *wrapper-shaped* output changes — mainly
-``features`` (composes three backends into a row dict) and ``ppgs`` (attaches
+``features`` (composes three backends into a row dict) and the classifiers (attach
 phoneme labels). The rest are thin pass-throughs to a ``tasks/`` API.
 """
 
@@ -96,24 +109,54 @@ class StageContext:
     """Run environment shared by every stage of one pass.
 
     Attributes:
-        pass_label: e.g. ``"raw_16k"`` / ``"enhanced_16k"``.
+        perturbation: e.g. ``"raw"`` / ``"enhanced"``.
         audio_signature: From ``cached_inference.audio_signature`` — the join key
             between ``summary.json`` and each cache entry's provenance.
         device: Compute device, or ``None`` for automatic selection.
         cache_dir: Cache directory, or ``None`` to disable caching.
         out_dir: Pass output directory, or ``None`` for a headless run that emits
             no sidecar files (what the adaptive loop wants).
+        run_dir: The run root, or ``None`` under the same headless condition. Carried
+            explicitly rather than walked back out of :attr:`out_dir`, because a stage whose
+            product is a *decision* rather than a measurement writes it under ``L2/`` and must
+            not have to guess how many parents up the run root is.
         audio_source: Absolute source path, recorded in provenance only.
         senselab_ver: Installed senselab version; participates in cache keys.
+        variant: Which audio variant this pass consumes — ``"unmodified"``,
+            ``"speech_enhanced"``, or ``"foreground_suppressed"``. Recorded on every
+            stage outcome so no result is unattributed (FR-012, SC-006).
+        variant_gain_db: Gain applied to that variant, in dB. Recorded for the same
+            reason: the classifiers are amplitude-sensitive, so a result is only
+            interpretable alongside the level it was computed at.
+
+    Note:
+        ``variant`` and ``variant_gain_db`` are deliberately **not** part of the cache
+        key. Cache correctness comes from :attr:`audio_signature`, which must be computed
+        on the *post-gain* waveform — amplifying changes the samples, so the signature
+        changes with them. Adding the variant to the key would be redundant, and computing
+        the signature *pre*-gain would break that guarantee, so keep signature computation
+        downstream of the gain.
     """
 
-    pass_label: str
+    perturbation: str
     audio_signature: str
     device: DeviceType | None = None
     cache_dir: Path | None = None
     out_dir: Path | None = None
+    run_dir: Path | None = None
     audio_source: str = ""
     senselab_ver: str = field(default_factory=senselab_version)
+    variant: str = "unmodified"
+    variant_gain_db: float = 0.0
+
+    def __post_init__(self) -> None:
+        """Reject an unknown variant name at construction.
+
+        A typo would propagate into provenance and silently break the joins that
+        ``level.json`` and the disagreements index rely on, so it fails here instead.
+        """
+        if self.variant not in _VARIANT_NAMES:
+            raise ValueError(f"unknown audio variant {self.variant!r}; expected one of {_VARIANT_NAMES}")
 
     @property
     def device_label(self) -> str:
@@ -168,7 +211,9 @@ class StageContext:
             "params": dict(params),
             "audio_signature": self.audio_signature,
             "audio_source": self.audio_source,
-            "pass": self.pass_label,
+            "pass": self.perturbation,
+            "variant": self.variant,
+            "variant_gain_db": self.variant_gain_db,
             "device": self.device_label,
             "code_version": stage_code_version(task),
             "senselab_version": self.senselab_ver,
@@ -202,6 +247,23 @@ class PassPlan:
     yamnet_win_length: float = 0.96
     yamnet_hop_length: float = 0.48
     scene_top_k: int = 50
+    background_mask: bool = True
+    background_sources: bool = True
+    task_type: str | None = None
+    mask_guard_interval_s: float | None = None
+    mask_grid: Any = None
+    """The grid the background mask is cut on — ``speech_presence``'s, per D-24.
+
+    Defaulted to ``None`` (``BucketGrid()``'s 0.5 s) only so a caller that builds a plan without
+    grids still works. The run must pass the presence grid: the mask is *derived from* presence —
+    a region is target-free where presence has settled — so on different grids that derivation
+    needs a projection, and every projection is a place to lose localisation. On a shared grid
+    row *i* of one is row *i* of the other and the coupling is exact.
+
+    Measured cost of not sharing it: presence produced 1070 buckets at 100 ms and the mask 43 at
+    0.5 s, so five presence judgements were projected onto each mask bucket before the mask could
+    say anything.
+    """
     features: bool = False
     features_win_length: float = 1.0
     features_hop_length: float = 0.5
@@ -209,6 +271,8 @@ class PassPlan:
     aligner: Literal["qwen", "mms"] = "qwen"
     qwen_aligner_model: str = "Qwen/Qwen3-ForcedAligner-0.6B"
     mms_aligner_model: str = "facebook/mms-1b-all"
-    asr_language: str = "en"
+    # ``None`` = not pinned, which ``stage_alignment`` resolves to English. It was ``str = "en"``
+    # while the CLI passed its unset value through unchanged, so the annotation described a default
+    # that never took effect.
+    asr_language: str | None = None
     qwen_native_timestamps: bool = True
-    ppg: bool = False

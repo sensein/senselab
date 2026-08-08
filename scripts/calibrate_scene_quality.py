@@ -43,8 +43,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--noise", choices=("white", "pink"), default="white")
     parser.add_argument("--clean-anchor-db", type=float, default=25.0, help="True SNR mapped to degradation 0")
     parser.add_argument("--floor-anchor-db", type=float, default=5.0, help="True SNR mapped to degradation 1")
-    parser.add_argument("--temperature-presence", type=float, default=1.0)
-    parser.add_argument("--temperature-utterance", type=float, default=1.0)
+    parser.add_argument("--temperature-speech-presence", type=float, default=1.0)
+    parser.add_argument("--temperature-asr", type=float, default=1.0)
     parser.add_argument("--out", type=Path, default=Path("artifacts/scene_quality_calibration.json"))
     parser.add_argument("--plot", type=Path, default=Path("artifacts/scene_quality_calibration_validation.png"))
     parser.add_argument("--table", type=Path, default=Path("artifacts/scene_quality_calibration_validation.json"))
@@ -103,7 +103,7 @@ def _estimate(audio_np: Any, sr: int, *, brouhaha: bool) -> dict[str, float | No
 
     from senselab.audio.data_structures import Audio
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
-    from senselab.audio.workflows.audio_analysis.quality import harvest_quality_scores
+    from senselab.audio.workflows.audio_analysis.quality import harvest_quality_measurements
 
     audio = Audio(waveform=torch.from_numpy(audio_np).unsqueeze(0), sampling_rate=sr)
     brouhaha_frames = None
@@ -111,13 +111,21 @@ def _estimate(audio_np: Any, sr: int, *, brouhaha: bool) -> dict[str, float | No
         from senselab.audio.tasks.scene_quality import extract_brouhaha_frames
 
         brouhaha_frames = extract_brouhaha_frames([audio])[0]
-    rows = harvest_quality_scores(audio=audio, brouhaha=brouhaha_frames, grid=BucketGrid(0.5, 0.5), calibration=None)
+    # L1 measurements are already the raw dB this fit needs — no ``calibration`` argument, since
+    # fitting anchors from values that had anchors applied would be circular.
+    rows = harvest_quality_measurements(audio=audio, brouhaha=brouhaha_frames, grid=BucketGrid(0.5, 0.5))
 
-    def _median_raw(key: str) -> float | None:
-        vals = [r["_raw"][key] for r in rows if isinstance(r.get("_raw"), dict) and r["_raw"].get(key) is not None]
+    def _median(key: str) -> float | None:
+        vals = [r[key] for r in rows if r.get(key) is not None]
         return float(np.median(vals)) if vals else None
 
-    return {"snr_db": _median_raw("primary_snr_db"), "c50_db": _median_raw("brouhaha_c50_db")}
+    # Brouhaha's SNR when available, else the spectral-gating estimator. Named explicitly rather
+    # than averaging: the estimators use different noise-floor definitions, so a mean of them is
+    # not an estimate of any one quantity.
+    snr = _median("snr_brouhaha_db")
+    if snr is None:
+        snr = _median("snr_spectral_gating_db")
+    return {"snr_db": snr, "c50_db": _median("c50_brouhaha_db")}
 
 
 def _fit_anchors(
@@ -208,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
             else dict(DEFAULT_PROFILE["reverb_c50"])
         ),
         "bandwidth": dict(DEFAULT_PROFILE["bandwidth"]),
-        "temperature": {"presence": args.temperature_presence, "utterance": args.temperature_utterance},
+        "temperature": {"speech_presence": args.temperature_speech_presence, "asr": args.temperature_asr},
         "provenance": {
             "fitted_by": "scripts/calibrate_scene_quality.py",
             "audio": args.audio.name,
