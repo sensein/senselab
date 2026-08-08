@@ -5,6 +5,7 @@ requested ref to an immutable commit SHA once and loading pinned by that SHA
 (``revision=<sha>`` — huggingface_hub's commit-hash shortcut then does no HEAD).
 """
 
+import logging
 from pathlib import Path
 
 import huggingface_hub
@@ -110,16 +111,33 @@ def test_hf_subprocess_env_sets_offline_when_all_cached(monkeypatch: pytest.Monk
     assert env["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_hf_subprocess_env_left_unchanged_when_uncacheable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If a model cannot be staged, the env is returned unchanged so the child may still download online."""
+def test_hf_subprocess_env_left_unchanged_when_uncacheable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If a model cannot be staged, the env is returned unchanged so the child may still download online.
+
+    It must also warn: the silent version of this fallback reverts to the per-call Hub version-check
+    path, which is the 429 source ``hf_subprocess_env`` exists to remove. A future refactor that drops
+    the ``logger.warning`` call would restore that silent revert with nothing to catch it, so the
+    assertion checks the message content (names the failing repo, states the online-fallback
+    consequence) rather than merely that some record was emitted — a record that just said "error"
+    would pass a count-only check without proving the regression this delta guards against.
+    """
 
     def boom(*a: object, **k: object) -> None:
         raise RuntimeError("cannot download")
 
     monkeypatch.setattr(dep, "resolve_model", boom)
-    env = hf_subprocess_env("org/model", "main", base_env={})
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        env = hf_subprocess_env("org/model", "main", base_env={})
     assert "HF_HUB_OFFLINE" not in env
     assert "TRANSFORMERS_OFFLINE" not in env
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "hf_subprocess_env must warn when a model can't be staged for offline use"
+    message = warnings[0].getMessage()
+    assert "org/model" in message, "warning must name the repo that failed to stage"
+    assert "online" in message.lower(), "warning must state the fallback consequence (online Hub loading)"
 
 
 def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPatch) -> None:
