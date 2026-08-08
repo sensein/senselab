@@ -97,9 +97,13 @@ def run_one(
 ) -> None:
     print(f"\n  --- {label} ---")
     print(f"      {model_id}")
-    model = PyannoteAudioModel(path_or_uri=model_id) if kind == "pyannote" else HFModel(path_or_uri=model_id)
     t0 = time.time()
     try:
+        # Construction is inside the try on purpose. A SenselabModel validates its id on
+        # instantiation — which reaches the Hub, and fails outright for a gated repo the
+        # local token cannot see. Built outside, that one failure aborts every remaining
+        # backend, which is exactly what happened on the first cluster run.
+        model = PyannoteAudioModel(path_or_uri=model_id) if kind == "pyannote" else HFModel(path_or_uri=model_id)
         results = diarize_audios(audios=[audio], model=model, device=device)
     except Exception as exc:  # noqa: BLE001 — a refusal is a result we want to see
         elapsed = time.time() - t0
@@ -159,14 +163,21 @@ def main() -> int:
 
     for path_str in args.audio:
         path = Path(path_str)
-        audio = Audio(filepath=str(path))
-        original_sr = audio.sampling_rate
-        duration = audio.waveform.shape[-1] / original_sr
-        if original_sr != TARGET_SR:
-            audio = resample_audios([audio], resample_rate=TARGET_SR)[0]
-
         print("\n" + "=" * 100)
         print(f"FILE: {path.name}")
+        try:
+            # Also guarded: decoding needs FFmpeg shared libraries that torchcodec dlopens
+            # by soname, and a host without them fails here for every file. One unreadable
+            # file should cost that file, not the rest of the run.
+            audio = Audio(filepath=str(path))
+            original_sr = audio.sampling_rate
+            duration = audio.waveform.shape[-1] / original_sr
+            if original_sr != TARGET_SR:
+                audio = resample_audios([audio], resample_rate=TARGET_SR)[0]
+        except Exception as exc:  # noqa: BLE001
+            print(f"      COULD NOT LOAD: {type(exc).__name__}: {str(exc)[:200]}")
+            print("=" * 100)
+            continue
         print(f"      {duration:.2f}s, {original_sr} Hz -> {TARGET_SR} Hz, {audio.waveform.shape[0]}ch")
         print("=" * 100)
 
