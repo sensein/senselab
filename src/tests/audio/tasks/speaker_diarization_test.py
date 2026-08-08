@@ -9,9 +9,9 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speaker_diarization import pyannote as pyannote_module
 from senselab.audio.tasks.speaker_diarization.pyannote import PyannoteDiarization, diarize_audios_with_pyannote
-from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine
+from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine
 from senselab.utils.data_structures.docker import docker_is_running
-from senselab.utils.data_structures.model import HFModel
+from senselab.utils.data_structures.model import model_for_task
 
 if docker_is_running():
     DOCKER_AVAILABLE = True
@@ -117,3 +117,62 @@ def test_diarize_stereo_audios_with_pyannote_invalid(
     """Test diarizing audios with unsupported number of channels."""
     with pytest.raises(ValueError):
         diarize_audios(audios=[resampled_stereo_audio_sample], model=pyannote_model, device=cpu_cuda_device)
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "microsoft/VibeVoice-ASR-HF",
+        "AlexXu811/whisper-child-adult",
+        "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+        "BUT-FIT/diarizen-wavlm-large-s80-md",
+        "nvidia/diar_sortformer_4spk-v1",
+    ],
+)
+def test_model_for_task_resolves_new_diarizers_to_hfmodel(model_id: str) -> None:
+    """The four new backends and Sortformer are HF-hosted, not Pyannote-hosted.
+
+    Resolving them to PyannoteAudioModel would send them through pyannote's
+    pipeline loader and fail with an opaque config error rather than dispatching.
+    """
+    assert isinstance(model_for_task(model_id, task="diarization"), HFModel)
+
+
+def test_model_for_task_still_defaults_to_pyannote() -> None:
+    """Anything not matched by a prefix stays on the Pyannote path."""
+    assert isinstance(
+        model_for_task("pyannote/speaker-diarization-3.1", task="diarization"),
+        PyannoteAudioModel,
+    )
+
+
+def test_vibevoice_prefix_does_not_capture_the_tts_checkpoints() -> None:
+    """`microsoft/VibeVoice-1.5B` is a TTS model, not the ASR diarizer.
+
+    A bare `microsoft/VibeVoice` prefix would route it to
+    VibeVoiceAsrForConditionalGeneration.from_pretrained and fail opaquely.
+    """
+    assert isinstance(
+        model_for_task("microsoft/VibeVoice-1.5B", task="diarization"),
+        PyannoteAudioModel,
+    )
+
+
+def test_speaker_hints_warn_when_the_backend_ignores_them(caplog: pytest.LogCaptureFixture) -> None:
+    """Only Pyannote honours num_speakers.
+
+    Silently dropping the hint on the other backends makes a misconfigured run
+    indistinguishable from a working one.
+    """
+    import logging
+
+    from senselab.audio.tasks.speaker_diarization.api import _warn_if_speaker_hints_ignored
+
+    with caplog.at_level(logging.WARNING):
+        _warn_if_speaker_hints_ignored(
+            backend_name="DiariZen",
+            num_speakers=2,
+            min_speakers=None,
+            max_speakers=None,
+        )
+    assert any("num_speakers" in r.message for r in caplog.records)
