@@ -21,6 +21,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 - **Every Python command runs through `uv run`.**
 - **Never run `pytest -n auto`.**
 - **Run `uv run ruff format` before any push.**
+- **Never `git add -A` unqualified.** Always limit it with a pathspec (`git add -A -- src/ docs/ pyproject.toml uv.lock`). The repository root can hold untracked local secrets — a developer-supplied API token sitting beside the checkout is the case that prompted this — and an unqualified `git add -A` would stage one. `git status` is not a safeguard: an agent running these steps does not read it before committing.
 - **Cache invalidation is free** — if any cached artifact keys on enhancement output, bump `CACHE_SCHEMA_VERSION` rather than reasoning about which entries survive.
 
 ## Preconditions
@@ -230,7 +231,7 @@ Expected: the imports are `torch`, `torchaudio`, `numpy`, `librosa`, `soundfile`
 ```bash
 uv run ruff format src/senselab/audio/tasks/speech_enhancement/ src/tests/
 uv run mypy src/senselab/audio/tasks/speech_enhancement/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(speech_enhancement): DriftSE backend scaffolding and pinned upstream
 
 Upstream is unlicensed and unpackaged, so it is cloned at a pinned SHA rather
@@ -592,7 +593,7 @@ Expected: PASS, 4 tests.
 ```bash
 uv run ruff format src/senselab/audio/tasks/speech_enhancement/ src/tests/
 uv run mypy src/senselab/audio/tasks/speech_enhancement/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(speech_enhancement): DriftSE worker — 1 NFE, weights_only, overlap-add
 
 Three deliberate deviations from upstream's enhancement.py: weights_only=True on
@@ -707,7 +708,7 @@ Expected: unchanged from before this task.
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(speech_enhancement): dispatch DriftSE by the sensein/driftse prefix
 
 The SpeechBrain default is unchanged, so the audio_analysis workflow keeps
@@ -821,7 +822,7 @@ If Step 3 raises rather than falling back, set the environment variable upstream
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "test(speech_enhancement): end-to-end DriftSE run, seed reproducibility, upfirdn2d path
 
 Length preservation is the cheapest real correctness check without a reference
@@ -873,7 +874,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py src/tests/audio/w
 - [ ] **Step 6: Commit and report**
 
 ```bash
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "docs(speech_enhancement): register DriftSE and document its deviations
 
 Records that the upstream license is unresolved, that the backend clones at a

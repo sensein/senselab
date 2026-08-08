@@ -19,6 +19,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 - **Never run `pytest -n auto`.** Each xdist worker duplicates 535 MB of frameworks plus its own model weights, and `ensure_venv` takes no lock, so two workers wanting the same subprocess venv delete each other's tree mid-install. Run serially, scoped to the directory changed.
 - **`uv sync` is subtractive** — always pass `--all-extras`.
 - **Run `uv run ruff format` before any push;** pre-commit CI fails on it otherwise.
+- **Never `git add -A` unqualified.** Always limit it with a pathspec (`git add -A -- src/ docs/ pyproject.toml uv.lock`). The repository root can hold untracked local secrets — a developer-supplied API token sitting beside the checkout is the case that prompted this — and an unqualified `git add -A` would stage one. `git status` is not a safeguard: an agent running these steps does not read it before committing.
 - Core floor becomes `transformers>=5.3` (Task 5). This is every HuggingFace backend in the package, not just diarization.
 - Upstream attribution: the final commit carries `Co-Authored-By: Evan Ng <evan.ng@sickkids.ca>`.
 
@@ -340,7 +341,7 @@ Expected: PASS.
 uv run ruff format src/senselab/ src/tests/
 uv run ruff check src/senselab/audio/tasks/speaker_diarization/ src/senselab/utils/data_structures/model.py
 uv run mypy src/senselab/audio/tasks/speaker_diarization/ src/senselab/utils/data_structures/model.py
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(speaker_diarization): dispatch the four new backends by model prefix
 
 The VibeVoice prefix is 'microsoft/VibeVoice-ASR', not 'microsoft/VibeVoice':
@@ -469,7 +470,7 @@ Expected: `dispatch wired`.
 ```bash
 uv run ruff format src/senselab/utils/ src/tests/utils/
 uv run mypy src/senselab/utils/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(utils): side-effect-free venv cache path, staging-fallback warning
 
 hf_subprocess_env's staging fallback now warns rather than silently reverting
@@ -604,7 +605,7 @@ Expected: pass or skip, with skip reasons naming CUDA or a missing venv. Compare
 
 ```bash
 uv run ruff format src/tests/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "test(speaker_diarization): backend tests with honest skip gates
 
 Gates resolve the venv location through _cache_dir_path() so they honour

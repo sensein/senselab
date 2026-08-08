@@ -21,6 +21,7 @@ Copied from `design.md`. Every task's requirements implicitly include these.
 - **Never run `pytest -n auto`.** Serial, scoped to the directory changed.
 - **`uv sync` is subtractive** — always `--all-extras`.
 - **Run `uv run ruff format` before any push.**
+- **Never `git add -A` unqualified.** Always limit it with a pathspec (`git add -A -- src/ docs/ pyproject.toml uv.lock`). The repository root can hold untracked local secrets — a developer-supplied API token sitting beside the checkout is the case that prompted this — and an unqualified `git add -A` would stage one. `git status` is not a safeguard: an agent running these steps does not read it before committing.
 - **Test cache isolation uses `monkeypatch.setattr`, never `.clear()`** on a module-level cache — clearing mutates real state that outlives the test.
 
 ## Preconditions
@@ -191,7 +192,7 @@ Expected: the three new tests PASS; the existing `audio_analysis` tests that tou
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/text/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "refactor(pii): move PII detection to text/tasks/pii_detection
 
 Pure move, no behaviour change. The input is a transcript, so the module
@@ -354,7 +355,7 @@ Expected: PASS, 11 tests.
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/text/
 uv run pytest src/tests/text/ -v
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(pii): detect_pii over str and ScriptLine
 
 Nested chunks are flattened depth-first so a word-level transcript and a
@@ -476,7 +477,7 @@ Expected: PASS, 15 tests.
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "fix(pii): divide detector agreement by the detectors that ran
 
 len(_KNOWN_DETECTORS) as the denominator caps a Presidio-only finding at 0.5
@@ -721,7 +722,7 @@ Expected: `detectors: presidio,gliner,rules` (order may vary), categories includ
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/text/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(pii): add #542's rule cascade as a third detector
 
 Regex, gazetteers, self-disclosed demographics, rare roles, age > 90, and the
@@ -840,7 +841,7 @@ Expected: PASS unchanged — those tests pass `n_detectors_run` explicitly, so g
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/text/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(pii): optional local-LLM detector, off by default, loopback-only
 
 The loopback restriction is a checked invariant rather than a documented
@@ -977,7 +978,7 @@ Expected: PASS, 2 tests.
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/audio/tasks/pii_detection/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "feat(pii): detect_pii_in_audios — run PII detection on an Audio
 
 Lives under audio/ because it needs transcribe_audios; a module under text/
@@ -1079,7 +1080,7 @@ Expected: `no references to the old module`. Per the pre-alpha convention the ol
 ```bash
 uv run ruff format src/senselab/ src/tests/
 uv run mypy src/senselab/
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "refactor(pii): workflow adapter over the standalone task
 
 detect_pii_in_pass keeps its shape so no audio_analysis caller changes, and
@@ -1168,7 +1169,7 @@ Match whatever mechanism the existing `doc.md` files use to get picked up, and m
 ```bash
 uv run ruff format --check src/ && uv run ruff check src/ && uv run mypy src/senselab/
 uv run pytest src/tests/text/ src/tests/audio/workflows/ src/tests/audio/tasks/pii_detection_test.py -v 2>&1 | tail -20
-git add -A
+git add -A -- src/ docs/ pyproject.toml uv.lock
 git commit -m "test(pii): port #542's PII-side self-test checks to pytest; add doc.md
 
 A self-test flag inside a shipped module is a second test framework with no
