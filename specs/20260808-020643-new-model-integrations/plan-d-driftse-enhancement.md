@@ -506,16 +506,16 @@ try:
         sf.write(out_path, x_hat.detach().cpu().numpy(), sr)
         results.append(out_path)
 
-    print("__SENSELAB_RESULT__" + json.dumps({"ok": True, "outputs": results, "seed": seed}))
+    print(json.dumps({"ok": True, "outputs": results, "seed": seed}))
 except Exception as exc:
     import traceback
-    print("__SENSELAB_RESULT__" + json.dumps(
+    print(json.dumps(
         {"ok": False, "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()}
     ))
 """
 ```
 
-Match the result-marker convention to whatever `parse_subprocess_result` expects — check it first:
+`parse_subprocess_result` (`subprocess_venv.py:560`) parses **the last line of stdout as bare JSON**. An earlier draft of this step printed a `"__SENSELAB_RESULT__"` prefix, which is not valid JSON and would have failed every successful call; it was corrected during execution. Confirm the contract before changing the worker's output:
 
 ```bash
 grep -n "def parse_subprocess_result" -A 30 src/senselab/utils/subprocess_venv.py
