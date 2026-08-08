@@ -1,0 +1,29 @@
+{
+    "classifiers": {
+        "MIT/ast-finetuned-audioset-10-10-0.4593": {
+            "has_floor_signature": false,
+            "low_level_floor_db": null,
+            "max_delta_at_min_gain": 0.5557431280612946,
+            "unity_stability": 1.0,
+            "verdict": "level_sensitive",
+            "window_length_s": 10.24
+        },
+        "yamnet": {
+            "has_floor_signature": true,
+            "low_level_floor_db": -40.0,
+            "max_delta_at_min_gain": 0.9965163881424814,
+            "unity_stability": 1.0,
+            "verdict": "level_sensitive",
+            "window_length_s": 0.96
+        }
+    },
+    "gains_db": [
+        -40.0,
+        -20.0,
+        -10.0,
+        0.0,
+        10.0
+    ],
+    "recorded_from": "src/tests/data_for_testing/english_conversation_higgs_audio_v2.wav",
+    "score_function": "sigmoid"
+}

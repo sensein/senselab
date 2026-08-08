@@ -1,0 +1,870 @@
+"""Background mask: where no target activity happens (T031-T034, FR-031 to FR-045).
+
+The mask marks regions free of **target activity** — activity from the near-microphone
+participant being recorded — not regions free of speech. Two consequences follow, and both
+matter more than the naming:
+
+**Background claims are trustworthy in a target-free region without any suppression.**
+There is no foreground there to leak, so the suppression-depth constraint that bounds
+everything else simply does not apply. Since a 30 dB suppression baseline was measured to
+leave residual foreground dominant, these regions may carry most of the trustworthy
+background evidence in a recording.
+
+**What counts as target activity depends on the task.** In a breathing or cough task the
+target *is* a non-speech vocal event, and speech detection reports no activity while it is
+happening. A mask built from speech activity alone would admit the target breaths — and
+because AudioSet maps ``Breathing`` and ``Cough`` to the ``people`` category, they would be
+reported as a background human-sound source. That is the collected signal misattributed as
+an environmental finding, which is why :func:`requires_label_detection` exists and why
+FR-033a forbids relying on voice activity alone.
+
+Scope: lab-like collection with the microphone close to the source. A distant talker stays
+*in* the mask and is reportable as a background source (FR-033c) — target-free is not
+speech-free.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Literal, Mapping, Sequence
+
+from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.workflows.audio_analysis.statistics import variability
+
+MaskState = Literal["target_free", "target_active", "nontarget_active", "indeterminate"]
+
+MASK_STATES: tuple[MaskState, ...] = ("target_free", "target_active", "nontarget_active", "indeterminate")
+"""``nontarget_active`` is the actionable state: the task target is absent *and* there is
+measurable other content. A pause with room tone and a pause with digital silence are both
+target-free, but only the first is worth introspecting — conflating them is what made the mask
+report a 21 s conversation as one uninformative region."""
+
+TARGET_EVENT_LABELS: Mapping[str, tuple[str, ...]] = {
+    "breath": ("Breathing", "Wheeze", "Snoring", "Gasp"),
+    "cough": ("Cough", "Throat clearing", "Sneeze", "Sniff"),
+    "mouth_noise": ("Chewing, mastication", "Lip smacking", "Whistling"),
+    "throat_clear": ("Throat clearing",),
+}
+"""AudioSet labels that evidence each non-speech target event type.
+
+Only classes the scene classifier can actually emit — a target type with no detectable
+label would silently degrade to "never active", which is the failure mode this table
+exists to prevent. ``speech`` is absent deliberately: speech targets are served by voice
+activity and diarization, not by a label lookup.
+"""
+
+_SPEECH_TARGET = "speech"
+
+
+@dataclass(frozen=True)
+class BackgroundMaskRegion:
+    """One contiguous run of buckets sharing a mask state."""
+
+    region_id: str
+    start: float
+    end: float
+    state: MaskState
+    uncertainty: float
+    """How undetermined the region's verdict is, in ``[0, 1]``.
+
+    Distinct from :attr:`confidence`, and both are needed: a region at confidence 0.5 with
+    uncertainty 1.0 is contested, while one at confidence 0.5 with uncertainty 0.0 would be a
+    calibrated coin flip. One number cannot say which."""
+
+    confidence: float = 0.0
+    """``P(target active)`` over the region — the mean of its buckets' confidences.
+
+    A mean rather than a max, so no single bucket speaks for the whole region."""
+
+    variability: float | None = None
+    """Dispersion of confidence across the region's buckets, in confidence units.
+
+    ``None`` for a single-bucket region: dispersion needs two measurements, and zero would
+    claim an agreement never observed."""
+
+    guard_trimmed_s: float = 0.0
+    contains_nontarget_speech: bool = False
+    supports_long_window: bool = False
+
+    @property
+    def duration_s(self) -> float:
+        """Region length in seconds."""
+        return max(0.0, self.end - self.start)
+
+
+@dataclass(frozen=True)
+class BackgroundMask:
+    """The mask for one pass, with its provenance and coverage totals."""
+
+    regions: list[BackgroundMaskRegion]
+    task_type: str | None
+    target_event_types: list[str]
+    metadata_provenance: Literal["recognized", "fallback"]
+    guard_interval_s: float
+    duration_s: float
+    negligible_threshold: float
+
+    @property
+    def total_masked_s(self) -> float:
+        """Total duration of target-free regions (FR-038)."""
+        return sum(r.duration_s for r in self.regions if r.state == "target_free")
+
+    @property
+    def masked_fraction(self) -> float:
+        """Target-free duration as a fraction of the recording."""
+        return (self.total_masked_s / self.duration_s) if self.duration_s > 0 else 0.0
+
+    @property
+    def is_empty(self) -> bool:
+        """True when no target-free region exists (FR-040)."""
+        return self.total_masked_s <= 0.0
+
+    @property
+    def negligible_fraction(self) -> bool:
+        """True when the mask is too small to support conclusions."""
+        return self.masked_fraction < self.negligible_threshold
+
+    @property
+    def regions_total(self) -> int:
+        """Number of target-free regions."""
+        return sum(1 for r in self.regions if r.state == "target_free")
+
+    @property
+    def nontarget_interest_s(self) -> float:
+        """Total duration where the target is absent and other content is present.
+
+        Reported separately from ``total_masked_s`` because a consumer asks two different
+        questions: what is clean enough to rest a background claim on, and what is worth
+        looking at. A target-free silent stretch answers the first and not the second.
+        """
+        return sum(r.duration_s for r in self.regions if r.state == "nontarget_active")
+
+    @property
+    def regions_of_interest(self) -> int:
+        """Number of non-target-active regions."""
+        return sum(1 for r in self.regions if r.state == "nontarget_active")
+
+    @property
+    def regions_supporting_long_window(self) -> int:
+        """How many target-free regions can host an unpadded long-window decision."""
+        return sum(1 for r in self.regions if r.state == "target_free" and r.supports_long_window)
+
+    def to_json(self) -> dict[str, Any]:
+        """Serialize per ``contracts/background-mask.md``."""
+        return {
+            "task_type": self.task_type,
+            "target_event_types": list(self.target_event_types),
+            "metadata_provenance": self.metadata_provenance,
+            "guard_interval_s": self.guard_interval_s,
+            "total_masked_s": round(self.total_masked_s, 6),
+            "masked_fraction": round(self.masked_fraction, 6),
+            "is_empty": self.is_empty,
+            "negligible_fraction": self.negligible_fraction,
+            "regions_supporting_long_window": self.regions_supporting_long_window,
+            "regions_total": self.regions_total,
+            "nontarget_interest_s": round(self.nontarget_interest_s, 6),
+            "regions_of_interest": self.regions_of_interest,
+            "requires_label_detection": requires_label_detection(self.target_event_types),
+        }
+
+    def to_rows(self) -> list[dict[str, Any]]:
+        """Per-region rows for ``background_mask.parquet``."""
+        types = ",".join(self.target_event_types)
+        return [
+            {
+                "region_id": r.region_id,
+                "start": r.start,
+                "end": r.end,
+                "state": r.state,
+                "confidence": r.confidence,
+                "uncertainty": r.uncertainty,
+                "variability": r.variability,
+                "guard_trimmed_s": r.guard_trimmed_s,
+                "contains_nontarget_speech": r.contains_nontarget_speech,
+                "supports_long_window": r.supports_long_window,
+                "target_event_types": types,
+            }
+            for r in self.regions
+        ]
+
+
+def target_event_types_for(
+    task_type: str | None,
+    profile: Mapping[str, Any],
+) -> tuple[list[str], Literal["recognized", "fallback"]]:
+    """Resolve a task type to its target event types (FR-033, FR-033b).
+
+    Args:
+        task_type: Task name from metadata, or ``None`` when unavailable.
+        profile: Detection-margin profile supplying ``mask.target_event_types_by_task``.
+
+    Returns:
+        ``(event_types, provenance)``. Provenance is ``"fallback"`` whenever the task type
+        is missing or unrecognized — recorded rather than silently assumed, because a mask
+        built without task context is a different object from one built with it, and the
+        fallback deliberately over-excludes.
+    """
+    mask_cfg = profile.get("mask", {}) or {}
+    by_task = mask_cfg.get("target_event_types_by_task", {}) or {}
+    if task_type is not None and task_type in by_task:
+        return list(by_task[task_type]), "recognized"
+    return list(mask_cfg.get("fallback_target_event_types", [_SPEECH_TARGET])), "fallback"
+
+
+def target_labels_for(event_types: Iterable[str]) -> tuple[str, ...]:
+    """AudioSet labels evidencing the given non-speech target event types."""
+    labels: list[str] = []
+    for event in event_types:
+        labels.extend(TARGET_EVENT_LABELS.get(event, ()))
+    return tuple(dict.fromkeys(labels))
+
+
+def requires_label_detection(event_types: Iterable[str]) -> bool:
+    """True when the target includes a non-speech vocal event (FR-033a).
+
+    Voice-activity detection reports nothing during a breath or a cough, so a mask built
+    from it alone would admit the target signal and then report it as a background
+    ``people`` source. When this returns ``True`` the caller **must** consult classifier
+    labels for :func:`target_labels_for` rather than voice activity alone.
+    """
+    return any(event != _SPEECH_TARGET for event in event_types)
+
+
+def _classify_bucket(
+    confidence: float,
+    uncertainty: float,
+    *,
+    active_at: float,
+    free_at: float,
+    max_free_uncertainty: float,
+    nontarget_confidence: float | None = None,
+    nontarget_at: float = 0.5,
+) -> MaskState:
+    """Assign one bucket's mask state.
+
+    Both committed verdicts demand low uncertainty. ``target_free`` always did — "probably
+    nothing there, but I cannot tell" is not a region background claims can rest on — while
+    ``target_active`` demanded none, so a bucket at confidence 0.99 *and* uncertainty 0.99
+    committed to "target active" on evidence that supported no verdict at all. Measured on a
+    21.5 s conversation, that asymmetry produced a single whole-file ``target_active`` region
+    at uncertainty 0.9997.
+
+    ``nontarget_active`` requires the target to be absent as well as other content to be
+    present: background content underneath active target speech is not a clean region to
+    introspect, which is the leakage problem suppression-depth measurement exists for.
+    """
+    if uncertainty > max_free_uncertainty:
+        return "indeterminate"
+    if confidence >= active_at:
+        return "target_active"
+    if confidence <= free_at:
+        if nontarget_confidence is not None and float(nontarget_confidence) >= nontarget_at:
+            return "nontarget_active"
+        return "target_free"
+    return "indeterminate"
+
+
+def build_mask(
+    buckets: Sequence[Mapping[str, Any]],
+    task_type: str | None,
+    *,
+    profile: Mapping[str, Any],
+    long_window_s: float = 10.24,
+) -> BackgroundMask:
+    """Build the background mask from per-bucket target-activity evidence.
+
+    Args:
+        buckets: Rows with ``start``, ``end``, ``target_confidence``, ``uncertainty``, and
+            optionally ``nontarget_speech``. The caller is responsible for computing
+            ``target_confidence`` from the *right* detector for the task — see
+            :func:`requires_label_detection`.
+        task_type: Task name from metadata, or ``None``.
+        profile: Detection-margin profile.
+        long_window_s: Analysis window of the long-window classifier, used to decide
+            whether a region can host an unpadded decision (FR-045).
+
+    Returns:
+        The assembled :class:`BackgroundMask`.
+    """
+    mask_cfg = profile.get("mask", {}) or {}
+    guard_s = float(mask_cfg.get("guard_interval_s", 0.5))
+    min_region_s = float(mask_cfg.get("min_region_s", 1.0))
+    max_padding = float(mask_cfg.get("max_padding_fraction", 0.5))
+    active_at = float(mask_cfg.get("target_active_confidence", 0.6))
+    free_at = float(mask_cfg.get("target_free_confidence", 0.2))
+    max_free_unc = float(mask_cfg.get("max_free_uncertainty", 0.5))
+    negligible = float(mask_cfg.get("negligible_fraction", 0.05))
+    nontarget_at = float(mask_cfg.get("nontarget_active_confidence", 0.5))
+
+    event_types, provenance = target_event_types_for(task_type, profile)
+
+    ordered = sorted(buckets, key=lambda b: float(b["start"]))
+    duration = float(ordered[-1]["end"]) if ordered else 0.0
+
+    states: list[MaskState] = [
+        _classify_bucket(
+            float(b.get("target_confidence") or 0.0),
+            float(b.get("uncertainty") or 0.0),
+            active_at=active_at,
+            free_at=free_at,
+            max_free_uncertainty=max_free_unc,
+            nontarget_confidence=(
+                float(b["nontarget_confidence"]) if b.get("nontarget_confidence") is not None else None
+            ),
+            nontarget_at=nontarget_at,
+        )
+        for b in ordered
+    ]
+
+    # Guard interval: the stretch *following* target activity is contaminated by the
+    # reverberant tail, so it is not clean background even where no activity is detected
+    # in it (FR-034). Forward-only by design — window-overlap contamination on the other
+    # side is handled by the excision padding rule (FR-043), not by widening this guard,
+    # which would eat short regions before they could be evaluated.
+    guard_trim = [0.0] * len(ordered)
+    last_active_end: float | None = None
+    for i, bucket in enumerate(ordered):
+        if states[i] == "target_active":
+            last_active_end = float(bucket["end"])
+            continue
+        if last_active_end is None:
+            continue
+        if float(bucket["start"]) < last_active_end + guard_s and states[i] == "target_free":
+            states[i] = "indeterminate"
+            guard_trim[i] = min(float(bucket["end"]), last_active_end + guard_s) - float(bucket["start"])
+
+    regions: list[BackgroundMaskRegion] = []
+    idx = 0
+    while idx < len(ordered):
+        run_end = idx
+        while run_end + 1 < len(ordered) and states[run_end + 1] == states[idx]:
+            run_end += 1
+        span = ordered[idx : run_end + 1]
+        start, end = float(span[0]["start"]), float(span[-1]["end"])
+        uncertainties = [float(b.get("uncertainty") or 0.0) for b in span]
+        confidences = [float(b.get("target_confidence") or 0.0) for b in span]
+        region_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+        spread = variability(confidences)
+        # The region's uncertainty combines its buckets' own undeterminedness with how far they
+        # disagree among themselves: a region whose buckets range 0.1-0.9 is less determined
+        # than one where every bucket agrees, even when their means coincide. Bucket spread is
+        # already in confidence units on [0, 1], so it composes without rescaling.
+        bucket_uncertainty = max(uncertainties) if uncertainties else 0.0
+        region_uncertainty = min(1.0, bucket_uncertainty + (0.0 if spread is None else 2.0 * spread))
+        dur = max(0.0, end - start)
+        padding_fraction = max(0.0, (long_window_s - dur) / long_window_s) if long_window_s > 0 else 0.0
+        regions.append(
+            BackgroundMaskRegion(
+                region_id=f"m{len(regions)}",
+                start=start,
+                end=end,
+                state=states[idx],
+                uncertainty=region_uncertainty,
+                confidence=region_confidence,
+                variability=spread,
+                guard_trimmed_s=round(sum(guard_trim[idx : run_end + 1]), 6),
+                contains_nontarget_speech=any(bool(b.get("nontarget_speech")) for b in span),
+                supports_long_window=(dur >= min_region_s and padding_fraction <= max_padding),
+            )
+        )
+        idx = run_end + 1
+
+    return BackgroundMask(
+        regions=regions,
+        task_type=task_type,
+        target_event_types=event_types,
+        metadata_provenance=provenance,
+        guard_interval_s=guard_s,
+        duration_s=duration,
+        negligible_threshold=negligible,
+    )
+
+
+@dataclass(frozen=True)
+class MaskedRegionIntrospection:
+    """What one target-free region actually contains (FR-037)."""
+
+    region_id: str
+    start: float
+    end: float
+    is_noise_floor_only: bool
+    floor_db_by_band: dict[str, float] = field(default_factory=dict)
+    summary_a_weighted_db: float | None = None
+    findings: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_json(self) -> dict[str, Any]:
+        """Serialize per ``contracts/background-mask.md``.
+
+        ``summary_a_weighted_db`` is a human-readable summary only. The gate is per-band
+        excess over a locally estimated floor; a broadband number would be set by the low
+        bands and leave mid/high-band events ungated.
+        """
+        return {
+            "region_id": self.region_id,
+            "start": self.start,
+            "end": self.end,
+            "is_noise_floor_only": self.is_noise_floor_only,
+            "floor_db_by_band": dict(self.floor_db_by_band),
+            "summary_a_weighted_db": self.summary_a_weighted_db,
+            "findings": list(self.findings),
+        }
+
+
+# ── target-activity evidence (T033, FR-033a) ───────────────────────────
+
+
+def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
+    """True when two half-open intervals intersect."""
+    return a_start < b_end and b_start < a_end
+
+
+def _seg_bounds(seg: Any) -> tuple[float, float] | None:  # noqa: ANN401 — ScriptLine or dict
+    """Return ``(start, end)`` for one diarization segment, or ``None`` if unreadable.
+
+    Segments arrive as either Pydantic-like objects (in memory) or plain dicts (after a
+    cache round-trip), so both shapes are handled. The attribute lookup deliberately does
+    *not* use ``getattr(seg, "start", seg.get("start"))``: Python evaluates that default
+    eagerly, so the dict access runs even for objects that already have the attribute — and
+    raises on anything that is neither.
+    """
+    start = getattr(seg, "start", None)
+    end = getattr(seg, "end", None)
+    if start is None and isinstance(seg, Mapping):
+        start, end = seg.get("start"), seg.get("end")
+    if start is None or end is None:
+        return None
+    try:
+        return float(start), float(end)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flatten_segments(result: Any) -> list[Any]:  # noqa: ANN401 — senselab outputs
+    """Flatten a diarization result to a flat list of segments.
+
+    ``diarize_audios`` returns one entry per input audio, so a single-audio call yields
+    ``[[seg, seg, ...]]``. Iterating that without flattening hands *lists* where segments
+    are expected. This only surfaced on a real run — every fixture had used the flat shape.
+    """
+    if not isinstance(result, list):
+        return []
+    flat: list[Any] = []
+    for item in result:
+        flat.extend(item) if isinstance(item, list) else flat.append(item)
+    return flat
+
+
+def _speech_activity_by_bucket(
+    pass_summary: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+) -> list[float | None]:
+    """Per-bucket speech-activity confidence from diarization segments.
+
+    Each diarizer contributes the **fraction of the bucket it covers**, and the bucket takes the
+    mean across diarizers. Not a hit test: a segment clipping a bucket by 10 ms and one filling it
+    entirely are not the same evidence, and ``diar_covered_fraction`` was already saying so
+    elsewhere in this package while this function asked "does anything overlap".
+
+    That boolean is what made the mask unable to be uncertain. Every bucket of a continuous
+    conversation scored exactly 1.0, so every bucket classified identically at margin 1.0 —
+    uncertainty 0.0 — and ``build_mask``'s run-length encoding correctly collapsed 1070 identical
+    buckets into a single 21 s region reporting no doubt at all. The encoding was right; the
+    evidence had already thrown away every distinction it could have encoded.
+
+    ``None`` where no diarizer contributed, so "nobody looked" stays distinguishable from
+    "everybody said no" — collapsing the two is what would let an unexamined bucket be
+    reported as clean background.
+    """
+    diar = (pass_summary.get("diarization") or {}).get("by_model") or {}
+    tracks: list[list[tuple[float, float]]] = []
+    for outcome in diar.values():
+        if not isinstance(outcome, Mapping) or outcome.get("status") != "ok":
+            continue
+        tracks.append([b for b in (_seg_bounds(seg) for seg in _flatten_segments(outcome.get("result"))) if b])
+    if not tracks:
+        return [None] * len(buckets)
+    out: list[float | None] = []
+    for b_start, b_end in buckets:
+        coverage = [_covered_fraction(track, b_start, b_end) for track in tracks]
+        out.append(sum(coverage) / len(coverage) if coverage else None)
+    return out
+
+
+def _covered_fraction(spans: Sequence[tuple[float, float]], win_start: float, win_end: float) -> float:
+    """Fraction of ``[win_start, win_end)`` covered by the union of ``spans``.
+
+    Union rather than sum: two speakers overlapping inside one bucket must not report more than a
+    bucket's worth of coverage. Shares ``harvesters._union_length`` with
+    ``harvesters.diar_covered_fraction`` so the two cannot drift — that function takes a raw model
+    result and this one takes bounds already flattened by the caller.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import _union_length
+
+    span = float(win_end) - float(win_start)
+    if span <= 0:
+        return 0.0
+    clipped = [
+        (lo, hi) for s, e in spans if (hi := min(float(win_end), float(e))) > (lo := max(float(win_start), float(s)))
+    ]
+    if not clipped:
+        return 0.0
+    return max(0.0, min(1.0, _union_length(clipped) / span))
+
+
+def _label_score_by_bucket(
+    pass_summary: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+    labels: Sequence[str],
+    *,
+    absent_bound_below: float = 0.6,
+) -> list[float | None]:
+    """Per-bucket maximum score across ``labels``, from the scene classifiers.
+
+    This is the mechanism FR-033a requires: for a breath or cough target, voice activity
+    reports nothing while the target event is happening, so the evidence has to come from
+    classifier labels instead.
+    """
+    from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
+
+    wanted = set(labels)
+    if not wanted:
+        return [None] * len(buckets)
+
+    windows: list[Any] = []
+    for key in ("ast", "yamnet"):
+        block = pass_summary.get(key) or {}
+        if block.get("status") == "ok":
+            windows.extend(classification_windows(block.get("result")))
+    if not windows:
+        return [None] * len(buckets)
+
+    out: list[float | None] = []
+    for b_start, b_end in buckets:
+        best: float | None = None
+        for win in windows:
+            if not isinstance(win, dict):
+                continue
+            if not _overlaps(float(win.get("start", 0.0)), float(win.get("end", 0.0)), b_start, b_end):
+                continue
+            pairs = label_scores(win)
+            scores = [next(iter(d.values())) for d in pairs]
+            hit = next(
+                (float(sc) for d in pairs for lb, sc in d.items() if str(lb) in wanted),
+                None,
+            )
+            # A target label absent from a top-k window is bounded above by the smallest
+            # score the window *did* report — it must rank below all of them. That bound is
+            # usable evidence only when it lands below the active threshold: then the target
+            # is definitely not active. When the bound sits above the threshold (a short
+            # window reporting one confident label, say) it is true but uninformative, and
+            # reporting it as the confidence would read a quiet bucket as target-active. In
+            # that case there is genuinely nothing to say, so contribute nothing and let the
+            # bucket fall to `indeterminate`.
+            if hit is not None:
+                value: float | None = hit
+            elif scores and min(scores) < absent_bound_below:
+                value = min(scores)
+            else:
+                value = None
+            if value is not None:
+                best = value if best is None else max(best, value)
+        out.append(best)
+    return out
+
+
+def target_confidence_by_bucket(
+    pass_summary: Mapping[str, Any],
+    buckets: Sequence[tuple[float, float]],
+    event_types: Sequence[str],
+    *,
+    active_threshold: float = 0.6,
+    free_threshold: float = 0.2,
+) -> list[dict[str, Any]]:
+    """Assemble per-bucket target-activity evidence for :func:`build_mask`.
+
+    Combines two evidence sources, taking the **maximum** because either is sufficient to
+    establish that the participant was active:
+
+    - speech activity from diarization, when ``speech`` is a target type;
+    - classifier label scores for every non-speech target type (FR-033a).
+
+    Uncertainty is the *spread* between contributing sources — zero when they agree, wide
+    when they disagree — and ``1.0`` when nothing contributed at all. That last case is the
+    important one: a bucket no source examined must not read as confidently target-free.
+
+    Args:
+        pass_summary: The per-pass summary from ``run_pass``.
+        buckets: ``(start, end)`` pairs on the analysis grid.
+        event_types: Target event types from :func:`target_event_types_for`.
+        active_threshold: The mask's target-active threshold. An absent target label's
+            upper bound counts as evidence only when it falls below this; above it the
+            bound is true but uninformative.
+        free_threshold: The mask's target-free threshold. Together with ``active_threshold``
+            it bounds the region where the decision is genuinely in doubt — see
+            :func:`combine_target_evidence`.
+
+    Returns:
+        Bucket rows ready for :func:`build_mask`.
+    """
+    sources: list[list[float | None]] = []
+    if _SPEECH_TARGET in event_types:
+        sources.append(_speech_activity_by_bucket(pass_summary, buckets))
+    labels = target_labels_for(event_types)
+    if labels:
+        sources.append(_label_score_by_bucket(pass_summary, buckets, labels, absent_bound_below=active_threshold))
+
+    rows: list[dict[str, Any]] = []
+    for i, (start, end) in enumerate(buckets):
+        values: list[float] = [v for s in sources if (v := s[i]) is not None]
+        rows.append(
+            combine_target_evidence(
+                start,
+                end,
+                values,
+                active_at=active_threshold,
+                free_at=free_threshold,
+            )
+        )
+    return rows
+
+
+def combine_target_evidence(
+    start: float,
+    end: float,
+    values: Sequence[float],
+    *,
+    active_at: float,
+    free_at: float,
+) -> dict[str, Any]:
+    """Combine one bucket's target-activity evidence into a confidence and an uncertainty.
+
+    The sources combine by **maximum**: each detects a different target event type, and any one
+    of them is sufficient to establish that the participant was active. That is what makes the
+    spread between them the wrong uncertainty measure — during ordinary speech the breath
+    detector correctly reports ~0, answering its own question rather than contradicting the
+    speech detector, and reading the gap as disagreement put 0.9997 on every bucket of a 21.5 s
+    conversation and left the whole file unusable.
+
+    Uncertainty is therefore distance from the decision, not spread between heterogeneous
+    questions: confidence well above ``active_at`` or well below ``free_at`` is a verdict not in
+    doubt, while confidence between them could go either way. No evidence at all stays maximally
+    uncertain — absence must not read as a confident "nothing here".
+    """
+    if not values:
+        return {"start": start, "end": end, "target_confidence": 0.0, "uncertainty": 1.0}
+    confidence = max(float(v) for v in values)
+    return {
+        "start": start,
+        "end": end,
+        "target_confidence": confidence,
+        "uncertainty": margin_uncertainty(confidence, active_at=active_at, free_at=free_at),
+    }
+
+
+def margin_uncertainty(confidence: float, *, active_at: float, free_at: float) -> float:
+    """How undetermined a verdict at ``confidence`` is: distance from the decision, inverted.
+
+    Extracted so the mask has **one** definition of its own uncertainty. ``apply_span_evidence``
+    used to pin ``uncertainty`` to ``min(u, 0.0)`` for any bucket a word touched, which is a second
+    definition — and an absolute one, asserted from a single overlap. Two rules for one quantity is
+    how a bucket could be certain for a reason unrelated to how far its confidence sat from the
+    threshold.
+    """
+    if confidence >= float(active_at):
+        margin = (confidence - float(active_at)) / max(1e-9, 1.0 - float(active_at))
+    elif confidence <= float(free_at):
+        margin = (float(free_at) - confidence) / max(1e-9, float(free_at))
+    else:
+        margin = 0.0
+    return max(0.0, min(1.0, 1.0 - margin))
+
+
+NONTARGET_EXCLUDED_CATEGORIES = ("speech",)
+"""Scene categories that do not count as non-target content.
+
+``speech`` is excluded because a speech-category detection during a target-free stretch is
+most likely leaked or distant target speech, and the mask's job here is to point at content
+worth introspecting rather than at the thing already being excluded.
+"""
+
+
+def nontarget_confidence_by_bucket(
+    rows: Sequence[Mapping[str, Any]],
+    source_by_bucket: Mapping[tuple[float, float], Mapping[str, Any]],
+    *,
+    excluded: Sequence[str] = NONTARGET_EXCLUDED_CATEGORIES,
+) -> list[dict[str, Any]]:
+    """Attach ``nontarget_confidence`` to target-activity rows from scene source mass.
+
+    The mask needs a second quantity to distinguish "target absent, nothing there" from
+    "target absent, something else is" — the second being the region worth introspecting. The
+    scene classifiers already report per-category mass per bucket, so the evidence exists; it
+    was simply never reaching the mask.
+
+    Args:
+        rows: Rows from :func:`target_confidence_by_bucket`.
+        source_by_bucket: ``{(start, end) → {"src_machine": ..., "src_environment": ...}}``
+            as harvested on the speech_presence grid.
+        excluded: Categories that do not count as non-target content.
+
+    Returns:
+        The same rows with ``nontarget_confidence`` added where scene mass was available. A
+        bucket with no scene evidence is left without the field, so the mask keeps its prior
+        verdict rather than being told there is nothing there.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        enriched = dict(row)
+        key = (round(float(row.get("start", 0.0)), 6), round(float(row.get("end", 0.0)), 6))
+        mass = source_by_bucket.get(key)
+        if isinstance(mass, Mapping):
+            values = [
+                float(v)
+                for k, v in mass.items()
+                if str(k).startswith("src_") and str(k)[4:] not in excluded and isinstance(v, (int, float))
+            ]
+            if values:
+                enriched["nontarget_confidence"] = max(0.0, min(1.0, max(values)))
+        out.append(enriched)
+    return out
+
+
+def target_spans_from_evidence(
+    *,
+    word_spans: Sequence[tuple[float, float]] = (),
+    speaker_spans: Sequence[tuple[float, float]] = (),
+    frame_speech: Sequence[float] = (),
+    frame_hop_s: float = 0.0,
+    frame_threshold: float = 0.5,
+    duration_s: float = 0.0,
+    min_free_s: float = 0.0,
+) -> dict[str, list[tuple[float, float]]]:
+    """Target-active and target-free spans, from every axis at its own resolution.
+
+    The mask was as coarse as its coarsest source: two bucketed sources on a 0.5 s grid, so a
+    bucket holding one short word was wholly target-active and every gap shorter than a bucket was
+    invisible. Yet the system already measures speech far more precisely — ASR word boundaries at
+    roughly 10 ms, frame posteriors at 16.9 ms — and the mask is a *derived* quantity, free to read
+    any axis it likes. Deriving it from the finest available evidence is what makes it temporally
+    precise enough to be worth having.
+
+    Evidence is **unioned, not averaged**: a word the recognizer heard and a span the diarizer
+    attributed are each sufficient to establish the target was present, so they are not votes to
+    reconcile. A span is free only where *nothing* claimed activity.
+
+    Args:
+        word_spans: ASR word ``(start, end)`` spans — the most precise speech evidence available.
+        speaker_spans: Diarization spans attributed to a speaker.
+        frame_speech: Per-frame speech probability.
+        frame_hop_s: Seconds per frame; required for ``frame_speech`` to mean anything.
+        frame_threshold: Frame probability at or above which the target counts as present.
+        duration_s: Recording duration, so the tail after the last claim is reachable.
+        min_free_s: Shortest span offered as free. An inter-word pause is not a background
+            opportunity — the target is still present — and without a floor every gap becomes a
+            region no classifier could characterise.
+
+    Returns:
+        ``{"target": spans, "free": spans}``, both merged and in time order. Both are empty when
+        nothing was measured: an absence of evidence is not a claim that the clip is free, which
+        would be the loudest possible guess.
+    """
+    active: list[tuple[float, float]] = [(float(a), float(b)) for a, b in word_spans if float(b) > float(a)]
+    active += [(float(a), float(b)) for a, b in speaker_spans if float(b) > float(a)]
+    if frame_speech and frame_hop_s > 0:
+        run_start: float | None = None
+        for i, value in enumerate(frame_speech):
+            if float(value) >= float(frame_threshold):
+                run_start = i * frame_hop_s if run_start is None else run_start
+            elif run_start is not None:
+                active.append((run_start, i * frame_hop_s))
+                run_start = None
+        if run_start is not None:
+            active.append((run_start, len(frame_speech) * frame_hop_s))
+    if not active:
+        return {"target": [], "free": []}
+
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(active):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    free: list[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in merged:
+        if start - cursor >= float(min_free_s) and start > cursor:
+            free.append((cursor, start))
+        cursor = max(cursor, end)
+    if float(duration_s) - cursor >= float(min_free_s) and float(duration_s) > cursor:
+        free.append((cursor, float(duration_s)))
+    return {"target": merged, "free": free}
+
+
+def apply_span_evidence(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    target_spans: Sequence[tuple[float, float]],
+    active_at: float = 0.6,
+    free_at: float = 0.2,
+) -> list[dict[str, Any]]:
+    """Fold span-resolution target evidence into per-bucket confidence.
+
+    ``target_confidence_by_bucket`` combines diarization and classifier scores by taking the
+    **maximum**, because either is sufficient to establish the target was active. A recognised ASR
+    word is evidence of exactly the same kind, measured an order of magnitude more precisely, and
+    was simply absent from that union — the mask never consulted the transcript at all.
+
+    **Raises only.** ASR misses words, and a diarizer can miss a turn, so a bucket no span touches
+    is not thereby evidence the target was absent. Letting an empty span lower confidence would
+    convert a recogniser's miss into a positive claim that nobody spoke, and that region would then
+    be offered as usable background — the most damaging direction for this particular error.
+
+    **Graded by what was observed.** The contribution scales with the fraction of the bucket the
+    spans cover, onto ``[active_at, 1.0]`` — so any word makes the bucket at least target-active
+    and a bucket packed with words is fully confident. A word clipping a bucket's edge and a
+    bucket packed with words are different evidence, and the flat version was the second saturator
+    that
+    left the mask unable to be uncertain: it set ``uncertainty`` to ``min(u, 0.0)`` — exactly zero,
+    the confident claim that nothing about this bucket is in doubt — for every bucket a single word
+    touched, which on a conversation is nearly all of them.
+
+    Uncertainty now follows from the raised confidence through :func:`margin_uncertainty`, the same
+    rule :func:`combine_target_evidence` uses, and can only fall: a direct observation resolves
+    doubt, and leaving it untouched would understate what is now known.
+
+    Note this improves accuracy, not boundary resolution: regions are still cut on the bucket grid.
+    Word-resolution boundaries need ``build_mask`` to accept spans rather than buckets, which
+    changes what a region means.
+
+    Args:
+        rows: Per-bucket evidence rows with ``start``, ``end``, ``target_confidence``.
+        target_spans: Spans where an axis observed the target directly — ASR words, speaker turns.
+        active_at: The mask's target-active threshold, for the shared margin rule.
+        free_at: The mask's target-free threshold, for the shared margin rule.
+
+    Returns:
+        New rows; inputs are not mutated.
+    """
+    spans = [(float(a), float(b)) for a, b in target_spans if float(b) > float(a)]
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        new = dict(row)
+        lo, hi = float(new.get("start", 0.0)), float(new.get("end", 0.0))
+        covered = _covered_fraction(spans, lo, hi)
+        if covered > 0.0:
+            # Coverage is not confidence. A word filling 5% of a bucket is direct evidence the
+            # target was active *in this bucket* — the unit the mask decides on — so it cannot
+            # score 0.05 and read as nearly target-free. It maps onto ``[active_at, 1.0]``: any
+            # observed word puts the bucket at the active threshold, and how far above depends on
+            # how much of it was observed. The doubt about the unobserved remainder then arrives
+            # through the margin rule rather than being discarded.
+            observed = float(active_at) + (1.0 - float(active_at)) * covered
+            confidence = max(float(new.get("target_confidence") or 0.0), observed)
+            new["target_confidence"] = confidence
+            new["uncertainty"] = min(
+                float(new.get("uncertainty") or 0.0),
+                margin_uncertainty(confidence, active_at=active_at, free_at=free_at),
+            )
+        out.append(new)
+    return out

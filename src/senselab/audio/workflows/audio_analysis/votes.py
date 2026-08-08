@@ -1,30 +1,39 @@
-"""Pure aggregation over harvested votes — the light half of the harvest/aggregate split.
+"""Pure linking over harvested measurements — the light half of the harvest/link split.
 
 ``compute.py`` owns the expensive, model-touching **harvest** phase and produces one
-``PassHarvest`` per pass; this module folds a ``PassHarvest`` into ``AxisResult`` rows
-without touching any model, waveform, or file. Consequences (spec
+``PassHarvest`` per pass; this module reads a ``PassHarvest`` as beliefs under a named policy and
+emits the per-signal L1 rows, without touching any model, waveform, or file. Consequences (spec
 ``20260723-225523-dynamic-uncertainty-workflow`` FR-006 / research.md D8):
 
-- re-aggregating with a different ``aggregator`` costs milliseconds, not GPU time;
+- re-linking under a different policy costs milliseconds, not GPU time;
 - the adaptive loop can merge new votes and re-fold only covered buckets;
-- everything here is unit-testable with synthetic vote dicts.
+- everything here is unit-testable with synthetic measurement dicts.
 
-No imports beyond stdlib + the sibling pure modules (``aggregate``, ``types``).
+**Nothing here folds an axis.** An axis aggregates across signals *and* across passes, so a
+per-pass axis is a category error; the single fold lives in ``fuse.fuse_axis``, which sees every
+pass at once. This module used to compute one per pass (``aggregate_pass``) and then subtract two
+of them to measure perturbation stability (``compute_pass_deltas``) — stability is now measured
+per *signal* by ``reliability.signal_stability``, which needs no axis at all.
+
+Imports stay within the sibling analysis modules. "Pure" here means *deterministic and
+model-free*, not dependency-free: the speech-presence link clusters L1 embedding vectors, which
+brings numpy and scikit-learn into this path. That is a computation over data already in hand — it
+touches no model, no waveform and no file, so re-aggregation is still cheap and repeatable.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import asdict, dataclass, field
+from typing import Any, Mapping, MutableMapping, Sequence
 
-from senselab.audio.workflows.audio_analysis.aggregate import (
-    aggregate_identity,
-    aggregate_presence,
-    aggregate_utterance,
-    mean_token_entropy,
-    presence_p_voice,
+from senselab.audio.workflows.audio_analysis.axes import HARVEST_SOURCES
+from senselab.audio.workflows.audio_analysis.degradation import scene_degradation
+from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+    SpeechPresencePolicy,
+    policy_from_params,
+    votes_for_harvest,
 )
-from senselab.audio.workflows.audio_analysis.types import AxisResult, UncertaintyRow
+from senselab.audio.workflows.audio_analysis.types import SignalResult, SignalRow
 
 
 @dataclass
@@ -32,29 +41,106 @@ class PassHarvest:
     """Everything the aggregate phase needs about one pass — and nothing model-bound.
 
     Attributes:
-        pass_label: e.g. ``"raw_16k"``.
-        presence_votes: per-bucket ``{"start", "end", "votes", "frame_instability"?}``
-            dicts from ``harvest_presence_votes``.
-        identity_votes: per-bucket vote dicts from ``harvest_identity_votes``.
-        utterance_votes: per-bucket vote dicts from ``harvest_utterance_votes``.
-        quality_by_bucket: presence-grid bucket key → quality score dict (US1 columns).
-        source_by_bucket: presence-grid bucket key → source-mass dict (US2 columns).
+        perturbation: e.g. ``"raw"``.
+        speech_presence_evidence: per-bucket ``{"start", "end", "evidence", "frame_dispersion"}``
+            dicts from ``harvest_speech_presence_evidence`` — **measurements, not votes**. The
+            thresholds that turn them into beliefs live in ``speech_presence_link``, so this field
+            can be re-linked under a different policy without re-running a model. Call
+            ``speech_presence_link.link_speech_presence`` to get votes from it.
+        speaker_votes: per-bucket vote dicts from ``harvest_speaker_votes``.
+        asr_votes: per-bucket vote dicts from ``harvest_asr_votes``.
+        quality_by_bucket: speech_presence-grid bucket key → L1 scene-quality *measurements* in native
+            units (dB, hertz, proportion). Degradation scores are derived here at L2 via
+            ``degradation.scene_degradation``, because the anchors that produce them are
+            calibration — held at L1 they zeroed the columns on every real recording.
+        source_by_bucket: speech_presence-grid bucket key → source-mass dict (US2 columns).
         grids: axis → ``{"win_length", "hop_length"}`` actually used at harvest.
+        sampling_rate: The pass audio's sample rate, needed to compare a measured spectral
+            roll-off against Nyquist. Carried on the harvest rather than re-derived, so the
+            aggregate phase stays pure and model-free.
+        per_window_embeddings: ``{embedding_model → [WindowEmbedding]}`` — L1 vectors. Clustering
+            them is an L2 derivation (``speech_presence_link.derive_window_clusters``), so the
+            vectors travel and the conclusion is drawn where it can be re-drawn.
+        background_mask_evidence: per-bucket votes on whether the **target** was active, from VAD /
+            ASR words / speaker occupancy under the declared task type
+            (``mask_harvest.harvest_background_mask_evidence``). Derived from
+            ``speech_presence_evidence`` rather than re-measured: the mask shares the presence grid, so
+            one measurement serves both and the two cannot drift.
+        diarization_by_model: ``{model → diarization block}``, carried so the fusion phase can bind
+            fused speaker ids to each diarizer's own labels (C2) without re-running a model, which
+            would defeat the harvest/aggregate split. This replaces ``frame_posteriors`` as the
+            binding's input: the channels were permutation-arbitrary and could not name anyone,
+            while a tool's labels carry both timing and its own identity (D-19).
         provenance_extras: scene_quality / sound_sources / frame_posteriors blocks.
         synthetic_diarization: optional ``{source_id: diar_block}`` synthesized from
             embedding clustering (kept explicit so callers can opt into the legacy
             pass-summary injection instead of being mutated silently).
     """
 
-    pass_label: str
-    presence_votes: list[dict[str, Any]] = field(default_factory=list)
-    identity_votes: list[dict[str, Any]] = field(default_factory=list)
-    utterance_votes: list[dict[str, Any]] = field(default_factory=list)
+    perturbation: str
+    speech_presence_evidence: list[dict[str, Any]] = field(default_factory=list)
+    speaker_votes: list[dict[str, Any]] = field(default_factory=list)
+    asr_votes: list[dict[str, Any]] = field(default_factory=list)
     quality_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     source_by_bucket: dict[tuple[float, float], dict[str, Any]] = field(default_factory=dict)
     grids: dict[str, dict[str, float]] = field(default_factory=dict)
+    sampling_rate: int = 16000
+    per_window_embeddings: dict[str, list[Any]] = field(default_factory=dict)
+    diarization_by_model: dict[str, Any] = field(default_factory=dict)
+    background_mask_evidence: list[dict[str, Any]] = field(default_factory=list)
     provenance_extras: dict[str, Any] = field(default_factory=dict)
     synthetic_diarization: dict[str, Any] | None = None
+
+
+def buckets_for_axis(
+    harvest: Any,  # noqa: ANN401 — PassHarvest, duck-typed like the rest of this module
+    axis: str,
+    *,
+    policy: SpeechPresencePolicy | None = None,
+) -> list[dict[str, Any]]:
+    """One axis's per-bucket belief buckets, read off ``harvest`` the way that axis declares.
+
+    The single answer to "where does this axis's evidence come from", for the three readers that
+    each had their own: :func:`link_pass` (the L1→L2 link), ``fuse.write_final_uncertainty`` (the
+    run's fold) and ``adaptive.belief.VoteStore.from_harvests`` (the loop's ingest). Two of them
+    read four axes off ``axes.AXES`` while the third enumerated three in a literal tuple, so
+    ``background_mask`` was folded per bucket by L2 and rebuilt from one vote per mask *region* by
+    the loop — 1070 rows at round 0, one row by round 4, and nothing reporting a loss. A reader
+    that cannot name a per-axis field cannot skip an axis.
+
+    Args:
+        harvest: One pass's ``PassHarvest``.
+        axis: The axis to read. Must be harvested and must declare a
+            :class:`~.axes.HarvestSource`.
+        policy: Presence-link policy, for an axis whose harvest holds *measurements*. ``None`` uses
+            the documented default anchors.
+
+    Returns:
+        Bucket dicts in the shape ``fuse.fuse_axis`` consumes — votes already linked, so no
+        consumer has to know which axes needed linking.
+
+    Raises:
+        KeyError: For an axis with no declared harvest source. An axis marked ``harvested`` whose
+            evidence no reader can find is the failure this replaces, and it has to be loud: an
+            empty result reads as "this axis had nothing to say".
+        NotImplementedError: For a measurements-holding axis other than speech presence. The only
+            link that exists reads ``speech_presence_evidence``; returning its votes for a
+            different axis would be a silent mislabel.
+    """
+    source = HARVEST_SOURCES.get(str(axis))
+    if source is None:
+        raise KeyError(
+            f"axis {axis!r} declares no harvest source; add a HarvestSource to its axes.AXES entry "
+            f"— known: {sorted(HARVEST_SOURCES)}"
+        )
+    if source.holds == "measurements":
+        if source.field != "speech_presence_evidence":
+            raise NotImplementedError(
+                f"axis {axis!r} holds measurements in {source.field!r}, and the only link that exists reads "
+                "speech_presence_evidence; give the axis its own linker rather than borrowing presence's"
+            )
+        return votes_for_harvest(harvest, **({"policy": policy} if policy is not None else {}))
+    return list(getattr(harvest, source.field, None) or [])
 
 
 def mask_from_pvoice(p: float) -> float:
@@ -62,19 +148,19 @@ def mask_from_pvoice(p: float) -> float:
     return 1.0 if p >= 0.5 else max(0.0, min(1.0, p / 0.5))
 
 
-def intensity_mask(start: float, end: float, presence_pv_intervals: list[tuple[float, float, float]]) -> float:
-    """Average presence-derived mask over presence buckets overlapping ``[start, end)``.
+def intensity_mask(start: float, end: float, speech_presence_pv_intervals: list[tuple[float, float, float]]) -> float:
+    """Average speech_presence-derived mask over speech_presence buckets overlapping ``[start, end)``.
 
     Overlap-averaging (not closest-only) so a query bucket spanning a half-voice /
-    half-silence region is masked proportionally; works when presence runs on a
-    finer grid. Falls back to 1.0 (no masking) when presence produced no p_voice.
+    half-silence region is masked proportionally; works when speech_presence runs on a
+    finer grid. Falls back to 1.0 (no masking) when speech_presence produced no p_voice.
     """
-    vals = [mask_from_pvoice(p) for s_p, e_p, p in presence_pv_intervals if s_p < end and e_p > start]
+    vals = [mask_from_pvoice(p) for s_p, e_p, p in speech_presence_pv_intervals if s_p < end and e_p > start]
     return sum(vals) / len(vals) if vals else 1.0
 
 
 DEFAULT_UTTERANCE_SCENE_COUPLING: dict[str, float] = {"w_q": 0.5, "w_s": 0.25}
-"""Default scene→utterance coupling weights (FR-019).
+"""Default scene→asr coupling weights (FR-019).
 
 ``w_q`` weights SNR-based quality degradation, ``w_s`` the mass of competing
 non-speech sources (machine + environment). Quality is weighted twice as heavily
@@ -86,10 +172,10 @@ Set both to 0.0 to disable coupling entirely.
 
 
 def _overlap_mean(start: float, end: float, values: list[tuple[float, float, float]]) -> float | None:
-    """Mean of scene values whose presence bucket overlaps ``[start, end)``.
+    """Mean of scene values whose speech_presence bucket overlaps ``[start, end)``.
 
-    Overlap-averaging (rather than nearest-bucket) so a wide utterance bucket
-    spanning several finer presence buckets sees their average, matching how
+    Overlap-averaging (rather than nearest-bucket) so a wide asr bucket
+    spanning several finer speech_presence buckets sees their average, matching how
     ``intensity_mask`` bridges the two grids.
     """
     hits = [v for s, e, v in values if s < end and e > start]
@@ -104,7 +190,7 @@ def scene_quality_coupling(
     competing_source_mass: list[tuple[float, float, float]],
     weights: dict[str, float],
 ) -> float:
-    """Multiplier (``>= 1.0``) by which poor scene conditions inflate utterance doubt.
+    """Multiplier (``>= 1.0``) by which poor scene conditions inflate asr doubt.
 
     ``1.0 + w_q · quality_degradation + w_s · competing_source_mass``, with each term
     dropped when the corresponding scene column is absent — so a run with
@@ -133,9 +219,113 @@ def scene_quality_coupling(
     return max(1.0, coupling)
 
 
+MAX_PROBABILITY_STD = 0.5
+"""Largest possible standard deviation of a value bounded in ``[0, 1]``.
+
+Reached by a half-0 / half-1 split, which is exactly the onset-crossing case the frame dispersion
+signal is meant to catch."""
+
+
+def _dispersion_to_instability(dispersion: float | None) -> float | None:
+    """Map within-bucket frame dispersion onto ``[0, 1]`` for folding into a belief.
+
+    L1 reports dispersion in probability units and does not rescale it, because rescaling makes it
+    a different statistic and invites reading a dispersion as a probability. The rescale is a
+    *modelling choice* about how temporal instability should contribute to doubt, so it happens
+    here, once, where it can be seen and changed — rather than being baked into the recorded
+    measurement as ``clip(2 * std, 0, 1)`` was.
+    """
+    if dispersion is None:
+        return None
+    return max(0.0, min(1.0, float(dispersion) / MAX_PROBABILITY_STD))
+
+
+def _quality_anchors(params: dict[str, Any]) -> dict[str, float] | None:
+    """Extract fitted scene-quality anchors from run params, or ``None`` for the defaults.
+
+    The calibration profile is a versioned artifact (US5), so only the keys ``degradation``
+    recognises are forwarded — an unknown key would otherwise silently do nothing while appearing
+    to have been applied.
+    """
+    calibration = params.get("calibration")
+    if not isinstance(calibration, dict):
+        return None
+    anchors = {
+        key: float(calibration[key])
+        for key in ("snr_clean_db", "snr_floor_db", "c50_clean_db", "c50_floor_db")
+        if isinstance(calibration.get(key), (int, float))
+    }
+    return anchors or None
+
+
+def apply_scene_coupling(
+    asr_rows: Sequence[MutableMapping[str, Any]],
+    scene_rows: Sequence[Mapping[str, Any]],
+    params: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Inflate the asr rows' *policy fold* where the scene degrades the evidence (FR-019).
+
+    Applied to ``triage_score`` only — the policy fold, which exists to rank where to spend budget
+    — and never to ``uncertainty``, which is the entropy measure and has no policy in it. The
+    multiplier, its weights and the pre-coupling value go onto the row, so the adjustment is
+    re-decidable without re-running anything.
+
+    Lives here rather than in ``compute`` because both callers need it. It ran once, on
+    ``compute_uncertainty_axes``'s in-memory rows, and then ``write_final_uncertainty``'s rounds
+    re-folded every axis from the harvests and overwrote ``triage_score`` and ``coupled_from`` —
+    so no persisted row ever carried the coupling, while ``scene_quality_coupling`` and
+    ``triage_score_pre_coupling`` stayed behind on the in-memory row asserting an adjustment its
+    number did not contain.
+
+    Args:
+        asr_rows: The asr axis's rows, mutated in place.
+        scene_rows: Presence rows carrying the scene measurements (``quality_snr``,
+            ``src_machine``, ``src_environment``). Empty means nothing was measured, and every
+            multiplier is then 1.0 — which is the identity, not a claim that the scene is clean.
+        params: Comparator params; ``asr_scene_coupling`` overrides the default weights.
+
+    Returns:
+        The provenance block naming the weights, the defaults and what the coupling applies to.
+    """
+    weights = _coupling_weights(dict(params))
+    quality_intervals = [
+        (float(r["start"]), float(r["end"]), float(r["quality_snr"]))
+        for r in scene_rows
+        if isinstance(r.get("quality_snr"), (int, float))
+    ]
+    competing_intervals = [
+        (
+            float(r["start"]),
+            float(r["end"]),
+            float(r.get("src_machine") or 0.0) + float(r.get("src_environment") or 0.0),
+        )
+        for r in scene_rows
+        if isinstance(r.get("src_machine"), (int, float)) or isinstance(r.get("src_environment"), (int, float))
+    ]
+    for row in asr_rows:
+        coupling = scene_quality_coupling(
+            float(row["start"]),
+            float(row["end"]),
+            quality_degradation=quality_intervals,
+            competing_source_mass=competing_intervals,
+            weights=weights,
+        )
+        row["scene_quality_coupling"] = coupling
+        row["triage_score_pre_coupling"] = row.get("triage_score")
+        if isinstance(row.get("triage_score"), (int, float)) and coupling != 1.0:
+            row["triage_score"] = max(0.0, min(1.0, float(row["triage_score"]) * coupling))
+        if coupling != 1.0:
+            row["coupled_from"] = sorted({*(row.get("coupled_from") or []), "scene_quality"})
+    return {
+        "weights": dict(weights),
+        "defaults": dict(DEFAULT_UTTERANCE_SCENE_COUPLING),
+        "applies_to": "triage_score",
+    }
+
+
 def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     """Resolve coupling weights from ``params``, falling back to the documented defaults."""
-    raw = params.get("utterance_scene_coupling")
+    raw = params.get("asr_scene_coupling")
     if not isinstance(raw, dict):
         return dict(DEFAULT_UTTERANCE_SCENE_COUPLING)
     weights = dict(DEFAULT_UTTERANCE_SCENE_COUPLING)
@@ -148,251 +338,195 @@ def _coupling_weights(params: dict[str, Any]) -> dict[str, float]:
     return weights
 
 
-def aggregate_pass(harvest: PassHarvest, *, aggregator: str, params: dict[str, Any]) -> dict[str, AxisResult]:
-    """Fold one pass's harvested votes into the three per-axis ``AxisResult``s.
+def _signal_rows_from_buckets(
+    buckets: Any,  # noqa: ANN401 — sequence of harvested bucket dicts
+    key: str,
+    into: dict[str, list[SignalRow]],
+) -> None:
+    """Accumulate one bucket family's per-signal measurements into ``into``.
 
-    Pure: same harvest + same aggregator ⇒ identical rows (bit-for-bit). The math is
-    the historical compute.py aggregation, moved verbatim: presence keeps
-    ``aggregated_uncertainty = aggregate_presence(votes)`` with the temporal-
-    instability OR only on the additive ``presence_uncertainty`` column; identity /
-    utterance keep the intensity mask OUT of ``aggregated_uncertainty`` and expose it
-    as ``intensity_weight``.
+    No fold and no threshold: the entry a signal reported is copied through as the
+    measurement, and the provenance fields the signal declared are lifted onto the row so a
+    reader does not have to know which harvester wrote it.
     """
-    pass_label = harvest.pass_label
-    out: dict[str, AxisResult] = {}
-
-    # ── presence ──
-    presence_rows: list[UncertaintyRow] = []
-    presence_pv_intervals: list[tuple[float, float, float]] = []
-    # Scene columns live on the presence grid; the utterance axis reads them back by
-    # time overlap to build its coupling multiplier (FR-019).
-    quality_intervals: list[tuple[float, float, float]] = []
-    competing_intervals: list[tuple[float, float, float]] = []
-    for bucket in harvest.presence_votes:
-        u = aggregate_presence(bucket["votes"])
-        p_v = presence_p_voice(bucket["votes"])
-        if u is None and not bucket["votes"]:
+    for bucket in buckets or []:
+        if not isinstance(bucket, Mapping):
             continue
-        bkey = (round(bucket["start"], 6), round(bucket["end"], 6))
-        quality = harvest.quality_by_bucket.get(bkey)
-        source = harvest.source_by_bucket.get(bkey)
-        votes = bucket["votes"]
-        if quality is not None:
-            votes = {**votes, "__quality__": quality.get("_raw", {})}
-        if source is not None:
-            votes = {**votes, "__sources__": source.get("_raw", {})}
-        instability = bucket.get("frame_instability")
-        if u is None:
-            presence_uncertainty: float | None = None
-        elif instability is None:
-            presence_uncertainty = u
-        else:
-            presence_uncertainty = max(0.0, min(1.0, 1.0 - (1.0 - u) * (1.0 - float(instability))))
-        presence_rows.append(
-            UncertaintyRow(
-                start=bucket["start"],
-                end=bucket["end"],
-                axis="presence",
-                aggregated_uncertainty=u,
-                contributing_models=sorted(k for k in votes if not k.startswith("__")),
-                model_votes=votes,
-                comparison_status="ok" if u is not None else "incomparable",
-                raw_aggregated_uncertainty=u,
-                intensity_weight=1.0,
-                presence_confidence=float(p_v) if p_v is not None else None,
-                presence_uncertainty=presence_uncertainty,
-                quality_snr=quality.get("quality_snr") if quality else None,
-                quality_clip=quality.get("quality_clip") if quality else None,
-                quality_reverb=quality.get("quality_reverb") if quality else None,
-                quality_bandwidth=quality.get("quality_bandwidth") if quality else None,
-                quality_uncertainty=quality.get("quality_uncertainty") if quality else None,
-                src_speech=source.get("src_speech") if source else None,
-                src_people=source.get("src_people") if source else None,
-                src_machine=source.get("src_machine") if source else None,
-                src_environment=source.get("src_environment") if source else None,
-                src_dominant=source.get("src_dominant") if source else None,
-            )
-        )
-        if p_v is not None:
-            presence_pv_intervals.append((float(bucket["start"]), float(bucket["end"]), float(p_v)))
-        b_start, b_end = float(bucket["start"]), float(bucket["end"])
-        if quality is not None and quality.get("quality_snr") is not None:
-            quality_intervals.append((b_start, b_end, float(quality["quality_snr"])))
-        if source is not None:
-            machine = source.get("src_machine")
-            environment = source.get("src_environment")
-            if machine is not None or environment is not None:
-                competing_intervals.append((b_start, b_end, float(machine or 0.0) + float(environment or 0.0)))
-
-    pres_grid = harvest.grids.get("presence", {})
-    out["presence"] = AxisResult(
-        pass_label=pass_label,  # type: ignore[arg-type]
-        axis="presence",
-        rows=presence_rows,
-        provenance={
-            "axis": "presence",
-            "pass": pass_label,
-            "grid": dict(pres_grid),
-            "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.presence_votes for m in b["votes"]}),
-            **{k: v for k, v in harvest.provenance_extras.items()},
-        },
-    )
-
-    # ── identity ──
-    identity_rows: list[UncertaintyRow] = []
-    for bucket in harvest.identity_votes:
-        u_raw = aggregate_identity(bucket["votes"], raw_vs_enh=None, aggregator=aggregator)
-        if u_raw is None and not bucket["votes"]:
-            continue
-        mask = intensity_mask(bucket["start"], bucket["end"], presence_pv_intervals)
-        identity_rows.append(
-            UncertaintyRow(
-                start=bucket["start"],
-                end=bucket["end"],
-                axis="identity",
-                aggregated_uncertainty=u_raw,
-                contributing_models=sorted(bucket["votes"].keys()),
-                model_votes=bucket["votes"],
-                comparison_status="ok" if u_raw is not None else "incomparable",
-                raw_aggregated_uncertainty=u_raw,
-                intensity_weight=mask,
-            )
-        )
-    out["identity"] = AxisResult(
-        pass_label=pass_label,  # type: ignore[arg-type]
-        axis="identity",
-        rows=identity_rows,
-        provenance={
-            "axis": "identity",
-            "pass": pass_label,
-            "grid": dict(harvest.grids.get("identity", {})),
-            "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.identity_votes for m in b["votes"]}),
-        },
-    )
-
-    # ── utterance ──
-    utterance_rows: list[UncertaintyRow] = []
-    coupling_weights = _coupling_weights(params)
-    for bucket in harvest.utterance_votes:
-        u_raw = aggregate_utterance(bucket["votes"], aggregator=aggregator, calibration=params.get("calibration"))
-        if u_raw is None and not bucket["votes"]:
-            continue
-        mask = intensity_mask(bucket["start"], bucket["end"], presence_pv_intervals)
-        coupling = scene_quality_coupling(
-            float(bucket["start"]),
-            float(bucket["end"]),
-            quality_degradation=quality_intervals,
-            competing_source_mass=competing_intervals,
-            weights=coupling_weights,
-        )
-        # Reported value carries the coupling (FR-019); the pre-coupling number stays
-        # visible on raw_aggregated_uncertainty and in model_votes so the adjustment is
-        # auditable rather than invisible.
-        votes = bucket["votes"]
-        u_reported = u_raw
-        if u_raw is not None:
-            u_reported = max(0.0, min(1.0, u_raw * coupling))
-            if coupling != 1.0:
-                votes = {**votes, "__utterance_pre_coupling__": {"value": u_raw}}
-        utterance_rows.append(
-            UncertaintyRow(
-                start=bucket["start"],
-                end=bucket["end"],
-                axis="utterance",
-                aggregated_uncertainty=u_reported,
-                contributing_models=sorted(bucket["votes"].keys()),
-                model_votes=votes,
-                comparison_status="ok" if u_reported is not None else "incomparable",
-                raw_aggregated_uncertainty=u_raw,
-                intensity_weight=mask,
-                token_entropy=mean_token_entropy(bucket["votes"]),
-                scene_quality_coupling=coupling,
-            )
-        )
-    out["utterance"] = AxisResult(
-        pass_label=pass_label,  # type: ignore[arg-type]
-        axis="utterance",
-        rows=utterance_rows,
-        provenance={
-            "axis": "utterance",
-            "pass": pass_label,
-            "grid": dict(harvest.grids.get("utterance", {})),
-            "comparator_params": params,
-            "contributing_model_set": sorted({m for b in harvest.utterance_votes for m in b["votes"]}),
-        },
-    )
-    return out
-
-
-def compute_pass_deltas(
-    raw_rows: list[UncertaintyRow],
-    enh_rows: list[UncertaintyRow],
-    axis: str,
-    aggregator: str,
-) -> list[UncertaintyRow]:
-    """Pair raw and enhanced rows by (start, end) and emit a delta row per shared bucket.
-
-    Moved verbatim from ``compute._compute_raw_vs_enhanced_delta`` (pure). The delta
-    row's ``aggregated_uncertainty`` is |raw − enhanced| clipped to [0, 1]; buckets in
-    one pass only → ``comparison_status="one_sided"`` with ``None`` uncertainty.
-    """
-    raw_by_bucket = {(r.start, r.end): r for r in raw_rows}
-    enh_by_bucket = {(r.start, r.end): r for r in enh_rows}
-    bucket_keys = sorted(set(raw_by_bucket) | set(enh_by_bucket))
-    out: list[UncertaintyRow] = []
-    for key in bucket_keys:
-        raw_row = raw_by_bucket.get(key)
-        enh_row = enh_by_bucket.get(key)
-        votes: dict[str, dict[str, Any]] = {}
-        if raw_row is not None:
-            for m, v in raw_row.model_votes.items():
-                votes[f"raw_16k::{m}"] = v
-        if enh_row is not None:
-            for m, v in enh_row.model_votes.items():
-                votes[f"enhanced_16k::{m}"] = v
-
-        if raw_row is None or enh_row is None:
-            present = raw_row if raw_row is not None else enh_row
-            iw = present.intensity_weight if present and present.intensity_weight is not None else None
-            ra_raw = raw_row.raw_aggregated_uncertainty if raw_row else None
-            enh_raw = enh_row.raw_aggregated_uncertainty if enh_row else None
-            out.append(
-                UncertaintyRow(
-                    start=key[0],
-                    end=key[1],
-                    axis=axis,  # type: ignore[arg-type]
-                    aggregated_uncertainty=None,
-                    contributing_models=sorted(votes.keys()),
-                    model_votes=votes,
-                    comparison_status="one_sided",
-                    raw_aggregated_uncertainty=ra_raw if ra_raw is not None else enh_raw,
-                    intensity_weight=iw,
+        start, end = float(bucket.get("start", 0.0)), float(bucket.get("end", 0.0))
+        for name, entry in (bucket.get(key) or {}).items():
+            signal = str(name)
+            if signal.startswith("__"):
+                # Synthetic cross-signal blocks (pairwise distances, quality, sources) are not a
+                # signal's own report; they are emitted separately below where they belong.
+                continue
+            measurement = dict(entry) if isinstance(entry, Mapping) else {"value": entry}
+            rows = into.setdefault(signal, [])
+            for existing in rows:
+                # The same signal can report on two axes (an ASR model votes on presence and on
+                # asr). One signal, one file: merge rather than shadow.
+                if existing.start == start and existing.end == end:
+                    existing.measurement.update(measurement)
+                    break
+            else:
+                rows.append(
+                    SignalRow(
+                        start=start,
+                        end=end,
+                        signal=signal,
+                        measurement=measurement,
+                        units=measurement.get("units"),
+                        native_window_s=_as_float(measurement.get("native_window_s")),
+                        resolution_s=_as_float(measurement.get("resolution_s")),
+                        model_id=measurement.get("model_id") or signal,
+                        revision=measurement.get("revision"),
+                    )
                 )
-            )
-            continue
-        ra = raw_row.aggregated_uncertainty
-        ea = enh_row.aggregated_uncertainty
-        if ra is None or ea is None:
-            delta = None
-            status = "incomparable"
-        else:
-            delta = max(0.0, min(1.0, abs(ra - ea)))
-            status = "ok"
-        raw_iw = raw_row.intensity_weight if raw_row.intensity_weight is not None else 1.0
-        enh_iw = enh_row.intensity_weight if enh_row.intensity_weight is not None else 1.0
-        out.append(
-            UncertaintyRow(
-                start=key[0],
-                end=key[1],
-                axis=axis,  # type: ignore[arg-type]
-                aggregated_uncertainty=delta,
-                contributing_models=sorted(votes.keys()),
-                model_votes=votes,
-                comparison_status=status,  # type: ignore[arg-type]
-                raw_aggregated_uncertainty=delta,
-                intensity_weight=max(raw_iw, enh_iw),
+
+
+def _as_float(value: Any) -> float | None:  # noqa: ANN401
+    """``float(value)`` when it is a finite number, else ``None`` — never a default."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+@dataclass
+class LinkedPass:
+    """One pass, linked: L1 rows per signal, and the belief buckets L2 fuses.
+
+    Two products, deliberately separate. ``signal_results`` is what L1 writes — measurements in
+    native units, no axis anywhere. ``buckets_by_axis`` is L2's input: the same measurements read
+    as beliefs under a *named* policy, which is recorded in ``provenance``. Neither is an axis
+    value; folding across signals happens exactly once, in ``fuse.fuse_axis``.
+    """
+
+    perturbation: str
+    buckets_by_axis: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    signal_results: dict[str, SignalResult] = field(default_factory=dict)
+    quality_scores: dict[tuple[float, float], dict[str, float]] = field(default_factory=dict)
+    provenance: dict[str, Any] = field(default_factory=dict)
+
+
+def link_pass(harvest: PassHarvest, *, params: dict[str, Any]) -> LinkedPass:
+    """Read one pass's L1 measurements as beliefs, and emit its per-signal L1 rows.
+
+    Args:
+        harvest: One pass's harvested measurements.
+        params: Run parameters (calibration anchors, presence-policy thresholds).
+
+    Returns:
+        A :class:`LinkedPass`. Pure: same harvest + same params ⇒ identical output.
+
+    **No axis is computed here.** An axis aggregates across signals *and* across passes, so it
+    cannot be produced from one pass; the fold lives in ``fuse.fuse_axis``, which receives every
+    pass at once. What happens here is the *link* — measurements read as beliefs under the policy
+    recorded in ``provenance`` — and the emission of the per-signal L1 rows.
+    """
+    presence_policy = policy_from_params(params)
+    # Every harvested axis, read the way it declares — including ``background_mask``, whose
+    # per-bucket harvest was absent from this dict while ``reliability`` and ``fuse`` both knew
+    # about it. So this pass contributed no mask evidence to ``L2/round/0/derivatives/votes/`` and
+    # the driver overwrote that (empty) file with one vote per mask region.
+    buckets_by_axis = {axis: buckets_for_axis(harvest, axis, policy=presence_policy) for axis in HARVEST_SOURCES}
+    presence_buckets = buckets_by_axis["speech_presence"]
+
+    signal_rows: dict[str, list[SignalRow]] = {}
+    _signal_rows_from_buckets(harvest.speech_presence_evidence, "evidence", signal_rows)
+    _signal_rows_from_buckets(harvest.speaker_votes, "votes", signal_rows)
+    _signal_rows_from_buckets(harvest.asr_votes, "votes", signal_rows)
+
+    # Frame dispersion is a per-bucket L1 measurement of how much the frame posteriors moved
+    # inside the bucket. It reached the belief store only through the in-process path, so the
+    # artifact-driven path read ``None`` everywhere and one of P2's two triggers was structurally
+    # dead. Persisting it as a signal fixes that in both paths.
+    dispersion_rows = [
+        SignalRow(
+            start=float(b["start"]),
+            end=float(b["end"]),
+            signal="frame_dispersion",
+            measurement={"frame_dispersion": float(b["frame_dispersion"]), "units": "probability"},
+            units="probability",
+        )
+        for b in harvest.speech_presence_evidence
+        if isinstance(b, Mapping) and isinstance(b.get("frame_dispersion"), (int, float))
+    ]
+    if dispersion_rows:
+        signal_rows["frame_dispersion"] = dispersion_rows
+
+    # Scene quality: L1 keeps the dB / hertz / proportion measurements; the anchored [0, 1]
+    # degradation scores are derived here, at L2, where a fitted calibration profile can replace
+    # the defaults and where a saturated column is visibly a fusion choice rather than a
+    # measurement.
+    anchors = _quality_anchors(params)
+    quality_rows: list[SignalRow] = []
+    quality_scores: dict[tuple[float, float], dict[str, float]] = {}
+    for (start, end), quality in sorted(harvest.quality_by_bucket.items()):
+        native = {k: v for k, v in quality.items() if k != "provenance"}
+        quality_rows.append(
+            SignalRow(
+                start=float(start),
+                end=float(end),
+                signal="scene_quality",
+                measurement=native,
+                units="mixed",
+                model_id="scene_quality",
             )
         )
-    return out
+        scores = scene_degradation(quality, sampling_rate=harvest.sampling_rate, calibration=anchors)
+        if scores:
+            quality_scores[(round(float(start), 6), round(float(end), 6))] = scores
+    if quality_rows:
+        signal_rows["scene_quality"] = quality_rows
+
+    source_rows = [
+        SignalRow(
+            start=float(start),
+            end=float(end),
+            signal="sound_sources",
+            measurement=dict(source),
+            units="proportion",
+            model_id="sound_sources",
+        )
+        for (start, end), source in sorted(harvest.source_by_bucket.items())
+    ]
+    if source_rows:
+        signal_rows["sound_sources"] = source_rows
+
+    # The scene blocks ride along on the presence buckets under ``__``-prefixed keys, as they
+    # always have: they are cross-signal context for the bucket rather than one signal's report,
+    # and consumers that weigh evidence per source need them next to the votes they qualify.
+    for bucket in presence_buckets:
+        key = (round(float(bucket["start"]), 6), round(float(bucket["end"]), 6))
+        quality_block = harvest.quality_by_bucket.get(key)
+        if quality_block is not None:
+            bucket["votes"] = {
+                **bucket["votes"],
+                "__quality__": {k: v for k, v in quality_block.items() if k != "provenance"},
+            }
+        source_block = harvest.source_by_bucket.get(key)
+        if source_block is not None:
+            bucket["votes"] = {**bucket["votes"], "__sources__": dict(source_block.get("_raw") or {})}
+
+    provenance_common = {
+        "pass": harvest.perturbation,
+        "grids": {k: dict(v) for k, v in harvest.grids.items()},
+        "sampling_rate": harvest.sampling_rate,
+        "speech_presence_policy": asdict(presence_policy),
+        "quality_calibration": anchors,
+        **{k: v for k, v in harvest.provenance_extras.items()},
+    }
+    return LinkedPass(
+        perturbation=harvest.perturbation,
+        buckets_by_axis=buckets_by_axis,
+        signal_results={
+            signal: SignalResult(
+                perturbation=harvest.perturbation,  # type: ignore[arg-type]
+                signal=signal,
+                rows=sorted(rows, key=lambda r: (r.start, r.end)),
+                provenance=provenance_common,
+            )
+            for signal, rows in sorted(signal_rows.items())
+        },
+        quality_scores=quality_scores,
+        provenance=provenance_common,
+    )

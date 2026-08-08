@@ -1,10 +1,14 @@
-"""Continuous per-frame speech posteriors from ``pyannote/segmentation-3.0``.
+"""The continuous per-frame posterior container, and the chunk stitching Brouhaha uses.
+
+No longer loads ``pyannote/segmentation-3.0``: nothing consumes its per-speaker channels
+(D-19 moved the count to ``occupancy`` and the binding to ``identity_binding``), and
+Brouhaha's VAD head supplies the speech posterior at the same 16.9 ms hop.
 
 Unlike ``detect_human_voice_activity_in_audios`` (which runs the high-level
 ``Pipeline`` and returns thresholded ``ScriptLine`` segments), this extractor
 uses the low-level ``Model`` + ``Inference`` path to obtain the **raw per-frame
 speech probability** (~16.9 ms/frame) without any segment thresholding or
-hangover smoothing — exactly what the presence axis needs to resolve brief
+hangover smoothing — exactly what the speech_presence axis needs to resolve brief
 events and to compute a within-bucket temporal-instability signal.
 
 ``segmentation-3.0`` is a powerset model (up to 3 speakers / chunk); P(speech)
@@ -41,88 +45,125 @@ SEGMENTATION_MODEL_ID = "pyannote/segmentation-3.0"
 SEGMENTATION_REVISION = "main"
 
 
-@dataclass
-class FramePosterior:
-    """Continuous per-frame speech probability for one audio.
+ChannelFormat = str
+"""What the columns of an activation matrix mean: ``per_speaker``, ``powerset``, or ``single``."""
 
-    Attributes:
-        probs: ``(num_frames,)`` P(speech) in ``[0, 1]``.
-        frame_hop_s: seconds between consecutive frame starts.
-        frame_win_s: analysis window per frame (seconds).
-        per_class: optional ``(num_frames, num_classes)`` raw class posteriors —
-            powerset ``[∅, s1, s2, s3, s1s2, s1s3, s2s3]`` for pyannote 3.x
-            segmentation, or per-speaker multilabel activations for 4.x. Only
-            populated when ``extract_speech_frame_posteriors(...,
-            include_per_class=True)`` (spec 20260723-225523 FR-016); ``None``
-            otherwise so existing consumers are unaffected.
+
+def channel_format_for(*, n_columns: int, declared_classes: Optional[list[str]]) -> ChannelFormat:
+    """Decide what an output's columns mean, from the model's declaration and the output width.
+
+    Args:
+        n_columns: Columns in the returned frame array.
+        declared_classes: ``model.specifications.classes``, or ``None`` when unavailable.
+
+    Returns:
+        ``"single"`` for one column, ``"per_speaker"`` when the width matches the declared class
+        count, ``"powerset"`` when it matches the powerset size, else ``"per_speaker"``.
+
+    **Never inferred from row sums.** ``segmentation-3.0`` declares ``powerset=True``, but
+    pyannote 4.x converts to per-speaker activations before returning, so the output has one
+    column per speaker. With a single speaker fully active those rows sum to exactly 1.0 — so a
+    row-sum test concludes "powerset" and the caller then computes ``1 − data[:, 0]``, treating
+    *speaker#1* as the no-speaker class. Measured on real audio that read exactly 1.0000 in 100%
+    of frames, including 4 s of digital silence. Width against the declaration cannot make that
+    mistake: powerset over 3 speakers is 7 columns, per-speaker is 3.
     """
-
-    probs: np.ndarray
-    frame_hop_s: float
-    frame_win_s: float = 0.0
-    per_class: Optional[np.ndarray] = None
-
-    def mean_std_in_window(self, start_s: float, end_s: float) -> tuple[float, float]:
-        """Return ``(mean, std)`` of P(speech) over frames overlapping ``[start, end)``.
-
-        The mean is the bucket's speech-presence contribution; the std captures
-        within-bucket temporal instability (a bucket straddling an onset has
-        high frame variance). Returns ``(nan, nan)`` when no frame overlaps.
-        """
-        if self.frame_hop_s <= 0 or self.probs.size == 0:
-            return (float("nan"), float("nan"))
-        lo = max(0, int(np.floor(start_s / self.frame_hop_s)))
-        hi = min(self.probs.size, int(np.ceil(end_s / self.frame_hop_s)))
-        if hi <= lo:
-            return (float("nan"), float("nan"))
-        window = self.probs[lo:hi]
-        return (float(np.nanmean(window)), float(np.nanstd(window)))
-
-    def overlap_probs(self) -> Optional[np.ndarray]:
-        """Per-frame P(≥ 2 concurrent speakers) from the per-class posteriors.
-
-        Powerset output (rows summing to ~1, ≥ 5 classes): sum of the
-        multi-speaker classes (columns 4+). Multilabel per-speaker output
-        (pyannote 4.x): the second-highest speaker activation. ``None`` when
-        ``per_class`` was not requested at extraction time.
-        """
-        if self.per_class is None or self.per_class.ndim != 2:
-            return None
-        return _overlap_prob_from_output(self.per_class)
+    if n_columns <= 1:
+        return "single"
+    if declared_classes:
+        n_declared = len(declared_classes)
+        if n_columns == n_declared:
+            return "per_speaker"
+        # Powerset over k speakers with at most 2 concurrent: 1 + k + k(k-1)/2 classes.
+        if n_columns == 1 + n_declared + n_declared * (n_declared - 1) // 2:
+            return "powerset"
+    return "per_speaker"
 
 
-def _speech_prob_from_output(data: np.ndarray) -> np.ndarray:
-    """Reduce a segmentation model's per-frame output to P(speech) in ``[0, 1]``.
+def collapse_to_speech_prob(data: np.ndarray, *, channel_format: ChannelFormat) -> np.ndarray:
+    """Pool an activation matrix into per-frame P(speech) — an **L2** reduction.
 
-    ``segmentation-3.0`` emits per-frame powerset class probabilities that sum
-    to ~1 with class 0 = "no speaker"; P(speech) = ``1 − P(class 0)``. If the
-    output instead looks multilabel (rows not summing to ~1), fall back to the
-    max over the class axis. Validated end-to-end in T044.
+    Args:
+        data: ``(num_frames, num_channels)`` activations.
+        channel_format: What the columns mean; see :func:`channel_format_for`.
+
+    Returns:
+        ``(num_frames,)`` P(speech) in ``[0, 1]``.
+
+    ``per_speaker`` uses noisy-or, ``1 − Π(1 − p_k)``, which is the probability calculus for
+    "at least one speaker active" — correct here precisely because the channels are still
+    available to be combined. ``powerset`` uses ``1 − P(class 0)``. ``single`` bounds and returns.
     """
     if data.ndim == 1:
         return np.clip(data, 0.0, 1.0)
-    row_sums = data.sum(axis=1)
-    if np.nanmean(np.abs(row_sums - 1.0)) < 0.1:  # powerset softmax
-        return np.clip(1.0 - data[:, 0], 0.0, 1.0)
-    return np.clip(data.max(axis=1), 0.0, 1.0)
+    clipped = np.clip(data, 0.0, 1.0)
+    if channel_format == "single" or clipped.shape[1] == 1:
+        return clipped[:, 0]
+    if channel_format == "powerset":
+        return np.clip(1.0 - clipped[:, 0], 0.0, 1.0)
+    return np.clip(1.0 - np.prod(1.0 - clipped, axis=1), 0.0, 1.0)
 
 
-def _overlap_prob_from_output(data: np.ndarray) -> np.ndarray:
-    """Reduce per-frame class posteriors to P(overlapping speech) in ``[0, 1]``.
+@dataclass
+class FramePosterior:
+    """Per-frame activations for one audio — the L1 measurement, channels intact.
 
-    Mirrors :func:`_speech_prob_from_output`'s powerset-vs-multilabel detection:
-    powerset softmax (rows ~1) with ≥ 5 classes → sum of multi-speaker classes
-    (columns 4+); otherwise treat columns as per-speaker activations and take
-    the second-highest per frame (the probability a second concurrent speaker
-    is active).
+    Attributes:
+        activations: ``(num_frames, num_channels)`` model output. For
+            ``segmentation-3.0`` one column per speaker; for a VAD head a single column.
+        frame_hop_s: seconds between consecutive frame starts.
+        frame_win_s: analysis window per frame (seconds).
+        channel_format: what the columns mean; see :func:`channel_format_for`.
+        channel_labels: the model's own names for the columns, when it declares them.
+
+    The pooled P(speech) is deliberately **not** a field. Storing a collapse next to the matrix
+    it came from lets the two disagree, and consumers read the stored value — which is how a
+    reduction that returned exactly 1.0000 everywhere went unnoticed. :meth:`speech_prob`
+    computes it on demand from the channels.
     """
-    if data.ndim != 2 or data.shape[1] < 2:
-        return np.zeros(data.shape[0] if data.ndim >= 1 else 0)
-    row_sums = data.sum(axis=1)
-    if data.shape[1] >= 5 and float(np.nanmean(np.abs(row_sums - 1.0))) < 0.1:  # powerset softmax
-        return np.clip(data[:, 4:].sum(axis=1), 0.0, 1.0)
-    sorted_desc = np.sort(data, axis=1)[:, ::-1]
-    return np.clip(sorted_desc[:, 1], 0.0, 1.0)
+
+    activations: np.ndarray
+    frame_hop_s: float
+    frame_win_s: float = 0.0
+    channel_format: ChannelFormat = "per_speaker"
+    channel_labels: tuple[str, ...] = ()
+
+    def speech_prob(self) -> np.ndarray:
+        """Per-frame P(speech), pooled from the channels."""
+        return collapse_to_speech_prob(self.activations, channel_format=self.channel_format)
+
+    def frame_slice(self, start_s: float, end_s: float) -> Optional[tuple[int, int]]:
+        """Frame index range overlapping ``[start, end)``, or ``None`` when empty."""
+        n = int(self.activations.shape[0]) if self.activations.ndim >= 1 else 0
+        if self.frame_hop_s <= 0 or n == 0:
+            return None
+        lo = max(0, int(np.floor(start_s / self.frame_hop_s)))
+        hi = min(n, int(np.ceil(end_s / self.frame_hop_s)))
+        return (lo, hi) if hi > lo else None
+
+    def mean_std_in_window(self, start_s: float, end_s: float) -> tuple[float, float]:
+        """Return ``(mean, std)`` of pooled P(speech) over frames overlapping ``[start, end)``.
+
+        The mean is the bucket's speech contribution; the std captures within-bucket temporal
+        instability (a bucket straddling an onset has high frame variance). Returns
+        ``(nan, nan)`` when no frame overlaps.
+        """
+        span = self.frame_slice(start_s, end_s)
+        if span is None:
+            return (float("nan"), float("nan"))
+        window = self.speech_prob()[span[0] : span[1]]
+        return (float(np.nanmean(window)), float(np.nanstd(window)))
+
+    def per_channel_mean_in_window(self, start_s: float, end_s: float) -> Optional[np.ndarray]:
+        """Per-channel mean activation over frames overlapping ``[start, end)``.
+
+        The basis for per-speaker speech_presence: it keeps *which* channel was active, which pooling
+        discards. ``None`` when no frame overlaps.
+        """
+        span = self.frame_slice(start_s, end_s)
+        if span is None:
+            return None
+        return np.asarray(np.nanmean(self.activations[span[0] : span[1], :], axis=0), dtype=np.float64)
 
 
 def _output_to_array(output: Any) -> np.ndarray:  # noqa: ANN401
@@ -161,10 +202,48 @@ _CHUNK_S = 10.0
 _CHUNK_STEP_S = 8.0  # 2 s overlap → smooth stitching across chunk seams
 
 
+MIN_SEAM_ACTIVATION = 0.5
+"""Activation a chunk overlap must reach before its columns may be permuted.
+
+Below this the overlap holds no confident speaker, the assignment cost is near-uniform, and the
+"best" permutation is arbitrary. Since the permutation is applied to the *whole* chunk, acting on
+an arbitrary match would scramble frames that were fine. Measured on the validation run: half the
+seams of a 72 s recording fell in silence."""
+
+
+def _match_columns(reference: np.ndarray, candidate: np.ndarray) -> tuple[int, ...]:
+    """Column permutation of ``candidate`` that best matches ``reference``, by squared error.
+
+    Hungarian assignment on the pairwise MSE between columns over the frames the two share. Falls
+    back to the identity when scipy is unavailable, the shapes disagree, or the overlap carries no
+    confident speaker — a wrong permutation is worse than none, so an uncertain match declines
+    rather than guesses.
+    """
+    identity = tuple(range(candidate.shape[1]))
+    if reference.shape != candidate.shape or reference.size == 0:
+        return identity
+    if max(float(reference.max()), float(candidate.max())) < MIN_SEAM_ACTIVATION:
+        return identity
+    cost = np.empty((candidate.shape[1], reference.shape[1]), dtype=np.float64)
+    for j in range(candidate.shape[1]):
+        cost[j] = np.mean((reference - candidate[:, j : j + 1]) ** 2, axis=0)
+    try:
+        from scipy.optimize import linear_sum_assignment
+    except ImportError:  # pragma: no cover - scipy is a hard dependency in practice
+        return identity
+    rows, cols = linear_sum_assignment(cost)
+    permutation = list(identity)
+    for src, dst in zip(rows.tolist(), cols.tolist()):
+        permutation[dst] = src
+    return tuple(permutation)
+
+
 def stitch_frames(
     chunk_arrays: list[np.ndarray],
     chunk_starts_s: list[float],
     hop_s: float,
+    *,
+    align_permutations: bool = False,
 ) -> np.ndarray:
     """Overlap-average per-chunk ``(frames, C)`` arrays into one continuous timeline.
 
@@ -173,6 +252,24 @@ def stitch_frames(
     uncovered frames are trimmed. Returns a ``(num_frames, C)`` array. Pure /
     model-free so it is shared by the in-process extractor and the Brouhaha
     subprocess path.
+
+    Args:
+        chunk_arrays: Per-chunk ``(frames, C)`` (or ``(frames,)``) activations.
+        chunk_starts_s: Absolute start time of each chunk, seconds.
+        hop_s: Frame hop, seconds.
+        align_permutations: Match each chunk's columns to the already-stitched timeline before
+            averaging. **Required for speaker segmentation, wrong for anything else.**
+
+            A speaker-segmentation model assigns its output channels arbitrarily *per inference*,
+            so the same person can be column 0 in one chunk and column 1 in the next. Averaging by
+            column index then splits one speaker into two half-strength channels across the whole
+            overlap region — which reads downstream as two speakers each half-present, i.e. as
+            overlapped speech that never happened. pyannote's own pipeline solves this permutation
+            before aggregating; this is the same step.
+
+            It must stay opt-in because it is only sound where the ordering carries no meaning.
+            Brouhaha's columns are ``[vad, snr, c50]``: permuting them would swap unrelated
+            physical quantities.
     """
     if not chunk_arrays or hop_s <= 0:
         return np.zeros((0, 1))
@@ -185,6 +282,15 @@ def stitch_frames(
     count = np.zeros(n_global, dtype=np.float64)
     for arr, t0 in zip(norm, chunk_starts_s):
         base = int(round(t0 / hop_s))
+        if align_permutations and arr.shape[1] > 1 and count.any():
+            # Match against what the overlap already holds, not against the previous chunk: the
+            # timeline is the thing every later chunk must agree with, and comparing pairwise would
+            # let a permutation drift chunk by chunk.
+            span = [g for g in range(base, min(n_global, base + arr.shape[0])) if count[g] > 0]
+            if span:
+                local = [g - base for g in span]
+                reference = accum[span] / np.maximum(count[span, None], 1.0)
+                arr = arr[:, list(_match_columns(reference, arr[local]))]
         for i in range(arr.shape[0]):
             g = base + i
             if 0 <= g < n_global:
@@ -238,7 +344,9 @@ def chunked_frame_inference(
             break
         start += step_samples
 
-    data = stitch_frames(chunk_arrays, chunk_starts_s, hop)
+    # Speaker channels are permutation-arbitrary per inference, so they must be matched to the
+    # timeline before averaging (see ``stitch_frames``). Single-column outputs are unaffected.
+    data = stitch_frames(chunk_arrays, chunk_starts_s, hop, align_permutations=True)
     return data, hop, win
 
 
@@ -267,7 +375,7 @@ def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "
             raise ValueError(f"segmentation model {model.path_or_uri} could not be loaded.")
         # window="whole" returns the model's NATIVE per-frame posterior (~17 ms/frame)
         # for the entire signal. The default (sliding) mode returns a coarse
-        # per-chunk aggregate (~1 s step) that would defeat the fine presence grid.
+        # per-chunk aggregate (~1 s step) that would defeat the fine speech_presence grid.
         # Trade-off: "whole" holds the whole signal in one forward pass — fine for
         # the short clinical clips this workflow targets; very long recordings would
         # need chunked stitching (future work).
@@ -275,47 +383,16 @@ def _get_inference(model: PyannoteAudioModel, device: Optional[DeviceType]) -> "
     return _inference_cache[key]
 
 
-def extract_speech_frame_posteriors(
-    audios: list[Audio],
-    model: Optional[PyannoteAudioModel] = None,
-    device: Optional[DeviceType] = None,
-    include_per_class: bool = False,
-) -> list[Optional[FramePosterior]]:
-    """Return continuous per-frame P(speech) for each audio (``None`` on failure).
-
-    If the model cannot be loaded (not installed, gated without a token,
-    native-lib failure), every entry is ``None`` and the presence axis simply
-    omits the frame-posterior voter (FR-023) — the workflow does not abort.
-
-    With ``include_per_class=True`` the raw ``(frames, classes)`` posteriors are
-    retained on ``FramePosterior.per_class`` (enabling
-    :meth:`FramePosterior.overlap_probs` — FR-016); default ``False`` keeps the
-    historical memory profile and output shape.
-    """
-    if not PYANNOTEAUDIO_AVAILABLE:
-        logger.warning("pyannote-audio unavailable; segmentation frame posteriors will be null.")
-        return [None] * len(audios)
+def _declared_classes(inference: "Inference") -> Optional[list[str]]:
+    """The model's own names for its output channels, or ``None`` when it declares none."""
     try:
-        # PyannoteAudioModel validates id/revision against HF at construction
-        # (ValidationError for a gated repo the token can't access), so guard it too.
-        if model is None:
-            model = PyannoteAudioModel(path_or_uri=SEGMENTATION_MODEL_ID, revision=SEGMENTATION_REVISION)
-        hf_local_files_only(str(model.path_or_uri), revision=model.revision)
-        inference = _get_inference(model=model, device=device)
-    except Exception as exc:  # noqa: BLE001 — any load/access failure degrades to null (FR-023)
-        logger.warning(f"Failed to load {SEGMENTATION_MODEL_ID}: {exc}. Frame posteriors will be null.")
-        return [None] * len(audios)
-
-    results: list[Optional[FramePosterior]] = []
-    for audio in audios:
-        try:
-            t0 = time.time()
-            data, hop_s, win_s = chunked_frame_inference(inference, audio)
-            probs = _speech_prob_from_output(data)
-            per_class = np.asarray(data, dtype=np.float64) if include_per_class and data.ndim == 2 else None
-            results.append(FramePosterior(probs=probs, frame_hop_s=hop_s, frame_win_s=win_s, per_class=per_class))
-            logger.info(f"segmentation inference took {time.time() - t0:.2f}s ({probs.size} frames @ {hop_s:.4f}s)")
-        except (RuntimeError, ValueError, OSError) as exc:
-            logger.warning(f"segmentation inference failed for one audio: {exc}")
-            results.append(None)
-    return results
+        spec = inference.model.specifications
+        # Multi-task models (e.g. Brouhaha) declare a tuple of specifications, one per head. There
+        # is no single channel vocabulary in that case, so decline rather than pick a head — a
+        # wrong vocabulary would produce a confident and wrong channel-format decision.
+        if isinstance(spec, tuple):
+            return None
+        classes = spec.classes
+    except (AttributeError, TypeError):
+        return None
+    return [str(c) for c in classes] if classes else None

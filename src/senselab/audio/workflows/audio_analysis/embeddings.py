@@ -3,7 +3,7 @@
 Slices the pass audio into uniform fixed-duration windows (default 2.0 s with 1.0 s
 hop) and runs each requested embedding model on every window. Output is a list of
 ``(start_s, end_s, vector_np)`` per model, written to disk by the caller and consumed
-by the identity workflow.
+by the speaker workflow.
 
 Why windows, not diarization segments
 -------------------------------------
@@ -281,7 +281,11 @@ def cluster_pass_speakers(
     5. **Else** → single-cluster regime (1 if the speech windows cluster
        tightly around the mean, 0 if even that fails).
 
-    The output ``labels`` use ``"S0"``, ``"S1"``, … as cluster IDs. Non-speech
+    The output ``labels`` use ``"spk0"``, ``"spk1"``, … — this component's own speaker
+    labels, in the same role as pyannote's ``SPEAKER_00``. They are distinct from the
+    pass-wide cluster ids (``C0``…) that harmonise labels across diar models, and from the
+    fused speaker ids (``S0``…) in ``final/speakers.json``; three namespaces that all read
+    as "S0" made the label-correspondence table unreadable on a real run. Non-speech
     or zero-norm windows are tagged ``"NOISE"``. ``p_voice`` is keyed by the
     window index in ``entries``.
 
@@ -333,20 +337,24 @@ def cluster_pass_speakers(
             "valid_indices": [],
         }
 
-    # Single-utterance / quiet-environment path: when we have ≥1 valid speech
+    # Single-asr / quiet-environment path: when we have ≥1 valid speech
     # window but fewer than ``min_windows_for_clustering``, there's nothing to
     # partition — the system should report exactly one speaker, not skip. This
     # is the "single word in an otherwise quiet recording" case.
     if len(vectors) < min_windows_for_clustering:
         for idx in valid_indices:
-            cluster_labels[idx] = "S0"
+            cluster_labels[idx] = "spk0"
             p_voice[idx] = 1.0
+        band = _within_cluster_band(np.stack(vectors, axis=0)) if vectors else None
+        same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": None,
             "labels": cluster_labels,
             "p_voice": p_voice,
             "valid_indices": list(valid_indices),
+            "empirical_same_speaker_floor": same_floor,
+            "empirical_diff_speaker_floor": diff_floor,
             "single_window_mode": True,
         }
     X = np.stack(vectors, axis=0)
@@ -461,7 +469,7 @@ def cluster_pass_speakers(
         best_labels = _merge_close_clusters(X, best_labels, merge_threshold=merge_threshold)
         unique_after_merge = sorted(set(int(x) for x in best_labels))
         n_speakers_final = len(unique_after_merge)
-        # Renumber to S0..S(n-1) so downstream label sets are dense.
+        # Renumber to spk0..spk(n-1) so downstream label sets are dense.
         relabel = {old: new for new, old in enumerate(unique_after_merge)}
         best_labels = np.array([relabel[int(x)] for x in best_labels], dtype=int)
         try:
@@ -469,18 +477,22 @@ def cluster_pass_speakers(
         except ValueError:
             per_sample = None
         for vi, idx in enumerate(valid_indices):
-            cluster_labels[idx] = f"S{int(best_labels[vi])}"
+            cluster_labels[idx] = f"spk{int(best_labels[vi])}"
             if per_sample is None:
                 p_voice[idx] = 1.0 if n_speakers_final == 1 else 0.5
             else:
                 p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(per_sample[vi]) + 1.0)))
-        # Empirical per-pass calibration band for the identity-axis cosine
+        # Empirical per-pass calibration band for the speaker-axis cosine
         # validation: ``same_floor`` = 75th percentile of within-cluster
         # pairwise cos_dist (most same-speaker pairs are below this),
         # ``diff_floor`` = 25th percentile of between-cluster pairwise cos_dist
         # (most different-speaker pairs are above this). Falls back to the
         # default fixed band when too few pairs.
-        same_floor, diff_floor = _empirical_calibration_band(X, best_labels)
+        # Sequential first: it measures the statistic the harvester computes. All-pairs is
+        # kept as a fallback for passes whose turn structure gives too few sequential
+        # comparisons to anchor on.
+        band = _sequential_calibration_band(X, best_labels) or _empirical_calibration_band(X, best_labels)
+        same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": n_speakers_final,
             "best_silhouette": float(best_overall),
@@ -514,15 +526,19 @@ def cluster_pass_speakers(
     if mean_sim >= coherent_silhouette_threshold:
         # Single coherent speaker.
         for vi, idx in enumerate(valid_indices):
-            cluster_labels[idx] = "S0"
+            cluster_labels[idx] = "spk0"
             # cos sim → [0,1] via (s+1)/2.
             p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
+        band = _within_cluster_band(X)
+        same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
             "labels": cluster_labels,
             "p_voice": p_voice,
             "valid_indices": list(valid_indices),
+            "empirical_same_speaker_floor": same_floor,
+            "empirical_diff_speaker_floor": diff_floor,
         }
     # No coherent cluster — likely noise / silence dominated.
     for vi, idx in enumerate(valid_indices):
@@ -547,7 +563,7 @@ def _merge_close_clusters(
 
     Speaker embedding clusterings (k-means / spectral) sometimes split one
     speaker into prosodic sub-clusters — long continuous passage vs brief
-    utterance, near-mic vs far-mic, etc. This pass collapses those back into
+    asr, near-mic vs far-mic, etc. This pass collapses those back into
     one. Two cluster centroids with cosine similarity ≥ ``merge_threshold``
     are taken to be the same speaker; we merge them and re-evaluate. Stops
     when every remaining pair is below the threshold (i.e. genuinely
@@ -594,10 +610,8 @@ def _empirical_calibration_band(
     X: np.ndarray,
     labels: np.ndarray,
     *,
-    fallback_same_floor: float = 0.30,
-    fallback_diff_floor: float = 0.70,
     min_pairs: int = 5,
-) -> tuple[float, float]:
+) -> tuple[float, float] | None:
     """Estimate ``(same_speaker_floor, diff_speaker_floor)`` from clustered embeddings.
 
     Walks all within-cluster pairs and all between-cluster pairs, computes
@@ -608,15 +622,21 @@ def _empirical_calibration_band(
     - ``diff_floor = quantile(between, 0.25)``: most different-speaker pairs
       sit above; cos_dist at this anchor → uncertainty 1.
 
-    When the cluster sizes are too small for stable percentiles (< ``min_pairs``
-    pairs), falls back to the literature defaults [0.30, 0.70].
+    Returns ``None`` when the pass cannot support a band — too few pairs, or within- and
+    between-cluster distances that overlap. Substituting the literature defaults there was
+    the defect this replaces: on a real recording ECAPA's within-speaker distances had
+    median 0.874 against 0.966 between, overlapping almost entirely, and the [0.30, 0.70]
+    fallback sat below *every* distance the embedding produced — so every same-speaker
+    comparison scored as maximally doubtful and the axis reported high uncertainty on
+    buckets where every diarizer agreed. A sub-signal that cannot be calibrated must drop
+    out (FR-007), not vote with fabricated confidence.
 
     Vectors in ``X`` are assumed L2-normalized (unit-norm), which matches
     ``cluster_pass_speakers``'s preprocessing — cosine distance reduces to
     ``1 − x · y`` directly.
     """
     if X.shape[0] < 2:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     sim_matrix = X @ X.T  # shape (N, N), values in [-1, 1] for unit vectors
     n = X.shape[0]
     within_dists: list[float] = []
@@ -629,17 +649,109 @@ def _empirical_calibration_band(
             else:
                 between_dists.append(d)
     if len(within_dists) < min_pairs or len(between_dists) < min_pairs:
-        return fallback_same_floor, fallback_diff_floor
+        return None
     same_floor = float(np.quantile(within_dists, 0.75))
     diff_floor = float(np.quantile(between_dists, 0.25))
     # Ensure ordering (same < diff). Pathological clusters can give within > between
     # — fall back to defaults rather than report nonsense.
     if same_floor >= diff_floor:
-        return fallback_same_floor, fallback_diff_floor
-    # Clamp to plausible bounds so a degenerate cluster doesn't pull the band
-    # outside [0.1, 0.9].
-    same_floor = max(0.10, min(0.50, same_floor))
-    diff_floor = max(0.50, min(0.90, diff_floor))
+        return None
+    # Clamp only enough to keep the band ordered and inside [0.05, 0.95]. An earlier
+    # version pinned same_floor to at most 0.50 and diff_floor to at least 0.50, which
+    # presumes the two distributions straddle 0.5. Measured on a real two-speaker
+    # recording, ECAPA's *within*-speaker distance over 0.5 s buckets has a median of
+    # 0.543 — above that cap — so the presumption fails at this time scale and the cap
+    # would drag the anchor back below anything the embeddings actually produce.
+    same_floor = max(0.05, min(0.95, same_floor))
+    diff_floor = max(0.05, min(0.95, diff_floor))
+    if diff_floor - same_floor < 0.05:
+        return None
+    return same_floor, diff_floor
+
+
+def _sequential_calibration_band(
+    X: np.ndarray,
+    labels: np.ndarray,
+    *,
+    min_pairs: int = 5,
+) -> tuple[float, float] | None:
+    """Calibration anchors measured on the comparison the speaker harvester actually makes.
+
+    The harvester never compares all window pairs. It compares each bucket to the *most
+    recent prior* bucket carrying the same speaker label, and — for change claims — to the
+    immediately preceding bucket. Anchors must describe that statistic, because it is a
+    different distribution from the all-pairs one.
+
+    How different, measured on a two-speaker recording with the diarizer's turns as ground
+    truth: over all pairs, ECAPA's within- and between-speaker distances overlap (within q75
+    0.919 against between q25 0.916) and no ordered band exists at all. Over the sequential
+    comparison, the same embeddings separate cleanly (within q75 0.646, between q25 0.915).
+    Nearest-centroid classification recovers the diarizer's labels at 98.5%, so the embedding
+    discriminates perfectly well — calibrating on all-pairs merely measured the wrong thing,
+    discarded the usable band, and fell back to a fixed one sitting below every distance the
+    embedding produces. The axis then reported high uncertainty on buckets where every
+    diarizer agreed.
+
+    Args:
+        X: Unit-norm embedding vectors in time order.
+        labels: Cluster label per row, aligned with ``X``.
+        min_pairs: Minimum comparisons of each kind before anchors are trusted.
+
+    Returns:
+        ``(same_speaker_floor, diff_speaker_floor)``, or ``None`` when the pass supports no
+        ordered band — too few comparisons, or distributions that genuinely overlap.
+    """
+    if X.shape[0] < 2:
+        return None
+    within: list[float] = []
+    between: list[float] = []
+    last_seen: dict[Any, int] = {}
+    for i in range(X.shape[0]):
+        label = labels[i]
+        for other, idx in last_seen.items():
+            d = float(max(0.0, min(1.0, 1.0 - float(X[i] @ X[idx]))))
+            (within if other == label else between).append(d)
+        last_seen[label] = i
+    if len(within) < min_pairs or len(between) < min_pairs:
+        return None
+    same_floor = float(np.quantile(within, 0.75))
+    diff_floor = float(np.quantile(between, 0.25))
+    if same_floor >= diff_floor:
+        return None
+    same_floor = max(0.05, min(0.95, same_floor))
+    diff_floor = max(0.05, min(0.95, diff_floor))
+    if diff_floor - same_floor < 0.05:
+        return None
+    return same_floor, diff_floor
+
+
+def _within_cluster_band(
+    X: np.ndarray,
+    *,
+    fallback_diff_floor: float = 0.70,
+    min_pairs: int = 5,
+) -> tuple[float, float] | None:
+    """Calibration band for a pass whose windows all belong to one speaker.
+
+    With a single cluster there are no between-speaker pairs, so only the same-speaker
+    anchor can be measured and the different-speaker floor keeps its default. Measuring the
+    one is what matters: a fixed same-speaker floor of 0.30 is unreachable for short-bucket
+    embeddings, which leaves the speaker axis unable to report low uncertainty even when
+    every diarizer agrees on an unchanging speaker.
+    """
+    if X.shape[0] < 2:
+        return None
+    sim = X @ X.T
+    n = X.shape[0]
+    dists = [float(max(0.0, min(1.0, 1.0 - sim[i, j]))) for i in range(n) for j in range(i + 1, n)]
+    if len(dists) < min_pairs:
+        return None
+    same_floor = max(0.05, min(0.95, float(np.quantile(dists, 0.75))))
+    diff_floor = fallback_diff_floor
+    if diff_floor - same_floor < 0.05:
+        # The speaker's own spread reaches the different-speaker anchor. Push the anchor
+        # out rather than returning an inverted band that would score every comparison.
+        diff_floor = min(0.95, same_floor + 0.20)
     return same_floor, diff_floor
 
 
@@ -672,9 +784,9 @@ def calibrate_cosine_uncertainty(
 ) -> float:
     """Map raw cosine distance to a calibrated uncertainty in ``[0, 1]``.
 
-    The raw cosine distance between two ECAPA / ResNet utterance embeddings sits
+    The raw cosine distance between two ECAPA / ResNet asr embeddings sits
     in a noise floor of roughly 0.1–0.3 even for the same speaker (phonetic
-    variation), so a small distance is **not** strong evidence of identity. The
+    variation), so a small distance is **not** strong evidence of speaker. The
     EER decision boundary on VoxCeleb is around 0.4–0.5; distances above ~0.7
     are confidently different speakers. This helper maps the raw distance onto
     the [same_speaker_floor, diff_speaker_floor] calibration band.

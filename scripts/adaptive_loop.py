@@ -5,13 +5,13 @@ Runs the loop from ``specs/20260723-225523-dynamic-uncertainty-workflow`` over a
 completed ``analyze_audio.py`` run directory: round 1 ingests the run's
 uncertainty parquets into the belief store (with a re-aggregation parity
 check), rounds 2..K execute the policy-ranked intervention catalog (stream
-election, hallucination adjudication, missed-speech correction, cache-replay
+election, uncorroborated-speech attenuation, missed-speech correction, cache-replay
 reserve-ASR escalation; live-backend rules defer with guard reasons), and the
-final round fuses a consensus transcript / diarization / presence track with a
+final round fuses a consensus transcript / diarization / speech_presence track with a
 full decision audit trail.
 
 Usage:
-    uv run python scripts/adaptive_loop.py artifacts/e2e_runs/<run_dir> \
+    uv run python scripts/adaptive_loop.py artifacts/analyze_audio/<run_dir> \
         --cache-dir artifacts/analyze_audio_cache \
         --ground-truth ~/Downloads/updated-label-XXXX.json
 
@@ -49,15 +49,28 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("run_dir", type=Path, help="Completed analyze_audio run directory")
     parser.add_argument("--cache-dir", type=Path, default=Path("artifacts/analyze_audio_cache"))
-    parser.add_argument("--policy", type=Path, default=None, help="Policy YAML overriding the default")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help=(
+            "Run config YAML deep-merged over the packaged default; its `adaptive:` section is the "
+            "policy. A file with policy keys at the top level is refused rather than silently ignored."
+        ),
+    )
     parser.add_argument("--out", type=Path, default=None, help="Output dir (default: run_dir)")
     parser.add_argument("--max-rounds", type=int, default=3)
     parser.add_argument("--aggregator", default=None, help="Override (default: from run's disagreements.json)")
     parser.add_argument("--ground-truth", type=Path, default=None, help="Label Studio export JSON")
     args = parser.parse_args(argv)
 
-    if not (args.run_dir / "summary.json").exists():
-        print(f"ERROR: {args.run_dir} is not an analyze_audio run dir (no summary.json)", file=sys.stderr)
+    from senselab.audio.workflows.audio_analysis.layout import evidence_dir
+
+    if not (evidence_dir(args.run_dir) / "perturbations.json").exists():
+        print(
+            f"ERROR: {args.run_dir} is not an analyze_audio run dir (no L1/perturbations.json)",
+            file=sys.stderr,
+        )
         return 2
 
     _ensure_light_importable()
@@ -67,14 +80,19 @@ def main(argv: list[str] | None = None) -> int:
     result = run_adaptive_loop(
         args.run_dir,
         cache_dir=args.cache_dir,
-        policy_path=args.policy,
+        config_path=args.config,
         out_dir=args.out,
         max_rounds=args.max_rounds,
         aggregator=args.aggregator,
     )
     out_dir = Path(result["out_dir"])
-    print(f"run_state: {result['run_state']}  rounds: {result['rounds']}")
-    print("parity:", json.dumps(result["parity_check"]))
+    # Both, when they disagree: the loop's own reason for stopping is not the same claim as
+    # whether the answer settled, and an oscillating run stops with "nothing left to fire".
+    verdict = result["termination_reason"]
+    if verdict != result["run_state"]:
+        verdict = f"{verdict} (loop stopped: {result['run_state']})"
+    print(f"termination: {verdict}  rounds: {result['rounds']}")
+    print("replay:", json.dumps(result["replay_check"]))
     print(
         f"interventions fired: {result['n_interventions_fired']}  "
         f"fused words: {result['n_words_fused']}  stream: {result['fusion_stream']}"
@@ -86,7 +104,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from senselab.audio.workflows.audio_analysis.adaptive.plot import build_adaptive_timeline
 
-        plot_path = build_adaptive_timeline(out_dir, gt_path=args.ground_truth, title=args.run_dir.name)
+        plot_path = build_adaptive_timeline(
+            out_dir,
+            transcript=result["transcript"],
+            gt_path=args.ground_truth,
+            title=args.run_dir.name,
+        )
         if plot_path is not None:
             print(f"timeline: {plot_path}")
     except Exception as exc:  # noqa: BLE001 — plotting must never fail the run
@@ -98,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         t = eval_doc["transcript"]
         print("\n── evaluation vs ground truth ──")
-        print(f"presence: {json.dumps(eval_doc['presence'])}")
+        print(f"speech_presence: {json.dumps(eval_doc['speech_presence'])}")
         print(f"fused WER: {t['fused']['wer']}  (normalized: {t['fused']['wer_normalized']})")
         for m, s in (t.get("per_model") or {}).items():
             print(f"  {m}: WER {s['wer']} (normalized {s['wer_normalized']})")

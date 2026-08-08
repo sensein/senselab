@@ -1,0 +1,551 @@
+# The audio-analysis run configuration. One file, versioned, with its derivation written down.
+#
+# `scripts/analyze_audio.py` takes an audio file and an output directory. Every other value it once
+# accepted as a flag lives here, because a caller had no basis to choose between them: the run
+# recipes in CLAUDE.md differed from each other only in flags whose right value nobody could name
+# without re-deriving it. A value that is chosen once and measured belongs in a file that records the
+# measurement, not in a `--flag` whose default is the real answer and whose other settings are
+# untested.
+#
+# Two invariants this file exists to hold:
+#
+#   1. Its identity travels into every artifact. `run_config.load_run_config` hashes the *merged*
+#      mapping and stamps `{name, version, config_hash}` onto the run summary, every L1 signal
+#      parquet, every L2 estimate, the disagreements index and the LS bundle. A run whose config
+#      cannot be named is a run that cannot be reproduced.
+#   2. Overrides are whole-file. `--config <path>` deep-merges one YAML over this one; there are no
+#      per-knob flags, because that is what this replaced.
+#
+# `profile_version`-style note: `version` below is the *schema* version of this file and is bumped
+# only when the shape changes. The identity of a particular set of values is `name` plus the file's
+# hash, exactly as `data/detection_margin/<version>.json` distinguishes `profile_version` from
+# `calibrated_as`.
+version: 3
+name: senselab-audio-analysis/default
+
+derivation: |
+  Grid (0.1 s window, 0.1 s hop) — axes.DEFAULT_TIME_GRID, and the reason it is a single pair is
+  measured: with a per-axis grid the four axes carried 242 / 242 / 19 / 8 rows on four different
+  spacings and shared zero bucket keys, so every cross-axis coupling in the pipeline ran and did
+  nothing. Window equals hop so no two rows share a frame; a 0.1 s window at a 0.02 s hop reported
+  five near-duplicate rows per window and nothing said so. 100 ms resolves speech and
+  target-activity onsets, and speaker turns and mask regions are much longer.
+
+  Embedding window 0.5 s / hop 0.25 s — measured on the 4-speaker validation clip: 0.5 s recovers
+  the correct speaker count and roughly doubles cluster-vs-truth agreement (ARI 0.70 vs 0.48 at
+  1.0 s), because 1.0 s windows straddle turn boundaries. The 0.25 s hop flips the speaker axis from
+  inverted (uncertainty dipping at speaker changes) to peaking within ~15 ms of the two clearest
+  turn boundaries.
+
+  Speaker cosine floors 0.30 / 0.70 and the 0.5 clustering threshold — ECAPA's same-speaker noise
+  level and its VoxCeleb EER. These are *fallbacks*: `harvest_pass` prefers a band measured per
+  embedder from that pass's own clusters, and only an embedder that produced no usable band falls
+  back here.
+
+  Scene windows — AST and YAMNet on the same 0.96 s / 0.48 s grid, which is YAMNet's native frame
+  per Google's model card.
+
+  AST previously ran at 10.24 s / 10.24 s on the reasoning that this is "its native frame: 1024 mel
+  frames at 10 ms". That conflates the model's **required input size** with its **temporal
+  precision**. 1024 frames is a fixed input shape, not an analysis resolution: a shorter window is
+  zero-padded to 1024 frames by `ASTFeatureExtractor` — rectangular padding, no taper — so the
+  content is unattenuated and AST can be slid at any hop.
+
+  Measured on the 21.48 s conversation clip, the coarse setting cost both resolution and confidence:
+
+  |                     | windows | Speech score on speech |
+  |---------------------|---------|------------------------|
+  | 10.24 s / 10.24 s   | 3       | 0.473, 0.449, 0.195    |
+  | 0.96 s / 0.48 s     | 45      | 0.75 - 0.92            |
+
+  Confidence *rose* because a 10.24 s window of a conversation contains speech plus silence plus
+  everything else, so the softmax mass spreads over many classes; a 0.96 s window of speech is
+  unambiguous. And on a 4.9 s recording the old window exceeded the whole clip, so AST returned one
+  value for every bucket — flat by construction, at 0.4604 raw and 0.3987 enhanced, while carrying
+  the largest weight on the presence axis.
+
+  The "kaldi-fbank refuses chunks below ~1 s" constraint is real but does not bind here: 0.96 s is
+  ~96 mel frames, far above the minimum. It would bind at the 0.1 s reporting grid, which is why
+  these stay at the classifier's frame rather than following `grid`.
+
+  ASR set — CrisperWhisper 2.0 turbo (verbatim, native word timestamps and per-word confidence),
+  Canary-Qwen 2.5B (text-only, auto-aligned) and Qwen3-ASR 1.7B (native timestamps via its bundled
+  aligner). Three families, so a per-word vote has a majority to lose; `adaptive.families` records
+  which ids count as one family so two members of one cannot outvote a family of one.
+
+  Aligner `qwen` — D-1: running one aligner across the pipeline is what makes a boundary difference
+  attributable to the recognizers rather than to the aligners. `adaptive.fusion` re-times the fused
+  sequence with the same backend for the same reason.
+
+  Aggregator `min` — "most-doubtful wins" across a bucket's sub-signals. `mean` is the
+  average-doubt reading and is a policy choice, not a better estimate.
+
+  Triage gates 0.5 / 0.3 s / 10 dB / 0.4 — the round-0 speech gate and SNR enhancement gate. They
+  only bind under `enhancement.mode: auto`; the default `always` runs both passes unconditionally,
+  because the enhanced pass is the perturbation sample every stability weight is measured from.
+
+  UNMEASURED, and marked as such: `uncertainty.asr_scene_coupling` (0.5 / 0.25) is the only block
+  here with no derivation behind its magnitude. It multiplies the asr axis's *policy fold*
+  (`triage_score`) and never `uncertainty`, so it cannot move the entropy measure; set both weights
+  to 0 to disable it. Re-measure on artifacts/degradation_suite/ before alpha.
+
+# Where results go, when `--out` is not given. The only value here a caller routinely overrides, and
+# it is a CLI argument rather than a config knob for exactly that reason.
+output_dir: artifacts/analyze_audio
+
+# `auto` lets each task pick a device it supports — pyannote and AST reject MPS and must fall back
+# to CPU while Whisper and SepFormer can use it, so one global choice is wrong on Apple silicon.
+device: auto
+
+# The run's one bucket grid. Equals `axes.DEFAULT_TIME_GRID`; `run_config` asserts they agree at load
+# rather than trusting two copies of a pair of floats.
+grid:
+  win_length: 0.1
+  hop_length: 0.1
+
+cache:
+  enabled: true
+  dir: artifacts/analyze_audio_cache
+
+# Which stages run. Absence-means-skip is expressed here so the library never sees a CLI-shaped
+# skip set.
+stages:
+  diarization: true
+  ast: true
+  yamnet: true
+  features: true
+  asr: true
+  alignment: true
+  comparisons: true          # the uncertainty comparator; false also disables the belief store,
+                             # every adaptive round >= 2 and all of final/
+  align_asr: true            # auto-align timestamp-less ASR output before the LS export
+  background_mask: true      # regions free of TARGET activity — where background findings are
+                             # trustworthy without any suppression
+  scene_quality: true        # REQUIRED when true: an unreachable Brouhaha fails the run loudly
+                             # rather than shipping null SNR/reverb columns
+  sound_sources: true
+  stability: true            # cross-pass perturbation stability; false leaves every signal at full
+                             # weight, *unmeasured*, which floors correctly but carries no evidence
+  per_speaker_identity: true # costs no extra inference — derived from the passes already computed
+  adaptive_outputs: true     # rounds/ and final/
+  invariance_probe: false    # multiplies diarization cost by the number of probes
+
+models:
+  diarization:
+  - pyannote/speaker-diarization-community-1
+  - nvidia/diar_sortformer_4spk-v1
+  asr:
+  - nyralabs/CrisperWhisper2.0_turbo
+  - nvidia/canary-qwen-2.5b
+  - Qwen/Qwen3-ASR-1.7B
+  embeddings:
+  - speechbrain/spkrec-ecapa-voxceleb
+  - speechbrain/spkrec-resnet-voxceleb
+  ast: MIT/ast-finetuned-audioset-10-10-0.4593
+  yamnet: google/yamnet
+  # Anchored, because the adaptive loop's on-demand enhanced stream must be the same model the
+  # perturbation used — two spellings of one value is a drift waiting to happen.
+  enhancement: &enhancement_model speechbrain/sepformer-wham16k-enhancement
+
+alignment:
+  aligner: qwen                                     # qwen | mms
+  qwen_model: Qwen/Qwen3-ForcedAligner-0.6B
+  mms_model: facebook/mms-1b-all                    # 1100+ languages via per-language adapters
+  qwen_native_timestamps: true                      # false forces the script's own align stage
+  # ISO 639-1 ('en') or 639-3 ('eng'); null falls back to each model's documented default. Anchored
+  # so the aligner and the loop's live re-ASR cannot be pinned to different languages.
+  language:
+
+scene:
+  ast_win_length: 0.96
+  ast_hop_length: 0.48
+  yamnet_win_length: 0.96
+  yamnet_hop_length: 0.48
+  # AudioSet classes kept per window. 50 captures essentially all of the softmax mass; the top-1
+  # label (the YAMNet speech veto) is unaffected by this at any setting.
+  top_k: 50
+
+features:
+  win_length: 1.0
+  hop_length: 0.5
+
+embeddings:
+  window_s: 0.5
+  hop_s: 0.25
+
+speaker:
+  same_floor: 0.30
+  diff_floor: 0.70
+  cluster_cosine_threshold: 0.5
+  # Cosine similarity below which two models' speaker centroids are not the same voice, used by the
+  # second matcher in label harmonisation (H2/D-6). Where the overlap matcher and the centroid matcher
+  # disagree, that disagreement *is* the assignment uncertainty — so this value decides how often the
+  # two are allowed to disagree.
+  centroid_min_similarity: 0.5
+  # Posterior mass at which a speaker count counts as *supported* by a source, for the multi-modal
+  # count report.
+  supported_threshold: 0.5
+  clustering_algorithm: spectral    # spectral | kmeans; spectral falls back per-k automatically
+
+task:
+  # speech | breath | cough. null triggers a conservative fallback that treats any vocal activity as
+  # target and records itself as such — for a breathing or cough task, getting this right is what
+  # stops the collected signal being reported as a background 'people' source.
+  type:
+  # Seconds after target activity excluded from the mask (reverberant tail). null defers to the
+  # detection-margin profile's own value.
+  mask_guard_interval_s:
+
+enhancement:
+  # always | auto | never. `always` runs both passes unconditionally, which is what makes raw and
+  # enhanced a perturbation *sample*; `auto` gates on the triage block below and also skips
+  # diarization/ASR/alignment entirely when no speech is found.
+  mode: always
+
+triage:
+  # Round-0 gates. `speech_threshold` / `min_speech_s` decide whether any speech was found at all;
+  # the two SNR values decide when the recording counts as degraded.
+  speech_threshold: 0.5
+  min_speech_s: 0.3
+
+  # ⚠ UNDERIVED. `snr_floor_db` is a **judgement, not a measurement**, and is recorded as such rather
+  # than given a derivation it does not have. Nothing was fitted to choose 10 dB; it is the
+  # conventional boundary at which broadband noise becomes audibly intrusive in speech, and no
+  # measurement in this repo supports that number over 8 or 12.
+  #
+  # It now carries more weight than when it was written. Originally it only decided whether to
+  # *compute* the enhanced pass (`enhancement.mode: auto`). It also decides, per bucket, whether a
+  # repair perturbation's readings are **admitted to the fold** (`fuse.SnrGate`) — so it changes
+  # published axis values, not just runtime.
+  #
+  # Measured consequence of the arbitrariness, on `audio_48khz_mono_16bits`: that recording's SNR
+  # spans 8.6-11.7 dB, so a 10 dB floor slices it mid-distribution — 9 buckets admit the enhanced
+  # pass and 40 do not. At 8 dB none would; at 12 dB all would. The split is an artifact of where the
+  # number sits, not a distinction between degraded and clean regions.
+  #
+  # Closing this means what closed `detection_margin`: measure the SNR at which enhancement starts to
+  # *change downstream answers*, on recordings spanning conditions, and write the anchors into
+  # `data/` with the verdicts behind them. See `scripts/calibrate_detection_margin.py` for the shape
+  # such a profile takes, and its refusal to emit one from insufficient measurement.
+  snr_floor_db: 10.0
+  # Fraction of speech buckets that must fall below the floor for `enhancement.mode: auto` to run the
+  # enhanced pass. Also underived, and less consequential: it gates computation only, never a value.
+  low_snr_fraction: 0.4
+
+uncertainty:
+  aggregator: min                   # min | mean | harmonic_mean | disagreement_weighted
+  disagreements_top_n: 100          # 0 disables the index
+  # AudioSet labels that count as speech-present. The labels contain commas, so they are a list.
+  speech_presence_labels:
+  - Speech
+  - Conversation
+  - Narration, monologue
+  - Female speech, woman speaking
+  - Male speech, man speaking
+  - Child speech, kid speaking
+  - Speech synthesizer
+  # Applied at L2 to the asr axis's triage_score only. See the UNMEASURED note in `derivation`.
+  asr_scene_coupling:
+    w_q: 0.5
+    w_s: 0.25
+
+# ── L1 → L2 linking: what turns a measurement into a belief ──────────────────
+#
+# Every value here was a dataclass default in `speech_presence_link.SpeechPresencePolicy`, reachable
+# only by editing Python. `policy_from_params` has always been able to read them from the run params;
+# nothing ever filled them, so `DEFAULT_POLICY` was the dataclass and the config could not move a
+# single threshold. These are the decisions that turn L1's measurements into L2's votes, which makes
+# them exactly the kind of thing the config exists to carry.
+#
+# Values are unchanged from those defaults, deliberately: this move is about *where* they are declared.
+linking:
+  # A diarizer's segment counts as a claim on a bucket at any overlap. Zero because the segment is the
+  # model's own assertion of extent — requiring more would be re-cutting its answer.
+  diar_coverage_threshold: 0.0
+  # Likewise for ASR word overlap, in seconds.
+  word_overlap_threshold_s: 0.0
+  # Whisper-family `no_speech_prob` above which the chunk is read as non-speech.
+  no_speech_threshold: 0.5
+  # How per-chunk log-probabilities become one bucket confidence. `mean_of_exp` averages the
+  # per-chunk confidences — each chunk is an independent "am I confident here?" vote;
+  # `exp_of_mean` exponentiates the mean log-probability. By Jensen's inequality the first is
+  # always >= the second whenever the chunks disagree, so these are different statistics and one
+  # has to be named. mean_of_exp | exp_of_mean.
+  asr_confidence_pooling: mean_of_exp
+  # Share of a scene classifier's label mass on speech labels needed to read the window as speech.
+  label_mass_threshold: 0.5
+  # Frame-posterior mean above which a bucket is read as speech.
+  frame_speech_threshold: 0.5
+  # dB above the measured noise floor at which level counts as activity. The low end of this ramp
+  # abstains rather than denying — a low excess is ambiguous between silence and a source that runs
+  # through the whole recording and is absorbed into its own floor estimate.
+  speech_excess_db: 12.0
+  # Absolute loudness anchors. LUFS *may* assert absence: -60 is unambiguous silence, -30 is
+  # conversational. This is the one acoustic voter allowed to contradict a model outright.
+  lufs_silence: -60.0
+  lufs_speech: -30.0
+  # A voter whose native analysis window exceeds `coarse_window_ratio` x the reporting window has one
+  # value spanning many buckets, and is demoted to `coarse_voter_weight`.
+  #
+  # ⚠ `coarse_voter_weight` is UNDERIVED — a hand-set magnitude on an otherwise measured demotion.
+  # Detection reads the declared `native_window_s`; the penalty does not. Register item 15 is
+  # **partial** for this reason, and asks for `native_window_s / resolution_s` instead. Measured cost:
+  # on a 4.9 s clip, `ast` (10.24 s window, wider than the recording, so one observation) and `yamnet`
+  # (0.96 s, five observations) received the identical 0.25.
+  coarse_voter_weight: 0.25
+  coarse_window_ratio: 2.0
+
+  # Background-mask thresholds. A reading above these says the *target* was active, before the
+  # task-type polarity flip. Zero for words and speaker occupancy because any overlap is the model's
+  # own claim of extent, as above.
+  mask_speech_threshold: 0.5
+  mask_word_coverage_threshold: 0.0
+  mask_occupancy_threshold: 0.0
+
+  # Word-slot alignment for the ASR consensus fold. `slot_overlap` is the fraction two words must
+  # share to be candidates for the same slot; `slot_mid_tol_s` is how far their midpoints may differ.
+  # These were the task API's own defaults, named here rather than inherited silently so the recorded
+  # value and the used value cannot drift.
+  asr_slot_overlap: 0.3
+  asr_slot_mid_tol_s: 0.15
+
+# ── measurement geometry and anchors that are not per-signal ──────────────────
+quality:
+  # The scene-quality analysis frame. Not the reporting grid: these are the window and hop the SNR /
+  # reverb / bandwidth estimators run at, and they are recorded in each run's provenance so a measured
+  # value can be read back at the resolution it was taken.
+  analysis_win_length: 0.5
+  analysis_hop_length: 0.25
+  # Percentile of per-band energy taken as the noise floor. A tenth-percentile estimate sits ~9.8 dB
+  # below the true mean noise power, and `acoustic._FLOOR_BIAS_DB` corrects for exactly that — the two
+  # travel together, so changing this one without re-deriving the bias makes every relative-dB gate
+  # that much more permissive.
+  floor_percentile: 10.0
+  # Ceiling on the gain the scene-quality calibration may apply when normalising a level. A cap rather
+  # than a target: amplification changes no signal-to-noise ratio, so unbounded gain buys nothing and
+  # risks clipping.
+  max_gain_cap_db: 10.0
+
+# ── how uncertainty is binned for review ─────────────────────────────────────
+labelstudio:
+  # The high/low bins the Label Studio bundle colours by, and the same scale `theta_low` / `theta_high`
+  # are written on. Doubt below `low` reads as settled, above `high` as unsettled. These are review
+  # ergonomics, not measurements — they decide what a human is shown first.
+  low_threshold: 0.33
+  high_threshold: 0.66
+
+# ── how far a signal's claim must be corroborated ─────────────────────────────
+support:
+  # A signal whose independent evidence spans less than this is not measured against — an evidence set
+  # with no spread cannot distinguish a supported claim from an unsupported one.
+  min_evidence_spread: 0.15
+  # Pooled evidence below this counts as *low*, i.e. as failing to corroborate a claim.
+  evidence_low_threshold: 0.20
+  # Fraction of a signal's claims that must fall in low-evidence buckets before its support is
+  # discounted at all. Without it a single unlucky bucket would attenuate a signal across a whole run.
+  min_low_fraction: 0.02
+
+profiles:
+  # null → the bundled profile for each. Paths or names, resolved by their own loaders, which record
+  # what they resolved to.
+  detection_margin:
+  influence:
+  calibration:
+
+rounds:
+  # Total adaptive rounds including the baseline. 1 = baseline only: no interventions and no
+  # rounds/>=2, though final/ is still emitted from the round-1 belief.
+  max_rounds: 3
+  # Change in epistemic uncertainty below which a round counts as having improved nothing. 1e-3 is a
+  # convergence tolerance, not a belief about the data: it is the scale at which two folds of the same
+  # evidence differ by float arithmetic rather than by measurement.
+  epistemic_tolerance: 0.001
+  # How many rounds of history the cycle detector compares. A loop that revisits the same state every
+  # third round is oscillating, not converging, and 4 is the shortest window that can see it.
+  cycle_window: 4
+
+# ── the adaptive loop's policy ───────────────────────────────────────────────
+#
+# Nested rather than merged flat, because it is a different kind of thing: the values above describe
+# what the run measures, these describe what the loop may *do* about the result. `load_policy` reads
+# this section and hashes it as `policy_hash`, so the two identities stay separable — a policy change
+# and a model change are not the same event.
+# Contract: specs/20260723-225523-dynamic-uncertainty-workflow/contracts/policy-engine.md
+adaptive:
+  version: 2
+  thresholds:
+    theta_speech: 0.5      # triage speech gate (FR-004) — unused by the artifact-driven prototype
+    theta_enh: 0.4         # quality gate for enhancement auto (FR-003) — unused by the prototype
+    theta_high: 0.66       # region seed (matches labelstudio HIGH_THRESHOLD)
+    theta_low: 0.33        # converged bucket (matches LS low bin)
+    epsilon: 0.05          # minimum per-intervention improvement (FR-017)
+  regions:
+    gap_merge_s: 0.5
+    pad_s: 1.0
+    top_n_per_round: 8
+    max_region_rounds: 2
+  budget:
+    medium_per_run: 24
+    heavy_per_run: 4
+  election:
+    weights:
+      speech_presence_conf: 0.4
+      quality: 0.3
+      asr_agreement: 0.3
+  adjudication:
+    # P3 reads *measured corroboration* from the independent presence pool (frame posteriors and
+    # acoustic proxies that are willing to report absence — never ASR or diarizers, which infer
+    # presence from a decision that already presupposes a speaker). It used to read the belief row's
+    # p_voice, which folds in the indicted ASR's own vote: the source partly protected itself and
+    # acting on it moved the number that indicted it.
+    corroboration_low: 0.2       # below this, an ASR speech claim becomes a P3 candidate
+    corroboration_very_low: 0.1  # was the unnamed `p_voice_hallucination / 2`
+    low_native_confidence: 0.35
+    low_src_speech: 0.4
+    min_indicators: 2
+    # Floor on the weight P3 may withdraw. Validated > 0 at load: aggregation drops voters at
+    # weight <= 0, so a zero floor here is a purge switch, not a tuning knob.
+    # This IS floors.MIN_EVIDENCE_WEIGHT — same quantity, same argument. YAML cannot import a Python
+    # constant, so the link is held by evidence_weight_test.py::
+    # test_policy_yaml_weight_floors_do_not_drift_from_the_shared_constant, which fails if this
+    # default and the constant stop agreeing. An override config may still set its own.
+    min_evidence_weight: 0.05
+    p_voice_missed_low: 0.2      # C9's own lower bound; it used to borrow P3's threshold, so
+                                 # retuning one rule silently moved the other
+    p_voice_missed: 0.6          # below this, strong text agreement triggers C9
+    missed_speech_weight: 0.5
+  fusion:
+    slot_overlap: 0.3            # min time-overlap fraction to join an existing word slot
+    slot_mid_tol_s: 0.15         # or midpoint distance below this
+    winner_margin: 0.66          # winner share below this -> record alternates
+    alternate_min_share: 0.15
+    corroboration:
+      # Per-word evidence weight, measured against presence voters independent of ASR. Every word
+      # is measured, whether or not an intervention fired: under the previous design a word survived
+      # according to whether P3 had been admitted within budget, so budget accounting decided what
+      # reached the transcript.
+      exponent: 1.0              # gate = max(min_corroboration, p_independent ** exponent);
+                                 # same shape as influence.uncertainty_gate.exponent
+      min_corroboration: 0.05    # floor: attenuate, never erase. Validated > 0 at load — at zero
+                                 # both the vote weight and the coverage contribution vanish, which
+                                 # is deletion by configuration. Same quantity as
+                                 # floors.MIN_EVIDENCE_WEIGHT (which api.MIN_CORROBORATION now binds
+                                 # to); the drift guard is the same test named above.
+      segment_min_corroboration: 0.2
+                                 # below this a word stays in words[] with its measurement and its
+                                 # sources, but not in the readable segment rollup. THE ONE NUMBER
+                                 # THAT STILL REMOVES TEXT FROM A DELIVERABLE — raised far enough it
+                                 # reproduces purging in effect. Defaulted to the same figure as
+                                 # adjudication.corroboration_low because it answers the identical
+                                 # question on the identical scale, but the pool differs (independent
+                                 # voters only, ASR excluded), so it is PROVISIONAL and must be
+                                 # re-measured on artifacts/degradation_suite/ before alpha rather
+                                 # than assumed transferable.
+    consensus_alignment: auto    # U3/C8: "auto" re-times the consensus sequence; "off" keeps member
+                                 # timestamps (which is what the per-edge onset/offset confidences
+                                 # describe, so "off" is the setting under which the published timing
+                                 # and the reported boundary agreement refer to the same thing).
+    consensus_alignment_backend: qwen   # "qwen" = Qwen3-ForcedAligner-0.6B, the aligner the pre-fusion
+                                 # path already uses (D-1); "mms" = torchaudio MMS_FA. Was hard-coded
+                                 # to MMS with no knob, which ran two aligners in one pipeline — the
+                                 # thing D-1 removed when it moved Canary off MMS so boundary
+                                 # differences would reflect models rather than aligners.
+    consensus_alignment_timeout_s: 600.0   # SIGALRM guard around bundle load + alignment
+  calibration_profile:           # T033: {"type":"logistic","a":..,"b":..} or {"type":"piecewise","x":[..],"y":[..]}
+                                 # produced by the synthetic calibration harness; null -> calibrated: false
+  audio_io_backend: auto         # T048: "auto" = senselab preprocessing (cache-signature parity)
+                                 # with DSP-loader fallback; "senselab" = strict, fail loudly;
+                                 # "dsp" pins the fallback. Loader used is recorded in
+                                 # convergence.json -> audio_backend (never silent).
+  families:                      # FR-008 — glob-style prefixes; weight = 1/|family members present|
+    whisper:
+    - openai/whisper-
+    - nyralabs/CrisperWhisper
+    nemo:
+    - nvidia/canary-
+    - nvidia/stt_en_
+    qwen:
+    - Qwen/Qwen3-ASR
+    granite:
+    - ibm-granite/
+  reserve_asr_models:            # U2 escalation pool (cache replay), in order
+  - openai/whisper-large-v3-turbo
+  u1_asr_models:                 # U1 live re-ASR pool — env-appropriate HF whisper ids;
+  - openai/whisper-base          # full installs may list the run's own backends instead
+  u1_backend: auto               # T047: "auto" = senselab task API first, HF-pipeline fallback
+                                 # (recorded in iterations.json); "senselab" / "pipeline" pin one path
+  language:
+                                 # ASR language pin for U1 — the same one the aligner uses
+  enhancement_model: *enhancement_model
+                                           # on-demand enhanced stream
+  speech_presence:               # P2 fine-grid speech_presence re-analysis
+    coarse_share_threshold: 0.5  # fire P2 when >= this share of active votes are coarse
+  speaker:                       # I1/I2 speaker repair (stored or live embeddings)
+    cp_k: 1.0                    # change-point threshold = mean + k·std of the cosine trajectory
+    cp_floor: 0.15               # absolute minimum adjacent-cosine distance for a change-point
+    min_segment_s: 0.25
+    recluster_cosine_threshold: 0.45
+    voiced_threshold: 0.5
+    max_stored_hop_s: 0.3        # stored per-window embeddings usable when hop <= this
+    fine_win_s: 0.5              # live re-embedding grid (full env)
+    fine_hop_s: 0.1
+  rules:
+    S1_stream_election: {enabled: true}
+    P3_uncorroborated_speech_attenuation: {enabled: true}
+    C9_missed_speech: {enabled: true}
+    U2_reserve_escalation: {enabled: true}
+    U1_region_reasr: {enabled: true}
+    I1_boundary_refinement: {enabled: true}
+    I2_recluster: {enabled: true}
+    P2_fine_posteriors: {enabled: true}
+    I4_overlap_detection: {enabled: true}
+
+  # ── mutual influence (T010, FR-011b/FR-011c/FR-011e) ────────────────────
+  #
+  # Signals influence each other iteratively toward convergence. Two gates bound how
+  # far any one signal can move another:
+  #
+  #   effective_weight = base_weight * uncertainty_gate * derivation_gate
+  #
+  # `uncertainty_gate` shrinks a signal's influence as its own uncertainty rises, so an
+  # unreliable signal cannot propagate its error. `derivation_gate` shrinks it further for
+  # signals whose labels are a by-product of another signal already in the system — their
+  # agreement with a parent is not corroboration, so counting it as such would double-count
+  # one underlying computation.
+  influence:
+    max_rounds: 5
+    oscillation_window: 3            # rounds inspected for alternation (>= 2 to detect any)
+    min_uncertainty_improvement: 0.01  # below this, a round counts as no progress
+    uncertainty_gate:
+      # gate = (1 - uncertainty) ** exponent
+      exponent: 1.0
+    derivation_gate:
+      independent: 1.0
+      derived: 0.4                   # MUST stay below `independent`
+    # Which sources count as derived, and WHY -- declared rather than hardcoded, because
+    # this is a judgement about pipeline wiring, not an intrinsic property of a model.
+    #
+    # embedding_silhouette is marked derived because it is the *seed* of the cross-model
+    # label harmonisation (clustering.py: pyannote and sortformer labels snap to its
+    # centroids). The same embeddings also drive same-label and change-point validation,
+    # so embedding evidence enters the speaker axis three ways; letting it also vote as
+    # a peer counts it a fourth time.
+    #
+    # The counter-argument is real and unresolved: it runs an embedding model on the
+    # audio and clusters the result, which is no less direct an observation than a
+    # segmentation model. On one validation recording it reported 5 speakers where two
+    # "independent" diarizers reported 1, and re-examination suggested IT was closer to
+    # right -- so this gate may suppress correct answers. Revisit against ground truth.
+    source_kinds:
+      embedding_silhouette: derived
+    default_source_kind: independent
+    weights:
+      speaker_to_diarization: 1.0
+      diarization_to_speaker_assignment: 1.0
+      background_mask_to_speech_presence: 0.6
+      asr_to_speaker_attribution: 0.5
+
+  # ── speaker-count posterior (T010, FR-002/FR-008/FR-011) ────────────────
+  speaker_count:
+    multimodal_threshold: 0.15         # a count above this counts as a supported mode
+    agreement_mass_for_single: 0.90    # all-sources-agree gate (SC-001)

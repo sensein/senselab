@@ -1,28 +1,37 @@
-"""BucketGrid — shared time grid that all model outputs project onto before voting."""
+"""BucketGrid — the one time grid every model output projects onto before voting."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
 
+from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
+
 
 @dataclass(frozen=True)
 class BucketGrid:
     """Time grid for per-bucket cross-model aggregation.
 
-    Defaults match FR-010: 0.5 s non-overlapping. Every model's output is projected onto
-    this grid before voting; the bucket boundaries appear verbatim on each parquet row's
-    ``start`` / ``end`` columns.
+    Defaults to :data:`~.axes.DEFAULT_TIME_GRID`, and that is the point rather than a convenience:
+    **every axis is on this grid**, so row *i* of one axis is row *i* of another and a cross-axis
+    join needs no reconciliation. Measured before it was: the four axes carried 242 / 242 / 19 / 8
+    rows on 0.1/0.02, 0.1/0.02, 0.25/0.25 and 1.0/0.5 respectively, shared zero bucket keys, and
+    the coupling between them therefore did nothing while reporting that it had run.
+
+    A default that differed from the declared constant is how that happened — the constant was
+    declared, nothing read it, and each caller supplied its own pair.
 
     Attributes:
         win_length: Bucket length in seconds. Must be > 0.
         hop_length: Hop between consecutive bucket starts in seconds.
-            Must satisfy 0 < hop_length <= win_length.
+            Must satisfy 0 < hop_length <= win_length. Equal to ``win_length`` in the default, so
+            no two rows share a frame; see :data:`~.axes.DEFAULT_TIME_GRID` for why overlap is
+            not "finer resolution".
         name: Provenance label recorded in the parquet metadata.
     """
 
-    win_length: float = 0.5
-    hop_length: float = 0.5
+    win_length: float = DEFAULT_TIME_GRID[0]
+    hop_length: float = DEFAULT_TIME_GRID[1]
     name: str = "comparator"
 
     def __post_init__(self) -> None:

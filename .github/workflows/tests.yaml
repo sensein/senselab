@@ -20,6 +20,9 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'macos-test')
     name: macOS-tests
     runs-on: ${{ matrix.os }}
+    # Without this a hang runs to GitHub's 6-hour default. The serial suite is ~20 min on Engaging
+    # and ~19 on ubuntu, so 90 leaves headroom for a slower runner while still failing the same day.
+    timeout-minutes: 90
     strategy:
       fail-fast: true
       matrix:
@@ -69,8 +72,19 @@ jobs:
         HF_TOKEN: ${{ secrets.HF_TOKEN }}
         # torchcodec needs FFmpeg shared libraries at runtime
         DYLD_LIBRARY_PATH: /opt/homebrew/lib:${{ env.DYLD_LIBRARY_PATH }}
+      # Serial, matching cpu-tests and gpu-tests. Under `-n auto` this job hung for 5.5 hours and
+      # was killed by GitHub's 6-hour ceiling (run 31218624423): all three workers stalled at the
+      # same instant at 93%, and nothing completed afterwards. Two independent causes, either
+      # sufficient on its own:
+      #   * a macos-latest arm64 runner has 3 cores and ~7 GB, while each xdist worker imports
+      #     torch + transformers + speechbrain independently at ~535 MB resident before running
+      #     anything, plus a private copy of any weights it loads;
+      #   * `ensure_venv` takes no lock and does `shutil.rmtree(venv_dir)` before installing, so two
+      #     workers wanting the same subprocess venv delete each other's tree mid-install.
+      # The parallelism also buys nothing measurable: 68 s against 70 s serial on a 16-core node,
+      # because the import cost equals the test time.
       run: |
-        uv run pytest -n auto \
+        uv run pytest \
           --junitxml=pytest.xml \
           --cov-report=term-missing:skip-covered \
           --cov-report=xml:coverage.xml \

@@ -171,6 +171,12 @@ data/
 # category map, YAMNet class names) that must be tracked and wheel-included.
 !src/senselab/audio/workflows/audio_analysis/data/
 !src/senselab/audio/workflows/audio_analysis/data/**
+# ...and the same for checked-in *test* data. `level_verdicts_baseline.json` is a measured artifact —
+# the level-probe verdicts the guards in `level_probe_test.py` assert properties of — so a clone
+# without it cannot run those six tests at all. They passed only on the machine that generated the
+# file, and failed on every fresh clone (Engaging, CI) with the bare `data/` pattern above hiding why.
+!src/tests/**/data/
+!src/tests/**/data/**
 # pdoc documentation
 docs/
 
@@ -191,3 +197,33 @@ src/senselab/video/tasks/pose_estimation/models/
 tutorials/audio/tutorial_audio_files/
 tutorials/video/tutorial_images/
 tutorials/video/visualize/
+
+# Run outputs. Content-addressable inputs are reproducible from the cache; the runs
+# themselves are not source, and 142 MB of them were tracked while the default output
+# directory was not — one convention, and it is "not in git".
+
+# Nothing in artifacts/ is source. Every file under it is a regenerable output — run
+# directories, the content-addressable cache, calibration profiles and probe results, all
+# reproducible from the scripts that write them. Four per-directory rules used to sit here and
+# each new output directory arrived untracked-by-accident or committed-by-accident depending on
+# which was added first; 142 MB of run output was tracked while the default output directory was
+# not. One rule, so the question never comes up again.
+artifacts/
+
+# SpeechBrain writes checkpoints into CWD from a `save_path` on an inner lobe's hparams.yaml,
+# which the outer `savedir=` does not redirect. `dependencies.speechbrain_loading_cwd` now pins
+# CWD to the senselab cache so this cannot recur; these directories were the residue from before
+# that fix, and 3 GB of HuggingFace blobs had been committed.
+wav2vec2_checkpoint/
+wav2vec2_checkpoints/
+pretrained_models/
+
+# Tutorial output. `tutorials/video/pose_estimation.ipynb` writes these; running the notebook
+# regenerates them, and a committed copy goes stale against the model that made it.
+visualize/
+
+# Build output.
+dist/
+
+# matplotlib's font cache — machine-local, and it was committed by accident once
+.matplotlib/

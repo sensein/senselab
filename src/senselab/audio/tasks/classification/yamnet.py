@@ -13,7 +13,50 @@ from typing import Any, Dict, List
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+
+LOSSLESS_WAV_SUBTYPE = "FLOAT"
+"""WAV subtype for the worker hand-off.
+
+The temp WAV is the only lossy step between senselab and the TensorFlow subprocess, and
+this classifier has an absolute low-level floor — so a fixed-point write is exactly the
+wrong thing here. Measured with a 16-bit write: a -100 dBFS signal reads back at -93 dBFS,
+because 16-bit quantization noise is louder than the content; at -120 dBFS it reads back as
+exact zeros, which the model reports as silence with full confidence.
+
+Two reasons that matters beyond losing a faint source. First, background characterization
+deliberately presents this classifier quiet residual audio. Second, 16-bit quantization
+noise is statistically indistinguishable from analog broadband noise, so amplifying it
+yields the water-like environmental labels the noise-character guard exists to reject —
+a fabricated finding rather than a missed one.
+"""
+
+
+def write_worker_wav(path: "Path | str", waveform: Any, sampling_rate: int) -> Dict[str, Any]:  # noqa: ANN401
+    """Write a lossless mono WAV for the YAMNet worker and report input-path artifacts.
+
+    Args:
+        path: Destination file.
+        waveform: Samples; a leading channel dimension is averaged to mono.
+        sampling_rate: Sample rate in Hz.
+
+    Returns:
+        A report with ``subtype``, ``clipped_fraction``, and ``requantized`` — surfaced
+        rather than silently repaired, because a clamped or requantized input would make
+        the classifier respond to distortion while provenance claimed clean audio
+        (FR-017d, FR-019b).
+    """
+    import numpy as np
+    import soundfile as sf
+
+    arr = np.asarray(waveform, dtype=np.float32)
+    if arr.ndim > 1:
+        arr = arr.mean(axis=0) if arr.shape[0] < arr.shape[-1] else arr.mean(axis=-1)
+    clipped = float(np.count_nonzero(np.abs(arr) >= 0.9999) / arr.size) if arr.size else 0.0
+    sf.write(str(path), arr, sampling_rate, subtype=LOSSLESS_WAV_SUBTYPE)
+    return {"subtype": LOSSLESS_WAV_SUBTYPE, "clipped_fraction": clipped, "requantized": False}
+
 
 _YAMNET_VENV = "yamnet"
 _YAMNET_REQUIREMENTS = [
@@ -30,6 +73,10 @@ import json
 import sys
 
 try:
+    import os
+    import pathlib
+    import shutil
+
     import numpy as np
     import soundfile as sf
     import tensorflow_hub as hub
@@ -38,8 +85,36 @@ try:
     audio_paths = args["audio_paths"]
     top_k = args.get("top_k", 5)
 
-    # Load YAMNet
-    model = hub.load("https://tfhub.dev/google/yamnet/1")
+    # Load YAMNet.
+    #
+    # The TF-Hub cache defaults to $TMPDIR, which is wrong twice over: it is discarded between
+    # reboots so the model is re-fetched, and a partially-written entry is reused forever
+    # because TF-Hub only checks that the directory exists. That second failure is not
+    # hypothetical — it took YAMNet out of a real run with
+    # "contains neither 'saved_model.pb' nor 'saved_model.pbtxt'", leaving the axis a signal
+    # short with no indication the cause was a corrupt download rather than the audio.
+    _HUB_URL = "https://tfhub.dev/google/yamnet/1"
+    cache_root = pathlib.Path(
+        os.environ.get("SENSELAB_TFHUB_CACHE")
+        or (pathlib.Path.home() / ".cache" / "senselab" / "tfhub")
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
+    os.environ["TFHUB_CACHE_DIR"] = str(cache_root)
+
+    def _load_yamnet():
+        try:
+            return hub.load(_HUB_URL)
+        except (ValueError, OSError) as exc:
+            # A corrupt entry must be a cache miss, not a permanent failure. Discard the
+            # incomplete directory and fetch once more; a second failure is real.
+            if "saved_model" not in str(exc):
+                raise
+            for stale in cache_root.iterdir():
+                if stale.is_dir() and not any(stale.glob("saved_model.pb*")):
+                    shutil.rmtree(stale, ignore_errors=True)
+            return hub.load(_HUB_URL)
+
+    model = _load_yamnet()
 
     # Load class names from the model's assets
     import csv
@@ -63,8 +138,7 @@ try:
         for i, frame_scores in enumerate(scores_np):
             top_indices = frame_scores.argsort()[::-1][:top_k]
             windows.append({
-                "labels": [class_names[idx] for idx in top_indices],
-                "scores": [float(frame_scores[idx]) for idx in top_indices],
+                "label_scores": [{class_names[idx]: float(frame_scores[idx])} for idx in top_indices],
             })
         all_results.append(windows)
 
@@ -114,7 +188,15 @@ class YAMNetClassifier:
                 # resampled audios in memory simultaneously
                 resampled = resample_audios([audio], resample_rate=16000)[0]
                 path = str(tmp / f"audio_{i}.wav")
-                resampled.save_to_file(path)
+                # Not Audio.save_to_file: that path writes PCM_16, which replaces faint
+                # residual content with quantization noise (see LOSSLESS_WAV_SUBTYPE).
+                report = write_worker_wav(path, resampled.waveform.squeeze().numpy(), 16000)
+                if report["clipped_fraction"] > 0.0:
+                    logger.warning(
+                        "yamnet input clipped: %.1f%% of samples at or beyond full scale; "
+                        "the classifier will respond to distortion rather than content",
+                        100.0 * report["clipped_fraction"],
+                    )
                 audio_paths.append(path)
                 durations.append(resampled.waveform.shape[1] / resampled.sampling_rate)
 
@@ -149,8 +231,7 @@ class YAMNetClassifier:
                         {
                             "start": start,
                             "end": end,
-                            "labels": w["labels"],
-                            "scores": w["scores"],
+                            "label_scores": w["label_scores"],
                             "win_length": cls.WINDOW_SECONDS,
                             "hop_length": cls.HOP_SECONDS,
                         }

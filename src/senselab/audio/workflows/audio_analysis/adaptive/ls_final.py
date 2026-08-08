@@ -13,6 +13,17 @@ import json
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.axes import HARVESTED_AXES
+from senselab.audio.workflows.audio_analysis.layout import (
+    belief_dir,
+    derivatives_dir,
+    estimates_dir,
+    final_dir,
+    last_round,
+    round_dir,
+    rounds_present,
+)
+
 _CONF_BINS = (("high", 0.66), ("medium", 0.33), ("low", 0.0))
 
 
@@ -36,7 +47,7 @@ def _region(
     return {"id": rid, "from_name": from_name, "to_name": "audio", "type": kind, "value": value}
 
 
-def _task_pass_label(task: dict[str, Any]) -> str | None:
+def _task_perturbation(task: dict[str, Any]) -> str | None:
     """Infer the pass a LS task belongs to from its region-id prefixes."""
     for pred in task.get("predictions") or []:
         for region in pred.get("result") or []:
@@ -52,17 +63,23 @@ def build_final_ls_bundle(
     run_dir: Path,
     transcript: dict[str, Any],
     diarization: dict[str, Any],
-    presence_rows: list[dict[str, Any]],
+    speech_presence_rows: list[dict[str, Any]],
     fusion_stream: str,
     iterations: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Write final/{labelstudio_tasks.json, labelstudio_config.xml, disagreements_resolved.json}."""
-    final = Path(out_dir) / "final"
+    final = final_dir(out_dir)
     final.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {}
 
-    tasks_path = Path(run_dir) / "labelstudio_tasks.json"
-    config_path = Path(run_dir) / "labelstudio_config.xml"
+    # The run bundle is the belief rendered for an annotator — per-pass uncertainty and scene
+    # tracks — and it is *input* here: this stage appends the consensus tracks and writes the
+    # deliverable next to them. So it lives under ``L2/``. While it lived in ``final/`` this stage
+    # read it back out of the directory it was about to write, and in the integrated path the
+    # bundle was not written until after the loop had already run, so the read always missed and
+    # the stage silently produced nothing — "not found" being indistinguishable from "no bundle".
+    tasks_path = belief_dir(run_dir) / "labelstudio_tasks.json"
+    config_path = belief_dir(run_dir) / "labelstudio_config.xml"
     if tasks_path.exists() and config_path.exists():
         tasks = json.loads(tasks_path.read_text())
         config = config_path.read_text()
@@ -105,7 +122,7 @@ def build_final_ls_bundle(
         run_status: str | None = None
         prev_end = 0.0
         status_regions: list[tuple[float, float, str]] = []
-        for row in presence_rows:
+        for row in speech_presence_rows:
             status = str(row.get("status") or "open")
             if run_status is None:
                 run_start, run_status = row["start"], status
@@ -116,10 +133,10 @@ def build_final_ls_bundle(
         if run_status is not None:
             status_regions.append((run_start, prev_end, run_status))
         for i, (s, e, status) in enumerate(status_regions):
-            regions.append(_region(f"final_presence_{i:04d}", "final__presence", s, e, labels=[status]))
+            regions.append(_region(f"final_speech_presence_{i:04d}", "final__speech_presence", s, e, labels=[status]))
 
         # Attach to the fusion stream's task (fallback: first task).
-        target = next((t for t in tasks if _task_pass_label(t) == fusion_stream), tasks[0] if tasks else None)
+        target = next((t for t in tasks if _task_perturbation(t) == fusion_stream), tasks[0] if tasks else None)
         if target is not None:
             preds = target.setdefault("predictions", [{"model_version": "adaptive_final", "score": 1.0, "result": []}])
             preds[0].setdefault("result", []).extend(regions)
@@ -135,24 +152,27 @@ def build_final_ls_bundle(
             '<Labels name="final__diarization" toName="audio">',
         ]
         blocks += [f'  <Label value="{v}"/>' for v in cluster_values]
-        blocks += ["</Labels>", '<Labels name="final__presence" toName="audio">']
+        blocks += ["</Labels>", '<Labels name="final__speech_presence" toName="audio">']
         blocks += [f'  <Label value="{v}"/>' for v in status_values]
         blocks += ["</Labels>"]
         config = config.replace("</View>", "\n".join(blocks) + "\n</View>")
 
         (final / "labelstudio_tasks.json").write_text(json.dumps(tasks, indent=2))
         (final / "labelstudio_config.xml").write_text(config)
-        report["ls_tracks_added"] = ["final__consensus_transcript", "final__diarization", "final__presence"]
+        report["ls_tracks_added"] = ["final__consensus_transcript", "final__diarization", "final__speech_presence"]
         report["n_final_regions"] = len(regions)
     else:
         report["ls_tracks_added"] = []
-        report["reason"] = "run LS bundle not found"
+        report["reason"] = f"run LS bundle not found under {belief_dir(run_dir)}"
 
     # ── disagreements_resolved.json ──────────────────────────────────────
-    dis_path = Path(run_dir) / "disagreements.json"
+    # The ranked index of contested buckets is a belief artifact — it says where the fold was
+    # least sure — and this stage annotates it with what the loop did about each one. Input, so
+    # ``L2/``; the annotated form is the deliverable and stays in ``final/``.
+    dis_path = belief_dir(run_dir) / "disagreements.json"
     if dis_path.exists():
         dis = json.loads(dis_path.read_text())
-        region_spans = _region_spans(Path(out_dir) / "rounds")
+        region_spans = _region_spans(out_dir)
         resolved = []
         for entry in dis.get("entries") or []:
             annotated = dict(entry)
@@ -164,15 +184,10 @@ def build_final_ls_bundle(
                 and _overlaps(region_spans.get(e["region_id"]), entry)
                 and e.get("axis") == entry.get("axis")
             ]
-            annotated["resolution"] = _resolution_for(entry, Path(out_dir) / "rounds")
+            annotated["resolution"] = _resolution_for(entry, out_dir)
             resolved.append(annotated)
         payload = {
             "source": str(dis_path),
-            "scale_note": (
-                "final_uncertainty / delta_from_round1 are on the pre-coupling (per-vote) scale; "
-                "round-1 utterance entries from runs with FR-019 scene coupling may include the "
-                "scene multiplier in their aggregated_uncertainty (see scene_quality_coupling)."
-            ),
             "entries": resolved,
         }
         (final / "disagreements_resolved.json").write_text(json.dumps(payload, indent=2))
@@ -180,12 +195,10 @@ def build_final_ls_bundle(
     return report
 
 
-def _region_spans(rounds_dir: Path) -> dict[str, tuple[float, float]]:
+def _region_spans(out_dir: Path) -> dict[str, tuple[float, float]]:
     spans: dict[str, tuple[float, float]] = {}
-    if not rounds_dir.is_dir():
-        return spans
-    for rd in rounds_dir.iterdir():
-        f = rd / "regions.json"
+    for index in rounds_present(out_dir):
+        f = derivatives_dir(out_dir, index) / "regions.json"
         if f.exists():
             try:
                 for reg in json.loads(f.read_text()):
@@ -201,49 +214,58 @@ def _overlaps(span: tuple[float, float] | None, entry: dict[str, Any]) -> bool:
     return float(entry.get("start", 0)) < span[1] and float(entry.get("end", 0)) > span[0]
 
 
-def _final_belief_index(rounds_dir: Path) -> dict[tuple[str, str, float, float], dict[str, Any]]:
-    """Last round's belief rows indexed by (stream, axis, start, end)."""
-    try:
-        import pandas as pd
+def _final_belief_index(out_dir: Path) -> dict[tuple[str, float, float], dict[str, Any]]:
+    """Last round's belief rows indexed by ``(axis, start, end)``.
 
-        last = max(int(p.name) for p in rounds_dir.iterdir() if p.name.isdigit())
-    except (OSError, ValueError):
+    Not by stream, and no longer collapsed here: the belief file now holds one row per bucket,
+    folded across passes by the writer under a policy it records. This function used to apply its
+    own most-doubtful collapse, ``adaptive.plot`` filtered to the fusion stream, and ``evaluate``
+    filtered to the transcript's — three answers from one file, only one of which was written
+    down. The fold moved to the writer so there is one.
+    """
+    import pandas as pd
+
+    last = last_round(out_dir)
+    if last is None:
         return {}
-    out: dict[tuple[str, str, float, float], dict[str, Any]] = {}
-    for axis in ("presence", "identity", "utterance"):
-        f = rounds_dir / str(last) / "belief" / f"{axis}.parquet"
+    out: dict[tuple[str, float, float], dict[str, Any]] = {}
+    for axis in HARVESTED_AXES:
+        f = estimates_dir(out_dir, last) / f"{axis}.parquet"
         if not f.exists():
             continue
         for _, row in pd.read_parquet(f).iterrows():
-            out[(str(row["stream"]), axis, round(float(row["start"]), 4), round(float(row["end"]), 4))] = {
+            key = (axis, round(float(row["start"]), 4), round(float(row["end"]), 4))
+            out[key] = {
                 "status": row.get("status"),
                 "irreducible_reason": row.get("irreducible_reason"),
-                "aggregated_uncertainty_final": row.get("aggregated_uncertainty"),
+                "final_uncertainty": row.get("uncertainty"),
             }
     return out
 
 
 def _resolution_for(
     entry: dict[str, Any],
-    rounds_dir: Path,
-    _cache: dict[str, dict[tuple[str, str, float, float], dict[str, Any]]] = {},  # noqa: B006 — per-call-site memo
+    out_dir: Path,
+    _cache: dict[str, dict[tuple[str, float, float], dict[str, Any]]] = {},  # noqa: B006 — per-call-site memo
 ) -> dict[str, Any]:
-    # Memoized per rounds_dir + directory mtime so repeated in-process runs that
+    # Memoized per round tree + directory mtime so repeated in-process runs that
     # rewrite the same out_dir never read a stale final-belief index.
+    # Stamped on the round it actually reads, not on the tree root: final/ extracts the *last*
+    # round, so that is the directory whose mtime says whether the index is stale.
+    last = last_round(out_dir)
+    tree = round_dir(out_dir, last) if last is not None else belief_dir(out_dir)
     try:
-        stamp = f"{rounds_dir}|{rounds_dir.stat().st_mtime_ns}"
+        stamp = f"{tree}|{tree.stat().st_mtime_ns}"
     except OSError:
-        stamp = str(rounds_dir)
+        stamp = str(tree)
     if stamp not in _cache:
         _cache.clear()
-        _cache[stamp] = _final_belief_index(rounds_dir)
+        _cache[stamp] = _final_belief_index(out_dir)
     index = _cache[stamp]
-    pass_label = str(entry.get("pass") or "")
-    if pass_label == "pass_pair":
-        return {"status": "delta_entry_not_tracked"}
+    # No pass on a disagreements entry any more: an axis is a fold across passes, so the entry
+    # names a span of the recording. The belief index is keyed the same way.
     row = index.get(
         (
-            pass_label,
             str(entry.get("axis")),
             round(float(entry.get("start", 0)), 4),
             round(float(entry.get("end", 0)), 4),
@@ -251,8 +273,8 @@ def _resolution_for(
     )
     if row is None:
         return {"status": "bucket_not_in_final_belief"}
-    u0 = entry.get("aggregated_uncertainty")
-    u1 = row.get("aggregated_uncertainty_final")
+    u0 = entry.get("triage_score")
+    u1 = row.get("final_uncertainty")
     out = {
         "status": row.get("status"),
         "final_uncertainty": None if u1 is None or u1 != u1 else round(float(u1), 6),

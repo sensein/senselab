@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME, IDENTITY_TRANSFORM
+
 TARGET_SR = 16000
 
 
@@ -106,12 +108,16 @@ def crop(wav: Any, start_s: float, end_s: float) -> Any:  # noqa: ANN401
 
 
 def get_stream_wav(ctx: dict[str, Any], stream: str) -> tuple[Any | None, str | None]:  # noqa: ANN401
-    """Waveform for a pass: raw loads the input file; enhanced is regenerated on demand.
+    """Waveform for one perturbation: the identity loads the input file, any other is regenerated.
 
-    Results are cached in ``ctx["_wav_cache"]``. The enhanced stream mirrors
-    analyze_audio's whole-file SepFormer pass (research.md D4); when the
-    backend is unavailable the caller decides whether raw is an acceptable
-    fallback (recorded as ``stream_fallback`` in the intervention log).
+    Dispatch is on the **declared transform** from ``L1/perturbations.json`` (``ctx["perturbations"]``),
+    not on the perturbation's name. It used to be a two-armed comparison against the two pass
+    names of the day (``perturbations.py`` records which), so a third perturbation was an edit
+    here — in a module that has no business knowing any perturbation's name.
+
+    Results are cached in ``ctx["_wav_cache"]``. When the backend for a transform is unavailable the
+    caller decides whether the identity is an acceptable fallback (recorded as ``stream_fallback``
+    in the intervention log).
     """
     cache = ctx.setdefault("_wav_cache", {})
     if stream in cache:
@@ -120,19 +126,35 @@ def get_stream_wav(ctx: dict[str, Any], stream: str) -> tuple[Any | None, str | 
     io_backend = str((ctx.get("policy") or {}).get("audio_io_backend", "auto"))
     backend_out: dict[str, Any] = {}
     result: tuple[Any | None, str | None]
+    transform = _declared_transform(ctx, stream)
     if not input_audio or not Path(input_audio).exists():
         result = (None, "input_audio_missing")
-    elif stream == "raw_16k":
+    elif transform is None:
+        result = (None, f"unknown_stream ({stream})")
+    elif transform == IDENTITY_TRANSFORM:
         result = load_wav_16k_mono(Path(input_audio), backend=io_backend, backend_out=backend_out)
         if backend_out:
             ctx.setdefault("audio_backend", {})[stream] = backend_out
-    elif stream == "enhanced_16k":
-        raw, reason = get_stream_wav(ctx, "raw_16k")
+    elif transform == "speech_enhanced":
+        raw, reason = get_stream_wav(ctx, IDENTITY_NAME)
         result = (None, reason) if raw is None else _enhance(raw, ctx)
     else:
-        result = (None, f"unknown_stream ({stream})")
+        result = (None, f"transform_not_regenerable ({transform})")
     cache[stream] = result
     return result
+
+
+def _declared_transform(ctx: dict[str, Any], stream: str) -> str | None:
+    """The transform ``stream`` declared in the run's register, or ``None`` if it declared none.
+
+    ``ctx["perturbations"]`` is the register as loaded by the loop. The identity name resolves
+    even with no register at all: a live-audio caller that never ran L1 still has the recording,
+    and refusing it would make the loop dependent on an artifact it does not need.
+    """
+    for entry in ctx.get("perturbations") or []:
+        if isinstance(entry, dict) and str(entry.get("name")) == stream:
+            return str(entry.get("transform") or "") or None
+    return IDENTITY_TRANSFORM if stream == IDENTITY_NAME else None
 
 
 def _enhance(wav: Any, ctx: dict[str, Any]) -> tuple[Any | None, str | None]:  # noqa: ANN401

@@ -2,7 +2,7 @@
 
 Reads cached / in-memory results from senselab's per-task audio pipeline
 (diarization, ASR, scene classification, alignment, PPG) and emits three
-per-bucket uncertainty time series — `presence`, `identity`, and `utterance` —
+per-bucket uncertainty time series — `speech_presence`, `speaker`, and `asr` —
 plus a ranked `disagreements.json` index and a 5-row timeline plot.
 
 See ``specs/20260508-173136-compare-uncertainty/spec.md`` for the full design.
@@ -36,16 +36,19 @@ _LAZY_EXPORTS = {
     "StageContext": "stage_context",
     "run_pass": "stages",
     "stage_code_version": "stage_context",
-    "write_axis_parquet": "io",
+    "write_linked_votes": "io",
+    "write_signal_parquet": "io",
+    "write_signal_stability": "io",
     "attach_uncertainty_tracks_to_ls": "labelstudio",
     "uncertainty_to_label_bin": "labelstudio",
     "build_aligned_timeline_plot": "plot",
-    "AxisResult": "types",
+    "FusedAxis": "types",
+    "SignalResult": "types",
+    "SignalRow": "types",
     "UncertaintyAxis": "types",
-    "UncertaintyRow": "types",
+    "LinkedPass": "votes",
     "PassHarvest": "votes",
-    "aggregate_pass": "votes",
-    "compute_pass_deltas": "votes",
+    "link_pass": "votes",
 }
 
 __all__ = sorted(_LAZY_EXPORTS)

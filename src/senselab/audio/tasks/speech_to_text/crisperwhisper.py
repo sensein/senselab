@@ -8,7 +8,7 @@ in its own venv (same pattern as the Qwen / Canary / Brouhaha backends) — the
 CT2 fork (``ctranslate2-crisperwhisper``) must not leak into the senselab core.
 
 The worker returns per-word timestamps and native per-word confidence (when the
-library exposes it) so the utterance axis can consume a native uncertainty
+library exposes it) so the asr axis can consume a native uncertainty
 signal via ``ScriptLine.score`` (line-level) and each word chunk's ``score``.
 """
 

@@ -7,7 +7,7 @@ Note that a code of conduct applies to all spaces managed by the `senselab` proj
 Please use the following workflow when contributing:
 
 0. **Install uv**:
-  - Make sure `ffmpeg` is installed in your system. If not, please install it (see [here](https://www.ffmpeg.org/download.html) for detailed platform-dependent instructions).
+  - Make sure the `ffmpeg` **shared libraries** are available — `torchcodec` needs them at import, and without them no test collects at all. If you have no system ffmpeg or no root, run `bash scripts/install-ffmpeg.sh` (conda-forge into a prefix, what CI uses) and add its `lib/` to `LD_LIBRARY_PATH` / `DYLD_LIBRARY_PATH`. See the README's System Requirements for why the PyAV wheel does not cover this.
   - Install and run Docker (required for some video models, like MediaPipe-based estimators).
 Please follow the official installation instructions for your platform: [Install Docker](https://docs.docker.com/get-started/get-docker/).
   - ```curl -LsSf https://astral.sh/uv/install.sh | sh``` (alternative installation strategies [here](https://docs.astral.sh/uv/getting-started/installation/))
@@ -25,7 +25,8 @@ Please follow the official installation instructions for your platform: [Install
 
 
 5b. **Install all required dependencies** (we recommend to test your code both with all extras and the minimum required set of extras):
-  - ```uv sync --extra articulatory --extra nlp --extra text --extra video --extra senselab-ai --group dev --group docs```
+  - ```uv sync --extra all --group dev --group docs```
+    (there is no `articulatory` extra; the declared ones are `nlp`, `text`, `video`, `senselab-ai`, and `all`. `uv sync --extra articulatory` errors out.)
 
 5c. **Set up your HuggingFace token** (required for some models).
 Many models used in senselab are hosted on HuggingFace and require authentication or acceptance of a model license.

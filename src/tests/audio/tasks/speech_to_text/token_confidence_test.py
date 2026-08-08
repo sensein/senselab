@@ -204,8 +204,8 @@ def test_capture_restores_original_generate() -> None:
     """The wrapper is removed on exit — no lasting mutation of the pipeline.
 
     Asserted behaviorally (does generate still inject ``output_logits``?) rather
-    than by object identity, since attribute access rebuilds a bound method each
-    time and an identity check could never hold.
+    than by object speaker, since attribute access rebuilds a bound method each
+    time and an speaker check could never hold.
     """
     pipe = _FakePipe()
     with capture_token_confidence(pipe, no_speech_token_id=None):

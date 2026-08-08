@@ -29,8 +29,10 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 __all__ = ["AxisName", "CostClass", "PlannedIntervention", "Region", "RegionStatus"]
 
-AxisName = Literal["presence", "identity", "utterance"]
-"""The three uncertainty axes."""
+from senselab.audio.workflows.audio_analysis.axes import AxisName
+
+# Re-exported, not redeclared: this module used to carry its own three-member ``Literal``, so
+# ``adaptive`` and the workflow layer could disagree about how many axes there were — and did.
 
 CostClass = Literal["light", "medium", "heavy"]
 """Intervention cost tier; indexes the budget ledger and the priority weight."""
@@ -50,10 +52,14 @@ class Region(TypedDict):
     span is ``core`` padded by ``regions.pad_s`` and is what gets handed to a
     model — models need context either side of the span to behave sensibly, but
     that context must not silently claim buckets outside the core.
+
+    There is no ``stream``. A region is a span of the *recording* the run is unsure about, and it
+    is proposed from the axis, which is a fold across passes. A rule that must operate on audio
+    still names a pass — that is an action target, not an index on the belief — and records it as
+    ``action_stream`` with the per-signal evidence that elected it (``S1_stream_election``).
     """
 
     axis: AxisName
-    stream: str
     region_id: str
     core_start: float
     core_end: float
@@ -62,6 +68,12 @@ class Region(TypedDict):
     uncertainty_mass: float
     n_buckets: int
     status: RegionStatus
+    action_stream: NotRequired[str]
+    """Pass a rule should act on, elected by ``S1_stream_election`` from per-signal evidence.
+
+    Absent until a rule needs one. It is not part of the belief: two rules may legitimately act on
+    different passes for the same region, and neither choice changes the axis.
+    """
 
 
 class PlannedIntervention(TypedDict):

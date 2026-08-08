@@ -17,8 +17,8 @@ Implements I1 (boundary evidence) and I2 (re-cluster) generically:
    ``recluster_cosine_threshold``). Cross-model consensus: segments co-clustered
    by ≥ half the models merge (union-find on the co-association matrix).
 5. Output refined segments/clusters (ids ``R0, R1, …`` by first appearance),
-   boundary confidences, and per-bucket identity votes; the caller shadows the
-   per-bucket ``__cross_diar_label_disagreement__`` with a recomputed value that
+   boundary confidences, and per-bucket speaker votes; the caller shadows the
+   per-bucket ``speaker_assignment`` with a recomputed value that
    includes the new voter.
 
 No parameter here is tuned to a particular file: everything comes from the
@@ -28,6 +28,19 @@ policy, and inputs are whatever embeddings/diarization the run produced.
 from __future__ import annotations
 
 from typing import Any
+
+from senselab.audio.workflows.audio_analysis.floors import MIN_EVIDENCE_WEIGHT
+
+MIN_WINDOW_WEIGHT = MIN_EVIDENCE_WEIGHT
+"""Floor on a window's contribution to its segment's pooled embedding.
+
+Pooling is ``p_voice``-weighted, so an unvoiced or unmeasured window would otherwise contribute
+nothing to the vector that decides which speaker the segment belongs to — erasure by weight, in
+the one computation where a short, quiet or unmeasured window is most likely to be the boundary
+evidence. Two bare ``0.05`` literals used to sit inline here, doing the job of this constant
+without naming it or connecting it to the argument that sets it; the number and its derivation
+live in :data:`~senselab.audio.workflows.audio_analysis.floors.MIN_EVIDENCE_WEIGHT`.
+"""
 
 
 def _l2(mat: Any) -> Any:  # noqa: ANN401
@@ -147,7 +160,7 @@ def repair_identity(
     """Full I1+I2 repair. Returns refined segments/clusters + change-point evidence, or None."""
     import numpy as np
 
-    cfg = policy.get("identity") or {}
+    cfg = policy.get("speaker") or {}
     times, dist = change_point_trajectory(window_embeddings)
     if not times:
         return None
@@ -177,7 +190,7 @@ def repair_identity(
             if not inside.any():  # fall back to nearest window
                 inside = np.zeros(len(mids), dtype=bool)
                 inside[int(np.argmin(np.abs(mids - (seg["start"] + seg["end"]) / 2)))] = True
-            weights = np.asarray([max(0.05, p_voice_at(m) or 0.05) for m in mids[inside]])
+            weights = np.asarray([max(MIN_WINDOW_WEIGHT, p_voice_at(m) or 0.0) for m in mids[inside]])
             v = (vecs[inside] * weights[:, None]).sum(axis=0) / weights.sum()
             seg_vecs.append(v)
         pooled[model] = seg_vecs
@@ -237,16 +250,3 @@ def cluster_at(refined: dict[str, Any], t: float) -> str | None:
         if seg["start"] <= t < seg["end"]:
             return str(seg["cluster_id"])
     return None
-
-
-def cross_source_disagreement(cluster_ids: list[str]) -> float | None:
-    """Fraction of source pairs disagreeing on the cluster — mirrors the identity axis sub-signal."""
-    ids = [c for c in cluster_ids if c]
-    if len(ids) < 2:
-        return None
-    pairs = disagree = 0
-    for i in range(len(ids)):
-        for j in range(i + 1, len(ids)):
-            pairs += 1
-            disagree += ids[i] != ids[j]
-    return disagree / pairs if pairs else None

@@ -64,7 +64,7 @@ class PiiSpan:
     category: str  # presidio entity_type, e.g. "PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER"
     source: str  # "presidio" or "gliner/<original_label>"
     asr_model: str
-    pass_label: str | None = None
+    perturbation: str | None = None
     score: float | None = None  # detector confidence in [0, 1]
 
 
@@ -72,7 +72,7 @@ class PiiSpan:
 class PiiPassReport:
     """Aggregated PII findings for one pass."""
 
-    pass_label: str
+    perturbation: str
     contains_pii: bool
     n_spans: int
     categories: list[str]
@@ -184,7 +184,7 @@ def _build_full_text(resolved: Any) -> str:  # noqa: ANN401 — accepts list / d
 
 def detect_pii_in_pass(
     *,
-    pass_label: str,
+    perturbation: str,
     asr_resolved: dict[str, Any],
     detectors: list[str] | None = None,
     presidio_score_threshold: float = 0.4,
@@ -205,7 +205,7 @@ def detect_pii_in_pass(
     via ``detectors``.
 
     Args:
-        pass_label: e.g. ``"raw_16k"``.
+        perturbation: e.g. ``"raw"``.
         asr_resolved: ``{asr_model_id → resolved_asr_result}``.
         detectors: Subset of detector names to run inside the subprocess
             venv. ``None`` (default) runs both ``"presidio"`` and
@@ -252,7 +252,7 @@ def detect_pii_in_pass(
     if not transcripts_by_asr:
         # Nothing to scan — every ASR result was empty / whitespace.
         return PiiPassReport(
-            pass_label=pass_label,
+            perturbation=perturbation,
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -268,7 +268,7 @@ def detect_pii_in_pass(
     if detectors is not None and len(detectors) == 0:
         failures["pii_disabled"] = "PII detection disabled by caller (detectors=[])."
         return PiiPassReport(
-            pass_label=pass_label,
+            perturbation=perturbation,
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -294,7 +294,7 @@ def detect_pii_in_pass(
         failures["pii_subprocess"] = msg
         print(f"warn: {msg}", file=sys.stderr)
         return PiiPassReport(
-            pass_label=pass_label,
+            perturbation=perturbation,
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -316,7 +316,7 @@ def detect_pii_in_pass(
         )
         print(f"warn: {failures['no_pii_detector']}", file=sys.stderr)
         return PiiPassReport(
-            pass_label=pass_label,
+            perturbation=perturbation,
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -325,7 +325,7 @@ def detect_pii_in_pass(
             detector_used=None,
         )
 
-    # Materialize PiiSpan objects with the asr_model + pass_label fields
+    # Materialize PiiSpan objects with the asr_model + perturbation fields
     # the subprocess can't fill in (it doesn't know which pass it's running
     # against), and dedupe ``(category, normalized_text, source)`` per ASR
     # model so a single entity detected by both Presidio and GLiNER counts
@@ -351,7 +351,7 @@ def detect_pii_in_pass(
                     category=category,
                     source=source,
                     asr_model=asr_model,
-                    pass_label=pass_label,
+                    perturbation=perturbation,
                     score=float(score) if score is not None else None,
                 )
             )
@@ -390,7 +390,7 @@ def detect_pii_in_pass(
     # did not actually run" (None).
     detection_confidence = _compute_detection_confidence(spans, n_asr_models=len(spans_by_asr))
     return PiiPassReport(
-        pass_label=pass_label,
+        perturbation=perturbation,
         contains_pii=contains_pii,
         n_spans=len(spans),
         categories=categories,
@@ -404,7 +404,7 @@ def detect_pii_in_pass(
 def report_to_dict(report: PiiPassReport) -> dict[str, Any]:
     """Convert a ``PiiPassReport`` into a JSON-serializable dict."""
     return {
-        "pass_label": report.pass_label,
+        "perturbation": report.perturbation,
         "contains_pii": report.contains_pii,
         "n_spans": report.n_spans,
         "categories": report.categories,

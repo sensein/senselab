@@ -36,17 +36,25 @@ Rule ids are stable API (they appear in iterations.json and tests).
   `--policy` to exercise it. Tuning deferred pending a benchmark set; see prototype-results.md
   "Decision on `theta_high`".
 
-## P3_hallucination_adjudication — ASR text where VAD says silence (C10)
+## P3_uncorroborated_speech_attenuation — ASR text independent evidence does not support (C10)
 
-- **Trigger**: buckets with active ASR `speaks=true` votes while frame-posterior p_voice < 0.2.
+- **Trigger**: buckets with active ASR `speaks=true` votes where measured corroboration from the
+  *independent* presence pool is below `adjudication.corroboration_low` (0.2). The pool is derived
+  per run (`support.evidence_signal_names` + `informative_evidence`) and structurally excludes ASR
+  and diarizers, so a model can never be measured against its own vote. `corroboration is None`
+  (nothing measured here) is not a trigger.
 - **Guards**: none (light; runs on existing evidence).
-- **Action**: score indicators — whisper `no_speech_prob ≥ 0.5` with tokens (flag exists,
-  `presence.py:330`), `1 − exp(avg_logprob)` high, alignment CTC score low, PPG non-silent fraction
-  low, `src_machine + src_environment + music mass` high. Verdict `hallucination` if ≥ 2 independent
-  indicators (different families); verdict `missed_speech` if PPG active ∧ CTC high ∧ ≥ 2 ASR families
-  agree on text.
-- **Evidence**: hallucination → affected utterance/presence votes `status=purged_hallucination` (C10);
-  missed_speech → add `adjudicator/missed_speech` presence vote `{speaks: true, weight: 0.5}` (C9).
+- **Action**: score indicators — low native confidence, low `src_speech`, corroboration below
+  `adjudication.corroboration_very_low`. `min_indicators` (2) promotes to a candidate. A source that
+  already carries an `uncorroborated_speech_claim` factor here is skipped — the idempotence guard
+  that `status` used to supply implicitly.
+- **Evidence**: the claimant's presence and utterance votes stay **active** and keep aggregating;
+  their `evidence_weight` is multiplied by the measured corroboration, floored at
+  `adjudication.min_evidence_weight`, with the measurement, the pool, the pooling rule, the map and
+  the floor recorded per factor. Nothing is deleted: a quiet, distant or overlapped speaker produces
+  this exact signature, and non-corroboration cannot distinguish them from a fabrication.
+  `C9_missed_speech` handles the other direction — add `adjudicator/missed_speech` presence vote
+  `{speaks: true, weight: 0.5}` between `p_voice_missed_low` and `p_voice_missed`.
 - **Cost**: light. **Gain**: `n_affected_buckets × mean uncertainty`.
 
 ## U1_region_reasr — targeted re-transcription

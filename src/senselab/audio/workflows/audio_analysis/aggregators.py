@@ -22,27 +22,49 @@ def _confidences_from_uncertainties(uncertainties: list[float]) -> list[float]:
     return [max(0.0, min(1.0, 1.0 - u)) for u in uncertainties]
 
 
-def apply_aggregator(sub_signals: list[float | None], name: AggregatorName | str) -> float | None:
+def apply_aggregator(
+    sub_signals: list[float | None],
+    name: AggregatorName | str,
+    weights: list[float] | None = None,
+) -> float | None:
     """Combine per-axis sub-signal uncertainties into a single uncertainty scalar.
 
     Args:
         sub_signals: Each entry is either a sub-signal uncertainty in ``[0, 1]`` or
             ``None``. ``None`` entries are dropped before aggregation.
         name: One of ``AGGREGATORS``. Must be a recognized aggregator.
+        weights: Optional per-signal reliability in ``[0, 1]``, positionally aligned with
+            ``sub_signals`` — typically measured by perturbation (see ``reliability.py``). A
+            signal's *doubt* is scaled by its reliability before aggregation, so a signal
+            that contradicts itself under perturbation cannot decide the axis on its own.
+            This matters most under ``min`` (max-doubt), where an unweighted single
+            saturated signal overrides every corroborating one; it was doing exactly that on
+            a real recording. Weights are dropped alongside their ``None`` sub-signals, so
+            positions stay aligned. Omit for unweighted aggregation.
 
     Returns:
         The combined uncertainty scalar in ``[0, 1]``, or ``None`` when every sub-signal
         was ``None``.
 
     Raises:
-        ValueError: If ``name`` is not a recognized aggregator.
+        ValueError: If ``name`` is not a recognized aggregator, or ``weights`` is present
+            with a different length than ``sub_signals`` — recycling or truncating would
+            silently attribute one signal's reliability to another.
     """
     if name not in AGGREGATORS:
         raise ValueError(f"unknown aggregator {name!r}; must be one of {AGGREGATORS}")
+    if weights is not None and len(weights) != len(sub_signals):
+        raise ValueError(f"weights has length {len(weights)} but there are {len(sub_signals)} sub-signals")
 
-    values = [u for u in sub_signals if u is not None]
+    kept = [(u, 1.0 if weights is None else float(weights[i])) for i, u in enumerate(sub_signals) if u is not None]
+    values = [u for u, _w in kept]
     if not values:
         return None
+    if weights is not None:
+        # Scale doubt by reliability. An unreliable signal's objection shrinks toward the
+        # corroborated answer instead of being taken at face value; the caller's floor on
+        # reliability keeps it visible rather than erasing it.
+        values = [float(u) * max(0.0, min(1.0, w)) for u, w in kept]
 
     # Clip inputs to [0, 1] defensively — sub-signals like 1 - exp(avg_logprob) can
     # nudge over 1.0 due to float rounding when avg_logprob is near 0.

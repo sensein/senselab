@@ -14,13 +14,41 @@
       "speaker": "cluster_0",         // unified cluster id; null when unattributable
       "confidence": 0.93,
       "sources": ["nyralabs/CrisperWhisper2.0_turbo", "Qwen/Qwen3-ASR-1.7B"],
-      "alternates": [],               // [{text, share, models}] when winner margin < policy threshold
-      "flags": []                     // overlap | low_presence | hallucination_purged_nearby | …
+      "coverage": 0.75,
+      "corroboration": 0.91,          // measured independent evidence for the winning text; null
+                                      // when no member was measured — NEVER read null as 0
+      "member_corroboration": {"Qwen/Qwen3-ASR-1.7B": 0.91, "openai/whisper-large-v3": null},
+      "corroboration_evidence": {"p_independent": 0.91, "n_buckets": 2, "n_measured": 2},
+      "alternates": [],               // [{text, share, share_uncorroborated, models, corroboration}]
+                                      // when the *uncorroborated* winner share < policy threshold
+      "flags": []                     // overlap | single_source | …
     }
   ],
-  "segments": [ /* utterance-level rollup: start, end, speaker, text, min_word_confidence */ ]
+  "segments": [ /* utterance-level rollup: start, end, speaker, text, min_word_confidence */ ],
+  "corroboration": {
+    "evidence_pool": ["frame_brouhaha_vad", "frame_segmentation"],
+    "evidence_pool_rejected": {"acoustic_loudness": "never_reports_absence"},
+    "pool_derivation": "support.evidence_signal_names + support.informative_evidence",
+    "exponent": 1.0,
+    "min_corroboration": 0.05,
+    "segment_min_corroboration": 0.2,
+    "n_words_measured": 412, "n_words_unmeasured": 0,
+    "n_words_withheld_from_segments": 3,
+    "withheld_word_indices": [88, 89, 210]
+  }
 }
 ```
+
+`flags` lost `low_presence` and `hallucination_purged_nearby`. Both thresholded, at a bare
+literal, the quantity `corroboration` now carries continuously; the number is the measurement and
+the flag was a decision recorded where it could not be re-taken.
+
+A word below `segment_min_corroboration` is **absent from `segments[].text` and present in
+`words[]`**, carrying the measurement that excluded it. Keeping it in the readable transcript
+would let it win — the deliverable would assert it, and the text consumers downstream (PII,
+sentiment, summary) would ingest it. Dropping it from `words[]` would be erasure. `withheld_word_indices`
+indexes into `words[]`, so the rollup is reproducible as a pure function of `words[]` plus one
+number, with no model re-run.
 
 Invariants: words sorted by (start, end); `0 ≤ confidence ≤ 1`; every `speaker` exists in
 final/diarization.json; every word derivable from active votes in the belief store (SC-008).
@@ -40,11 +68,17 @@ final/diarization.json; every word derivable from active votes in the belief sto
 RTTM sidecar for interop. Cluster ids come from the existing unified clustering
 (`clustering.py:202`); boundary confidences from I1 change-point evidence where it ran, else 0.5.
 
-## final/presence.parquet
+## belief/speech_presence.parquet
 
-Fused presence at the presence grid: `start, end, p_voice, presence_confidence, status,
-irreducible_reason?, elected_stream, overlap_posterior?`. This is the last round's presence belief —
-identical values to `rounds/<K>/belief/presence.parquet`, republished for discoverability.
+Fused speech presence at the presence grid: `start, end, within_pass_uncertainty, epistemic,
+aleatoric_floor, speech_presence_confidence, status, irreducible_reason?, round, elected_stream,
+overlap_posterior?`, plus the attenuation columns `n_attenuated_sources, attenuated_sources,
+attenuation` (belief-store.md invariant 8). This is the last round's presence belief — identical
+values to `rounds/<K>/belief/speech_presence.parquet`, republished for discoverability.
+
+`speech_presence_confidence` is a *weighted* fold, so the attenuation columns are load-bearing
+rather than diagnostic: without them a bucket where every source agreed and one where the only
+source that heard a speaker was discounted to the floor are the same row.
 
 ## final/convergence.json
 
@@ -75,6 +109,11 @@ entries — the full decision surface, not only fired actions.
 
 ## summary.json (additive keys)
 
-`adaptive: {run_state, rounds_executed, policy_hash, budget: {...}, uncertainty_mass_by_round: {...}}`
-alongside the existing `global_uncertainty` block (whose semantics are unchanged; it is now computed
-from the final belief state).
+`adaptive: {run_state, termination_reason, converged, rounds_executed, policy_hash, budget: {...},
+uncertainty_mass_by_round: {...}}` alongside the existing `global_uncertainty` block (whose semantics
+are unchanged; it is now computed from the final belief state).
+
+`run_state` is the loop's own reason for stopping; `termination_reason` is that reason after
+non-convergence detection has had its say (FR-011e), and the two differ exactly when a run stopped
+with nothing left to fire while its state was still trading places. Consumers deciding whether an
+answer settled must read `termination_reason` / `converged`, never `run_state` alone.

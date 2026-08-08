@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from senselab.audio.data_structures import Audio, AudioClassificationResult
 from senselab.audio.tasks.classification.huggingface import HuggingFaceAudioClassifier
+from senselab.audio.tasks.classification.label_scores import label_scores, top_label
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, logger
 
@@ -162,8 +163,11 @@ def _classify_windowed(
                         {
                             "start": bp / sr,
                             "end": min(bp + win_samples, n_samples) / sr,
-                            "labels": result.labels[:top_k],
-                            "scores": result.scores[:top_k],
+                            # One dict per label, so a score cannot drift away from the label it
+                            # belongs to. Two aligned lists were a slice away from disagreeing.
+                            "label_scores": [
+                                {lbl: float(sc)} for lbl, sc in zip(result.labels[:top_k], result.scores[:top_k])
+                            ],
                             "win_length": win_length,
                             "hop_length": hop_length,
                         }
@@ -179,8 +183,9 @@ def _classify_windowed(
                     {
                         "start": bp / sr,
                         "end": min(bp + win_samples, n_samples) / sr,
-                        "labels": result.labels[:top_k],
-                        "scores": result.scores[:top_k],
+                        "label_scores": [
+                            {lbl: float(sc)} for lbl, sc in zip(result.labels[:top_k], result.scores[:top_k])
+                        ],
                         "win_length": win_length,
                         "hop_length": hop_length,
                     }
@@ -202,6 +207,4 @@ def scene_results_to_segments(results: List[Dict[str, Any]]) -> List[Dict[str, A
     Returns:
         Segment dicts with ``label``, ``start``, ``end``.
     """
-    return [
-        {"label": r["labels"][0] if r["labels"] else "unknown", "start": r["start"], "end": r["end"]} for r in results
-    ]
+    return [{"label": (top_label(r) or ("unknown", 0.0))[0], "start": r["start"], "end": r["end"]} for r in results]

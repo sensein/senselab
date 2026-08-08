@@ -7,9 +7,9 @@ reviewer can drill in directly without opening the parquets.
 
 Rows top-to-bottom:
 
-1. **presence_uncertainty** — raw solid + enhanced dashed in [0, 1]
-2. **identity_uncertainty** — raw solid + enhanced dashed
-3. **utterance_uncertainty** — raw solid + enhanced dashed
+1. **speech_presence_uncertainty** — raw solid + enhanced dashed in [0, 1]
+2. **speaker_uncertainty** — raw solid + enhanced dashed
+3. **asr_uncertainty** — raw solid + enhanced dashed
 4. **Diarization detail** — per (pass, diar_model), speaker bars at native segment
    times, colored by speaker label. Lets the reviewer see where each diar model
    thinks each speaker is.
@@ -20,22 +20,44 @@ Rows top-to-bottom:
    transitions against what the audio itself says.
 6. **ASR output** — per (pass, asr_model), token-level spans at the actual
    timestamps from the resolved (post-MMS-aligned) ASR result. Lets the reviewer see
-   which models returned text where and confirm whether high utterance uncertainty
+   which models returned text where and confirm whether high asr uncertainty
    is real disagreement or punctuation/hesitation noise.
+
+**This figure is an L2 conclusion and writes to ``final/uncertainty_detail.png``.** Rows 1–3 are
+the fused axes; a fold across signals *and* perturbations is an axis (D-16), and an axis is L2's.
+It previously defaulted to ``L1/timeline.png`` — chosen here, inside the renderer, to escape a
+filename collision with the adaptive ``final/timeline.png``. That resolved the collision by
+relabelling the figure as "the evidence timeline", which it is not: the first parameter is
+``fused_axes``. Two lessons kept in the code rather than only in the spec:
+
+- **A collision between two conclusions is not fixed by moving one into the evidence layer.** It
+  is fixed by giving them different names, which is what ``uncertainty_detail`` versus
+  ``timeline`` now does.
+- **A default argument decided the layer.** The call site passed ``run_dir`` and the callee picked
+  the directory, so no reviewer of the call site could see which layer was being written. The
+  default is still here for convenience, but it now names the layer this figure belongs to.
+
+The evidence view with no conclusions on it is ``L1/signals.png`` (``l1_plot``), whose docstring
+states the rule this module was breaking.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from senselab.audio.workflows.audio_analysis.types import AxisResult
+from senselab.audio.workflows.audio_analysis.layout import belief_dir, final_dir
+from senselab.audio.workflows.audio_analysis.perturbations import IDENTITY_NAME
+from senselab.audio.workflows.audio_analysis.types import FusedAxis
+from senselab.utils.data_structures.logging import logger
 
 
-def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray, np.ndarray]:
-    """Return ``(centers, values)`` for plotting one (pass, axis) line in [0, 1].
+def _series_for(
+    rows: Sequence[Mapping[str, Any]], duration_s: float, hop_s: float, key: str = "uncertainty"
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return ``(centers, values)`` for plotting one fused axis line in [0, 1].
 
     Plots one point per row at the row's own midpoint — this matches whatever
     bucket grid ``BucketGrid.iter_buckets`` actually produced (handling
@@ -45,9 +67,9 @@ def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray
     """
     if duration_s <= 0 or not rows:
         return np.array([]), np.array([])
-    centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
+    centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
     values = np.array(
-        [float(r.aggregated_uncertainty) if r.aggregated_uncertainty is not None else np.nan for r in rows],
+        [float(r[key]) if isinstance(r.get(key), (int, float)) else np.nan for r in rows],
         dtype=np.float64,
     )
     # Sort by center so plotting doesn't draw a zigzag if rows arrive out of order.
@@ -55,33 +77,29 @@ def _series_for(rows: list, duration_s: float, hop_s: float) -> tuple[np.ndarray
     return centers[order], values[order]
 
 
-def _attr_series(rows: list, attr: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return sorted ``(centers, values)`` for an arbitrary numeric row attribute.
+def _attr_series(rows: Sequence[Mapping[str, Any]], attr: str) -> tuple[np.ndarray, np.ndarray]:
+    """Return sorted ``(centers, values)`` for an arbitrary numeric row field.
 
-    Used for the scene-quality / sound-source rows, whose values live on the
-    presence rows' additive columns (``quality_*`` / ``src_*``). ``None`` values
-    become ``nan`` so gaps don't draw as zeros.
+    Used for the scene-quality / sound-source rows, whose measurements ride the fused presence
+    rows (``quality_*`` / ``src_*``). Missing values become ``nan`` so gaps don't draw as zeros.
     """
     if not rows:
         return np.array([]), np.array([])
-    centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
+    centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
     values = np.array(
-        [float(v) if (v := getattr(r, attr, None)) is not None else np.nan for r in rows],
+        [float(r[attr]) if isinstance(r.get(attr), (int, float)) else np.nan for r in rows],
         dtype=np.float64,
     )
     order = np.argsort(centers)
     return centers[order], values[order]
 
 
-def _presence_has_attr(axis_results: dict, attrs: tuple[str, ...]) -> bool:
-    """True if any presence row across passes carries a non-null value for any of ``attrs``."""
-    for (_pl, axis), result in axis_results.items():
-        if axis != "presence":
-            continue
-        for r in result.rows:
-            if any(getattr(r, a, None) is not None for a in attrs):
-                return True
-    return False
+def _speech_presence_has_attr(fused_axes: Mapping[str, FusedAxis], attrs: tuple[str, ...]) -> bool:
+    """True if any fused speech_presence row carries a value for any of ``attrs``."""
+    presence = fused_axes.get("speech_presence")
+    if presence is None:
+        return False
+    return any(isinstance(r.get(a), (int, float)) for r in presence.rows for a in attrs)
 
 
 def _seg_attr(seg: Any, name: str) -> Any:  # noqa: ANN401
@@ -102,7 +120,7 @@ def _cluster_speakers_by_embedding(
     typically stay well within the same-speaker cosine band (≤0.3). Sharing
     the centroid accumulator across passes lets a speaker keep one cluster id
     (and one plot color) end-to-end, regardless of which pass / diar model is
-    asking. Falls back to label-string identity when no embeddings are
+    asking. Falls back to label-string speaker when no embeddings are
     available for a given (pass, diar_model).
     """
     from senselab.audio.workflows.audio_analysis.clustering import (
@@ -120,14 +138,14 @@ def _cluster_speakers_by_embedding(
     seed_groups: dict[tuple[str, str], list[tuple[tuple[str, str, str], np.ndarray]]] = {}
     other_items: list[tuple[tuple[str, str, str], np.ndarray]] = []
 
-    for pass_label, detail in detail_by_pass.items():
+    for perturbation, detail in detail_by_pass.items():
         per_window_emb_by_model = detail.get("per_window_embeddings") or {}
         diar_by_model = detail.get("diar_by_model") or {}
         if not per_window_emb_by_model or not any(per_window_emb_by_model.values()):
             for m, segs in diar_by_model.items():
                 for seg in segs:
                     spk = str(_seg_attr(seg, "speaker") or "?")
-                    out.setdefault((pass_label, m, spk), spk)
+                    out.setdefault((perturbation, m, spk), spk)
             continue
         emb_model = sorted(per_window_emb_by_model)[0]
         windows = per_window_emb_by_model[emb_model]
@@ -141,12 +159,12 @@ def _cluster_speakers_by_embedding(
             for label, label_seg_list in label_segs.items():
                 mean_emb = _mean_window_embedding_over_segments(label_seg_list, windows)
                 if mean_emb is None or mean_emb.size == 0:
-                    out[(pass_label, m, label)] = label
+                    out[(perturbation, m, label)] = label
                     continue
                 if is_seed:
-                    seed_groups.setdefault((pass_label, m), []).append(((pass_label, m, label), mean_emb))
+                    seed_groups.setdefault((perturbation, m), []).append(((perturbation, m, label), mean_emb))
                 else:
-                    other_items.append(((pass_label, m, label), mean_emb))
+                    other_items.append(((perturbation, m, label), mean_emb))
 
     out.update(
         assign_unified_clusters_with_seed_phase(
@@ -164,7 +182,7 @@ def _iter_leaf_tokens(asr_result: Any) -> Any:  # noqa: ANN401
     - **Whisper-style** (native per-token chunks on a single ScriptLine): the line's
       ``chunks`` field is already at word level.
     - **Post-MMS-aligned** (text-only ASR resolved through the alignment block): the
-      structure is nested — outer ScriptLine → utterance ScriptLine →
+      structure is nested — outer ScriptLine → asr ScriptLine →
       word ScriptLines. Recurse to the leaves to get the per-word text + timestamps.
 
     A "leaf" is a chunk with no further sub-chunks (or whose sub-chunks have no
@@ -230,26 +248,106 @@ def _adjacent_window_cosine_series(
     return timestamps, distances
 
 
-def _pass_color_alpha(pass_label: str) -> tuple[float, str]:
-    """Lighter alpha + dashed for enhanced; full alpha + solid for raw."""
-    if pass_label == "raw_16k":
+def _pass_color_alpha(perturbation: str) -> tuple[float, str]:
+    """Full alpha + solid for the recording; lighter + dashed for any transform of it.
+
+    Two styles for an open set, deliberately: the distinction the eye needs is "the recording"
+    against "something done to it", and a palette indexed by perturbation name would have to
+    grow a colour every time one is added.
+    """
+    if perturbation == IDENTITY_NAME:
         return 0.85, "-"
     return 0.55, "--"
+
+
+_MASK_STATE_STYLE = {
+    "target_free": ("#2e7d32", "target-free"),
+    "indeterminate": ("#9e9e9e", "cannot tell"),
+    "target_active": ("#c8c8c8", "target active"),
+}
+
+
+def _load_background_mask_rows(run_dir: Path) -> list[dict[str, Any]]:
+    """Read the background mask, if one was written.
+
+    One named path rather than a glob. There is one mask per run — it is only built on the
+    unmodified variant, because enhancement removes the non-speech evidence target activity is
+    read from — so a glob was never selecting between candidates, only failing quietly when the
+    layout moved beneath it. This one was written against the flat layout and matched nothing for
+    as long as passes have lived under ``L1/``, which reads exactly like a run with no mask.
+    """
+    candidate = belief_dir(run_dir) / "background_mask.parquet"
+    if not candidate.exists():
+        return []
+    try:
+        import pandas as pd
+
+        return list(pd.read_parquet(candidate).to_dict("records"))
+    except Exception as exc:  # noqa: BLE001 — a plot must never fail a run
+        logger.debug("background mask unreadable at %s: %s", candidate, exc)
+        return []
+
+
+def _draw_background_mask_row(ax: Any, rows: list[dict[str, Any]], duration_s: float) -> None:  # noqa: ANN401
+    """Draw the mask as a three-state strip, with uncertainty as alpha."""
+    from matplotlib.patches import Rectangle
+
+    ax.set_ylabel("background\nmask", rotation=0, ha="right", va="center", fontsize=8)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.set_xlim(0, duration_s)
+    seen: set[str] = set()
+    for row in rows:
+        state = str(row.get("state", "indeterminate"))
+        color, label = _MASK_STATE_STYLE.get(state, _MASK_STATE_STYLE["indeterminate"])
+        start, end = float(row["start"]), float(row["end"])
+        unc = float(row.get("uncertainty") or 0.0)
+        # A washed-out green marks a region whose own "usable" claim is shaky.
+        alpha = 0.85 if state == "target_active" else max(0.15, 0.85 * (1.0 - unc))
+        ax.add_patch(
+            Rectangle(
+                (start, 0.2),
+                max(end - start, 1e-6),
+                0.6,
+                facecolor=color,
+                edgecolor="none",
+                alpha=alpha,
+                label=label if label not in seen else None,
+            )
+        )
+        seen.add(label)
+        if float(row.get("guard_trimmed_s") or 0.0) > 0.0:
+            # Hatch what the guard removed, so a shrunken mask is visibly the guard's
+            # doing rather than an absence of quiet audio.
+            ax.add_patch(
+                Rectangle(
+                    (start, 0.2),
+                    max(end - start, 1e-6),
+                    0.6,
+                    facecolor="none",
+                    edgecolor="#555555",
+                    hatch="///",
+                    linewidth=0.0,
+                    alpha=0.5,
+                )
+            )
+    if seen:
+        ax.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.6)
 
 
 def build_aligned_timeline_plot(
     *,
     run_dir: Path,
-    axis_results: dict[tuple[Any, Any], AxisResult],
+    fused_axes: Mapping[str, FusedAxis],
     duration_s: float,
     grid_hop: float,
-    utterance_grid_hop: float | None = None,
+    stability_by_signal: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
     detail_by_pass: dict[str, dict[str, Any]] | None = None,
     save_path: Path | None = None,
     title: str | None = None,
     audio_waveform: np.ndarray | None = None,
     audio_sr: int = 16000,
-    chunk_duration_s: float = 20.0,
+    chunk_duration_s: float | None = None,
 ) -> Path | None:
     """Render the aggregate-uncertainty + per-source-detail figure.
 
@@ -259,23 +357,31 @@ def build_aligned_timeline_plot(
     child and adult voices (high f0 → narrowband would smear formants into harmonic
     bands; broadband shows formant trajectories cleanly for both ranges).
 
-    For audio longer than ``chunk_duration_s`` the figure is rendered once and saved
-    repeatedly with ``xlim`` adjusted to each ``chunk_duration_s``-second window. The
-    files are written as ``timeline_001.png``, ``timeline_002.png``, …. For shorter
-    audio a single ``timeline.png`` is written.
+    Chunked output is opt-in via ``chunk_duration_s``. It used to be the default and produced
+    panels that were mostly empty, because a fixed window rarely lines up with where anything
+    happened; one figure per L2 round, drawn after fusion, replaced it. When enabled, the figure
+    is rendered once and saved repeatedly with ``xlim`` adjusted to each
+    ``chunk_duration_s``-second window, as ``final/uncertainty_detail_001.png``,
+    ``final/uncertainty_detail_002.png``, …. For shorter audio a single
+    ``final/uncertainty_detail.png`` is written.
 
     Args:
-        run_dir: Where ``timeline.png`` (or ``timeline_NNN.png``) is written.
-        axis_results: ``{(pass_label, axis) → AxisResult}`` from ``compute_uncertainty_axes``.
+        run_dir: Run directory; the figure lands in ``final/`` with the other deliverables.
+        fused_axes: ``{axis → FusedAxis}`` — one line per axis, fused across passes. There is
+            no raw/enhanced overlay any more: the two passes are a perturbation sample, and what
+            they bought is drawn as the stability strip instead.
         duration_s: Audio duration in seconds — drives the x-axis extent.
-        grid_hop: Bucket hop length (seconds) — matches the comparator grid.
-        utterance_grid_hop: Hop length for the utterance grid (typically wider than
-            ``grid_hop``, e.g. 0.5 s with a 1.0 s window). When ``None``, falls back
-            to ``grid_hop`` for the utterance row.
-        detail_by_pass: ``{pass_label → {"diar_by_model": {..}, "asr_by_model": {..},
+        grid_hop: Bucket hop length (seconds) — the run's one grid, so it applies to every axis
+            row. There was a second ``asr_grid_hop`` parameter while the asr axis had a grid of its
+            own; drawing two axes at two spacings on one x-axis is a figure whose rows cannot be
+            read against each other.
+        stability_by_signal: ``{signal → per-bucket stability rows}`` from
+            ``L1/stability/<signal>.parquet``. Drawn as its own strip — that is what the two
+            passes actually bought, in the form the weights actually use it.
+        detail_by_pass: ``{perturbation → {"diar_by_model": {..}, "asr_by_model": {..},
             "per_window_embeddings": {emb_model → [WindowEmbedding, ...]},
-            "ppg": {"per_frame_phonemes": [..], "frame_hop": float}}}``.
-            Populates the four detail rows (diar / embedding / PPG / ASR). ``None``
+            }}``.
+            Populates the three detail rows (diar / embedding / ASR). ``None``
             collapses the figure to the three uncertainty rows alone.
         save_path: Override path for the single PNG (only honored when
             ``duration_s <= chunk_duration_s``; chunked output always writes into ``run_dir``).
@@ -284,7 +390,8 @@ def build_aligned_timeline_plot(
             Pass a 1-D float array (or 2-D array shaped ``(1, N)``); 2-D input is
             squeezed.
         audio_sr: Sampling rate for ``audio_waveform``. Defaults to 16 kHz.
-        chunk_duration_s: Maximum visible time per figure. Audio longer than this
+        chunk_duration_s: Maximum visible time per figure, or ``None`` (default) for no
+            chunked output at all. Audio longer than this
             triggers chunked output. Defaults to 20 s.
 
     Returns:
@@ -303,28 +410,24 @@ def build_aligned_timeline_plot(
     has_spec = audio_waveform is not None and np.asarray(audio_waveform).size > 1
     # Pass labels actually present in the detail bundle — any pass beyond the
     # default raw/enhanced pair shows up in every detail row. Sorted so that
-    # "raw_16k" sorts before "enhanced_16k" by convention but extension passes
+    # "raw" sorts before "enhanced" by convention but extension passes
     # land in alphabetical order after.
     pass_order: list[str] = sorted(detail_by_pass.keys()) if detail_by_pass else []
-    # Size the diar / PPG / ASR detail rows by stripe count (each stripe is one
+    # Size the diar / ASR detail rows by stripe count (each stripe is one
     # (pass, model)) so tall rows aren't squashed and short rows don't waste space.
     n_diar_stripes = 0
     n_asr_stripes = 0
-    n_ppg_stripes = 0
     if has_detail:
         assert detail_by_pass is not None
         for pl in pass_order:
             n_diar_stripes += len((detail_by_pass.get(pl) or {}).get("diar_by_model", {}))
             n_asr_stripes += len((detail_by_pass.get(pl) or {}).get("asr_by_model", {}))
-            ppg = (detail_by_pass.get(pl) or {}).get("ppg")
-            if ppg and ppg.get("per_frame_phonemes"):
-                n_ppg_stripes += 1
-    # Optional scene rows (feature 20260722-175022) — only when the presence
+    # Optional scene rows (feature 20260722-175022) — only when the speech_presence
     # axis actually carries the additive columns.
-    has_quality = _presence_has_attr(
-        axis_results, ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
+    has_quality = _speech_presence_has_attr(
+        fused_axes, ("quality_snr", "quality_clip", "quality_reverb", "quality_bandwidth")
     )
-    has_sources = _presence_has_attr(axis_results, ("src_speech", "src_people", "src_machine", "src_environment"))
+    has_sources = _speech_presence_has_attr(fused_axes, ("src_speech", "src_people", "src_machine", "src_environment"))
 
     # Build the row-index map with a running counter so inserting rows never
     # requires re-deriving fragile offsets.
@@ -337,9 +440,18 @@ def build_aligned_timeline_plot(
 
     if has_spec:
         _add_row("spec", 1.6)  # broadband spectrogram
-    _add_row("presence", 1.4)
-    _add_row("identity", 1.4)
-    _add_row("utterance", 1.4)
+    mask_rows = _load_background_mask_rows(run_dir)
+    if mask_rows:
+        # Above the axis rows on purpose: it says *where the rows below can be trusted*.
+        # A target-free span has no foreground to leak, so a background claim there does
+        # not depend on suppression depth. Reading an axis without knowing which spans
+        # were target-free invites treating a leakage artifact as a finding.
+        _add_row("mask", 0.55)
+    _add_row("speech_presence", 1.4)
+    _add_row("speaker", 1.4)
+    _add_row("asr", 1.4)
+    if stability_by_signal:
+        _add_row("stability", 1.2)
     if has_quality:
         _add_row("quality", 1.2)
     if has_sources:
@@ -349,24 +461,25 @@ def build_aligned_timeline_plot(
         asr_h = max(0.9, 0.3 * max(1, n_asr_stripes))
         _add_row("diar", diar_h)
         _add_row("emb", 1.2)
-        if n_ppg_stripes > 0:
-            _add_row("ppg", max(0.9, 0.3 * n_ppg_stripes))
-        _add_row("asr", asr_h)
+        _add_row("asr_words", asr_h)
     n_rows = len(height_ratios)
     fig_height = sum(height_ratios) + 1.0
 
     spec_row = row_idx.get("spec")
-    presence_row = row_idx["presence"]
-    identity_row = row_idx["identity"]
-    utterance_row = row_idx["utterance"]
+    mask_row = row_idx.get("mask")
+    speech_presence_row = row_idx["speech_presence"]
+    speaker_row = row_idx["speaker"]
+    asr_row = row_idx["asr"]
+    stability_row = row_idx.get("stability")
     quality_row = row_idx.get("quality")
     sources_row = row_idx.get("sources")
     diar_row = row_idx.get("diar")
     emb_row = row_idx.get("emb")
-    ppg_row = row_idx.get("ppg")
-    asr_row = row_idx.get("asr")
 
-    will_chunk = duration_s > chunk_duration_s + 0.5
+    # ``None`` means chunking is off, so nothing will chunk regardless of duration. Narrowed to a
+    # local rather than relying on ``bool(...) and ...`` short-circuiting, which mypy cannot follow.
+    chunk_s = None if chunk_duration_s is None else float(chunk_duration_s)
+    will_chunk = chunk_s is not None and chunk_s > 0 and duration_s > chunk_s + 0.5
     # When chunking, fix the figure width per-chunk; otherwise scale with duration.
     fig_width = 12.0 if will_chunk else max(10.0, duration_s / 4.0)
     fig, axes = plt.subplots(
@@ -381,8 +494,10 @@ def build_aligned_timeline_plot(
     if title:
         fig.suptitle(title, fontsize=11)
 
-    axis_color = {"presence": "#1f77b4", "identity": "#ff7f0e", "utterance": "#2ca02c"}
-    utt_hop = utterance_grid_hop if utterance_grid_hop is not None else grid_hop
+    axis_color = {"speech_presence": "#1f77b4", "speaker": "#ff7f0e", "asr": "#2ca02c"}
+
+    if mask_row is not None and mask_rows:
+        _draw_background_mask_row(axes[mask_row], mask_rows, duration_s)
 
     if has_spec and spec_row is not None:
         from scipy.signal import spectrogram
@@ -422,26 +537,52 @@ def build_aligned_timeline_plot(
         ax_spec.set_ylabel("freq (Hz)\nbroadband", fontsize=8)
         ax_spec.set_xlim(0, duration_s)
 
-    # Rows 1–3: per-axis raw + enhanced overlay.
-    for axis, row_i in (("presence", presence_row), ("identity", identity_row), ("utterance", utterance_row)):
+    # Rows 1–3: one line per axis, from the single fused fold, with its reducible part shaded
+    # beneath. The old raw/enhanced overlay drew the category error — two per-pass axis lines
+    # competing — on the artifact a human actually looks at.
+    for axis, row_i in (("speech_presence", speech_presence_row), ("speaker", speaker_row), ("asr", asr_row)):
         ax = axes[row_i]
-        # Utterance has its own (possibly wider+overlapping) grid.
-        axis_hop = utt_hop if axis == "utterance" else grid_hop
-        for pass_label in pass_order:
-            result = axis_results.get((pass_label, axis))
-            if result is None:
-                continue
-            centers, values = _series_for(result.rows, duration_s, axis_hop)
-            if centers.size == 0:
-                continue
-            alpha, style = _pass_color_alpha(pass_label)
-            label = f"{'raw' if pass_label == 'raw_16k' else 'enhanced'} {axis}"
-            ax.plot(centers, values, linestyle=style, color=axis_color[axis], linewidth=1.0, alpha=alpha, label=label)
+        result = fused_axes.get(axis)
+        if result is not None:
+            centers, values = _series_for(result.rows, duration_s, grid_hop)
+            if centers.size:
+                ax.plot(
+                    centers, values, linestyle="-", color=axis_color[axis], linewidth=1.2, label=f"{axis} uncertainty"
+                )
+                _, epistemic = _series_for(result.rows, duration_s, grid_hop, key="epistemic_uncertainty")
+                if epistemic.size == centers.size and not np.all(np.isnan(epistemic)):
+                    ax.fill_between(
+                        centers,
+                        0.0,
+                        np.nan_to_num(epistemic, nan=0.0),
+                        color=axis_color[axis],
+                        alpha=0.22,
+                        linewidth=0,
+                        label="epistemic (reducible)",
+                    )
         ax.set_ylim(0, 1)
         ax.set_ylabel(f"{axis}\nuncertainty", fontsize=8)
         ax.grid(axis="x", alpha=0.2)
         if any(line.get_label() and not line.get_label().startswith("_") for line in ax.lines):
             ax.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
+
+    # Perturbation stability: what running the second pass actually bought, per signal, in the
+    # form the fusion weights consume it. Replaces the raw-vs-enhanced delta strip, which was the
+    # same idea computed by subtracting two per-pass axes.
+    if stability_row is not None and stability_by_signal:
+        ax = axes[stability_row]
+        for i, signal in enumerate(sorted(stability_by_signal)):
+            rows = sorted(stability_by_signal[signal], key=lambda r: float(r["start"]))
+            if not rows:
+                continue
+            centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
+            values = np.array([float(r["abs_delta"]) for r in rows], dtype=np.float64)
+            ax.plot(centers, values, linewidth=0.9, alpha=0.85, label=signal, color=f"C{i % 10}")
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("signal\ninstability", fontsize=8)
+        ax.grid(axis="x", alpha=0.2)
+        if any(line.get_label() and not line.get_label().startswith("_") for line in ax.lines):
+            ax.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.85)
 
     # Scene quality: the four [0,1] degradation scores over time (0 = clean).
     if quality_row is not None:
@@ -452,18 +593,20 @@ def build_aligned_timeline_plot(
             "quality_reverb": "#8c564b",
             "quality_bandwidth": "#e377c2",
         }
-        for pass_label in pass_order:
-            result = axis_results.get((pass_label, "presence"))
-            if result is None:
-                continue
-            alpha, style = _pass_color_alpha(pass_label)
+        presence = fused_axes.get("speech_presence")
+        if presence is not None:
             for attr, color in q_colors.items():
-                centers, values = _attr_series(result.rows, attr)
+                centers, values = _attr_series(presence.rows, attr)
                 if centers.size == 0 or np.all(np.isnan(values)):
                     continue
-                suffix = "" if pass_label == "raw_16k" else " (enh)"
-                label = attr.removeprefix("quality_") + suffix
-                ax.plot(centers, values, linestyle=style, color=color, linewidth=1.0, alpha=alpha, label=label)
+                ax.plot(
+                    centers,
+                    values,
+                    linestyle="-",
+                    color=color,
+                    linewidth=1.0,
+                    label=attr.removeprefix("quality_"),
+                )
         ax.set_ylim(0, 1)
         ax.set_ylabel("scene quality\n(0=clean)", fontsize=8)
         ax.grid(axis="x", alpha=0.2)
@@ -480,21 +623,15 @@ def build_aligned_timeline_plot(
             "src_machine": "#7f7f7f",
             "src_environment": "#bcbd22",
         }
-        # Prefer the raw pass; fall back to the first presence pass available.
-        result = axis_results.get(("raw_16k", "presence"))
-        if result is None:
-            for pass_label in pass_order:
-                if (pass_label, "presence") in axis_results:
-                    result = axis_results[(pass_label, "presence")]
-                    break
+        result = fused_axes.get("speech_presence")
         if result is not None:
             rows = sorted(
-                (r for r in result.rows if getattr(r, "src_speech", None) is not None),
-                key=lambda r: r.start,
+                (r for r in result.rows if isinstance(r.get("src_speech"), (int, float))),
+                key=lambda r: float(r["start"]),
             )
             if rows:
-                centers = np.array([0.5 * (r.start + r.end) for r in rows], dtype=np.float64)
-                stacks = [np.array([float(getattr(r, c) or 0.0) for r in rows], dtype=np.float64) for c in src_cats]
+                centers = np.array([0.5 * (float(r["start"]) + float(r["end"])) for r in rows], dtype=np.float64)
+                stacks = [np.array([float(r.get(c) or 0.0) for r in rows], dtype=np.float64) for c in src_cats]
                 ax.stackplot(
                     centers,
                     *stacks,
@@ -524,22 +661,22 @@ def build_aligned_timeline_plot(
                 cluster_color[cluster_id] = diar_cmap(len(cluster_color) % 10)
 
         diar_stripes: list[tuple[str, str, list[Any]]] = []
-        for pass_label in pass_order:
-            for m, segs in (detail_by_pass.get(pass_label) or {}).get("diar_by_model", {}).items():
-                diar_stripes.append((pass_label, m, segs))
+        for perturbation in pass_order:
+            for m, segs in (detail_by_pass.get(perturbation) or {}).get("diar_by_model", {}).items():
+                diar_stripes.append((perturbation, m, segs))
         if diar_stripes:
-            for k, (pass_label, m, segs) in enumerate(diar_stripes):
+            for k, (perturbation, m, segs) in enumerate(diar_stripes):
                 y = k
                 # Distinguish pass via edge color (raw=solid black; enhanced=grey),
-                # not via fill — fill is reserved for speaker identity.
-                edge = "black" if pass_label == "raw_16k" else "0.4"
+                # not via fill — fill is reserved for speaker speaker.
+                edge = "black" if perturbation == IDENTITY_NAME else "0.4"
                 for seg in segs:
                     s = _seg_attr(seg, "start")
                     e = _seg_attr(seg, "end")
                     spk_raw = str(_seg_attr(seg, "speaker") or "?")
                     if s is None or e is None:
                         continue
-                    cluster_id = cluster_map.get((pass_label, m, spk_raw), spk_raw)
+                    cluster_id = cluster_map.get((perturbation, m, spk_raw), spk_raw)
                     color_ = cluster_color.get(cluster_id)
                     if color_ is None:
                         # Fallback for labels not seen during clustering.
@@ -586,18 +723,18 @@ def build_aligned_timeline_plot(
             "speechbrain/spkrec-resnet-voxceleb": "#8c564b",
         }
         any_emb_plotted = False
-        for pass_label in pass_order:
-            detail = detail_by_pass.get(pass_label) or {}
+        for perturbation in pass_order:
+            detail = detail_by_pass.get(perturbation) or {}
             for emb_model, windows in (detail.get("per_window_embeddings") or {}).items():
                 if not windows:
                     continue
                 centers, dists = _adjacent_window_cosine_series(windows)
                 if centers.size == 0 or np.all(np.isnan(dists)):
                     continue
-                alpha, style = _pass_color_alpha(pass_label)
+                alpha, style = _pass_color_alpha(perturbation)
                 emb_color = emb_palette.get(emb_model, "#7f7f7f")
                 short = emb_model.split("/")[-1].replace("spkrec-", "")
-                label = f"{'raw' if pass_label == 'raw_16k' else 'enh'} {short}"
+                label = f"{perturbation} {short}"
                 ax_emb.plot(centers, dists, color=emb_color, linestyle=style, linewidth=1.0, alpha=alpha, label=label)
                 any_emb_plotted = True
         ax_emb.set_ylim(0, 1)
@@ -606,76 +743,24 @@ def build_aligned_timeline_plot(
         if any_emb_plotted:
             ax_emb.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
 
-        # Row 6 (when present): PPG argmax phonetic sequence, time-aligned. One stripe
-        # per pass with PPG data; each contiguous run of the same argmax phoneme
-        # renders as a bar from the run's start to its end with the phoneme letter(s)
-        # as small text. ``<silent>`` runs render as a faint background bar.
-        if ppg_row is not None:
-            ax_ppg = axes[ppg_row]
-            ppg_stripes: list[tuple[str, list[tuple[float, float, str]]]] = []
-            for pass_label in pass_order:
-                ppg_detail = (detail_by_pass.get(pass_label) or {}).get("ppg") or {}
-                per_frame = ppg_detail.get("per_frame_phonemes") or []
-                frame_hop = float(ppg_detail.get("frame_hop") or 0.0)
-                if per_frame and frame_hop > 0:
-                    runs = []
-                    cur = per_frame[0]
-                    cur_start = 0
-                    for f in range(1, len(per_frame)):
-                        if per_frame[f] != cur:
-                            runs.append((cur_start * frame_hop, f * frame_hop, cur))
-                            cur = per_frame[f]
-                            cur_start = f
-                    runs.append((cur_start * frame_hop, len(per_frame) * frame_hop, cur))
-                    ppg_stripes.append((pass_label, runs))
-
-            if ppg_stripes:
-                for k, (pass_label, runs) in enumerate(ppg_stripes):
-                    y = k
-                    alpha, _ = _pass_color_alpha(pass_label)
-                    for rs, re_, phon in runs:
-                        is_silent = phon == "<silent>"
-                        ax_ppg.barh(
-                            y + 0.15,
-                            re_ - rs,
-                            left=rs,
-                            height=0.7,
-                            color="#cccccc" if is_silent else "#9467bd",
-                            alpha=alpha if not is_silent else alpha * 0.4,
-                            edgecolor="none",
-                        )
-                        if not is_silent and (re_ - rs) >= 0.04:
-                            ax_ppg.text(
-                                (rs + re_) / 2,
-                                y + 0.22,
-                                phon,
-                                ha="center",
-                                va="bottom",
-                                fontsize=3.5,
-                                color="black",
-                                clip_on=True,
-                            )
-                ax_ppg.set_yticks([k + 0.5 for k in range(len(ppg_stripes))])
-                ax_ppg.set_yticklabels([f"{pl[:3]} ppg" for pl, _ in ppg_stripes], fontsize=7)
-                ax_ppg.set_ylim(0, max(1, len(ppg_stripes)))
-            ax_ppg.set_ylabel("PPG\nphonemes", fontsize=8)
-            ax_ppg.grid(axis="x", alpha=0.2)
-
         # Row 6/7: ASR output — one stripe per (pass, asr_model), token spans at native
         # timestamps with the actual text rendered on each bar (small font) so the
-        # reviewer can see WHY utterance uncertainty is high (punctuation differences,
+        # reviewer can see WHY asr uncertainty is high (punctuation differences,
         # partial words, hesitation tokens).
-        ax_asr = axes[asr_row]
+        # Read the index directly rather than via the Optional local: this block runs under the
+        # same ``has_detail`` guard that added the row, so it is present by construction. The
+        # Optional lookup is what let the key collision with the axis row go unnoticed.
+        ax_asr = axes[row_idx["asr_words"]]
         asr_stripes: list[tuple[str, str, Any]] = []
-        for pass_label in pass_order:
-            for m, asr_result in (detail_by_pass.get(pass_label) or {}).get("asr_by_model", {}).items():
-                asr_stripes.append((pass_label, m, asr_result))
+        for perturbation in pass_order:
+            for m, asr_result in (detail_by_pass.get(perturbation) or {}).get("asr_by_model", {}).items():
+                asr_stripes.append((perturbation, m, asr_result))
         asr_palette = list(mcolors.TABLEAU_COLORS.values())
         if asr_stripes:
-            for k, (pass_label, m, asr_result) in enumerate(asr_stripes):
+            for k, (perturbation, m, asr_result) in enumerate(asr_stripes):
                 y = k
                 stripe_color = asr_palette[k % len(asr_palette)]
-                alpha, _ = _pass_color_alpha(pass_label)
+                alpha, _ = _pass_color_alpha(perturbation)
                 tokens = list(_iter_leaf_tokens(asr_result))
                 if tokens:
                     for cs, ce, ct in tokens:
@@ -731,13 +816,23 @@ def build_aligned_timeline_plot(
 
     fig.tight_layout(rect=(0, 0.02, 1, 0.97))
     if not will_chunk:
-        out = save_path or (run_dir / "timeline.png")
+        # final/, under its own name. Rows 1-3 are fused axes, so this is a conclusion and L1 is
+        # closed to it (D-16). The collision with the adaptive `final/timeline.png` that sent this
+        # figure to L1 in the first place is resolved by the *name*: two conclusions answering
+        # different questions get two filenames, not two layers.
+        out = save_path or (final_dir(run_dir) / "uncertainty_detail.png")
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(out, dpi=140)
         plt.close(fig)
         return out
-    # Chunked: walk 0..duration in chunk_duration_s windows and re-save with xlim.
+    # Chunked output is opt-in. It produced timeline_001.png, timeline_002.png … whose panels
+    # were mostly empty, because a fixed window rarely lines up with where anything happened.
+    # One figure per L2 round, drawn after fusion, is the useful unit instead.
+    if not chunk_duration_s:
+        plt.close(fig)
+        return None
+
     import math
 
     n_chunks = math.ceil(duration_s / chunk_duration_s)
@@ -748,7 +843,11 @@ def build_aligned_timeline_plot(
         t1 = min((i + 1) * chunk_duration_s, duration_s)
         for ax in axes:
             ax.set_xlim(t0, t1)
-        out_path = run_dir / f"timeline_{i + 1:03d}.png"
+        # Same layer as the single-figure path above: a chunk carries the same axis rows, so how
+        # long the recording is cannot decide which layer its figure belongs to.
+        chunk_dir = final_dir(run_dir)
+        chunk_dir.mkdir(parents=True, exist_ok=True)
+        out_path = chunk_dir / f"uncertainty_detail_{i + 1:03d}.png"
         fig.savefig(out_path, dpi=140)
         out_paths.append(out_path)
     plt.close(fig)

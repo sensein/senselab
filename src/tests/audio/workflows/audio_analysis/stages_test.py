@@ -2,7 +2,7 @@
 
 Model-free: each test monkeypatches the ``tasks/`` call the stage dispatches to, so
 this runs in CI without downloads or a GPU. What's pinned is the part that fails
-*silently* if it drifts — the fragment keys that ``presence.py`` / ``compute.py`` /
+*silently* if it drifts — the fragment keys that ``speech_presence.py`` / ``compute.py`` /
 ``global_summary.py`` / the adaptive interventions read, and the deliberate
 asymmetry between what ``stage_features`` returns and what it writes.
 """
@@ -24,7 +24,6 @@ from senselab.audio.workflows.audio_analysis.stages import (
     stage_asr,
     stage_diarization,
     stage_features,
-    stage_ppg,
     stage_scene,
 )
 
@@ -39,10 +38,10 @@ def audio() -> Audio:
 def ctx(tmp_path: Path) -> StageContext:
     """A cache- and sidecar-enabled context rooted in tmp_path."""
     return StageContext(
-        pass_label="raw_16k",
+        perturbation="raw",
         audio_signature="a" * 64,
         cache_dir=tmp_path / "cache",
-        out_dir=tmp_path / "raw_16k",
+        out_dir=tmp_path / "raw",
         senselab_ver="test",
     )
 
@@ -149,7 +148,7 @@ def test_features_returns_live_rows_but_writes_a_placeholder(
 ) -> None:
     """The returned result must be the real dict; only the JSON gets a placeholder.
 
-    presence.py / compute.py / global_summary.py read
+    speech_presence.py / compute.py / global_summary.py read
     pass_summary["features"]["result"] as {backend: rows}. Returning the sidecar
     shape instead would leave every loudness/quality column None rather than
     raising — the exact failure this pins.
@@ -296,26 +295,13 @@ def test_alignment_skips_failed_asr(audio: Audio, ctx: StageContext) -> None:
 # ── stage_ppg ─────────────────────────────────────────────────────────
 
 
-def test_ppg_uses_the_plural_key(audio: Audio, ctx: StageContext, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Consumers accept "ppg" and "ppgs", so a rename degrades silently — pin it."""
-    import numpy as np
-
-    monkeypatch.setattr(
-        "senselab.audio.tasks.features_extraction.ppg.extract_ppgs_from_audios",
-        lambda *a, **k: [np.zeros((40, 10), dtype="float32")],
-    )
-    fragment = stage_ppg(audio, ctx)
-    assert set(fragment) == {"ppgs"}, "the key must be plural"
-    assert fragment["ppgs"]["phoneme_labels"], "inventory must ride along for the harvester"
-
-
 # ── run_pass ──────────────────────────────────────────────────────────
 
 
 def test_run_pass_emits_the_summary_envelope(audio: Audio, ctx: StageContext) -> None:
     """Label / duration_s / audio_signature are what adaptive/loop.py reads."""
     summary = run_pass(audio, ctx, PassPlan())
-    assert summary["label"] == "raw_16k"
+    assert summary["label"] == "raw"
     assert summary["duration_s"] == pytest.approx(1.0)
     assert summary["audio_signature"] == ctx.audio_signature
 

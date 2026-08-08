@@ -13,15 +13,51 @@ except ModuleNotFoundError:
 
 _PUNCTUATION_PATTERN = re.compile(r"[^\w\s']")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
+_NONLEXICAL_PATTERN = re.compile(r"[\[<][^\]>]*[\]>]")
+"""Bracketed non-lexical markers: ``[cough]``, ``[UH]``, ``<unk>``, ``[LAUGH]``.
+
+Only square and angle brackets. Parentheses are left alone because some conventions use
+them for genuine speech (uncertain or overlapping words), so stripping them would delete
+transcript content rather than annotation.
+"""
+
+
+def strip_nonlexical_tokens(text: str) -> str:
+    """Remove bracketed non-lexical markers and their contents.
+
+    ASR models that annotate fillers and non-speech events — CrisperWhisper emits
+    ``[cough]``, ``[UH]``, ``[LAUGH]`` and similar — must not have those markers compared
+    against models that stay silent in the same span. Removing the brackets alone is worse
+    than doing nothing: ``[cough]`` then normalizes to the ordinary word ``cough``, which a
+    WER comparison counts as a substitution error against a model that transcribed nothing
+    there. The disagreement is then about annotation *convention*, not about what was said,
+    and it inflates the asr uncertainty axis with a difference that carries no signal.
+
+    The same applies to grapheme-to-phoneme conversion: ``[cough]`` yields phonemes for a
+    word nobody spoke, and those get aligned against real acoustics.
+
+    Args:
+        text (str): raw transcript text.
+
+    Returns:
+        str: text with bracketed markers removed (may be empty).
+    """
+    if not text:
+        return ""
+    return _WHITESPACE_PATTERN.sub(" ", _NONLEXICAL_PATTERN.sub(" ", text)).strip()
 
 
 def normalize_transcript_for_wer(text: str) -> str:
-    """Lowercase, strip non-word punctuation, collapse whitespace.
+    """Lowercase, drop non-lexical markers, strip punctuation, collapse whitespace.
 
     The shared surface-normalization applied before WER-style comparisons so
     that ``"first."`` vs ``"first!"`` and ``"I"`` vs ``"i"`` don't count as
     errors (moved here from the audio-analysis workflow — architecture-review
     T049 — so task- and workflow-level WER share one definition).
+
+    Non-lexical markers are removed first, so a model that annotates ``[cough]`` is not
+    scored as having said the word "cough" against one that annotates nothing — see
+    :func:`strip_nonlexical_tokens`.
 
     Args:
         text (str): raw transcript text.
@@ -31,7 +67,7 @@ def normalize_transcript_for_wer(text: str) -> str:
     """
     if not text:
         return ""
-    cleaned = _PUNCTUATION_PATTERN.sub(" ", text.lower())
+    cleaned = _PUNCTUATION_PATTERN.sub(" ", strip_nonlexical_tokens(text).lower())
     return _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
 
 

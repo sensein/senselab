@@ -6,7 +6,6 @@ Audio data is serialized as FLAC for efficient lossless transfer.
 """
 
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -176,8 +175,7 @@ class CoquiVoiceCloner:
                 }
             )
 
-            # Clear MPLBACKEND to avoid matplotlib_inline errors in subprocess
-            env = {k: v for k, v in os.environ.items() if k != "MPLBACKEND"}
+            env = _clean_subprocess_env()
             result = subprocess.run(
                 [python, "-c", _WORKER_SCRIPT],
                 input=input_json,
