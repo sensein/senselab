@@ -21,11 +21,11 @@ This module imports no backend, so it stays cheap to import from anywhere.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, Optional, get_args
 
 SpeakerLabelKind = Literal["identity", "role"]
 
-_VALID_LABEL_KINDS = ("identity", "role")
+_VALID_LABEL_KINDS = get_args(SpeakerLabelKind)
 
 
 @dataclass(frozen=True)
@@ -43,7 +43,11 @@ class DiarizationCapabilities:
         labels_stable_across_files: Whether label ``"1"`` in one file denotes the same
             speaker as ``"1"`` in another. False for any backend that numbers per audio.
         max_speakers: The backend's ceiling, or ``None`` when nobody has measured it.
-            ``None`` does **not** mean unlimited.
+            ``None`` does **not** mean unlimited. Counts distinguishable *speakers*,
+            not distinct ``speaker`` label values: the child-adult classifier emits
+            three label values (``CHILD``, ``ADULT``, ``OVERLAP``) but declares
+            ``max_speakers=2``, because ``OVERLAP`` marks two of the two known
+            talkers speaking at once, not a third talker.
         honors_speaker_hints: Whether ``num_speakers``/``min_speakers``/``max_speakers``
             passed to :func:`diarize_audios` do anything. Five of six ignore them.
     """

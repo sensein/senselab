@@ -57,8 +57,12 @@ from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, p
 CAPABILITIES = DiarizationCapabilities(
     populates_text=False,
     speaker_label_kind="role",  # CHILD/ADULT/OVERLAP name a role, not a speaker
-    labels_stable_across_files=False,
-    max_speakers=2,  # it can only ever emit CHILD and ADULT
+    labels_stable_across_files=False,  # not measured; False is the conservative default
+    # CHILD and ADULT are the only two *talkers* this backend distinguishes; OVERLAP
+    # marks both talking at once, not a third speaker, so it does not raise the count.
+    # (The worker does emit a literal "OVERLAP" label value — see the three-way split
+    # below — but max_speakers counts distinguishable speakers, not label values.)
+    max_speakers=2,
     honors_speaker_hints=False,
 )
 

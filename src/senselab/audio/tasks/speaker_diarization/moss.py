@@ -67,7 +67,7 @@ _MOSS_PYTHON = "3.12"
 CAPABILITIES = DiarizationCapabilities(
     populates_text=True,  # joint ASR+diarization: measured 6/6 segments carried text
     speaker_label_kind="identity",  # emits S01/S02 tags parsed from its transcript
-    labels_stable_across_files=False,
+    labels_stable_across_files=False,  # not measured; False is the conservative default
     max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
     honors_speaker_hints=False,
 )

@@ -176,7 +176,7 @@
     populates_text: false
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers: null
+    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
     honors_speaker_hints: true
 
 - name: NeMo Sortformer
@@ -204,7 +204,7 @@
     populates_text: true
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers: null
+    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
     honors_speaker_hints: false
 
 - name: USC-SAIL Child-Adult Classifier
@@ -232,7 +232,7 @@
     populates_text: true
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers: null
+    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
     honors_speaker_hints: false
 
 - name: DiariZen
@@ -249,7 +249,7 @@
     populates_text: false
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers: null
+    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
     honors_speaker_hints: false
 
 # Speech Emotion Recognition

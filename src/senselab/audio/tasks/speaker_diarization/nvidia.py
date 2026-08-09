@@ -43,7 +43,7 @@ _NEMO_PYTHON = "3.12"
 CAPABILITIES = DiarizationCapabilities(
     populates_text=False,
     speaker_label_kind="identity",
-    labels_stable_across_files=False,
+    labels_stable_across_files=False,  # not measured; False is the conservative default
     max_speakers=4,  # declared by the checkpoint's own name: diar_sortformer_4spk
     honors_speaker_hints=False,
 )
