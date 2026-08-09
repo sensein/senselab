@@ -1,5 +1,6 @@
 """A file lock that several users can share on one directory."""
 
+import getpass
 import json
 import os
 import stat
@@ -103,6 +104,37 @@ def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
             with SharedFileLock(resource, timeout=0.5, stale_after=3600.0):
                 pass
     assert heartbeat.exists() is False
+
+
+def test_a_live_holder_with_a_stale_heartbeat_is_not_displaced(tmp_path: Path) -> None:
+    """A ``filelock.Timeout`` means a live process holds the lock -- never break it.
+
+    Reaching ``except Timeout:`` proves the OS-level flock was held
+    continuously for the entire wait, which a crashed process cannot do (the
+    kernel drops its flock the instant it exits). This forces exactly that
+    branch against a holder whose heartbeat has gone stale independently of
+    its still-live flock -- e.g. its heartbeat thread died or was starved of
+    scheduling, which is exactly what ``_heartbeat_loop``'s bare
+    ``except OSError`` cannot see. A second acquirer must still raise
+    ``TimeoutError`` naming the holder rather than unlinking and taking over:
+    doing so would hand it a lock on a fresh inode while the first holder
+    still holds the ``flock`` on the orphaned one, so both would believe they
+    hold the lock -- the exact clobber this class exists to prevent.
+    """
+    resource = tmp_path / "thing"
+    heartbeat = resource.with_suffix(".heartbeat")
+
+    with SharedFileLock(resource):
+        # The flock is genuinely held (by us, in this process) for the whole
+        # test below, but age the heartbeat file to simulate its refresh
+        # thread having stalled or died independently of the work it guards.
+        os.utime(heartbeat, (0, 0))
+        with pytest.raises(TimeoutError) as excinfo:
+            with SharedFileLock(resource, timeout=0.5, stale_after=1.0):
+                pass  # pragma: no cover - must not be reached
+        message = str(excinfo.value)
+        assert str(os.getpid()) in message
+        assert getpass.getuser() in message
 
 
 def test_chmod_failure_does_not_break_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
