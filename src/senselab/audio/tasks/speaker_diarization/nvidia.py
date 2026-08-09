@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
@@ -38,6 +39,14 @@ _NEMO_REQUIREMENTS = [
 # `lightning` (alongside this one and speech_to_text/nemo.py) — re-check this
 # note there too before trusting it stale-dated.
 _NEMO_PYTHON = "3.12"
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=False,
+    speaker_label_kind="identity",
+    labels_stable_across_files=False,
+    max_speakers=4,  # declared by the checkpoint's own name: diar_sortformer_4spk
+    honors_speaker_hints=False,
+)
 
 # Worker script — runs inside the isolated venv
 _WORKER_SCRIPT = r"""

@@ -63,10 +63,21 @@ from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=False,  # measured: 10/10 segments had no text
+    speaker_label_kind="identity",
+    # Measured: VBx clusters per audio, so the same run gave ['1','2'] for one file
+    # and ['0','0','1','0'] for another. A label means nothing outside its own file.
+    labels_stable_across_files=False,
+    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    honors_speaker_hints=False,
+)
 
 # Embedding model DiariZenPipeline.from_pretrained downloads internally (see
 # module docstring) — staged alongside the main checkpoint so both are cached

@@ -3,16 +3,29 @@
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
+from senselab.audio.tasks.speaker_diarization.child_adult import CAPABILITIES as _CHILD_ADULT_CAPS
 from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
+from senselab.audio.tasks.speaker_diarization.diarizen import CAPABILITIES as _DIARIZEN_CAPS
 from senselab.audio.tasks.speaker_diarization.diarizen import diarize_audios_with_diarizen
+from senselab.audio.tasks.speaker_diarization.moss import CAPABILITIES as _MOSS_CAPS
 from senselab.audio.tasks.speaker_diarization.moss import diarize_audios_with_moss
+from senselab.audio.tasks.speaker_diarization.nvidia import CAPABILITIES as _SORTFORMER_CAPS
 from senselab.audio.tasks.speaker_diarization.nvidia import diarize_audios_with_nvidia_sortformer
+from senselab.audio.tasks.speaker_diarization.pyannote import CAPABILITIES as _PYANNOTE_CAPS
 from senselab.audio.tasks.speaker_diarization.pyannote import diarize_audios_with_pyannote
+from senselab.audio.tasks.speaker_diarization.vibevoice import CAPABILITIES as _VIBEVOICE_CAPS
 from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, PyannoteAudioModel, ScriptLine, SenselabModel
 from senselab.utils.data_structures.logging import logger
 
+# NOTE: this is deliberately "nvidia/diar", not "nvidia/diar_sortformer" — it is
+# the literal the dispatch branch below already used before this constant existed.
+# Narrowing it to "_sortformer" would change dispatch for any future
+# "nvidia/diar*" checkpoint that isn't a Sortformer build; keep it exact so the
+# constant cannot silently change what already ships.
+_SORTFORMER_PREFIXES = ("nvidia/diar",)
 _VIBEVOICE_PREFIXES = ("microsoft/VibeVoice-ASR",)
 _CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
 _MOSS_PREFIXES = ("OpenMOSS-Team/MOSS-Transcribe-Diarize",)
@@ -163,7 +176,7 @@ def diarize_audios(
             max_speakers=max_speakers,
             exclusive=exclusive,
         )
-    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith("nvidia/diar"):
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_SORTFORMER_PREFIXES):
         _warn_if_speaker_hints_ignored("NVIDIA Sortformer", num_speakers, min_speakers, max_speakers)
         return diarize_audios_with_nvidia_sortformer(
             audios=audios,
@@ -208,3 +221,26 @@ def diarize_audios(
             "classifier, MOSS-Transcribe-Diarize, and DiariZen (from HuggingFace) models are "
             "supported for now."
         )
+
+
+_CAPABILITIES_BY_PREFIX: tuple[tuple[tuple[str, ...], DiarizationCapabilities], ...] = (
+    (_SORTFORMER_PREFIXES, _SORTFORMER_CAPS),
+    (_VIBEVOICE_PREFIXES, _VIBEVOICE_CAPS),
+    (_CHILD_ADULT_PREFIXES, _CHILD_ADULT_CAPS),
+    (_MOSS_PREFIXES, _MOSS_CAPS),
+    (_DIARIZEN_PREFIXES, _DIARIZEN_CAPS),
+)
+
+
+def capabilities_for(model_id: str) -> DiarizationCapabilities:
+    """Return what the backend handling ``model_id`` provides.
+
+    Mirrors :func:`diarize_audios`' own dispatch, including its fallback: an id
+    matching no prefix resolves to Pyannote, because that is the backend that would
+    actually run it. Returning ``None`` instead would make every caller write the
+    same check for a case the dispatch treats as ordinary.
+    """
+    for prefixes, caps in _CAPABILITIES_BY_PREFIX:
+        if any(model_id.startswith(p) for p in prefixes):
+            return caps
+    return _PYANNOTE_CAPS

@@ -49,9 +49,18 @@ from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=False,
+    speaker_label_kind="role",  # CHILD/ADULT/OVERLAP name a role, not a speaker
+    labels_stable_across_files=False,
+    max_speakers=2,  # it can only ever emit CHILD and ADULT
+    honors_speaker_hints=False,
+)
 
 # Upstream's WhisperWrapper() (default args) always loads the feature extractor
 # from "openai/whisper-tiny" and the backbone from "openai/whisper-base" (the
