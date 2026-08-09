@@ -146,7 +146,7 @@ class SharedFileLock:
     def _heartbeat_loop(self) -> None:
         while not self._stop_event.wait(self._heartbeat_interval):
             try:
-                self._heartbeat_path.touch()
+                _touch_shared(self._heartbeat_path)
             except OSError:
                 # Swallowed deliberately, but this is exactly the failure mode
                 # this module exists to fix: if the heartbeat file is not
@@ -202,35 +202,62 @@ class SharedFileLock:
             )
 
     def __enter__(self) -> "SharedFileLock":
-        """Acquire the lock, taking over a stale holder if one is found.
+        """Acquire the lock, taking over a dead holder's leftovers if found.
+
+        The two branches below are deliberately asymmetric, and that
+        asymmetry is the safety property this class provides:
+
+        - **Uncontended acquire, stale identity on disk** (the ``else``
+          branch): the OS-level ``flock`` was free — a crashed process's
+          ``flock`` is released by the kernel the instant it exits — so what
+          is left behind is a leftover: a lock file naming a dead holder.
+          Safe to clean up and log.
+        - **``filelock.Timeout``** (the ``except`` branch): reaching this
+          proves the ``flock`` was held *continuously* for the entire
+          ``timeout`` window. A crashed process cannot do that — so a timeout
+          always means a live process holds the lock, no matter how stale its
+          heartbeat looks (heartbeat writes can stall or die independently of
+          the holder, e.g. an uncaught exception in the heartbeat thread, or
+          the thread simply not being scheduled under load — the holder's
+          real work continues regardless). Unlinking here would hand a new
+          claimant a lock on a **fresh inode** while the original holder still
+          holds the ``flock`` on the now-orphaned one: both then believe they
+          hold the lock, which is precisely the concurrent clobber this class
+          exists to prevent. So this branch never unlinks or retries; it only
+          raises, naming the holder so a human can decide whether to kill it.
 
         Returns:
             This instance, for use as a context manager.
 
         Raises:
-            TimeoutError: The lock is held and its heartbeat is still fresh.
+            TimeoutError: The lock is held by a live process (see above).
         """
         _ensure_dir(self._lock_path.parent)
         _touch_shared(self._lock_path)
-        # Read whatever identity is on disk *before* we touch anything else.
-        # A crash releases the OS-level flock immediately (the kernel drops it
-        # when the holding process exits), but leaves this recorded identity
-        # and heartbeat behind — so the far more common "stale lock" case
-        # below is an *uncontested* acquire that still needs to report a
-        # takeover, not a `filelock.Timeout`.
+        # Read whatever identity is on disk *before* we touch anything else,
+        # for both branches below: the uncontended-acquire check needs it to
+        # decide whether to log a takeover, and the Timeout branch needs it
+        # purely to name the current holder in the error message.
         previous_holder: Optional[dict] = lock_holder(self._lock_path)
         try:
             self._lock.acquire(timeout=self._timeout)
         except Timeout:
             age = self._heartbeat_age()
-            if age <= self._stale_after:
-                raise TimeoutError(
-                    f"Lock at {self._lock_path} is held and its heartbeat is fresh ({age:.1f}s old); not taking over."
-                ) from None
-            self._warn_stale_takeover(previous_holder, age)
-            self._lock_path.unlink(missing_ok=True)
-            _touch_shared(self._lock_path)
-            self._lock.acquire(timeout=self._timeout)
+            if previous_holder is not None:
+                held_for = time.time() - previous_holder["taken_at"]
+                detail = (
+                    f"held by user={previous_holder.get('user')} host={previous_holder.get('host')} "
+                    f"pid={previous_holder.get('pid')} for {held_for:.1f}s "
+                    f"(heartbeat {age:.1f}s old)"
+                )
+            else:
+                detail = f"held by an unknown process (heartbeat {age:.1f}s old, no identity on disk)"
+            raise TimeoutError(
+                f"Timed out after {self._timeout:.1f}s waiting for lock at {self._lock_path}: {detail}. "
+                "The OS-level lock was held for the entire wait, which a crashed process cannot do, so this "
+                "is a live holder even though its heartbeat may look stale -- it is not broken automatically. "
+                "If that process is confirmed dead, remove the .lock file by hand."
+            ) from None
         else:
             if previous_holder is not None:
                 age = self._heartbeat_age()
@@ -258,10 +285,15 @@ class SharedFileLock:
             self._heartbeat_thread.join(timeout=5)
         self._heartbeat_path.unlink(missing_ok=True)
         try:
-            # Truncate rather than unlink: the file (and its group-writable
-            # mode) stays in place for the next acquirer's _touch_shared to
-            # find already correctly permissioned; only the holder payload
-            # is cleared so lock_holder() reports unheld.
+            # `filelock.UnixFileLock._release()` (called below) unconditionally
+            # attempts to unlink the lock file itself, so this content does not
+            # normally survive past this call -- the next acquirer's
+            # `_touch_shared` recreates the file from nothing, not from what we
+            # leave here. Truncating first is a backstop for the case where
+            # that unlink silently fails (`_release()` suppresses `OSError`,
+            # e.g. a permission or network hiccup on a shared tree): even then,
+            # `lock_holder()` reads the leftover file as unheld rather than
+            # reporting our identity indefinitely.
             self._lock_path.write_text("")
         except OSError:
             pass
