@@ -1,6 +1,8 @@
 """Declared capabilities for the diarization backends."""
 
 import dataclasses
+from pathlib import Path
+from typing import Iterator
 
 import pytest
 
@@ -197,3 +199,35 @@ def test_an_unknown_model_id_falls_back_like_the_dispatch_does() -> None:
     case the dispatch itself treats as ordinary.
     """
     assert capabilities_for("some/unknown-diarizer").honors_speaker_hints is True
+
+
+def test_registry_capabilities_match_the_code() -> None:
+    """The YAML and the backend declarations must agree.
+
+    The registry is what a human reads when choosing a model; the code is what runs.
+    Two sources of truth are acceptable here only because this test makes drift a
+    test failure rather than a surprise.
+    """
+    import yaml
+
+    registry = yaml.safe_load((Path(__file__).parents[3] / "senselab" / "model_registry.yaml").read_text())
+
+    def _walk(node: object) -> "Iterator[dict]":
+        if isinstance(node, dict):
+            if "model_id" in node and "capabilities" in node:
+                yield node
+            for value in node.values():
+                yield from _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from _walk(value)
+
+    checked = 0
+    for entry in _walk(registry):
+        caps = capabilities_for(entry["model_id"])
+        declared = entry["capabilities"]
+        assert declared["populates_text"] == caps.populates_text, entry["model_id"]
+        assert declared["speaker_label_kind"] == caps.speaker_label_kind, entry["model_id"]
+        assert declared["max_speakers"] == caps.max_speakers, entry["model_id"]
+        checked += 1
+    assert checked == 6, f"expected 6 diarization entries with capabilities, found {checked}"
