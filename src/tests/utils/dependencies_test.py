@@ -140,6 +140,50 @@ def test_hf_subprocess_env_left_unchanged_when_uncacheable(
     assert "online" in message.lower(), "warning must state the fallback consequence (online Hub loading)"
 
 
+def test_senselab_cache_dir_honors_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SENSELAB_CACHE, when set, is used verbatim as the cache directory."""
+    custom = tmp_path / "custom_cache"
+    monkeypatch.setenv("SENSELAB_CACHE", str(custom))
+    result = dep._senselab_cache_dir()
+    assert result == custom
+
+
+def test_senselab_cache_dir_defaults_under_senselab_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Absent SENSELAB_CACHE, the cache lives under ~/.cache/senselab, not ~/.cache/huggingface."""
+    monkeypatch.delenv("SENSELAB_CACHE", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    result = dep._senselab_cache_dir()
+    assert result == tmp_path / ".cache" / "senselab" / "hf"
+    assert "huggingface" not in str(result)
+
+
+def test_senselab_cache_dir_ignores_hf_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting HF_HOME to a shared tree must not relocate senselab's own cache.
+
+    This is the regression guard: on a shared HPC cluster, HF_HOME is routinely pointed at a
+    large group-writable tree so model weights are downloaded once and reused. This directory
+    also holds per-process lock files (see resolve_model), so deriving it from HF_HOME would put
+    those locks in a tree contended by every other user of the shared tree.
+    """
+    monkeypatch.delenv("SENSELAB_CACHE", raising=False)
+    shared_hf_home = tmp_path / "shared_group_tree" / "huggingface"
+    monkeypatch.setenv("HF_HOME", str(shared_hf_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    result = dep._senselab_cache_dir()
+    assert "shared_group_tree" not in str(result)
+    assert result == tmp_path / "home" / ".cache" / "senselab" / "hf"
+
+
+def test_senselab_cache_dir_created_on_first_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cache directory is created if it does not already exist."""
+    custom = tmp_path / "not_yet_created"
+    monkeypatch.setenv("SENSELAB_CACHE", str(custom))
+    assert not custom.exists()
+    result = dep._senselab_cache_dir()
+    assert result.is_dir()
+
+
 def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPatch) -> None:
     """`also` companions (e.g. the Qwen forced aligner) are staged alongside the primary model."""
     staged: list = []

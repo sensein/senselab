@@ -115,10 +115,19 @@ def retry_on_transient_error(
 def _senselab_cache_dir() -> Path:
     """Return the directory used by senselab for cross-process caching.
 
-    Defaults to ``{HF_HOME}/senselab_cache``.  Created on first access.
+    Defaults to ``~/.cache/senselab/hf``, a sibling of the venv cache
+    (``~/.cache/senselab/venvs`` in ``subprocess_venv.py``). Override with ``SENSELAB_CACHE``.
+
+    Deliberately NOT derived from ``HF_HOME``: on shared HPC clusters, ``HF_HOME`` is routinely
+    redirected to a large group-writable tree so model weights are downloaded once and reused
+    across users. This directory also holds per-process coordination lock files
+    (``_FileLockWithHeartbeat``, see ``resolve_model`` below) — putting those in a tree shared
+    by a whole group means unrelated users contend on each other's locks over NFS. Keep this
+    directory in senselab's own, per-user namespace no matter where ``HF_HOME`` points.
+
+    Created on first access.
     """
-    hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    cache_dir = hf_home / "senselab_cache"
+    cache_dir = Path(os.environ.get("SENSELAB_CACHE", str(Path.home() / ".cache" / "senselab" / "hf")))
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
