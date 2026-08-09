@@ -25,9 +25,23 @@ processes can check the heartbeat to distinguish a live lock holder from a crash
 does. It has no staleness threshold and no takeover path, so a crashed holder blocks every waiter
 until the 300 s timeout, then raises.
 
-That second one guards venv creation — the operation `CLAUDE.md` already records as the cause of a
-5.5-hour CI hang, where "`ensure_venv` takes no lock and does `shutil.rmtree(venv_dir)` before
+### A stale claim, corrected
+
+`CLAUDE.md` says "**`ensure_venv` takes no lock** and does `shutil.rmtree(venv_dir)` before
 installing, so two workers that want the same subprocess venv delete each other's tree mid-install."
+
+**That is no longer true.** `ensure_venv` acquires `FileLock(str(lock_path), timeout=600)` around
+the whole marker-check / `rmtree` / install sequence, and gates reuse on a `.senselab-installed`
+completion marker so a half-built venv is never mistaken for a finished one. The lock arrived in
+PR #444 and the note was never updated. Fixing that note is part of this work — a stale warning
+about a concurrency hazard is worse than none, because it sends the next reader to solve a solved
+problem.
+
+What `ensure_venv` actually lacks is what this spec is about: its `FileLock` is the **plain** one,
+with no heartbeat. A holder that crashes mid-install blocks every waiter for the full 600 s and then
+raises, where `dependencies.py`'s lock would have detected the dead holder and taken over. And its
+lock file, venv tree and marker are all created with the process umask, so a second user can neither
+take over a stale build nor, in some configurations, execute the interpreter the first user built.
 
 ## Why neither works across users
 
@@ -81,6 +95,32 @@ whether alice's job actually died.
 nodes, so the threshold must exceed plausible clock skew; and `fcntl` locking requires NFSv4 or
 equivalent. Both belong in the module docstring, because both are invisible until they misbehave.
 
+**A shared venv must be usable by the group, not just buildable.** Building it group-writable is
+half the job: the second user has to *run* the interpreter the first user created. Venv trees are
+created with the process umask, so directories need group execute and files group read. The
+completion marker matters more here than in the single-user case — user B may arrive while user A is
+mid-install, and `.senselab-installed` is what stops B treating a half-populated tree as ready. That
+mechanism already exists and is correct; it simply becomes load-bearing once the cache is shared.
+
+Note the one thing sharing a venv does **not** require: relocatability. Venvs embed absolute paths,
+which is fine precisely because every user reaches it through the same configured path
+(`SENSELAB_VENV_CACHE`), not through their own home directory.
+
+## Configuration
+
+Three settings decide what is shared, and they are already independent of one another:
+
+| Setting | Controls | Default |
+|---|---|---|
+| `SENSELAB_VENV_CACHE` | subprocess venvs | `~/.cache/senselab/venvs` |
+| `SENSELAB_CACHE` | senselab's resolution cache and locks | `~/.cache/senselab/hf` |
+| `HF_HOME` | HuggingFace model weights | `~/.cache/huggingface` |
+
+Point all three at a group location and the group shares venvs, resolution state and weights; point
+none and behaviour is unchanged. `SENSELAB_CACHE` exists as its own variable precisely so that
+redirecting `HF_HOME` to a shared tree does not silently drag senselab's coordination state along
+with it — which is what it used to do.
+
 ## What this does not do
 
 - It does **not** introduce a lock manager, a lease service, or anything requiring a daemon. A file
@@ -90,9 +130,10 @@ equivalent. Both belong in the module docstring, because both are invisible unti
   the requirement instead of pretending to detect it.
 - It does **not** change where any cache lives. `SENSELAB_CACHE` and `HF_HOME` keep their current
   meanings; this makes a shared location safe, which is what makes pointing them at one reasonable.
-- It does **not** add locking to `ensure_venv` itself. That gap is real and recorded in `CLAUDE.md`,
-  but adding a lock to venv creation is a behavioural change to a hot path and deserves its own
-  review — this work makes the lock it would use trustworthy first.
+- It does **not** add a *new* lock to `ensure_venv` — it already has one. It replaces that plain
+  `FileLock` with the shared-safe lock, so a crashed build is taken over rather than blocking every
+  waiter for 600 s, and so a second user can participate at all.
+- It does **not** change how a venv is built, only who can build, take over, and reuse one.
 
 ## Testing
 
