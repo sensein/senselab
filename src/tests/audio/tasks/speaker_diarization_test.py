@@ -405,6 +405,72 @@ def test_diarize_audios_with_vibevoice_raises_on_all_batch_schema_mismatch(
         diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
 
 
+def test_diarize_audios_with_vibevoice_missing_speaker_does_not_become_phantom_label(
+    monkeypatch: pytest.MonkeyPatch, resampled_mono_audio_sample: Audio, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A segment missing ``Speaker`` must yield ``speaker=None``, never the string ``"None"``.
+
+    Observed on a real H100 run: an 11.26s recording produced speaker labels
+    `['None', '0']` for a 2-segment result, because the unconditional
+    `str(seg.get("Speaker"))` turns a missing key into the literal string `"None"` —
+    indistinguishable from a real label to any consumer grouping segments by speaker.
+    A segment missing both `Speaker` and `Content` has nothing for `ScriptLine` to
+    construct from and must be skipped with a warning instead, the same way an
+    unparsable Start/End is already skipped just above this loop.
+    """
+    import logging
+
+    from senselab.audio.tasks.speaker_diarization import vibevoice as vibevoice_module
+    from senselab.audio.tasks.speaker_diarization.vibevoice import diarize_audios_with_vibevoice
+
+    class _FakeModel:
+        device = torch.device("cpu")
+
+        def parameters(self) -> Iterator[torch.Tensor]:
+            return iter([torch.zeros(1, dtype=torch.float32)])
+
+        def generate(self, **kwargs: torch.Tensor) -> torch.Tensor:
+            input_ids = kwargs["input_ids"]
+            return torch.zeros((1, input_ids.shape[1] + 1), dtype=torch.long)
+
+    class _FakeProcessor:
+        def apply_transcription_request(self, audio: str) -> dict[str, torch.Tensor]:
+            return {"input_ids": torch.zeros((1, 1), dtype=torch.long)}
+
+        def decode(self, generated_ids: torch.Tensor, return_format: str) -> list[dict[str, object]]:
+            return [
+                {"Start": 0.0, "End": 1.0, "Speaker": "0", "Content": "hello"},
+                {"Start": 1.0, "End": 2.0, "Content": "world"},  # Speaker key absent
+                {"Start": 2.0, "End": 3.0},  # both Speaker and Content absent
+            ]
+
+    monkeypatch.setattr(
+        vibevoice_module.VibeVoiceDiarization,
+        "_get_vibevoice_model",
+        Mock(return_value=(_FakeProcessor(), _FakeModel())),
+    )
+
+    # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
+
+    with caplog.at_level(logging.WARNING):
+        results = diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
+
+    assert len(results) == 1
+    lines = results[0]
+    assert len(lines) == 2, "the both-missing segment must be skipped, not raised on or phantom-labeled"
+
+    labeled = next(line for line in lines if line.start == 0.0)
+    assert labeled.speaker == "0"
+
+    unlabeled = next(line for line in lines if line.start == 1.0)
+    assert unlabeled.speaker is None, "a missing Speaker key must stay None, not become the string 'None'"
+    assert unlabeled.text == "world"
+
+    assert any("Speaker" in r.message and "Content" in r.message for r in caplog.records)
+
+
 @pytest.mark.skip(reason="Downloads a 7B model; run manually on a GPU machine")
 def test_diarize_audios_with_vibevoice(resampled_mono_audio_sample: Audio) -> None:
     """Test diarizing audios with VibeVoice-ASR-HF."""

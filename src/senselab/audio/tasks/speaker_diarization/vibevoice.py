@@ -260,9 +260,27 @@ def diarize_audios_with_vibevoice(
                     # the except clause above) — skip just this segment.
                     logger.warning(f"VibeVoice-ASR-HF produced a segment with unparsable Start/End ({exc}); skipping.")
                     continue
-                script_lines.append(
-                    ScriptLine(speaker=str(seg.get("Speaker")), start=start, end=end, text=seg.get("Content"))
-                )
+
+                # `Speaker` gets no upstream guard the way `Start`/`End` do above, and
+                # VibeVoice's own JSON omits it on some segments of a joint ASR+diarization
+                # pass. str()-ing it unconditionally turns that absence into the literal
+                # string "None", which is indistinguishable from a real speaker label to any
+                # consumer grouping segments by speaker — observed on a real H100 run, where
+                # an 11.26s recording produced speaker labels ['None', '0'] for a 2-segment
+                # result. Keep a missing/None Speaker as speaker=None instead: a genuine
+                # absence a consumer can actually detect.
+                raw_speaker = seg.get("Speaker")
+                speaker = str(raw_speaker) if raw_speaker is not None else None
+                content = seg.get("Content")
+
+                if speaker is None and not content:
+                    # ScriptLine requires at least one of speaker/text; a segment with
+                    # neither has nothing to construct a line from. Skip it like the
+                    # unparsable-Start/End case above rather than aborting the batch.
+                    logger.warning("VibeVoice-ASR-HF produced a segment with neither Speaker nor Content; skipping.")
+                    continue
+
+                script_lines.append(ScriptLine(speaker=speaker, start=start, end=end, text=content))
             results.append(sorted(script_lines, key=lambda x: x.start or 0.0))
 
     if audios and decode_failures == len(audios):
