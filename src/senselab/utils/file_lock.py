@@ -67,19 +67,31 @@ def _touch_shared(path: Path) -> None:
 
 
 def lock_holder(lock_path: Path) -> Optional[dict]:
-    """Return the identity recorded in ``lock_path``, or ``None`` if unheld.
+    """Return the identity recorded in ``lock_path``, if one is legible there.
 
-    ``None`` covers a missing file, an empty file (the window between
-    ``_touch_shared`` creating it and the holder's payload write landing), and
-    a file that fails to parse as JSON — a partially-written read must never
-    raise, only report "unheld".
+    **``None`` does not mean the lock is free.** This reads file *content*,
+    which is advisory; mutual exclusion is governed by the ``flock`` on the
+    descriptor, and the two disagree under contention. ``filelock``'s
+    ``UnixFileLock._acquire`` opens the lock file with ``O_TRUNC`` on *every*
+    poll attempt including the ones that fail to take the lock, so a waiter's
+    own polling erases the live holder's payload within one poll interval.
+    Never use this as a liveness probe: use it for logging, and to capture the
+    holder's identity **once, before** any contended acquire begins — which is
+    what ``SharedFileLock.__enter__`` does, and why its timeout message can
+    still name a holder whose payload it is about to wipe.
+
+    ``None`` therefore covers: a missing file, a file truncated by a
+    contender's failed poll, the window between ``_touch_shared`` creating the
+    file and the holder's payload write landing, and a file that fails to parse
+    as JSON. A partially-written read must never raise, only report ``None``.
 
     Args:
         lock_path: Path to the ``.lock`` file to inspect.
 
     Returns:
         The decoded holder payload (``user``, ``host``, ``pid``, ``taken_at``),
-        or ``None`` if the file does not name a current holder.
+        or ``None`` if no identity is currently legible in the file — which is
+        not evidence that the lock is unheld (see above).
     """
     try:
         text = lock_path.read_text()
