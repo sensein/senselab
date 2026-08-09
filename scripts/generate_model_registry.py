@@ -30,12 +30,24 @@ def main() -> None:
         # narrower than every other entry's default (e.g. DiariZen's CC BY-NC 4.0) set
         # it, so most tasks render without the column at all rather than a page of "—".
         has_license = any("license" in m for m in task_models)
+        # `capabilities` is an optional key, present only on diarization entries.
+        # Gate the columns on the section, like `license` above, so unrelated task
+        # tables are not widened with columns that would be empty in every row.
+        has_caps = any("capabilities" in m for m in task_models)
+
+        header = "| Model | Source | Model ID | Embedding Dim | Parameters |"
+        separator = "|-------|--------|----------|---------------|------------|"
         if has_license:
-            print("| Model | Source | Model ID | Embedding Dim | Parameters | License | Recommended For |")
-            print("|-------|--------|----------|---------------|------------|---------|-----------------|")
-        else:
-            print("| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |")
-            print("|-------|--------|----------|---------------|------------|-----------------|")
+            header += " License |"
+            separator += "---------|"
+        if has_caps:
+            header += " Speakers | Text |"
+            separator += "---|---|"
+        header += " Recommended For |"
+        separator += "-----------------|"
+        print(header)
+        print(separator)
+
         for m in task_models:
             name = m["name"]
             source = m["source"]
@@ -43,11 +55,20 @@ def main() -> None:
             emb = m.get("embedding_dim", "—")
             params = m.get("parameters", "—")
             rec = m.get("recommended_for", "—")
+            row = f"| {name} | {source} | {model_id} | {emb} | {params} |"
             if has_license:
                 license_ = m.get("license", "—")
-                print(f"| {name} | {source} | {model_id} | {emb} | {params} | {license_} | {rec} |")
-            else:
-                print(f"| {name} | {source} | {model_id} | {emb} | {params} | {rec} |")
+                row += f" {license_} |"
+            if has_caps:
+                caps = m.get("capabilities", {})
+                max_spk = caps.get("max_speakers")
+                # An em dash, never "unlimited": null means nobody has measured the
+                # ceiling. Rendering it as unlimited would invent a capability.
+                speakers = "—" if max_spk is None else str(max_spk)
+                text_col = "yes" if caps.get("populates_text") else "no"
+                row += f" {speakers} | {text_col} |"
+            row += f" {rec} |"
+            print(row)
         print()
 
 

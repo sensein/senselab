@@ -37,14 +37,14 @@ All models supported by senselab, organized by task.
 
 ## Speaker Diarization
 
-| Model | Source | Model ID | Embedding Dim | Parameters | License | Recommended For |
-|-------|--------|----------|---------------|------------|---------|-----------------|
-| Pyannote Diarization | pyannote | `pyannote/speaker-diarization-community-1` | — | N/A | — | Multi-speaker diarization (requires HF token) |
-| NeMo Sortformer | nemo | `nvidia/diar_sortformer_4spk-v1` | — | N/A | — | 4-speaker diarization (via subprocess venv) |
-| VibeVoice-ASR-HF | microsoft | `microsoft/VibeVoice-ASR-HF` | — | 7B | — | Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended) |
-| USC-SAIL Child-Adult Classifier | usc-sail | `AlexXu811/whisper-child-adult` | — | Whisper-base + LoRA | — | Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only) |
-| MOSS-Transcribe-Diarize | OpenMOSS-Team | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | — | 0.9B | — | Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6) |
-| DiariZen | BUT-FIT | `BUT-FIT/diarizen-wavlm-large-s80-md` | — | WavLM-large + Conformer | CC BY-NC 4.0 — non-commercial only | Diarization only, no transcription (via subprocess venv installing DiariZen's forked pyannote-audio) |
+| Model | Source | Model ID | Embedding Dim | Parameters | License | Speakers | Text | Recommended For |
+|-------|--------|----------|---------------|------------|---------|---|---|-----------------|
+| Pyannote Diarization | pyannote | `pyannote/speaker-diarization-community-1` | — | N/A | — | — | no | Multi-speaker diarization (requires HF token) |
+| NeMo Sortformer | nemo | `nvidia/diar_sortformer_4spk-v1` | — | N/A | — | 4 | no | 4-speaker diarization (via subprocess venv) |
+| VibeVoice-ASR-HF | microsoft | `microsoft/VibeVoice-ASR-HF` | — | 7B | — | — | yes | Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended) |
+| USC-SAIL Child-Adult Classifier | usc-sail | `AlexXu811/whisper-child-adult` | — | Whisper-base + LoRA | — | 2 | no | Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only) |
+| MOSS-Transcribe-Diarize | OpenMOSS-Team | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | — | 0.9B | — | — | yes | Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6) |
+| DiariZen | BUT-FIT | `BUT-FIT/diarizen-wavlm-large-s80-md` | — | WavLM-large + Conformer | CC BY-NC 4.0 — non-commercial only | — | no | Diarization only, no transcription (via subprocess venv installing DiariZen's forked pyannote-audio) |
 
 ## Speech Emotion Recognition
 
@@ -82,3 +82,4 @@ All models supported by senselab, organized by task.
 | SPARC (Articulatory) | sparc | `speech-articulatory-coding` | 14 (EMA) + pitch/loudness/periodicity | N/A | Articulatory features, voice conversion, resynthesis |
 | PPG (Phonetic Posteriorgrams) | ppgs | `ppgs` | 40 (phonemes) | N/A | Phoneme-level analysis, duration extraction |
 | OpenSMILE | opensmile | `eGeMAPSv02` | 88 (functionals) | N/A | Standard acoustic features for emotion, health assessment |
+
