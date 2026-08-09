@@ -11,7 +11,23 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional, Tuple, TypeVar
 
+from senselab.utils.file_lock import SharedFileLock
+
 logger = logging.getLogger("senselab")
+
+# Chosen to reproduce the effective behaviour of the _HeartbeatLock this module used to
+# define: it polled with a 60s acquire timeout and looped indefinitely whenever the
+# heartbeat still looked fresh, so a live multi-GB download was never abandoned. Under
+# SharedFileLock the "is the holder dead" check moved onto the uncontended-acquire path
+# (see file_lock.py) rather than the timeout path, so a poll either succeeds immediately
+# (holder gone -- possibly a stale takeover, logged by SharedFileLock itself) or times out
+# having *proven* the holder is still alive, in which case ensure_hf_model's retry loop
+# below waits again. HEARTBEAT_INTERVAL matches _HeartbeatLock's old default; STALE_AFTER
+# matches its old stale_threshold default (90s, tighter than SharedFileLock's own default
+# of 120s) so a crashed download is not tolerated any longer than it used to be.
+_LOCK_POLL_TIMEOUT = 60.0
+_LOCK_HEARTBEAT_INTERVAL = 30.0
+_LOCK_STALE_AFTER = 90.0
 
 
 @lru_cache(maxsize=1)
@@ -121,7 +137,7 @@ def _senselab_cache_dir() -> Path:
     Deliberately NOT derived from ``HF_HOME``: on shared HPC clusters, ``HF_HOME`` is routinely
     redirected to a large group-writable tree so model weights are downloaded once and reused
     across users. This directory also holds per-process coordination lock files
-    (``_FileLockWithHeartbeat``, see ``resolve_model`` below) — putting those in a tree shared
+    (``SharedFileLock``, see ``resolve_model`` below) — putting those in a tree shared
     by a whole group means unrelated users contend on each other's locks over NFS. Keep this
     directory in senselab's own, per-user namespace no matter where ``HF_HOME`` points.
 
@@ -277,92 +293,6 @@ def _write_result_cache(repo_id: str, revision: str, **data: object) -> None:
         pass  # Best-effort; failure to cache is not fatal
 
 
-class _HeartbeatLock:
-    """A file lock with a heartbeat mechanism for long-running operations.
-
-    While the lock is held, a background thread touches a heartbeat file every
-    ``heartbeat_interval`` seconds.  Waiting processes check the heartbeat when
-    their initial timeout expires: if the heartbeat is recent, the download is
-    still in progress and they keep waiting; if it's stale, the holder likely
-    crashed and the lock can be broken.
-    """
-
-    def __init__(
-        self,
-        lock_path: Path,
-        heartbeat_interval: int = 30,
-        stale_threshold: int = 90,
-    ) -> None:
-        from filelock import FileLock
-
-        self._lock_path = lock_path
-        self._heartbeat_path = lock_path.with_suffix(".heartbeat")
-        self._heartbeat_interval = heartbeat_interval
-        self._stale_threshold = stale_threshold
-        self._lock = FileLock(str(lock_path))
-        self._stop_event = threading.Event()
-        self._heartbeat_thread: Optional[threading.Thread] = None
-
-    def _heartbeat_loop(self) -> None:
-        while not self._stop_event.wait(self._heartbeat_interval):
-            try:
-                self._heartbeat_path.touch()
-            except Exception:
-                pass
-
-    def _is_heartbeat_stale(self) -> bool:
-        if not self._heartbeat_path.exists():
-            return True
-        try:
-            age = time.time() - self._heartbeat_path.stat().st_mtime
-            return age > self._stale_threshold
-        except Exception:
-            return True
-
-    def __enter__(self) -> "_HeartbeatLock":
-        initial_timeout = 60
-        while True:
-            try:
-                self._lock.acquire(timeout=initial_timeout)
-                break
-            except TimeoutError:
-                if self._is_heartbeat_stale():
-                    logger.warning(
-                        "Stale lock detected (heartbeat expired) at %s — breaking lock",
-                        self._lock_path,
-                    )
-                    try:
-                        self._lock_path.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                    self._lock.acquire(timeout=initial_timeout)
-                    break
-                else:
-                    logger.info(
-                        "Download in progress (heartbeat active) at %s — continuing to wait",
-                        self._lock_path,
-                    )
-                    # Keep waiting in 60s increments
-                    continue
-
-        # Start heartbeat once we hold the lock
-        self._stop_event.clear()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        self._heartbeat_thread.start()
-        self._heartbeat_path.touch()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._stop_event.set()
-        if self._heartbeat_thread:
-            self._heartbeat_thread.join(timeout=5)
-        try:
-            self._heartbeat_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-        self._lock.release()
-
-
 def hf_local_files_only(repo_id: str, revision: str = "main") -> bool:
     """Return True if the model is cached and ``local_files_only=True`` is safe.
 
@@ -440,9 +370,43 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
             return str(cached["commit_hash"])
         raise _cached_error(cached)
 
-    # Slow path: acquire lock, re-check, then download
-    lock_path = _senselab_cache_dir() / f"{_safe_key(repo_id, revision)}.lock"
-    with _HeartbeatLock(lock_path):
+    # Slow path: acquire lock, re-check, then download.
+    #
+    # The resource path carries a synthetic ".resource" marker rather than the key
+    # bare: SharedFileLock derives the lock/heartbeat paths via Path.with_suffix,
+    # which replaces everything from the *last* dot onward. A repo_id or revision
+    # containing a dot (e.g. "org/model-v1.5") would otherwise have that dot
+    # mistaken for the suffix boundary, silently truncating the distinguishing
+    # part of the key and colliding two different models' locks. Appending
+    # ".resource" guarantees the last dot is ours, so with_suffix(".lock") always
+    # yields exactly "<safe_key>.lock" -- unaffected by dots anywhere in the key.
+    resource_path = _senselab_cache_dir() / f"{_safe_key(repo_id, revision)}.resource"
+    lock = SharedFileLock(
+        resource_path,
+        timeout=_LOCK_POLL_TIMEOUT,
+        heartbeat_interval=_LOCK_HEARTBEAT_INTERVAL,
+        stale_after=_LOCK_STALE_AFTER,
+    )
+    while True:
+        try:
+            lock.__enter__()
+            break
+        except TimeoutError:
+            # Reaching this proves the flock was held continuously for the whole
+            # poll window, which SharedFileLock's own contract treats as proof of
+            # a live holder (a crashed process's flock is kernel-released, so it
+            # cannot hold continuously). SharedFileLock deliberately never retries
+            # this internally -- retrying here, unboundedly, is what reproduces
+            # _HeartbeatLock's old "still waiting" loop, so a live multi-GB
+            # download is never abandoned mid-transfer.
+            logger.info(
+                "Still waiting for another process to resolve %s@%s (lock held for the last %.0fs)",
+                repo_id,
+                revision,
+                _LOCK_POLL_TIMEOUT,
+            )
+            continue
+    try:
         # Re-check after acquiring lock
         if is_hf_model_cached(repo_id, revision):
             return _get_cached_commit_hash(repo_id, revision)
@@ -480,6 +444,11 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
                 error_message=str(exc),
             )
             raise
+    finally:
+        # __exit__ ignores its exc_info arguments (it never suppresses an exception),
+        # so passing None here is equivalent to the (exc_type, exc, tb) a `with` block
+        # would supply.
+        lock.__exit__(None, None, None)
     # Should never reach here, but satisfy mypy
     raise RuntimeError("Unreachable")  # pragma: no cover
 

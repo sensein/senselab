@@ -79,7 +79,7 @@ except ImportError:  # pragma: no cover — older huggingface_hub
 # Concurrency: per-(path, revision) locks rather than a single global lock, so
 # concurrent loads of *different* models don't serialize on the network. Mirrors
 # the per-key strategy ``dependencies.ensure_hf_model`` uses for artifact downloads
-# (file-based ``_HeartbeatLock`` there; in-memory ``threading.Lock`` here, since
+# (file-based ``SharedFileLock`` there; in-memory ``threading.Lock`` here, since
 # this memo is single-process). The ``_config_memo_locks_guard`` only protects
 # inserts into the per-key lock map itself — held for microseconds, never across I/O.
 #
