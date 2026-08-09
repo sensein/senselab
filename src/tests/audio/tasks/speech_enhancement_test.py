@@ -1,5 +1,6 @@
 """Tests for the speech enhancement task."""
 
+from pathlib import Path
 from typing import List
 
 import pytest
@@ -95,6 +96,81 @@ def test_empty_input_returns_empty_without_spawning(monkeypatch: pytest.MonkeyPa
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
     assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
+
+
+def test_checkpoint_download_routes_through_resolve_model(
+    monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio
+) -> None:
+    """Assert checkpoint/config resolution goes through resolve_model, not a raw download.
+
+    A raw ``hf_hub_download(..., revision=model.revision)`` call performs a Hub
+    HEAD/revision check on every invocation, in every parallel process, when
+    ``revision`` is an unresolved ref like "main" -- the 429-rate-limit hazard
+    ``resolve_model`` exists to remove by pinning to an immutable commit SHA
+    and downloading once. ``ensure_venv`` is mocked to raise right after the
+    resolution call, which lets this test observe that call without spawning a
+    real subprocess venv or touching the network. A raw ``hf_hub_download`` is
+    also mocked to fail the test if it is reached at all.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+
+    calls = []
+
+    def fake_resolve_model(repo_id: str, revision: str, **kwargs: object) -> tuple:
+        calls.append((repo_id, revision))
+        return "0" * 40, Path("/tmp/fake-driftse-snapshot")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", fake_resolve_model)
+
+    def fail_hf_hub_download(*args: object, **kwargs: object) -> None:
+        raise AssertionError("hf_hub_download must not be called directly; route through resolve_model")
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fail_hf_hub_download)
+
+    def fail_ensure_venv(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("stop-before-venv")
+
+    monkeypatch.setattr(driftse, "ensure_venv", fail_ensure_venv)
+
+    model = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    with pytest.raises(RuntimeError, match="stop-before-venv"):
+        driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
+
+    assert calls == [(driftse._DRIFTSE_HF_REPO, driftse._DRIFTSE_HF_REVISION)]
+
+
+def test_checkpoint_override_skips_the_hub_entirely(
+    monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio, tmp_path: Path
+) -> None:
+    """Assert a local ``SENSELAB_DRIFTSE_CHECKPOINT`` override never calls the Hub.
+
+    An operator pointing at local checkpoint files must not need Hub access at
+    all -- neither ``resolve_model`` nor a raw ``hf_hub_download`` may run.
+    ``ensure_venv`` is mocked to raise right after the override branch, which
+    lets this test observe that neither Hub path was taken without spawning a
+    real subprocess venv or touching the network.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
+
+    def fail_resolve_model(*args: object, **kwargs: object) -> None:
+        raise AssertionError("resolve_model must not be called when a local checkpoint override is set")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", fail_resolve_model)
+
+    def fail_hf_hub_download(*args: object, **kwargs: object) -> None:
+        raise AssertionError("hf_hub_download must not be called when a local checkpoint override is set")
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fail_hf_hub_download)
+
+    def fail_ensure_venv(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("stop-before-venv")
+
+    monkeypatch.setattr(driftse, "ensure_venv", fail_ensure_venv)
+
+    model = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    with pytest.raises(RuntimeError, match="stop-before-venv"):
+        driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
 
 
 @pytest.fixture

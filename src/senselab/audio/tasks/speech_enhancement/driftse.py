@@ -307,10 +307,18 @@ def enhance_audios_with_driftse(
         ckpt_path = str(override_dir / "last.ckpt")
         config_path = str(override_dir / "config.json")
     else:
-        from huggingface_hub import hf_hub_download
+        from senselab.utils.dependencies import resolve_model
 
-        ckpt_path = hf_hub_download(repo_id=str(model.path_or_uri), filename="last.ckpt", revision=model.revision)
-        config_path = hf_hub_download(repo_id=str(model.path_or_uri), filename="config.json", revision=model.revision)
+        # resolve_model pins (repo_id, revision) to an immutable commit SHA and
+        # downloads the snapshot once, behind a cross-process lock, then returns
+        # the local snapshot directory. A raw hf_hub_download(..., revision=
+        # model.revision) would instead perform a Hub HEAD/revision check on
+        # every call in every parallel process -- the source of the 429 storms
+        # this helper exists to eliminate. The mirror repo carries only these
+        # two files, so the resolved snapshot directory already has both.
+        _, snapshot_dir = resolve_model(str(model.path_or_uri), model.revision)
+        ckpt_path = str(snapshot_dir / "last.ckpt")
+        config_path = str(snapshot_dir / "config.json")
 
     venv_dir = ensure_venv(_DRIFTSE_VENV, _DRIFTSE_REQUIREMENTS, python_version=_DRIFTSE_PYTHON)
     python = venv_python(venv_dir)
