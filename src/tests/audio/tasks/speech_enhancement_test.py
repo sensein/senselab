@@ -132,7 +132,7 @@ def test_checkpoint_download_routes_through_resolve_model(
 
     monkeypatch.setattr(driftse, "ensure_venv", fail_ensure_venv)
 
-    model = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
     with pytest.raises(RuntimeError, match="stop-before-venv"):
         driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
 
@@ -168,7 +168,7 @@ def test_checkpoint_override_skips_the_hub_entirely(
 
     monkeypatch.setattr(driftse, "ensure_venv", fail_ensure_venv)
 
-    model = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
     with pytest.raises(RuntimeError, match="stop-before-venv"):
         driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
 
