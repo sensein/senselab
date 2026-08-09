@@ -23,7 +23,7 @@ except ModuleNotFoundError:
 CAPABILITIES = DiarizationCapabilities(
     populates_text=False,
     speaker_label_kind="identity",  # SPEAKER_00, SPEAKER_01, ...
-    labels_stable_across_files=False,
+    labels_stable_across_files=False,  # not measured; False is the conservative default
     max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
     honors_speaker_hints=True,  # the only backend that acts on num_speakers
 )

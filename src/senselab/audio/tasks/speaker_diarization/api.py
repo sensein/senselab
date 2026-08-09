@@ -25,6 +25,12 @@ from senselab.utils.data_structures.logging import logger
 # Narrowing it to "_sortformer" would change dispatch for any future
 # "nvidia/diar*" checkpoint that isn't a Sortformer build; keep it exact so the
 # constant cannot silently change what already ships.
+#
+# This deliberately diverges from `model.py`'s `model_for_task` (task="diarization"),
+# which matches the narrower "nvidia/diar_sortformer" literal. That module's own
+# docstring asserts the two dispatch tables "must be kept in sync by hand" — they
+# are provably not, right here, and this divergence is why. Don't trust that
+# assertion; check both tables directly.
 _SORTFORMER_PREFIXES = ("nvidia/diar",)
 _VIBEVOICE_PREFIXES = ("microsoft/VibeVoice-ASR",)
 _CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
@@ -235,10 +241,19 @@ _CAPABILITIES_BY_PREFIX: tuple[tuple[tuple[str, ...], DiarizationCapabilities], 
 def capabilities_for(model_id: str) -> DiarizationCapabilities:
     """Return what the backend handling ``model_id`` provides.
 
-    Mirrors :func:`diarize_audios`' own dispatch, including its fallback: an id
-    matching no prefix resolves to Pyannote, because that is the backend that would
-    actually run it. Returning ``None`` instead would make every caller write the
-    same check for a case the dispatch treats as ordinary.
+    Mirrors :func:`~senselab.utils.data_structures.model.model_for_task`'s dispatch
+    (task="diarization"), including its fallback: an id matching no prefix resolves
+    to Pyannote, because that is the backend ``model_for_task`` would wrap it for.
+    Returning ``None`` instead would make every caller write the same check for a
+    case that router treats as ordinary.
+
+    This function answers by **id string**, not by the backend :func:`diarize_audios`
+    would actually dispatch to for a given call. `diarize_audios` itself does not
+    fall back to Pyannote for an unmatched `HFModel` — it raises `NotImplementedError`
+    — Pyannote is only reached there via an `isinstance(model, PyannoteAudioModel)`
+    check that this string-taking function cannot perform. So this reports DiariZen
+    for a DiariZen id even if a caller hands `diarize_audios` a `PyannoteAudioModel`
+    wrapping that same id — that call would run Pyannote, not DiariZen.
     """
     for prefixes, caps in _CAPABILITIES_BY_PREFIX:
         if any(model_id.startswith(p) for p in prefixes):

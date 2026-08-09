@@ -87,14 +87,40 @@ _ALL_BACKEND_IDS = (
 
 @pytest.mark.parametrize("model_id", _ALL_BACKEND_IDS)
 def test_every_dispatchable_backend_declares_capabilities(model_id: str) -> None:
-    """A backend reachable from diarize_audios must say what it provides.
+    """`capabilities_for` returns a real record, not None, for every known backend id.
 
-    This is the test that stops a seventh backend being added without declaring
-    itself, which is how the current situation arose: six backends, no declarations,
-    and the only way to learn the differences was to run each one.
+    This does NOT prove a seventh backend can't be added without declaring itself:
+    `capabilities_for` falls back to Pyannote's record for any unmatched id, so this
+    assertion is true for *every* string, known or not. It only guards the shape of
+    the return value (a `DiarizationCapabilities`, never `None`) for the six ids this
+    repo currently knows about. The actual "can't add a backend silently" guarantee
+    is `test_every_dispatch_prefix_has_a_capability_record` below, which inspects the
+    dispatch tables themselves rather than probing pre-known ids.
     """
     caps = capabilities_for(model_id)
     assert isinstance(caps, DiarizationCapabilities)
+
+
+def test_every_dispatch_prefix_has_a_capability_record() -> None:
+    """Every prefix `diarize_audios` dispatches on must have a capabilities entry.
+
+    `test_every_dispatchable_backend_declares_capabilities` above cannot catch a
+    seventh backend added to `diarize_audios` with no entry in
+    `_CAPABILITIES_BY_PREFIX`: such a backend would silently report Pyannote's
+    record via the fallback, including `honors_speaker_hints=True`, which is wrong
+    for every backend but Pyannote. This test reads the dispatch tables directly
+    (any module-level name ending `_PREFIXES`, excluding `ROLE_LABEL_ONLY_PREFIXES`,
+    which is a derived cross-reference rather than a dispatch table) so a new prefix
+    table with no matching capabilities entry fails here instead of passing silently
+    through the fallback.
+    """
+    import senselab.audio.tasks.speaker_diarization.api as api
+
+    mapped = {p for prefixes, _ in api._CAPABILITIES_BY_PREFIX for p in prefixes}
+    for name, value in vars(api).items():
+        if name.endswith("_PREFIXES") and name != "ROLE_LABEL_ONLY_PREFIXES":
+            for prefix in value:
+                assert prefix in mapped, f"{name} dispatches but declares no capabilities"
 
 
 @pytest.mark.parametrize(
@@ -213,14 +239,22 @@ def test_registry_capabilities_match_the_code() -> None:
     """
     import yaml
 
+    import senselab.audio.tasks.speaker_diarization.api as api
+
     registry = yaml.safe_load((Path(__file__).parents[3] / "senselab" / "model_registry.yaml").read_text())
 
     diarization_entries = [entry for entry in registry if entry.get("task") == "speaker_diarization"]
-    # A sanity floor, not a magic total: the count itself is never asserted below,
-    # since every entry in this list is required to declare capabilities and is
-    # checked in the loop — a hard-coded total would only duplicate that. This just
-    # guards against the list being silently empty (e.g. the task label was renamed).
-    assert diarization_entries, "expected at least one speaker_diarization entry in the registry"
+    # Derived, not hard-coded: one registry entry per dispatch-prefix table, plus one
+    # for Pyannote, which has no prefix entry of its own and is reached only via
+    # `capabilities_for`'s fallback (and `diarize_audios`'s `isinstance` check). A
+    # literal `6` here would need updating by hand every time a backend is added —
+    # exactly the kind of drift this suite exists to catch instead of require.
+    expected_count = len(api._CAPABILITIES_BY_PREFIX) + 1
+    assert len(diarization_entries) == expected_count, (
+        f"expected {expected_count} speaker_diarization registry entries "
+        f"({len(api._CAPABILITIES_BY_PREFIX)} dispatch prefixes + 1 Pyannote fallback), "
+        f"got {len(diarization_entries)}"
+    )
 
     for entry in diarization_entries:
         model_id = entry.get("model_id")
