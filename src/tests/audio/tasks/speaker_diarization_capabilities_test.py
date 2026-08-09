@@ -2,7 +2,6 @@
 
 import dataclasses
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -202,32 +201,33 @@ def test_an_unknown_model_id_falls_back_like_the_dispatch_does() -> None:
 
 
 def test_registry_capabilities_match_the_code() -> None:
-    """The YAML and the backend declarations must agree.
+    """The YAML and the backend declarations must agree, on every field, for every entry.
 
     The registry is what a human reads when choosing a model; the code is what runs.
     Two sources of truth are acceptable here only because this test makes drift a
-    test failure rather than a surprise.
+    test failure rather than a surprise — which requires the set of entries under
+    test to come from the registry's own task label, not from "has a capabilities
+    key already", or a backend added without one would simply never be visited. It
+    also requires comparing the whole record, not a chosen subset of fields, or a
+    field outside that subset could drift unnoticed.
     """
     import yaml
 
     registry = yaml.safe_load((Path(__file__).parents[3] / "senselab" / "model_registry.yaml").read_text())
 
-    def _walk(node: object) -> "Iterator[dict]":
-        if isinstance(node, dict):
-            if "model_id" in node and "capabilities" in node:
-                yield node
-            for value in node.values():
-                yield from _walk(value)
-        elif isinstance(node, list):
-            for value in node:
-                yield from _walk(value)
+    diarization_entries = [entry for entry in registry if entry.get("task") == "speaker_diarization"]
+    # A sanity floor, not a magic total: the count itself is never asserted below,
+    # since every entry in this list is required to declare capabilities and is
+    # checked in the loop — a hard-coded total would only duplicate that. This just
+    # guards against the list being silently empty (e.g. the task label was renamed).
+    assert diarization_entries, "expected at least one speaker_diarization entry in the registry"
 
-    checked = 0
-    for entry in _walk(registry):
-        caps = capabilities_for(entry["model_id"])
-        declared = entry["capabilities"]
-        assert declared["populates_text"] == caps.populates_text, entry["model_id"]
-        assert declared["speaker_label_kind"] == caps.speaker_label_kind, entry["model_id"]
-        assert declared["max_speakers"] == caps.max_speakers, entry["model_id"]
-        checked += 1
-    assert checked == 6, f"expected 6 diarization entries with capabilities, found {checked}"
+    for entry in diarization_entries:
+        model_id = entry.get("model_id")
+        assert "capabilities" in entry, (
+            f"{model_id}: every speaker_diarization registry entry must declare capabilities"
+        )
+        caps = capabilities_for(model_id)
+        assert entry["capabilities"] == dataclasses.asdict(caps), (
+            f"{model_id}: registry capabilities do not match capabilities_for()"
+        )
