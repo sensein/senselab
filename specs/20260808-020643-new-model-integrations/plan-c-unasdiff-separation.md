@@ -399,7 +399,7 @@ The clone block is identical in shape to Plan D, Task 3 (flock, sibling temp dir
         back is a split-and-sum."""
         return sum(torch.split(x, x.shape[-1] // n_src, dim=-1))
 
-    def separate_window(models_list, gaus, mixture, n_src, labels):
+    def separate_window(models_list, gaussian, mixture, n_src, labels):
         """One 4 s window. Returns a list of n_src waveforms.
 
         p_sample_loop_group ignores the `measurement` argument it is handed and
@@ -413,7 +413,7 @@ The clone block is identical in shape to Plan D, Task 3 (flock, sibling temp dir
         mix = mixture.reshape(1, 1, -1)
         orig_x = torch.cat([mix] + [torch.zeros_like(mix)] * (n_src - 1), dim=-1)
         shape = (1, 1, n_src * T)
-        gen = gaus.p_sample_loop_group(
+        gen = gaussian.p_sample_loop_group(
             models_list,
             shape=shape,
             measurement=mix,
@@ -435,7 +435,7 @@ Model list construction: index 0 is the speech prior when the mode includes spee
 The `GaussianDiffusion` build, from the benchmark:
 
 ```python
-    gaus = diffusion.GaussianDiffusion(
+    gaussian = diffusion.GaussianDiffusion(
         steps=200,
         config_file=speech_config,
         beta_start=speech_config["train_para"]["beta_start"],
