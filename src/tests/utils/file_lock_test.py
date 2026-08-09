@@ -12,6 +12,21 @@ import pytest
 from senselab.utils.file_lock import LOCK_DIR_MODE, LOCK_FILE_MODE, SharedFileLock, lock_holder
 
 
+def _lock_file(resource: Path) -> Path:
+    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`.
+
+    Kept as a named helper (rather than inlined `Path(str(resource) + ".lock")` at each
+    call site) so a future change to that derivation shows up as one helper edit, not a
+    dozen silently-stale call sites.
+    """
+    return Path(str(resource) + ".lock")
+
+
+def _heartbeat_file(resource: Path) -> Path:
+    """Mirror SharedFileLock's own derivation: append, not `Path.with_suffix`."""
+    return Path(str(resource) + ".heartbeat")
+
+
 def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     """A second user must be able to refresh the heartbeat and break a stale lock.
 
@@ -22,8 +37,8 @@ def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
     """
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
-        lock_file = resource.with_suffix(".lock")
-        heartbeat = resource.with_suffix(".heartbeat")
+        lock_file = _lock_file(resource)
+        heartbeat = _heartbeat_file(resource)
         assert stat.S_IMODE(lock_file.stat().st_mode) & 0o060 == 0o060
         assert stat.S_IMODE(heartbeat.stat().st_mode) & 0o060 == 0o060
 
@@ -46,7 +61,7 @@ def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
     """
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
-        holder = lock_holder(resource.with_suffix(".lock"))
+        holder = lock_holder(_lock_file(resource))
         assert holder is not None
         assert holder["pid"] == os.getpid()
         assert holder["user"] and holder["host"]
@@ -58,7 +73,7 @@ def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
     resource = tmp_path / "thing"
     with SharedFileLock(resource):
         pass
-    assert lock_holder(resource.with_suffix(".lock")) is None
+    assert lock_holder(_lock_file(resource)) is None
 
 
 def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -71,8 +86,8 @@ def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptu
     import logging
 
     resource = tmp_path / "thing"
-    lock_file = resource.with_suffix(".lock")
-    heartbeat = resource.with_suffix(".heartbeat")
+    lock_file = _lock_file(resource)
+    heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
     lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
     heartbeat.touch()
@@ -94,7 +109,7 @@ def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
     lock produces exactly the concurrent clobber the lock exists to prevent.
     """
     resource = tmp_path / "thing"
-    heartbeat = resource.with_suffix(".heartbeat")
+    heartbeat = _heartbeat_file(resource)
     resource.parent.mkdir(parents=True, exist_ok=True)
 
     with SharedFileLock(resource):
@@ -122,7 +137,7 @@ def test_a_live_holder_with_a_stale_heartbeat_is_not_displaced(tmp_path: Path) -
     hold the lock -- the exact clobber this class exists to prevent.
     """
     resource = tmp_path / "thing"
-    heartbeat = resource.with_suffix(".heartbeat")
+    heartbeat = _heartbeat_file(resource)
 
     with SharedFileLock(resource):
         # The flock is genuinely held (by us, in this process) for the whole
@@ -150,6 +165,30 @@ def test_chmod_failure_does_not_break_the_lock(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(os, "chmod", _boom)
     with SharedFileLock(tmp_path / "thing"):
         pass  # must not raise
+
+
+def test_dotted_resource_names_get_distinct_lock_files(tmp_path: Path) -> None:
+    """Two resources differing only after a dot must never share a lock file.
+
+    `Path.with_suffix(".lock")` replaces everything from the *last* dot onward, so two
+    distinct resources like two revisions of the same model --
+    "org--model--v1.5--main" and "org--model--v1.6--main" -- both reduced to the
+    identical "org--model--v1.lock" under that derivation, silently merging their
+    locks. This forces exactly that case: nesting locks on both resources must succeed
+    immediately (append-based derivation makes them different files, so there is no
+    contention), which fails against the old `with_suffix` derivation because the
+    second, mistakenly-identical acquire blocks until its own short timeout and then
+    raises.
+    """
+    a = tmp_path / "org--model--v1.5--main"
+    b = tmp_path / "org--model--v1.6--main"
+    with SharedFileLock(a):
+        with SharedFileLock(b, timeout=0.5):
+            locks_while_both_held = sorted(p.name for p in tmp_path.glob("*.lock"))
+    assert locks_while_both_held == [
+        "org--model--v1.5--main.lock",
+        "org--model--v1.6--main.lock",
+    ]
 
 
 def test_lock_holder_returns_none_for_a_missing_or_junk_file(tmp_path: Path) -> None:

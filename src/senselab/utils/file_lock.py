@@ -112,9 +112,23 @@ class SharedFileLock:
     """A cross-user file lock with a heartbeat that stale-detection actually reads.
 
     ``path`` names the resource being guarded; the lock itself lives at
-    ``path.with_suffix(".lock")`` and the heartbeat at
-    ``path.with_suffix(".heartbeat")``, matching the convention both prior
-    lock implementations (``dependencies.py``, ``subprocess_venv.py``) used.
+    ``path`` with ``.lock`` appended and the heartbeat at ``path`` with
+    ``.heartbeat`` appended -- string concatenation, not ``Path.with_suffix``.
+
+    ``with_suffix`` *replaces* everything from the resource name's last dot
+    onward rather than appending after it, and both prior lock implementations
+    (``dependencies.py``, ``subprocess_venv.py``) guard resources whose names
+    can legitimately contain a dot -- a HuggingFace revision or a venv path,
+    for instance. Two distinct resources differing only after such a dot, e.g.
+    ``org--model--v1.5--main`` and ``org--model--v1.6--main``, both reduce
+    under ``with_suffix(".lock")`` to the identical ``org--model--v1.lock``:
+    silently merging two callers' locks onto one file, each unaware the other
+    exists. Concatenation (``Path(str(path) + ".lock")``) is injective -- two
+    distinct ``path`` values can never produce the same lock file -- so no
+    caller needs to invent its own workaround (an earlier version of
+    ``dependencies.py`` did, appending a synthetic no-dot marker before
+    calling this class; that workaround is gone now that the primitive itself
+    cannot collide).
     """
 
     def __init__(
@@ -146,8 +160,11 @@ class SharedFileLock:
                 module docstring) without waiting for the full ``timeout``.
         """
         self._path = path
-        self._lock_path = path.with_suffix(".lock")
-        self._heartbeat_path = path.with_suffix(".heartbeat")
+        # Append, don't replace -- see the class docstring for the concrete collision
+        # (two dotted resource names reducing to the same path) that using
+        # Path.with_suffix here used to produce.
+        self._lock_path = Path(str(path) + ".lock")
+        self._heartbeat_path = Path(str(path) + ".heartbeat")
         self._timeout = timeout
         self._heartbeat_interval = heartbeat_interval
         self._stale_after = stale_after

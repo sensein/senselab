@@ -22,12 +22,21 @@ logger = logging.getLogger("senselab")
 # (see file_lock.py) rather than the timeout path, so a poll either succeeds immediately
 # (holder gone -- possibly a stale takeover, logged by SharedFileLock itself) or times out
 # having *proven* the holder is still alive, in which case ensure_hf_model's retry loop
-# below waits again. HEARTBEAT_INTERVAL matches _HeartbeatLock's old default; STALE_AFTER
-# matches its old stale_threshold default (90s, tighter than SharedFileLock's own default
-# of 120s) so a crashed download is not tolerated any longer than it used to be.
+# below waits again. HEARTBEAT_INTERVAL matches _HeartbeatLock's old default.
+#
+# stale_after is deliberately left at SharedFileLock's own default (120s) rather than
+# _HeartbeatLock's old 90s: _HeartbeatLock's 90s was only ever exercised same-host, where
+# "heartbeat age" and "wall-clock time" share one clock. _senselab_cache_dir() (below) is
+# explicitly meant to be redirected via SENSELAB_CACHE onto a group-writable tree shared
+# across cluster nodes, which is exactly the cross-node case file_lock.py's module
+# docstring warns about: stale_after must exceed plausible clock skew between the holder's
+# node and the checker's, or a live holder on a slow/behind clock reads as dead and gets
+# displaced mid-download. 120s (SharedFileLock's own derivation: 4x heartbeat_interval,
+# with headroom for both missed beats and skew) costs at most 30s of extra wait before
+# taking over a genuinely dead holder -- negligible against a multi-GB download -- and is
+# not weaker than what this call site actually needs.
 _LOCK_POLL_TIMEOUT = 60.0
 _LOCK_HEARTBEAT_INTERVAL = 30.0
-_LOCK_STALE_AFTER = 90.0
 
 
 @lru_cache(maxsize=1)
@@ -370,22 +379,16 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
             return str(cached["commit_hash"])
         raise _cached_error(cached)
 
-    # Slow path: acquire lock, re-check, then download.
-    #
-    # The resource path carries a synthetic ".resource" marker rather than the key
-    # bare: SharedFileLock derives the lock/heartbeat paths via Path.with_suffix,
-    # which replaces everything from the *last* dot onward. A repo_id or revision
-    # containing a dot (e.g. "org/model-v1.5") would otherwise have that dot
-    # mistaken for the suffix boundary, silently truncating the distinguishing
-    # part of the key and colliding two different models' locks. Appending
-    # ".resource" guarantees the last dot is ours, so with_suffix(".lock") always
-    # yields exactly "<safe_key>.lock" -- unaffected by dots anywhere in the key.
-    resource_path = _senselab_cache_dir() / f"{_safe_key(repo_id, revision)}.resource"
+    # Slow path: acquire lock, re-check, then download. SharedFileLock derives the lock
+    # filename by appending (never replacing) a fixed suffix onto this resource path (see
+    # file_lock.py), so passing the bare _safe_key(...) here is safe even though repo_id
+    # or revision can legitimately contain a dot: the derivation is injective, so no two
+    # distinct (repo_id, revision) pairs can ever collide onto the same lock file.
+    resource_path = _senselab_cache_dir() / _safe_key(repo_id, revision)
     lock = SharedFileLock(
         resource_path,
         timeout=_LOCK_POLL_TIMEOUT,
         heartbeat_interval=_LOCK_HEARTBEAT_INTERVAL,
-        stale_after=_LOCK_STALE_AFTER,
     )
     while True:
         try:
