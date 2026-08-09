@@ -6,6 +6,7 @@ requested ref to an immutable commit SHA once and loading pinned by that SHA
 """
 
 import logging
+import os
 from pathlib import Path
 
 import huggingface_hub
@@ -18,6 +19,7 @@ from senselab.utils.dependencies import (
     load_hf_resilient,
     resolve_model,
 )
+from senselab.utils.file_lock import lock_holder
 
 
 def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revision: str, sha: str) -> Path:
@@ -182,6 +184,40 @@ def test_senselab_cache_dir_created_on_first_access(tmp_path: Path, monkeypatch:
     assert not custom.exists()
     result = dep._senselab_cache_dir()
     assert result.is_dir()
+
+
+def test_heartbeat_lock_class_removed() -> None:
+    """Pre-alpha rename-and-replace: `_HeartbeatLock` must not survive alongside `SharedFileLock`."""
+    assert not hasattr(dep, "_HeartbeatLock")
+
+
+def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The slow path in ensure_hf_model must acquire via SharedFileLock, not a bare filelock.FileLock.
+
+    SharedFileLock is what stamps a JSON holder identity (user/host/pid) into the lock file
+    while it is held; a bare `filelock.FileLock` never writes any content there. Reading that
+    identity back from *inside* the locked `snapshot_download` call proves the real class is
+    wired in as the thing serialising the download, not merely imported and unused.
+    """
+    monkeypatch.setattr(dep, "_senselab_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
+    monkeypatch.setattr(dep, "_read_result_cache", lambda *a, **k: None)
+    monkeypatch.setattr(dep, "_write_result_cache", lambda *a, **k: None)
+    monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab.utils.data_structures.model.get_huggingface_token", lambda: None)
+
+    captured: dict = {}
+
+    def fake_snapshot_download(**kwargs: object) -> None:
+        lock_path = tmp_path / f"{dep._safe_key('org/model', 'main')}.lock"
+        captured["holder"] = lock_holder(lock_path)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+
+    dep.ensure_hf_model("org/model", "main")
+
+    assert captured["holder"] is not None, "no SharedFileLock holder identity was recorded during the download"
+    assert captured["holder"]["pid"] == os.getpid()
 
 
 def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPatch) -> None:
