@@ -1,0 +1,181 @@
+"""A file lock that several users can share on one directory."""
+
+import json
+import os
+import stat
+from multiprocessing.synchronize import Event as MpEvent
+from pathlib import Path
+
+import pytest
+
+from senselab.utils.file_lock import LOCK_DIR_MODE, LOCK_FILE_MODE, SharedFileLock, lock_holder
+
+
+def test_lock_and_heartbeat_files_are_group_writable(tmp_path: Path) -> None:
+    """A second user must be able to refresh the heartbeat and break a stale lock.
+
+    Created under the default umask these land at 0644, so user B's heartbeat
+    touch fails — and because both old implementations swallowed that error, B's
+    heartbeat silently stopped refreshing and a third user read it as stale and
+    broke a live lock.
+    """
+    resource = tmp_path / "thing"
+    with SharedFileLock(resource):
+        lock_file = resource.with_suffix(".lock")
+        heartbeat = resource.with_suffix(".heartbeat")
+        assert stat.S_IMODE(lock_file.stat().st_mode) & 0o060 == 0o060
+        assert stat.S_IMODE(heartbeat.stat().st_mode) & 0o060 == 0o060
+
+
+def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
+    """Group ownership must propagate to files the next user creates."""
+    resource = tmp_path / "nested" / "thing"
+    with SharedFileLock(resource):
+        mode = stat.S_IMODE(resource.parent.stat().st_mode)
+        assert mode & stat.S_ISGID, "directory should be setgid"
+        assert mode & 0o070 == 0o070, "directory should be group rwx"
+
+
+def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
+    """A takeover must be able to name who it displaced.
+
+    On a cluster the holder is often on another node, so 'stale lock detected'
+    without a user, host and pid gives nobody enough to check whether that job
+    actually died.
+    """
+    resource = tmp_path / "thing"
+    with SharedFileLock(resource):
+        holder = lock_holder(resource.with_suffix(".lock"))
+        assert holder is not None
+        assert holder["pid"] == os.getpid()
+        assert holder["user"] and holder["host"]
+        assert isinstance(holder["taken_at"], (int, float))
+
+
+def test_holder_is_cleared_on_release(tmp_path: Path) -> None:
+    """After release, lock_holder must read as unheld."""
+    resource = tmp_path / "thing"
+    with SharedFileLock(resource):
+        pass
+    assert lock_holder(resource.with_suffix(".lock")) is None
+
+
+def test_a_stale_heartbeat_is_taken_over(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """A holder that died must not block waiters until timeout.
+
+    This is what subprocess_venv's plain FileLock lacked: a crashed install held
+    the lock for the full 600s and then raised, rather than being detected as
+    dead and taken over.
+    """
+    import logging
+
+    resource = tmp_path / "thing"
+    lock_file = resource.with_suffix(".lock")
+    heartbeat = resource.with_suffix(".heartbeat")
+    resource.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text(json.dumps({"user": "alice", "host": "node1234", "pid": 4211, "taken_at": 0}))
+    heartbeat.touch()
+    os.utime(heartbeat, (0, 0))  # aged, not slept
+
+    with caplog.at_level(logging.WARNING):
+        with SharedFileLock(resource, timeout=1.0, stale_after=60.0):
+            holder = lock_holder(lock_file)
+            assert holder is not None
+            assert holder["pid"] == os.getpid()
+    message = " ".join(r.message for r in caplog.records)
+    assert "alice" in message and "node1234" in message and "4211" in message
+
+
+def test_a_fresh_heartbeat_is_not_taken_over(tmp_path: Path) -> None:
+    """A live holder must be waited for, not displaced.
+
+    The mirror of the test above, and the one that matters more: breaking a live
+    lock produces exactly the concurrent clobber the lock exists to prevent.
+    """
+    resource = tmp_path / "thing"
+    heartbeat = resource.with_suffix(".heartbeat")
+    resource.parent.mkdir(parents=True, exist_ok=True)
+
+    with SharedFileLock(resource):
+        # Held by us; a second acquisition with a short timeout must fail rather
+        # than break in, because the heartbeat is current.
+        with pytest.raises(TimeoutError):
+            with SharedFileLock(resource, timeout=0.5, stale_after=3600.0):
+                pass
+    assert heartbeat.exists() is False
+
+
+def test_chmod_failure_does_not_break_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a shared tree the file may belong to someone else.
+
+    Its mode is already correct in that case, so a failed chmod must be ignored —
+    raising would break precisely the multi-user scenario this class exists for.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("not the owner")
+
+    monkeypatch.setattr(os, "chmod", _boom)
+    with SharedFileLock(tmp_path / "thing"):
+        pass  # must not raise
+
+
+def test_lock_holder_returns_none_for_a_missing_or_junk_file(tmp_path: Path) -> None:
+    """A partially written or corrupt lock file must read as unheld, not crash."""
+    assert lock_holder(tmp_path / "nope.lock") is None
+    junk = tmp_path / "junk.lock"
+    junk.write_text("not json")
+    assert lock_holder(junk) is None
+
+
+def _hold(path: str, seconds: float, acquired: MpEvent) -> None:
+    """Acquire the lock on ``path``, signal readiness, then hold it for ``seconds``.
+
+    Module-scoped so ``multiprocessing``'s ``spawn`` context can pickle it.
+    ``spawn`` re-imports the interpreter and this module from scratch, which
+    under load can itself take longer than a fixed sleep would assume — hence
+    the explicit ``acquired`` handshake instead of a timed guess by the parent.
+
+    Args:
+        path: String form of the resource path (Path is not always picklable
+            across the spawn boundary depending on platform).
+        seconds: How long to sleep while holding the lock, after signaling.
+        acquired: Set once the lock is actually held, so the parent can wait
+            on a real event instead of guessing how long spawn + import takes.
+    """
+    from senselab.utils.file_lock import SharedFileLock
+
+    with SharedFileLock(Path(path)):
+        acquired.set()
+        import time
+
+        time.sleep(seconds)
+
+
+def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
+    """Two live processes must serialise, not interleave.
+
+    Every other test here is single-process and could pass against a lock that
+    does nothing. This is the one that cannot.
+
+    The child signals an ``Event`` right after it acquires, so the parent times
+    its own acquire attempt from a real handshake rather than a fixed sleep —
+    under load, a ``spawn``-started child re-importing the interpreter and this
+    module can take much longer than any fixed guess to reach the acquire.
+    """
+    import multiprocessing as mp
+    import time
+
+    resource = tmp_path / "thing"
+    ctx = mp.get_context("spawn")
+    acquired = ctx.Event()
+
+    proc = ctx.Process(target=_hold, args=(str(resource), 2.0, acquired))
+    proc.start()
+    signaled = acquired.wait(timeout=30)
+    assert signaled, "child never acquired the lock within 30s"
+    started = time.monotonic()
+    with SharedFileLock(resource, timeout=10.0):
+        waited = time.monotonic() - started
+    proc.join(timeout=10)
+    assert waited > 0.5, f"second acquirer did not wait (waited {waited:.2f}s)"
