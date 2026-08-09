@@ -30,6 +30,7 @@ from typing import Dict, List, Optional, Tuple
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
@@ -46,6 +47,14 @@ except (ImportError, RuntimeError):
     # otherwise take down `import senselab.audio.tasks.speaker_diarization` for
     # Pyannote users too.
     VIBEVOICE_AVAILABLE = False
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=True,  # joint ASR+diarization: measured 7/7 segments carried text
+    speaker_label_kind="identity",
+    labels_stable_across_files=False,  # per-audio numbering; not measured otherwise
+    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    honors_speaker_hints=False,  # api.py warns that num_speakers is dropped here
+)
 
 
 class VibeVoiceDiarization:

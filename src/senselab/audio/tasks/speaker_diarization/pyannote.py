@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Union
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
@@ -18,6 +19,14 @@ try:
     PYANNOTEAUDIO_AVAILABLE = True
 except ModuleNotFoundError:
     PYANNOTEAUDIO_AVAILABLE = False
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=False,
+    speaker_label_kind="identity",  # SPEAKER_00, SPEAKER_01, ...
+    labels_stable_across_files=False,
+    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    honors_speaker_hints=True,  # the only backend that acts on num_speakers
+)
 
 
 class PyannoteDiarization:

@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import hf_subprocess_env
@@ -62,6 +63,14 @@ _MOSS_REQUIREMENTS = [
     "torchaudio>=2.8,<2.9",
 ]
 _MOSS_PYTHON = "3.12"
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=True,  # joint ASR+diarization: measured 6/6 segments carried text
+    speaker_label_kind="identity",  # emits S01/S02 tags parsed from its transcript
+    labels_stable_across_files=False,
+    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    honors_speaker_hints=False,
+)
 
 # Worker script — runs inside the isolated venv.
 _WORKER_SCRIPT = r"""
