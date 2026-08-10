@@ -5,7 +5,6 @@ from senselab.text.tasks.pii_detection.api import (
     PiiSpan,
     detect_pii,
     flatten_script_line,
-    report_to_dict,
 )
 from senselab.text.tasks.pii_detection.subprocess_backend import (
     DETECTOR_GLINER,
@@ -19,5 +18,4 @@ __all__ = [
     "PiiSpan",
     "detect_pii",
     "flatten_script_line",
-    "report_to_dict",
 ]

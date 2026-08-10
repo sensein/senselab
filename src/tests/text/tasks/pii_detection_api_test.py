@@ -1,25 +1,22 @@
-"""Tests for ``api.detect_pii_in_pass`` and ``api._compute_detection_confidence``.
+"""Tests for ``api._compute_detection_confidence``.
 
-Mocks ``detect_pii_via_subprocess`` (the subprocess dispatch layer) so this
-file exercises the in-host plumbing: report construction, cross-detector
-and cross-ASR-model agreement weighting, and ``None`` propagation for the
-"detectors didn't run" case.
+Exercises the in-host scoring plumbing: cross-detector and cross-ASR-model
+agreement weighting, and ``None`` vs ``0.0`` propagation for the "detectors
+didn't run" vs "ran and found nothing" distinction.
 
 Moved here from ``audio/workflows/audio_analysis/pii_test.py`` alongside the
-module under test (see plan-b Task 1). ``pii_module`` is bound to ``api``
-(not the ``audio_analysis.pii`` compatibility shim) because
-``detect_pii_in_pass`` resolves ``detect_pii_via_subprocess`` through its own
-module globals -- patching the shim's copy of the name would not reach the
-call site.
+module under test (see plan-b Task 1). The integration tests that used to
+live in this file for ``detect_pii_in_pass`` moved again in plan-b Task 6,
+to ``src/tests/audio/workflows/pii_adapter_test.py`` alongside the workflow
+adapter that now owns that function -- this file keeps only what actually
+tests the standalone task API.
 """
 
 import pytest
 
-from senselab.text.tasks.pii_detection import api as pii_module
 from senselab.text.tasks.pii_detection.api import (
     PiiSpan,
     _compute_detection_confidence,
-    detect_pii_in_pass,
 )
 
 # ── _compute_detection_confidence — unit-level ──────────────────────
@@ -104,127 +101,3 @@ def test_confidence_missing_per_span_score_treated_as_zero() -> None:
     conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     # max_score collapses to 0.0 → overall 0.0
     assert conf == 0.0
-
-
-# ── detect_pii_in_pass — integration with mocked subprocess ─────────
-
-
-def _mock_subprocess_result(
-    spans_by_asr: dict[str, list[dict]],
-    detectors_used: list[str] | None = None,
-    failures: dict[str, str] | None = None,
-) -> dict:
-    return {
-        "spans_by_asr": spans_by_asr,
-        "detectors_used": list(detectors_used) if detectors_used is not None else ["presidio", "gliner"],
-        "failures": failures or {},
-    }
-
-
-def test_detect_pii_in_pass_populates_detection_confidence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Happy path: confidence computed and stored on the report."""
-
-    def fake_subprocess(transcripts_by_asr: dict[str, str], **_: object) -> dict:
-        return _mock_subprocess_result(
-            spans_by_asr={
-                "whisper": [
-                    {"text": "John Doe", "category": "PERSON", "source": "presidio", "score": 0.85},
-                ],
-                "canary": [
-                    {"text": "John Doe", "category": "PERSON", "source": "gliner/person", "score": 0.9},
-                ],
-            },
-        )
-
-    monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
-
-    report = detect_pii_in_pass(
-        perturbation="raw",
-        asr_resolved={
-            "whisper": [{"text": "Hi I am John Doe."}],
-            "canary": [{"text": "Hi I am John Doe."}],
-        },
-    )
-    # max_score=0.9 × detector_agreement=1.0 (both Presidio + GLiNER) ×
-    # asr_agreement=1.0 (2/2 ASRs) = 0.9.
-    assert report.detection_confidence == pytest.approx(0.9)
-    assert report.detector_used == "presidio,gliner"
-
-
-def test_detect_pii_in_pass_detection_confidence_none_when_subprocess_finds_no_detectors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Both detectors failed to load → detector_used None → confidence None."""
-
-    def fake_subprocess(*_: object, **__: object) -> dict:
-        return _mock_subprocess_result(
-            spans_by_asr={"whisper": []},
-            detectors_used=[],
-            failures={"presidio": "ImportError: ...", "gliner": "ImportError: ..."},
-        )
-
-    monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
-
-    report = detect_pii_in_pass(
-        perturbation="raw",
-        asr_resolved={"whisper": [{"text": "Some text."}]},
-    )
-    assert report.detector_used is None
-    assert report.detection_confidence is None
-
-
-def test_detect_pii_in_pass_detection_confidence_none_when_subprocess_raises(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Subprocess crash → report still produced, confidence stays None."""
-
-    def fake_subprocess(*_: object, **__: object) -> dict:
-        raise RuntimeError("subprocess venv build failed")
-
-    monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
-
-    report = detect_pii_in_pass(
-        perturbation="raw",
-        asr_resolved={"whisper": [{"text": "Some text."}]},
-    )
-    assert report.detector_used is None
-    assert report.detection_confidence is None
-    assert "pii_subprocess" in report.failures
-
-
-def test_detect_pii_in_pass_detection_confidence_zero_when_detectors_ran_clean(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Detectors ran, no spans → 0.0, not None. Distinct signal from "didn't run"."""
-
-    def fake_subprocess(*_: object, **__: object) -> dict:
-        return _mock_subprocess_result(spans_by_asr={"whisper": []})
-
-    monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
-
-    report = detect_pii_in_pass(
-        perturbation="raw",
-        asr_resolved={"whisper": [{"text": "Some text."}]},
-    )
-    assert report.detector_used == "presidio,gliner"
-    assert report.detection_confidence == 0.0
-
-
-def test_detect_pii_in_pass_disabled_path_yields_none_confidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``detectors=[]`` short-circuit: no subprocess spawn, confidence None."""
-
-    def fake_subprocess(*_: object, **__: object) -> dict:
-        raise AssertionError("must not call subprocess when detectors=[]")
-
-    monkeypatch.setattr(pii_module, "detect_pii_via_subprocess", fake_subprocess)
-
-    report = detect_pii_in_pass(
-        perturbation="raw",
-        asr_resolved={"whisper": [{"text": "Some text."}]},
-        detectors=[],
-    )
-    assert report.detector_used is None
-    assert report.detection_confidence is None
-    assert "pii_disabled" in report.failures

@@ -846,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
             compute_run_global_summary,
         )
         from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
-        from senselab.text.tasks.pii_detection.api import detect_pii_in_pass, report_to_dict
+        from senselab.audio.workflows.audio_analysis.pii import detect_pii_in_pass, report_to_dict
 
         pii_reports: dict[str, Any] = {}
         for pl, ps in passes_for_compute.items():
