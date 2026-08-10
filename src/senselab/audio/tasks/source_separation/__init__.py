@@ -7,6 +7,6 @@ diffusion priors, without training on mixtures. See
 licensing position, and why it runs in an isolated subprocess venv.
 """
 
-from senselab.audio.tasks.source_separation.api import resolve_source_classes
+from senselab.audio.tasks.source_separation.api import resolve_source_classes, separate_audios
 
-__all__ = ["resolve_source_classes"]
+__all__ = ["resolve_source_classes", "separate_audios"]
