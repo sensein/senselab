@@ -34,8 +34,15 @@
 #       --out artifacts/speaker_ceiling/runs/speaker-ceiling-seed-17 \
 #       --corpus artifacts/speaker_ceiling/corpus/seed-17
 
+# Partition: ou_bcs_low rather than mit_preemptable. It is preemptable on the same terms (so the
+# resumability below is still load-bearing), but every GPU in it is an a100 or h100 -- all >= 40 GB --
+# whereas mit_preemptable's pool includes l4 (24 GB) and a40. An untyped --gres=gpu:1 there can land
+# a 7B backend like VibeVoice on a card too small for it, and a systematic OOM would be recorded as
+# that backend failing to count rather than as the wrong hardware, which would corrupt the very
+# measurement this probe exists to produce. ou_bcs_low's 64-GPU ceiling is also mine alone rather
+# than a shared group pool, and it starts immediately.
 #SBATCH --job-name=speaker-ceiling-evaluate
-#SBATCH --partition=mit_preemptable
+#SBATCH --partition=ou_bcs_low
 #SBATCH --array=0-5
 #SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=8
