@@ -66,6 +66,52 @@ The second piece of leverage: `HFModel.revision` is already threaded to all four
 read it, subprocess parents already forward it into worker `input_json`, and the Brouhaha path
 already writes it to parquet. Those readers need a SHA-bearing field to read, not new wiring.
 
+## Resolution and load are two separate calls, and the second must carry the SHA
+
+This is the rule the whole design rests on, and getting it wrong makes everything else cosmetic.
+
+Resolving `(repo_id, "main") -> sha` does **not** bind anything to that SHA. `snapshot_download`
+called with `revision="main"` materialises `snapshots/<sha>/` and writes `refs/main`, but the caller
+is still ref-addressed: a later load that passes `revision="main"` sends `huggingface_hub` back
+through `refs/main`, which may by then point somewhere else. Recording a SHA while loading through a
+ref would produce provenance that is confidently wrong — the worst possible outcome for a change
+whose entire purpose is knowing what ran.
+
+So every load is **two calls**:
+
+1. Resolve the ref to a SHA.
+2. Load again, explicitly passing `revision=<sha>`.
+
+The second call downloads nothing. The blobs are already on disk from step 1, and a full 40-hex SHA
+triggers `huggingface_hub`'s commit-hash shortcut, which returns the cached files with **zero**
+network traffic — not even a HEAD. This is why it is free to insist on it everywhere.
+
+`load_hf_resilient` already does exactly this (it injects `revision=<sha>`), which is the proof the
+pattern works. What is missing is that the other paths do not: `ensure_hf_model` downloads
+ref-addressed, `HFModel` construction never re-binds, and subprocess parents ship the *ref* to
+workers that then resolve it themselves. Each of those becomes a two-call sequence.
+
+The rule is directly testable, and cheaply: assert that whatever a loader (or a worker's
+`input_json`) receives as `revision` is 40-hex, never a ref name. That single assertion is what stops
+the design decaying back into ref-addressed loads.
+
+### A consequence of local-first resolution, worth stating
+
+`ensure_hf_model` already checks locally before going online — `is_hf_model_cached` is a
+filesystem-only check, then senselab's own on-disk result cache, and only on a miss does it take the
+lock and call `snapshot_download`. That ordering is correct and stays.
+
+But the local check is keyed on the **ref**. Once `refs/main` exists locally, `main` never
+re-resolves: the fast path returns the cached SHA and never asks the Hub whether `main` moved. So a
+warm machine keeps returning January's commit while a cold machine downloads August's — same
+senselab version, same config, different weights, no signal anywhere.
+
+This design does not change that behaviour, and deliberately so: re-checking the Hub on every
+resolution would reintroduce the 429 rate-limiting that `load_hf_resilient` exists to avoid. What it
+changes is that the two machines are no longer indistinguishable — the SHA is in the cache key and in
+the provenance, so the divergence is visible in the record instead of silent. Making `main` staleness
+*detectable* (rather than merely visible after the fact) is a separate concern and is not in scope.
+
 ## Design
 
 **Two fields, because they answer two different questions.**
@@ -118,18 +164,36 @@ among them — call `resolve_revision` directly at the stage boundary. Same help
 
 ## Testing
 
-- **Resolution is assertable without network.** Write a `refs/<ref>` file into a temp `HF_HUB_CACHE`
-  and assert `resolve_revision` returns its contents; assert a 40-hex input short-circuits with no
-  I/O at all.
-- **The cache-key bug gets a regression test that fails today**: same audio, same task, same
-  `model_id`, two different SHAs must produce two different keys. Against current code they collide,
-  which is the bug.
-- **Hard-error path**: cold cache plus unreachable Hub raises rather than falling back.
+**No test downloads a real model of consequence.** The suite currently has no tiny fixture model at
+all — it uses a fake `"org/model"` for mocked paths and real names like `Qwen/Qwen3-ASR-1.7B`
+elsewhere. Two tiers, and the split is the point:
+
+- **One tiny real model**, from the `hf-internal-testing/tiny-random-*` family (public, ungated,
+  well under a megabyte, stable). It exists to prove the *real* `huggingface_hub` contract that
+  mocks cannot: that resolving a ref yields a 40-hex SHA, and that the second call with
+  `revision=<sha>` returns the cached files without network. A mock asserting our own beliefs about
+  `huggingface_hub` would pass just as happily when those beliefs are wrong, which is exactly the
+  failure this design must not have. Confine it to the handful of tests that genuinely exercise the
+  Hub contract, and pin the fixture model's own SHA so the fixture cannot drift.
+- **Everything else is mocked** — monkeypatch `check_hf_repo_exists` / `ensure_hf_model` /
+  `resolve_revision` per test. Tests must never construct an unmocked `HFModel`: its validator calls
+  `ensure_hf_model`, which downloads the full snapshot. An earlier revision of the diarization tests
+  did this and pulled 20 GB, and would have on every cold CI run. Each test monkeypatches
+  independently rather than relying on a sibling having warmed a session-lifetime cache.
+
+The specific assertions:
+
+- **Resolution without network.** Write a `refs/<ref>` file into a temp `HF_HUB_CACHE` and assert
+  `resolve_revision` returns its contents; assert a 40-hex input short-circuits with no I/O at all.
+- **The two-call rule.** Assert every loader call and every worker `input_json` receives a 40-hex
+  `revision`, never a ref name. This is the regression guard against decaying back to ref-addressed
+  loads, and it is a cheap string assertion.
+- **The cache-key bug gets a test that fails against current code**: same audio, same task, same
+  `model_id`, two different SHAs must produce two different keys. Today they collide — that is the
+  bug, and a test that passes both before and after would not be testing it.
+- **Hard-error path**: cold cache plus unreachable Hub raises rather than falling back to the ref.
 - **Provenance round-trip**: run a stage, read the artifact back, assert both `revision` and
   `commit_sha` are present and that `commit_sha` is 40-hex.
-- **Subprocess**: assert the worker `input_json` carries a SHA, not `"main"`.
-- Tests must not construct an unmocked `HFModel` — that triggers a real `snapshot_download` (an
-  earlier revision of the diarization tests pulled 20 GB). Monkeypatch per test.
 
 ## What this does not do
 
@@ -147,3 +211,7 @@ among them — call `resolve_revision` directly at the stage boundary. Same help
 A result artifact names the 40-hex commit that produced it. An upstream push to `main` invalidates
 the cache entries that depended on it, without a `CACHE_SCHEMA_VERSION` bump. A subprocess worker
 loads the same commit its parent resolved, rather than resolving one for itself.
+
+And the one that guards all three: **no load anywhere passes a ref.** Every loader call and every
+worker `input_json` carries a 40-hex SHA, so the commit named in the provenance is provably the
+commit whose weights ran — not a ref that merely pointed there at some earlier moment.
