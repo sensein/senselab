@@ -341,6 +341,34 @@
     audio_analysis (via subprocess venv, pinned upstream commit
     695a64db187500fa0d7bae23912680bd5d4df613)
 
+# Source Separation
+- name: unasdiff
+  task: separation
+  source: RunwuShi (unpackaged upstream repo, via subprocess venv, Python 3.10, torch==2.6.0)
+  model_id: sensein/unasdiff-diffusion-priors
+  parameters: N/A
+  training_data: >-
+    Speech prior: VCTK. Sound prior: FSD50K subset (41 of 50 conditioning
+    slots trained; per paper, this backend is inference-only and does not
+    verify a training config)
+  license: >-
+    Unknown — unresolved upstream. The source repository
+    https://github.com/RunwuShi/unasdiff carries no LICENSE file and no
+    README licence statement, so no terms have been granted for these
+    weights. A licence request was opened 2026-08-08 and is unanswered:
+    https://github.com/RunwuShi/unasdiff/issues/1. The mirror is private
+    pending that answer — a caller without access uses the
+    SENSELAB_UNASDIFF_CHECKPOINTS override. Reachability (were the mirror
+    ever made public) would still grant no rights: treat the weights as
+    all-rights-reserved by default, and consult upstream before any use
+    that depends on licence terms.
+  recommended_for: >-
+    Unsupervised speech/sound source separation via two independently
+    trained diffusion priors (speech_sound, sound_sound, speech_speech
+    modes); reachable only via an explicit HFModel id, not in any default
+    model list and not wired into audio_analysis (via subprocess venv,
+    pinned upstream commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa)
+
 # Voice Activity Detection
 - name: Pyannote VAD
   task: voice_activity_detection

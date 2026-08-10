@@ -8,6 +8,16 @@ from senselab.audio.tasks.source_separation import separate_audios, unasdiff
 from senselab.audio.tasks.source_separation.api import resolve_source_classes
 from senselab.audio.tasks.source_separation.unasdiff import align_permutations
 from senselab.utils.data_structures import HFModel
+from senselab.utils.subprocess_venv import _cache_dir_path
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+
+        return torch.cuda.is_available()
+    except Exception:
+        return False
 
 
 def test_class_map_has_41_classes_in_50_slots() -> None:
@@ -255,3 +265,28 @@ def test_long_input_is_chunked_aligned_and_stitched(monkeypatch: pytest.MonkeyPa
         # Two windows -> exactly one boundary -> one margin, carried for the caller to inspect
         # rather than gated on (see data/permutation_alignment.json's derivation).
         assert len(source.metadata["unasdiff_alignment_margins"]) == 1
+
+
+@pytest.mark.skipif(
+    not ((_cache_dir_path() / "unasdiff").is_dir() and _cuda_available()),
+    reason="needs the unasdiff venv and CUDA; the sampler backprops through the "
+    "priors at every one of 200 steps, so CPU is impractical",
+)
+def test_unasdiff_separates_a_mixture_into_n_sources(mono_audio_sample: Audio) -> None:
+    """Shape and energy, not quality.
+
+    A separation that returns the mixture in every slot passes a shape check, so the
+    energy-difference assertion is the one that can actually fail.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    result = separate_audios([audio], mode="speech_sound", n_sources=2, source_classes=["Applause"], seed=17)
+
+    assert len(result) == 1 and len(result[0]) == 2
+    for source in result[0]:
+        assert source.sampling_rate == 16000
+        assert source.waveform.shape[-1] == audio.waveform.shape[-1]
+
+    a, b = result[0][0].waveform, result[0][1].waveform
+    assert (a - b).abs().mean() > 1e-4, "both slots returned the same signal"
