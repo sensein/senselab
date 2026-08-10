@@ -26,6 +26,12 @@ CRISPER_VENV = Path.home() / ".cache" / "senselab" / "venvs" / "crisperwhisper"
 
 def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fake worker output assembles into a ScriptLine with word chunks + scores."""
+    # model=None now still constructs a default HFModel (to get a resolved commit_sha for
+    # staging), so both the constructor's Hub validation and the module's own
+    # resolve_model call (which would otherwise download the real snapshot) are faked.
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(cw, "resolve_model", lambda *a, **k: ("f" * 40, Path("/fake/snapshot")))
     monkeypatch.setattr(cw, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(cw, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
     monkeypatch.setattr(cw.subprocess, "run", lambda *a, **k: None)
@@ -48,7 +54,7 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
         },
     )
     audio = Audio(waveform=torch.zeros(1, 16000, dtype=torch.float32), sampling_rate=16000)
-    # model=None avoids constructing an HFModel (which would validate against the Hub).
+    # model=None now builds a default HFModel internally (see the mocks above).
     out = cw.CrisperWhisperASR.transcribe_with_crisperwhisper([audio], model=None)
 
     assert len(out) == 1

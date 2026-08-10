@@ -15,6 +15,7 @@ from typing import List, Optional
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
+from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
@@ -64,6 +65,13 @@ try:
     device = args["device"]
     output_dir = args["output_dir"]
 
+    # SortformerEncLabelModel.from_pretrained is nemo.core.classes.common.Model.from_pretrained,
+    # which takes no revision argument at all: it resolves via try_to_load_from_cache /
+    # HfApi.file_exists+hf_hub_download / snapshot_download, none of which is ever passed a
+    # revision, so it always targets the mutable "main" ref regardless of what the parent
+    # staged. Genuinely unpinnable at the loader; the parent still resolves+stages the SHA
+    # so the run manifest and the download-once cache agree on a commit, even though this
+    # call can't be pointed at it directly.
     model = nemo_asr.models.SortformerEncLabelModel.from_pretrained(model_name)
     if device == "cuda" and torch.cuda.is_available():
         model = model.cuda()
@@ -116,7 +124,18 @@ def diarize_audios_with_nvidia_sortformer(
     Returns:
         One list per input audio with (speaker, start, end), sorted by start time.
     """
-    model_name = model.path_or_uri if model is not None else "nvidia/diar_sortformer_4spk-v1"
+    if model is None:
+        model = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+    elif model.revision != "main":
+        # SortformerEncLabelModel.from_pretrained() has no revision parameter at all (see
+        # the worker-script comment above) and always resolves the mutable "main" ref, so
+        # a non-default revision here would otherwise be silently ignored.
+        logger.warning(
+            f"NVIDIA Sortformer ignores model.revision (got {model.revision!r}): the upstream "
+            "SortformerEncLabelModel.from_pretrained() has no revision parameter and always "
+            "resolves against the mutable 'main' ref."
+        )
+    model_name = str(model.path_or_uri)
     device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
 
     venv_dir = ensure_venv(_NEMO_VENV, _NEMO_REQUIREMENTS, python_version=_NEMO_PYTHON)
@@ -141,10 +160,19 @@ def diarize_audios_with_nvidia_sortformer(
             }
         )
 
+        # Forward the resolved commit SHA to hf_subprocess_env, never the ref -- so the
+        # parent's staging pins the exact run-agreed commit, even though the worker's own
+        # from_pretrained call cannot be pointed at it (see the worker-script comment).
+        # Deferred import (not at module top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        revision = model.commit_sha or resolve_revision(model_name, model.revision)
+
         # Stage the model once (cross-process, via the heartbeat lock) + run the
         # worker offline so its SortformerEncLabelModel.from_pretrained makes no
         # per-call Hub version check — the 429 source under parallel batch.
-        env = hf_subprocess_env(str(model_name), "main", base_env=_clean_subprocess_env())
+        env = hf_subprocess_env(model_name, revision, base_env=_clean_subprocess_env())
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
             input=input_json,
