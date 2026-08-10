@@ -524,57 +524,65 @@
 </span><span id="L-354"><a href="#L-354"><span class="linenos">354</span></a><span class="sd">        through to Pyannote) each independently repeated here and in</span>
 </span><span id="L-355"><a href="#L-355"><span class="linenos">355</span></a><span class="sd">        ``speaker_diarization/api.py``&#39;s ``elif`` chain. That duplication is</span>
 </span><span id="L-356"><a href="#L-356"><span class="linenos">356</span></a><span class="sd">        pre-existing and worth collapsing into one source of truth eventually;</span>
-</span><span id="L-357"><a href="#L-357"><span class="linenos">357</span></a><span class="sd">        the two tables must be kept in sync by hand until then.</span>
-</span><span id="L-358"><a href="#L-358"><span class="linenos">358</span></a>
-</span><span id="L-359"><a href="#L-359"><span class="linenos">359</span></a><span class="sd">    Example:</span>
-</span><span id="L-360"><a href="#L-360"><span class="linenos">360</span></a><span class="sd">        &gt;&gt;&gt; model_for_task(&quot;openai/whisper-tiny&quot;, task=&quot;asr&quot;).path_or_uri</span>
-</span><span id="L-361"><a href="#L-361"><span class="linenos">361</span></a><span class="sd">        &#39;openai/whisper-tiny&#39;</span>
-</span><span id="L-362"><a href="#L-362"><span class="linenos">362</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-363"><a href="#L-363"><span class="linenos">363</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;diarization&quot;</span><span class="p">:</span>
-</span><span id="L-364"><a href="#L-364"><span class="linenos">364</span></a>        <span class="k">if</span> <span class="p">(</span>
-</span><span id="L-365"><a href="#L-365"><span class="linenos">365</span></a>            <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;nvidia/diar_sortformer&quot;</span><span class="p">)</span>
-</span><span id="L-366"><a href="#L-366"><span class="linenos">366</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;microsoft/VibeVoice-ASR&quot;</span><span class="p">)</span>
-</span><span id="L-367"><a href="#L-367"><span class="linenos">367</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;AlexXu811/whisper-child-adult&quot;</span><span class="p">)</span>
-</span><span id="L-368"><a href="#L-368"><span class="linenos">368</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;OpenMOSS-Team/MOSS-Transcribe-Diarize&quot;</span><span class="p">)</span>
-</span><span id="L-369"><a href="#L-369"><span class="linenos">369</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;BUT-FIT/diarizen&quot;</span><span class="p">)</span>
-</span><span id="L-370"><a href="#L-370"><span class="linenos">370</span></a>        <span class="p">):</span>
-</span><span id="L-371"><a href="#L-371"><span class="linenos">371</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="L-372"><a href="#L-372"><span class="linenos">372</span></a>        <span class="k">return</span> <span class="n">PyannoteAudioModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="L-373"><a href="#L-373"><span class="linenos">373</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;asr&quot;</span><span class="p">:</span>
-</span><span id="L-374"><a href="#L-374"><span class="linenos">374</span></a>        <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="L-375"><a href="#L-375"><span class="linenos">375</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;embeddings&quot;</span><span class="p">,</span> <span class="s2">&quot;enhancement&quot;</span><span class="p">):</span>
-</span><span id="L-376"><a href="#L-376"><span class="linenos">376</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="L-377"><a href="#L-377"><span class="linenos">377</span></a>    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unknown task: </span><span class="si">{</span><span class="n">task</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="L-378"><a href="#L-378"><span class="linenos">378</span></a>
-</span><span id="L-379"><a href="#L-379"><span class="linenos">379</span></a>
-</span><span id="L-380"><a href="#L-380"><span class="linenos">380</span></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_model_id</span><span class="p">(</span><span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="L-381"><a href="#L-381"><span class="linenos">381</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Sanitize a model id for use in filenames and Label Studio ``from_name`` values.</span>
-</span><span id="L-382"><a href="#L-382"><span class="linenos">382</span></a>
-</span><span id="L-383"><a href="#L-383"><span class="linenos">383</span></a><span class="sd">    Collapses every run of non-alphanumeric/underscore characters to a single</span>
-</span><span id="L-384"><a href="#L-384"><span class="linenos">384</span></a><span class="sd">    ``_``, strips leading/trailing separators, and never returns an empty string.</span>
-</span><span id="L-385"><a href="#L-385"><span class="linenos">385</span></a>
-</span><span id="L-386"><a href="#L-386"><span class="linenos">386</span></a><span class="sd">    This consolidates two implementations that had silently diverged — a</span>
-</span><span id="L-387"><a href="#L-387"><span class="linenos">387</span></a><span class="sd">    character-wise variant in the CLI script and this collapsing variant in</span>
-</span><span id="L-388"><a href="#L-388"><span class="linenos">388</span></a><span class="sd">    ``labelstudio.py``. They agreed on every model id in the current defaults</span>
-</span><span id="L-389"><a href="#L-389"><span class="linenos">389</span></a><span class="sd">    (none contains adjacent non-alphanumerics), so unifying on the more robust</span>
-</span><span id="L-390"><a href="#L-390"><span class="linenos">390</span></a><span class="sd">    collapsing form is behavior-neutral today and prevents a filename-vs-track</span>
-</span><span id="L-391"><a href="#L-391"><span class="linenos">391</span></a><span class="sd">    name divergence later.</span>
-</span><span id="L-392"><a href="#L-392"><span class="linenos">392</span></a>
-</span><span id="L-393"><a href="#L-393"><span class="linenos">393</span></a><span class="sd">    Args:</span>
-</span><span id="L-394"><a href="#L-394"><span class="linenos">394</span></a><span class="sd">        model_id: Raw model identifier.</span>
-</span><span id="L-395"><a href="#L-395"><span class="linenos">395</span></a>
-</span><span id="L-396"><a href="#L-396"><span class="linenos">396</span></a><span class="sd">    Returns:</span>
-</span><span id="L-397"><a href="#L-397"><span class="linenos">397</span></a><span class="sd">        A filesystem- and Label-Studio-safe token.</span>
-</span><span id="L-398"><a href="#L-398"><span class="linenos">398</span></a>
-</span><span id="L-399"><a href="#L-399"><span class="linenos">399</span></a><span class="sd">    Example:</span>
-</span><span id="L-400"><a href="#L-400"><span class="linenos">400</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;openai/whisper-large-v3-turbo&quot;)</span>
-</span><span id="L-401"><a href="#L-401"><span class="linenos">401</span></a><span class="sd">        &#39;openai_whisper_large_v3_turbo&#39;</span>
-</span><span id="L-402"><a href="#L-402"><span class="linenos">402</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;a--b&quot;)</span>
-</span><span id="L-403"><a href="#L-403"><span class="linenos">403</span></a><span class="sd">        &#39;a_b&#39;</span>
-</span><span id="L-404"><a href="#L-404"><span class="linenos">404</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;///&quot;)</span>
-</span><span id="L-405"><a href="#L-405"><span class="linenos">405</span></a><span class="sd">        &#39;model&#39;</span>
-</span><span id="L-406"><a href="#L-406"><span class="linenos">406</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-407"><a href="#L-407"><span class="linenos">407</span></a>    <span class="k">return</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;[^A-Za-z0-9_]+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">model_id</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;model&quot;</span>
+</span><span id="L-357"><a href="#L-357"><span class="linenos">357</span></a><span class="sd">        the two tables must be kept in sync by hand until then. The enhancement</span>
+</span><span id="L-358"><a href="#L-358"><span class="linenos">358</span></a><span class="sd">        branch below duplicates ``enhance_audios``&#39;s ``sensein/driftse`` prefix</span>
+</span><span id="L-359"><a href="#L-359"><span class="linenos">359</span></a><span class="sd">        check the same way, for the same reason: importing the literal from</span>
+</span><span id="L-360"><a href="#L-360"><span class="linenos">360</span></a><span class="sd">        ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend</span>
+</span><span id="L-361"><a href="#L-361"><span class="linenos">361</span></a><span class="sd">        on ``audio``, inverting the package layering.</span>
+</span><span id="L-362"><a href="#L-362"><span class="linenos">362</span></a>
+</span><span id="L-363"><a href="#L-363"><span class="linenos">363</span></a><span class="sd">    Example:</span>
+</span><span id="L-364"><a href="#L-364"><span class="linenos">364</span></a><span class="sd">        &gt;&gt;&gt; model_for_task(&quot;openai/whisper-tiny&quot;, task=&quot;asr&quot;).path_or_uri</span>
+</span><span id="L-365"><a href="#L-365"><span class="linenos">365</span></a><span class="sd">        &#39;openai/whisper-tiny&#39;</span>
+</span><span id="L-366"><a href="#L-366"><span class="linenos">366</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-367"><a href="#L-367"><span class="linenos">367</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;diarization&quot;</span><span class="p">:</span>
+</span><span id="L-368"><a href="#L-368"><span class="linenos">368</span></a>        <span class="k">if</span> <span class="p">(</span>
+</span><span id="L-369"><a href="#L-369"><span class="linenos">369</span></a>            <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;nvidia/diar_sortformer&quot;</span><span class="p">)</span>
+</span><span id="L-370"><a href="#L-370"><span class="linenos">370</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;microsoft/VibeVoice-ASR&quot;</span><span class="p">)</span>
+</span><span id="L-371"><a href="#L-371"><span class="linenos">371</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;AlexXu811/whisper-child-adult&quot;</span><span class="p">)</span>
+</span><span id="L-372"><a href="#L-372"><span class="linenos">372</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;OpenMOSS-Team/MOSS-Transcribe-Diarize&quot;</span><span class="p">)</span>
+</span><span id="L-373"><a href="#L-373"><span class="linenos">373</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;BUT-FIT/diarizen&quot;</span><span class="p">)</span>
+</span><span id="L-374"><a href="#L-374"><span class="linenos">374</span></a>        <span class="p">):</span>
+</span><span id="L-375"><a href="#L-375"><span class="linenos">375</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="L-376"><a href="#L-376"><span class="linenos">376</span></a>        <span class="k">return</span> <span class="n">PyannoteAudioModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="L-377"><a href="#L-377"><span class="linenos">377</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;asr&quot;</span><span class="p">:</span>
+</span><span id="L-378"><a href="#L-378"><span class="linenos">378</span></a>        <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="L-379"><a href="#L-379"><span class="linenos">379</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">:</span>
+</span><span id="L-380"><a href="#L-380"><span class="linenos">380</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="L-381"><a href="#L-381"><span class="linenos">381</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;enhancement&quot;</span><span class="p">:</span>
+</span><span id="L-382"><a href="#L-382"><span class="linenos">382</span></a>        <span class="k">if</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;sensein/driftse&quot;</span><span class="p">):</span>
+</span><span id="L-383"><a href="#L-383"><span class="linenos">383</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="L-384"><a href="#L-384"><span class="linenos">384</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="L-385"><a href="#L-385"><span class="linenos">385</span></a>    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unknown task: </span><span class="si">{</span><span class="n">task</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="L-386"><a href="#L-386"><span class="linenos">386</span></a>
+</span><span id="L-387"><a href="#L-387"><span class="linenos">387</span></a>
+</span><span id="L-388"><a href="#L-388"><span class="linenos">388</span></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_model_id</span><span class="p">(</span><span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-389"><a href="#L-389"><span class="linenos">389</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Sanitize a model id for use in filenames and Label Studio ``from_name`` values.</span>
+</span><span id="L-390"><a href="#L-390"><span class="linenos">390</span></a>
+</span><span id="L-391"><a href="#L-391"><span class="linenos">391</span></a><span class="sd">    Collapses every run of non-alphanumeric/underscore characters to a single</span>
+</span><span id="L-392"><a href="#L-392"><span class="linenos">392</span></a><span class="sd">    ``_``, strips leading/trailing separators, and never returns an empty string.</span>
+</span><span id="L-393"><a href="#L-393"><span class="linenos">393</span></a>
+</span><span id="L-394"><a href="#L-394"><span class="linenos">394</span></a><span class="sd">    This consolidates two implementations that had silently diverged — a</span>
+</span><span id="L-395"><a href="#L-395"><span class="linenos">395</span></a><span class="sd">    character-wise variant in the CLI script and this collapsing variant in</span>
+</span><span id="L-396"><a href="#L-396"><span class="linenos">396</span></a><span class="sd">    ``labelstudio.py``. They agreed on every model id in the current defaults</span>
+</span><span id="L-397"><a href="#L-397"><span class="linenos">397</span></a><span class="sd">    (none contains adjacent non-alphanumerics), so unifying on the more robust</span>
+</span><span id="L-398"><a href="#L-398"><span class="linenos">398</span></a><span class="sd">    collapsing form is behavior-neutral today and prevents a filename-vs-track</span>
+</span><span id="L-399"><a href="#L-399"><span class="linenos">399</span></a><span class="sd">    name divergence later.</span>
+</span><span id="L-400"><a href="#L-400"><span class="linenos">400</span></a>
+</span><span id="L-401"><a href="#L-401"><span class="linenos">401</span></a><span class="sd">    Args:</span>
+</span><span id="L-402"><a href="#L-402"><span class="linenos">402</span></a><span class="sd">        model_id: Raw model identifier.</span>
+</span><span id="L-403"><a href="#L-403"><span class="linenos">403</span></a>
+</span><span id="L-404"><a href="#L-404"><span class="linenos">404</span></a><span class="sd">    Returns:</span>
+</span><span id="L-405"><a href="#L-405"><span class="linenos">405</span></a><span class="sd">        A filesystem- and Label-Studio-safe token.</span>
+</span><span id="L-406"><a href="#L-406"><span class="linenos">406</span></a>
+</span><span id="L-407"><a href="#L-407"><span class="linenos">407</span></a><span class="sd">    Example:</span>
+</span><span id="L-408"><a href="#L-408"><span class="linenos">408</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;openai/whisper-large-v3-turbo&quot;)</span>
+</span><span id="L-409"><a href="#L-409"><span class="linenos">409</span></a><span class="sd">        &#39;openai_whisper_large_v3_turbo&#39;</span>
+</span><span id="L-410"><a href="#L-410"><span class="linenos">410</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;a--b&quot;)</span>
+</span><span id="L-411"><a href="#L-411"><span class="linenos">411</span></a><span class="sd">        &#39;a_b&#39;</span>
+</span><span id="L-412"><a href="#L-412"><span class="linenos">412</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;///&quot;)</span>
+</span><span id="L-413"><a href="#L-413"><span class="linenos">413</span></a><span class="sd">        &#39;model&#39;</span>
+</span><span id="L-414"><a href="#L-414"><span class="linenos">414</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-415"><a href="#L-415"><span class="linenos">415</span></a>    <span class="k">return</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;[^A-Za-z0-9_]+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">model_id</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;model&quot;</span>
 </span></pre></div>
 
 
@@ -1573,27 +1581,35 @@ processes via file locking and caches results on the shared filesystem.</p>
 </span><span id="model_for_task-355"><a href="#model_for_task-355"><span class="linenos">355</span></a><span class="sd">        through to Pyannote) each independently repeated here and in</span>
 </span><span id="model_for_task-356"><a href="#model_for_task-356"><span class="linenos">356</span></a><span class="sd">        ``speaker_diarization/api.py``&#39;s ``elif`` chain. That duplication is</span>
 </span><span id="model_for_task-357"><a href="#model_for_task-357"><span class="linenos">357</span></a><span class="sd">        pre-existing and worth collapsing into one source of truth eventually;</span>
-</span><span id="model_for_task-358"><a href="#model_for_task-358"><span class="linenos">358</span></a><span class="sd">        the two tables must be kept in sync by hand until then.</span>
-</span><span id="model_for_task-359"><a href="#model_for_task-359"><span class="linenos">359</span></a>
-</span><span id="model_for_task-360"><a href="#model_for_task-360"><span class="linenos">360</span></a><span class="sd">    Example:</span>
-</span><span id="model_for_task-361"><a href="#model_for_task-361"><span class="linenos">361</span></a><span class="sd">        &gt;&gt;&gt; model_for_task(&quot;openai/whisper-tiny&quot;, task=&quot;asr&quot;).path_or_uri</span>
-</span><span id="model_for_task-362"><a href="#model_for_task-362"><span class="linenos">362</span></a><span class="sd">        &#39;openai/whisper-tiny&#39;</span>
-</span><span id="model_for_task-363"><a href="#model_for_task-363"><span class="linenos">363</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="model_for_task-364"><a href="#model_for_task-364"><span class="linenos">364</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;diarization&quot;</span><span class="p">:</span>
-</span><span id="model_for_task-365"><a href="#model_for_task-365"><span class="linenos">365</span></a>        <span class="k">if</span> <span class="p">(</span>
-</span><span id="model_for_task-366"><a href="#model_for_task-366"><span class="linenos">366</span></a>            <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;nvidia/diar_sortformer&quot;</span><span class="p">)</span>
-</span><span id="model_for_task-367"><a href="#model_for_task-367"><span class="linenos">367</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;microsoft/VibeVoice-ASR&quot;</span><span class="p">)</span>
-</span><span id="model_for_task-368"><a href="#model_for_task-368"><span class="linenos">368</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;AlexXu811/whisper-child-adult&quot;</span><span class="p">)</span>
-</span><span id="model_for_task-369"><a href="#model_for_task-369"><span class="linenos">369</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;OpenMOSS-Team/MOSS-Transcribe-Diarize&quot;</span><span class="p">)</span>
-</span><span id="model_for_task-370"><a href="#model_for_task-370"><span class="linenos">370</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;BUT-FIT/diarizen&quot;</span><span class="p">)</span>
-</span><span id="model_for_task-371"><a href="#model_for_task-371"><span class="linenos">371</span></a>        <span class="p">):</span>
-</span><span id="model_for_task-372"><a href="#model_for_task-372"><span class="linenos">372</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="model_for_task-373"><a href="#model_for_task-373"><span class="linenos">373</span></a>        <span class="k">return</span> <span class="n">PyannoteAudioModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="model_for_task-374"><a href="#model_for_task-374"><span class="linenos">374</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;asr&quot;</span><span class="p">:</span>
-</span><span id="model_for_task-375"><a href="#model_for_task-375"><span class="linenos">375</span></a>        <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="model_for_task-376"><a href="#model_for_task-376"><span class="linenos">376</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;embeddings&quot;</span><span class="p">,</span> <span class="s2">&quot;enhancement&quot;</span><span class="p">):</span>
-</span><span id="model_for_task-377"><a href="#model_for_task-377"><span class="linenos">377</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
-</span><span id="model_for_task-378"><a href="#model_for_task-378"><span class="linenos">378</span></a>    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unknown task: </span><span class="si">{</span><span class="n">task</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="model_for_task-358"><a href="#model_for_task-358"><span class="linenos">358</span></a><span class="sd">        the two tables must be kept in sync by hand until then. The enhancement</span>
+</span><span id="model_for_task-359"><a href="#model_for_task-359"><span class="linenos">359</span></a><span class="sd">        branch below duplicates ``enhance_audios``&#39;s ``sensein/driftse`` prefix</span>
+</span><span id="model_for_task-360"><a href="#model_for_task-360"><span class="linenos">360</span></a><span class="sd">        check the same way, for the same reason: importing the literal from</span>
+</span><span id="model_for_task-361"><a href="#model_for_task-361"><span class="linenos">361</span></a><span class="sd">        ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend</span>
+</span><span id="model_for_task-362"><a href="#model_for_task-362"><span class="linenos">362</span></a><span class="sd">        on ``audio``, inverting the package layering.</span>
+</span><span id="model_for_task-363"><a href="#model_for_task-363"><span class="linenos">363</span></a>
+</span><span id="model_for_task-364"><a href="#model_for_task-364"><span class="linenos">364</span></a><span class="sd">    Example:</span>
+</span><span id="model_for_task-365"><a href="#model_for_task-365"><span class="linenos">365</span></a><span class="sd">        &gt;&gt;&gt; model_for_task(&quot;openai/whisper-tiny&quot;, task=&quot;asr&quot;).path_or_uri</span>
+</span><span id="model_for_task-366"><a href="#model_for_task-366"><span class="linenos">366</span></a><span class="sd">        &#39;openai/whisper-tiny&#39;</span>
+</span><span id="model_for_task-367"><a href="#model_for_task-367"><span class="linenos">367</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="model_for_task-368"><a href="#model_for_task-368"><span class="linenos">368</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;diarization&quot;</span><span class="p">:</span>
+</span><span id="model_for_task-369"><a href="#model_for_task-369"><span class="linenos">369</span></a>        <span class="k">if</span> <span class="p">(</span>
+</span><span id="model_for_task-370"><a href="#model_for_task-370"><span class="linenos">370</span></a>            <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;nvidia/diar_sortformer&quot;</span><span class="p">)</span>
+</span><span id="model_for_task-371"><a href="#model_for_task-371"><span class="linenos">371</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;microsoft/VibeVoice-ASR&quot;</span><span class="p">)</span>
+</span><span id="model_for_task-372"><a href="#model_for_task-372"><span class="linenos">372</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;AlexXu811/whisper-child-adult&quot;</span><span class="p">)</span>
+</span><span id="model_for_task-373"><a href="#model_for_task-373"><span class="linenos">373</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;OpenMOSS-Team/MOSS-Transcribe-Diarize&quot;</span><span class="p">)</span>
+</span><span id="model_for_task-374"><a href="#model_for_task-374"><span class="linenos">374</span></a>            <span class="ow">or</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;BUT-FIT/diarizen&quot;</span><span class="p">)</span>
+</span><span id="model_for_task-375"><a href="#model_for_task-375"><span class="linenos">375</span></a>        <span class="p">):</span>
+</span><span id="model_for_task-376"><a href="#model_for_task-376"><span class="linenos">376</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="model_for_task-377"><a href="#model_for_task-377"><span class="linenos">377</span></a>        <span class="k">return</span> <span class="n">PyannoteAudioModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="model_for_task-378"><a href="#model_for_task-378"><span class="linenos">378</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;asr&quot;</span><span class="p">:</span>
+</span><span id="model_for_task-379"><a href="#model_for_task-379"><span class="linenos">379</span></a>        <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="model_for_task-380"><a href="#model_for_task-380"><span class="linenos">380</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">:</span>
+</span><span id="model_for_task-381"><a href="#model_for_task-381"><span class="linenos">381</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="model_for_task-382"><a href="#model_for_task-382"><span class="linenos">382</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;enhancement&quot;</span><span class="p">:</span>
+</span><span id="model_for_task-383"><a href="#model_for_task-383"><span class="linenos">383</span></a>        <span class="k">if</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;sensein/driftse&quot;</span><span class="p">):</span>
+</span><span id="model_for_task-384"><a href="#model_for_task-384"><span class="linenos">384</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="model_for_task-385"><a href="#model_for_task-385"><span class="linenos">385</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
+</span><span id="model_for_task-386"><a href="#model_for_task-386"><span class="linenos">386</span></a>    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unknown task: </span><span class="si">{</span><span class="n">task</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1631,7 +1647,11 @@ script, and the enhancement path.</p>
   through to Pyannote) each independently repeated here and in
   <code>speaker_diarization/api.py</code>'s <code>elif</code> chain. That duplication is
   pre-existing and worth collapsing into one source of truth eventually;
-  the two tables must be kept in sync by hand until then.</p>
+  the two tables must be kept in sync by hand until then. The enhancement
+  branch below duplicates <code>enhance_audios</code>'s <code>sensein/driftse</code> prefix
+  check the same way, for the same reason: importing the literal from
+  <code>audio.tasks.speech_enhancement.api</code> here would make <code>utils</code> depend
+  on <code>audio</code>, inverting the package layering.</p>
 </blockquote>
 
 <h6 id="example">Example:</h6>
@@ -1658,34 +1678,34 @@ script, and the enhancement path.</p>
 
     </div>
     <a class="headerlink" href="#safe_model_id"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="safe_model_id-381"><a href="#safe_model_id-381"><span class="linenos">381</span></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_model_id</span><span class="p">(</span><span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="safe_model_id-382"><a href="#safe_model_id-382"><span class="linenos">382</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Sanitize a model id for use in filenames and Label Studio ``from_name`` values.</span>
-</span><span id="safe_model_id-383"><a href="#safe_model_id-383"><span class="linenos">383</span></a>
-</span><span id="safe_model_id-384"><a href="#safe_model_id-384"><span class="linenos">384</span></a><span class="sd">    Collapses every run of non-alphanumeric/underscore characters to a single</span>
-</span><span id="safe_model_id-385"><a href="#safe_model_id-385"><span class="linenos">385</span></a><span class="sd">    ``_``, strips leading/trailing separators, and never returns an empty string.</span>
-</span><span id="safe_model_id-386"><a href="#safe_model_id-386"><span class="linenos">386</span></a>
-</span><span id="safe_model_id-387"><a href="#safe_model_id-387"><span class="linenos">387</span></a><span class="sd">    This consolidates two implementations that had silently diverged — a</span>
-</span><span id="safe_model_id-388"><a href="#safe_model_id-388"><span class="linenos">388</span></a><span class="sd">    character-wise variant in the CLI script and this collapsing variant in</span>
-</span><span id="safe_model_id-389"><a href="#safe_model_id-389"><span class="linenos">389</span></a><span class="sd">    ``labelstudio.py``. They agreed on every model id in the current defaults</span>
-</span><span id="safe_model_id-390"><a href="#safe_model_id-390"><span class="linenos">390</span></a><span class="sd">    (none contains adjacent non-alphanumerics), so unifying on the more robust</span>
-</span><span id="safe_model_id-391"><a href="#safe_model_id-391"><span class="linenos">391</span></a><span class="sd">    collapsing form is behavior-neutral today and prevents a filename-vs-track</span>
-</span><span id="safe_model_id-392"><a href="#safe_model_id-392"><span class="linenos">392</span></a><span class="sd">    name divergence later.</span>
-</span><span id="safe_model_id-393"><a href="#safe_model_id-393"><span class="linenos">393</span></a>
-</span><span id="safe_model_id-394"><a href="#safe_model_id-394"><span class="linenos">394</span></a><span class="sd">    Args:</span>
-</span><span id="safe_model_id-395"><a href="#safe_model_id-395"><span class="linenos">395</span></a><span class="sd">        model_id: Raw model identifier.</span>
-</span><span id="safe_model_id-396"><a href="#safe_model_id-396"><span class="linenos">396</span></a>
-</span><span id="safe_model_id-397"><a href="#safe_model_id-397"><span class="linenos">397</span></a><span class="sd">    Returns:</span>
-</span><span id="safe_model_id-398"><a href="#safe_model_id-398"><span class="linenos">398</span></a><span class="sd">        A filesystem- and Label-Studio-safe token.</span>
-</span><span id="safe_model_id-399"><a href="#safe_model_id-399"><span class="linenos">399</span></a>
-</span><span id="safe_model_id-400"><a href="#safe_model_id-400"><span class="linenos">400</span></a><span class="sd">    Example:</span>
-</span><span id="safe_model_id-401"><a href="#safe_model_id-401"><span class="linenos">401</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;openai/whisper-large-v3-turbo&quot;)</span>
-</span><span id="safe_model_id-402"><a href="#safe_model_id-402"><span class="linenos">402</span></a><span class="sd">        &#39;openai_whisper_large_v3_turbo&#39;</span>
-</span><span id="safe_model_id-403"><a href="#safe_model_id-403"><span class="linenos">403</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;a--b&quot;)</span>
-</span><span id="safe_model_id-404"><a href="#safe_model_id-404"><span class="linenos">404</span></a><span class="sd">        &#39;a_b&#39;</span>
-</span><span id="safe_model_id-405"><a href="#safe_model_id-405"><span class="linenos">405</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;///&quot;)</span>
-</span><span id="safe_model_id-406"><a href="#safe_model_id-406"><span class="linenos">406</span></a><span class="sd">        &#39;model&#39;</span>
-</span><span id="safe_model_id-407"><a href="#safe_model_id-407"><span class="linenos">407</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="safe_model_id-408"><a href="#safe_model_id-408"><span class="linenos">408</span></a>    <span class="k">return</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;[^A-Za-z0-9_]+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">model_id</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;model&quot;</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="safe_model_id-389"><a href="#safe_model_id-389"><span class="linenos">389</span></a><span class="k">def</span><span class="w"> </span><span class="nf">safe_model_id</span><span class="p">(</span><span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="safe_model_id-390"><a href="#safe_model_id-390"><span class="linenos">390</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Sanitize a model id for use in filenames and Label Studio ``from_name`` values.</span>
+</span><span id="safe_model_id-391"><a href="#safe_model_id-391"><span class="linenos">391</span></a>
+</span><span id="safe_model_id-392"><a href="#safe_model_id-392"><span class="linenos">392</span></a><span class="sd">    Collapses every run of non-alphanumeric/underscore characters to a single</span>
+</span><span id="safe_model_id-393"><a href="#safe_model_id-393"><span class="linenos">393</span></a><span class="sd">    ``_``, strips leading/trailing separators, and never returns an empty string.</span>
+</span><span id="safe_model_id-394"><a href="#safe_model_id-394"><span class="linenos">394</span></a>
+</span><span id="safe_model_id-395"><a href="#safe_model_id-395"><span class="linenos">395</span></a><span class="sd">    This consolidates two implementations that had silently diverged — a</span>
+</span><span id="safe_model_id-396"><a href="#safe_model_id-396"><span class="linenos">396</span></a><span class="sd">    character-wise variant in the CLI script and this collapsing variant in</span>
+</span><span id="safe_model_id-397"><a href="#safe_model_id-397"><span class="linenos">397</span></a><span class="sd">    ``labelstudio.py``. They agreed on every model id in the current defaults</span>
+</span><span id="safe_model_id-398"><a href="#safe_model_id-398"><span class="linenos">398</span></a><span class="sd">    (none contains adjacent non-alphanumerics), so unifying on the more robust</span>
+</span><span id="safe_model_id-399"><a href="#safe_model_id-399"><span class="linenos">399</span></a><span class="sd">    collapsing form is behavior-neutral today and prevents a filename-vs-track</span>
+</span><span id="safe_model_id-400"><a href="#safe_model_id-400"><span class="linenos">400</span></a><span class="sd">    name divergence later.</span>
+</span><span id="safe_model_id-401"><a href="#safe_model_id-401"><span class="linenos">401</span></a>
+</span><span id="safe_model_id-402"><a href="#safe_model_id-402"><span class="linenos">402</span></a><span class="sd">    Args:</span>
+</span><span id="safe_model_id-403"><a href="#safe_model_id-403"><span class="linenos">403</span></a><span class="sd">        model_id: Raw model identifier.</span>
+</span><span id="safe_model_id-404"><a href="#safe_model_id-404"><span class="linenos">404</span></a>
+</span><span id="safe_model_id-405"><a href="#safe_model_id-405"><span class="linenos">405</span></a><span class="sd">    Returns:</span>
+</span><span id="safe_model_id-406"><a href="#safe_model_id-406"><span class="linenos">406</span></a><span class="sd">        A filesystem- and Label-Studio-safe token.</span>
+</span><span id="safe_model_id-407"><a href="#safe_model_id-407"><span class="linenos">407</span></a>
+</span><span id="safe_model_id-408"><a href="#safe_model_id-408"><span class="linenos">408</span></a><span class="sd">    Example:</span>
+</span><span id="safe_model_id-409"><a href="#safe_model_id-409"><span class="linenos">409</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;openai/whisper-large-v3-turbo&quot;)</span>
+</span><span id="safe_model_id-410"><a href="#safe_model_id-410"><span class="linenos">410</span></a><span class="sd">        &#39;openai_whisper_large_v3_turbo&#39;</span>
+</span><span id="safe_model_id-411"><a href="#safe_model_id-411"><span class="linenos">411</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;a--b&quot;)</span>
+</span><span id="safe_model_id-412"><a href="#safe_model_id-412"><span class="linenos">412</span></a><span class="sd">        &#39;a_b&#39;</span>
+</span><span id="safe_model_id-413"><a href="#safe_model_id-413"><span class="linenos">413</span></a><span class="sd">        &gt;&gt;&gt; safe_model_id(&quot;///&quot;)</span>
+</span><span id="safe_model_id-414"><a href="#safe_model_id-414"><span class="linenos">414</span></a><span class="sd">        &#39;model&#39;</span>
+</span><span id="safe_model_id-415"><a href="#safe_model_id-415"><span class="linenos">415</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="safe_model_id-416"><a href="#safe_model_id-416"><span class="linenos">416</span></a>    <span class="k">return</span> <span class="n">re</span><span class="o">.</span><span class="n">sub</span><span class="p">(</span><span class="sa">r</span><span class="s2">&quot;[^A-Za-z0-9_]+&quot;</span><span class="p">,</span> <span class="s2">&quot;_&quot;</span><span class="p">,</span> <span class="n">model_id</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="s2">&quot;_&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;model&quot;</span>
 </span></pre></div>
 
 
