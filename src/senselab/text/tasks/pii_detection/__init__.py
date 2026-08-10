@@ -1,9 +1,10 @@
-"""Standalone PII detection over transcripts."""
+"""Standalone PII detection over text, ``ScriptLine``, and transcripts."""
 
-# NOTE: detect_pii / PiiReport are added in Task 2 of plan-b. Until then this
-# __init__ exports only what api.py actually defines.
 from senselab.text.tasks.pii_detection.api import (
+    PiiReport,
     PiiSpan,
+    detect_pii,
+    flatten_script_line,
     report_to_dict,
 )
 from senselab.text.tasks.pii_detection.subprocess_backend import (
@@ -14,6 +15,9 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
 __all__ = [
     "DETECTOR_GLINER",
     "DETECTOR_PRESIDIO",
+    "PiiReport",
     "PiiSpan",
+    "detect_pii",
+    "flatten_script_line",
     "report_to_dict",
 ]
