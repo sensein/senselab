@@ -1,5 +1,6 @@
 """Tests for run-scoped HF revision resolution."""
 
+import json
 import multiprocessing as mp
 import os
 from pathlib import Path
@@ -171,3 +172,17 @@ def test_concurrent_first_resolution_agrees_on_one_sha(tmp_path: Path) -> None:
         p.join(timeout=60)
     results = {q.get(timeout=5) for _ in procs}
     assert len(results) == 1, f"both processes must adopt one SHA, got {results}"
+
+
+def test_a_corrupt_manifest_entry_is_ignored_rather_than_trusted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-SHA entry must be re-resolved, not propagated into keys and provenance."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): "main"}))
+    monkeypatch.setattr("senselab.utils.model_revision._resolve_uncached", lambda *a, **k: SHA_A)
+    assert resolve_revision("org/model", "main") == SHA_A
+
+
+def test_recording_a_non_sha_is_refused() -> None:
+    """One bad write would poison every later participant, since entries are immutable."""
+    with pytest.raises(RevisionResolutionError):
+        record_resolution("org/model", "main", "main")

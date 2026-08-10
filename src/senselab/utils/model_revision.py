@@ -118,6 +118,14 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
     race adopts the winner's SHA rather than overwriting it. The returned value is
     therefore the *authoritative* SHA for the run, which may not be ``sha``.
     """
+    # Reject a non-SHA at the door rather than only filtering it on read: an entry is immutable
+    # for the run's life, so one bad write poisons every later participant that adopts it.
+    if not _SHA_RE.match(sha):
+        raise RevisionResolutionError(
+            f"Refusing to record {sha!r} as the commit for {manifest_key(repo_id, ref)}: "
+            "a run manifest entry must be a 40-hex commit SHA."
+        )
+
     path = manifest_path(run)
     path.parent.mkdir(parents=True, exist_ok=True)
     key = manifest_key(repo_id, ref)
@@ -135,7 +143,11 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
     try:
         current = read_manifest(run)
         winner = current.get(key)
-        if winner is not None:
+        # Adopt an existing entry only if it is a real commit. Append-if-absent otherwise treats
+        # *any* present value as authoritative, so a corrupt entry would be handed back to every
+        # later caller -- and because entries are immutable for the run's life, nothing would ever
+        # dislodge it. Overwriting a non-SHA is the one case where replacing an entry is correct.
+        if winner is not None and _SHA_RE.match(winner):
             return winner
         current[key] = sha
         # Write-then-rename, not write_text directly: a writer killed mid-write
@@ -211,9 +223,19 @@ def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = 
         return memoized
 
     recorded = read_manifest().get(key)
-    if recorded is not None:
+    # Validate rather than trust: read_manifest coerces every value with str(), so a JSON null
+    # becomes the string "None", and a hand-edit or a partial write on a filesystem where
+    # os.replace is not atomic can leave anything at all here. An unvalidated entry would flow
+    # straight into cache keys, provenance and worker payloads -- "confidently wrong" with the
+    # loud-failure path bypassed, which is the one outcome this module exists to prevent. A
+    # non-SHA entry is therefore treated as absent and re-resolved.
+    if recorded is not None and _SHA_RE.match(recorded):
         _MEMO[key] = recorded
         return recorded
+    if recorded is not None:
+        logger.warning(
+            "Run manifest entry for %s is not a commit SHA (%r); re-resolving and ignoring it", key, recorded
+        )
 
     sha = _resolve_uncached(repo_id, ref, token)
     binding = record_resolution(repo_id, ref, sha)

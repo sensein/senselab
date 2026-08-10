@@ -482,7 +482,23 @@ def resolve_model(repo_id: str, revision: str = "main", *, token: Optional[str] 
     """
     from huggingface_hub import constants
 
-    sha = ensure_hf_model(repo_id, revision, token=token)
+    from senselab.utils.model_revision import resolve_revision
+
+    # Resolve through the run manifest BEFORE staging, so the commit this loads is the commit the
+    # run agreed on -- not whatever this host's refs/<ref> happens to point at.
+    #
+    # Passing `revision` straight to ensure_hf_model made the loader a second, independent
+    # resolver: cache keys and provenance consult the manifest, while the load consulted the local
+    # ref. On one warm node they agree, which is why nothing caught it. On the multi-node sweep the
+    # manifest exists for, they diverge -- node A records repo@main -> SHA1 at t0, upstream pushes
+    # SHA2, and node B (cold) six hours later keys and stamps SHA1 while ensure_hf_model downloads
+    # and loads SHA2. The artifact then names a commit that did not run, which is the one outcome
+    # worse than naming none.
+    #
+    # Resolving first also makes the manifest outrank the local cache, as the docs claim: a node
+    # missing the pinned commit has is_hf_model_cached(repo, <sha>) return False and fetches
+    # exactly that commit, rather than reusing an older snapshot its own ref still points at.
+    sha = ensure_hf_model(repo_id, resolve_revision(repo_id, revision, token=token), token=token)
     snapshot_path = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
     return sha, snapshot_path
 
