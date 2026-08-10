@@ -34,13 +34,20 @@
 #       --out artifacts/speaker_ceiling/runs/speaker-ceiling-seed-17 \
 #       --corpus artifacts/speaker_ceiling/corpus/seed-17
 
-# Partition: ou_bcs_low rather than mit_preemptable. It is preemptable on the same terms (so the
-# resumability below is still load-bearing), but every GPU in it is an a100 or h100 -- all >= 40 GB --
-# whereas mit_preemptable's pool includes l4 (24 GB) and a40. An untyped --gres=gpu:1 there can land
-# a 7B backend like VibeVoice on a card too small for it, and a systematic OOM would be recorded as
-# that backend failing to count rather than as the wrong hardware, which would corrupt the very
-# measurement this probe exists to produce. ou_bcs_low's 64-GPU ceiling is also mine alone rather
-# than a shared group pool, and it starts immediately.
+# Partition: ou_bcs_low rather than mit_preemptable. Preemptable on the same terms, so the
+# resumability below stays load-bearing.
+#
+# An earlier version of this comment claimed a 7B backend like VibeVoice would OOM on
+# mit_preemptable's 24 GB l4 cards. That was wrong and is corrected here rather than deleted:
+# VibeVoice loads with dtype="auto" against a checkpoint whose config declares bfloat16, so 7B is
+# ~14 GB of weights and fits an l4 with room to spare. The fp32 figure it was implicitly reasoning
+# from does not apply.
+#
+# The real reasons to prefer this partition: it starts immediately (mit_preemptable was queued out
+# ~36 min at submission), its 64-GPU ceiling is mine alone rather than a pool shared with the whole
+# group, and every card is an a100 or h100 -- so the sweep's memory headroom does not depend on
+# re-deriving each backend's dtype against whatever model an untyped --gres request happens to land.
+# That last one is a convenience, not a correctness requirement.
 #SBATCH --job-name=speaker-ceiling-evaluate
 #SBATCH --partition=ou_bcs_low
 #SBATCH --array=0-5
