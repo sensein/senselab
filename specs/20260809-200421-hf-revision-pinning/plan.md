@@ -265,7 +265,7 @@ def manifest_path(run: Optional[str] = None) -> Path:
 def read_manifest(run: Optional[str] = None) -> dict[str, str]:
     """Return a run's recorded resolutions, or an empty mapping.
 
-    A manifest that is missing, empty, or unparseable reads as empty rather than
+    A manifest that is missing, empty, or unparsable reads as empty rather than
     raising: a corrupt manifest must degrade to "resolve again", never to a crash
     that takes down every job in the run.
     """
@@ -277,7 +277,7 @@ def read_manifest(run: Optional[str] = None) -> dict[str, str]:
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Run manifest %s is unparseable; treating as empty", path)
+        logger.warning("Run manifest %s is unparsable; treating as empty", path)
         return {}
     if not isinstance(payload, dict):
         return {}
