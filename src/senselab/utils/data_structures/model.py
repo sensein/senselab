@@ -354,7 +354,11 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         through to Pyannote) each independently repeated here and in
         ``speaker_diarization/api.py``'s ``elif`` chain. That duplication is
         pre-existing and worth collapsing into one source of truth eventually;
-        the two tables must be kept in sync by hand until then.
+        the two tables must be kept in sync by hand until then. The enhancement
+        branch below duplicates ``enhance_audios``'s ``sensein/driftse`` prefix
+        check the same way, for the same reason: importing the literal from
+        ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend
+        on ``audio``, inverting the package layering.
 
     Example:
         >>> model_for_task("openai/whisper-tiny", task="asr").path_or_uri
@@ -372,7 +376,11 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         return PyannoteAudioModel(path_or_uri=model_id)
     if task == "asr":
         return HFModel(path_or_uri=model_id)
-    if task in ("embeddings", "enhancement"):
+    if task == "embeddings":
+        return SpeechBrainModel(path_or_uri=model_id)
+    if task == "enhancement":
+        if model_id.startswith("sensein/driftse"):
+            return HFModel(path_or_uri=model_id)
         return SpeechBrainModel(path_or_uri=model_id)
     raise ValueError(f"unknown task: {task}")
 
