@@ -82,24 +82,40 @@ def test_subprocess_env_propagates_the_run_id(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_revision_resolved_subprocess_files_still_resolve_before_sending() -> None:
-    """The five reviewed subprocess parents must keep resolving before they send.
+    """The reviewed subprocess parents must keep resolving before they send.
 
-    Source-level check in the spirit of ``hf_load_coverage_test.py``'s
-    ``test_reviewed_subprocess_files_use_hf_subprocess_env``: it does not understand data
-    flow, so it cannot prove a *specific* value is a SHA, but it can catch the file having
-    stopped referencing ``resolve_revision``/``commit_sha`` at all -- the signal that a raw
-    ref crept back into the worker payload.
+    **Matched against the AST, not the file text, and that distinction is the whole test.**
+    A substring search over the source cannot fail here: every reviewed file carries a
+    comment explaining why it resolves, and those comments contain both
+    ``resolve_revision`` and ``commit_sha``. So reverting the code to
+    ``"revision": model.revision`` while leaving the comment in place would keep a text-based
+    check green -- it would assert that the explanation exists, not that the behaviour does.
+
+    Comments and string literals are invisible to ``ast``, so requiring a real
+    ``resolve_revision(...)`` call or a real ``.commit_sha`` attribute access means only
+    executable code can satisfy it.
+
+    It still does not understand data flow, so it cannot prove the value reaching the payload
+    is the resolved one -- ``test_worker_input_json_carries_a_sha_not_a_ref`` does that for the
+    one builder callable without spawning a subprocess.
     """
     from tests.utils.hf_load_coverage_test import _SRC
 
-    unresolved = [
-        relpath
-        for relpath in sorted(REVISION_RESOLVED_SUBPROCESS_FILES)
-        if "resolve_revision" not in (text := (_SRC / relpath).read_text()) and "commit_sha" not in text
-    ]
+    unresolved: list[str] = []
+    for relpath in sorted(REVISION_RESOLVED_SUBPROCESS_FILES):
+        tree = ast.parse((_SRC / relpath).read_text())
+        resolves = any(
+            (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "resolve_revision")
+            or (isinstance(node, ast.Attribute) and node.attr == "commit_sha")
+            for node in ast.walk(tree)
+        )
+        if not resolves:
+            unresolved.append(relpath)
+
     assert not unresolved, (
-        "File(s) no longer reference resolve_revision or commit_sha -- a raw ref may have "
-        "crept back into the worker payload:\n" + "\n".join(f"  {f}" for f in unresolved)
+        "File(s) have no executable resolve_revision(...) call and no .commit_sha access -- a raw "
+        "ref may have crept back into the worker payload (a comment saying otherwise does not "
+        "count):\n" + "\n".join(f"  {f}" for f in unresolved)
     )
 
 
