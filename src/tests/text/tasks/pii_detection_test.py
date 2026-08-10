@@ -21,7 +21,7 @@ def test_confidence_is_zero_when_no_spans() -> None:
 
     "Detectors did not run" is None instead, and is carried on the report rather than here.
     """
-    assert _compute_detection_confidence([], n_asr_models=2) == 0.0
+    assert _compute_detection_confidence([], n_asr_models=2, n_detectors_run=2) == 0.0
 
 
 def test_two_detectors_agreeing_beats_one_detector_alone() -> None:
@@ -36,7 +36,9 @@ def test_two_detectors_agreeing_beats_one_detector_alone() -> None:
     one = [
         PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="w", score=0.9),
     ]
-    assert _compute_detection_confidence(both, n_asr_models=1) > _compute_detection_confidence(one, n_asr_models=1)
+    assert _compute_detection_confidence(both, n_asr_models=1, n_detectors_run=2) > _compute_detection_confidence(
+        one, n_asr_models=1, n_detectors_run=2
+    )
 
 
 def test_cross_source_agreement_raises_confidence() -> None:
@@ -48,9 +50,56 @@ def test_cross_source_agreement_raises_confidence() -> None:
     in_one = [
         PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="a", score=0.9),
     ]
-    assert _compute_detection_confidence(in_both, n_asr_models=2) > _compute_detection_confidence(
-        in_one, n_asr_models=2
+    assert _compute_detection_confidence(in_both, n_asr_models=2, n_detectors_run=2) > _compute_detection_confidence(
+        in_one, n_asr_models=2, n_detectors_run=2
     )
+
+
+def test_agreement_denominator_is_detectors_that_ran_not_detectors_that_exist() -> None:
+    """A Presidio-only finding when GLiNER never ran is the best available evidence.
+
+    Dividing by the number of known detectors caps it at 0.5 as though a second
+    detector had declined to confirm it — when in fact none was asked.
+    """
+    spans = [PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="w", score=0.9)]
+    assert _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=1) == pytest.approx(0.9)
+
+
+def test_a_third_detector_does_not_rescale_two_detector_agreement() -> None:
+    """Adding a third detector to the module must not silently rescale published confidences.
+
+    Two detectors agreeing out of two that ran is still full agreement.
+    """
+    two = [
+        PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="w", score=0.8),
+        PiiSpan(text="Jane Doe", category="PERSON", source="gliner/name", asr_model="w", score=0.8),
+    ]
+    assert _compute_detection_confidence(two, n_asr_models=1, n_detectors_run=2) == pytest.approx(0.8)
+
+
+def test_partial_agreement_among_three_scores_between() -> None:
+    """Two of three detectors agreeing scores strictly between one-of-three and full agreement."""
+    three_ran_two_agree = [
+        PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="w", score=0.9),
+        PiiSpan(text="Jane Doe", category="PERSON", source="gliner/name", asr_model="w", score=0.9),
+    ]
+    all_three = three_ran_two_agree + [
+        PiiSpan(text="Jane Doe", category="PERSON", source="rules/gazetteer", asr_model="w", score=0.9),
+    ]
+    partial = _compute_detection_confidence(three_ran_two_agree, n_asr_models=1, n_detectors_run=3)
+    full = _compute_detection_confidence(all_three, n_asr_models=1, n_detectors_run=3)
+    assert 0.0 < partial < full == pytest.approx(0.9)
+
+
+def test_denominator_never_divides_by_zero() -> None:
+    """A defined score beats a crash even for an input the caller should never send.
+
+    ``n_detectors_run=0`` cannot reach here in practice — the caller short-circuits
+    before calling this function — but a ``ZeroDivisionError`` in a scoring function
+    is a bad failure mode regardless.
+    """
+    spans = [PiiSpan(text="x", category="PERSON", source="presidio", asr_model="w", score=0.5)]
+    assert _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=0) >= 0.0
 
 
 # ── flatten_script_line ─────────────────────────────────────────────

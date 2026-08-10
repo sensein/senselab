@@ -32,7 +32,7 @@ def _span(*, text: str, category: str, source: str, asr_model: str, score: float
 
 def test_confidence_empty_spans_returns_zero() -> None:
     """No spans → confident negative. ``None`` is reserved for "detectors didn't run"."""
-    assert _compute_detection_confidence([], n_asr_models=3) == 0.0
+    assert _compute_detection_confidence([], n_asr_models=3, n_detectors_run=2) == 0.0
 
 
 def test_confidence_single_detector_single_asr_halves_score() -> None:
@@ -40,7 +40,7 @@ def test_confidence_single_detector_single_asr_halves_score() -> None:
     spans = [
         _span(text="John Doe", category="PERSON", source="presidio", asr_model="whisper", score=0.8),
     ]
-    conf = _compute_detection_confidence(spans, n_asr_models=1)
+    conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     # 0.8 * (1/2) * (1/1) = 0.4
     assert conf == pytest.approx(0.4)
 
@@ -51,7 +51,7 @@ def test_confidence_two_detectors_agreeing_doubles_factor() -> None:
         _span(text="John Doe", category="PERSON", source="presidio", asr_model="whisper", score=0.8),
         _span(text="John Doe", category="PERSON", source="gliner/person", asr_model="whisper", score=0.9),
     ]
-    conf = _compute_detection_confidence(spans, n_asr_models=1)
+    conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     # max_score=0.9 * detector_agreement=1.0 * asr_agreement=1.0 = 0.9
     assert conf == pytest.approx(0.9)
 
@@ -62,7 +62,7 @@ def test_confidence_cross_asr_corroboration_scales_with_fraction() -> None:
         _span(text="John Doe", category="PERSON", source="presidio", asr_model="whisper", score=0.8),
         _span(text="John Doe", category="PERSON", source="presidio", asr_model="canary", score=0.7),
     ]
-    conf = _compute_detection_confidence(spans, n_asr_models=3)
+    conf = _compute_detection_confidence(spans, n_asr_models=3, n_detectors_run=2)
     # max_score=0.8 * detector_agreement=0.5 * asr_agreement=(2/3) ≈ 0.267
     assert conf == pytest.approx(0.8 * 0.5 * (2 / 3))
 
@@ -76,7 +76,7 @@ def test_confidence_max_across_independent_findings() -> None:
     ]
     # Phone-number finding wins: 0.95 * 0.5 * 1.0 = 0.475
     # Person finding: 0.4 * 1.0 * 1.0 = 0.4
-    conf = _compute_detection_confidence(spans, n_asr_models=1)
+    conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     assert conf == pytest.approx(0.475)
 
 
@@ -86,7 +86,7 @@ def test_confidence_whitespace_only_text_dropped() -> None:
         _span(text="   ", category="PERSON", source="presidio", asr_model="whisper", score=0.9),
         _span(text="real", category="PERSON", source="presidio", asr_model="whisper", score=0.3),
     ]
-    conf = _compute_detection_confidence(spans, n_asr_models=1)
+    conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     # Only the "real" span counts: 0.3 * 0.5 * 1.0 = 0.15
     assert conf == pytest.approx(0.15)
 
@@ -101,7 +101,7 @@ def test_confidence_missing_per_span_score_treated_as_zero() -> None:
     spans = [
         PiiSpan(text="John", category="PERSON", source="presidio", asr_model="whisper", score=None),
     ]
-    conf = _compute_detection_confidence(spans, n_asr_models=1)
+    conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     # max_score collapses to 0.0 → overall 0.0
     assert conf == 0.0
 
