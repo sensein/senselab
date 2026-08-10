@@ -183,3 +183,37 @@ def test_detect_pii_returns_one_report_per_input_in_order() -> None:
 def test_detect_pii_single_input_returns_a_bare_report() -> None:
     """A scalar input returns a bare report, not a one-element list."""
     assert not isinstance(detect_pii("", detectors=[]), list)
+
+
+def test_detectors_at_different_granularity_still_corroborate() -> None:
+    """Presidio's PERSON and the rules cascade's NAME are the same finding.
+
+    Keying agreement on the raw category made the cascade structurally unable to
+    corroborate anything while still counting toward the denominator, so adding it as a
+    third detector pushed a finding Presidio and GLiNER both agreed on from 2/2 down to
+    2/3. Adding a detector must not make a well-corroborated finding look less certain.
+    """
+    from senselab.text.tasks.pii_detection.api import corroboration_family
+
+    spans = [
+        PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="w", score=0.9),
+        PiiSpan(text="Jane Doe", category="NAME", source="rules/gazetteer", asr_model="w", score=0.9),
+    ]
+    assert corroboration_family("PERSON") == corroboration_family("NAME")
+    # Two of two detectors agree on the family, so the score must reflect full agreement
+    # rather than the zero it would score if PERSON and NAME were treated as unrelated.
+    agreed = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
+    only_one = _compute_detection_confidence(spans[:1], n_asr_models=1, n_detectors_run=2)
+    assert agreed > only_one, f"agreement across granularity did not help: {agreed} vs {only_one}"
+
+
+def test_an_unmapped_category_is_not_folded_into_a_family() -> None:
+    """A label the family map has not seen agrees only with itself.
+
+    The reduction is fine -> coarse and deterministic; guessing which family an unknown
+    label belongs to would silently merge unrelated findings.
+    """
+    from senselab.text.tasks.pii_detection.api import corroboration_family
+
+    assert corroboration_family("SOME_NEW_ENTITY") == "SOME_NEW_ENTITY"
+    assert corroboration_family("SOME_NEW_ENTITY") != corroboration_family("PERSON")
