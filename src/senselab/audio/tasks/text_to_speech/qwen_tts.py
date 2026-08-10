@@ -128,6 +128,13 @@ _QWEN_TTS_REQUIREMENTS = [
     "qwen-tts==0.1.1",
     "torch>=2.6",
     "torchaudio>=2.6",
+    # numba floor, or the venv cannot be built at all. Measured on an H100: qwen-tts pulls
+    # librosa, librosa needs numba, and with no floor uv backtracked numba to 0.53.1 -- whose
+    # llvmlite 0.36.0 refuses to install with "Cannot install on Python version 3.12.1; only
+    # versions >=3.6,<3.10 are supported", taking the whole Stage-2 install down. numba added
+    # Python 3.12 support in 0.59 and numpy 2.x support in 0.60, and this venv is Python 3.12
+    # with an unpinned numpy, so 0.60 is the lowest floor that can resolve here at all.
+    "numba>=0.60",
 ]
 
 _QWEN_TTS_DEFAULT_MODEL = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
