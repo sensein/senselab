@@ -79,6 +79,8 @@ from senselab.audio.tasks.speaker_diarization import diarize_audios
 from senselab.audio.tasks.speech_enhancement import enhance_audios
 from senselab.audio.tasks.speech_to_text import transcribe_audios
 from senselab.audio.tasks.speech_to_text.qwen import QwenASR
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, HARVESTED_AXES
+from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import (
     classification_window_top1 as _classification_window_top1,
 )
@@ -89,8 +91,6 @@ from senselab.audio.workflows.audio_analysis.labelstudio import (
     build_labelstudio_config,
     build_labelstudio_task,
 )
-from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, HARVESTED_AXES
-from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.layout import (
     belief_dir,
     derivatives_dir,
@@ -846,7 +846,7 @@ def main(argv: list[str] | None = None) -> int:
             compute_run_global_summary,
         )
         from senselab.audio.workflows.audio_analysis.harvesters import resolve_asr_result
-        from senselab.audio.workflows.audio_analysis.pii import detect_pii_in_pass, report_to_dict
+        from senselab.text.tasks.pii_detection.api import detect_pii_in_pass, report_to_dict
 
         pii_reports: dict[str, Any] = {}
         for pl, ps in passes_for_compute.items():
@@ -1148,8 +1148,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 from senselab.audio.workflows.audio_analysis.adaptive.fusion import write_speaker_outputs
                 from senselab.audio.workflows.audio_analysis.speaker_identity import (
-                    build_speech_presence_tracks,
                     build_speaker_identity,
+                    build_speech_presence_tracks,
                 )
 
                 # Per-speaker structure reads the speaker harvest of the unmodified pass.
@@ -1168,14 +1168,13 @@ def main(argv: list[str] | None = None) -> int:
                 # claiming speakers where no voice detector reports speech, never for its
                 # name. Measured on the unmodified pass — whether the audio carries a claim
                 # is a fact about the recording, not about the transform.
+                from senselab.audio.workflows.audio_analysis.speech_presence_link import (
+                    votes_for_harvest,
+                )
                 from senselab.audio.workflows.audio_analysis.support import (
                     evidence_signal_names,
                     informative_evidence,
                     signal_support,
-                )
-
-                from senselab.audio.workflows.audio_analysis.speech_presence_link import (
-                    votes_for_harvest,
                 )
 
                 # Support is measured over verdicts; the harvest holds L1 measurements, so link
