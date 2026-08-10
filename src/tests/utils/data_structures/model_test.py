@@ -39,11 +39,25 @@ def test_check_hf_repo_exists_false() -> None:
         assert check_hf_repo_exists("invalid_repo") is False
 
 
-def test_hfmodel_valid_hf_repo_check() -> None:
+def test_hfmodel_valid_hf_repo_check(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test valid HFModel repo check."""
-    with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=True):
-        model: HFModel = HFModel(path_or_uri="valid_repo")
-        assert model.revision == "main"
+    sha = "a" * 40
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    model: HFModel = HFModel(path_or_uri="valid_repo")
+    assert model.revision == "main"
+    assert model.commit_sha == sha
+
+
+def test_hf_model_records_the_resolved_commit_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Revision keeps the ref asked for; commit_sha carries what it resolved to."""
+    sha = "c" * 40
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+
+    model = HFModel(path_or_uri="org/model", revision="main")
+    assert model.revision == "main", "the requested ref must survive"
+    assert model.commit_sha == sha, "the resolved commit must be recorded"
 
 
 def test_hfmodel_invalid_hf_repo_check() -> None:
@@ -84,8 +98,9 @@ def test_get_huggingface_token_prefers_environment_over_dotenv(tmp_path: Path, m
     assert get_huggingface_token() == "hf_from_env"
 
 
+@patch("senselab.utils.model_revision.resolve_revision", return_value="c" * 40)
 @patch("senselab.utils.dependencies.ensure_hf_model", return_value="abc123")
-def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock) -> None:
+def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock, mock_resolve: MagicMock) -> None:
     """Test that we successfully cache HF repo checks and only make the check once."""
     _ = HFModel(path_or_uri="unique_repo_name_1")
     assert mock_ensure.call_count == 1

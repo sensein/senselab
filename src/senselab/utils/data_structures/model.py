@@ -13,7 +13,7 @@ from dotenv import dotenv_values, find_dotenv
 from huggingface_hub import HfApi
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import ModelInfo
-from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator, model_validator
 from typing_extensions import Annotated
 
 from senselab.utils.dependencies import torchaudio_available
@@ -65,6 +65,13 @@ class HFModel(SenselabModel[PROVIDER_T]):
     """
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
+    commit_sha: Optional[str] = None
+    """The immutable 40-hex commit this run pins to, resolved at construction.
+
+    Distinct from ``revision``, which records what was *asked for*. Keeping both
+    lets provenance distinguish "pinned to abc123" from "tracked main, which
+    resolved to abc123" -- drift is only diagnosable when those are tellable apart.
+    """
     info: Optional[ModelInfo] = None
     _hf_cache: ClassVar[Dict[Tuple[str, str], bool]] = {}
 
@@ -93,6 +100,27 @@ class HFModel(SenselabModel[PROVIDER_T]):
                     "environment variables."
                 )
         return value
+
+    @model_validator(mode="after")
+    def _resolve_commit_sha(self) -> "HFModel":
+        """Pin this model to an immutable commit, once, at construction.
+
+        Skipped for local paths, which have no Hub revision. The resolution is one
+        the constructor already performs -- ``check_hf_repo_exists`` calls
+        ``ensure_hf_model``, which computes this SHA and discards it -- so this
+        adds no network call and no download.
+
+        Plain assignment, not ``object.__setattr__``: ``HFModel`` sets neither
+        ``frozen`` nor ``validate_assignment`` in its config, so pydantic's normal
+        ``__setattr__`` just stores the value -- no frozen-field bypass is needed,
+        and no assignment-time re-validation loop to worry about either.
+        """
+        if isinstance(self.path_or_uri, Path) or self.commit_sha is not None:
+            return self
+        from senselab.utils.model_revision import resolve_revision
+
+        self.commit_sha = resolve_revision(str(self.path_or_uri), self.revision)
+        return self
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
