@@ -181,6 +181,42 @@ class BrouhahaFrames:
         )
 
 
+def _build_worker_input(
+    chunks: list[dict],
+    model_name: str,
+    revision: str,
+    device: str,
+    out_dir: str,
+    token: Optional[str] = None,
+) -> dict:
+    """Build the JSON-able payload sent to the Brouhaha worker.
+
+    Resolves ``revision`` to its immutable commit SHA here, in the parent, rather than
+    handing the worker a ref (e.g. ``"main"``) to re-resolve against its own venv's cache —
+    two nodes in one run re-resolving independently can land on different commits if
+    upstream moves in between. Extracted out of ``extract_brouhaha_frames`` so this step
+    is unit-testable without spawning the subprocess venv.
+
+    Raises:
+        RevisionResolutionError: if ``revision`` cannot be resolved to a commit SHA
+            (propagates from :func:`resolve_revision`); the caller degrades to null
+            scene-quality signals rather than crash the whole run (FR-023).
+    """
+    # Deferred import (not at module top): keeps this module monkeypatch-friendly at
+    # `senselab.utils.model_revision.resolve_revision`, matching the rest of the codebase's
+    # convention for cross-module helpers (see e.g. HFModel._resolve_commit_sha).
+    from senselab.utils.model_revision import resolve_revision
+
+    resolved = resolve_revision(model_name, revision, token=token)
+    return {
+        "chunks": chunks,
+        "model_name": model_name,
+        "revision": resolved,
+        "device": device,
+        "out_dir": out_dir,
+    }
+
+
 def extract_brouhaha_frames(
     audios: list[Audio],
     device: Optional[DeviceType] = None,
@@ -235,24 +271,26 @@ def extract_brouhaha_frames(
             audio.save_to_file(path)
             chunk_specs.append({"path": path, "start_s": 0.0, "audio_idx": ai})
 
-        input_json = json.dumps(
-            {
-                "chunks": chunk_specs,
-                "model_name": model_id,
-                "revision": revision,
-                "device": device_type.value,
-                "out_dir": str(out_dir),
-            }
-        )
+        token = get_huggingface_token()
+        try:
+            payload = _build_worker_input(chunk_specs, model_id, revision, device_type.value, str(out_dir), token)
+        except Exception as exc:  # noqa: BLE001 — unresolvable revision degrades to null (FR-023), matching the
+            # venv-build failure above.
+            logger.warning(
+                f"Failed to resolve Brouhaha revision {model_id}@{revision}: {exc}. Scene-quality signals will be null."
+            )
+            return [None] * len(audios)
+        input_json = json.dumps(payload)
+        resolved_revision = payload["revision"]
 
         # Stage the (gated) model once (cross-process heartbeat lock) + run the
         # worker offline so its Model.from_pretrained makes no per-call Hub version
         # check — the 429 source under parallel batch. If staging fails (no access),
         # hf_subprocess_env leaves the env online so the worker's current path still
-        # runs.
-        env = hf_subprocess_env(
-            str(model_id), revision, base_env=_clean_subprocess_env(), token=get_huggingface_token()
-        )
+        # runs. Staged and sent under the SAME resolved SHA -- resolving twice (once here,
+        # once in _build_worker_input) risks the parent staging one commit while the worker
+        # is told to load another if upstream moves between the two calls.
+        env = hf_subprocess_env(str(model_id), resolved_revision, base_env=_clean_subprocess_env(), token=token)
         try:
             result = subprocess.run(
                 [python, "-c", _BROUHAHA_WORKER_SCRIPT],

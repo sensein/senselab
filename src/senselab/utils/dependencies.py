@@ -554,8 +554,20 @@ def hf_subprocess_env(
     online. This is the subprocess analogue of :func:`load_hf_resilient`: unlike an
     in-process env toggle (a no-op, since huggingface_hub freezes offline mode at
     import), the child imports fresh with the flag already set, so it is honored.
+
+    The returned env also carries ``SENSELAB_RUN_ID``, so the child process joins this
+    run's resolution manifest (see ``model_revision.py``) instead of starting its own.
+    Without this, a worker that resolves a ref itself would do so against an empty
+    manifest and could pin to a different commit than the rest of the run if upstream
+    moved between the two resolutions.
     """
     env = dict(os.environ if base_env is None else base_env)
+    # Set unconditionally, before either return path below: a worker that falls back to
+    # online loading (the early `return env` on a staging failure) must still inherit the
+    # parent's run identity, not just the happy path that reaches the offline flags.
+    from senselab.utils.model_revision import run_id
+
+    env["SENSELAB_RUN_ID"] = run_id()
     repos: list[Tuple[str, str]] = [(str(repo_id), revision), *(also or [])]
     for rid, rev in repos:
         try:
