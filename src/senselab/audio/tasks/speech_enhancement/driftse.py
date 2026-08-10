@@ -47,16 +47,26 @@ weights reachable; it does not grant rights over them. Treat them as
 all-rights-reserved by default and consult upstream before any use that turns on
 licence terms. See this module's ``doc.md`` for the status of the request.
 
-The ``upfirdn2d`` path, measured
--------------------------------
-Upstream ships a JIT-compiled CUDA extension for ``upfirdn2d`` with a pure-PyTorch
-fallback, and which one runs was an open question rather than a choice. Measured on
-an H100: upstream dispatches on ``input.device.type == "cpu" or upfirdn2d_op is
-None``, the extension was never compiled (no ``.so`` beside the source, empty
-``~/.cache/torch_extensions``), so ``upfirdn2d_op`` is ``None`` and the **native
-fallback runs even on CUDA** — producing correct output on a 4.92 s clip. The
-selection is therefore automatic and correct, and senselab forces nothing. If a
-future host does compile the extension, the same branch picks it up.
+The ``upfirdn2d`` path: no compilation, ever
+-------------------------------------------
+The concern this spec recorded — a JIT-compiled CUDA extension whose fallback
+selection was unconfirmed — does not apply at the pinned commit. Upstream's
+``backbones/ncsnpp_utils/op/upfirdn2d.py`` imports
+``torch.utils.cpp_extension.load`` and **never calls it**, hardcoding
+
+    # Force PyTorch fallback to avoid CUDA_HOME dependency
+    upfirdn2d_op = None
+
+so the dispatch ``if input.device.type == "cpu" or upfirdn2d_op is None`` always
+takes ``upfirdn2d_native`` (plain ``F.conv2d``), on CPU and CUDA alike. Confirmed on
+an H100: no ``.so`` beside the source, empty ``~/.cache/torch_extensions``, and
+correct output on a 4.92 s clip.
+
+Two consequences. The venv needs **no build toolchain** — no ``nvcc``, no
+``CUDA_HOME`` — which is why installing it is fast and portable. And the CUDA kernel
+path is unreachable, so its performance is not available either: enhancement runs
+through the PyTorch implementation. An upstream commit that restores the ``load()``
+call would change both, which is one more reason the commit is pinned.
 
 Not wired into ``audio_analysis``
 ---------------------------------
