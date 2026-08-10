@@ -1,10 +1,12 @@
 """unasdiff source separation — API contract and class-space handling."""
 
 import pytest
+import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.source_separation import separate_audios, unasdiff
 from senselab.audio.tasks.source_separation.api import resolve_source_classes
+from senselab.audio.tasks.source_separation.unasdiff import align_permutations
 from senselab.utils.data_structures import HFModel
 
 
@@ -157,3 +159,92 @@ def test_a_foreign_model_is_rejected(mono_audio_sample: Audio) -> None:
     foreign: HFModel = HFModel(path_or_uri="openai/whisper-tiny")
     with pytest.raises(ValueError, match="unasdiff"):
         separate_audios([mono_audio_sample], model=foreign, mode="speech_speech", n_sources=2)
+
+
+def test_identity_permutation_when_slots_already_match() -> None:
+    """Slots that already agree resolve to the identity permutation."""
+    a, b = torch.randn(1000), torch.randn(1000)
+    assert align_permutations([a, b], [a, b]) == [0, 1]
+
+
+def test_swapped_slots_are_detected() -> None:
+    """A permutation swap between windows must be detected, not ignored.
+
+    Windows are separated independently, so slot 0 in window k need not be the same source as
+    slot 0 in window k+1. Concatenating without this check swaps sources mid-file and the
+    result is worse than the mixture.
+    """
+    a, b = torch.randn(1000), torch.randn(1000)
+    assert align_permutations([a, b], [b, a]) == [1, 0]
+
+
+def test_three_sources_resolve_to_a_full_permutation() -> None:
+    """A three-way rotation resolves to a full, correct permutation, not a partial match."""
+    a, b, c = torch.randn(1000), torch.randn(1000), torch.randn(1000)
+    assert sorted(align_permutations([a, b, c], [c, a, b])) == [0, 1, 2]
+    assert align_permutations([a, b, c], [c, a, b]) == [1, 2, 0]
+
+
+def test_alignment_survives_scaling_and_noise() -> None:
+    """Correlation must be scale-invariant and tolerate the disagreement between windows.
+
+    Adjacent windows overlap but are not identical there -- each is the sampler's own estimate.
+    """
+    a, b = torch.randn(1000), torch.randn(1000)
+    noisy_a = 0.7 * a + 0.05 * torch.randn(1000)
+    noisy_b = 1.3 * b + 0.05 * torch.randn(1000)
+    assert align_permutations([a, b], [noisy_b, noisy_a]) == [1, 0]
+
+
+def test_long_input_is_chunked_aligned_and_stitched(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A long input is windowed, aligned across windows, and overlap-added back to full length.
+
+    Exercises the whole host-side chunking path in ``separate_with_unasdiff`` without a real
+    venv: ``subprocess.run`` is replaced with a fake worker that writes synthetic per-window,
+    per-source audio to the exact paths the driver asked for, so this proves the windowing
+    arithmetic, the alignment call, and the overlap-add stitching are wired together correctly
+    -- not that the sampler itself produces good separations, which needs the real venv and GPU
+    (see the skip-gated end-to-end test elsewhere in this module).
+    """
+    import types
+
+    from senselab.audio.tasks.source_separation import unasdiff as u
+
+    monkeypatch.setattr(u, "ensure_venv", lambda *a, **k: __import__("pathlib").Path("/tmp/fake-unasdiff-venv"))
+    monkeypatch.setattr(u, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(
+        cmd: list, *, input: str, capture_output: bool, text: bool, timeout: int, env: dict
+    ) -> "types.SimpleNamespace":
+        payload = __import__("json").loads(input)
+        for paths in payload["out_paths"]:
+            for p in paths:
+                segment = torch.randn(int(u._WINDOW_S * u._TARGET_SR))
+                Audio(waveform=segment.unsqueeze(0), sampling_rate=u._TARGET_SR).save_to_file(p)
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=__import__("json").dumps({"output_paths": payload["out_paths"]}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # longer than one 4 s window -> exactly two windows
+    long_audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+
+    result = u.separate_with_unasdiff(
+        [long_audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+    )
+
+    assert len(result) == 1
+    assert len(result[0]) == 2
+    for source in result[0]:
+        assert source.sampling_rate == u._TARGET_SR
+        assert source.waveform.shape[-1] == n_samples
+        # Two windows -> exactly one boundary -> one margin, carried for the caller to inspect
+        # rather than gated on (see data/permutation_alignment.json's derivation).
+        assert len(source.metadata["unasdiff_alignment_margins"]) == 1
