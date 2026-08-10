@@ -2,8 +2,15 @@
 
 ``write_signal_parquet`` writes **one file per signal**, accumulating across raw and every
 perturbation — long format, one row per ``(perturbation, bucket)``, the measurement carried as
-JSON in the tool's own units. Units, window, hop, model and revision travel per row so a reader
+JSON in the tool's own units. Units, window, hop and model travel per row so a reader
 can interpret the number without knowing which module produced it.
+
+There is deliberately **no** per-row revision or commit column. One existed, always null: its
+only producer read a top-level ``"revision"`` key from the measurement and no harvester sets
+one, so the column documented a provenance it never carried. Per-row is also the wrong place --
+every row in a file shares the model, so the commit belongs to the file. It is written as
+schema metadata under ``signal_provenance`` (see ``compute.py``), which carries both the
+requested ref and the resolved 40-hex commit.
 
 One file per ``(pass, signal)`` was the earlier form, and it made the perturbation an index on
 the *location*. That is what let a consumer open one perturbation's directory and get an answer
@@ -118,7 +125,6 @@ def write_signal_parquet(
         "native_window_s": pa.array([r.native_window_s for r in rows], type=pa.float64()),
         "resolution_s": pa.array([r.resolution_s for r in rows], type=pa.float64()),
         "model_id": pa.array([r.model_id for r in rows], type=pa.string()),
-        "revision": pa.array([r.revision for r in rows], type=pa.string()),
         "status": pa.array([r.status for r in rows], type=pa.string()),
     }
     table = pa.table(columns)
