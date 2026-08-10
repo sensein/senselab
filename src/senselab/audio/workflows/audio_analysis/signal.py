@@ -21,10 +21,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from senselab.utils.data_structures.logging import logger
+
 __all__ = [
     "UNITS",
     "SignalProvenance",
     "measurement",
+    "resolved_commit_sha",
 ]
 
 UNITS: dict[str, str] = {
@@ -61,6 +64,11 @@ class SignalProvenance:
     model: str
     units: str
     revision: str | None = None
+    # Both, deliberately (Task 5, mirroring StageContext.provenance_for): "revision" is the ref
+    # the model was pinned to, "commit_sha" is the immutable commit that ref resolved to for this
+    # run. A consumer that sees only "revision" cannot tell a deliberate pin from a tracked ref
+    # that happened to resolve there on the day; recording both makes that distinguishable.
+    commit_sha: str | None = None
     resolution_s: float | None = None
     window_s: float | None = None
     reduction: str | None = None
@@ -74,6 +82,7 @@ class SignalProvenance:
             "signal": self.signal,
             "model": self.model,
             "revision": self.revision,
+            "commit_sha": self.commit_sha,
             "units": self.units,
             "resolution_s": self.resolution_s,
             "window_s": self.window_s,
@@ -82,6 +91,25 @@ class SignalProvenance:
             "status": self.status,
             **({"extra": dict(self.extra)} if self.extra else {}),
         }
+
+
+def resolved_commit_sha(model_id: str, ref: str) -> str | None:
+    """Resolve ``model_id@ref`` to a commit SHA for a provenance block, or ``None`` on failure.
+
+    Shared by every module that stamps one specific model's revision onto a provenance block
+    (``compute.py``'s scene-quality and frame-posterior blocks, ``quality.py``'s per-signal
+    envelope), so there is one resolution path and one place that decides how a failure degrades.
+    Degrading to ``None`` rather than the ref matters here specifically: a provenance block that
+    fell back to the ref on a Hub outage would be indistinguishable from one that successfully
+    pinned a commit, silently reintroducing the ambiguity this task exists to remove.
+    """
+    from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
+
+    try:
+        return resolve_revision(model_id, ref)
+    except RevisionResolutionError as exc:
+        logger.warning(f"Could not resolve {model_id}@{ref} to a commit SHA for provenance: {exc}")
+        return None
 
 
 def measurement(

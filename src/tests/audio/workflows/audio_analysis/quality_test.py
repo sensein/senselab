@@ -29,6 +29,19 @@ from senselab.audio.workflows.audio_analysis.quality import QUALITY_SIGNALS, har
 
 SR = 16000
 
+_FAKE_SHA = "f" * 40
+
+
+@pytest.fixture(autouse=True)
+def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these tests offline (Task 5).
+
+    ``quality._provenance`` now resolves Brouhaha's ref to a commit SHA for every window whose
+    Brouhaha signals report ``"ok"`` — most tests here supply real (synthetic) Brouhaha frames via
+    ``_const_brouhaha``, so without this stub they would make a live Hub call for a gated model.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: _FAKE_SHA)
+
 
 def _audio(y: np.ndarray) -> Audio:
     """Wrap a 1-D numpy signal as a mono 16 kHz ``Audio``."""
@@ -173,6 +186,33 @@ def test_l1_provenance_declares_units_for_every_signal() -> None:
         assert prov[name]["model"]
         assert prov[name]["resolution_s"] == pytest.approx(0.25)
         assert prov[name]["window_s"] == pytest.approx(0.5)
+
+
+def test_l1_brouhaha_provenance_carries_the_resolved_commit_not_just_the_ref() -> None:
+    """Task 5: a reader must be able to tell the commit that produced the Brouhaha measurements.
+
+    ``revision`` alone (the ref, e.g. "main") cannot distinguish a deliberate pin from a tracked
+    ref that happened to resolve there on the day this ran — that ambiguity is exactly what this
+    task exists to remove, so both fields must travel together.
+    """
+    rows = _rows(_audio(_white_noise(1.0)), _const_brouhaha(1.0, 20.0, 25.0))
+    prov = rows[0]["provenance"]
+    for name in ("snr_brouhaha_db", "c50_brouhaha_db"):
+        assert prov[name]["revision"] == "main"
+        assert prov[name]["commit_sha"] == _FAKE_SHA
+        assert len(prov[name]["commit_sha"]) == 40
+    # Non-Brouhaha signals have nothing pinned, so neither field should claim one.
+    for name in ("snr_spectral_gating_db", "snr_peak_db", "rolloff_95_hz", "proportion_clipped", "rms"):
+        assert prov[name]["revision"] is None
+        assert prov[name]["commit_sha"] is None
+
+
+def test_l1_brouhaha_commit_sha_is_none_when_the_signal_is_unavailable() -> None:
+    """No Brouhaha frames → status is "unavailable", so nothing is resolved and nothing is claimed."""
+    rows = _rows(_audio(_white_noise(1.0)), None)
+    prov = rows[0]["provenance"]
+    assert prov["snr_brouhaha_db"]["status"] == "unavailable"
+    assert prov["snr_brouhaha_db"]["commit_sha"] is None
 
 
 # ── L2: degradation from measurements ────────────────────────────────────────
