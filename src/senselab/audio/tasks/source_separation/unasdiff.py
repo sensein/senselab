@@ -138,7 +138,14 @@ _UNASDIFF_REQUIREMENTS = [
     "thop==0.1.1.post2209072238",
     "toml==0.10.2",
     "tqdm==4.67.0",
-    "av==14.4.0",
+    # av (PyAV) is in upstream's requirements.txt but is NOT installed here. Measured on an
+    # H100: uv finds no wheel for av==14.4.0 on this interpreter and falls back to a source
+    # build, which fails with "You are REQUIRED to use ffmpeg 7" and pkg-config unable to
+    # find avformat/avcodec/... -- so the whole venv build dies. Checked upstream at the
+    # pinned commit: neither inference.py, utils.py nor dataloader.py imports av, so it is a
+    # training/data-pipeline dependency the inference path never touches. Same reasoning as
+    # flash-attn above, and the opposite of DriftSE's pesq, which looked training-only but
+    # was imported at module scope -- which is why this one was verified rather than assumed.
     "soundfile",
 ]
 
