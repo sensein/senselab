@@ -11,7 +11,9 @@ directory with:
 File references include optional integrity metadata:
 - checksum (SHA-256) for verifying data integrity
 - readonly flag to prevent in-place modification
-- file locks with heartbeat for concurrent access safety
+- a shared file lock (``SharedFileLock``) with a heartbeat that stale-detection
+  actually reads: a holder that dies mid-install or mid-transfer is detected and
+  taken over, rather than blocking every other process for the full lock timeout
 
 Safety features are configurable via ``safe_mode`` to minimize
 overhead for simple single-process workflows.
@@ -23,16 +25,14 @@ import logging
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
-
-from filelock import FileLock
 
 from senselab.utils.cuda_probe import (
     HostCuda,
@@ -41,6 +41,7 @@ from senselab.utils.cuda_probe import (
     detect_host_cuda,
     pick_torch_index,
 )
+from senselab.utils.file_lock import SharedFileLock
 
 logger = logging.getLogger("senselab")
 
@@ -107,46 +108,6 @@ class FileRef:
         if self.checksum and self._computed_hash:
             entry["checksum"] = self._computed_hash
         return entry
-
-
-class _FileLockWithHeartbeat:
-    """A file lock that touches a heartbeat file while held.
-
-    Other processes can check the heartbeat to distinguish a live lock
-    holder from a crashed one.
-    """
-
-    def __init__(self, path: Path, timeout: int = 300, heartbeat_interval: int = 15) -> None:
-        self._lock = FileLock(str(path.with_suffix(".lock")), timeout=timeout)
-        self._heartbeat_path = path.with_suffix(".heartbeat")
-        self._interval = heartbeat_interval
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-
-    def _beat(self) -> None:
-        while not self._stop.wait(self._interval):
-            try:
-                self._heartbeat_path.touch()
-            except OSError:
-                pass
-
-    def __enter__(self) -> "_FileLockWithHeartbeat":
-        self._lock.acquire()
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._beat, daemon=True)
-        self._thread.start()
-        self._heartbeat_path.touch()
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._stop.set()
-        if self._thread:
-            self._thread.join(timeout=5)
-        try:
-            self._heartbeat_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        self._lock.release()
 
 
 def _cache_dir_path() -> Path:
@@ -235,10 +196,17 @@ def ensure_venv(
         Path to the venv directory.
     """
     venv_dir = _cache_dir() / name
-    lock_path = _cache_dir() / f"{name}.lock"
     marker = venv_dir / ".senselab-installed"
 
-    with FileLock(str(lock_path), timeout=600):
+    # SharedFileLock derives its own ".lock" / ".heartbeat" paths from venv_dir by
+    # appending (never Path.with_suffix, which would collide two venv names differing
+    # only after a dot -- see file_lock.py's class docstring). timeout=600 matches this
+    # module's original FileLock timeout and is in fact the case SharedFileLock's own
+    # default was derived from: a venv install can legitimately take minutes. Unlike the
+    # plain FileLock this replaces, a holder that dies mid-install is detected on the
+    # next uncontended acquire (stale heartbeat) rather than blocking every waiter for
+    # the full 600s and then raising.
+    with SharedFileLock(venv_dir, timeout=600):
         # Auto-detect whether this venv routes torch through the CUDA
         # index: any caller-declared torch / torchaudio spec triggers the
         # probe + Stage-1 install. A backend that pins neither (yamnet,
@@ -412,8 +380,61 @@ def ensure_venv(
                 "source": torch_index.source,
             }
         marker.write_text(json.dumps(marker_data))
+        # Strictly after the marker write: an interrupted chmod pass must never leave a venv
+        # that looks complete (marker present) to a second user but that user still can't
+        # execute (see _make_group_readable's docstring for why building it group-writable
+        # alone doesn't already cover this).
+        _make_group_readable(venv_dir)
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
+
+
+def _make_group_readable(venv_dir: Path) -> None:
+    """Add group read (and execute, where already owner-executable) across a completed venv tree.
+
+    Building the venv under a group-writable cache directory only lets a second user take over a
+    stale build (``SharedFileLock``'s ``LOCK_DIR_MODE``) -- it says nothing about whether that user
+    can *run* the interpreter the first user produced. ``uv venv`` and the subsequent installs create
+    every file under the process umask, so unless the group happens to already have read (and, for
+    executables, execute) access from some other setting, a second user can see the venv but not use
+    it: a shared cache that is buildable but not usable, which is the gap this closes.
+
+    Directories always gain group execute -- without it the directory can't be traversed by the
+    group regardless of what's inside. Files gain group read always, and group execute only when
+    already owner-executable: mirroring the owner's bit rather than escalating it, so a data file
+    does not become runnable just because it lives in the same tree as ``bin/python``.
+
+    A failed ``chmod`` is ignored: a shared cache directory can hold entries left by a different
+    user's earlier, unrelated build, which this process cannot re-permission -- and raising here
+    would abort the whole walk on that one leftover instead of still fixing every entry this
+    process does own.
+
+    Args:
+        venv_dir: Root of a just-completed venv tree. Call this only after the
+            ``.senselab-installed`` marker is written (see ``ensure_venv``) -- an interrupted
+            chmod pass here must never be the difference between a venv reading as complete
+            and reading as usable.
+    """
+    for root, _dirs, files in os.walk(venv_dir):
+        root_path = Path(root)
+        try:
+            mode = root_path.stat().st_mode
+            os.chmod(root_path, mode | stat.S_IRGRP | stat.S_IXGRP)
+        except OSError:
+            pass
+        for name in files:
+            file_path = root_path / name
+            try:
+                mode = file_path.stat().st_mode
+            except OSError:
+                continue
+            new_mode = mode | stat.S_IRGRP
+            if mode & stat.S_IXUSR:
+                new_mode |= stat.S_IXGRP
+            try:
+                os.chmod(file_path, new_mode)
+            except OSError:
+                pass
 
 
 # uv emits these phrases when it can't find a compatible wheel. The
@@ -860,11 +881,15 @@ def call_in_venv(
             if isinstance(value, Path) and value.is_file():
                 effective_args[key] = FileRef(path=value, readonly=True, checksum=True)
 
-    # Collect FileRef locks to hold during execution
-    file_locks: list[_FileLockWithHeartbeat] = []
+    # Collect FileRef locks to hold during execution. SharedFileLock derives its own
+    # ".lock" / ".heartbeat" paths from value.path by appending, never Path.with_suffix
+    # (see file_lock.py) -- a FileRef path can legitimately contain a dot (e.g. a
+    # revisioned filename), and with_suffix would silently collide two such paths onto
+    # one lock file.
+    file_locks: list[SharedFileLock] = []
     for value in effective_args.values():
         if isinstance(value, FileRef) and value.lock:
-            fl = _FileLockWithHeartbeat(value.path, timeout=value.lock_timeout)
+            fl = SharedFileLock(value.path, timeout=value.lock_timeout)
             fl.__enter__()
             file_locks.append(fl)
 

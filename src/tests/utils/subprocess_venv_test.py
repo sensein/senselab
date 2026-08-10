@@ -8,6 +8,8 @@ behavior across the three real subprocess-venv backends.
 """
 
 import json
+import os
+import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -82,6 +84,78 @@ class _SubprocessRecorder:
         if self.hook is not None:
             return self.hook(self.calls)
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+
+# ── Group-readable venv permissions ────────────────────────────────
+
+
+def test_a_completed_venv_is_group_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second user must be able to run the interpreter the first user built.
+
+    Group-writable lock files let user B take over a stale build; they do not let
+    B execute A's venv. Venv trees are created under the default umask, so without
+    this a shared cache is buildable but not usable.
+    """
+    venv_dir = tmp_path / "venv"
+    bin_dir = venv_dir / "bin"
+    site_packages = venv_dir / "lib" / "python3.12" / "site-packages"
+    site_packages.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+
+    interpreter = bin_dir / "python3.12"
+    interpreter.write_text("#!/bin/sh\n")
+    interpreter.chmod(0o700)  # owner rwx only -- typical default-umask result for an executable
+
+    module = site_packages / "pkg.py"
+    module.write_text("x = 1\n")
+    module.chmod(0o600)  # owner rw only, no execute bit to mirror
+
+    for d in (venv_dir, bin_dir, site_packages):
+        d.chmod(0o700)
+
+    subprocess_venv._make_group_readable(venv_dir)
+
+    # An already-executable file gets group-execute mirrored alongside group-read.
+    assert stat.S_IMODE(interpreter.stat().st_mode) & 0o070 == 0o050
+    # A plain, non-executable file gets group-read only -- it must not become runnable
+    # just because it lives in the same tree as bin/python.
+    assert stat.S_IMODE(module.stat().st_mode) & 0o070 == 0o040
+    # Directories always need group read+execute, or the group can't traverse them
+    # regardless of what's inside.
+    for d in (venv_dir, bin_dir, site_packages):
+        assert stat.S_IMODE(d.stat().st_mode) & 0o070 == 0o050
+
+
+def test_group_readable_ignores_chmod_failures_on_foreign_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry owned by a different user must not abort the walk for the rest.
+
+    A shared cache directory can hold leftovers from a different user's earlier,
+    unrelated build; this process cannot re-permission those, and raising on the
+    first one would stop the group-readable pass before it reaches everything else
+    in the tree that this process *does* own.
+    """
+    venv_dir = tmp_path / "venv"
+    bin_dir = venv_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    owned = bin_dir / "mine.py"
+    owned.write_text("x = 1\n")
+    foreign = bin_dir / "not-mine.py"
+    foreign.write_text("y = 2\n")
+
+    real_chmod = os.chmod
+
+    def _flaky_chmod(path: object, mode: int, *args: object, **kwargs: object) -> None:
+        if str(path) == str(foreign):
+            raise PermissionError("not the owner")
+        real_chmod(path, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "chmod", _flaky_chmod)
+
+    subprocess_venv._make_group_readable(venv_dir)  # must not raise
+
+    assert stat.S_IMODE(owned.stat().st_mode) & 0o040 == 0o040
 
 
 # ── Marker mismatch + rebuild paths ────────────────────────────────
