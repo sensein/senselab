@@ -115,6 +115,28 @@ def test_a_corrupt_manifest_does_not_crash_resolution(monkeypatch: pytest.Monkey
     assert resolve_revision("org/model", "main") == SHA_A
 
 
+def test_cache_root_agrees_with_dependencies_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_cache_root`` must not drift from ``dependencies._senselab_cache_dir``.
+
+    The two duplicate the same env var and default path -- duplication forced by
+    the circular-import constraint (``dependencies`` imports this module) -- and
+    nothing else catches the two definitions drifting apart, which would put the
+    run manifest in a different tree from the rest of the HF cache.
+    """
+    import senselab.utils.dependencies as deps
+    import senselab.utils.model_revision as mr
+
+    override = tmp_path / "explicit-cache"
+    monkeypatch.setenv("SENSELAB_CACHE", str(override))
+    assert mr._cache_root() == deps._senselab_cache_dir()
+
+    # Unset case: also pin HOME so dependencies._senselab_cache_dir()'s mkdir
+    # lands under tmp_path rather than creating ~/.cache/senselab/hf for real.
+    monkeypatch.delenv("SENSELAB_CACHE", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert mr._cache_root() == deps._senselab_cache_dir()
+
+
 def _record_resolution_worker(sha: str, cache_dir: str, out: "mp.Queue[str]") -> None:
     """Run ``record_resolution`` in a spawned process and report the winning SHA.
 
