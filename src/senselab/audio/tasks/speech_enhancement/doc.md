@@ -64,8 +64,14 @@ The upstream repository reports no license (no `LICENSE` file, no statement in t
 itself built on SGMSE+ (MIT) without carrying that statement forward. senselab therefore vendors none
 of it: the worker clones the repository at a pinned commit into the user's own cache at first use. A
 license request was opened upstream on 2026-08-08 and remains unanswered:
-<https://github.com/LiangXu123/DriftSE/issues/2>. The checkpoint mirror under `sensein` is **private**
-until it is answered — see the model registry entry for the pinned revision and file digests.
+<https://github.com/LiangXu123/DriftSE/issues/2>.
+
+The checkpoint mirror under `sensein` is **public**, so the backend is usable during the alpha, and its
+licence is **unknown** — those are two separate facts and both matter. Publishing the mirror makes the
+weights reachable; it grants no rights over them. No terms have been offered upstream, so treat the
+weights as all-rights-reserved by default and consult
+<https://github.com/LiangXu123/DriftSE> before any use that turns on licence terms. See the model
+registry entry for the pinned revision and file digests.
 
 ### Not wired into `audio_analysis`
 

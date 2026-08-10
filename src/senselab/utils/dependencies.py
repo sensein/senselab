@@ -293,15 +293,45 @@ def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
     )
 
 
+# A cached "not found" expires; a cached success does not. HuggingFace returns a plain 404 for a
+# private repo the caller cannot see -- deliberately, so repo existence does not leak -- which makes
+# "does not exist" and "exists but you lack access" indistinguishable at the API. Caching either as
+# permanent means an access change never takes effect: measured on ORCD, a repo that 404'd under a
+# narrowly-scoped token stayed "missing" on that host after the token was re-scoped AND the repo was
+# made public, because every later call read this file instead of asking again. GatedRepoError is
+# already exempt from caching, but that only covers gated repos that announce themselves.
+#
+# One hour: long enough to still absorb a retry storm across a job array, short enough that fixing a
+# token or flipping a repo public is not a mystery.
+_NEGATIVE_CACHE_TTL_S = 3600.0
+
+
 def _read_result_cache(repo_id: str, revision: str) -> Optional[dict]:
-    """Read a cached validation/download result from the filesystem."""
+    """Read a cached validation/download result, expiring stale negative entries.
+
+    Returns ``None`` for a "not found" entry older than :data:`_NEGATIVE_CACHE_TTL_S` so the caller
+    re-asks the Hub, because such an entry may only mean "not visible to the token used then".
+    """
     cache_file = _senselab_cache_dir() / f"{_safe_key(repo_id, revision)}.json"
     if not cache_file.is_file():
         return None
     try:
-        return json.loads(cache_file.read_text())  # type: ignore[no-any-return]
+        payload = json.loads(cache_file.read_text())
     except Exception:
         return None
+    if isinstance(payload, dict) and payload.get("status") == "error":
+        try:
+            if time.time() - cache_file.stat().st_mtime > _NEGATIVE_CACHE_TTL_S:
+                logger.info(
+                    "Ignoring a stale cached failure for %s@%s (older than %.0fs); re-checking the Hub",
+                    repo_id,
+                    revision,
+                    _NEGATIVE_CACHE_TTL_S,
+                )
+                return None
+        except OSError:
+            return None
+    return payload  # type: ignore[no-any-return]
 
 
 def _write_result_cache(repo_id: str, revision: str, **data: object) -> None:
