@@ -989,7 +989,50 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Replace the shim with the real workflow adapter
+### Task 6: Move the pass-level API out of the task layer into a workflow adapter
+
+**This task's original text is superseded and kept below only as a record.** It said "replace the
+shim" in `audio_analysis/pii.py`. That shim no longer exists: it was deleted and its single
+consumer (`scripts/analyze_audio.py`) repointed at the task module, because this repository's
+pre-alpha convention forbids re-export shims. Following the original text literally would
+re-introduce one.
+
+The defect it was aiming at is still real, and is now precisely locatable. `detect_pii_in_pass`
+and `PiiPassReport` live in `src/senselab/text/tasks/pii_detection/api.py`, and that file
+mentions `perturbation` ten times. "Pass" and "perturbation" are `audio_analysis` vocabulary. The
+task API is supposed to be standalone — that was the whole point of the relocation — and it
+currently carries workflow concepts inside it.
+
+So the direction is the inverse of what was written: **move the pass-level API out of the task
+layer**, leaving `text/tasks/pii_detection` free of workflow vocabulary.
+
+**Files:**
+- Create: `src/senselab/audio/workflows/audio_analysis/pii.py` — the adapter, owning
+  `PiiPassReport`, `detect_pii_in_pass`, and `report_to_dict`.
+- Modify: `src/senselab/text/tasks/pii_detection/api.py` — remove those three and every
+  `perturbation` reference; `detect_pii`, `PiiReport`, `PiiSpan` and the scoring helpers stay.
+- Modify: `scripts/analyze_audio.py` — repoint its import at the adapter.
+- Test: `src/tests/audio/workflows/pii_adapter_test.py`
+
+**Interfaces:**
+- Consumes: `detect_pii` and `PiiReport` (Task 2), `_compute_detection_confidence` and
+  `corroboration_family` (Task 3 and its follow-up).
+- Produces: `PiiPassReport`, `detect_pii_in_pass(perturbation, asr_resolved, **kwargs) ->
+  PiiPassReport`, and `report_to_dict(report) -> dict` — **the same shapes they have today**, so
+  `scripts/analyze_audio.py` changes only its import line and no artifact format moves.
+
+**Two things the adapter exists to do**, and they are the reason it is not just a re-export:
+1. **Re-attach `perturbation`**, which the workflow keys artifacts on and the task API
+   deliberately does not carry.
+2. **Own the multi-ASR ensemble.** `asr_resolved` maps model id → scriptlines, and cross-ASR
+   corroboration is only meaningful with more than one transcript. The standalone path scans one
+   transcript and cannot have it; that asymmetry belongs on the workflow side.
+
+**A test must prove the layering, not just the behaviour:** assert that
+`src/senselab/text/tasks/pii_detection/` contains no occurrence of `perturbation` and no import
+from `senselab.audio.workflows`. Without that, the vocabulary drifts back one function at a time.
+
+<details><summary>Superseded original text</summary>
 
 **Files:**
 - Rewrite: `src/senselab/audio/workflows/audio_analysis/pii.py`
@@ -998,6 +1041,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 **Interfaces:**
 - Consumes: `detect_pii` (Task 2), `_compute_detection_confidence` (Task 3).
 - Produces: `PiiPassReport` and `detect_pii_in_pass(perturbation, asr_resolved, **kwargs) -> PiiPassReport` and `report_to_dict(report) -> dict`, all with the **same shape they have today**, so no `audio_analysis` caller changes.
+
+</details>
 
 - [ ] **Step 1: Write the failing test**
 
