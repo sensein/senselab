@@ -253,14 +253,18 @@ def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
          repos with no ``config.json``);
       3. a cached file's ``snapshots/<sha>/`` parent directory.
 
-    Returns ``revision`` unchanged only as a last resort; callers needing an
-    immutable identity should treat a non-40-hex return as "unresolved" (the
-    snapshot could not be located locally).
+    Raises:
+        RevisionResolutionError: If none of the above resolves ``revision`` to a
+            SHA. Callers needing an immutable identity cannot be handed the
+            mutable ``revision`` back as if it were one; the caller can retry
+            against the Hub instead (see ``model_revision._resolve_uncached``).
     """
     if _SHA_RE.match(revision):
         return revision
 
     from huggingface_hub import constants, try_to_load_from_cache
+
+    from senselab.utils.model_revision import RevisionResolutionError
 
     ref_file = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "refs" / revision
     try:
@@ -279,7 +283,14 @@ def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
                 return Path(result).parent.name
         except Exception:
             continue
-    return revision
+
+    # Returning `revision` here would hand a mutable ref to callers that will
+    # record it as a commit -- provenance that is confidently wrong, which is
+    # worse than none. Refuse instead; the caller can go to the Hub.
+    raise RevisionResolutionError(
+        f"{repo_id}@{revision} is not resolvable from the local cache "
+        f"(no refs/{revision} pointer and no snapshot directory)."
+    )
 
 
 def _read_result_cache(repo_id: str, revision: str) -> Optional[dict]:
