@@ -38,6 +38,19 @@ if TYPE_CHECKING:  # pragma: no cover — avoids a runtime torch+transformers im
 __all__ = ["STAGE_VERSIONS", "PassPlan", "StageContext", "stage_code_version"]
 
 
+_DEFAULT_REVISION_REF: Final[str] = "main"
+"""The ref every ``_commit_sha_for`` resolution is made against.
+
+True today for a structural reason, not a hardcoded guess: a model id reaching :class:`StageContext`
+is a bare Hub id (``PassPlan.asr_models``, ``.ast_model``, ``.qwen_aligner_model``, ...) with no
+per-model revision knob anywhere in this module's plumbing, so there is nowhere for a caller to have
+asked for anything other than ``resolve_revision``'s default ref. If ``PassPlan`` ever grows such a
+knob, this constant and ``_commit_sha_for``'s call into ``resolve_revision`` both need to start
+threading that value through — silently leaving this literal behind would make
+:meth:`StageContext.provenance_for`'s ``"revision"`` lie about what was actually requested.
+"""
+
+
 _VARIANT_NAMES: Final[tuple[str, ...]] = tuple(TRANSFORMS)
 """Recognized audio variants — exactly the declared perturbation transforms.
 
@@ -197,7 +210,7 @@ class StageContext:
             return None
         from senselab.utils.model_revision import resolve_revision
 
-        return resolve_revision(model_id)
+        return resolve_revision(model_id, ref=_DEFAULT_REVISION_REF)
 
     def align_key_for(
         self,
@@ -227,6 +240,13 @@ class StageContext:
         ``audio_signature`` here must match what ``summary.json`` reports for the
         pass — ``adaptive/interventions.py::build_cache_index`` joins on it.
         """
+        # Resolved once and reused for both fields below: "revision" is what was asked for,
+        # "commit_sha" is what ran. Recording only the second cannot distinguish a deliberate
+        # pin from a tracked ref that happened to resolve there on the day. "revision" tracks
+        # commit_sha's None-ness rather than being unconditionally "main": a model-less stage or
+        # a non-Hub backend name has nothing pinned, and claiming a ref for it would assert a
+        # request that was never made.
+        commit_sha = self._commit_sha_for(model_id)
         return {
             "task": task,
             "model_id": model_id,
@@ -241,6 +261,8 @@ class StageContext:
             "senselab_version": self.senselab_ver,
             "cache_schema_version": CACHE_SCHEMA_VERSION,
             "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "revision": _DEFAULT_REVISION_REF if commit_sha is not None else None,
+            "commit_sha": commit_sha,
         }
 
     def write_sidecar(self, relpath: str | Path, payload: Any) -> None:  # noqa: ANN401 — senselab outputs
