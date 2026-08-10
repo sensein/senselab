@@ -356,12 +356,13 @@
     https://github.com/RunwuShi/unasdiff carries no LICENSE file and no
     README licence statement, so no terms have been granted for these
     weights. A licence request was opened 2026-08-08 and is unanswered:
-    https://github.com/RunwuShi/unasdiff/issues/1. The mirror is private
-    pending that answer — a caller without access uses the
-    SENSELAB_UNASDIFF_CHECKPOINTS override. Reachability (were the mirror
-    ever made public) would still grant no rights: treat the weights as
+    https://github.com/RunwuShi/unasdiff/issues/1. The mirror is public so
+    the backend is usable during the alpha, which is a deliberate decision
+    taken with that unknown status visible rather than resolved:
+    reachability grants no rights. Treat the weights as
     all-rights-reserved by default, and consult upstream before any use
-    that depends on licence terms.
+    that depends on licence terms. SENSELAB_UNASDIFF_CHECKPOINTS remains
+    for a caller supplying their own checkpoints.
   recommended_for: >-
     Unsupervised speech/sound source separation via two independently
     trained diffusion priors (speech_sound, sound_sound, speech_speech
