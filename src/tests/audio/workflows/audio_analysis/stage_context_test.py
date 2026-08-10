@@ -143,10 +143,14 @@ def test_commit_sha_for_a_non_hub_id_skips_resolution(monkeypatch: pytest.Monkey
 def test_commit_sha_for_a_hub_id_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``org/name``-shaped id is resolved through the run-scoped resolver."""
     sha = "c" * 40
-    seen = []
-    monkeypatch.setattr(
-        "senselab.utils.model_revision.resolve_revision", lambda repo_id, *a, **k: (seen.append(repo_id), sha)[1]
-    )
+    seen: list[str] = []
+
+    def _record(repo_id: str, *a: object, **k: object) -> str:
+        """Record the id it was asked to resolve, so the assertion can check what was passed."""
+        seen.append(repo_id)
+        return sha
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _record)
     assert _ctx()._commit_sha_for("openai/whisper-tiny") == sha  # noqa: SLF001
     assert seen == ["openai/whisper-tiny"]
 
