@@ -52,7 +52,7 @@ REVISION_RESOLVED_SUBPROCESS_FILES = {
     "audio/tasks/speaker_diarization/child_adult.py",
     "audio/tasks/speaker_diarization/moss.py",
     "audio/tasks/speech_to_text/qwen.py",
-    "audio/workflows/audio_analysis/pii_subprocess.py",
+    "text/tasks/pii_detection/subprocess_backend.py",
 }
 
 # Subprocess workers that CANNOT pass a revision to their loader, because the upstream loader has
