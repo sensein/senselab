@@ -107,10 +107,64 @@ warm machine keeps returning January's commit while a cold machine downloads Aug
 senselab version, same config, different weights, no signal anywhere.
 
 This design does not change that behaviour, and deliberately so: re-checking the Hub on every
-resolution would reintroduce the 429 rate-limiting that `load_hf_resilient` exists to avoid. What it
-changes is that the two machines are no longer indistinguishable — the SHA is in the cache key and in
-the provenance, so the divergence is visible in the record instead of silent. Making `main` staleness
-*detectable* (rather than merely visible after the fact) is a separate concern and is not in scope.
+resolution would reintroduce the 429 rate-limiting that `load_hf_resilient` exists to avoid.
+
+Recording the SHA makes the divergence *visible*. It does not make it *stop*, and for one important
+case visibility is not enough — see the next section.
+
+## One run, one SHA: the resolution manifest
+
+A cluster sweep is not one process. It is an array of jobs across nodes, each spawning subprocess
+venvs, running over hours or days. If upstream pushes to `main` partway through, the tasks that
+resolve after the push get different weights from the ones before it. Every task would record its own
+SHA correctly, and the run as a whole would be quietly inhomogeneous — results from two different
+models pooled into one analysis, each individually well-documented. Per-task provenance *documents*
+that split; it does not prevent it, and a split run is usually worthless rather than merely annotated.
+
+**A run resolves each `(repo_id, ref)` exactly once, and every participant binds to that answer.**
+
+The run is named by `SENSELAB_RUN_ID`:
+
+- If set, it is inherited — a Slurm submission exports one value (a UUID, or `$SLURM_JOB_ID`) and
+  every node, task, and subprocess venv in that submission shares it.
+- If unset, senselab generates a UUID4 at first use and exports it to every subprocess it spawns. A
+  bare `python -m senselab ...` is therefore its own run, self-consistent, with no configuration
+  required. This is the "for a given process launch" case: the launch is the run.
+
+Resolution consults a per-run manifest before anything else:
+
+```
+$SENSELAB_CACHE/runs/<run_id>/resolutions.json
+    {"openai/whisper-large-v3-turbo@main": "abc123…", …}
+```
+
+`resolve_revision(repo_id, ref)` becomes: manifest hit → return that SHA, no network and no local
+`refs/` read; manifest miss → resolve as described above, record the entry, return it. The
+first participant to need a model decides for the whole run; everyone after follows, including a task
+that starts on a cold node a day later.
+
+**Writes take a `SharedFileLock`** on the manifest — this is precisely the multi-user,
+multi-node, read-modify-write case that lock was built for, and the manifest lives in the same shared
+tree. Two nodes resolving the same model concurrently must not lose one another's entries, and the
+loser of the race adopts the winner's SHA rather than overwriting it. Manifest writes are therefore
+append-if-absent, never replace: an entry, once recorded, is immutable for the life of the run. That
+immutability is the whole guarantee.
+
+**The manifest is also the run's provenance.** It is a single small file listing every model the run
+used and the exact commit of each — recoverable without parsing per-artifact metadata, and the
+natural thing to attach to a paper or a bug report.
+
+Two consequences worth being explicit about:
+
+- **A long-lived run pins to increasingly old commits.** That is the intent: within a run, consistency
+  beats freshness. A new run gets a new id and re-resolves.
+- **The manifest is authoritative over the local cache.** If the manifest names a SHA a node does not
+  have, that node downloads that SHA rather than using whatever its `refs/main` points at. This is the
+  case that makes the guarantee real on a heterogeneous cluster, and it is where the two-call rule
+  above stops being a formality: the load *must* pass the SHA, or the node silently uses its own.
+
+Run directories are small JSON files and accumulate; pruning is a housekeeping concern, not part of
+this design's correctness. They are safe to delete once a run is finished.
 
 ## Design
 
@@ -194,10 +248,21 @@ The specific assertions:
 - **Hard-error path**: cold cache plus unreachable Hub raises rather than falling back to the ref.
 - **Provenance round-trip**: run a stage, read the artifact back, assert both `revision` and
   `commit_sha` are present and that `commit_sha` is 40-hex.
+- **The manifest pins across an upstream move.** Seed a manifest with a known SHA, then make the
+  resolver's underlying lookup return a *different* SHA (as an upstream push would) and assert
+  `resolve_revision` still returns the manifest's. This is the test that proves the run-consistency
+  guarantee, and it needs no network — the "upstream moved" half is a monkeypatch.
+- **Concurrent first-resolution does not lose an entry.** Two processes resolving the same model at
+  once must end with one agreed SHA, and the loser must adopt the winner's rather than overwrite it.
+  Worth one real `multiprocessing` test: mocking the lock would prove nothing about the case the
+  lock exists for.
+- **Run id propagates.** Assert a spawned subprocess venv's environment carries the parent's
+  `SENSELAB_RUN_ID`, and that an unset id is generated once rather than per-call.
 
 ## What this does not do
 
-- It does **not** add a lockfile, or any way to replay an old run's SHAs. Record-only by decision.
+- It does **not** add a lockfile, or any way to replay a *past* run's SHAs. The manifest pins a run
+  to itself while it runs; it is not a checked-in artifact you re-run against months later.
 - It does **not** change which models are used or any default model list.
 - It does **not** make `HFModel` construction more expensive — the resolution it captures is one the
   constructor already performs and discards.
