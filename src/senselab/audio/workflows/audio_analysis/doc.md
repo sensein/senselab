@@ -149,6 +149,44 @@ Its `temperature` and `token_entropy_reference_nats` fields currently reach **no
 consumers were the uncalled per-axis aggregators — and are kept validated rather than dropped so
 fitted values survive until `fuse_axis` takes them.
 
+## One run, one commit: `SENSELAB_RUN_ID`
+
+A sweep is not one process. It is an array of jobs across nodes, each spawning subprocess venvs,
+running for hours or days. If an upstream repo pushes to a tracked ref partway through, the tasks
+that resolve after the push load different weights from the ones before it — each recording its own
+commit correctly, and the run as a whole quietly inhomogeneous. Per-task provenance *documents* that
+split; it does not prevent it, and a split run is usually worthless rather than merely annotated.
+
+So a run resolves each `(repo_id, ref)` **exactly once**, and every participant binds to that answer:
+
+```bash
+# One submission, one run: every node, task and subprocess venv shares the id.
+export SENSELAB_RUN_ID="$SLURM_JOB_ID"
+uv run python scripts/analyze_audio.py audio.wav
+```
+
+Leave it unset and senselab generates a UUID4 at first use and exports it to every subprocess it
+spawns, so a bare launch is its own self-consistent run with no configuration required.
+
+The bindings live in `$SENSELAB_CACHE/runs/<run_id>/resolutions.json`, mapping
+`"<repo_id>@<ref>" -> "<40-hex commit>"`. Resolution consults it before the local `refs/` read and
+before any network call, so the first participant to need a model decides for the whole run and
+everyone after follows — including a task starting on a cold node a day later.
+
+Three properties worth knowing:
+
+- **Entries are append-if-absent and immutable for the run's life.** Writes take a `SharedFileLock`,
+  and the loser of a concurrent race adopts the winner's commit rather than overwriting it. That
+  immutability is the entire guarantee.
+- **The manifest outranks the local cache.** If it names a commit a node does not have, that node
+  downloads *that* commit rather than using whatever its own `refs/main` points at.
+- **A long-lived run pins to increasingly old commits.** That is the intent: within a run,
+  consistency beats freshness. A new run id re-resolves.
+
+It doubles as the run's provenance — one small file naming every model the run used and its exact
+commit, without parsing per-artifact metadata. Run directories are small and safe to delete once a
+run is finished.
+
 ## Background scene characterization and per-speaker identity
 
 Background sound sources are detected by **per-band noise-floor subtraction**, not by

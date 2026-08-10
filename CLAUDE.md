@@ -89,6 +89,23 @@ Key audio processing capabilities in `audio/tasks/`:
   `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
   `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
   more than recomputing one, and the wipe is automatic on every host.
+- **Cache keys are commit-aware as of schema 23, so the first run after that change recomputes
+  everything.** Keys used to carry a bare `model_id`, so an upstream push to a tracked ref loaded
+  new weights under an unchanged key and served a result computed by the *old* commit as current.
+  Keys now include the resolved 40-hex commit, which is what makes an upstream push invalidate on
+  its own. Every pre-23 entry predates that and cannot be attributed to a commit, so none is
+  reused — a one-time full recompute, not a regression, and worth saying out loud before someone
+  reports it as one.
+- **A model load must pass a commit SHA, never a ref.** Resolving `main` to a SHA binds nothing by
+  itself: `snapshot_download(revision="main")` writes `refs/main` and the caller stays
+  ref-addressed, so a later load passing `"main"` goes back through that pointer, which may have
+  moved. Every load is therefore two calls — resolve, then load again with `revision=<sha>` — and
+  the second is free, because a full SHA triggers `huggingface_hub`'s commit-hash shortcut and
+  returns cached files with no network at all. `src/tests/utils/revision_pinning_guard_test.py`
+  enforces this by AST sweep over the subprocess-worker files: a new worker payload carrying a
+  `revision`-ish key fails the test until it is reviewed and allowlisted. Recording a SHA while
+  loading through a ref is the one outcome worse than recording nothing, because the provenance is
+  then confidently wrong.
 - **Thresholds belong in `data/` with a written derivation, never as code literals.** Two defects
   this session came from literals that were never fitted: a silhouette coefficient read directly as
   a probability, and a 2→10 dB HNR ramp under which ordinary voiced speech (median 8.12 dB) read as
