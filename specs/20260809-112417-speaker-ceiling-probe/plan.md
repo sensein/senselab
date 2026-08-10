@@ -253,6 +253,32 @@ measures senselab's diarizers against this ground truth; deriving that ground tr
 senselab component would fold its alignment error into the measurement and make a poor result
 ambiguous between "the diarizer miscounted" and "the alignments were wrong".
 
+**Chosen approach: TTS-composed sessions, borrowing NeMo's session model rather than its
+simulator.** Instead of sourcing an aligned corpus, synthesize the single-speaker material with
+senselab's own `synthesize_texts` (Coqui exposes distinct voices via `tts.speakers[i]`, and
+`speaker_wav` clones from reference clips when more identities are needed than the model ships), then
+compose sessions ourselves.
+
+Why this is better than LibriSpeech-plus-alignments, and not merely cheaper: **the ground truth
+becomes constructive rather than estimated.** Placing a synthesized utterance at a chosen offset
+means the RTTM is exact by definition — there is no alignment step whose error could be mistaken for
+a diarizer miscounting. It also removes the corpus download, the published-alignment dependency, and
+the need to run NeMo at all for generation.
+
+What to borrow from `data_simulation.py` is its *session model*, which is the part carrying real
+judgement: `turn_prob` (speaker switching), `dominance_var` / `min_dominance` (unequal speaking
+time), `sentence_length_params` (negative-binomial utterance lengths), the overlap probability, and
+`session_length`. A naive round-robin at equal dominance would make speaker counting far easier than
+real conversation and inflate every ceiling.
+
+**The caveat must ship with the numbers.** A ceiling measured on TTS-composed audio is a ceiling on
+*clean, synthetically distinct voices*: no room acoustics, no channel variation, and vocoder
+characteristics shared across speakers. That plausibly makes counting easier than real speech (more
+separable identities) and could make it harder (shared synthesis artifacts). Either way the measured
+value is an upper bound on well-conditioned audio, not a guarantee about a real recording — and the
+profile records the generation method beside the curve so a reader can judge that for themselves,
+exactly as it records the 80% threshold beside the distribution it was applied to.
+
 The probe's knobs map onto the config directly: `session_config.num_speakers` is the *k* being
 swept, `session_config.num_sessions` is sessions-per-count, and **`enforce_num_speakers` must be
 true** — without it a session requested at *k*=8 may contain fewer speakers, which silently corrupts
