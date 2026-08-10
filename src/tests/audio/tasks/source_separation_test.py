@@ -154,8 +154,15 @@ def test_an_unknown_mode_raises(mono_audio_sample: Audio) -> None:
         separate_audios([mono_audio_sample], mode="music_speech", n_sources=2)
 
 
-def test_a_foreign_model_is_rejected(mono_audio_sample: Audio) -> None:
-    """Source separation has one backend; a model naming a different one must not be accepted."""
+def test_a_foreign_model_is_rejected(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Source separation has one backend; a model naming a different one must not be accepted.
+
+    Both HFModel validators are monkeypatched rather than constructing a real one: an unmocked
+    HFModel triggers a real Hub lookup (and, on a cold cache, a full snapshot download) in its
+    field validator.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     foreign: HFModel = HFModel(path_or_uri="openai/whisper-tiny")
     with pytest.raises(ValueError, match="unasdiff"):
         separate_audios([mono_audio_sample], model=foreign, mode="speech_speech", n_sources=2)
