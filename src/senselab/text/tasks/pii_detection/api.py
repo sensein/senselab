@@ -182,8 +182,69 @@ def _corroborated_contains_pii(
         if not normalized:
             continue
         root = s.source.split("/", 1)[0] if s.source else "unknown"
-        groups.setdefault((s.category, normalized), set()).add(root)
+        groups.setdefault((corroboration_family(s.category), normalized), set()).add(root)
     return any(len(roots) >= 2 for roots in groups.values())
+
+
+# Cross-detector agreement is keyed on a COARSE family, not the reported category.
+#
+# The detectors disagree about granularity, not about entities. Presidio splits contact
+# details into EMAIL_ADDRESS / PHONE_NUMBER / IP_ADDRESS and identifiers into US_SSN /
+# CREDIT_CARD / ...; the rules cascade emits one CONTACT and one IDNUM. Keying agreement on
+# the raw category therefore made rules structurally unable to corroborate anything, while
+# still counting toward the denominator -- so adding a third detector pushed a finding both
+# Presidio and GLiNER agreed on from 2/2 = 1.0 down to 2/3 = 0.667. Adding a detector must
+# not make a well-corroborated finding look less certain.
+#
+# The reduction is fine -> coarse, which is deterministic many-to-one. The inverse (mapping
+# rules' CONTACT onto one of Presidio's three) would be a guess, which is why it is not done
+# here: an unmapped category falls through to itself, so an unknown label simply agrees only
+# with its own kind rather than being silently merged into the wrong family.
+#
+# Only the agreement key is coarsened. PiiSpan.category keeps the finest label any detector
+# supplied, because that is what a reader acting on a finding needs.
+_CORROBORATION_FAMILY: dict[str, str] = {
+    # people
+    "PERSON": "NAME",
+    "NAME": "NAME",
+    # contact details
+    "EMAIL_ADDRESS": "CONTACT",
+    "PHONE_NUMBER": "CONTACT",
+    "IP_ADDRESS": "CONTACT",
+    "CONTACT": "CONTACT",
+    # government / financial / clinical identifiers
+    "US_SSN": "IDNUM",
+    "US_DRIVER_LICENSE": "IDNUM",
+    "US_PASSPORT": "IDNUM",
+    "US_ITIN": "IDNUM",
+    "US_BANK_NUMBER": "IDNUM",
+    "CREDIT_CARD": "IDNUM",
+    "IBAN_CODE": "IDNUM",
+    "MEDICAL_LICENSE": "IDNUM",
+    "IDNUM": "IDNUM",
+    # places
+    "LOCATION": "LOC",
+    "ADDRESS": "LOC",
+    "LOC": "LOC",
+    # dates and ages
+    "DATE_TIME": "DATE",
+    "DATE": "DATE",
+    "AGE": "AGE",
+    # organisations
+    "ORGANIZATION": "ORG",
+    "ORG": "ORG",
+    "NRP": "ORG",
+}
+
+
+def corroboration_family(category: str) -> str:
+    """Return the coarse family a detector category belongs to, for agreement only.
+
+    An unmapped category returns itself, so a detector emitting a label this map has not
+    seen corroborates only with the same label rather than being folded into a family it
+    may not belong to.
+    """
+    return _CORROBORATION_FAMILY.get(category.upper(), category.upper())
 
 
 def _materialize_spans(raw_spans: list[dict[str, Any]], source_id: str) -> list[PiiSpan]:
@@ -466,7 +527,7 @@ def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int, n_det
         normalized = s.text.strip().lower()
         if not normalized:
             continue
-        key = (s.category, normalized)
+        key = (corroboration_family(s.category), normalized)
         g = groups.setdefault(
             key,
             {"detectors": set(), "asrs": set(), "max_score": 0.0},
