@@ -254,3 +254,24 @@ def test_lay_out_session_never_starts_a_turn_before_the_session_begins() -> None
     turns = _generate._lay_out_session(plan, durations, rng)
     assert all(turn.start >= 0.0 for turn in turns)
     assert all(turn.end > turn.start for turn in turns)
+
+
+def test_sessions_are_written_at_the_rate_diarizers_expect(tmp_path: Path) -> None:
+    """Sessions land at 16 kHz, not the TTS model's native 24 kHz.
+
+    Measured on an H100: Qwen3-TTS emits 24 kHz and pyannote rejects it outright with
+    "Audio sampling rate 24000 does not match expected 16000", so a 24 kHz corpus scored zero
+    successes and the probe correctly refused to emit any profile at all. Resampling once here
+    is deterministic; leaving it to each backend would let the measured ceiling depend on whose
+    resampler ran. The RTTM carries seconds, which resampling preserves exactly, so ground truth
+    stays exact by construction.
+    """
+    import soundfile as sf
+
+    out_dir = _generate.generate_corpus(out_dir=tmp_path / "corpus", counts=[2], sessions_per_count=1, seed=17)
+    wav_path = out_dir / "k=2" / "session_0.wav"
+    assert wav_path.exists()
+    info = sf.info(str(wav_path))
+    assert info.samplerate == _generate.CORPUS_SAMPLE_RATE == 16000, (
+        f"corpus written at {info.samplerate} Hz; pyannote and the other diarizers require 16000"
+    )

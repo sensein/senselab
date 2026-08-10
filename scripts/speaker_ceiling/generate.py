@@ -118,6 +118,7 @@ import numpy as np
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.audio.tasks.text_to_speech.qwen_tts import (
     _QWEN_TTS_DEFAULT_MODEL,
     supported_speakers,
@@ -381,6 +382,12 @@ def _compose_waveform(turns: Sequence[_SessionTurn], waveforms: Sequence[np.ndar
     return buffer.astype(np.float32)
 
 
+# Diarizers in this repo take 16 kHz; Qwen3-TTS emits 24 kHz. The corpus is written at the rate
+# the consumers require so no backend has to resample, and so the ceiling cannot depend on whose
+# resampler ran. See the write path in generate_corpus for the measured failure this avoids.
+CORPUS_SAMPLE_RATE = 16000
+
+
 def _write_rttm(path: Path, audio_id: str, turns: Sequence[_SessionTurn], speaker_names: Sequence[str]) -> None:
     """Write one RTTM line per turn, labeling each with its real TTS voice identity.
 
@@ -515,10 +522,23 @@ def generate_corpus(
             wav_path = k_dir / f"{audio_id}.wav"
             rttm_path = k_dir / f"{audio_id}.rttm"
 
-            Audio(
+            session_audio = Audio(
                 waveform=torch.from_numpy(waveform).unsqueeze(0),
                 sampling_rate=sample_rate,
-            ).save_to_file(wav_path)
+            )
+            # Write at CORPUS_SAMPLE_RATE, not the TTS model's native rate. Measured on an H100:
+            # Qwen3-TTS emits 24 kHz and pyannote rejects it outright --
+            # "Audio sampling rate 24000 does not match expected 16000" -- so a 24 kHz corpus
+            # scores zero successes for that backend and the probe correctly refuses to emit a
+            # profile at all. 16 kHz is what every diarizer here expects, and resampling once
+            # here is deterministic and auditable, whereas leaving it to each backend would make
+            # the ceiling depend on whose resampler ran.
+            #
+            # The RTTM is unaffected: it carries times in seconds, which resampling preserves
+            # exactly, so ground truth stays exact by construction.
+            if session_audio.sampling_rate != CORPUS_SAMPLE_RATE:
+                session_audio = resample_audios([session_audio], resample_rate=CORPUS_SAMPLE_RATE)[0]
+            session_audio.save_to_file(wav_path)
             _write_rttm(rttm_path, audio_id, turns, speaker_names)
 
             # Verify against the file just written, not the in-memory turns -- the
