@@ -15,12 +15,20 @@ resolution step is extracted into ``_build_worker_input`` specifically so it is 
 here without spawning the subprocess venv.
 
 ``test_no_unreviewed_subprocess_revision_payload`` is what makes this durable against sites
-added *after* this task: rather than hardcoding "these five files are fine" as the only
-check, it statically discovers every subprocess-worker file whose parent-side payload
-carries a revision-shaped key and fails if that file is not in
+added *after* this task: rather than hardcoding a fixed list of fine files as the only check,
+it statically discovers every subprocess-worker file whose parent-side payload carries a
+revision-shaped key and fails if that file is not in
 ``REVISION_RESOLVED_SUBPROCESS_FILES`` -- the same conscious-human-checkpoint pattern
 ``hf_load_coverage_test.py`` uses for HF-load sites generally (new site -> test fails until
 reviewed and added to the allowlist here).
+
+That sweep has one blind spot by construction, which is why there are **two** allowlists: it
+can only see a file that *carries* a revision key, so a worker passing none -- and therefore
+loading through whatever the host's ref names -- never trips it. Omitting such a file would
+read as "reviewed and fine" when it means "never examined". ``LOADER_CANNOT_PIN_SUBPROCESS_FILES``
+enumerates the workers whose upstream loader accepts no revision at all, so every subprocess
+backend lands in exactly one list and a new one has to be classified deliberately;
+``test_the_two_revision_allowlists_are_disjoint_and_current`` enforces that.
 """
 
 import ast
@@ -43,6 +51,29 @@ REVISION_RESOLVED_SUBPROCESS_FILES = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
     "audio/tasks/speaker_diarization/child_adult.py",
     "audio/tasks/speaker_diarization/moss.py",
+    "audio/tasks/speech_to_text/qwen.py",
+    "audio/workflows/audio_analysis/pii_subprocess.py",
+}
+
+# Subprocess workers that CANNOT pass a revision to their loader, because the upstream loader has
+# no such parameter. Enumerated rather than left out, because the sweep above can only see files
+# that *carry* a revision key -- a worker that pins nothing is invisible to it, so omission would
+# read as "reviewed and fine" when it means "never looked at". A new backend must land in one list
+# or the other.
+#
+# These are not unpinned in practice: the parent resolves the commit and stages it, and
+# ``dependencies._point_ref_at`` then makes ``refs/<ref>`` name that commit, so the worker's bare
+# load resolves to it. That pointer is load-bearing for exactly these files -- measured, not
+# assumed: staging by SHA writes no ``refs/`` entry at all, and without one a bare
+# ``from_pretrained`` under ``HF_HUB_OFFLINE=1`` fails outright.
+LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
+    # nemo.core.classes.common.Model.from_pretrained takes no revision, on either backend.
+    "audio/tasks/speaker_diarization/nvidia.py",
+    "audio/tasks/speech_to_text/nemo.py",
+    # DiariZenPipeline.from_pretrained takes no revision and calls snapshot_download itself.
+    "audio/tasks/speaker_diarization/diarizen.py",
+    # CrisperWhisperModel takes a local directory, so it is pinned by the staged snapshot path.
+    "audio/tasks/speech_to_text/crisperwhisper.py",
 }
 
 
@@ -247,3 +278,86 @@ def test_resolve_model_stages_the_manifest_commit_not_the_local_ref(monkeypatch:
         "or the load and the recorded provenance can name different commits"
     )
     assert sha == manifest_sha
+
+
+def test_resolve_model_points_the_ref_at_the_pinned_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A loader that cannot take a revision must still get the run's commit.
+
+    ``snapshot_download(revision=<sha>)`` writes no ``refs/`` entry -- refs exist only for named
+    revisions. So resolving before staging, which is what makes a run agree on one commit, removes
+    the pointer that NeMo's ``Model.from_pretrained`` and ``DiariZenPipeline.from_pretrained`` rely
+    on: both load bare because neither accepts a revision. Without this pointer those backends fail
+    outright under ``HF_HUB_OFFLINE=1``; with it they resolve to the pinned commit rather than to
+    whatever the ref last named.
+    """
+    pinned = "9" * 40
+    repo = "org/model"
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: pinned)
+    monkeypatch.setattr("senselab.utils.dependencies.ensure_hf_model", lambda *a, **k: pinned)
+
+    import importlib
+
+    from huggingface_hub import constants
+
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
+    deps = importlib.import_module("senselab.utils.dependencies")
+
+    sha, _ = deps.resolve_model(repo, "main")
+    ref_file = tmp_path / "hub" / "models--org--model" / "refs" / "main"
+    assert sha == pinned
+    assert ref_file.is_file(), "refs/main was not written; a bare offline load would fail"
+    assert ref_file.read_text().strip() == pinned, "refs/main must name the pinned commit"
+
+
+def test_resolve_model_does_not_write_a_ref_for_a_sha_revision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 40-hex revision is not a ref name, so no pointer file should be created for it."""
+    pinned = "8" * 40
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: pinned)
+    monkeypatch.setattr("senselab.utils.dependencies.ensure_hf_model", lambda *a, **k: pinned)
+
+    from huggingface_hub import constants
+
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
+    from senselab.utils.dependencies import resolve_model
+
+    resolve_model("org/model", pinned)
+    assert not (tmp_path / "hub" / "models--org--model" / "refs").exists()
+
+
+def test_the_two_revision_allowlists_are_disjoint_and_current() -> None:
+    """Each subprocess worker is classified exactly once, and every entry still exists.
+
+    Two lists mean two ways to go stale. A file in both is an unresolved contradiction about
+    whether it pins. A file in neither is the sweep's blind spot -- it only sees files that
+    *carry* a revision key, so a worker pinning nothing looks reviewed when it was never
+    examined. And an entry naming a moved or deleted file silently stops guarding anything,
+    which is the failure mode ``hf_load_coverage_test``'s own stale-entry test exists to catch.
+    """
+    from tests.utils.hf_load_coverage_test import _SRC
+
+    both = REVISION_RESOLVED_SUBPROCESS_FILES & LOADER_CANNOT_PIN_SUBPROCESS_FILES
+    assert not both, f"file(s) classified as both pinning and unable to pin: {sorted(both)}"
+
+    missing = [
+        relpath
+        for relpath in sorted(REVISION_RESOLVED_SUBPROCESS_FILES | LOADER_CANNOT_PIN_SUBPROCESS_FILES)
+        if not (_SRC / relpath).is_file()
+    ]
+    assert not missing, "allowlist entr(ies) name files that no longer exist:\n" + "\n".join(f"  {f}" for f in missing)
+
+
+def test_loaders_that_cannot_pin_still_get_a_ref_pointer() -> None:
+    """The staged-only backends depend on ``_point_ref_at``, so it must not quietly disappear.
+
+    These four load bare. Their only link to the run's commit is that ``resolve_model`` points
+    ``refs/<ref>`` at it after staging. Deleting that helper would leave them loading whatever the
+    ref last named -- or failing outright offline, since SHA-addressed staging writes no ref at all.
+    """
+    from senselab.utils import dependencies
+
+    assert hasattr(dependencies, "_point_ref_at"), (
+        "dependencies._point_ref_at is gone; the workers in LOADER_CANNOT_PIN_SUBPROCESS_FILES "
+        "load bare and rely on it to reach the run's pinned commit"
+    )

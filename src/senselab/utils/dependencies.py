@@ -499,8 +499,49 @@ def resolve_model(repo_id: str, revision: str = "main", *, token: Optional[str] 
     # missing the pinned commit has is_hf_model_cached(repo, <sha>) return False and fetches
     # exactly that commit, rather than reusing an older snapshot its own ref still points at.
     sha = ensure_hf_model(repo_id, resolve_revision(repo_id, revision, token=token), token=token)
-    snapshot_path = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
+    repo_root = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}"
+    _point_ref_at(repo_root, revision, sha)
+    snapshot_path = repo_root / "snapshots" / sha
     return sha, snapshot_path
+
+
+def _point_ref_at(repo_root: Path, ref: str, sha: str) -> None:
+    """Make ``refs/<ref>`` name ``sha``, so a loader that cannot take a revision still gets it.
+
+    ``snapshot_download(revision=<sha>)`` writes ``snapshots/<sha>/`` and **no** ``refs/`` entry at
+    all — refs exist only for named revisions. Measured, not assumed: staging a repo by SHA into an
+    empty cache leaves no ``refs`` directory, and a subsequent bare
+    ``AutoConfig.from_pretrained(repo)`` under ``HF_HUB_OFFLINE=1`` then fails outright with
+    "couldn't find them in the cached files".
+
+    That matters because several subprocess backends load bare — NeMo's
+    ``Model.from_pretrained``, ``DiariZenPipeline.from_pretrained`` — since their loaders accept no
+    revision argument. Resolving the ref before staging (which is what makes the run agree on one
+    commit) would otherwise *break* them, because the pointer they rely on stops being written.
+
+    Writing it here fixes that and upgrades those backends from "the parent staged the right commit
+    but the worker reads whatever the ref says" to genuinely pinned: the ref now says the pinned
+    commit.
+
+    On a shared cache this mutates state other processes read, which deserves stating plainly — but
+    it is strictly better than what it replaced. Ref-addressed staging already overwrote
+    ``refs/<ref>`` on every call; it just wrote whatever upstream happened to be serving at that
+    moment, rather than the commit this run pinned.
+
+    A failure is ignored: on a group-owned tree the file may belong to another user, and the pinned
+    load path (an explicit ``revision=<sha>``) does not depend on this pointer.
+    """
+    if _SHA_RE.match(ref):
+        return
+    refs_dir = repo_root / "refs"
+    try:
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        ref_file = refs_dir / ref
+        current = ref_file.read_text().strip() if ref_file.is_file() else None
+        if current != sha:
+            ref_file.write_text(sha)
+    except OSError as exc:
+        logger.debug("Could not point refs/%s at %s under %s: %s", ref, sha, repo_root, exc)
 
 
 def load_hf_resilient(
