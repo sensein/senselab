@@ -9,8 +9,16 @@ from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement import driftse, enhance_audios
+from senselab.audio.tasks.speech_enhancement.driftse import enhance_audios_with_driftse
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
 from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel
+from senselab.utils.subprocess_venv import _cache_dir_path
+
+# Honor SENSELAB_VENV_CACHE the same way ensure_venv() does — hardcoding
+# Path.home()/".cache"/... here would silently disagree with a cache dir
+# override, so the gate below would never match where the venv actually lives.
+_DRIFTSE_VENV_ROOT = _cache_dir_path() / "driftse"
+driftse_venv_present = _DRIFTSE_VENV_ROOT.is_dir()
 
 
 @pytest.fixture
@@ -373,3 +381,46 @@ def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
+
+
+@pytest.mark.skipif(
+    not driftse_venv_present,
+    reason=f"driftse venv not provisioned at {_DRIFTSE_VENV_ROOT}; run manually to build it (first run takes minutes)",
+)
+def test_driftse_enhances_and_preserves_length(mono_audio_sample: Audio) -> None:
+    """Length preservation is the cheapest real correctness check available without a reference signal.
+
+    ``istft(length=T_orig)`` must round-trip, and a chunking bug in the
+    overlap-add path shows up here immediately as a short or long result.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    out = enhance_audios([audio], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO))
+
+    assert len(out) == 1
+    assert out[0].sampling_rate == 16000
+    assert out[0].waveform.shape[-1] == audio.waveform.shape[-1]
+    assert out[0].waveform.abs().max() > 0, "silent output — the model produced nothing"
+
+
+@pytest.mark.skipif(
+    not driftse_venv_present,
+    reason=f"driftse venv not provisioned at {_DRIFTSE_VENV_ROOT}; run manually to build it (first run takes minutes)",
+)
+def test_driftse_is_reproducible_under_a_fixed_seed(mono_audio_sample: Audio) -> None:
+    """Assert a fixed seed makes the stochastic forward pass reproducible.
+
+    ``train_add_gaussian`` (the released checkpoint's setting) makes the
+    forward pass consume a Gaussian sample, so without a seed a rerun would
+    produce different audio -- which would make any cached artifact keyed on
+    this output non-reproducible.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    a = enhance_audios_with_driftse([audio], model=model, seed=17)[0]
+    b = enhance_audios_with_driftse([audio], model=model, seed=17)[0]
+
+    assert (a.waveform - b.waveform).abs().max() < 1e-5
