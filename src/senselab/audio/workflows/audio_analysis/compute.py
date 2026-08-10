@@ -64,6 +64,7 @@ from senselab.audio.workflows.audio_analysis.reliability import (
 from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
 )
+from senselab.audio.workflows.audio_analysis.signal import resolved_commit_sha
 from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
 from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_evidence
 from senselab.audio.workflows.audio_analysis.speech_presence_link import (
@@ -85,24 +86,6 @@ from senselab.audio.workflows.audio_analysis.votes import (
     apply_scene_coupling,
     link_pass,
 )
-from senselab.utils.data_structures.logging import logger
-
-
-def _resolved_commit_sha(model_id: str, ref: str) -> str | None:
-    """Resolve ``model_id@ref`` to a commit SHA for a provenance block, or ``None`` on failure.
-
-    Scene quality's own contract (FR-023) is null-on-failure rather than abort — a Hub outage
-    while resolving Brouhaha's revision must not turn an otherwise-successful (or already-null)
-    quality pass into a crashed run. ``None`` here means "could not confirm the commit", which is
-    the honest state; it must never fall back to reporting the ref as if it were the commit.
-    """
-    from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
-
-    try:
-        return resolve_revision(model_id, ref)
-    except RevisionResolutionError as exc:
-        logger.warning(f"Could not resolve {model_id}@{ref} to a commit SHA for provenance: {exc}")
-        return None
 
 
 def harvest_pass(
@@ -305,7 +288,7 @@ def harvest_pass(
                     # every null-quality run for no benefit.
                     "revision": BROUHAHA_REVISION,
                     "commit_sha": (
-                        _resolved_commit_sha(BROUHAHA_MODEL_ID, BROUHAHA_REVISION)
+                        resolved_commit_sha(BROUHAHA_MODEL_ID, BROUHAHA_REVISION)
                         if brouhaha_frames is not None
                         else None
                     ),
@@ -347,7 +330,7 @@ def harvest_pass(
             # resolved commit rather than replacing one with the other, and only resolve when the
             # model actually loaded.
             "revision": _VAD_REVISION,
-            "commit_sha": (_resolved_commit_sha(_VAD_MODEL_ID, _VAD_REVISION) if vad_frames is not None else None),
+            "commit_sha": (resolved_commit_sha(_VAD_MODEL_ID, _VAD_REVISION) if vad_frames is not None else None),
             "available": vad_frames is not None,
         }
 
