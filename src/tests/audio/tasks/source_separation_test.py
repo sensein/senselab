@@ -60,3 +60,42 @@ def test_torch_is_pinned_for_cuda_routing() -> None:
     """Torch and torchaudio are named explicitly so ensure_venv's CUDA routing fires."""
     named = {r.split(">=")[0].split("==")[0].strip().lower() for r in unasdiff._UNASDIFF_REQUIREMENTS}
     assert "torch" in named and "torchaudio" in named
+
+
+def test_worker_script_compiles_standalone() -> None:
+    """The worker is a string literal run by another interpreter.
+
+    A syntax error would otherwise surface only after the venv build and the model download.
+    """
+    compile(unasdiff._WORKER_SCRIPT, "<unasdiff worker>", "exec")
+
+
+def test_worker_never_imports_the_benchmark_scripts() -> None:
+    """The worker imports the library modules directly, not upstream's benchmark scripts.
+
+    Upstream's ``test_speech_sound.py`` and its siblings call ``torch.cuda.set_device(0)`` at
+    module import and abort on any CPU host.
+    """
+    for forbidden in ("test_speech_sound", "test_soundevent", "test_speech_speech"):
+        assert forbidden not in unasdiff._WORKER_SCRIPT
+
+
+def test_worker_uses_the_ema_weights() -> None:
+    """The worker loads the EMA copy of each checkpoint, not the raw training weights.
+
+    ``load_model`` in the benchmark script returns the EMA copy, not ``ckpt['model']``. Loading
+    the non-EMA weights runs but separates measurably worse -- a silent quality regression
+    rather than a failure.
+    """
+    assert '"ema"' in unasdiff._WORKER_SCRIPT or "'ema'" in unasdiff._WORKER_SCRIPT
+
+
+def test_worker_packs_the_mixture_so_degradation_reproduces_it() -> None:
+    """The worker packs orig_x so the sampler's internal degradation recomputes the mixture.
+
+    ``p_sample_loop_group`` ignores its ``measurement`` argument and recomputes
+    ``degradation(orig_x)``. Packing ``[mixture, zeros...]`` makes that sum equal the mixture
+    exactly -- which is what keeps this an inference call and not an oracle.
+    """
+    assert "zeros" in unasdiff._WORKER_SCRIPT
+    assert "orig_x" in unasdiff._WORKER_SCRIPT
