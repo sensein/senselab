@@ -77,8 +77,20 @@ export SENSELAB_RUN_ID="speaker-ceiling-seed-${SEED}"
 SESSIONS_PER_COUNT="${SPEAKER_CEILING_SESSIONS:-20}"
 CORPUS_DIR="artifacts/speaker_ceiling/corpus/seed-${SEED}"
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_DIR"
+# Repo root from SLURM_SUBMIT_DIR, not from BASH_SOURCE. sbatch copies the batch script into its
+# spool directory before running it, so under Slurm BASH_SOURCE[0] is
+# /var/spool/slurmd/job<N>/slurm_script and "$(dirname ...)/../.." resolves to /var/spool -- which
+# is not writable, so every array task died in one second with
+# "mkdir: cannot create directory 'logs': Permission denied" before reaching any real work.
+# SLURM_SUBMIT_DIR is the directory sbatch was invoked from (the repo root, since these are
+# submitted as `sbatch scripts/speaker_ceiling/<name>.sbatch`), and the fallback keeps the script
+# runnable by hand outside Slurm.
+REPO_DIR="${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+cd "$REPO_DIR" || { echo "cannot cd to REPO_DIR=$REPO_DIR" >&2; exit 1; }
+if [ ! -d "src/senselab" ]; then
+    echo "REPO_DIR=$REPO_DIR does not look like the senselab checkout (no src/senselab)" >&2
+    exit 1
+fi
 mkdir -p logs "$CORPUS_DIR"
 
 # Checkpoint-and-requeue on Slurm's pre-preemption signal. A clean (0) exit tells Slurm the
