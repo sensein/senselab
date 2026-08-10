@@ -158,6 +158,48 @@ def test_group_readable_ignores_chmod_failures_on_foreign_entries(
     assert stat.S_IMODE(owned.stat().st_mode) & 0o040 == 0o040
 
 
+def test_group_readable_runs_before_the_marker_write(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker must not exist yet while the chmod pass is still running.
+
+    A hard kill (OOM, CI timeout -- both have happened in this repo) between the chmod
+    pass and the marker write must leave NO marker, so the next call's marker check fails,
+    `shutil.rmtree` fires, and the rebuild reruns chmod to completion. Marker-first would
+    instead let that same kill leave `.senselab-installed` present with the chmod pass
+    incomplete: every later `ensure_venv` call takes the reuse fast path on seeing the
+    marker and returns immediately, and since that path never calls
+    `_make_group_readable`, the half-permissioned venv would never be repaired -- a second
+    user hits a permission error deep in `site-packages` with no remedy short of deleting
+    the venv by hand. A real kill mid-chmod needs a process signal to demonstrate for real;
+    this asserts the cheaper, equivalent property -- that the marker is absent for the
+    entire duration of the chmod pass -- via a real (non-mocked) `ensure_venv` call against
+    torch-free requirements, so no 2.5 GB install is needed to exercise it.
+    """
+    name = "t-order"
+    venv_dir = fake_cache_dir / name
+    marker = venv_dir / ".senselab-installed"
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    real_make_group_readable = subprocess_venv._make_group_readable
+    marker_seen_during_chmod: list[bool] = []
+
+    def _spy(path: Path) -> None:
+        marker_seen_during_chmod.append(marker.exists())
+        real_make_group_readable(path)
+
+    monkeypatch.setattr(subprocess_venv, "_make_group_readable", _spy)
+
+    ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
+
+    assert marker_seen_during_chmod == [False], "marker existed while the chmod pass was still running"
+    assert marker.is_file(), "marker must exist once the (successful) chmod pass has completed"
+
+
 # ── Marker mismatch + rebuild paths ────────────────────────────────
 
 

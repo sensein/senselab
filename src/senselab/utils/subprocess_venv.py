@@ -13,7 +13,10 @@ File references include optional integrity metadata:
 - readonly flag to prevent in-place modification
 - a shared file lock (``SharedFileLock``) with a heartbeat that stale-detection
   actually reads: a holder that dies mid-install or mid-transfer is detected and
-  taken over, rather than blocking every other process for the full lock timeout
+  taken over on the next uncontended acquire, rather than blocking every waiter
+  for the full lock timeout; a holder that is still alive and legitimately slow
+  (a multi-GB torch install on a congested mirror) is waited out in an unbounded
+  retry loop instead of turning into a hard failure for every other process
 
 Safety features are configurable via ``safe_mode`` to minimize
 overhead for simple single-process workflows.
@@ -206,7 +209,31 @@ def ensure_venv(
     # plain FileLock this replaces, a holder that dies mid-install is detected on the
     # next uncontended acquire (stale heartbeat) rather than blocking every waiter for
     # the full 600s and then raising.
-    with SharedFileLock(venv_dir, timeout=600):
+    #
+    # Reaching `except TimeoutError` below proves the opposite: SharedFileLock's contract
+    # is that a timeout means the flock was held *continuously* for the whole window, which
+    # a crashed process cannot do (its flock is kernel-released the instant it exits) -- so
+    # this is always a live holder, however stale its heartbeat looks. These venvs install
+    # torch + torchaudio (~2.5 GB) from the PyTorch wheel index, which can legitimately
+    # exceed 600s on a congested shared filesystem or a slow mirror. Failing here instead of
+    # retrying would turn "someone else is still installing" into a hard error for every
+    # waiter -- functionally the same failure this task removed, just with a better
+    # diagnostic. SharedFileLock deliberately never retries this internally (see
+    # file_lock.py), so the unbounded wait lives here, mirroring ensure_hf_model's pattern
+    # in dependencies.py: a proven-live holder means wait longer, never take over.
+    lock = SharedFileLock(venv_dir, timeout=600)
+    while True:
+        try:
+            lock.__enter__()
+            break
+        except TimeoutError:
+            logger.info(
+                "Still waiting for another process to build venv '%s' (lock held for the last %.0fs)",
+                name,
+                600.0,
+            )
+            continue
+    try:
         # Auto-detect whether this venv routes torch through the CUDA
         # index: any caller-declared torch / torchaudio spec triggers the
         # probe + Stage-1 install. A backend that pins neither (yamnet,
@@ -379,14 +406,22 @@ def ensure_venv(
                 "url": torch_index.url,
                 "source": torch_index.source,
             }
-        marker.write_text(json.dumps(marker_data))
-        # Strictly after the marker write: an interrupted chmod pass must never leave a venv
-        # that looks complete (marker present) to a second user but that user still can't
-        # execute (see _make_group_readable's docstring for why building it group-writable
-        # alone doesn't already cover this).
+        # Strictly before the marker write: a hard kill (OOM, CI timeout) between chmod and
+        # the marker would otherwise leave `.senselab-installed` present with the chmod pass
+        # incomplete. Every later ensure_venv call takes the reuse fast path on seeing the
+        # marker and returns immediately -- but that path never calls _make_group_readable,
+        # so a half-permissioned venv would never be repaired. Marker-after means an
+        # interrupted chmod instead leaves no marker: the next call's marker check fails,
+        # `shutil.rmtree` fires, and the rebuild reruns chmod to completion.
         _make_group_readable(venv_dir)
+        marker.write_text(json.dumps(marker_data))
         logger.info("Venv '%s' ready at %s", name, venv_dir)
         return venv_dir
+    finally:
+        # __exit__ ignores its exc_info arguments (it never suppresses an exception), so
+        # passing None here is equivalent to the (exc_type, exc, tb) a `with` block would
+        # supply -- see ensure_hf_model's identical finally in dependencies.py.
+        lock.__exit__(None, None, None)
 
 
 def _make_group_readable(venv_dir: Path) -> None:
@@ -410,10 +445,11 @@ def _make_group_readable(venv_dir: Path) -> None:
     process does own.
 
     Args:
-        venv_dir: Root of a just-completed venv tree. Call this only after the
-            ``.senselab-installed`` marker is written (see ``ensure_venv``) -- an interrupted
-            chmod pass here must never be the difference between a venv reading as complete
-            and reading as usable.
+        venv_dir: Root of a just-completed venv tree. Call this **before** writing the
+            ``.senselab-installed`` marker (see ``ensure_venv``): the marker is what later
+            calls trust to skip straight to the reuse fast path without re-running this
+            pass, so if a kill lands mid-walk, the marker must not exist yet -- otherwise
+            the next call would reuse a half-permissioned venv forever instead of rebuilding.
     """
     for root, _dirs, files in os.walk(venv_dir):
         root_path = Path(root)
