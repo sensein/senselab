@@ -184,6 +184,30 @@ def test_provenance_records_the_stage_code_version() -> None:
     assert prov["device"] == "auto"
 
 
+def test_provenance_records_the_commit_that_produced_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both "revision" and "commit_sha" travel: what was asked for, and what actually ran."""
+    sha = "d" * 40
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    ctx = _ctx()
+    prov = ctx.provenance_for("asr", "openai/whisper-large-v3-turbo", {"device": "cpu"})
+    assert prov["commit_sha"] == sha
+    assert prov["revision"] == "main"
+
+
+def test_provenance_revision_is_none_when_nothing_is_pinned() -> None:
+    """A model-less stage (e.g. "features") has no ref to have asked for, so both fields are None."""
+    prov = _ctx().provenance_for("features", None, {})
+    assert prov["commit_sha"] is None
+    assert prov["revision"] is None
+
+
+def test_provenance_revision_is_none_for_a_non_hub_backend() -> None:
+    """A local backend name (no "/") is never resolved, so "revision" must not claim one was asked."""
+    prov = _ctx().provenance_for("yamnet", "yamnet", {})
+    assert prov["commit_sha"] is None
+    assert prov["revision"] is None
+
+
 def test_provenance_joins_to_build_cache_index(tmp_path: Path) -> None:
     """summary.json's audio_signature must resolve in the adaptive cache index.
 

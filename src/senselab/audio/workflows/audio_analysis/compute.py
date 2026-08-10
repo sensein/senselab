@@ -85,6 +85,24 @@ from senselab.audio.workflows.audio_analysis.votes import (
     apply_scene_coupling,
     link_pass,
 )
+from senselab.utils.data_structures.logging import logger
+
+
+def _resolved_commit_sha(model_id: str, ref: str) -> str | None:
+    """Resolve ``model_id@ref`` to a commit SHA for a provenance block, or ``None`` on failure.
+
+    Scene quality's own contract (FR-023) is null-on-failure rather than abort — a Hub outage
+    while resolving Brouhaha's revision must not turn an otherwise-successful (or already-null)
+    quality pass into a crashed run. ``None`` here means "could not confirm the commit", which is
+    the honest state; it must never fall back to reporting the ref as if it were the commit.
+    """
+    from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
+
+    try:
+        return resolve_revision(model_id, ref)
+    except RevisionResolutionError as exc:
+        logger.warning(f"Could not resolve {model_id}@{ref} to a commit SHA for provenance: {exc}")
+        return None
 
 
 def harvest_pass(
@@ -278,7 +296,19 @@ def harvest_pass(
                 "calibration_version": (calibration or {}).get("calibration_version"),
                 "model": {
                     "id": BROUHAHA_MODEL_ID,
+                    # Both, deliberately (mirrors StageContext.provenance_for): "revision" is the
+                    # ref Brouhaha is pinned to, "commit_sha" is the immutable commit that ref
+                    # resolved to for this run. This used to record only the ref, indistinguishable
+                    # from a moving "main" that happened to answer the same way on a given day.
+                    # Resolved only when the model actually loaded — a model that never loaded has
+                    # no commit to name, and resolving one anyway would spend a Hub round-trip on
+                    # every null-quality run for no benefit.
                     "revision": BROUHAHA_REVISION,
+                    "commit_sha": (
+                        _resolved_commit_sha(BROUHAHA_MODEL_ID, BROUHAHA_REVISION)
+                        if brouhaha_frames is not None
+                        else None
+                    ),
                     "available": brouhaha_frames is not None,
                 },
             }
@@ -313,7 +343,11 @@ def harvest_pass(
         # distinguishable from "this voter was never asked for".
         frame_posteriors_provenance["brouhaha_vad"] = {
             "id": _VAD_MODEL_ID,
+            # Same reasoning as the scene-quality "model" block above: keep the ref, add the
+            # resolved commit rather than replacing one with the other, and only resolve when the
+            # model actually loaded.
             "revision": _VAD_REVISION,
+            "commit_sha": (_resolved_commit_sha(_VAD_MODEL_ID, _VAD_REVISION) if vad_frames is not None else None),
             "available": vad_frames is not None,
         }
 
