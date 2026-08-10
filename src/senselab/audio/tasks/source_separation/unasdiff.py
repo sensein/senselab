@@ -108,11 +108,21 @@ from senselab.utils.subprocess_venv import (
 
 _UNASDIFF_VENV = "unasdiff"
 _UNASDIFF_PYTHON = "3.10"
+# torch==2.6.0 ships wheels up to cu124 -- cu128 support begins at torch 2.7 -- so cap the
+# Stage-1 index or a modern host selects an index this pin has no wheel on. Measured on an H100
+# with CUDA 12.8: ensure_venv probed the host, chose cu128, and the install failed outright with
+# "no version of torch==2.6.0". The version and the CUDA build are coupled, which is why dropping
+# upstream's +cu124 local tag and letting host detection choose was not sufficient on its own.
+# cu124 wheels run fine on a newer driver; the ceiling only constrains which index is searched.
+# Same failure and same fix as child_adult.py's _CHILD_ADULT_MAX_CUDA_VERSION.
+_UNASDIFF_MAX_CUDA_VERSION = (12, 4)
 
 # Upstream's requirements.txt pins torch==2.6.0+cu124 and numpy==1.23.5 against
-# Python 3.10; the pins are reproduced (minus the +cu124 local tag, which
-# ensure_venv supplies by routing Stage 1 through the index matching the host's
-# CUDA). flash-attn is deliberately absent: atten_unet.py sets use_flash=False on
+# Python 3.10; the version pins are reproduced without the +cu124 local tag, and the CUDA
+# build comes from the Stage-1 index -- capped by _UNASDIFF_MAX_CUDA_VERSION above, because
+# host-CUDA routing alone picks an index this torch pin has no wheels on.
+#
+# flash-attn is deliberately absent: atten_unet.py sets use_flash=False on
 # ImportError and branches to a manual softmax attention, so it is optional in
 # fact and not merely in the README. The fallback materialises a [b, h, t, t]
 # attention matrix, so it is slower and heavier -- an acceptable trade against
@@ -574,7 +584,12 @@ def separate_with_unasdiff(
 
     speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
 
-    venv_dir = ensure_venv(_UNASDIFF_VENV, _UNASDIFF_REQUIREMENTS, python_version=_UNASDIFF_PYTHON)
+    venv_dir = ensure_venv(
+        _UNASDIFF_VENV,
+        _UNASDIFF_REQUIREMENTS,
+        python_version=_UNASDIFF_PYTHON,
+        max_cuda_version=_UNASDIFF_MAX_CUDA_VERSION,
+    )
     python = venv_python(venv_dir)
     # Cached alongside the venv rather than per-tempdir, so the pinned-commit clone in the
     # worker script happens once per host, not once per call.
