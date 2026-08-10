@@ -385,7 +385,9 @@ def detect_pii(
                 spans=spans,
                 failures=dict(subprocess_failures),
                 detector_used=",".join(detectors_used),
-                detection_confidence=_compute_detection_confidence(spans, n_asr_models=1),
+                detection_confidence=_compute_detection_confidence(
+                    spans, n_asr_models=1, n_detectors_run=len(detectors_used)
+                ),
             )
         )
     return built_reports[0] if is_scalar else built_reports
@@ -408,17 +410,23 @@ def _quick_return(texts: list[str], failures: dict[str, str], is_scalar: bool) -
     return reports[0] if is_scalar else reports
 
 
-def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int) -> float:
+def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int, n_detectors_run: int) -> float:
     """Aggregate per-span detector scores into a single ``[0, 1]`` confidence.
 
     Combines three signals per unique ``(category, normalized_text)`` finding:
 
     - **max raw detector confidence** on that finding (Presidio's analyzer
       score or GLiNER's prediction probability)
-    - **cross-detector agreement** — both Presidio and GLiNER independently
-      flagged the same (category, normalized_text) (factor of 1.0) vs only
-      one detector (0.5). Two-detector agreement is the strongest "is this
-      a real entity or hallucinated?" signal we have at this layer.
+    - **cross-detector agreement** — fraction of the detectors that actually
+      ran *for this report* that independently flagged the same
+      ``(category, normalized_text)``. The denominator is ``n_detectors_run``,
+      not the size of the module's known-detector set: dividing by the known
+      set would cap a Presidio-only finding at ``1/len(_KNOWN_DETECTORS)``
+      even when GLiNER was never asked to run (failed to load, or excluded
+      via ``detectors=``) — as though a second detector had declined to
+      corroborate it, when in fact none was consulted. It would also mean
+      every detector added to the module silently rescales every confidence
+      already published, since the historical denominator changes underfoot.
     - **cross-ASR-model agreement** — fraction of available ASR transcripts
       that contain the finding. A span only one ASR transcribed (and that
       neither sibling ASR confirms) is the prototypical hallucination case.
@@ -437,6 +445,12 @@ def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int) -> fl
         n_asr_models: Total number of ASR backends whose transcripts were
             scanned. Used as the denominator for cross-ASR agreement so
             single-ASR setups don't get penalised relative to multi-ASR.
+        n_detectors_run: Number of detectors that actually ran for this
+            report (e.g. ``len(detectors_used)``), used as the denominator
+            for cross-detector agreement. Clamped to at least 1 so a caller
+            passing 0 (which should never happen — the caller short-circuits
+            before reaching this function when no detector ran) still gets a
+            defined score rather than a ``ZeroDivisionError``.
 
     Returns:
         Confidence in ``[0, 1]``. ``0.0`` when ``spans`` is empty (the
@@ -466,10 +480,11 @@ def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int) -> fl
             g["max_score"] = max(g["max_score"], float(s.score))
     if not groups:
         return 0.0
+    denom_detectors = max(1, n_detectors_run)
     denom_asrs = max(1, n_asr_models)
     risks: list[float] = []
     for g in groups.values():
-        detector_agreement = len(g["detectors"]) / len(_KNOWN_DETECTORS)  # 0.5 single, 1.0 both
+        detector_agreement = min(1.0, len(g["detectors"]) / denom_detectors)
         asr_agreement = min(1.0, len(g["asrs"]) / denom_asrs)
         risks.append(g["max_score"] * detector_agreement * asr_agreement)
     return max(risks) if risks else 0.0
@@ -696,7 +711,9 @@ def detect_pii_in_pass(
     # leave it as ``None`` (the dataclass default), so a caller can
     # distinguish "detectors ran, found nothing" (0.0) from "detectors
     # did not actually run" (None).
-    detection_confidence = _compute_detection_confidence(spans, n_asr_models=len(spans_by_asr))
+    detection_confidence = _compute_detection_confidence(
+        spans, n_asr_models=len(spans_by_asr), n_detectors_run=len(detectors_used)
+    )
     return PiiReport(
         contains_pii=contains_pii,
         n_spans=len(spans),
