@@ -81,17 +81,25 @@ revision=download_revision)`` — confirmed by reading the installed wheel's
 (``speech_tokenizer/config.json``, ``generation_config.json``) call
 ``cached_file(..., revision=kwargs.pop("revision", None))`` — always ``None``, because
 ``revision`` is consumed by the method's own named parameter and never lands in
-``kwargs``. Under ``HF_HUB_OFFLINE`` that resolves against ``refs/main``. This backend
-therefore stages via the *ref* the caller declared (``model.revision``, default
-``"main"``) through :func:`~senselab.utils.dependencies.hf_subprocess_env` — which
-writes ``refs/<ref>`` at the resolved commit — while still sending the **resolved
-commit SHA** to the worker for the actual ``from_pretrained(..., revision=...)`` call.
-Passing the SHA to ``hf_subprocess_env`` instead (the pattern ``speech_to_text/qwen.py``
-and ``speaker_diarization/moss.py`` use) would skip writing that pointer entirely —
-``_point_ref_at`` no-ops once its ``ref`` argument is already a SHA — and leave those
-two unpinned reads with nothing to resolve offline. This has not been exercised
-against a real download; it is a design mitigation for a gap read from source, not a
-measured fix. See this task's report for what remains to verify on a GPU host.
+``kwargs``. This backend therefore stages via the *ref* the caller declared
+(``model.revision``, default ``"main"``) through
+:func:`~senselab.utils.dependencies.hf_subprocess_env` — which writes ``refs/<ref>`` at
+the resolved commit — while still sending the **resolved commit SHA** to the worker for
+the actual ``from_pretrained(..., revision=...)`` call. Passing the SHA to
+``hf_subprocess_env`` instead (the pattern ``speech_to_text/qwen.py`` and
+``speaker_diarization/moss.py`` use) would skip writing that pointer entirely —
+``_point_ref_at`` no-ops once its ``ref`` argument is already a SHA — and leave those two
+unpinned reads with nothing to resolve.
+
+**This backend cannot run air-gapped, and that is measured rather than assumed.** On an
+H100, ``qwen_tts``'s ``from_pretrained`` makes a live call to
+``huggingface.co/api/models/<repo>`` — not merely a cached-file read — so under
+``HF_HUB_OFFLINE=1`` it fails with "Cannot reach ...: offline mode is enabled" however
+completely the snapshot is staged. The ``refs/<ref>`` pointer fixes the ``cached_file``
+reads; nothing local can satisfy an API call. The offline flags are therefore unset for
+this worker (see :func:`synthesize_texts_with_qwen`), which is the only such exception
+among senselab's subprocess backends. Staging still earns its place: the weights download
+once, cross-process, under the shared lock.
 
 Not wired into ``audio_analysis``
 -----------------------------------
@@ -265,7 +273,21 @@ def synthesize_texts_with_qwen(
     # from_pretrained(..., revision=...) call, so the pin itself is unaffected. Staging
     # before ensure_venv (mirroring driftse.py's resolve_model-before-ensure_venv order)
     # is what makes this observable in a test without building a real subprocess venv.
+    # Stage the weights, then deliberately UNSET the offline flags hf_subprocess_env adds.
+    #
+    # Measured on an H100: qwen_tts's from_pretrained makes a live call to
+    # huggingface.co/api/models/<repo> -- not merely a cached-file read -- so under
+    # HF_HUB_OFFLINE=1 it dies with "Cannot reach ...: offline mode is enabled" no matter how
+    # completely the snapshot is staged. The refs/<ref> pointer this backend relies on (see the
+    # module docstring) fixes the *cached_file* reads that pass revision=None, but nothing local
+    # can satisfy an API call. So this is the one subprocess backend that cannot run air-gapped,
+    # and pretending otherwise would turn a clear error into a confusing one.
+    #
+    # Staging still earns its place: the weights download once, cross-process, under the shared
+    # lock, and the worker's own from_pretrained then finds them cached.
     env = hf_subprocess_env(model_name, model.revision or "main", base_env=_clean_subprocess_env())
+    for _offline_var in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+        env.pop(_offline_var, None)
 
     venv_dir = ensure_venv(_QWEN_TTS_VENV, _QWEN_TTS_REQUIREMENTS, python_version=_QWEN_TTS_PYTHON)
     python = venv_python(venv_dir)
