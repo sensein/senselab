@@ -610,11 +610,21 @@ def _classify_continuous_ser_venv(
             audio.save_to_file(path, format="flac")
             audio_paths.append(path)
 
+        # Forward the resolved commit SHA to the worker, never the ref -- it has no senselab
+        # install and cannot re-resolve, so a bare "main" would load whatever this host's
+        # cache resolves it to right now, which can disagree with the rest of a multi-node
+        # run. commit_sha is already populated by HFModel's constructor-time resolution;
+        # resolve_revision is only a defensive fallback if it somehow was not. Deferred import
+        # (not at module top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        revision = model.commit_sha or resolve_revision(str(model.path_or_uri), model.revision or "main")
         input_json = json.dumps(
             {
                 "audio_paths": audio_paths,
                 "model_id": str(model.path_or_uri),
-                "revision": model.revision or "main",
+                "revision": revision,
                 "device": device_type.value,
                 "output_dir": str(tmp),
             }
@@ -623,7 +633,7 @@ def _classify_continuous_ser_venv(
         # Stage the model once (cross-process, via the heartbeat lock) + run the
         # worker offline so its pipeline() makes no per-call Hub version check — the
         # 429 source under parallel batch.
-        env = hf_subprocess_env(str(model.path_or_uri), model.revision or "main", base_env=_clean_subprocess_env())
+        env = hf_subprocess_env(str(model.path_or_uri), revision, base_env=_clean_subprocess_env())
         result = subprocess.run(
             [python, "-c", _CONT_SER_WORKER],
             input=input_json,
