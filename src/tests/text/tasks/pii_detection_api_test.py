@@ -1,15 +1,22 @@
-"""Tests for ``pii.detect_pii_in_pass`` and ``pii._compute_detection_confidence``.
+"""Tests for ``api.detect_pii_in_pass`` and ``api._compute_detection_confidence``.
 
 Mocks ``detect_pii_via_subprocess`` (the subprocess dispatch layer) so this
 file exercises the in-host plumbing: report construction, cross-detector
 and cross-ASR-model agreement weighting, and ``None`` propagation for the
 "detectors didn't run" case.
+
+Moved here from ``audio/workflows/audio_analysis/pii_test.py`` alongside the
+module under test (see plan-b Task 1). ``pii_module`` is bound to ``api``
+(not the ``audio_analysis.pii`` compatibility shim) because
+``detect_pii_in_pass`` resolves ``detect_pii_via_subprocess`` through its own
+module globals -- patching the shim's copy of the name would not reach the
+call site.
 """
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis import pii as pii_module
-from senselab.audio.workflows.audio_analysis.pii import (
+from senselab.text.tasks.pii_detection import api as pii_module
+from senselab.text.tasks.pii_detection.api import (
     PiiSpan,
     _compute_detection_confidence,
     detect_pii_in_pass,

@@ -8,6 +8,9 @@ require building the actual venv on every test run.
 Coverage focuses on the dispatch surface: detector selection (the
 ``detectors`` arg), JSON-request construction, response parsing, and
 the empty-detector short-circuit.
+
+Moved here from ``audio/workflows/audio_analysis/pii_subprocess_test.py``
+alongside the module under test (see plan-b Task 1).
 """
 
 import json
@@ -17,8 +20,8 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis import pii_subprocess
-from senselab.audio.workflows.audio_analysis.pii_subprocess import (
+from senselab.text.tasks.pii_detection import subprocess_backend as pii_subprocess
+from senselab.text.tasks.pii_detection.subprocess_backend import (
     _DEFAULT_GLINER_LABELS,
     _DEFAULT_GLINER_MODEL,
     _GLINER_TO_PRESIDIO_CATEGORY,
@@ -250,6 +253,6 @@ def test_response_passes_through_spans_failures_and_detectors_used(
 
 def test_known_detectors_constant_matches_aliases() -> None:
     """The frozenset and the alias constants must agree — guards against drift."""
-    from senselab.audio.workflows.audio_analysis.pii_subprocess import _KNOWN_DETECTORS
+    from senselab.text.tasks.pii_detection.subprocess_backend import _KNOWN_DETECTORS
 
     assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER}

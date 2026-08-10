@@ -27,7 +27,7 @@ are merged:
 
 GLiNER's lowercase labels (``"person"``, ``"phone_number"``, ...) are
 normalized to Presidio's uppercase scheme inside the worker so the
-downstream corroboration logic in ``pii.py`` — which treats ``(category,
+downstream corroboration logic in ``api.py`` — which treats ``(category,
 text.lower())`` as the dedupe key — sees the two detectors' findings as
 referring to the same entity when they do.
 
@@ -38,7 +38,7 @@ What lives in this module
   category map.
 - The worker script that ``ensure_venv`` runs inside the isolated venv.
 - ``detect_pii_via_subprocess`` — the dispatch function called by
-  ``pii.py``.
+  ``api.py``.
 
 The first call after a fresh venv build pays ~30 s for the GLiNER + spaCy
 model loads (in addition to the venv build itself). Subsequent calls pay

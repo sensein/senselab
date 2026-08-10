@@ -99,7 +99,7 @@ REVIEWED_SUBPROCESS = {
     "audio/tasks/speech_to_text/canary_qwen.py",
     "audio/tasks/speech_to_text/nemo.py",
     "audio/tasks/speech_to_text/qwen.py",
-    "audio/workflows/audio_analysis/pii_subprocess.py",
+    "text/tasks/pii_detection/subprocess_backend.py",
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",
