@@ -34,11 +34,17 @@ repository has no installable package and its top-level module names are `backbo
 `config` and `data`; injecting a generic `util` onto the host interpreter's `sys.path` is the kind of
 hazard that surfaces months later as an unrelated import resolving to the wrong module. The venv
 installs only the inference dependency set. Upstream's `requirements.txt` is a *training* dependency
-set — the inference path (`enhancement.py` -> `backbones.ncsnpp_v2{,_drift}` + `util.other`) imports
-none of `pesq`, `pystoi`, `scoreq`, `torch-pesq`, `asteroid-filterbanks`, `wandb`,
-`pytorch-optimizer`, or `torchinfo`, and `pesq`/`scoreq` in particular are slow and fragile to build
-for no benefit here. The `latent_ckpt/` archive upstream's README requires for training is therefore
-not needed at all.
+set — the inference path (`enhancement.py` -> `backbones.ncsnpp_v2{,_drift}` + `util.other`) does not
+reach `scoreq`, `torch-pesq`, `asteroid-filterbanks`, `wandb`, `pytorch-optimizer`, or `torchinfo`, so
+those stay out. The `latent_ckpt/` archive upstream's README requires for training is not needed at
+all either.
+
+`pesq` and `pystoi` *are* installed, and an earlier revision of this page claimed they were not.
+`util/other.py` — the module the worker must import for `pad_spec` and `set_torch_cuda_arch_list` —
+does `from pesq import pesq` and `from pystoi import stoi` at module scope (lines 7-8 at the pinned
+commit), so they are genuine inference dependencies even though this backend computes no metric. The
+H100 run failed with `No module named 'pesq'` until they were added; the distinction that matters is
+between what the model computes and what its import chain touches.
 
 ### Deviations from upstream's script
 
@@ -72,6 +78,14 @@ weights reachable; it grants no rights over them. No terms have been offered ups
 weights as all-rights-reserved by default and consult
 <https://github.com/LiangXu123/DriftSE> before any use that turns on licence terms. See the model
 registry entry for the pinned revision and file digests.
+
+### The `upfirdn2d` path
+
+Upstream JIT-compiles a CUDA extension for `upfirdn2d` and ships a pure-PyTorch fallback. Which one
+runs is decided by upstream's own `if input.device.type == "cpu" or upfirdn2d_op is None`. Measured on
+an H100: the extension is never compiled (no `.so`, empty `~/.cache/torch_extensions`), so the native
+fallback runs **even on CUDA**, and end-to-end enhancement of a 4.92 s clip is correct. senselab
+forces neither path; if a host does compile the extension, the same branch selects it.
 
 ### Not wired into `audio_analysis`
 
