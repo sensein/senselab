@@ -133,6 +133,14 @@ def _provenance(status_by_signal: dict[str, str]) -> dict[str, Any]:
             # Resolved only for the Brouhaha signals, and only when this window actually measured
             # one — an "unavailable" status means the model never ran here, so there is no commit
             # to name and resolving one anyway would spend a Hub round-trip for no benefit.
+            #
+            # This block reaches no artifact yet, and that is worth stating rather than leaving a
+            # reader to discover it: `votes.py` strips the "provenance" key before building the
+            # SignalRow, and `quality_series` — the only other consumer — has no production caller.
+            # The commit that ships today comes from `compute.py`'s file-level `signal_provenance`
+            # metadata, which is the right granularity anyway since every row shares the model.
+            # Kept because it is correct and nearly free (resolution is memoised per process), and
+            # because whichever of those two consumers becomes live will need it.
             commit_sha=(
                 resolved_commit_sha(BROUHAHA_MODEL_ID, BROUHAHA_REVISION) if is_brouhaha and status == "ok" else None
             ),

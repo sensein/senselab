@@ -653,7 +653,11 @@ FINAL = StageContract(
             "the fused axes over their per-source detail rows, optionally chunked",
         ),
         Artifact("final/summary.md", "the human-facing summary"),
-        Artifact("final/summary.json", "run provenance: policy hash, model revisions, versions, budget"),
+        # Not "model revisions": summary.json records none. Each model's resolved commit is stamped
+        # per stage in that stage's provenance block, and the run-wide model -> commit mapping is
+        # $SENSELAB_CACHE/runs/<run_id>/resolutions.json. Saying otherwise sent a reader looking
+        # here for an attribution this file has never carried.
+        Artifact("final/summary.json", "run provenance: policy hash, versions, budget"),
         Artifact("final/run_summary.json", "the headline numbers of the last round"),
         Artifact("final/labelstudio_tasks.json", "the review bundle"),
         Artifact("final/labelstudio_config.xml", "the review bundle's config"),
