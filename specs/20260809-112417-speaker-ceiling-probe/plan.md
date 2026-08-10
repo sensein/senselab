@@ -228,6 +228,37 @@ succeeds at 6 cannot be depended on at 6."
 
 ### Task 2: Corpus generation
 
+**API confirmed on the cluster 2026-08-10 (job 20080436), against the nemo-diarization venv and
+upstream source. Read this before writing code — it changes the task's prerequisites.**
+
+```python
+MultiSpeakerSimulator(cfg)                    # one OmegaConf object, not kwargs
+  .generate_sessions(random_seed: int = None)
+  .clean_up()
+```
+
+**The simulator does not synthesize speech.** Upstream's own class docstring: *"Simulates
+multispeaker audio sessions using **single-speaker audio files and corresponding word
+alignments**."* It samples from `data_simulator.manifest_filepath` and composes real utterances into
+multi-speaker sessions, with `_min_alignment_count = 2` rejecting a manifest that lacks alignments.
+The design doc called it a "synthetic data constructor", which is true of the *sessions* and not of
+the *speech* — so this task needs an aligned single-speaker corpus as input, which was not costed.
+
+Each manifest entry needs `audio_filepath`, `words`, and `alignments` (word end times in seconds,
+parallel to `words`, **index 0 is always silence** — see upstream line 612). That is the standard
+NeMo manifest format, and LibriSpeech with its published word alignments is the documented source.
+
+**Prefer published alignments over generating them with senselab's own forced aligner.** The probe
+measures senselab's diarizers against this ground truth; deriving that ground truth from another
+senselab component would fold its alignment error into the measurement and make a poor result
+ambiguous between "the diarizer miscounted" and "the alignments were wrong".
+
+The probe's knobs map onto the config directly: `session_config.num_speakers` is the *k* being
+swept, `session_config.num_sessions` is sessions-per-count, and **`enforce_num_speakers` must be
+true** — without it a session requested at *k*=8 may contain fewer speakers, which silently corrupts
+the ground truth the whole probe rests on.
+
+
 **Files:**
 - Create: `scripts/speaker_ceiling/generate.py`
 
