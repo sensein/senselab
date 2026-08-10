@@ -202,11 +202,23 @@ def diarize_audios_with_moss(
             audio.save_to_file(path)
             audio_paths.append(path)
 
+        # Forward the resolved commit SHA to the worker, never the ref -- it has no senselab
+        # install and cannot re-resolve, so a bare ref would load whatever this host's cache
+        # resolves it to right now, which can disagree with the rest of a multi-node run.
+        # commit_sha is already populated by HFModel's constructor-time resolution; the
+        # resolve_revision fallback only matters if that somehow did not happen. Deferred
+        # import (not at module top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        model_name = str(model.path_or_uri)
+        revision = model.commit_sha or resolve_revision(model_name, model.revision)
+
         input_json = json.dumps(
             {
                 "audio_paths": audio_paths,
-                "model_name": str(model.path_or_uri),
-                "model_revision": model.revision,
+                "model_name": model_name,
+                "model_revision": revision,
                 "device": resolved_device.value,
                 "max_new_tokens": max_new_tokens,
             }
@@ -215,7 +227,7 @@ def diarize_audios_with_moss(
         # Stage the model once (cross-process, via the heartbeat lock) + run the
         # worker offline so its from_pretrained calls make no per-call Hub version
         # check — the 429 source under parallel batch load.
-        env = hf_subprocess_env(str(model.path_or_uri), model.revision, base_env=_clean_subprocess_env())
+        env = hf_subprocess_env(model_name, revision, base_env=_clean_subprocess_env())
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],
             input=input_json,
