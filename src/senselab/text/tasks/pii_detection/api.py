@@ -1,4 +1,14 @@
-"""PII detection over ASR transcripts.
+"""Standalone PII detection over plain text, ``ScriptLine``, and ASR transcripts.
+
+Two public entry points share one subprocess-backed implementation:
+
+- :func:`detect_pii` — the standalone component: a ``str``, a ``ScriptLine`` (optionally
+  with nested word/segment ``chunks``), or a sequence of either. No dependency on any
+  audio-workflow concept ("pass", "perturbation", ASR-model ensembles) — this is what a
+  caller reaches for to check arbitrary text or a transcript line for PII on its own.
+- :func:`detect_pii_in_pass` — the ``audio_analysis`` workflow's per-pass wrapper, which
+  additionally merges multiple ASR backends' transcripts and corroborates findings
+  across them.
 
 Detection runs in an isolated subprocess venv (Presidio + GLiNER on
 Python 3.13) so the host process doesn't need ``presidio-analyzer`` /
@@ -32,6 +42,7 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -41,6 +52,7 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
     DETECTOR_PRESIDIO,
     detect_pii_via_subprocess,
 )
+from senselab.utils.data_structures import ScriptLine
 
 # Re-export the canonical detector names so ``analyze_audio.py`` (and
 # any other caller wiring up a ``--pii-detectors`` flag) can reference
@@ -49,9 +61,11 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
 __all__ = [
     "DETECTOR_GLINER",
     "DETECTOR_PRESIDIO",
-    "PiiPassReport",
+    "PiiReport",
     "PiiSpan",
+    "detect_pii",
     "detect_pii_in_pass",
+    "flatten_script_line",
     "report_to_dict",
 ]
 
@@ -69,10 +83,16 @@ class PiiSpan:
 
 
 @dataclass
-class PiiPassReport:
-    """Aggregated PII findings for one pass."""
+class PiiReport:
+    """Aggregated PII findings for one scanned input.
 
-    perturbation: str
+    Carries no notion of "pass" or "perturbation" — that is audio-workflow vocabulary that
+    belongs to the caller, not to a standalone text/ScriptLine detector. ``detect_pii_in_pass``
+    (below) still accepts a ``perturbation`` argument to tag each ``PiiSpan`` with pass context,
+    but no longer stores it on the aggregate report itself; callers that need the association
+    already key their own ``{perturbation: PiiReport}`` mapping (see ``scripts/analyze_audio.py``).
+    """
+
     contains_pii: bool
     n_spans: int
     categories: list[str]
@@ -94,6 +114,298 @@ class PiiPassReport:
     # digit-hallucinations, so weighting them up would inflate exactly
     # the hits a reviewer should de-prioritize.
     detection_confidence: float | None = None
+
+
+def flatten_script_line(line: ScriptLine) -> str:
+    """Join a ScriptLine's text with its nested chunks', depth-first.
+
+    Backends differ in where they put the words: Whisper returns segment text
+    plus word-level ``chunks``, a forced aligner returns segment-level lines with
+    word-level chunks nested underneath, and a diarization line carries a speaker
+    and no text at all. Scanning only ``text`` would make PII coverage silently
+    depend on which backend produced the transcript, so the whole tree is
+    flattened instead.
+
+    Args:
+        line: The ``ScriptLine`` to flatten. Its own ``text`` (if any) comes
+            first, followed by each child's flattened text in order.
+
+    Returns:
+        The concatenated, whitespace-normalized text. Empty string when the
+        line and all its descendants carry no text (e.g. a diarization line
+        with only a ``speaker`` label) — this is a normal, documented result,
+        not an error.
+    """
+    parts: list[str] = []
+    own = (line.text or "").strip()
+    if own:
+        parts.append(own)
+    for child in line.chunks or []:
+        nested = flatten_script_line(child)
+        if nested:
+            parts.append(nested)
+    return " ".join(parts)
+
+
+def _corroborated_contains_pii(
+    spans: list[PiiSpan],
+    detectors_used: list[str],
+    require_cross_source_corroboration: bool,
+) -> bool:
+    """Decide the ``contains_pii`` boolean for one scanned input's spans.
+
+    ``detect_pii_in_pass`` corroborates across multiple *ASR transcripts* of the same
+    pass (a span only one ASR hallucinated is the classic false positive). A standalone
+    ``str``/``ScriptLine`` input has exactly one transcript, so there is nothing to
+    corroborate across sources in that sense. The redundancy that *does* exist at this
+    layer is cross-detector agreement — Presidio and GLiNER independently flagging the
+    same ``(category, normalized_text)`` — so that becomes the corroboration signal here.
+
+    Args:
+        spans: Materialized spans for this single input.
+        detectors_used: Detector names that actually loaded for this call.
+        require_cross_source_corroboration: When ``True`` and ≥2 detectors ran, only a
+            ``(category, normalized_text)`` pair flagged by ≥2 detectors counts. When
+            fewer than 2 detectors ran, corroboration cannot apply and any hit counts —
+            matching ``detect_pii_in_pass``'s single-ASR fallback.
+
+    Returns:
+        Whether the input should be flagged as containing PII.
+    """
+    if not spans:
+        return False
+    if not require_cross_source_corroboration or len(detectors_used) < 2:
+        return True
+    groups: dict[tuple[str, str], set[str]] = {}
+    for s in spans:
+        normalized = s.text.strip().lower()
+        if not normalized:
+            continue
+        root = s.source.split("/", 1)[0] if s.source else "unknown"
+        groups.setdefault((s.category, normalized), set()).add(root)
+    return any(len(roots) >= 2 for roots in groups.values())
+
+
+def _materialize_spans(raw_spans: list[dict[str, Any]], source_id: str) -> list[PiiSpan]:
+    """Build deduped ``PiiSpan`` objects from one input's raw subprocess spans.
+
+    Dedupe key is ``(category, normalized_text, source)`` so a single entity detected by
+    both Presidio and GLiNER counts once per detector rather than once per phrasing —
+    mirrors the per-ASR-model dedup in ``detect_pii_in_pass``.
+
+    Args:
+        raw_spans: Raw span dicts for one input, as returned under one
+            ``spans_by_asr`` key by ``detect_pii_via_subprocess``.
+        source_id: Identifier for the scanned input, stored on ``PiiSpan.asr_model``.
+            Standalone text has no ASR backend; this reuses that field as the
+            per-input identifier ``_compute_detection_confidence`` groups by, rather
+            than adding a parallel field for a single-input-per-report caller.
+
+    Returns:
+        Deduped ``PiiSpan`` list for the input.
+    """
+    seen: set[tuple[str, str, str]] = set()
+    spans: list[PiiSpan] = []
+    for raw in raw_spans:
+        text: str = raw.get("text") or ""
+        category: str = raw.get("category") or ""
+        source: str = raw.get("source") or "unknown"
+        normalized = text.strip().lower()
+        dedup_key: tuple[str, str, str] = (category, normalized, source)
+        if not normalized or dedup_key in seen:
+            continue
+        seen.add(dedup_key)
+        score = raw.get("score")
+        spans.append(
+            PiiSpan(
+                text=text,
+                category=category,
+                source=source,
+                asr_model=source_id,
+                score=float(score) if score is not None else None,
+            )
+        )
+    return spans
+
+
+def _empty_reports(n: int, failures: dict[str, str]) -> list[PiiReport]:
+    """Build ``n`` identical "detector did not run" reports, one per input.
+
+    Every early-return branch of ``detect_pii`` (disabled, all-empty, subprocess crash,
+    no detector loaded) shares this shape: ``detector_used=None`` and
+    ``detection_confidence=None`` so a caller can tell "did not run" apart from "ran and
+    found nothing" (``0.0``) — the same distinction ``detect_pii_in_pass`` preserves.
+
+    Args:
+        n: Number of reports to produce (one per input in the caller's batch).
+        failures: Failure dict shared by every report in the batch.
+
+    Returns:
+        A list of ``n`` ``PiiReport`` objects, each a fresh, independent instance.
+    """
+    return [
+        PiiReport(
+            contains_pii=False,
+            n_spans=0,
+            categories=[],
+            spans=[],
+            failures=dict(failures),
+            detector_used=None,
+            detection_confidence=None,
+        )
+        for _ in range(n)
+    ]
+
+
+def detect_pii(
+    inputs: str | ScriptLine | Sequence[str | ScriptLine],
+    detectors: list[str] | None = None,
+    presidio_score_threshold: float = 0.4,
+    gliner_model: str | None = None,
+    gliner_labels: list[str] | None = None,
+    gliner_threshold: float = 0.5,
+    require_cross_source_corroboration: bool = True,
+) -> PiiReport | list[PiiReport]:
+    """Scan a string or ``ScriptLine`` (or a sequence of either) for PII.
+
+    Standalone entry point: no dependency on any audio-workflow concept ("pass",
+    "perturbation", ASR-model ensembles). ``str`` and ``ScriptLine`` are two entry
+    shapes over one implementation — a ``ScriptLine`` is flattened to text via
+    :func:`flatten_script_line` first, then both shapes go through the same
+    subprocess-backed detection as :func:`detect_pii_in_pass`.
+
+    Every non-empty input is sent to ``detect_pii_via_subprocess`` in a single batched
+    call (one entry per input index) rather than one subprocess per input — the venv's
+    model loads (~5-10s each for Presidio/GLiNER) dominate cost, so batching a whole
+    sequence avoids paying that repeatedly.
+
+    Args:
+        inputs: A single ``str``, a single ``ScriptLine``, or a sequence of either
+            (may be mixed). A ``ScriptLine`` with no text anywhere in its tree (e.g. a
+            diarization line carrying only a ``speaker`` label) flattens to ``""`` and
+            is treated exactly like an empty string input — a documented empty result,
+            not an error.
+        detectors: Subset of ``{"presidio", "gliner"}`` to run. ``None`` (default) runs
+            both. An empty list (``[]``) is the caller explicitly disabling detection:
+            no subprocess is spawned, every report gets ``detector_used=None`` and an
+            explicit ``"pii_disabled"`` failure note — the LLM-judge-shaped case: this
+            module ships no LLM judge, and there is deliberately no default-on path
+            that would require one.
+        presidio_score_threshold: Presidio entities below this score are dropped at
+            extraction time. 0.4 matches ``detect_pii_in_pass``'s default.
+        gliner_model: HuggingFace model id for GLiNER. ``None`` uses the subprocess
+            module's default (``nvidia/gliner-pii``). Ignored when ``"gliner"`` is
+            excluded from ``detectors``.
+        gliner_labels: Labels passed to GLiNER's ``predict_entities``. ``None`` uses
+            the subprocess module's curated HIPAA-18 default set.
+        gliner_threshold: Drop GLiNER predictions below this score.
+        require_cross_source_corroboration: When ``True`` (default) and both detectors
+            ran, only flip ``contains_pii`` to ``True`` for a ``(category,
+            normalized_text)`` pair that both Presidio and GLiNER independently
+            flagged — the same rationale ``detect_pii_in_pass`` applies across ASR
+            models, generalized to cross-detector agreement since a standalone input
+            has exactly one transcript to corroborate. When only one detector ran, any
+            single detection counts (corroboration cannot apply with one witness).
+
+    Returns:
+        A single ``PiiReport`` when ``inputs`` is a scalar ``str``/``ScriptLine``; a
+        list of ``PiiReport``, same length and order as ``inputs``, when it is a
+        sequence. ``detector_used=None`` and ``detection_confidence=None`` together
+        mean detection did not actually run for that input (disabled, empty input,
+        subprocess failure, or no detector loaded) — distinct from ``detection_confidence
+        == 0.0``, which means detection ran and found nothing.
+    """
+    items: Sequence[str | ScriptLine]
+    if isinstance(inputs, (str, ScriptLine)):
+        is_scalar = True
+        items = [inputs]
+    else:
+        is_scalar = False
+        items = list(inputs)
+
+    texts: list[str] = [flatten_script_line(item) if isinstance(item, ScriptLine) else item for item in items]
+
+    # Explicit ``detectors=[]`` means the caller has chosen to disable PII detection.
+    # Checked before anything else so it wins regardless of input content — mirrors
+    # detect_pii_in_pass's ordering and the "pii_disabled" vs "ran, found nothing" vs
+    # "subprocess failed" three-way distinction the caller needs.
+    if detectors is not None and len(detectors) == 0:
+        disabled_reports = _empty_reports(
+            len(texts), {"pii_disabled": "PII detection disabled by caller (detectors=[])."}
+        )
+        return disabled_reports[0] if is_scalar else disabled_reports
+
+    # Index-keyed so a batch of inputs shares one subprocess call; empty/whitespace-only
+    # entries never reach the detectors (mirrors detect_pii_in_pass's per-ASR filtering).
+    transcripts_by_index: dict[str, str] = {str(i): t for i, t in enumerate(texts) if t and t.strip()}
+
+    if not transcripts_by_index:
+        return _quick_return(texts, {}, is_scalar)
+
+    try:
+        subprocess_kwargs: dict[str, Any] = {
+            "presidio_score_threshold": presidio_score_threshold,
+            "gliner_threshold": gliner_threshold,
+        }
+        if detectors is not None:
+            subprocess_kwargs["detectors"] = detectors
+        if gliner_model is not None:
+            subprocess_kwargs["gliner_model"] = gliner_model
+        if gliner_labels is not None:
+            subprocess_kwargs["gliner_labels"] = gliner_labels
+        result = detect_pii_via_subprocess(transcripts_by_index, **subprocess_kwargs)
+    except Exception as exc:  # noqa: BLE001 — caller needs reports to continue, not a crash
+        msg = f"PII subprocess failed: {type(exc).__name__}: {exc}"
+        print(f"warn: {msg}", file=sys.stderr)
+        return _quick_return(texts, {"pii_subprocess": msg}, is_scalar)
+
+    spans_by_index_raw = result.get("spans_by_asr", {})
+    subprocess_failures = dict(result.get("failures", {}))
+    detectors_used = list(result.get("detectors_used", []))
+    for name, msg in subprocess_failures.items():
+        print(f"warn: PII / {name}: {msg}", file=sys.stderr)
+
+    if not detectors_used:
+        no_detector_msg = (
+            "Neither Presidio nor GLiNER loaded inside the subprocess venv; contains_pii=False reported by default."
+        )
+        subprocess_failures.setdefault("no_pii_detector", no_detector_msg)
+        print(f"warn: {no_detector_msg}", file=sys.stderr)
+        return _quick_return(texts, subprocess_failures, is_scalar)
+
+    built_reports: list[PiiReport] = []
+    for i, _text in enumerate(texts):
+        spans = _materialize_spans(spans_by_index_raw.get(str(i), []), str(i))
+        contains_pii = _corroborated_contains_pii(spans, detectors_used, require_cross_source_corroboration)
+        built_reports.append(
+            PiiReport(
+                contains_pii=contains_pii,
+                n_spans=len(spans),
+                categories=sorted({s.category for s in spans}),
+                spans=spans,
+                failures=dict(subprocess_failures),
+                detector_used=",".join(detectors_used),
+                detection_confidence=_compute_detection_confidence(spans, n_asr_models=1),
+            )
+        )
+    return built_reports[0] if is_scalar else built_reports
+
+
+def _quick_return(texts: list[str], failures: dict[str, str], is_scalar: bool) -> PiiReport | list[PiiReport]:
+    """Shared tail for ``detect_pii``'s "detector did not run" branches.
+
+    Args:
+        texts: The flattened input texts (only its length matters here — one report
+            per input).
+        failures: Failure dict to attach to every report (empty for the "all inputs
+            were empty, nothing to scan" branch).
+        is_scalar: Whether the original ``detect_pii`` call took a scalar input.
+
+    Returns:
+        A bare ``PiiReport`` when ``is_scalar``, else a list matching ``texts``' length.
+    """
+    reports = _empty_reports(len(texts), failures)
+    return reports[0] if is_scalar else reports
 
 
 def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int) -> float:
@@ -192,7 +504,7 @@ def detect_pii_in_pass(
     gliner_labels: list[str] | None = None,
     gliner_threshold: float = 0.5,
     require_cross_model_corroboration: bool = True,
-) -> PiiPassReport:
+) -> PiiReport:
     """Scan all ASR transcripts for one pass and return a unified PII report.
 
     Detection runs in the ``pii-detection`` subprocess venv via
@@ -235,7 +547,7 @@ def detect_pii_in_pass(
             single detection counts.
 
     Returns:
-        ``PiiPassReport`` with per-span detail, the detector(s) used, and
+        ``PiiReport`` with per-span detail, the detector(s) used, and
         any failure reasons.
     """
     failures: dict[str, str] = {}
@@ -251,8 +563,7 @@ def detect_pii_in_pass(
 
     if not transcripts_by_asr:
         # Nothing to scan — every ASR result was empty / whitespace.
-        return PiiPassReport(
-            perturbation=perturbation,
+        return PiiReport(
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -267,8 +578,7 @@ def detect_pii_in_pass(
     # apart from "ran but found nothing" and "subprocess crashed".
     if detectors is not None and len(detectors) == 0:
         failures["pii_disabled"] = "PII detection disabled by caller (detectors=[])."
-        return PiiPassReport(
-            perturbation=perturbation,
+        return PiiReport(
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -293,8 +603,7 @@ def detect_pii_in_pass(
         msg = f"PII subprocess failed: {type(exc).__name__}: {exc}"
         failures["pii_subprocess"] = msg
         print(f"warn: {msg}", file=sys.stderr)
-        return PiiPassReport(
-            perturbation=perturbation,
+        return PiiReport(
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -315,8 +624,7 @@ def detect_pii_in_pass(
             "Neither Presidio nor GLiNER loaded inside the subprocess venv; contains_pii=False reported by default.",
         )
         print(f"warn: {failures['no_pii_detector']}", file=sys.stderr)
-        return PiiPassReport(
-            perturbation=perturbation,
+        return PiiReport(
             contains_pii=False,
             n_spans=0,
             categories=[],
@@ -389,8 +697,7 @@ def detect_pii_in_pass(
     # distinguish "detectors ran, found nothing" (0.0) from "detectors
     # did not actually run" (None).
     detection_confidence = _compute_detection_confidence(spans, n_asr_models=len(spans_by_asr))
-    return PiiPassReport(
-        perturbation=perturbation,
+    return PiiReport(
         contains_pii=contains_pii,
         n_spans=len(spans),
         categories=categories,
@@ -401,10 +708,9 @@ def detect_pii_in_pass(
     )
 
 
-def report_to_dict(report: PiiPassReport) -> dict[str, Any]:
-    """Convert a ``PiiPassReport`` into a JSON-serializable dict."""
+def report_to_dict(report: PiiReport) -> dict[str, Any]:
+    """Convert a ``PiiReport`` into a JSON-serializable dict."""
     return {
-        "perturbation": report.perturbation,
         "contains_pii": report.contains_pii,
         "n_spans": report.n_spans,
         "categories": report.categories,
