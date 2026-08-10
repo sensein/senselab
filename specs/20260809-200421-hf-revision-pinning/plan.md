@@ -526,7 +526,7 @@ Add to `src/tests/utils/model_test.py`:
 
 ```python
 def test_hf_model_records_the_resolved_commit_sha(monkeypatch: pytest.MonkeyPatch) -> None:
-    """revision keeps the ref asked for; commit_sha carries what it resolved to."""
+    """Revision keeps the ref asked for; commit_sha carries what it resolved to."""
     sha = "c" * 40
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
