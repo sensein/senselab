@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import List
+from unittest.mock import patch
 
 import pytest
 from speechbrain.inference.separation import SepformerSeparation as separator
@@ -10,6 +11,58 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.speech_enhancement import driftse, enhance_audios
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
 from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel
+
+
+@pytest.fixture
+def _offline_hfmodel_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let an ``HFModel`` be constructed without reaching the Hub.
+
+    Unmocked, the ``revision`` validator calls ``check_hf_repo_exists``, which
+    downloads the full snapshot -- this once pulled 20 GB for an unrelated model.
+    Both the existence check and the commit-SHA resolution are stubbed,
+    independently, per this project's rule against unmocked ``HFModel``
+    construction in tests.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+
+
+def test_default_model_is_unchanged(mono_audio_sample: Audio) -> None:
+    """No existing caller may change behaviour.
+
+    The workflow calls ``enhance_audios`` with the SpeechBrain default and must
+    keep reaching the SpeechBrain path.
+    """
+    with patch(
+        "senselab.audio.tasks.speech_enhancement.api.SpeechBrainEnhancer.enhance_audios_with_speechbrain",
+        return_value=[mono_audio_sample],
+    ) as sb:
+        enhance_audios([mono_audio_sample])
+    sb.assert_called_once()
+    assert sb.call_args.kwargs["model"].path_or_uri == "speechbrain/sepformer-wham16k-enhancement"
+
+
+def test_hfmodel_with_the_driftse_prefix_dispatches_to_driftse(
+    mono_audio_sample: Audio, _offline_hfmodel_construction: None
+) -> None:
+    """An ``HFModel`` whose id starts with ``sensein/driftse`` reaches DriftSE."""
+    with patch(
+        "senselab.audio.tasks.speech_enhancement.api.enhance_audios_with_driftse",
+        return_value=[mono_audio_sample],
+    ) as ds:
+        enhance_audios(
+            [mono_audio_sample],
+            model=HFModel(path_or_uri="sensein/driftse-distilhubert-three-layers"),
+        )
+    ds.assert_called_once()
+
+
+def test_an_unrecognised_model_still_raises_not_implemented(
+    mono_audio_sample: Audio, _offline_hfmodel_construction: None
+) -> None:
+    """Silently falling through to a default would enhance with a model the caller did not ask for."""
+    with pytest.raises(NotImplementedError):
+        enhance_audios([mono_audio_sample], model=HFModel(path_or_uri="some/other-model"))
 
 
 def test_upstream_is_pinned_to_a_full_commit_sha() -> None:

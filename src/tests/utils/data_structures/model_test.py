@@ -152,6 +152,15 @@ def test_model_for_task_routes_remaining_tasks(_offline_model_construction: None
     assert isinstance(model_for_task("speechbrain/sepformer-wham16k-enhancement", task="enhancement"), SpeechBrainModel)
 
 
+def test_model_for_task_routes_driftse_enhancement_by_prefix(_offline_model_construction: None) -> None:
+    """A ``sensein/driftse`` id is HF-hosted; every other enhancement id is SpeechBrain."""
+    from senselab.utils.data_structures import model_for_task
+    from senselab.utils.data_structures.model import HFModel, SpeechBrainModel
+
+    assert isinstance(model_for_task("sensein/driftse-distilhubert-three-layers", task="enhancement"), HFModel)
+    assert isinstance(model_for_task("speechbrain/sepformer-wham16k-enhancement", task="enhancement"), SpeechBrainModel)
+
+
 def test_model_for_task_rejects_unknown_task() -> None:
     """An unrecognized task must fail loudly, not default to a provider."""
     import pytest as _pytest
