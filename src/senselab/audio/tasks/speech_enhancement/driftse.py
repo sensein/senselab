@@ -17,11 +17,12 @@ no SSL encoder. The ``latent_ckpt/`` archive its README requires for training is
 therefore not needed here at all, and this is the first generative enhancer in
 senselab that is genuinely CPU-viable.
 
-One correction, measured rather than reasoned: that import chain *does* pull
-``pesq`` at module scope, so the venv installs it even though this backend computes
-no metric. An earlier revision of this docstring claimed otherwise and the run
-failed with ``No module named 'pesq'`` on an H100 — the distinction that matters is
-between what the model computes and what it imports.
+One correction, measured rather than reasoned: ``util/other.py`` itself does
+``from pesq import pesq`` and ``from pystoi import stoi`` at module scope, so the
+venv installs both even though this backend computes no metric. An earlier revision
+blamed ``util/inference.py`` and omitted them; the H100 run failed with
+``No module named 'pesq'``. The distinction that matters is between what the model
+computes and what its import chain touches.
 
 Why a subprocess venv
 ---------------------
@@ -94,13 +95,15 @@ _DRIFTSE_REQUIREMENTS = [
     "librosa>=0.10.2",
     "soundfile>=0.12.1",
     "tqdm>=4.66",
-    # A metrics package, needed at *inference* despite this backend never computing a metric:
-    # upstream imports pesq at module scope in the chain the worker loads, so omitting it fails
-    # the run with `No module named 'pesq'` from inside the subprocess. Measured on an H100 --
-    # the local suite skips this path, so nothing caught it until a real GPU run. The earlier
-    # claim that inference needs none of upstream's metrics dependencies was right about what
-    # the model *computes* and wrong about what it *imports*.
+    # Metrics packages, needed at *inference* even though this backend computes no metric:
+    # upstream's util/other.py -- the module the worker imports for pad_spec and
+    # set_torch_cuda_arch_list -- does `from pesq import pesq` and `from pystoi import stoi` at
+    # module scope (lines 7-8 at the pinned commit). An earlier revision blamed util/inference.py
+    # and omitted both; the H100 run failed with `No module named 'pesq'`, and omitting pystoi
+    # would simply have failed on the next line. The distinction that matters is between what the
+    # model computes and what its import chain touches.
     "pesq>=0.0.4",
+    "pystoi>=0.3.3",
 ]
 
 _DRIFTSE_REPO_URL = "https://github.com/LiangXu123/DriftSE.git"
