@@ -178,7 +178,26 @@ class StageContext:
             params=dict(params),
             code_version=stage_code_version(task),
             senselab_ver=self.senselab_ver,
+            commit_sha=self._commit_sha_for(model_id),
         )
+
+    def _commit_sha_for(self, model_id: str | None) -> str | None:
+        """Resolve ``model_id`` to this run's commit SHA, or ``None`` if not a Hub id.
+
+        Resolution has to happen here, above the load, because the cache key is computed to decide
+        *whether* to load at all — a SHA harvested during loading would arrive too late to key on.
+
+        A bare ``None`` (a model-less stage, e.g. ``features``) and a non-Hub name (a local backend
+        like ``"yamnet"``, which has no ``/``) both resolve to ``None`` here, but for different
+        reasons: the first has nothing to pin, the second names something this run cannot look up
+        on the Hub. Neither should attempt a resolution — the ``/`` check is what tells them apart
+        from an id this run actually needs to pin.
+        """
+        if not model_id or "/" not in model_id:
+            return None
+        from senselab.utils.model_revision import resolve_revision
+
+        return resolve_revision(model_id)
 
     def align_key_for(
         self,
