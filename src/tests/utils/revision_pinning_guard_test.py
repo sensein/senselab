@@ -4,16 +4,26 @@ This is the regression guard for the design's central rule. Without it the codeb
 back to ref-addressed loads one call site at a time, and the provenance keeps reporting
 commits it did not actually load.
 
-Two of the three call sites this task touches (``canary_qwen.py``,
-``speech_emotion_recognition/api.py``) get their SHA from ``HFModel.commit_sha``, which is
-resolved once at model-construction time and simply forwarded here -- there is no local
-resolution step left to unit-test in those two files beyond "the field is forwarded, not
-``model.revision``", which the static sweep below covers. ``brouhaha.py`` has no ``HFModel``
-(it takes a bare ``model_id``/``revision`` pair), so it resolves for itself; that resolution
-step is extracted into ``_build_worker_input`` specifically so it is unit-testable here
-without spawning the subprocess venv.
+Three of the five call sites this task touches (``canary_qwen.py``,
+``speech_emotion_recognition/api.py``, ``child_adult.py``) get their SHA from
+``HFModel.commit_sha``, which is resolved once at model-construction time and simply
+forwarded here -- there is no local resolution step left to unit-test in those beyond "the
+field is forwarded, not ``model.revision``", which the static sweep below covers. A fourth
+(``moss.py``) does the same via a local ``revision`` variable. ``brouhaha.py`` has no
+``HFModel`` (it takes a bare ``model_id``/``revision`` pair), so it resolves for itself; that
+resolution step is extracted into ``_build_worker_input`` specifically so it is unit-testable
+here without spawning the subprocess venv.
+
+``test_no_unreviewed_subprocess_revision_payload`` is what makes this durable against sites
+added *after* this task: rather than hardcoding "these five files are fine" as the only
+check, it statically discovers every subprocess-worker file whose parent-side payload
+carries a revision-shaped key and fails if that file is not in
+``REVISION_RESOLVED_SUBPROCESS_FILES`` -- the same conscious-human-checkpoint pattern
+``hf_load_coverage_test.py`` uses for HF-load sites generally (new site -> test fails until
+reviewed and added to the allowlist here).
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -22,16 +32,17 @@ import pytest
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 # Subprocess-worker files where a resolved commit SHA has been verified to reach the
-# worker's JSON payload (task 6, hf-revision-pinning). Other files in
-# hf_load_coverage_test.REVIEWED_SUBPROCESS may still forward `model.revision` unresolved
-# (e.g. `speaker_diarization/child_adult.py`, `speaker_diarization/moss.py`, at the time this
-# guard was written) -- fixing those is out of this task's scope. Add a file here only after
-# checking its input_json construction the way the three below were checked; do not add it
-# just because it appears in REVIEWED_SUBPROCESS.
+# worker's JSON payload. Add a file here only after checking its input_json construction the
+# way the five below were checked -- do not add it just because it appears in
+# hf_load_coverage_test.REVIEWED_SUBPROCESS, which tracks a different property (HF-cache
+# safety, not revision-vs-ref). test_no_unreviewed_subprocess_revision_payload enforces that
+# every subprocess file sending a revision-shaped payload key is in this set.
 REVISION_RESOLVED_SUBPROCESS_FILES = {
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/canary_qwen.py",
     "audio/tasks/classification/speech_emotion_recognition/api.py",
+    "audio/tasks/speaker_diarization/child_adult.py",
+    "audio/tasks/speaker_diarization/moss.py",
 }
 
 
@@ -70,38 +81,79 @@ def test_subprocess_env_propagates_the_run_id(monkeypatch: pytest.MonkeyPatch) -
     assert env["SENSELAB_RUN_ID"] == "run-abc", "a worker must join its parent's run, not start its own"
 
 
-def test_revision_resolved_subprocess_files_send_a_sha_not_a_ref() -> None:
-    """The subprocess parents fixed by this task must keep resolving before they send.
+def test_revision_resolved_subprocess_files_still_resolve_before_sending() -> None:
+    """The five reviewed subprocess parents must keep resolving before they send.
 
-    Static, source-level sweep in the spirit of ``hf_load_coverage_test.py``: it does not
-    understand data flow, so it cannot prove a specific value is a SHA, but it can catch the
-    concrete anti-pattern this task removed -- ``X.revision or "main"`` fed straight into a
-    ``"revision"`` payload key -- the moment it reappears in one of the three files this task
-    fixed, and it requires each file to still reference ``resolve_revision``/``commit_sha`` at
-    all. Deliberately scoped to ``REVISION_RESOLVED_SUBPROCESS_FILES`` rather than the full
-    ``REVIEWED_SUBPROCESS`` set in ``hf_load_coverage_test.py``: other subprocess backends were
-    not touched by this task and may still have the same bug (see that set's module comment).
+    Source-level check in the spirit of ``hf_load_coverage_test.py``'s
+    ``test_reviewed_subprocess_files_use_hf_subprocess_env``: it does not understand data
+    flow, so it cannot prove a *specific* value is a SHA, but it can catch the file having
+    stopped referencing ``resolve_revision``/``commit_sha`` at all -- the signal that a raw
+    ref crept back into the worker payload.
     """
     from tests.utils.hf_load_coverage_test import _SRC
 
-    anti_pattern = re.compile(r'"revision"\s*:[^,\n]*\.revision\b[^,\n]*or\s+"main"')
-    offenders = []
-    unresolved = []
-    for relpath in sorted(REVISION_RESOLVED_SUBPROCESS_FILES):
-        text = (_SRC / relpath).read_text()
-        if anti_pattern.search(text):
-            offenders.append(relpath)
-        if "resolve_revision" not in text and "commit_sha" not in text:
-            unresolved.append(relpath)
-
-    assert not offenders, (
-        'Subprocess worker file(s) send a bare ref (`X.revision or "main"`) as the worker\'s '
-        "revision, instead of a resolved commit SHA:\n" + "\n".join(f"  {f}" for f in offenders)
-    )
+    unresolved = [
+        relpath
+        for relpath in sorted(REVISION_RESOLVED_SUBPROCESS_FILES)
+        if "resolve_revision" not in (text := (_SRC / relpath).read_text()) and "commit_sha" not in text
+    ]
     assert not unresolved, (
         "File(s) no longer reference resolve_revision or commit_sha -- a raw ref may have "
         "crept back into the worker payload:\n" + "\n".join(f"  {f}" for f in unresolved)
     )
+
+
+def _revision_payload_files() -> set[str]:
+    """Subprocess-worker files whose parent-side code builds a payload with a revision-ish key.
+
+    AST-based, reusing ``hf_load_coverage_test.py``'s own subprocess-worker discovery
+    (``_subprocess_worker_files``) as the candidate set. For each candidate, walks every
+    dict literal in the *parent's* Python (not the worker string -- that is a separate
+    string literal these dict literals feed into via ``json.dumps``) and flags any string
+    key containing "revision" (covers ``"revision"``, ``"hf_revision"``,
+    ``"model_revision"``, and any future name in that family). A file landing in this set is
+    a candidate carrying a per-run identity across the subprocess boundary and must be
+    reviewed the same way the five files in REVISION_RESOLVED_SUBPROCESS_FILES were.
+    """
+    from tests.utils.hf_load_coverage_test import _SRC, _subprocess_worker_files
+
+    found: set[str] = set()
+    for relpath in _subprocess_worker_files():
+        try:
+            tree = ast.parse((_SRC / relpath).read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            for key in node.keys:
+                if isinstance(key, ast.Constant) and isinstance(key.value, str) and "revision" in key.value.lower():
+                    found.add(relpath)
+    return found
+
+
+def test_no_unreviewed_subprocess_revision_payload() -> None:
+    """Fail if a subprocess site sends a revision-shaped payload field without being reviewed.
+
+    This is the check that generalises past the five files enumerated above: a *new*
+    subprocess backend added later that copies the same ``"revision": model.revision``
+    boilerplate is caught here automatically (via ``_revision_payload_files``'s AST sweep)
+    rather than silently passing because nobody remembered to touch this test. Both
+    directions are checked -- a newly-detected, unreviewed file, and a stale allowlist entry
+    whose payload no longer carries a revision-shaped key -- mirroring
+    ``hf_load_coverage_test.test_allowlists_have_no_stale_entries``.
+    """
+    detected = _revision_payload_files()
+    missing = sorted(detected - REVISION_RESOLVED_SUBPROCESS_FILES)
+    stale = sorted(REVISION_RESOLVED_SUBPROCESS_FILES - detected)
+    assert not missing, (
+        "Subprocess file(s) send a revision-shaped payload field but are not reviewed for "
+        "the SHA-not-ref rule:\n"
+        + "\n".join(f"  {f}" for f in missing)
+        + "\n\nResolve via resolve_revision / model.commit_sha before building the worker "
+        "payload, then add the file to REVISION_RESOLVED_SUBPROCESS_FILES in this test."
+    )
+    assert not stale, f"Remove stale REVISION_RESOLVED_SUBPROCESS_FILES entries (no revision-shaped key found): {stale}"
 
 
 @pytest.mark.slow

@@ -298,8 +298,17 @@ def diarize_audios_with_child_adult(
             audio.save_to_file(path)
             audio_paths.append(path)
 
+        # Forward the resolved commit SHA to the worker, never the ref -- it has no senselab
+        # install and cannot re-resolve, so a bare ref would load whatever this host's cache
+        # resolves it to right now, which can disagree with the rest of a multi-node run.
+        # commit_sha is already populated by HFModel's constructor-time resolution; the
+        # resolve_revision fallback only matters if that somehow did not happen. Deferred
+        # import (not at module top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
         hf_repo = str(model.path_or_uri)
-        hf_revision = model.revision
+        hf_revision = model.commit_sha or resolve_revision(hf_repo, model.revision)
 
         input_json = json.dumps(
             {
