@@ -151,6 +151,11 @@ try:
 
     from diarizen.pipelines.inference import DiariZenPipeline
 
+    # DiariZenPipeline.from_pretrained has no revision parameter at all (see the module
+    # docstring's Args note); it always resolves the mutable "main" ref internally via its
+    # own plain snapshot_download(). Genuinely unpinnable at the loader; the parent still
+    # resolves+stages the SHA so the run manifest and the download-once cache agree on a
+    # commit, even though this call can't be pointed at it directly.
     pipeline = DiariZenPipeline.from_pretrained(model_name)
 
     all_results = []
@@ -246,19 +251,34 @@ def diarize_audios_with_diarizen(
             audio.save_to_file(path)
             audio_paths.append(path)
 
+        model_name = str(model.path_or_uri)
         input_json = json.dumps(
             {
                 "audio_paths": audio_paths,
-                "model_name": str(model.path_or_uri),
+                "model_name": model_name,
             }
         )
+
+        # Forward the resolved commit SHA to hf_subprocess_env, never the ref -- so the
+        # parent's staging pins the exact run-agreed commit, even though
+        # DiariZenPipeline.from_pretrained() cannot be pointed at it (see the
+        # worker-script's own from_pretrained comment / the module docstring's license
+        # note). The embedding-model dependency has no revision concept of its own here
+        # either -- pyannote/wespeaker-voxceleb-resnet34-LM is staged at "main" like
+        # before, since DiariZenPipeline.from_pretrained() resolves it internally with no
+        # hook for the caller to pin it. Deferred import (not at module top) keeps this
+        # monkeypatch-friendly at senselab.utils.model_revision.resolve_revision,
+        # matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        revision = model.commit_sha or resolve_revision(model_name, model.revision)
 
         # Stage both the main checkpoint and its internal embedding-model
         # dependency once (cross-process, via the heartbeat lock) + run the
         # worker offline so from_pretrained/snapshot_download calls make no
         # per-call Hub version check — the 429 source under parallel batch load.
         env = hf_subprocess_env(
-            str(model.path_or_uri), "main", also=[(_DIARIZEN_EMBEDDING_MODEL, "main")], base_env=_clean_subprocess_env()
+            model_name, revision, also=[(_DIARIZEN_EMBEDDING_MODEL, "main")], base_env=_clean_subprocess_env()
         )
         result = subprocess.run(
             [python, "-c", _WORKER_SCRIPT],

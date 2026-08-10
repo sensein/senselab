@@ -249,6 +249,7 @@ _KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER})
 #     "presidio_entities": [str, ...],
 #     "presidio_score_threshold": float,
 #     "gliner_model": str,
+#     "gliner_revision": str | None,   # resolved commit SHA, never a mutable ref
 #     "gliner_labels": [str, ...],
 #     "gliner_threshold": float,
 #     "gliner_label_map": {str: str, ...},   # gliner_label → normalized_category
@@ -280,6 +281,7 @@ try:
     presidio_entities = args.get("presidio_entities") or []
     presidio_score_threshold = float(args.get("presidio_score_threshold", 0.4))
     gliner_model_id = args.get("gliner_model")
+    gliner_revision = args.get("gliner_revision")
     gliner_labels = args.get("gliner_labels") or []
     gliner_threshold = float(args.get("gliner_threshold", 0.5))
     gliner_label_map = args.get("gliner_label_map") or {}
@@ -303,7 +305,10 @@ try:
         try:
             import torch
             from gliner import GLiNER
-            gliner_model = GLiNER.from_pretrained(gliner_model_id)
+            # GLiNER.from_pretrained takes a real revision kwarg (unlike NeMo/DiariZen), so
+            # the resolved commit SHA the parent staged is passed straight through rather
+            # than falling back to whatever this host's mutable "main" ref points at.
+            gliner_model = GLiNER.from_pretrained(gliner_model_id, revision=gliner_revision)
             if torch.cuda.is_available():
                 # GLiNER 0.2+ exposes the wrapped HF model on .model; older
                 # builds use the wrapper directly. Try both gracefully so
@@ -501,6 +506,25 @@ def detect_pii_via_subprocess(
     labels = gliner_labels if gliner_labels is not None else list(_DEFAULT_GLINER_LABELS)
     entities = presidio_entities if presidio_entities is not None else list(_PRESIDIO_PII_ENTITIES)
 
+    gliner_revision: Optional[str] = None
+    env = _clean_subprocess_env()
+    if "gliner" in detectors_resolved and gliner_model:
+        # Resolve the ref to a commit SHA before staging, then forward that SHA (never
+        # the ref) to both the worker and hf_subprocess_env -- GLiNER.from_pretrained
+        # takes a real revision kwarg, so this fully pins the load rather than merely
+        # pinning what gets downloaded. Deferred import (not at module top) keeps this
+        # monkeypatch-friendly at senselab.utils.model_revision.resolve_revision,
+        # matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        gliner_revision = resolve_revision(str(gliner_model), "main")
+
+        # Stage the GLiNER model once (cross-process, via the heartbeat lock) and run
+        # the worker offline so its GLiNER.from_pretrained makes no per-call Hub
+        # version check — the 429 source under parallel batch. Only when gliner is
+        # actually requested (presidio uses spaCy, not the HF Hub).
+        env = hf_subprocess_env(str(gliner_model), gliner_revision, base_env=env)
+
     input_json = json.dumps(
         {
             "transcripts": transcripts_by_asr,
@@ -508,19 +532,13 @@ def detect_pii_via_subprocess(
             "presidio_entities": entities,
             "presidio_score_threshold": float(presidio_score_threshold),
             "gliner_model": gliner_model,
+            "gliner_revision": gliner_revision,
             "gliner_labels": labels,
             "gliner_threshold": float(gliner_threshold),
             "gliner_label_map": _GLINER_TO_PRESIDIO_CATEGORY,
         }
     )
 
-    env = _clean_subprocess_env()
-    if "gliner" in detectors_resolved and gliner_model:
-        # Stage the GLiNER model once (cross-process, via the heartbeat lock) and run
-        # the worker offline so its GLiNER.from_pretrained makes no per-call Hub
-        # version check — the 429 source under parallel batch. Only when gliner is
-        # actually requested (presidio uses spaCy, not the HF Hub).
-        env = hf_subprocess_env(str(gliner_model), "main", base_env=env)
     result = subprocess.run(
         [python, "-c", _PII_WORKER_SCRIPT],
         input=input_json,

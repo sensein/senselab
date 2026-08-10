@@ -31,6 +31,19 @@ from senselab.audio.workflows.audio_analysis.pii_subprocess import (
 # ── Fixtures ────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _fake_resolve_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake the GLiNER ref resolution every gliner-enabled test triggers.
+
+    detect_pii_via_subprocess resolves the GLiNER ref to a commit SHA before staging;
+    faking it here keeps every test in this module independent of network reachability
+    or this host's local HF cache state. Autouse because most tests below exercise the
+    default detector set (both presidio and gliner), so opting in per-test would just
+    repeat this line everywhere it matters.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+
+
 @pytest.fixture
 def fake_venv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Skip the real venv build; return a tmp path as the resolved venv dir."""
@@ -179,6 +192,8 @@ def test_request_carries_defaults_for_threshold_and_gliner_settings(
     sent = recorder.calls[0]["input"]
     assert sent["presidio_score_threshold"] == 0.4
     assert sent["gliner_model"] == _DEFAULT_GLINER_MODEL
+    # A resolved commit SHA, never the mutable "main" ref (see _fake_resolve_revision).
+    assert sent["gliner_revision"] == "f" * 40
     assert sent["gliner_threshold"] == 0.5
     assert sent["gliner_labels"] == list(_DEFAULT_GLINER_LABELS)
     assert sent["presidio_entities"] == list(_PRESIDIO_PII_ENTITIES)
