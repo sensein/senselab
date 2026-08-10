@@ -79,13 +79,19 @@ weights as all-rights-reserved by default and consult
 <https://github.com/LiangXu123/DriftSE> before any use that turns on licence terms. See the model
 registry entry for the pinned revision and file digests.
 
-### The `upfirdn2d` path
+### The `upfirdn2d` path: no compilation, ever
 
-Upstream JIT-compiles a CUDA extension for `upfirdn2d` and ships a pure-PyTorch fallback. Which one
-runs is decided by upstream's own `if input.device.type == "cpu" or upfirdn2d_op is None`. Measured on
-an H100: the extension is never compiled (no `.so`, empty `~/.cache/torch_extensions`), so the native
-fallback runs **even on CUDA**, and end-to-end enhancement of a 4.92 s clip is correct. senselab
-forces neither path; if a host does compile the extension, the same branch selects it.
+**It does not need compiling, and cannot be compiled at the pinned commit.** Upstream's
+`backbones/ncsnpp_utils/op/upfirdn2d.py` imports `torch.utils.cpp_extension.load` and never calls it,
+hardcoding `upfirdn2d_op = None` under the comment *"Force PyTorch fallback to avoid CUDA_HOME
+dependency"*. The dispatch `if input.device.type == "cpu" or upfirdn2d_op is None` therefore always
+selects `upfirdn2d_native` (plain `F.conv2d`) — on CPU and CUDA alike. Confirmed on an H100: no `.so`
+beside the source, empty `~/.cache/torch_extensions`, correct output on a 4.92 s clip.
+
+So the venv needs no build toolchain (`nvcc`/`CUDA_HOME` are irrelevant), which is why it installs
+quickly and portably; and the CUDA kernel's speed is simply not on the table, since that path is
+unreachable. An upstream change restoring the `load()` call would alter both — one more reason the
+commit is pinned.
 
 ### Not wired into `audio_analysis`
 
