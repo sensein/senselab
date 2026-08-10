@@ -11,11 +11,17 @@ Why inference is cheap
 The drifting field is computed in a frozen self-supervised latent space
 (HuBERT / WavLM / DistilHuBERT) — but that is the **training** signal. Inference
 is the backbone alone: one forward pass under ``no_grad``. Upstream's
-``enhancement.py`` imports only ``backbones.ncsnpp_v2``,
-``backbones.ncsnpp_v2_drift`` and ``util.other`` — no Lightning, no ``wandb``, no
-``pesq``, and no SSL encoder. The ``latent_ckpt/`` archive its README requires for
-training is therefore not needed here at all, and this is the first generative
-enhancer in senselab that is genuinely CPU-viable.
+``enhancement.py`` reaches only ``backbones.ncsnpp_v2``,
+``backbones.ncsnpp_v2_drift`` and ``util.other`` — no Lightning, no ``wandb``, and
+no SSL encoder. The ``latent_ckpt/`` archive its README requires for training is
+therefore not needed here at all, and this is the first generative enhancer in
+senselab that is genuinely CPU-viable.
+
+One correction, measured rather than reasoned: that import chain *does* pull
+``pesq`` at module scope, so the venv installs it even though this backend computes
+no metric. An earlier revision of this docstring claimed otherwise and the run
+failed with ``No module named 'pesq'`` on an H100 — the distinction that matters is
+between what the model computes and what it imports.
 
 Why a subprocess venv
 ---------------------
@@ -30,9 +36,15 @@ Licensing
 The upstream repository reports no license (no ``LICENSE`` file, no statement in
 the README), and is itself built on SGMSE+ (MIT) without carrying that statement
 forward. senselab therefore vendors none of it: the worker clones the repository
-at a pinned commit into the user's own cache at first use. The checkpoint mirror
-under ``sensein`` is private pending an upstream answer; see this module's
-``doc.md`` for the status of that request.
+at a pinned commit into the user's own cache at first use.
+
+The checkpoint mirror under ``sensein`` is **public**, so the backend is usable
+during the alpha, while its licence remains **unknown**: no terms have been
+granted for these weights, and a request opened 2026-08-08 is unanswered
+(https://github.com/LiangXu123/DriftSE/issues/2). Publishing the mirror makes the
+weights reachable; it does not grant rights over them. Treat them as
+all-rights-reserved by default and consult upstream before any use that turns on
+licence terms. See this module's ``doc.md`` for the status of the request.
 
 Not wired into ``audio_analysis``
 ---------------------------------
@@ -65,10 +77,10 @@ _DRIFTSE_VENV = "driftse"
 _DRIFTSE_PYTHON = "3.11"
 
 # Upstream's requirements.txt is a *training* dependency set. The inference path
-# (enhancement.py -> backbones.ncsnpp_v2{,_drift} + util.other) imports none of
-# pesq / pystoi / scoreq / torch-pesq / asteroid-filterbanks / wandb /
-# pytorch-optimizer / torchinfo, so they are deliberately absent: pesq and scoreq
-# in particular are slow and fragile to build for no benefit here.
+# (enhancement.py -> backbones.ncsnpp_v2{,_drift} + util.other) does not reach
+# pystoi / scoreq / torch-pesq / asteroid-filterbanks / wandb / pytorch-optimizer /
+# torchinfo, so those stay absent. pesq is the exception and is listed below: it is
+# imported at module scope on that path, which only a real run revealed.
 #
 # torch and torchaudio are named explicitly so ensure_venv's CUDA auto-detection
 # triggers and routes Stage 1 through the matching PyTorch wheel index. Left
@@ -82,6 +94,13 @@ _DRIFTSE_REQUIREMENTS = [
     "librosa>=0.10.2",
     "soundfile>=0.12.1",
     "tqdm>=4.66",
+    # A metrics package, needed at *inference* despite this backend never computing a metric:
+    # upstream imports pesq at module scope in the chain the worker loads, so omitting it fails
+    # the run with `No module named 'pesq'` from inside the subprocess. Measured on an H100 --
+    # the local suite skips this path, so nothing caught it until a real GPU run. The earlier
+    # claim that inference needs none of upstream's metrics dependencies was right about what
+    # the model *computes* and wrong about what it *imports*.
+    "pesq>=0.0.4",
 ]
 
 _DRIFTSE_REPO_URL = "https://github.com/LiangXu123/DriftSE.git"
@@ -91,8 +110,9 @@ _DRIFTSE_REPO_URL = "https://github.com/LiangXu123/DriftSE.git"
 _DRIFTSE_COMMIT = "695a64db187500fa0d7bae23912680bd5d4df613"
 
 _DRIFTSE_HF_REPO = "sensein/driftse-distilhubert-three-layers"
-# Pinned so a re-upload cannot change what this backend runs. The repo is private
-# pending the upstream licence answer; callers without access use the env override.
+# Pinned so a re-upload cannot change what this backend runs. The repo is public so the backend
+# is usable during the alpha, but its licence is still unknown (see the module docstring); the
+# env override below remains for callers supplying their own checkpoint.
 _DRIFTSE_HF_REVISION = "76a9448aae12e4c232b1d52c24899d0835db5782"
 _DRIFTSE_CHECKPOINT_ENV = "SENSELAB_DRIFTSE_CHECKPOINT"
 

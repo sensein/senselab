@@ -326,10 +326,15 @@
   parameters: N/A
   training_data: DNS 2020 (per paper; this backend is inference-only and does not verify a training config)
   license: >-
-    Unresolved upstream (no LICENSE file, no README statement). A license
-    request was opened 2026-08-08 and remains unanswered:
-    https://github.com/LiangXu123/DriftSE/issues/2. The checkpoint mirror
-    stays private until it is answered.
+    Unknown — unresolved upstream. The source repository
+    https://github.com/LiangXu123/DriftSE carries no LICENSE file and no README
+    licence statement, so no terms have been granted for these weights. A licence
+    request was opened 2026-08-08 and is unanswered:
+    https://github.com/LiangXu123/DriftSE/issues/2. The mirror is public so the
+    backend is usable during the alpha, which is a deliberate decision taken with
+    that unknown status visible rather than resolved: treat the weights as
+    all-rights-reserved by default, and consult upstream before any use that
+    depends on licence terms.
   recommended_for: >-
     One-step (1 NFE) generative enhancement; reachable only via an explicit
     HFModel id, not in any default model list and not wired into
