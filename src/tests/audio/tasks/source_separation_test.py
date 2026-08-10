@@ -2,8 +2,10 @@
 
 import pytest
 
-from senselab.audio.tasks.source_separation import unasdiff
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.source_separation import separate_audios, unasdiff
 from senselab.audio.tasks.source_separation.api import resolve_source_classes
+from senselab.utils.data_structures import HFModel
 
 
 def test_class_map_has_41_classes_in_50_slots() -> None:
@@ -99,3 +101,59 @@ def test_worker_packs_the_mixture_so_degradation_reproduces_it() -> None:
     """
     assert "zeros" in unasdiff._WORKER_SCRIPT
     assert "orig_x" in unasdiff._WORKER_SCRIPT
+
+
+def test_sound_modes_require_source_classes(mono_audio_sample: Audio) -> None:
+    """The sound prior is class-conditioned.
+
+    Without a class there is no defensible default -- index 0 is 'Hi-hat', and silently
+    choosing it would separate against the wrong prior while reporting success.
+    """
+    with pytest.raises(ValueError, match="source_classes"):
+        separate_audios([mono_audio_sample], mode="speech_sound", n_sources=2)
+
+
+def test_speech_speech_needs_no_source_classes(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both slots use the speech prior, whose only label is 0."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["labels"] = source_class_indices
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2)
+    assert captured["labels"] == [0, 0]
+
+
+def test_speech_sound_prepends_the_speech_label(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Slot 0 is always the speech prior in speech_sound mode."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["labels"] = source_class_indices
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_sound", n_sources=2, source_classes=["Applause"])
+    assert captured["labels"][0] == 0, "slot 0 is the speech prior"
+    assert len(captured["labels"]) == 2
+
+
+def test_source_classes_length_must_match_the_sound_slots(mono_audio_sample: Audio) -> None:
+    """A mismatched source_classes length must raise rather than silently truncate/pad."""
+    with pytest.raises(ValueError, match="n_sources"):
+        separate_audios([mono_audio_sample], mode="speech_sound", n_sources=3, source_classes=["Applause"])
+
+
+def test_an_unknown_mode_raises(mono_audio_sample: Audio) -> None:
+    """An unrecognized mode must raise rather than silently falling through."""
+    with pytest.raises(ValueError, match="mode"):
+        separate_audios([mono_audio_sample], mode="music_speech", n_sources=2)
+
+
+def test_a_foreign_model_is_rejected(mono_audio_sample: Audio) -> None:
+    """Source separation has one backend; a model naming a different one must not be accepted."""
+    foreign: HFModel = HFModel(path_or_uri="openai/whisper-tiny")
+    with pytest.raises(ValueError, match="unasdiff"):
+        separate_audios([mono_audio_sample], model=foreign, mode="speech_speech", n_sources=2)

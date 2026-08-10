@@ -339,7 +339,8 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
 
     Args:
         model_id: HuggingFace-style model identifier.
-        task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``.
+        task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``,
+            ``"separation"``.
 
     Returns:
         The provider-specific `SenselabModel` subclass instance.
@@ -358,7 +359,10 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         branch below duplicates ``enhance_audios``'s ``sensein/driftse`` prefix
         check the same way, for the same reason: importing the literal from
         ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend
-        on ``audio``, inverting the package layering.
+        on ``audio``, inverting the package layering. The separation branch has
+        only one backend (unasdiff) and always returns ``HFModel`` unconditionally;
+        it exists for parity with the other tasks' model-id → class routing, not
+        because there is a second backend to dispatch away from.
 
     Example:
         >>> model_for_task("openai/whisper-tiny", task="asr").path_or_uri
@@ -382,6 +386,8 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         if model_id.startswith("sensein/driftse"):
             return HFModel(path_or_uri=model_id)
         return SpeechBrainModel(path_or_uri=model_id)
+    if task == "separation":
+        return HFModel(path_or_uri=model_id)
     raise ValueError(f"unknown task: {task}")
 
 
