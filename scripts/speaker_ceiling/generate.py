@@ -103,6 +103,21 @@ separable identities) and could make it harder (shared synthesis artifacts). Eit
 measured value is an upper bound on well-conditioned audio, not a guarantee about a real
 recording. ``manifest.json`` records the generation method beside every session precisely
 so a reader of the resulting profile can judge that for themselves.
+
+Resumability, for a preemptable cluster sweep
+-----------------------------------------------
+The full sweep (*k* = 1..8, 20 sessions each) costs roughly 12.6 hours of GPU time at
+Qwen3-TTS's measured RTF, which belongs on a ``PreemptMode=REQUEUE`` partition rather than
+a guaranteed one -- but a task there can be killed and restarted at any moment, and this
+module is what makes that survivable. :func:`generate_corpus` treats a session as done, and
+skips regenerating it, the moment both its ``.wav`` and ``.rttm`` exist and parse (see
+:func:`_session_is_complete`); both files are written to a temporary sibling path and moved
+into place with :func:`os.replace` (POSIX-atomic on the same filesystem) so a task killed
+mid-write never leaves a partial file at the final name for the next attempt to mistake for
+done. This works *because* each session's random draws already come from an independent
+``SeedSequence([seed, k, i])`` (see the docstring above): skipping session ``i`` cannot
+perturb session ``i + 1``'s draws, so a resumed run reproduces every session -- finished or
+not-yet-finished at interruption time -- byte-identically to an uninterrupted one.
 """
 
 from __future__ import annotations
@@ -110,11 +125,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -403,6 +420,92 @@ def _write_rttm(path: Path, audio_id: str, turns: Sequence[_SessionTurn], speake
     path.write_text("\n".join(lines) + ("\n" if lines else ""))
 
 
+def _session_is_complete(wav_path: Path, rttm_path: Path) -> bool:
+    """Return whether a session's checkpoint on disk is complete and trustworthy.
+
+    Guards a resumed run against a preempted task's partial write: both files must exist,
+    the RTTM must contain at least one non-empty line, and the wav must open with a nonzero
+    frame count. A zero-byte or truncated file -- the two shapes a process killed mid-write
+    leaves -- reads as not-done and is regenerated, never trusted as a finished checkpoint.
+    Combined with :func:`generate_corpus`'s write-then-rename for both files, a session is
+    either entirely absent or entirely valid on disk; this is the read side of that
+    guarantee.
+    """
+    if not (wav_path.exists() and rttm_path.exists()):
+        return False
+    try:
+        rttm_text = rttm_path.read_text()
+    except OSError:
+        return False
+    if not any(line.strip() for line in rttm_text.splitlines()):
+        return False
+    try:
+        info = sf.info(str(wav_path))
+    except Exception:  # noqa: BLE001 -- any unreadable wav (truncated, zero-length) is not-done
+        return False
+    return bool(info.frames > 0)
+
+
+def _reconstruct_session_record(
+    out_dir: Path,
+    k: int,
+    i: int,
+    seed: int,
+    wav_path: Path,
+    rttm_path: Path,
+    voice_pool: Sequence[str],
+) -> Dict[str, object]:
+    """Rebuild one already-complete session's manifest record without touching TTS.
+
+    Re-draws only the speaker-name assignment -- the first and only rng operation this
+    session ever performs before either :func:`_plan_session` or synthesis runs, so it is
+    unaffected by whether the rest of the session was (re)computed this run or a prior one.
+    Because every session's rng is independently seeded from ``[seed, k, i]`` (see the
+    module docstring), redrawing it here reproduces ``speakers`` byte-identically to a fresh
+    run, with no TTS call. ``num_turns`` and ``duration_seconds`` are read back from the
+    RTTM already on disk instead of recomputed -- that file, not any in-memory state, is
+    the ground truth a resumed run must reproduce.
+    """
+    rng = np.random.default_rng(np.random.SeedSequence([seed, k, i]))
+    speaker_names = [str(name) for name in rng.choice(voice_pool, size=k, replace=False)]
+
+    lines = [line for line in rttm_path.read_text().splitlines() if line.strip()]
+    ends = [float(fields[3]) + float(fields[4]) for fields in (line.split() for line in lines)]
+
+    return {
+        "k": k,
+        "session_index": i,
+        "wav": str(wav_path.relative_to(out_dir)),
+        "rttm": str(rttm_path.relative_to(out_dir)),
+        "speakers": speaker_names,
+        "num_turns": len(lines),
+        "duration_seconds": round(max(ends), 3) if ends else 0.0,
+    }
+
+
+def _atomic_write_wav(session_audio: Audio, wav_path: Path) -> None:
+    """Write ``session_audio`` to ``wav_path`` via a same-directory temp file, then rename.
+
+    See the module docstring's "Resumability" section: this is the write-side half of the
+    guarantee that a session on disk is either entirely absent or entirely valid, never
+    partially written where a preempted-and-resumed task might mistake it for done.
+
+    The temp path keeps ``wav_path``'s suffix (``session_0.tmp.<pid>.wav``, not
+    ``session_0.wav.tmp.<pid>``) because torchcodec's ``AudioEncoder`` infers the output
+    format from the file extension and raises on an unrecognized one.
+    """
+    tmp_path = wav_path.with_name(f"{wav_path.stem}.tmp.{os.getpid()}{wav_path.suffix}")
+    session_audio.save_to_file(tmp_path)
+    os.replace(tmp_path, wav_path)
+
+
+def _atomic_write_rttm(path: Path, audio_id: str, turns: Sequence[_SessionTurn], speaker_names: Sequence[str]) -> None:
+    """Write an RTTM via a same-directory temp file, then rename. See :func:`_atomic_write_wav`."""
+    tmp_path = path.with_name(f"{path.stem}.tmp.{os.getpid()}{path.suffix}")
+    _write_rttm(tmp_path, audio_id, turns, speaker_names)
+    os.replace(tmp_path, path)
+
+
 def generate_corpus(
     out_dir: Path,
     counts: Sequence[int],
@@ -410,6 +513,7 @@ def generate_corpus(
     seed: int,
     tts_model: Optional[HFModel] = None,
     device: Optional[DeviceType] = None,
+    manifest_name: str = "manifest.json",
 ) -> Path:
     """Generate a synthetic multi-speaker corpus with exact-by-construction RTTM ground truth.
 
@@ -423,6 +527,14 @@ def generate_corpus(
     with the same arguments and the same (mocked or real) synthesis backend reproduces
     identical plans, layouts, and RTTM files.
 
+    Resumable: a session whose ``.wav`` and ``.rttm`` both already exist and parse (see
+    :func:`_session_is_complete`) is never regenerated -- this call only synthesizes and
+    writes the sessions still missing. Because each session's draws are independently
+    seeded (see above), the result is byte-identical to an uninterrupted run regardless of
+    which sessions were already on disk when this call started. See the module docstring's
+    "Resumability" section for why this is what makes the probe safe to run as a Slurm job
+    array on a preemptable partition.
+
     Args:
         out_dir: Root directory for the corpus. Created if missing. Must not be under a
             package ``data/`` directory -- a blanket repo rule gitignores those silently.
@@ -435,6 +547,12 @@ def generate_corpus(
             session independently (see above).
         tts_model: The TTS backend model. Defaults to Qwen3-TTS-12Hz-1.7B-CustomVoice.
         device: Device for TTS synthesis. Defaults to the backend's own auto-selection.
+        manifest_name: Filename (not path) for the manifest written under ``out_dir``.
+            Defaults to ``"manifest.json"``. A sharded caller generating only a subset of
+            ``counts`` in one process should pass a distinct name per shard (e.g.
+            ``f"manifest.k{k}.json"``) so concurrent shards writing into the same ``out_dir``
+            never clobber each other's manifest -- merging shard manifests back into one is
+            the aggregation step's job, not this function's.
 
     Returns:
         ``out_dir``.
@@ -473,89 +591,112 @@ def generate_corpus(
         k_dir = out_dir / f"k={k}"
         k_dir.mkdir(parents=True, exist_ok=True)
 
-        # Plan every session at this k before synthesizing anything: each session's rng
-        # is kept alive across the synthesis call below so _lay_out_session can keep
-        # drawing from the same stream afterward, and every session's utterances are
-        # flattened into one synthesis call to amortize the subprocess venv's one-time
-        # model load across `sessions_per_count` sessions instead of paying it per session.
-        session_rngs: List[np.random.Generator] = []
-        session_plans: List[List[Tuple[int, str]]] = []
-        session_speaker_names: List[List[str]] = []
-
+        # Resumability: split into sessions already complete on disk (see
+        # _session_is_complete) versus sessions still to (re)generate. A completed session
+        # is reconstructed into its manifest record without touching TTS at all -- see
+        # _reconstruct_session_record. Only `todo_indices` pay for planning and synthesis.
+        records_by_index: Dict[int, Dict[str, object]] = {}
+        todo_indices: List[int] = []
         for i in range(sessions_per_count):
-            rng = np.random.default_rng(np.random.SeedSequence([seed, k, i]))
-            speaker_names = [str(name) for name in rng.choice(voice_pool, size=k, replace=False)]
-            plan = _plan_session(rng, k)
-            session_rngs.append(rng)
-            session_plans.append(plan)
-            session_speaker_names.append(speaker_names)
-
-        flat_texts: List[str] = []
-        flat_speakers: List[str] = []
-        session_spans: List[Tuple[int, int]] = []
-        for plan, speaker_names in zip(session_plans, session_speaker_names):
-            start = len(flat_texts)
-            for speaker_idx, text in plan:
-                flat_texts.append(text)
-                flat_speakers.append(speaker_names[speaker_idx])
-            session_spans.append((start, len(flat_texts)))
-
-        audios = (
-            synthesize_texts_with_qwen(texts=flat_texts, model=tts_model, speaker=flat_speakers, device=device)
-            if flat_texts
-            else []
-        )
-        sample_rate = audios[0].sampling_rate if audios else 24000
-        flat_waveforms = [audio.waveform.squeeze(0).numpy() for audio in audios]
-
-        for i in range(sessions_per_count):
-            rng = session_rngs[i]
-            plan = session_plans[i]
-            speaker_names = session_speaker_names[i]
-            start, end = session_spans[i]
-            durations = [len(wav) / sample_rate for wav in flat_waveforms[start:end]]
-
-            turns = _lay_out_session(plan, durations, rng)
-            waveform = _compose_waveform(turns, flat_waveforms[start:end], sample_rate)
-
-            audio_id = f"session_{i}"
-            wav_path = k_dir / f"{audio_id}.wav"
-            rttm_path = k_dir / f"{audio_id}.rttm"
-
-            session_audio = Audio(
-                waveform=torch.from_numpy(waveform).unsqueeze(0),
-                sampling_rate=sample_rate,
-            )
-            # Write at CORPUS_SAMPLE_RATE, not the TTS model's native rate. Measured on an H100:
-            # Qwen3-TTS emits 24 kHz and pyannote rejects it outright --
-            # "Audio sampling rate 24000 does not match expected 16000" -- so a 24 kHz corpus
-            # scores zero successes for that backend and the probe correctly refuses to emit a
-            # profile at all. 16 kHz is what every diarizer here expects, and resampling once
-            # here is deterministic and auditable, whereas leaving it to each backend would make
-            # the ceiling depend on whose resampler ran.
-            #
-            # The RTTM is unaffected: it carries times in seconds, which resampling preserves
-            # exactly, so ground truth stays exact by construction.
-            if session_audio.sampling_rate != CORPUS_SAMPLE_RATE:
-                session_audio = resample_audios([session_audio], resample_rate=CORPUS_SAMPLE_RATE)[0]
-            session_audio.save_to_file(wav_path)
-            _write_rttm(rttm_path, audio_id, turns, speaker_names)
-
-            # Verify against the file just written, not the in-memory turns -- the
-            # guarantee that matters is what a later reader (the evaluation script) sees
-            # on disk, and _plan_session's guarantee-by-construction is exactly the thing
-            # under test here, not assumed.
-            written_speakers = {line.split()[7] for line in rttm_path.read_text().splitlines() if line.strip()}
-            if len(written_speakers) != k:
-                raise RuntimeError(
-                    f"k={k} session_{i}: enforce_num_speakers violated -- wrote "
-                    f"{len(written_speakers)} distinct speakers ({sorted(written_speakers)}), "
-                    f"requested {k}. _plan_session guarantees this by construction, so this "
-                    "is a bug in this module, not a sampling outcome to retry past."
+            wav_path = k_dir / f"session_{i}.wav"
+            rttm_path = k_dir / f"session_{i}.rttm"
+            if _session_is_complete(wav_path, rttm_path):
+                records_by_index[i] = _reconstruct_session_record(
+                    out_dir, k, i, seed, wav_path, rttm_path, voice_pool
                 )
+            else:
+                todo_indices.append(i)
 
-            session_records.append(
-                {
+        if todo_indices:
+            # Plan every todo session at this k before synthesizing anything: each
+            # session's rng is kept alive across the synthesis call below so
+            # _lay_out_session can keep drawing from the same stream afterward, and every
+            # session's utterances are flattened into one synthesis call to amortize the
+            # subprocess venv's one-time model load across the sessions still needed
+            # instead of paying it per session.
+            session_rngs: Dict[int, np.random.Generator] = {}
+            session_plans: Dict[int, List[Tuple[int, str]]] = {}
+            session_speaker_names: Dict[int, List[str]] = {}
+
+            for i in todo_indices:
+                rng = np.random.default_rng(np.random.SeedSequence([seed, k, i]))
+                speaker_names = [str(name) for name in rng.choice(voice_pool, size=k, replace=False)]
+                plan = _plan_session(rng, k)
+                session_rngs[i] = rng
+                session_plans[i] = plan
+                session_speaker_names[i] = speaker_names
+
+            flat_texts: List[str] = []
+            flat_speakers: List[str] = []
+            session_spans: Dict[int, Tuple[int, int]] = {}
+            for i in todo_indices:
+                plan = session_plans[i]
+                speaker_names = session_speaker_names[i]
+                start = len(flat_texts)
+                for speaker_idx, text in plan:
+                    flat_texts.append(text)
+                    flat_speakers.append(speaker_names[speaker_idx])
+                session_spans[i] = (start, len(flat_texts))
+
+            audios = (
+                synthesize_texts_with_qwen(texts=flat_texts, model=tts_model, speaker=flat_speakers, device=device)
+                if flat_texts
+                else []
+            )
+            sample_rate = audios[0].sampling_rate if audios else 24000
+            flat_waveforms = [audio.waveform.squeeze(0).numpy() for audio in audios]
+
+            for i in todo_indices:
+                rng = session_rngs[i]
+                plan = session_plans[i]
+                speaker_names = session_speaker_names[i]
+                start, end = session_spans[i]
+                durations = [len(wav) / sample_rate for wav in flat_waveforms[start:end]]
+
+                turns = _lay_out_session(plan, durations, rng)
+                waveform = _compose_waveform(turns, flat_waveforms[start:end], sample_rate)
+
+                audio_id = f"session_{i}"
+                wav_path = k_dir / f"{audio_id}.wav"
+                rttm_path = k_dir / f"{audio_id}.rttm"
+
+                session_audio = Audio(
+                    waveform=torch.from_numpy(waveform).unsqueeze(0),
+                    sampling_rate=sample_rate,
+                )
+                # Write at CORPUS_SAMPLE_RATE, not the TTS model's native rate. Measured on
+                # an H100: Qwen3-TTS emits 24 kHz and pyannote rejects it outright --
+                # "Audio sampling rate 24000 does not match expected 16000" -- so a 24 kHz
+                # corpus scores zero successes for that backend and the probe correctly
+                # refuses to emit a profile at all. 16 kHz is what every diarizer here
+                # expects, and resampling once here is deterministic and auditable, whereas
+                # leaving it to each backend would make the ceiling depend on whose
+                # resampler ran.
+                #
+                # The RTTM is unaffected: it carries times in seconds, which resampling
+                # preserves exactly, so ground truth stays exact by construction.
+                if session_audio.sampling_rate != CORPUS_SAMPLE_RATE:
+                    session_audio = resample_audios([session_audio], resample_rate=CORPUS_SAMPLE_RATE)[0]
+                # Write-then-rename for both files -- see the module docstring's
+                # "Resumability" section and _session_is_complete, the read-side check
+                # this write pattern exists to satisfy.
+                _atomic_write_wav(session_audio, wav_path)
+                _atomic_write_rttm(rttm_path, audio_id, turns, speaker_names)
+
+                # Verify against the file just written, not the in-memory turns -- the
+                # guarantee that matters is what a later reader (the evaluation script) sees
+                # on disk, and _plan_session's guarantee-by-construction is exactly the thing
+                # under test here, not assumed.
+                written_speakers = {line.split()[7] for line in rttm_path.read_text().splitlines() if line.strip()}
+                if len(written_speakers) != k:
+                    raise RuntimeError(
+                        f"k={k} session_{i}: enforce_num_speakers violated -- wrote "
+                        f"{len(written_speakers)} distinct speakers ({sorted(written_speakers)}), "
+                        f"requested {k}. _plan_session guarantees this by construction, so this "
+                        "is a bug in this module, not a sampling outcome to retry past."
+                    )
+
+                records_by_index[i] = {
                     "k": k,
                     "session_index": i,
                     "wav": str(wav_path.relative_to(out_dir)),
@@ -564,7 +705,8 @@ def generate_corpus(
                     "num_turns": len(turns),
                     "duration_seconds": round(max(t.end for t in turns), 3),
                 }
-            )
+
+        session_records.extend(records_by_index[i] for i in range(sessions_per_count))
 
     manifest = {
         "method": (
@@ -608,7 +750,10 @@ def generate_corpus(
         "sessions_per_count": sessions_per_count,
         "sessions": session_records,
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    manifest_path = out_dir / manifest_name
+    tmp_manifest_path = manifest_path.with_name(f"{manifest_path.stem}.tmp.{os.getpid()}{manifest_path.suffix}")
+    tmp_manifest_path.write_text(json.dumps(manifest, indent=2))
+    os.replace(tmp_manifest_path, manifest_path)
     return out_dir
 
 
