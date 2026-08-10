@@ -1,12 +1,18 @@
 """This module implements some utilities for the text-to-speech task."""
 
-from typing import Any, List, Optional, Tuple, TypeGuard
+from typing import Any, Dict, List, Optional, Tuple, TypeGuard
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.text_to_speech.coqui import CoquiTTS
 from senselab.audio.tasks.text_to_speech.huggingface import HuggingFaceTTS
+from senselab.audio.tasks.text_to_speech.qwen_tts import synthesize_texts_with_qwen
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, HFModel, Language, SenselabModel, TorchModel
+
+# Alibaba Qwen3-TTS prefix -- route to a separate subprocess venv (qwen_tts.py) that
+# uses Alibaba's qwen-tts PyPI package. Checked before the generic HFModel branch
+# below, the same ordering speech_to_text/api.py uses for its own Qwen prefix.
+_QWEN_TTS_PREFIXES = ("Qwen/Qwen3-TTS",)
 
 
 @requires_compatibility("audio.tasks.text_to_speech.synthesize_texts")
@@ -52,7 +58,13 @@ def synthesize_texts(
             if isinstance(target, tuple):
                 assert len(target[1]) > 0, ValueError(f"{i}th target was expected to have a transcript, but was empty.")
 
-    if isinstance(model, HFModel):
+    if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_QWEN_TTS_PREFIXES):
+        qwen_tts_kwargs: Dict[str, Any] = {}
+        for key in ("language", "speaker", "instruct"):
+            if key in kwargs:
+                qwen_tts_kwargs[key] = kwargs.pop(key)
+        return synthesize_texts_with_qwen(texts=texts, model=model, device=device, **qwen_tts_kwargs)
+    elif isinstance(model, HFModel):
         return HuggingFaceTTS.synthesize_texts_with_transformers(texts=texts, model=model, device=device, **kwargs)
     elif isinstance(model, CoquiTTSModel):
         coqui_targets: Optional[List[Audio]] = None

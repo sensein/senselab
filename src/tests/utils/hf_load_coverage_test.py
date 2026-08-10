@@ -99,6 +99,7 @@ REVIEWED_SUBPROCESS = {
     "audio/tasks/speech_to_text/canary_qwen.py",
     "audio/tasks/speech_to_text/nemo.py",
     "audio/tasks/speech_to_text/qwen.py",
+    "audio/tasks/text_to_speech/qwen_tts.py",
     "text/tasks/pii_detection/subprocess_backend.py",
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
@@ -113,6 +114,15 @@ RAW_LOAD_EXCEPTIONS = {
     # Diagnostic CLI probe (`_probe`) that intentionally exercises a raw
     # AutoConfig.from_pretrained to report whether a model is loadable.
     "audio/tasks/classification/speech_emotion_recognition/__main__.py",
+    # supported_speakers() resolves the ref to a commit SHA via resolve_revision
+    # (the same manifest-backed resolver resolve_model uses internally) and only then
+    # calls hf_hub_download(..., revision=<sha>) for a single small file
+    # (config.json) -- a full commit hash triggers huggingface_hub's commit-hash
+    # shortcut, so a cached file loads with zero network, same as resolve_model's
+    # guarantee. It deliberately does not call resolve_model itself: that downloads
+    # the *entire* multi-GB checkpoint snapshot, which would defeat the point of this
+    # function (enumerate named speakers without paying for the weights).
+    "audio/tasks/text_to_speech/qwen_tts.py",
 }
 
 
