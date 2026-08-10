@@ -101,6 +101,15 @@ this worker (see :func:`synthesize_texts_with_qwen`), which is the only such exc
 among senselab's subprocess backends. Staging still earns its place: the weights download
 once, cross-process, under the shared lock.
 
+Measured
+--------
+On an H100 (2026-08-10): two utterances totalling 5.36 s of 24 kHz audio in 33.5 s wall,
+i.e. **RTF ~6.3** including model load, with the two named voices producing audibly
+distinct output (asserted, not eyeballed — identical waveforms would make this useless
+as a multi-speaker source). ``supported_speakers()`` returns 9 voices: aiden, dylan,
+eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian — enough for the speaker-ceiling
+probe's *k* = 1…8 sweep with one spare, and no reference-audio cloning required.
+
 Not wired into ``audio_analysis``
 -----------------------------------
 Reachable only by naming ``Qwen/Qwen3-TTS...`` explicitly through
