@@ -55,7 +55,7 @@ def test_hf_model_records_the_resolved_commit_sha(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
 
-    model = HFModel(path_or_uri="org/model", revision="main")
+    model: HFModel = HFModel(path_or_uri="org/model", revision="main")
     assert model.revision == "main", "the requested ref must survive"
     assert model.commit_sha == sha, "the resolved commit must be recorded"
 

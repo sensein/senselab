@@ -65,15 +65,24 @@ def test_two_commits_of_one_model_do_not_share_a_cache_key() -> None:
     Today's bug: the key only ever carried ``model_id``, so a model resolving to
     a new commit loaded new weights under a hash that a stale entry still matches.
     """
-    common = dict(
-        audio_sig="sig",
-        task="asr",
-        model_id="openai/whisper-large-v3-turbo",
-        params={"device": "cpu"},
-        code_version="v1",
-        senselab_ver="0.1.0",
-    )
-    assert cache_key(**common, commit_sha="a" * 40) != cache_key(**common, commit_sha="b" * 40)
+
+    def _key(commit_sha: str) -> str:
+        """Build a key that differs only in the commit, so the assertion isolates that field.
+
+        A ``**dict`` splat here would widen every value to a common supertype and lose the
+        per-parameter types mypy --extra-checks needs.
+        """
+        return cache_key(
+            audio_sig="sig",
+            task="asr",
+            model_id="openai/whisper-large-v3-turbo",
+            params={"device": "cpu"},
+            code_version="v1",
+            senselab_ver="0.1.0",
+            commit_sha=commit_sha,
+        )
+
+    assert _key("a" * 40) != _key("b" * 40)
 
 
 def test_cache_key_requires_commit_sha_as_a_keyword() -> None:
@@ -174,18 +183,25 @@ def test_two_commits_of_one_aligner_do_not_share_an_align_key() -> None:
     Same bug as `cache_key`, same fix: `align_cache_key` carried `aligner_model_id` with no SHA, so
     a forced-aligner repo moving upstream served stale timestamps under an unchanged key.
     """
-    common = dict(
-        audio_sig="sig",
-        transcript_sha="ts",
-        language="en",
-        aligner_model_id="facebook/mms-1b-all",
-        aligner_params={"x": 1},
-        code_version="alignment@1",
-        senselab_ver="0.1.0",
-    )
-    assert align_cache_key(**common, aligner_commit_sha="a" * 40) != align_cache_key(
-        **common, aligner_commit_sha="b" * 40
-    )
+
+    def _key(aligner_commit_sha: str) -> str:
+        """Build a key that differs only in the aligner commit.
+
+        Spelled out rather than splatted from a shared dict: ``**dict`` widens every value to a
+        common supertype, which loses the per-parameter types mypy --extra-checks needs.
+        """
+        return align_cache_key(
+            audio_sig="sig",
+            transcript_sha="ts",
+            language="en",
+            aligner_model_id="facebook/mms-1b-all",
+            aligner_params={"x": 1},
+            code_version="alignment@1",
+            senselab_ver="0.1.0",
+            aligner_commit_sha=aligner_commit_sha,
+        )
+
+    assert _key("a" * 40) != _key("b" * 40)
 
 
 def test_align_cache_key_requires_aligner_commit_sha_as_a_keyword() -> None:
