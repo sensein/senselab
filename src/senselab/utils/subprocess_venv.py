@@ -365,12 +365,29 @@ def ensure_venv(
                 "safetensors",
                 "numpy",
             ]
+            # Filtering the torch specs out of the install list is not enough on its own: it also
+            # removes the only thing constraining torch during Stage 2's resolution. Measured on an
+            # H100 -- unasdiff pins torch==2.6.0 and the cu124 index was correctly selected, yet the
+            # finished venv held 2.13.0+cu130, because timm depends on torch with no upper bound and
+            # uv was free to upgrade the CUDA-matched wheel to PyPI's newest. The comment above
+            # assumed uv would leave an already-satisfying install alone; it does not.
+            #
+            # Pass the pins as *constraints* instead. They bound the resolution without becoming
+            # install targets, so the Stage-1 wheels stay exactly as the PyTorch index built them
+            # while a transitive dependent can no longer drag torch forward.
+            torch_constraints = [r for r in requirements if _spec_pkg_name(r) in _TORCH_PKG_NAMES]
         else:
             # Torch-free path: single install pass straight from default
             # PyPI. No probe, no CUDA-index routing, no ``torchaudio``
             # forced into the install — backends that don't declare
             # torch / torchaudio don't pay for them.
             stage_two_reqs = [*requirements, "safetensors", "numpy"]
+            torch_constraints = []
+
+        constraint_file: Optional[Path] = None
+        if torch_constraints:
+            constraint_file = venv_dir / ".torch-constraints.txt"
+            constraint_file.write_text("\n".join(torch_constraints) + "\n")
 
         try:
             subprocess.run(
@@ -380,6 +397,7 @@ def ensure_venv(
                     "install",
                     "--python",
                     venv_python(venv_dir),
+                    *(["--constraint", str(constraint_file)] if constraint_file else []),
                     *stage_two_reqs,
                 ],
                 check=True,
