@@ -85,16 +85,20 @@ def test_upstream_is_pinned_to_a_full_commit_sha() -> None:
 
 
 def test_training_and_metric_dependencies_are_not_installed() -> None:
-    """Assert the DriftSE venv requirements omit training/metric-only packages.
+    """Assert the DriftSE venv requirements omit training-only packages.
 
-    Upstream's requirements.txt lists these for training and scoring. The
-    inference path imports none of them, and pesq/scoreq in particular are slow
-    and fragile to build. util/inference.py imports pesq — the worker must never
-    import util.inference.
+    Upstream's requirements.txt lists these for training and scoring, and the inference path
+    does not reach them, so a build that installs one means the worker started importing
+    something it should not.
+
+    ``pesq`` and ``pystoi`` are deliberately NOT in this set, and that is a correction rather
+    than an exemption: an earlier revision excluded both on the belief that only
+    ``util/inference.py`` imports them. In fact ``util/other.py`` -- which the worker must
+    import for ``pad_spec`` -- does ``from pesq import pesq`` and ``from pystoi import stoi``
+    at module scope, so they are genuine inference dependencies. Asserting their absence made
+    this test pass while the real run failed with ``No module named 'pesq'``.
     """
     excluded = {
-        "pesq",
-        "pystoi",
         "scoreq",
         "torch-pesq",
         "asteroid-filterbanks",
