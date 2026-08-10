@@ -79,13 +79,16 @@ slots the mode calls for.
 from __future__ import annotations
 
 import functools
+import itertools
 import json
 import os
 import subprocess
 import tempfile
 from importlib import resources
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
+
+import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures.device import DeviceType
@@ -365,6 +368,97 @@ except Exception as exc:
 """
 
 
+def _assignment_scores(prev_tail: List[torch.Tensor], next_head: List[torch.Tensor]) -> List[float]:
+    """Score every candidate permutation of ``next_head`` against ``prev_tail``.
+
+    Each candidate's score is the total zero-mean, unit-normalised correlation between
+    ``prev_tail[i]`` and the candidate's pick for slot ``i``, summed over slots. Normalising
+    per-tensor (not just centering) is what makes the score scale-invariant: adjacent windows
+    overlap but are not identical there -- each is the sampler's own independent estimate -- so
+    raw correlation would conflate amplitude drift between windows with an actual source swap.
+
+    Factored out of :func:`align_permutations` so both it and the calibration procedure in this
+    module's ``doc.md`` (which measures the gap between the best and second-best score on
+    constructed cases with a known-correct answer) share one implementation.
+
+    Args:
+        prev_tail: The previous window's aligned per-source tail segments.
+        next_head: The next window's raw (unaligned) per-source head segments; same length as
+            ``prev_tail``.
+
+    Returns:
+        One total-correlation score per candidate permutation of ``range(len(prev_tail))``, in
+        the order ``itertools.permutations`` enumerates them.
+    """
+
+    def _zero_mean_unit_norm(x: torch.Tensor) -> torch.Tensor:
+        centered = x - x.mean()
+        return centered / centered.norm().clamp(min=1e-8)
+
+    prev_n = [_zero_mean_unit_norm(p) for p in prev_tail]
+    next_n = [_zero_mean_unit_norm(h) for h in next_head]
+    n = len(prev_tail)
+    return [
+        sum(float(torch.dot(prev_n[i], next_n[perm[i]])) for i in range(n)) for perm in itertools.permutations(range(n))
+    ]
+
+
+def align_permutations(prev_tail: List[torch.Tensor], next_head: List[torch.Tensor]) -> List[int]:
+    """Return the index permutation mapping ``next_head``'s slots onto ``prev_tail``'s.
+
+    Windows are separated independently, so slot 0 in window *k* need not be the same source as
+    slot 0 in window *k + 1*. Concatenating without this check swaps sources mid-file, and the
+    result is worse than the mixture -- this is what makes long-form separation different from
+    enhancement, which has no cross-segment identity to preserve.
+
+    Brute-force over all ``n!`` permutations rather than the Hungarian algorithm
+    (``scipy.optimize.linear_sum_assignment``): ``n_sources`` is at most 3-4 in this backend (two
+    priors, each usable for at most a couple of concurrent slots in practice), so ``n!`` is
+    trivial and this avoids an optional dependency for a problem size where it buys nothing.
+
+    Args:
+        prev_tail: The previous window's aligned per-source tail segments.
+        next_head: The next window's raw (unaligned) per-source head segments; same length as
+            ``prev_tail``.
+
+    Returns:
+        ``result`` such that ``next_head[result[i]]`` is the best match for ``prev_tail[i]``,
+        for every ``i`` -- i.e. reordering ``next_head`` by ``result`` aligns it onto
+        ``prev_tail``'s slot order.
+    """
+    perms = list(itertools.permutations(range(len(prev_tail))))
+    scores = _assignment_scores(prev_tail, next_head)
+    best_idx = max(range(len(scores)), key=lambda idx: scores[idx])
+    return list(perms[best_idx])
+
+
+def _window_starts(n_samples: int, window_samples: int, hop_samples: int) -> List[int]:
+    """Return start offsets (in samples) for windows of ``window_samples`` covering ``[0, n_samples)``.
+
+    A single ``[0]`` when the signal already fits in one window (the Task 3 short path, with no
+    taper and no alignment). Otherwise, evenly spaced starts at ``hop_samples`` apart, plus one
+    final window flush against the end when the even spacing would leave a tail uncovered --
+    that last window overlaps its predecessor by more than ``hop_samples``, trading a slightly
+    uneven overlap for full coverage with every window still exactly ``window_samples`` long
+    (which keeps the corrector's shape assumptions inside the worker unchanged).
+
+    Args:
+        n_samples: Total length of the signal, in samples.
+        window_samples: Length of each window, in samples.
+        hop_samples: Stride between consecutive window starts, in samples.
+
+    Returns:
+        Start offsets in increasing order.
+    """
+    if n_samples <= window_samples:
+        return [0]
+    starts = list(range(0, n_samples - window_samples + 1, hop_samples))
+    last_covered = (starts[-1] + window_samples) if starts else 0
+    if last_covered < n_samples:
+        starts.append(n_samples - window_samples)
+    return starts
+
+
 def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tuple[Path, Path, Path, Path]:
     """Resolve the four files unasdiff's two priors need: two checkpoints, two configs.
 
@@ -410,10 +504,14 @@ def separate_with_unasdiff(
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
-    Resamples to 16 kHz mono on the way in. Inputs longer than the 4 s window unasdiff was
-    trained on are rejected here, deliberately: long-form chunking with cross-window permutation
-    alignment is a separate, reviewable change (see Task 5 / ``doc.md``) rather than something
-    entangled with getting this single-window sampler call right.
+    Resamples to 16 kHz mono on the way in. Inputs that fit in the 4 s window unasdiff was
+    trained on go through a single sampler call with no taper. Longer inputs are split into
+    overlapping 4 s / 50%-overlap windows, each separated independently and then stitched: since
+    each window is separated with no notion of the others, slot 0 in window *k* need not be the
+    same source as slot 0 in window *k + 1* (see :func:`align_permutations`), so adjacent windows
+    are aligned by correlation on their overlap before a Hann-tapered overlap-add. This chunking
+    scheme -- unlike DriftSE's plain overlap-add -- is senselab's own construction: upstream has
+    no long-form path at all, only fixed-window benchmark clips.
 
     ``mode`` decides which prior each slot loads and is required rather than inferred, because
     ``source_class_indices`` alone is ambiguous: index ``0`` is the speech prior's only label in
@@ -435,11 +533,15 @@ def separate_with_unasdiff(
         seed: RNG seed, recorded in the log line.
 
     Returns:
-        One list of ``n_sources`` ``Audio`` objects per input, in order.
+        One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
+        input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]`` carries one
+        ``best_score - second_best_score`` float per window boundary (see
+        ``data/permutation_alignment.json`` for the measurement behind reading this number,
+        which the profile does not gate on since the measurement did not support a fitted
+        threshold).
 
     Raises:
         ValueError: if ``len(source_class_indices) != n_sources``.
-        NotImplementedError: if any input exceeds the 4 s window.
         RuntimeError: if the worker fails; the upstream traceback is included.
     """
     if not audios:
@@ -457,15 +559,12 @@ def separate_with_unasdiff(
     mono_16k = downmix_audios_to_mono(resample_audios(audios, resample_rate=_TARGET_SR))
 
     window_samples = int(_WINDOW_S * _TARGET_SR)
-    for i, audio in enumerate(mono_16k):
-        n_samples = audio.waveform.shape[-1]
-        if n_samples > window_samples:
-            raise NotImplementedError(
-                f"Input {i} is {n_samples / _TARGET_SR:.2f}s, longer than the {_WINDOW_S:.0f}s "
-                "window unasdiff was trained on. Long-form chunking with cross-window "
-                "permutation alignment is a separate change (see this plan's Task 5) and is "
-                "not yet wired in."
-            )
+    overlap_samples = int(_OVERLAP_S * _TARGET_SR)
+    hop_samples = window_samples - overlap_samples
+
+    windows_per_audio: List[List[int]] = [
+        _window_starts(int(audio.waveform.shape[-1]), window_samples, hop_samples) for audio in mono_16k
+    ]
 
     speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
 
@@ -476,8 +575,9 @@ def separate_with_unasdiff(
     repo_dir = Path(venv_dir) / "unasdiff-src"
 
     logger.info(
-        "unasdiff: separating %d audio(s), mode=%s, n_sources=%d, seed=%d",
+        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d",
         len(mono_16k),
+        sum(len(w) for w in windows_per_audio),
         mode,
         n_sources,
         seed,
@@ -487,11 +587,21 @@ def separate_with_unasdiff(
         tmp = Path(tmpdir)
         in_paths: List[str] = []
         out_paths: List[List[str]] = []
-        for i, audio in enumerate(mono_16k):
-            in_path = str(tmp / f"in_{i}.wav")
-            audio.save_to_file(in_path)
-            in_paths.append(in_path)
-            out_paths.append([str(tmp / f"out_{i}_{s}.wav") for s in range(n_sources)])
+        # (flat_start, flat_end) into in_paths/out_paths for each input audio's windows, in
+        # order -- the worker is called once for every window of every audio (one model load
+        # for the whole batch), and this is how the flat results are regrouped back afterwards.
+        window_ranges: List[Tuple[int, int]] = []
+        for i, (audio, starts) in enumerate(zip(mono_16k, windows_per_audio)):
+            flat_start = len(in_paths)
+            waveform = audio.waveform.squeeze(0)
+            for w, start in enumerate(starts):
+                segment = waveform[start : start + window_samples]
+                segment_audio = Audio(waveform=segment.unsqueeze(0), sampling_rate=_TARGET_SR)
+                in_path = str(tmp / f"in_{i}_{w}.wav")
+                segment_audio.save_to_file(in_path)
+                in_paths.append(in_path)
+                out_paths.append([str(tmp / f"out_{i}_{w}_{s}.wav") for s in range(n_sources)])
+            window_ranges.append((flat_start, len(in_paths)))
 
         input_json = json.dumps(
             {
@@ -520,18 +630,65 @@ def separate_with_unasdiff(
             env=_clean_subprocess_env(),
         )
         output = parse_subprocess_result(result, venv_label="unasdiff")
+        all_output_paths: List[List[str]] = output["output_paths"]
 
         # Read outputs back while the temp dir is still alive: Audio(filepath=...) lazy-loads
         # on first .waveform access, and that access must happen before this context manager
         # deletes the files it points at.
         separated: List[List[Audio]] = []
-        for paths, original in zip(output["output_paths"], mono_16k):
+        for audio, starts, (flat_start, flat_end) in zip(mono_16k, windows_per_audio, window_ranges):
+            window_output_paths = all_output_paths[flat_start:flat_end]
+
+            if len(starts) == 1:
+                # Short path, unchanged from Task 3: no taper, no alignment -- there is only
+                # one window, so there is nothing to align it against.
+                sources = []
+                for p in window_output_paths[0]:
+                    source_audio = Audio(filepath=p)
+                    _ = source_audio.waveform
+                    source_audio.metadata = dict(audio.metadata)
+                    sources.append(source_audio)
+                separated.append(sources)
+                continue
+
+            window_tensors: List[List[torch.Tensor]] = []
+            for paths in window_output_paths:
+                tensors = []
+                for p in paths:
+                    window_audio = Audio(filepath=p)
+                    tensors.append(window_audio.waveform.squeeze(0))
+                window_tensors.append(tensors)
+
+            # Window 0 keeps its raw slot order (nothing precedes it to align onto). Every
+            # later window is reordered to match the previous *aligned* window's slots, using
+            # correlation on the overlap region -- not on the whole window, so speech/sound
+            # content outside the shared region cannot influence the match.
+            aligned_tensors: List[List[torch.Tensor]] = [window_tensors[0]]
+            margins: List[float] = []
+            for k in range(1, len(window_tensors)):
+                prev_tail = [t[-overlap_samples:] for t in aligned_tensors[-1]]
+                next_head = [t[:overlap_samples] for t in window_tensors[k]]
+                perm = align_permutations(prev_tail, next_head)
+                scores = sorted(_assignment_scores(prev_tail, next_head), reverse=True)
+                margins.append(scores[0] - scores[1] if len(scores) > 1 else float("inf"))
+                aligned_tensors.append([window_tensors[k][perm[s]] for s in range(n_sources)])
+
+            n_samples = int(audio.waveform.shape[-1])
+            taper = torch.hann_window(window_samples, periodic=False)
+            acc = torch.zeros(n_sources, n_samples)
+            weight_sum = torch.zeros(n_samples)
+            for start, sources_at_window in zip(starts, aligned_tensors):
+                for s in range(n_sources):
+                    acc[s, start : start + window_samples] += sources_at_window[s] * taper
+                weight_sum[start : start + window_samples] += taper
+            weight_sum = weight_sum.clamp(min=1e-8)
+
             sources = []
-            for p in paths:
-                source_audio = Audio(filepath=p)
-                _ = source_audio.waveform
-                source_audio.metadata = dict(original.metadata)
-                sources.append(source_audio)
+            for s in range(n_sources):
+                stitched_audio = Audio(waveform=(acc[s] / weight_sum).unsqueeze(0), sampling_rate=_TARGET_SR)
+                stitched_audio.metadata = dict(audio.metadata)
+                stitched_audio.metadata["unasdiff_alignment_margins"] = margins
+                sources.append(stitched_audio)
             separated.append(sources)
 
     return separated
