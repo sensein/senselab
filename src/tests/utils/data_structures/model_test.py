@@ -116,7 +116,24 @@ def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock, mock_resolve: Magi
 # ── model_for_task / safe_model_id (T051 consolidation) ───────────────
 
 
-def test_model_for_task_routes_diarization_by_prefix() -> None:
+@pytest.fixture
+def _offline_model_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let ``model_for_task`` build models without reaching the Hub.
+
+    These tests assert *routing* — which class an id maps to — so any network at
+    all is incidental. Unmocked, each construction runs the ``revision``
+    validator into ``ensure_hf_model``, which downloads the entire snapshot: this
+    pair alone would pull Sortformer and Whisper on every cold run, and an
+    earlier revision of the diarization tests pulled 20 GB this way. Both the
+    existence check and the commit resolution are stubbed, independently, so the
+    tests never depend on a warm cache — verified under ``HF_HUB_OFFLINE=1`` with
+    an empty ``HF_HUB_CACHE``.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "e" * 40)
+
+
+def test_model_for_task_routes_diarization_by_prefix(_offline_model_construction: None) -> None:
     """Sortformer ids are HF-hosted; every other diarizer is pyannote."""
     from senselab.utils.data_structures import model_for_task
     from senselab.utils.data_structures.model import HFModel, PyannoteAudioModel
@@ -125,7 +142,7 @@ def test_model_for_task_routes_diarization_by_prefix() -> None:
     assert isinstance(model_for_task("pyannote/speaker-diarization-3.1", task="diarization"), PyannoteAudioModel)
 
 
-def test_model_for_task_routes_remaining_tasks() -> None:
+def test_model_for_task_routes_remaining_tasks(_offline_model_construction: None) -> None:
     """ASR → HF; embeddings and enhancement → SpeechBrain."""
     from senselab.utils.data_structures import model_for_task
     from senselab.utils.data_structures.model import HFModel, SpeechBrainModel
