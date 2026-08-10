@@ -89,3 +89,9 @@ All models supported by senselab, organized by task.
 | SPARC (Articulatory) | sparc | `speech-articulatory-coding` | 14 (EMA) + pitch/loudness/periodicity | N/A | Articulatory features, voice conversion, resynthesis |
 | PPG (Phonetic Posteriorgrams) | ppgs | `ppgs` | 40 (phonemes) | N/A | Phoneme-level analysis, duration extraction |
 | OpenSMILE | opensmile | `eGeMAPSv02` | 88 (functionals) | N/A | Standard acoustic features for emotion, health assessment |
+
+## Text To Speech
+
+| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
+|-------|--------|----------|---------------|------------|-----------------|
+| Qwen3-TTS (CustomVoice) | Alibaba Qwen (qwen-tts PyPI package, via subprocess venv) | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | — | 1.7B | Named-speaker (9 built-in identities, no reference-audio cloning required) speech synthesis -- the speech source for the speaker-ceiling probe, which needs N distinct identities with exact ground truth; reachable only via an explicit HFModel id starting with Qwen/Qwen3-TTS, not in any default model list (via subprocess venv, pinned commit 0c0e3051f131929182e2c023b9537f8b1c68adfe, licence apache-2.0) |

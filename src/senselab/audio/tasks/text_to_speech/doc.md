@@ -28,6 +28,46 @@ Popular/recommended models include:
 - **[Coqui-tts](https://github.com/idiap/coqui-ai-TTS)**
   - [models](https://github.com/idiap/coqui-ai-TTS/blob/dev/TTS/.models.json)
 
+### Qwen3-TTS
+
+[`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice)
+(licence: apache-2.0, a real permissive licence — unlike DriftSE and unasdiff, this model
+needs no `sensein` weights mirror and loads straight from the Hub) runs through a
+dedicated subprocess venv (`senselab.audio.tasks.text_to_speech.qwen_tts`), reached by
+`synthesize_texts` whenever the model id starts with `Qwen/Qwen3-TTS`:
+
+```python
+from senselab.audio.tasks.text_to_speech import synthesize_texts
+from senselab.audio.tasks.text_to_speech.qwen_tts import supported_speakers
+from senselab.utils.data_structures import HFModel
+
+model = HFModel(path_or_uri="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice")
+supported_speakers(model)  # -> ['aiden', 'dylan', 'eric', 'ono_anna', 'ryan', 'serena', 'sohee', 'uncle_fu', 'vivian']
+
+audios = synthesize_texts(
+    texts=["She said she would be here by noon."],
+    model=model,
+    speaker="Ryan",
+    language="English",       # or "Auto"
+    instruct="Very happy.",   # optional style control
+)
+```
+
+**Named speakers, not voice cloning.** The checkpoint bakes in 9 speaker identities
+directly in its config (`talker_config.spk_id`), selectable by name via
+`generate_custom_voice`, with no reference audio required. `supported_speakers()`
+reads that mapping straight from `config.json` — a single small file — rather than
+downloading the full 1.7B-parameter checkpoint or spinning up the subprocess venv just
+to enumerate names. This is what makes the model useful as a speech source for
+multi-speaker synthetic sessions with exact ground-truth speaker identity (e.g. the
+speaker-ceiling probe): distinct named voices are generated directly instead of cloned
+from reference clips.
+
+Not part of any default model list and not wired into any pipeline — reachable only by
+naming a `Qwen/Qwen3-TTS...` model id explicitly. See the module's own docstring for the
+CUDA-wheel pinning rationale, the upstream package's import chain, and a documented
+partial-pin gap in the third-party wrapper's own revision handling.
+
 ## Evaluation
 ### Metrics
 

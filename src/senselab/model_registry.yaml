@@ -406,3 +406,20 @@
   parameters: N/A
   training_data: N/A (hand-crafted)
   recommended_for: Standard acoustic features for emotion, health assessment
+
+# Text to Speech
+- name: Qwen3-TTS (CustomVoice)
+  task: text_to_speech
+  source: Alibaba Qwen (qwen-tts PyPI package, via subprocess venv)
+  model_id: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  parameters: 1.7B
+  training_data: >-
+    Unpublished (per model card; this backend is inference-only and does not
+    verify a training config)
+  recommended_for: >-
+    Named-speaker (9 built-in identities, no reference-audio cloning required)
+    speech synthesis -- the speech source for the speaker-ceiling probe, which
+    needs N distinct identities with exact ground truth; reachable only via an
+    explicit HFModel id starting with Qwen/Qwen3-TTS, not in any default model
+    list (via subprocess venv, pinned commit
+    0c0e3051f131929182e2c023b9537f8b1c68adfe, licence apache-2.0)
