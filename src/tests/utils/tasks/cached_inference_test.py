@@ -168,6 +168,40 @@ def test_every_keyed_field_changes_the_key(field: str) -> None:
     assert cache_key(**base) != cache_key(**altered)  # type: ignore[arg-type]
 
 
+def test_two_commits_of_one_aligner_do_not_share_an_align_key() -> None:
+    """An upstream push to the aligner repo must invalidate, not silently reuse.
+
+    Same bug as `cache_key`, same fix: `align_cache_key` carried `aligner_model_id` with no SHA, so
+    a forced-aligner repo moving upstream served stale timestamps under an unchanged key.
+    """
+    common = dict(
+        audio_sig="sig",
+        transcript_sha="ts",
+        language="en",
+        aligner_model_id="facebook/mms-1b-all",
+        aligner_params={"x": 1},
+        code_version="alignment@1",
+        senselab_ver="0.1.0",
+    )
+    assert align_cache_key(**common, aligner_commit_sha="a" * 40) != align_cache_key(
+        **common, aligner_commit_sha="b" * 40
+    )
+
+
+def test_align_cache_key_requires_aligner_commit_sha_as_a_keyword() -> None:
+    """An omitted `aligner_commit_sha` must be a type error, not a silent `None` key."""
+    with pytest.raises(TypeError):
+        align_cache_key(  # type: ignore[call-arg]
+            audio_sig="s",
+            transcript_sha="ts",
+            language="en",
+            aligner_model_id="mms",
+            aligner_params={},
+            code_version="t@1",
+            senselab_ver="v",
+        )
+
+
 def test_alignment_key_is_independent_of_the_task_key() -> None:
     """ASR and alignment cache keys diverge by construction (FR-024).
 
@@ -181,6 +215,7 @@ def test_alignment_key_is_independent_of_the_task_key() -> None:
         aligner_params={"x": 1},
         code_version="t@1",
         senselab_ver="v",
+        aligner_commit_sha="a" * 40,
     )
     task = cache_key(
         audio_sig="s",
@@ -204,6 +239,7 @@ def test_alignment_key_tracks_the_transcript() -> None:
         "aligner_params": {},
         "code_version": "t@1",
         "senselab_ver": "v",
+        "aligner_commit_sha": "a" * 40,
     }
     assert align_cache_key(transcript_sha="a", **kwargs) != align_cache_key(transcript_sha="b", **kwargs)  # type: ignore[arg-type]
 

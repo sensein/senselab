@@ -216,6 +216,9 @@ class StageContext:
             aligner_params=dict(aligner_params),
             code_version=stage_code_version("alignment"),
             senselab_ver=self.senselab_ver,
+            # Same resolution path as cache_key_for's model_id, not a second one: one aligner
+            # id, one place that decides whether it's a Hub repo worth pinning.
+            aligner_commit_sha=self._commit_sha_for(aligner_model_id),
         )
 
     def provenance_for(self, task: str, model_id: str | None, params: Mapping[str, Any]) -> dict[str, Any]:
