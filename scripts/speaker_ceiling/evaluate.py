@@ -36,10 +36,12 @@ the sweep for every other backend or count.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
 
@@ -117,6 +119,124 @@ class SessionOutcome:
     elapsed_s: float = 0.0
 
 
+# ---------------------------------------------------------------------------------------
+# Per-cell checkpointing.
+#
+# Granularity decision, recorded here rather than left implicit: this checkpoints at
+# (backend, k) *cell* granularity, not per session. A cell is 20 diarization calls --
+# seconds each for every backend but the two subprocess-venv ones -- which is small next to
+# the ~4.7 minutes/session that corpus *generation* costs on the same cluster. Losing an
+# in-progress cell to preemption re-does at most `sessions_per_count` diarization calls, a
+# bounded and cheap cost; a finer per-session checkpoint would add a second lock/write path
+# for a saving that does not show up against generation's cost. Generation checkpoints at
+# session granularity (see generate.py) precisely because *its* per-unit cost is the one
+# that actually dominates the sweep.
+# ---------------------------------------------------------------------------------------
+
+
+def cell_path(cells_dir: Path, backend_name: str, k: int) -> Path:
+    """Return the checkpoint file path for one (backend, k) cell."""
+    return cells_dir / f"{backend_name}__k{k}.json"
+
+
+def corpus_identity_from_manifest(manifest: Mapping[str, object]) -> Dict[str, object]:
+    """Return the (seed, resolved TTS commit) pair identifying which corpus produced ``manifest``.
+
+    Recorded in every cell checkpoint (see :func:`write_cell`) so aggregation -- and a cache
+    hit inside :func:`evaluate_backend` -- can tell whether two cells, or a cached cell and
+    the corpus currently being evaluated, actually came from the same audio. Two backends
+    scored against different corpora would let a difference in *audio* masquerade as a
+    difference in *counting ability*, which is exactly what a shared corpus exists to rule
+    out; this is the fact that check enforces.
+    """
+    tts_model = manifest.get("tts_model")
+    tts_model = tts_model if isinstance(tts_model, dict) else {}
+    return {
+        "seed": manifest.get("seed"),
+        "tts_resolved_commit_sha": tts_model.get("resolved_commit_sha"),
+        "tts_path_or_uri": tts_model.get("path_or_uri"),
+    }
+
+
+def write_cell(
+    path: Path,
+    outcomes: Sequence[SessionOutcome],
+    corpus_identity: Optional[Mapping[str, object]] = None,
+) -> None:
+    """Write one cell's outcomes to ``path``, atomically, alongside the corpus it was measured against.
+
+    Write-then-rename (see ``senselab.utils.model_revision``'s identical convention): a
+    task preempted mid-write must never leave a partial cell file for the next attempt's
+    :func:`read_cell` to mistake for a completed, trustworthy checkpoint.
+
+    Args:
+        corpus_identity: See :func:`corpus_identity_from_manifest`. Defaults to ``{}`` for
+            callers that do not track it (mainly tests) -- an empty identity is exempted
+            from the cross-cell/corpus consistency check in ``aggregate.py`` rather than
+            treated as evidence of a mismatch, since it was never asked to record one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "corpus_identity": dict(corpus_identity) if corpus_identity else {},
+        "outcomes": [asdict(outcome) for outcome in outcomes],
+    }
+    tmp_path = path.with_name(f"{path.stem}.tmp.{os.getpid()}{path.suffix}")
+    tmp_path.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp_path, path)
+
+
+def _read_cell_payload(path: Path) -> Optional[dict]:
+    """Return a cell checkpoint's raw ``{"corpus_identity": ..., "outcomes": ...}`` payload.
+
+    ``None`` for anything not trustworthy as a completed checkpoint: missing, unreadable,
+    not JSON, or missing the ``"outcomes"`` key a real checkpoint always has. Shared by
+    :func:`read_cell` and :func:`read_cell_identity` so both apply the same definition of
+    "this file is not actually a finished checkpoint".
+    """
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or "outcomes" not in payload:
+        return None
+    return payload
+
+
+def read_cell(path: Path) -> Optional[List[SessionOutcome]]:
+    """Return a cell's checkpointed outcomes, or ``None`` if missing, unreadable, or unparsable.
+
+    ``None`` is not a failure signal here -- it is exactly the "not done yet, compute it"
+    case a resumed run needs to distinguish from "done" without raising. A truncated or
+    corrupt file (a preemption mid-write that somehow slipped past write-then-rename, or a
+    hand-edit) degrades to ``None`` for the same reason: treating an unparsable checkpoint
+    as trustworthy would silently propagate a hole in the measurement forward instead of
+    just recomputing the cell.
+    """
+    payload = _read_cell_payload(path)
+    if payload is None:
+        return None
+    try:
+        return [SessionOutcome(**item) for item in payload["outcomes"]]
+    except (TypeError, KeyError):
+        return None
+
+
+def read_cell_identity(path: Path) -> Optional[Dict[str, object]]:
+    """Return a cell checkpoint's recorded corpus identity, or ``None`` if it does not parse.
+
+    Distinguished from ``{}`` on purpose: ``None`` means the file itself is not a valid
+    checkpoint (see :func:`_read_cell_payload`), while ``{}`` means the checkpoint is valid
+    but was written without an identity (a test, or a caller pre-dating this field).
+    """
+    payload = _read_cell_payload(path)
+    if payload is None:
+        return None
+    identity = payload.get("corpus_identity")
+    return identity if isinstance(identity, dict) else {}
+
+
 def _build_model(backend: BackendSpec) -> SenselabModel:
     """Construct the ``SenselabModel`` for ``backend``.
 
@@ -175,6 +295,7 @@ def evaluate_backend(
     manifest: Mapping[str, object],
     counts: Sequence[int],
     device: Optional[DeviceType],
+    cells_dir: Optional[Path] = None,
 ) -> Dict[int, List[SessionOutcome]]:
     """Run ``backend`` over every session recorded in ``manifest`` at each ``k`` in ``counts``.
 
@@ -183,6 +304,22 @@ def evaluate_backend(
     corpus directory, so a session the manifest does not know about is never evaluated
     and a ``k`` with no matching sessions comes back as an empty (not missing) list --
     which is exactly the shape :func:`check_sweep_is_complete` needs to catch it.
+
+    Args:
+        cells_dir: When given, checkpoint at (backend, ``k``) cell granularity (see the
+            module's "Per-cell checkpointing" section): a cell whose checkpoint file
+            already exists and parses is loaded from disk instead of re-run, and a freshly
+            computed cell is written out immediately, before moving to the next ``k`` --
+            so a task preempted partway through this call has already durably saved every
+            cell it finished. ``None`` (the default) keeps the original in-memory-only
+            behavior, unchanged for every existing caller. Every cell written this way also
+            records ``manifest``'s corpus identity (see :func:`corpus_identity_from_manifest`);
+            a cache hit whose recorded identity disagrees with ``manifest``'s raises rather
+            than silently reusing outcomes measured against a different corpus.
+
+    Raises:
+        ValueError: if ``manifest`` has no ``"sessions"`` list, or if a cached cell under
+            ``cells_dir`` was computed against a different corpus than ``manifest`` describes.
     """
     sessions = manifest.get("sessions")
     if not isinstance(sessions, list):
@@ -194,10 +331,33 @@ def evaluate_backend(
         if k in counts:
             by_k[k].append(record)  # type: ignore[arg-type]
 
+    corpus_identity = corpus_identity_from_manifest(manifest) if cells_dir is not None else None
+
     outcomes: Dict[int, List[SessionOutcome]] = {}
     for k in counts:
+        checkpoint_path = cell_path(cells_dir, backend.name, k) if cells_dir is not None else None
+        if checkpoint_path is not None:
+            cached = read_cell(checkpoint_path)
+            if cached is not None:
+                cached_identity = read_cell_identity(checkpoint_path)
+                # An empty recorded identity means the checkpoint predates identity tracking
+                # (or was hand-built in a test) rather than evidence of an actual mismatch --
+                # see write_cell's docstring -- so only a non-empty disagreement refuses.
+                if cached_identity and cached_identity != corpus_identity:
+                    raise ValueError(
+                        f"cell checkpoint {checkpoint_path} was computed against a different corpus "
+                        f"({cached_identity}) than the one being evaluated now ({corpus_identity}) -- "
+                        "refusing to silently reuse it. Delete the stale checkpoint or point --corpus "
+                        "at the corpus it was actually computed from."
+                    )
+                outcomes[k] = cached
+                continue
+
         records = sorted(by_k.get(k, []), key=lambda r: r["session_index"])
-        outcomes[k] = [run_session(backend, corpus_dir / str(record["wav"]), device) for record in records]
+        result = [run_session(backend, corpus_dir / str(record["wav"]), device) for record in records]
+        if checkpoint_path is not None:
+            write_cell(checkpoint_path, result, corpus_identity=corpus_identity)
+        outcomes[k] = result
     return outcomes
 
 
@@ -235,9 +395,34 @@ class InsufficientMeasurementError(RuntimeError):
     """Raised when a sweep does not have enough measurement to derive a trustworthy profile."""
 
 
+def _dump_outcomes_for_diagnosis(
+    dump_dir: Path, outcomes: Mapping[str, Mapping[int, Sequence[SessionOutcome]]]
+) -> Path:
+    """Write every recorded outcome to disk so a refusal names somewhere to actually look.
+
+    Previously a refusal wrote no artifact at all -- the message's own advice ("check each
+    failing session's recorded error_type") pointed nowhere, because on the refusal path
+    nothing had been persisted. That was only diagnosable by having kept raw stdout, or by
+    already having per-cell checkpoints from a sharded run in flight; a single-process smoke
+    run had neither. Dumping unconditionally here (whenever a caller supplies ``dump_dir``)
+    means the advice is always actionable, whether or not cell checkpointing was in use.
+    """
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    path = dump_dir / "refusal_outcomes.json"
+    payload = {
+        backend_name: {str(k): [asdict(o) for o in sessions] for k, sessions in by_k.items()}
+        for backend_name, by_k in outcomes.items()
+    }
+    tmp_path = path.with_name(f"{path.stem}.tmp.{os.getpid()}{path.suffix}")
+    tmp_path.write_text(json.dumps(payload, indent=2))
+    os.replace(tmp_path, path)
+    return path
+
+
 def check_sweep_is_complete(
     outcomes: Mapping[str, Mapping[int, Sequence[SessionOutcome]]],
     sessions_per_count: int,
+    dump_dir: Optional[Path] = None,
 ) -> None:
     """Refuse if any (backend, k) cell has fewer than ``sessions_per_count`` recorded outcomes.
 
@@ -247,6 +432,13 @@ def check_sweep_is_complete(
     :func:`derive.derive_ceiling` cannot tell a gap from "the missing sessions would
     have passed". Following ``scripts/calibrate_detection_margin.py``'s posture: state
     what was insufficient and what would fix it, and hard-error rather than warn.
+
+    Args:
+        dump_dir: When given, every recorded outcome (including ``error_type`` and
+            ``error_message`` per session) is dumped to ``dump_dir/refusal_outcomes.json``
+            before raising, and the exception names that path. ``None`` (the default)
+            preserves the original message exactly, for callers (including this module's
+            own tests) that never had anywhere to write a dump.
 
     Raises:
         InsufficientMeasurementError: naming every short (backend, k) cell and how many
@@ -260,18 +452,23 @@ def check_sweep_is_complete(
     ]
     if short:
         detail = "; ".join(f"{backend} at k={k}: {n}/{sessions_per_count} sessions" for backend, k, n in short)
+        dump_note = ""
+        if dump_dir is not None:
+            dump_path = _dump_outcomes_for_diagnosis(dump_dir, outcomes)
+            dump_note = f" Every recorded outcome was dumped to {dump_path} for diagnosis."
         raise InsufficientMeasurementError(
             f"refusing to emit a profile: {len(short)} (backend, k) cell(s) have fewer than the "
             f"required {sessions_per_count} completed sessions -- {detail}. Generate more sessions "
             "for these counts with scripts/speaker_ceiling/generate.py (--counts ... --sessions "
             f"{sessions_per_count}) before re-running the sweep; a short cell would silently "
-            "understate that backend's measured accuracy at that count."
+            f"understate that backend's measured accuracy at that count.{dump_note}"
         )
 
 
 def check_smallest_count_has_successes(
     outcomes: Mapping[str, Mapping[int, Sequence[SessionOutcome]]],
     smallest_k: int,
+    dump_dir: Optional[Path] = None,
 ) -> None:
     """Refuse if any backend produced zero successful sessions at ``smallest_k``.
 
@@ -279,6 +476,10 @@ def check_smallest_count_has_successes(
     a broken model id, a missing HF token, an unmet CUDA requirement -- not the
     backend's counting ability, and every larger ``k`` for that backend would silently
     inherit the same failure without saying so.
+
+    Args:
+        dump_dir: See :func:`check_sweep_is_complete` -- same dump, same reason: without
+            it, "check each failing session's recorded error_type" named nowhere to look.
 
     Raises:
         InsufficientMeasurementError: naming every backend that failed every session at
@@ -291,10 +492,21 @@ def check_smallest_count_has_successes(
     ]
     if broken:
         names = ", ".join(sorted(broken))
+        if dump_dir is not None:
+            dump_path = _dump_outcomes_for_diagnosis(dump_dir, outcomes)
+            advice = (
+                f"Recorded outcomes (including error_type/error_message per session) were dumped to "
+                f"{dump_path} -- check each failing session's error_type there and fix whatever raised "
+                "before trusting any larger k for this backend."
+            )
+        else:
+            advice = (
+                "Check each failing session's recorded error_type and fix whatever raised "
+                "there before trusting any larger k for this backend."
+            )
         raise InsufficientMeasurementError(
             f"refusing to emit a profile: {names} produced zero successful sessions at "
             f"k={smallest_k}, the smallest count swept. That measures the harness -- a broken "
             "model id, a missing HF_TOKEN, an unmet CUDA requirement -- not the backend's "
-            "counting ability. Check each failing session's recorded error_type and fix "
-            "whatever raised there before trusting any larger k for this backend."
+            f"counting ability. {advice}"
         )

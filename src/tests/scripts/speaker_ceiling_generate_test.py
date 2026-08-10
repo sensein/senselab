@@ -256,6 +256,91 @@ def test_lay_out_session_never_starts_a_turn_before_the_session_begins() -> None
     assert all(turn.end > turn.start for turn in turns)
 
 
+def test_a_fully_resumed_run_never_calls_synthesis_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Calling generate_corpus a second time over a fully-complete corpus touches no TTS at all.
+
+    Proves the skip branch actually skips the expensive part, not just that it takes some
+    different code path: `synthesize_texts_with_qwen` is swapped for a version that fails
+    the test outright if called, then the exact same generate_corpus call is repeated.
+    """
+    out_dir = tmp_path / "corpus"
+    _generate.generate_corpus(out_dir=out_dir, counts=[1, 3], sessions_per_count=2, seed=11)
+
+    def _explode(*args: object, **kwargs: object) -> None:
+        raise AssertionError("synthesis must not run when every session is already complete")
+
+    monkeypatch.setattr(_generate, "synthesize_texts_with_qwen", _explode)
+    _generate.generate_corpus(out_dir=out_dir, counts=[1, 3], sessions_per_count=2, seed=11)
+
+
+def test_resuming_after_partial_deletion_matches_an_uninterrupted_run(tmp_path: Path) -> None:
+    """A run interrupted mid-corpus and resumed produces byte-identical output to one that never was.
+
+    Simulates the two shapes a task killed mid-write leaves behind (per _session_is_complete's
+    docstring): one session loses its wav entirely, another's rttm is truncated to zero bytes.
+    Only those two sessions should be regenerated; every file -- regenerated or left alone --
+    must end up identical to an uninterrupted reference run, and the manifest (including the
+    reconstructed sessions' "speakers" field) must match exactly.
+    """
+    reference = _generate.generate_corpus(out_dir=tmp_path / "reference", counts=[1, 3], sessions_per_count=3, seed=5)
+
+    resumed_dir = tmp_path / "resumed"
+    _generate.generate_corpus(out_dir=resumed_dir, counts=[1, 3], sessions_per_count=3, seed=5)
+
+    # Simulate a preempted task: an unlinked wav (never got that far) and a truncated rttm
+    # (killed mid-write) are the two partial shapes _session_is_complete must catch.
+    (resumed_dir / "k=3" / "session_1.wav").unlink()
+    (resumed_dir / "k=1" / "session_2.rttm").write_text("")
+
+    _generate.generate_corpus(out_dir=resumed_dir, counts=[1, 3], sessions_per_count=3, seed=5)
+
+    for k in (1, 3):
+        for i in range(3):
+            resumed_rttm = (resumed_dir / f"k={k}" / f"session_{i}.rttm").read_text()
+            reference_rttm = (reference / f"k={k}" / f"session_{i}.rttm").read_text()
+            assert resumed_rttm == reference_rttm
+
+            resumed_wav = Audio(filepath=str(resumed_dir / f"k={k}" / f"session_{i}.wav"))
+            reference_wav = Audio(filepath=str(reference / f"k={k}" / f"session_{i}.wav"))
+            assert torch.equal(resumed_wav.waveform, reference_wav.waveform)
+
+    manifest_resumed = json.loads((resumed_dir / "manifest.json").read_text())
+    manifest_reference = json.loads((reference / "manifest.json").read_text())
+    assert manifest_resumed == manifest_reference
+
+
+def test_a_zero_byte_wav_is_not_trusted_as_complete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A zero-length wav (a kill mid-encode, before any bytes landed) must be regenerated.
+
+    Distinct from the rttm-truncation half of the interruption test above: this covers the
+    wav side of the same partial-write hazard, checked directly against _session_is_complete
+    rather than through a full generate_corpus round trip.
+    """
+    out_dir = tmp_path / "corpus"
+    _generate.generate_corpus(out_dir=out_dir, counts=[2], sessions_per_count=1, seed=3)
+    wav_path = out_dir / "k=2" / "session_0.wav"
+    rttm_path = out_dir / "k=2" / "session_0.rttm"
+    assert _generate._session_is_complete(wav_path, rttm_path)
+
+    wav_path.write_bytes(b"")
+    assert not _generate._session_is_complete(wav_path, rttm_path)
+
+
+def test_sharded_generation_writes_a_distinct_manifest_name(tmp_path: Path) -> None:
+    """A caller generating one k in isolation can point the manifest at a shard-scoped name.
+
+    This is what lets several shard tasks write into the same corpus directory without one
+    task's manifest.json clobbering another's -- see the manifest_name docstring.
+    """
+    out_dir = tmp_path / "corpus"
+    _generate.generate_corpus(
+        out_dir=out_dir, counts=[4], sessions_per_count=1, seed=7, manifest_name="manifest.k4.json"
+    )
+    assert not (out_dir / "manifest.json").exists()
+    manifest = json.loads((out_dir / "manifest.k4.json").read_text())
+    assert manifest["counts"] == [4]
+
+
 def test_sessions_are_written_at_the_rate_diarizers_expect(tmp_path: Path) -> None:
     """Sessions land at 16 kHz, not the TTS model's native 24 kHz.
 
