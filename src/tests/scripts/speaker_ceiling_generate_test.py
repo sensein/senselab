@@ -360,3 +360,32 @@ def test_sessions_are_written_at_the_rate_diarizers_expect(tmp_path: Path) -> No
     assert info.samplerate == _generate.CORPUS_SAMPLE_RATE == 16000, (
         f"corpus written at {info.samplerate} Hz; pyannote and the other diarizers require 16000"
     )
+
+
+def test_synthesis_is_chunked_so_peak_memory_does_not_scale_with_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No synthesis call exceeds _SYNTH_BATCH_SIZE texts, however many sessions are requested.
+
+    Batching every session's utterances into one call amortizes the model load but makes peak GPU
+    memory scale with sessions_per_count, and at 20 sessions (~350 texts) it OOMs an 80 GB H100:
+    "Tried to allocate 19.96 GiB ... 76.35 GiB already in use" (job 20125423). Asserting the batch
+    ceiling here is what stops that regressing -- the failure only appears on real hardware at full
+    sweep size, which no local run reaches.
+    """
+    seen_batch_sizes: list[int] = []
+    real = _generate.synthesize_texts_with_qwen
+
+    def _recording(*args: object, **kwargs: object) -> object:
+        texts = kwargs.get("texts") or (args[0] if args else [])
+        seen_batch_sizes.append(len(texts))  # type: ignore[arg-type]
+        return real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(_generate, "synthesize_texts_with_qwen", _recording)
+    _generate.generate_corpus(out_dir=tmp_path / "corpus", counts=[3], sessions_per_count=6, seed=17)
+
+    assert seen_batch_sizes, "synthesis was never called"
+    assert max(seen_batch_sizes) <= _generate._SYNTH_BATCH_SIZE, (
+        f"a synthesis call carried {max(seen_batch_sizes)} texts, above the "
+        f"{_generate._SYNTH_BATCH_SIZE} ceiling that keeps peak memory bounded"
+    )
