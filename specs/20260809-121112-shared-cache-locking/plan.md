@@ -339,7 +339,9 @@ Two distinct sites:
 
 Building it group-writable is only half the job — a second user has to execute the interpreter the first user created. After a successful install, walk the venv tree and add group read to files and group read+execute to directories, ignoring failures on entries owned by someone else.
 
-Do this **after** the marker is written, so an interrupted chmod cannot leave a venv that looks complete but is half-permissioned.
+Do this **before** the marker is written, so an interrupted chmod cannot leave a venv that looks complete but is half-permissioned.
+
+(An earlier revision of this step said "after", with the same rationale — which the order it prescribed did not deliver. Writing the marker first means a kill between the two steps leaves a venv advertising itself as ready with its modes half-fixed, and because the chmod pass only runs on the fresh-build path, every later call takes the reuse fast path and never repairs it. Chmod first, then mark: an interrupted pass leaves no marker, the next call's marker check fails, `rmtree` fires, and the rebuild completes the chmod.)
 
 - [ ] **Step 3: Write the failing test first**
 
