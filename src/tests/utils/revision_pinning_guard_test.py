@@ -201,3 +201,33 @@ def test_the_two_call_rule_holds_against_the_real_hub(tmp_path: Path, monkeypatc
     assert snapshot_download(repo, revision=sha, cache_dir=cache_dir, local_files_only=True), (
         "a full SHA must resolve from cache with no network"
     )
+
+
+def test_resolve_model_stages_the_manifest_commit_not_the_local_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The loader must resolve through the run manifest, not this host's refs/<ref>.
+
+    The regression this guards is the one that makes provenance lie. Before the fix,
+    ``resolve_model`` passed the *ref* to ``ensure_hf_model``, so the load resolved against
+    whatever this host's ``refs/main`` pointed at while the cache key and provenance resolved
+    through the manifest. Two independent resolvers: identical on one warm node, divergent on the
+    multi-node sweep the manifest exists for -- and the artifact then names a commit that never ran.
+    """
+    manifest_sha = "1" * 40
+    staged: dict[str, str] = {}
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: manifest_sha)
+
+    def _record(repo_id: str, revision: str = "main", token: object = None) -> str:
+        staged["revision"] = revision
+        return revision
+
+    monkeypatch.setattr("senselab.utils.dependencies.ensure_hf_model", _record)
+
+    from senselab.utils.dependencies import resolve_model
+
+    sha, _ = resolve_model("org/model", "main")
+    assert staged["revision"] == manifest_sha, (
+        f"ensure_hf_model was handed {staged['revision']!r}; it must receive the manifest's commit, "
+        "or the load and the recorded provenance can name different commits"
+    )
+    assert sha == manifest_sha
