@@ -59,6 +59,7 @@ They are not installed in the main senselab environment.
 | child-adult-diarization | 3.10 | ==2.3.0 | transformers==4.30.2, loralib | Child/adult/overlap speaker-role classification (CUDA only, no CPU path) |
 | moss-transcribe-diarize | 3.12 | >=2.8,<2.9 | moss-transcribe-diarize (git), transformers>=5.6 | Unified ASR + diarization (0.9B, weights Apache 2.0) |
 | diarizen | 3.12 | >=2.1,<2.9 | forked pyannote-audio (git), lightning, speechbrain | Diarization only, no transcription (weights CC BY-NC 4.0 — non-commercial only) |
+| driftse | 3.11 | >=2.3 | torchaudio>=2.3, librosa>=0.10.2 | One-step (1 NFE) speech enhancement, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08) |
 
 ## System Dependencies
 

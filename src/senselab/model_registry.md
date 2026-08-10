@@ -64,10 +64,11 @@ All models supported by senselab, organized by task.
 
 ## Speech Enhancement
 
-| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
-|-------|--------|----------|---------------|------------|-----------------|
-| SepFormer (16kHz) | speechbrain | `speechbrain/sepformer-wham16k-enhancement` | — | N/A | Speech enhancement at 16kHz |
-| SepFormer (8kHz) | speechbrain | `speechbrain/sepformer-whamr-enhancement` | — | N/A | Speech enhancement at 8kHz (with reverb) |
+| Model | Source | Model ID | Embedding Dim | Parameters | License | Recommended For |
+|-------|--------|----------|---------------|------------|---------|-----------------|
+| SepFormer (16kHz) | speechbrain | `speechbrain/sepformer-wham16k-enhancement` | — | N/A | — | Speech enhancement at 16kHz |
+| SepFormer (8kHz) | speechbrain | `speechbrain/sepformer-whamr-enhancement` | — | N/A | — | Speech enhancement at 8kHz (with reverb) |
+| DriftSE | LiangXu123 (unpackaged upstream repo, via subprocess venv) | `sensein/driftse-distilhubert-three-layers` | — | N/A | Unresolved upstream (no LICENSE file, no README statement). A license request was opened 2026-08-08 and remains unanswered: https://github.com/LiangXu123/DriftSE/issues/2. The checkpoint mirror stays private until it is answered. | One-step (1 NFE) generative enhancement; reachable only via an explicit HFModel id, not in any default model list and not wired into audio_analysis (via subprocess venv, pinned upstream commit 695a64db187500fa0d7bae23912680bd5d4df613) |
 
 ## Voice Activity Detection
 

@@ -319,6 +319,23 @@
   training_data: WHAM! + reverberation
   recommended_for: Speech enhancement at 8kHz (with reverb)
 
+- name: DriftSE
+  task: speech_enhancement
+  source: LiangXu123 (unpackaged upstream repo, via subprocess venv)
+  model_id: sensein/driftse-distilhubert-three-layers
+  parameters: N/A
+  training_data: DNS 2020 (per paper; this backend is inference-only and does not verify a training config)
+  license: >-
+    Unresolved upstream (no LICENSE file, no README statement). A license
+    request was opened 2026-08-08 and remains unanswered:
+    https://github.com/LiangXu123/DriftSE/issues/2. The checkpoint mirror
+    stays private until it is answered.
+  recommended_for: >-
+    One-step (1 NFE) generative enhancement; reachable only via an explicit
+    HFModel id, not in any default model list and not wired into
+    audio_analysis (via subprocess venv, pinned upstream commit
+    695a64db187500fa0d7bae23912680bd5d4df613)
+
 # Voice Activity Detection
 - name: Pyannote VAD
   task: voice_activity_detection
