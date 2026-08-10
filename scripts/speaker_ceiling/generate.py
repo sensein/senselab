@@ -402,6 +402,11 @@ def _compose_waveform(turns: Sequence[_SessionTurn], waveforms: Sequence[np.ndar
 # Diarizers in this repo take 16 kHz; Qwen3-TTS emits 24 kHz. The corpus is written at the rate
 # the consumers require so no backend has to resample, and so the ceiling cannot depend on whose
 # resampler ran. See the write path in generate_corpus for the measured failure this avoids.
+# Utterances per synthesis call. Bounds peak GPU memory independently of sessions_per_count --
+# see the chunked loop in generate_corpus for the measured OOM that made this necessary.
+_SYNTH_BATCH_SIZE = 32
+
+
 CORPUS_SAMPLE_RATE = 16000
 
 
@@ -638,11 +643,26 @@ def generate_corpus(
                     flat_speakers.append(speaker_names[speaker_idx])
                 session_spans[i] = (start, len(flat_texts))
 
-            audios = (
-                synthesize_texts_with_qwen(texts=flat_texts, model=tts_model, speaker=flat_speakers, device=device)
-                if flat_texts
-                else []
-            )
+            # Synthesize in bounded chunks, not one call per k. Batching every session's
+            # utterances together amortizes the model load, but at 20 sessions that is ~350 texts
+            # in a single generate() and it OOMs an 80 GB H100 outright: "Tried to allocate
+            # 19.96 GiB ... 76.35 GiB already in use" (job 20125423, k=1/4/6/7/8 died this way
+            # while k=2/3/5 happened to fit, since utterance counts vary with the
+            # negative-binomial sentence lengths). A fixed ceiling keeps the amortization -- the
+            # model stays loaded across chunks within one process -- without letting peak memory
+            # scale with sessions_per_count. 32 is below the 35-37 that ran comfortably in the
+            # smoke sweep, with headroom rather than at the observed edge.
+            audios = []
+            for chunk_start in range(0, len(flat_texts), _SYNTH_BATCH_SIZE):
+                chunk_end = chunk_start + _SYNTH_BATCH_SIZE
+                audios.extend(
+                    synthesize_texts_with_qwen(
+                        texts=flat_texts[chunk_start:chunk_end],
+                        model=tts_model,
+                        speaker=flat_speakers[chunk_start:chunk_end],
+                        device=device,
+                    )
+                )
             sample_rate = audios[0].sampling_rate if audios else 24000
             flat_waveforms = [audio.waveform.squeeze(0).numpy() for audio in audios]
 
