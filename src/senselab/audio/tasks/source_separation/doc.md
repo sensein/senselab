@@ -144,15 +144,13 @@ upstream's code — the worker clones it at a pinned commit
 (`5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa`) into the user's own cache at first use, the same
 pattern as DriftSE (`speech_enhancement/driftse.py`).
 
-The checkpoint mirror under `sensein` (`sensein/unasdiff-diffusion-priors`) is **private** — unlike
-DriftSE's public mirror, this one was deliberately kept private specifically because the licence
-question is still open, per the request thread linked above. A caller without access to the mirror
-uses the `SENSELAB_UNASDIFF_CHECKPOINTS` environment-variable override. Whether the mirror is
-reachable and whether any terms have been granted are two separate facts, and reachability answers
-neither: even if the mirror were made public, that would not by itself grant any rights over the
-weights. No terms have been offered upstream, so treat the weights as all-rights-reserved by
-default, and consult <https://github.com/RunwuShi/unasdiff> before any use that depends on licence
-terms. See the model registry entry for the pinned revision.
+The checkpoint mirror under `sensein` (`sensein/unasdiff-diffusion-priors`) is **public**, so the
+backend is usable during the alpha, and its licence is **unknown** — those are two separate facts and
+both matter. Publishing the mirror makes the weights reachable; it grants no rights over them. No
+terms have been offered upstream, so treat the weights as all-rights-reserved by default, and consult
+<https://github.com/RunwuShi/unasdiff> before any use that depends on licence terms.
+`SENSELAB_UNASDIFF_CHECKPOINTS` remains for a caller supplying their own checkpoints. See the model
+registry entry for the pinned revision.
 
 ### Not wired into `audio_analysis`
 

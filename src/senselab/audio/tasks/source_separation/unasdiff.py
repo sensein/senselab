@@ -55,8 +55,14 @@ The upstream repository carries no ``LICENSE`` file and no license statement in
 its README. An issue requesting clarification has been filed upstream and is
 outstanding. Pending that answer, senselab vendors none of upstream's code (the
 worker clones it at a pinned commit into the user's own cache at first use, same
-as DriftSE) and the checkpoint mirror under ``sensein`` is private; a caller
-without access to the mirror uses the ``SENSELAB_UNASDIFF_CHECKPOINTS`` override.
+as DriftSE).
+
+The checkpoint mirror under ``sensein`` is **public**, so the backend is usable
+during the alpha, while its licence remains **unknown**: publishing the mirror makes
+the weights reachable and grants no rights over them. Treat them as
+all-rights-reserved by default and consult upstream before any use that turns on
+licence terms. ``SENSELAB_UNASDIFF_CHECKPOINTS`` remains for a caller supplying
+their own checkpoints.
 
 Not wired into ``audio_analysis``
 ----------------------------------
@@ -133,7 +139,7 @@ _UNASDIFF_REPO_URL = "https://github.com/RunwuShi/unasdiff.git"
 _UNASDIFF_COMMIT = "5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa"
 
 _UNASDIFF_HF_REPO = "sensein/unasdiff-diffusion-priors"
-# Pinned so a re-upload cannot change what this backend runs. The repo is private
+# Pinned so a re-upload cannot change what this backend runs. The repo is public
 # pending the upstream licence answer; callers without access use the env override.
 _UNASDIFF_HF_REVISION = "8d7c32204d1ba31cd9fca3cd64313fd711949b58"
 _UNASDIFF_CHECKPOINTS_ENV = "SENSELAB_UNASDIFF_CHECKPOINTS"
@@ -464,7 +470,7 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
 
     Resolution order mirrors DriftSE's (``speech_enhancement/driftse.py``): an explicit
     ``checkpoint_dir`` wins outright; otherwise ``SENSELAB_UNASDIFF_CHECKPOINTS`` (for a caller
-    without access to the private mirror); otherwise the pinned HF mirror via
+    supplying their own checkpoints); otherwise the pinned HF mirror via
     :func:`senselab.utils.dependencies.resolve_model`, which resolves to an immutable commit and
     downloads once, cross-process. All four filenames are returned unconditionally -- the mirror
     is one repo carrying all four -- and the worker loads only the pair its ``mode`` needs.
