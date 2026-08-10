@@ -25,6 +25,19 @@ from senselab.audio.workflows.audio_analysis.stage_context import (
 from senselab.utils.tasks.cached_inference import audio_signature, cache_store
 
 
+@pytest.fixture(autouse=True)
+def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub HF revision resolution so `cache_key_for` never touches the network.
+
+    `cache_key_for` resolves any Hub-shaped model id (containing ``/``, e.g.
+    ``"facebook/mms-1b-all"``) to a commit SHA before computing the key. A handful of tests below
+    use real-looking ids for exactly that reason; without this stub, resolving them would be a live
+    Hub call whose outcome depends on whether this machine already has that repo cached locally —
+    the same non-hermetic risk `HFModel` construction has, and the same fix.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+
+
 def _ctx(**kwargs: object) -> StageContext:
     base: dict[str, object] = {"perturbation": "raw", "audio_signature": "a" * 64, "senselab_ver": "1.2.3"}
     base.update(kwargs)
@@ -100,6 +113,42 @@ def test_cache_key_tracks_the_audio_signature() -> None:
     a = _ctx(audio_signature="a" * 64).cache_key_for("asr", "m", {})
     b = _ctx(audio_signature="b" * 64).cache_key_for("asr", "m", {})
     assert a != b
+
+
+def test_cache_key_tracks_the_resolved_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two commits of the same Hub model must not collide (the bug this task fixes)."""
+    ctx = _ctx()
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    at_a = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "b" * 40)
+    at_b = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
+    assert at_a != at_b
+
+
+def test_commit_sha_for_a_non_hub_id_skips_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A backend name with no ``/`` (e.g. ``"yamnet"``) has nothing to resolve on the Hub.
+
+    Distinct from a model-less stage's ``None`` -- both end up with no commit_sha, but for
+    different reasons, and neither should attempt a Hub lookup.
+    """
+
+    def _boom(*a: object, **k: object) -> str:
+        raise AssertionError("a non-Hub model id must never be resolved")
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _boom)
+    assert _ctx()._commit_sha_for("yamnet") is None  # noqa: SLF001
+    assert _ctx()._commit_sha_for(None) is None  # noqa: SLF001
+
+
+def test_commit_sha_for_a_hub_id_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``org/name``-shaped id is resolved through the run-scoped resolver."""
+    sha = "c" * 40
+    seen = []
+    monkeypatch.setattr(
+        "senselab.utils.model_revision.resolve_revision", lambda repo_id, *a, **k: (seen.append(repo_id), sha)[1]
+    )
+    assert _ctx()._commit_sha_for("openai/whisper-tiny") == sha  # noqa: SLF001
+    assert seen == ["openai/whisper-tiny"]
 
 
 def test_align_key_differs_from_the_task_key() -> None:
