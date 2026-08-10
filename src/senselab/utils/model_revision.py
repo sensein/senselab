@@ -88,17 +88,22 @@ def read_manifest(run: Optional[str] = None) -> dict[str, str]:
 
     A manifest that is missing, empty, or unparsable reads as empty rather than
     raising: a corrupt manifest must degrade to "resolve again", never to a crash
-    that takes down every job in the run.
+    that takes down every job in the run. Missing/empty is the expected steady
+    state for a run's first resolution and is silent; a *non-empty* file that
+    fails to parse is a materially worse signal (a truncated write, disk
+    corruption) and is logged at warning so it doesn't disappear silently.
     """
     path = manifest_path(run)
     try:
         text = path.read_text()
     except OSError:
         return {}
+    if not text.strip():
+        return {}
     try:
         payload = json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Run manifest %s is unparsable; treating as empty", path)
+        logger.warning("Run manifest %s is non-empty but unparsable; treating as empty", path)
         return {}
     if not isinstance(payload, dict):
         return {}
@@ -133,7 +138,20 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
         if winner is not None:
             return winner
         current[key] = sha
-        path.write_text(json.dumps(current, indent=2, sort_keys=True))
+        # Write-then-rename, not write_text directly: a writer killed mid-write
+        # (OOM, preemption, node failure -- all routine on a cluster) leaves a
+        # truncated file. read_manifest degrades that to {}, and the *next*
+        # writer would then persist only its own key, silently discarding every
+        # other (repo_id, ref) -> sha this run had already recorded -- forcing
+        # later processes to re-resolve those pairs against the Hub, which can
+        # disagree with the original answer if upstream moved meanwhile. That is
+        # the split-run failure this whole module exists to prevent, arriving
+        # via corruption instead of concurrency. os.replace is atomic on POSIX
+        # as long as the temp file is on the same filesystem, which the sibling
+        # path here guarantees.
+        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(current, indent=2, sort_keys=True))
+        os.replace(tmp, path)
         return sha
     finally:
         lock.__exit__(None, None, None)
@@ -150,7 +168,12 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
 
     try:
         local = _get_cached_commit_hash(repo_id, ref)
-    except Exception:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
+    except Exception as exc:  # noqa: BLE001 — any local-read failure just means "ask the Hub"
+        # Never surfaces a wrong answer, but a *persistent* local problem (bad
+        # HF_HUB_CACHE, permissions) would otherwise force every resolution onto
+        # the network with zero diagnostic trail. debug, not warning: a cold
+        # cache is the normal first-resolution case, not an anomaly.
+        logger.debug("Local cache lookup failed for %s@%s: %s", repo_id, ref, exc)
         local = None
     if local and _SHA_RE.match(local):
         return local
