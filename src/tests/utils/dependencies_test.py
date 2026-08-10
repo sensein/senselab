@@ -49,6 +49,16 @@ def test_sha_revision_is_passed_through(tmp_path: Path, monkeypatch: pytest.Monk
     assert _get_cached_commit_hash("org/model", sha) == sha
 
 
+def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cold cache must raise, not hand back the mutable ref as if it were a SHA."""
+    from senselab.utils.dependencies import _get_cached_commit_hash
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    with pytest.raises(RevisionResolutionError):
+        _get_cached_commit_hash("org/never-downloaded", "main")
+
+
 def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """resolve_model returns the immutable SHA + local snapshot dir without re-downloading a cached model."""
     sha = "b" * 40
