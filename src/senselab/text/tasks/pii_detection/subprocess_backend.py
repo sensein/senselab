@@ -11,7 +11,7 @@ whatever recent Python it wants; PII still works.
 
 What runs inside the venv
 -------------------------
-Two PII detectors run in series on each input transcript and their spans
+Three PII detectors run in series on each input transcript and their spans
 are merged:
 
 1. **Microsoft Presidio Analyzer** — regex + spaCy-NER orchestrator with
@@ -24,12 +24,26 @@ are merged:
    natively recognize (``medical_record_number``,
    ``health_plan_number``, ``account_number``, ``fax_number``, ``url``,
    ``biometric_identifier``, ``unique_identifier``, etc.).
+3. **Rules cascade** (``senselab.text.tasks.pii_detection.rules``, ported
+   from PR #542) — regex + gazetteers + spaCy NER + self-disclosed
+   demographics + age-over-90 + a combinatorial re-identification window,
+   with precision guards (a Zipf-frequency name hard-gate, structured-
+   identifier format validation) that make it worth running alongside the
+   two model-based detectors rather than in place of them. Its category
+   vocabulary (``NAME``, ``CONTACT``, ``IDNUM``, ...) is its own, not
+   Presidio's — see the module docstring in ``rules.py`` for why.
 
 GLiNER's lowercase labels (``"person"``, ``"phone_number"``, ...) are
 normalized to Presidio's uppercase scheme inside the worker so the
 downstream corroboration logic in ``api.py`` — which treats ``(category,
 text.lower())`` as the dedupe key — sees the two detectors' findings as
-referring to the same entity when they do.
+referring to the same entity when they do. The rules cascade is not
+normalized into that scheme (its categories don't map cleanly — e.g. its
+single ``CONTACT`` covers what Presidio splits into ``EMAIL_ADDRESS`` /
+``PHONE_NUMBER`` / ``IP_ADDRESS``), so a rules finding corroborates with
+Presidio/GLiNER only on the rarer occasions their categories coincide
+(e.g. ``URL``); it is a genuinely independent detector rather than a term
+in the existing corroboration set.
 
 What lives in this module
 -------------------------
@@ -51,6 +65,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from importlib.resources import files
 from typing import Any, Optional
 
 from senselab.utils.dependencies import hf_subprocess_env
@@ -75,6 +90,14 @@ _EN_CORE_WEB_LG_WHEEL = (
 # transitive resolve in Stage 2 would skip the CUDA-aware routing and
 # could land on a CPU-only wheel even on GPU hosts. ``torchaudio`` is
 # NOT in this list — neither Presidio nor GLiNER decode audio.
+#
+# ``wordfreq`` and ``nltk`` back the rules cascade's precision guards (the Zipf-frequency
+# name hard-gate, the NLTK name gazetteer) — see ``rules.py``. They are listed here rather
+# than as a host extra in ``pyproject.toml`` because this isolated venv is what lets the
+# host stay off a fixed spaCy/torch stack; adding a host dependency for a detector that
+# only runs inside this venv would defeat that isolation. (``nltk`` also happens to already
+# be a host "nlp"-extra dependency for unrelated tasks, but this venv does not inherit host
+# site-packages, so it needs its own copy regardless.)
 _PII_REQUIREMENTS = [
     "presidio-analyzer>=2.2",
     "spacy>=3.7,<3.9",
@@ -82,6 +105,8 @@ _PII_REQUIREMENTS = [
     "gliner>=0.2",
     "transformers>=4.40",
     "torch>=2.8,<2.9",
+    "wordfreq>=3.0",
+    "nltk>=3.9",
 ]
 
 # nvidia/gliner-pii: 570M-param GLiNER variant fine-tuned on a ~100k
@@ -236,7 +261,8 @@ _PRESIDIO_PII_ENTITIES = [
 # in its ``detectors`` kwarg.
 DETECTOR_PRESIDIO = "presidio"
 DETECTOR_GLINER = "gliner"
-_KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER})
+DETECTOR_RULES = "rules"
+_KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES})
 
 
 # Worker script — runs inside the isolated venv. Reads a single JSON
@@ -245,7 +271,7 @@ _KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER})
 # Request shape:
 #   {
 #     "transcripts": {asr_model: full_text_string, ...},
-#     "detectors": [str, ...],   # subset of {"presidio", "gliner"}
+#     "detectors": [str, ...],   # subset of {"presidio", "gliner", "rules"}
 #     "presidio_entities": [str, ...],
 #     "presidio_score_threshold": float,
 #     "gliner_model": str,
@@ -253,7 +279,13 @@ _KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER})
 #     "gliner_labels": [str, ...],
 #     "gliner_threshold": float,
 #     "gliner_label_map": {str: str, ...},   # gliner_label → normalized_category
+#     "rules_source": str | None,   # rules.py's own source, read via importlib.resources
 #   }
+#
+# ``rules_source`` carries the actual text of ``rules.py`` rather than the worker
+# duplicating the cascade as a second string literal — two four-hundred-line copies of the
+# same module would drift the moment either one is edited. The worker ``exec``s it into a
+# fresh module namespace and calls its functions; see the "Rules cascade" section below.
 #
 # Detectors not named in the request are NOT loaded — saves ~5-10 s of
 # model-load time per skipped detector. A detector that fails to load
@@ -285,6 +317,7 @@ try:
     gliner_labels = args.get("gliner_labels") or []
     gliner_threshold = float(args.get("gliner_threshold", 0.5))
     gliner_label_map = args.get("gliner_label_map") or {}
+    rules_source = args.get("rules_source")
 
     failures = {}
     detectors_used = []
@@ -321,6 +354,28 @@ try:
         except Exception as exc:
             failures["gliner"] = f"{type(exc).__name__}: {exc}"
             gliner_model = None
+
+    # ── Rules cascade ─────────────────────────────────────────────
+    # ``rules.py``'s source travels in the request (see the request-shape comment above
+    # this script) rather than being duplicated here; it is exec'd into a fresh module
+    # namespace so its functions can be called the same way an import would allow.
+    rules_module = None
+    rules_name_gazetteer = set()
+    rules_place_gazetteer = set()
+    rules_nlp = None
+    if "rules" in detectors_requested and rules_source:
+        try:
+            import types
+            rules_module = types.ModuleType("_pii_rules_cascade")
+            exec(compile(rules_source, "<pii_rules_cascade>", "exec"), rules_module.__dict__)
+            rules_name_gazetteer = rules_module.load_name_gazetteer()
+            rules_place_gazetteer = rules_module.load_place_gazetteer()
+            import spacy
+            rules_nlp = spacy.load("en_core_web_lg")
+            detectors_used.append("rules")
+        except Exception as exc:
+            failures["rules"] = f"{type(exc).__name__}: {exc}"
+            rules_module = None
 
     def _normalize_category(label):
         return gliner_label_map.get(label, label.upper())
@@ -371,6 +426,51 @@ try:
             })
         return out
 
+    def _rules_scan(text):
+        if rules_module is None:
+            return []
+        raw = []
+        raw.extend(rules_module.gazetteer_scan(text, rules_name_gazetteer, rules_place_gazetteer))
+        raw.extend(rules_module.regex_scan(text))
+        if rules_nlp is not None:
+            raw.extend(rules_module.ner_scan(rules_nlp, text, rules_place_gazetteer))
+        raw.extend(rules_module.honorific_scan(text))
+        raw.extend(rules_module.profession_scan(text))
+        raw.extend(rules_module.rareword_scan(text, rules_module.RARE_WORD_ZIPF_THRESHOLD))
+        raw.extend(rules_module.rare_role_scan(text))
+        raw.extend(rules_module.demographic_scan(text))
+        raw.extend(rules_module.age_scan(text))
+        # Combinatorial risk (Stage 3) only ever looks at the weak/misc categories collected
+        # above -- strong/contextual hits are already identifying on their own.
+        weak_and_misc = [e for e in raw if e["category"] in (rules_module.WEAK_RIGID | rules_module.MISC)]
+        raw.extend(rules_module.combinatorial_scan(
+            text,
+            weak_and_misc,
+            rules_module.COMBINATORIAL_WINDOW_TOKENS,
+            rules_module.COMBINATORIAL_THRESHOLD,
+        ))
+        filtered = rules_module.postprocess_entities(raw, text, precision_mode=True)
+        merged_clusters = rules_module.merge_pii(filtered, text)
+        out = []
+        for cluster in merged_clusters:
+            # Only "review_worthy" clusters are reported -- this is the same precision gate
+            # PR #542 used to decide what reaches a human reviewer at all; a lone weak signal
+            # (an age, a bare profession word, an uncorroborated common-word name) is recorded
+            # internally by merge_pii but was never meant to read as a confirmed PII span.
+            if not cluster.get("review_worthy"):
+                continue
+            canonical_labels = cluster.get("canonical_labels") or []
+            category = canonical_labels[0] if canonical_labels else "MISC"
+            engines = cluster.get("engines") or []
+            method = "+".join(engines) if engines else "rules"
+            out.append({
+                "text": cluster["text"],
+                "category": category,
+                "source": f"rules/{method}",
+                "score": float(cluster["score"]),
+            })
+        return out
+
     spans_by_asr = {}
     for asr_model, full_text in transcripts.items():
         if not isinstance(full_text, str) or not full_text.strip():
@@ -379,6 +479,7 @@ try:
         merged = []
         merged.extend(_presidio_scan(full_text))
         merged.extend(_gliner_scan(full_text))
+        merged.extend(_rules_scan(full_text))
         spans_by_asr[asr_model] = merged
 
     print(json.dumps({
@@ -408,13 +509,14 @@ def detect_pii_via_subprocess(
     gliner_threshold: float = 0.5,
     timeout: int = 600,
 ) -> dict[str, Any]:
-    """Run Presidio + GLiNER PII detection on per-ASR-model transcripts.
+    """Run Presidio + GLiNER + rules-cascade PII detection on per-ASR-model transcripts.
 
     The call is hermetic: ``ensure_venv`` builds (or reuses) the
     ``pii-detection`` venv at first call, then spawns a fresh worker
     process for each invocation that loads the requested detector(s),
     scans every transcript, and exits. Cold-start cost is dominated by
-    the model loads — ~5 s for Presidio + spaCy, ~5 s for GLiNER; the
+    the model loads — ~5 s for Presidio + spaCy, ~5 s for GLiNER, and a
+    second spaCy load for the rules cascade's own NER stage; the
     ``detectors`` parameter lets callers skip whichever they don't need.
 
     Args:
@@ -422,10 +524,10 @@ def detect_pii_via_subprocess(
             One entry per ASR backend whose output should be scanned.
             Empty / whitespace-only values are returned with an empty
             spans list and never reach the detectors.
-        detectors: Which detectors to run. ``None`` (default) runs both
-            ``"presidio"`` and ``"gliner"``. Passing a single-element
-            list like ``["presidio"]`` skips the GLiNER load entirely;
-            ``["gliner"]`` skips Presidio. An empty list short-circuits
+        detectors: Which detectors to run. ``None`` (default) runs all of
+            ``"presidio"``, ``"gliner"``, and ``"rules"``. Passing a
+            subset (e.g. ``["presidio"]``) skips loading whichever
+            detector(s) are omitted. An empty list short-circuits
             without invoking the subprocess at all (mirrors the
             "PII detection disabled" case). Unknown detector names raise
             ``ValueError`` immediately.
@@ -457,9 +559,9 @@ def detect_pii_via_subprocess(
 
         - ``"spans_by_asr"`` — ``{asr_model: [{text, category, source, score}, ...]}``.
           Spans from each requested detector are concatenated per ASR
-          model; the ``source`` field distinguishes ``"presidio"`` from
-          ``"gliner/<original_label>"`` so callers can audit which
-          detector produced what.
+          model; the ``source`` field distinguishes ``"presidio"``,
+          ``"gliner/<original_label>"``, and ``"rules/<method>"`` so
+          callers can audit which detector produced what.
         - ``"failures"`` — ``{detector_name: error_message}``. Empty when
           every requested detector loaded cleanly. A populated entry
           means that detector silently sat out for this call but any
@@ -525,6 +627,14 @@ def detect_pii_via_subprocess(
         # actually requested (presidio uses spaCy, not the HF Hub).
         env = hf_subprocess_env(str(gliner_model), gliner_revision, base_env=env)
 
+    # rules.py's own source travels with the request rather than being duplicated as a
+    # second string literal inside _PII_WORKER_SCRIPT -- two ~400-line copies of the same
+    # cascade would drift the moment either one is edited. Only read/sent when actually
+    # requested, so callers who exclude "rules" never pay for the file read.
+    rules_source: Optional[str] = None
+    if "rules" in detectors_resolved:
+        rules_source = files("senselab.text.tasks.pii_detection").joinpath("rules.py").read_text(encoding="utf-8")
+
     input_json = json.dumps(
         {
             "transcripts": transcripts_by_asr,
@@ -536,6 +646,7 @@ def detect_pii_via_subprocess(
             "gliner_labels": labels,
             "gliner_threshold": float(gliner_threshold),
             "gliner_label_map": _GLINER_TO_PRESIDIO_CATEGORY,
+            "rules_source": rules_source,
         }
     )
 

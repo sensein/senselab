@@ -28,6 +28,7 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
     _PRESIDIO_PII_ENTITIES,
     DETECTOR_GLINER,
     DETECTOR_PRESIDIO,
+    DETECTOR_RULES,
     detect_pii_via_subprocess,
 )
 
@@ -86,17 +87,17 @@ class _SubprocessRecorder:
 # ── Default-detectors behavior ──────────────────────────────────────
 
 
-def test_default_runs_both_presidio_and_gliner(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without an explicit ``detectors`` argument both detectors are requested."""
+def test_default_runs_presidio_gliner_and_rules(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without an explicit ``detectors`` argument all three detectors are requested."""
     recorder = _SubprocessRecorder(
-        {"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio", "gliner"]}
+        {"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio", "gliner", "rules"]}
     )
     monkeypatch.setattr(subprocess, "run", recorder)
 
     detect_pii_via_subprocess({"whisper": "Sample transcript."})
 
     sent = recorder.calls[0]["input"]
-    assert set(sent["detectors"]) == {DETECTOR_PRESIDIO, DETECTOR_GLINER}
+    assert set(sent["detectors"]) == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES}
 
 
 def test_explicit_presidio_only_skips_gliner(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,4 +256,4 @@ def test_known_detectors_constant_matches_aliases() -> None:
     """The frozenset and the alias constants must agree — guards against drift."""
     from senselab.text.tasks.pii_detection.subprocess_backend import _KNOWN_DETECTORS
 
-    assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER}
+    assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES}
