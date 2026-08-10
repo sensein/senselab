@@ -95,6 +95,7 @@ def test_empty_input_returns_empty_without_spawning(monkeypatch: pytest.MonkeyPa
     this project's rule against unmocked HFModel construction in tests.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
 
 
@@ -113,6 +114,7 @@ def test_checkpoint_download_routes_through_resolve_model(
     also mocked to fail the test if it is reached at all.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
 
     calls = []
 
@@ -151,6 +153,7 @@ def test_checkpoint_override_skips_the_hub_entirely(
     real subprocess venv or touching the network.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
 
     def fail_resolve_model(*args: object, **kwargs: object) -> None:

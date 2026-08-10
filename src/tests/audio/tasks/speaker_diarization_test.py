@@ -152,6 +152,7 @@ def test_model_for_task_resolves_new_diarizers_to_hfmodel(model_id: str, monkeyp
     # snapshot_download, not a HEAD request, and would pull multi-GB weights on every
     # cold CI run for a test that only asserts a routing decision.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     assert isinstance(model_for_task(model_id, task="diarization"), HFModel)
 
 
@@ -165,6 +166,7 @@ def test_vibevoice_prefix_does_not_capture_the_tts_checkpoints(monkeypatch: pyte
     # constructing one for this (deliberately non-matching) id would otherwise
     # trigger a real snapshot_download of the 4.4 GB VibeVoice-1.5B checkpoint.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     assert isinstance(
         model_for_task("microsoft/VibeVoice-1.5B", task="diarization"),
         PyannoteAudioModel,
@@ -230,6 +232,7 @@ def test_diarize_audios_dispatches_to_the_right_backend(
     # Avoid Hub validation when constructing the HFModel (see rationale on the
     # model_for_task tests above).
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
 
     mocks = {name: Mock(return_value=[[]]) for name in _ALL_BACKEND_ATTRS}
     for name, mock in mocks.items():
@@ -266,6 +269,7 @@ def test_diarize_audios_dispatches_to_vibevoice(monkeypatch: pytest.MonkeyPatch)
     # test must be safe to run alone (-k, --lf, xdist, a future pytest-randomly), not just
     # in file-definition order behind test_model_for_task_resolves_new_diarizers_to_hfmodel.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
     result = diarize_audios(audios=[], model=model)
 
@@ -281,6 +285,7 @@ def test_diarize_audios_dispatches_to_child_adult(monkeypatch: pytest.MonkeyPatc
 
     # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
     result = diarize_audios(audios=[], model=model)
 
@@ -296,6 +301,7 @@ def test_diarize_audios_dispatches_to_moss(monkeypatch: pytest.MonkeyPatch) -> N
 
     # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")
     result = diarize_audios(audios=[], model=model)
 
@@ -311,6 +317,7 @@ def test_diarize_audios_dispatches_to_diarizen(monkeypatch: pytest.MonkeyPatch) 
 
     # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="BUT-FIT/diarizen-wavlm-large-s80-md")
     result = diarize_audios(audios=[], model=model)
 
@@ -355,6 +362,7 @@ def test_diarize_audios_with_vibevoice_raises_when_all_segments_unparsable(
 
     # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
     with pytest.raises(RuntimeError, match="failed to parse output for all"):
         diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
@@ -400,6 +408,7 @@ def test_diarize_audios_with_vibevoice_raises_on_all_batch_schema_mismatch(
 
     # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
     with pytest.raises(RuntimeError, match="failed to parse output for all"):
         diarize_audios_with_vibevoice(audios=[resampled_mono_audio_sample], model=model)
@@ -452,6 +461,7 @@ def test_diarize_audios_with_vibevoice_missing_speaker_does_not_become_phantom_l
 
     # Mock Hub validation independently — see rationale on the VibeVoice dispatch test above.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="microsoft/VibeVoice-ASR-HF")
 
     with caplog.at_level(logging.WARNING):
@@ -542,6 +552,7 @@ def test_diarize_audios_with_child_adult_requires_cuda(monkeypatch: pytest.Monke
     # so it always executes; without this it would only be safe by accident of
     # HFModel._hf_cache already holding this repo from an earlier test in the same session.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     model: HFModel = HFModel(path_or_uri="AlexXu811/whisper-child-adult")
     with pytest.raises(RuntimeError, match="requires CUDA"):
         diarize_audios_with_child_adult(audios=[], model=model, device=DeviceType.CPU)
@@ -563,6 +574,7 @@ def test_diarize_audios_with_child_adult_rejects_short_clips(
     from senselab.audio.tasks.speaker_diarization.child_adult import diarize_audios_with_child_adult
 
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(
         child_adult_module, "_select_device_and_dtype", lambda **kwargs: (DeviceType.CUDA, torch.float32)
     )

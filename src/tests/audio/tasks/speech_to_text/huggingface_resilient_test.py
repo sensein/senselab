@@ -11,6 +11,7 @@ def test_asr_pipeline_loads_via_load_hf_resilient(monkeypatch: pytest.MonkeyPatc
 
     # Avoid Hub validation when constructing the HFModel.
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
 
     captured: dict = {}
 
@@ -37,6 +38,11 @@ def test_asr_pipeline_loads_via_load_hf_resilient(monkeypatch: pytest.MonkeyPatc
     assert pipe == "PIPE"
     assert captured["loader"] is hf_asr.pipeline
     assert captured["repo_id"] == "openai/whisper-small"
+    # This is the *requested* ref reaching load_hf_resilient's own revision= parameter --
+    # still correct under run-scoped pinning, since resolving that ref to a SHA is
+    # load_hf_resilient's job (via resolve_model), not _get_hf_asr_pipeline's. The
+    # assertion below is what actually guards against a mutable ref reaching the real
+    # pipeline() loader.
     assert captured["revision"] == "main"
     # The mutable revision must NOT go straight to pipeline(); load_hf_resilient injects the resolved SHA.
     assert "revision" not in captured["kwargs"]
