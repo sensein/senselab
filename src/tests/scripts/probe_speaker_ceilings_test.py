@@ -222,9 +222,18 @@ def test_generate_mode_shard_k_writes_only_that_ks_manifest_fragment(
     assert not (corpus_dir / "k=3").exists()
 
 
-def test_generate_mode_uses_slurm_array_task_id_when_shard_k_is_absent(
+def test_generate_mode_ignores_slurm_array_task_id_and_covers_every_count(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Without an explicit --shard-k, generate covers every count -- the env var is not consulted.
+
+    This test previously asserted the opposite: that SLURM_ARRAY_TASK_ID=3 alone would shard to
+    k=3. That contract was the bug. It is convenient only while every array shards by k, and
+    evaluate.sbatch shards by backend, so on the real sweep the implicit read turned its
+    --array=0-5 into k values -- task 0 died, tasks 1-5 evaluated (backend_i, k=i), and k=6,7,8
+    were never touched while Slurm reported COMPLETED. Rewritten rather than deleted so the
+    change of contract is visible to anyone who goes looking for why.
+    """
     monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "3")
     _install_real_fake_generate_corpus(monkeypatch)
     corpus_dir = tmp_path / "corpus"
@@ -234,7 +243,10 @@ def test_generate_mode_uses_slurm_array_task_id_when_shard_k_is_absent(
     )
 
     assert rc == 0
-    assert (corpus_dir / "manifest.k3.json").exists()
+    assert not (corpus_dir / "manifest.k3.json").exists(), (
+        "SLURM_ARRAY_TASK_ID was consulted; a backend-sharded array would silently shard by k again"
+    )
+    assert (corpus_dir / "manifest.json").exists(), "unsharded generate should write the whole-corpus manifest"
 
 
 def test_generate_mode_shard_k_outside_counts_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -815,3 +827,24 @@ def test_a_wrong_count_and_a_refusal_land_in_different_confusion_buckets(
     assert block["confusion"]["1"] == {"1": 1, "2": 1, "refused": 1}
     assert block["refusal_reasons"]["1"] == {"ValueError": 1}
     assert block["accuracy_curve"]["1"] == pytest.approx(1 / 3)
+
+
+def test_slurm_array_task_id_does_not_secretly_become_a_shard_k(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shard axis is explicit; the environment must never reinterpret an array index.
+
+    An earlier version fell back to SLURM_ARRAY_TASK_ID when --shard-k was absent, which is
+    convenient only while every array shards by k. evaluate.sbatch shards by *backend*
+    (--array=0-5), so on the real sweep that read turned backend indices into k values: task 0
+    resolved to --shard-k 0 and died, and tasks 1-5 silently evaluated (backend_i, k=i) -- a
+    diagonal, not a sweep -- skipping k=6,7,8 while reporting COMPLETED. A wrong-but-successful
+    run is the worst outcome available, so this pins the fallback as gone.
+    """
+    monkeypatch.setenv("SLURM_ARRAY_TASK_ID", "3")
+    assert cli._resolve_shard_k(None, [1, 2, 3, 4, 5, 6, 7, 8]) is None, (
+        "SLURM_ARRAY_TASK_ID leaked back into shard resolution; a backend-sharded array would "
+        "silently evaluate a diagonal again"
+    )
+    # An explicit value still works, and is still validated against --counts.
+    assert cli._resolve_shard_k(3, [1, 2, 3]) == 3
+    with pytest.raises(ValueError):
+        cli._resolve_shard_k(0, [1, 2, 3])
