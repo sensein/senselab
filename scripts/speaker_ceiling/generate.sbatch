@@ -112,7 +112,11 @@ uv run --no-sync python scripts/probe_speaker_ceilings.py --mode generate \
     --sessions "$SESSIONS_PER_COUNT" \
     --seed "$SEED" \
     --corpus "$CORPUS_DIR" \
-    --device cuda
-# --shard-k is intentionally omitted: probe_speaker_ceilings.py falls back to
-# SLURM_ARRAY_TASK_ID when it is unset, and --array=1-8 above makes that value exactly the k
-# this task should generate.
+    --device cuda \
+    --shard-k "$SLURM_ARRAY_TASK_ID"
+# --shard-k is passed explicitly. An earlier version omitted it and relied on the CLI reading
+# SLURM_ARRAY_TASK_ID itself, which works only while every array is sharded by k --
+# evaluate.sbatch shards by backend, so on the real sweep that implicit read turned its
+# --array=0-5 into k values: task 0 died and tasks 1-5 silently evaluated (backend_i, k=i),
+# skipping k=6,7,8 and reporting COMPLETED. The CLI no longer reads the variable; each array
+# states its own axis.

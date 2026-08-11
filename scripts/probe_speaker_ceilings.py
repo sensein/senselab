@@ -216,24 +216,24 @@ def build_profile(
 def _resolve_shard_k(explicit: Optional[int], counts: Sequence[int]) -> Optional[int]:
     """Return the single k this process should handle, or None to cover every requested k.
 
-    ``--shard-k`` takes priority when given explicitly, so sharding stays directly testable
-    and runnable by hand rather than only reachable from inside a real array job. Falling
-    back to ``SLURM_ARRAY_TASK_ID`` lets ``--array=1-8`` map each task id directly onto the
-    k it should process -- with no separate index-to-k lookup table to keep in sync with
-    ``--counts``. Used by both ``--mode generate`` (which k to generate) and
-    ``--mode evaluate`` (which k to evaluate) -- never by ``--mode aggregate``, which always
-    covers every requested k at once.
+    **Explicit only. ``SLURM_ARRAY_TASK_ID`` is deliberately NOT consulted**, and that is a
+    correction rather than an omission. An earlier version fell back to it so ``--array=1-8``
+    could map task ids straight onto k values, which is convenient exactly as long as every
+    array is sharded by k. ``evaluate.sbatch`` is sharded by *backend* (``--array=0-5``), so on
+    the real sweep task 0 resolved to ``--shard-k 0`` and died, while tasks 1-5 silently
+    evaluated ``(backend_i, k=i)`` -- a diagonal, not a sweep -- skipping k=6,7,8 entirely and
+    reporting COMPLETED. An implicit environment read that changes what an array index *means*
+    is not worth the lookup table it saves, so callers now pass ``--shard-k`` themselves.
+
+    Used by ``--mode generate`` (which k to generate) and ``--mode evaluate`` (which k to
+    evaluate); never by ``--mode aggregate``, which always covers every requested k at once.
 
     Raises:
         ValueError: if the resolved shard k is not among the requested ``counts``.
     """
-    if explicit is not None:
-        shard_k = explicit
-    else:
-        env_value = os.environ.get("SLURM_ARRAY_TASK_ID")
-        if env_value is None:
-            return None
-        shard_k = int(env_value)
+    if explicit is None:
+        return None
+    shard_k = explicit
     if shard_k not in counts:
         raise ValueError(f"--shard-k {shard_k} is not among the requested --counts {list(counts)}")
     return shard_k
