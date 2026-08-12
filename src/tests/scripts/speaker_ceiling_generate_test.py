@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import List, Optional, Sequence, Union
 
@@ -47,11 +48,22 @@ def _fake_synthesize_texts_with_qwen(
     same duration -- which is exactly what the reproducibility guarantee needs: two runs
     with the same seed must plan the same texts, and this stub then must turn identical
     texts into identical durations.
+
+    Renders at exactly ``ASSUMED_WORDS_PER_SECOND``, not an arbitrary rate: `_plan_session`'s
+    ``MIN_SPEAKER_SPEECH_SECONDS`` floor is a *planned*-word estimate built on that constant
+    (see the module docstring), and `generate_corpus` re-verifies it against each session's
+    *real* synthesized duration. A stub rendering faster than that assumption (an earlier
+    version of this stub used 5 words/s against the planner's 2.5) would make every test in
+    this file trip that re-verification, since a planned floor built on a slower assumed rate
+    is not guaranteed to survive being rendered at a faster real one -- exactly the gap the
+    module docstring calls a probabilistic, not deterministic, guarantee. Matching the rate
+    here keeps that real-hardware question out of tests that are not about it.
     """
     sample_rate = 24000
     audios = []
     for text in texts:
-        n_samples = max(1, len(text.split())) * int(0.2 * sample_rate)
+        words = max(1, len(text.split()))
+        n_samples = max(1, int(round(words / _generate.ASSUMED_WORDS_PER_SECOND * sample_rate)))
         waveform = torch.zeros((1, n_samples), dtype=torch.float32)
         audios.append(Audio(waveform=waveform, sampling_rate=sample_rate))
     return audios
@@ -177,6 +189,8 @@ def test_manifest_records_method_model_and_session_params(tmp_path: Path) -> Non
     params = manifest["session_params"]
     assert params["turn_prob"] == _generate.TURN_PROB
     assert params["dominance_var"] == _generate.DOMINANCE_VAR
+    assert params["overlap_trigger_prob"] == _generate.OVERLAP_TRIGGER_PROB
+    assert params["min_speaker_speech_seconds"] == _generate.MIN_SPEAKER_SPEECH_SECONDS
     assert params["enforce_num_speakers"] is True
     assert "judgement" in params["params_source"]
 
@@ -388,4 +402,77 @@ def test_synthesis_is_chunked_so_peak_memory_does_not_scale_with_sessions(
     assert max(seen_batch_sizes) <= _generate._SYNTH_BATCH_SIZE, (
         f"a synthesis call carried {max(seen_batch_sizes)} texts, above the "
         f"{_generate._SYNTH_BATCH_SIZE} ceiling that keeps peak memory bounded"
+    )
+
+
+def test_per_speaker_speech_floor_holds_in_the_written_rttm_at_k8(tmp_path: Path) -> None:
+    """At k=8, every speaker's total speech in the written RTTM clears MIN_SPEAKER_SPEECH_SECONDS.
+
+    Before this fix, `_plan_session` stopped once a *total* word budget was reached, with no
+    per-speaker floor at all: at k=8 on the real sweep, MIN_DOMINANCE's tail left the quietest
+    speaker with ~1.4s of total speech in a ~50s session (job 20125423's corpus statistics) --
+    far below what an embedding-based speaker model needs, so every k>=5 accuracy this probe
+    measured was measuring the task's impossibility rather than a diarizer's competence. This
+    would fail against that code (no floor enforced at all).
+
+    Uses the module's default (autouse) synthesis stub, which renders at exactly
+    ASSUMED_WORDS_PER_SECOND -- see that stub's docstring for why the rate matters here: a
+    planned floor built on an assumed rate is not guaranteed to survive being rendered at a
+    different real one, and this test is about the planning-and-verification logic, not about
+    whether Qwen3-TTS's real speaking rate happens to match the assumption.
+    """
+    out_dir = _generate.generate_corpus(out_dir=tmp_path / "corpus", counts=[8], sessions_per_count=3, seed=123)
+    for i in range(3):
+        rttm_path = out_dir / "k=8" / f"session_{i}.rttm"
+        speech_seconds: dict = defaultdict(float)
+        for line in rttm_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            fields = line.split()
+            speech_seconds[fields[7]] += float(fields[4])
+
+        assert len(speech_seconds) == 8, f"session_{i}: expected 8 distinct speakers, found {len(speech_seconds)}"
+        for speaker, secs in speech_seconds.items():
+            assert secs >= _generate.MIN_SPEAKER_SPEECH_SECONDS, (
+                f"session_{i} speaker {speaker!r}: {secs:.2f}s of total speech, below the "
+                f"{_generate.MIN_SPEAKER_SPEECH_SECONDS}s floor"
+            )
+
+
+def test_realized_overlap_is_near_its_target() -> None:
+    """The realized overlapped-time proportion lands near MEAN_OVERLAP's 10% target.
+
+    Before this fix, MEAN_OVERLAP doubled as both `_lay_out_session`'s Bernoulli-fire
+    probability *and* the target proportion of overlapped time -- their product, not
+    either alone, is what determines the realized proportion, and the old (0.10 fire,
+    ~0.225 mean fraction) combination realizes to ~0.0225 of speech time, matching the
+    1.2-2.9% measured on the full sweep's RTTMs (a 4-8x undershoot from the stated 10%
+    target). This drives the real `_plan_session` / `_lay_out_session` pair through many
+    simulated sessions and checks the realized figure computed from the placed turns'
+    start/end times, not from the constants' stated intent, so a future change to either
+    OVERLAP_TRIGGER_PROB or OVERLAP_FRACTION_RANGE that drifts the realized proportion away
+    from target is caught here rather than trusted.
+
+    Overlapped seconds are measured between consecutive turns only (`_lay_out_session` only
+    ever shifts a new turn into the immediately preceding one's tail), matching how the
+    corpus's own overlap statistic came out nonzero even at k=1: a single speaker's own
+    successive turns can still overlap under this placement model.
+    """
+    rng = np.random.default_rng(2024)
+    total_speech = 0.0
+    total_overlap = 0.0
+
+    for _ in range(200):
+        plan = _generate._plan_session(rng, num_speakers=4)
+        durations = [max(1, len(text.split())) / _generate.ASSUMED_WORDS_PER_SECOND for _, text in plan]
+        turns = _generate._lay_out_session(plan, durations, rng)
+
+        total_speech += sum(turn.end - turn.start for turn in turns)
+        total_overlap += sum(max(0.0, turns[j - 1].end - turns[j].start) for j in range(1, len(turns)))
+
+    realized_proportion = total_overlap / total_speech
+    assert realized_proportion == pytest.approx(_generate.MEAN_OVERLAP, rel=0.35), (
+        f"realized overlap proportion {realized_proportion:.4f} is not near the "
+        f"MEAN_OVERLAP={_generate.MEAN_OVERLAP} target it is meant to hit -- the old constants "
+        "realized to roughly a fifth of this target"
     )

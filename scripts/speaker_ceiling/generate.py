@@ -70,10 +70,37 @@ What is *not* borrowed, because NeMo splices real audio at the sample level with
 crossfades and this module places whole synthesized utterances instead: NeMo's exact
 per-segment silence/overlap sampling (``per_silence_var``, gamma-jittered, independently
 clipped) is replaced with a simpler proportional model in :func:`_lay_out_session` — a
-Bernoulli draw against ``MEAN_OVERLAP`` per turn boundary, then either an overlap fraction
-of the previous utterance's real duration or a silence gap proportional to it. This is a
-simplification, not a re-implementation, and is named as one rather than presented as
+Bernoulli draw against ``OVERLAP_TRIGGER_PROB`` per turn boundary, then either an overlap
+fraction of the previous utterance's real duration or a silence gap proportional to it. This
+is a simplification, not a re-implementation, and is named as one rather than presented as
 faithful to NeMo's algorithm.
+
+Making the overlap model hit its target, not merely name it
+-----------------------------------------------------------------
+The corpus statistics above also showed realized overlap at 1.2-2.9% of speech time against
+``MEAN_OVERLAP``'s documented target of 10% — a 4-8x undershoot, because the boundary's
+Bernoulli-fire probability was, before this fix, the *same* constant as the target overlap
+*proportion* (``MEAN_OVERLAP`` doing double duty as both "how often a boundary overlaps" and
+"what fraction of time is overlapped"), which are different quantities whose product, not
+either alone, determines the realized proportion. With the old ``MEAN_OVERLAP`` = 0.10 firing
+probability and ``OVERLAP_FRACTION_RANGE``'s old mean of 0.225, the realized proportion was
+their product, ≈ 0.0225 — matching the measured undershoot almost exactly.
+
+**Chosen fix: make the model hit its target, rather than redocument ``MEAN_OVERLAP`` to mean
+"boundary-fire probability".** Redefining it would have kept the corpus's overlap load at a fifth
+of NeMo's documented value with no measured justification for why a fifth is the right amount;
+hitting the stated target keeps the borrowed constant meaning what NeMo's own default says it
+means. ``OVERLAP_TRIGGER_PROB`` (0.30, ours, not NeMo's — the *structural* frequency of
+overlapping boundaries, kept below 1.0 so most boundaries still get a silence gap rather than
+every turn overlapping) and the widened ``OVERLAP_FRACTION_RANGE`` (0.15, 0.55) were chosen by
+Monte Carlo search over :func:`_lay_out_session` itself (not solved in closed form, since real
+overlap depends on the true pairwise-interval overlap, not the boundary-shift approximation):
+``OVERLAP_TRIGGER_PROB`` × ``mean(OVERLAP_FRACTION_RANGE)`` = 0.30 × 0.35 = 0.105, and simulating
+200 sessions at *k* = 4 with this module's own sentence-length distribution measured a realized
+proportion of 0.103 — within noise of the 0.10 target.
+:func:`test_realized_overlap_is_near_its_target` (Task's Defect 2 test) checks the realized
+figure directly against the written turns, not the intent, so a future change to either constant
+that drifts the realized proportion away from target is caught here rather than trusted.
 
 ``SESSION_LENGTH_SECONDS`` (45.0) and ``ASSUMED_WORDS_PER_SECOND`` (2.5) are **this
 module's own judgement**, not measured and not NeMo's — NeMo's own default
@@ -84,6 +111,46 @@ Critically, this budget only decides *how many turns get planned* — every turn
 placed duration always comes from the real synthesized waveform, never from this estimate,
 so an inaccurate words-per-second assumption cannot corrupt the ground truth it under- or
 over-shoots.
+
+The floor that keeps a quiet speaker detectable: ``MIN_SPEAKER_SPEECH_SECONDS``
+---------------------------------------------------------------------------------
+Corpus statistics computed from the RTTMs of the first full sweep (job 20125423, *k* = 1..8,
+20 sessions each) showed why the accuracy curve collapsed at high *k*: the 45 s budget above
+is a *total* across every speaker, and ``MIN_DOMINANCE`` only floors each speaker's *share* of
+it. At *k* = 8, min-dominance ranged 0.03..0.30 and speech_s averaged ~45.9 s, so the quietest
+speaker in the average session got **~1.4 s of total speech** (*k* = 7 ≈ 1.3 s, *k* = 6 ≈ 1.8 s,
+*k* = 5 ≈ 3.0 s) — well under what speaker-embedding models need to form a usable embedding, so
+the near-zero accuracies measured at *k* ≥ 5 were measuring the task's impossibility, not the
+diarizers.
+
+``MIN_SPEAKER_SPEECH_SECONDS`` (8.0 s) is this module's judgement of "several seconds", the
+rough floor the speaker-embedding literature (x-vector/ECAPA-TDNN-style encoders) treats as
+needed for a stable embedding — not measured against any specific senselab backend, the same
+epistemic status as ``SESSION_LENGTH_SECONDS`` above. :func:`_plan_session` now keeps drawing
+turns from the *same* dominance-weighted process past the ``SESSION_LENGTH_SECONDS`` budget
+until every speaker's planned time clears this floor, rather than stopping at a fixed total and
+hoping the dominance floor's tail happens to be enough — the fix NeMo's own 600 s default reaches
+by brute session length, this module reaches by extending only as far as the quietest speaker
+in *this* draw requires. Because the *same* dominance shares keep driving speaker selection,
+letting the quietest speaker (share as low as ``MIN_DOMINANCE`` = 0.05) reach 8 s of *planned*
+speech drives the *total* planned length to roughly ``8 / 0.05`` ≈ 160 s in the guaranteed-floor
+case, and higher still against a realized-share tail as thin as the 0.03 measured above (≈ 267 s)
+— consistent with the "~250-300 s at *k* = 8" this module now costs explicitly rather than
+absorbing silently. That is roughly **6x** the previous ~46 s of GPU-billed speech per session at
+*k* = 8; *k* = 1 is unaffected (a single speaker already owns 100% of the existing budget, well
+above the floor). ``manifest.json``'s ``session_params`` records ``min_speaker_speech_seconds``
+beside every other judgement call so the next person sees this trade before rerunning the sweep,
+not after.
+
+This is a probabilistic guarantee, not a deterministic one like ``enforce_num_speakers``
+below — the turn-taking model keeps sampling from the real dominance distribution rather than
+force-assigning turns to whichever speaker is still short, since force-assigning would silently
+change the *session model* being probed rather than merely extending it. :func:`_plan_session`
+raises if ``_MAX_TURNS_PER_SESSION`` binds before every floor clears, precisely so a session that
+failed to converge is a loud failure, not a silently-short one. And because a *planned* floor is
+built from ``ASSUMED_WORDS_PER_SECOND``, not the real synthesized duration, :func:`generate_corpus`
+re-checks the floor against the RTTM it just wrote — exactly as it already does for
+``enforce_num_speakers`` — and raises if the realized speech still falls short.
 
 ``enforce_num_speakers`` is not a tunable knob here: it is always true, by construction,
 not by NeMo's probabilistic late-session enforcement window (``speaker_enforcement``,
@@ -161,17 +228,42 @@ MEAN_SILENCE_VAR = 0.01
 SESSION_LENGTH_SECONDS = 45.0
 ASSUMED_WORDS_PER_SECOND = 2.5
 
+# Ours, not NeMo's, and not measured against any specific senselab backend -- the "several
+# seconds" the speaker-embedding literature (x-vector/ECAPA-TDNN-style encoders) treats as
+# needed for a stable embedding. See the module docstring's "floor that keeps a quiet speaker
+# detectable" section: at k=8 the pre-fix corpus gave the quietest speaker ~1.4s of total
+# speech, well under this, which is why every k>=5 accuracy this probe measured before this
+# fix was measuring the task's impossibility rather than a diarizer's competence.
+MIN_SPEAKER_SPEECH_SECONDS = 8.0
+
 # The fraction of the *previous* utterance's real duration that an overlapping turn
-# starts inside, when the MEAN_OVERLAP draw fires. Ours -- NeMo instead samples an
+# starts inside, when the OVERLAP_TRIGGER_PROB draw fires. Ours -- NeMo instead samples an
 # absolute overlap duration per segment from a separately-parameterized gamma
 # distribution (`per_overlap_var`); a proportion of the real duration is simpler and
-# cannot exceed the utterance it overlaps into.
-OVERLAP_FRACTION_RANGE: Tuple[float, float] = (0.05, 0.4)
+# cannot exceed the utterance it overlaps into. Range widened from (0.05, 0.4) alongside
+# OVERLAP_TRIGGER_PROB below -- see the module docstring's "making the overlap model hit its
+# target" section for the Monte Carlo tuning behind both numbers together.
+OVERLAP_FRACTION_RANGE: Tuple[float, float] = (0.15, 0.55)
 
-# Safety valve, not a session-model parameter: stops `_plan_session` from looping forever
-# if a degenerate word-count draw kept the budget from ever being met. Never expected to
-# bind at SESSION_LENGTH_SECONDS=45 with SENTENCE_LENGTH_PARAMS' ~9.6-word mean utterance.
-_MAX_TURNS_PER_SESSION = 400
+# Ours, not NeMo's: the probability a given turn boundary is an overlapping one at all,
+# structurally distinct from MEAN_OVERLAP (NeMo's *target proportion* of overlapped time).
+# Before this fix, MEAN_OVERLAP itself served as this firing probability, conflating "how
+# often a boundary overlaps" with "what fraction of total time ends up overlapped" -- their
+# product is what determines the realized proportion, and the old (0.10 fire, mean 0.225
+# fraction) product of ~0.0225 is what the measured 1.2-2.9% realized overlap traces back to.
+# 0.30 paired with OVERLAP_FRACTION_RANGE's new (0.15, 0.55) was chosen by Monte Carlo search
+# to make MEAN_OVERLAP mean what it says: see the module docstring.
+OVERLAP_TRIGGER_PROB = 0.30
+
+# Safety valve, not a session-model parameter: stops `_plan_session` from looping forever if a
+# degenerate draw kept a budget from ever being met. Reaching MIN_SPEAKER_SPEECH_SECONDS for a
+# speaker at MIN_DOMINANCE's guaranteed floor (0.05) needs on the order of
+# 8s * ASSUMED_WORDS_PER_SECOND / 0.05 ~= 400 words ~= 45-50 turns in expectation (mean
+# utterance ~8.6 words at SENTENCE_LENGTH_PARAMS); a thinner realized tail (this module
+# measured shares as low as 0.03) or an unlucky draw run push that higher, so 2000 keeps
+# roughly 25-40x headroom over the expected case while still catching a genuine non-converging
+# bug rather than waiting the full ceiling out silently.
+_MAX_TURNS_PER_SESSION = 2000
 
 # A small bank of generic, punctuation-light filler sentences spanning a range of word
 # counts, so `_pick_sentence` has something to select from at whatever target length
@@ -308,17 +400,32 @@ def _plan_session(rng: np.random.Generator, num_speakers: int) -> List[Tuple[int
     probabilistic near-certainty -- there is no draw here that could produce a session
     missing a speaker for :func:`generate_corpus` to discover after the fact.
 
-    Continues past that guarantee with the probabilistic model until the planned word
-    count reaches ``SESSION_LENGTH_SECONDS * ASSUMED_WORDS_PER_SECOND``. That budget only
-    controls how many turns get planned; every placed duration later comes from the real
-    synthesized waveform, so an inaccurate words-per-second assumption cannot corrupt the
-    ground truth it targets too loosely.
+    Continues past that guarantee with the probabilistic model until *both* the total
+    planned word count reaches ``SESSION_LENGTH_SECONDS * ASSUMED_WORDS_PER_SECOND`` *and*
+    every individual speaker's own planned word count reaches
+    ``MIN_SPEAKER_SPEECH_SECONDS * ASSUMED_WORDS_PER_SECOND`` -- see the module docstring's
+    "floor that keeps a quiet speaker detectable" section for why the per-speaker floor
+    exists: at k>=5, a fixed total budget alone let ``MIN_DOMINANCE``'s tail leave the
+    quietest speaker with only a few seconds of speech, below what an embedding-based
+    speaker model needs. Both budgets are in *planned* words, not real seconds; every
+    placed duration later comes from the real synthesized waveform, so an inaccurate
+    words-per-second assumption cannot corrupt the ground truth it targets too loosely --
+    :func:`generate_corpus` re-checks the per-speaker floor against the written RTTM for
+    exactly this reason.
+
+    Raises:
+        RuntimeError: if ``_MAX_TURNS_PER_SESSION`` is reached before every speaker's
+            planned floor clears -- a non-convergence this far past the expected turn count
+            (see that constant's comment) signals a bug in the turn-taking model, not an
+            outcome worth silently accepting a short session for.
     """
     dominance_cdf = _dominance_cdf(rng, num_speakers)
     budget_words = SESSION_LENGTH_SECONDS * ASSUMED_WORDS_PER_SECOND
+    min_speaker_words = MIN_SPEAKER_SPEECH_SECONDS * ASSUMED_WORDS_PER_SECOND
 
     plan: List[Tuple[int, str]] = []
     total_words = 0.0
+    words_by_speaker = [0.0] * num_speakers
 
     order = rng.permutation(num_speakers)
     prev_speaker: Optional[int] = None
@@ -326,14 +433,29 @@ def _plan_session(rng: np.random.Generator, num_speakers: int) -> List[Tuple[int
         text, words = _next_utterance(rng)
         plan.append((int(speaker_idx), text))
         total_words += words
+        words_by_speaker[int(speaker_idx)] += words
         prev_speaker = int(speaker_idx)
 
-    while total_words < budget_words and len(plan) < _MAX_TURNS_PER_SESSION:
+    while (total_words < budget_words or min(words_by_speaker) < min_speaker_words) and len(
+        plan
+    ) < _MAX_TURNS_PER_SESSION:
         speaker_idx = _next_speaker(rng, num_speakers, prev_speaker, dominance_cdf)
         text, words = _next_utterance(rng)
         plan.append((speaker_idx, text))
         total_words += words
+        words_by_speaker[speaker_idx] += words
         prev_speaker = speaker_idx
+
+    if min(words_by_speaker) < min_speaker_words:
+        raise RuntimeError(
+            f"_plan_session for num_speakers={num_speakers} hit _MAX_TURNS_PER_SESSION="
+            f"{_MAX_TURNS_PER_SESSION} turns without every speaker's planned speech clearing "
+            f"the {MIN_SPEAKER_SPEECH_SECONDS}s floor ({min_speaker_words:.1f} words at "
+            f"ASSUMED_WORDS_PER_SECOND={ASSUMED_WORDS_PER_SECOND}); quietest speaker reached "
+            f"only {min(words_by_speaker):.1f} words. This is the safety valve documented on "
+            "_MAX_TURNS_PER_SESSION binding, not an expected outcome -- treat as a bug in the "
+            "turn-taking or dominance model, not a sampling outcome to retry past."
+        )
 
     return plan
 
@@ -346,8 +468,8 @@ def _lay_out_session(
     """Place planned turns on a timeline using each turn's *real* synthesized duration.
 
     Simplified relative to NeMo's per-segment silence/overlap sampling (see the module
-    docstring): each turn boundary is a Bernoulli draw against ``MEAN_OVERLAP``. On a hit,
-    the new turn starts inside the tail of the previous one, by a fraction of the
+    docstring): each turn boundary is a Bernoulli draw against ``OVERLAP_TRIGGER_PROB``. On a
+    hit, the new turn starts inside the tail of the previous one, by a fraction of the
     previous turn's real duration drawn from ``OVERLAP_FRACTION_RANGE`` -- so an overlap
     can never exceed the utterance it overlaps into. Otherwise a silence gap proportional
     to the previous duration is inserted, sized around ``MEAN_SILENCE``.
@@ -359,7 +481,7 @@ def _lay_out_session(
     for (speaker_idx, text), duration in zip(plan, durations):
         if not turns:
             start = 0.0
-        elif rng.random() < MEAN_OVERLAP:
+        elif rng.random() < OVERLAP_TRIGGER_PROB:
             overlap_fraction = rng.uniform(*OVERLAP_FRACTION_RANGE)
             start = max(0.0, cursor - overlap_fraction * prev_duration)
         else:
@@ -568,7 +690,11 @@ def generate_corpus(
         RuntimeError: if a session's written RTTM does not contain exactly ``k`` distinct
             speakers -- ``enforce_num_speakers`` is guaranteed by construction (see
             :func:`_plan_session`), so this signals a bug in this module, not a rare
-            sampling outcome to retry past.
+            sampling outcome to retry past. Also raised if any speaker's total speech in
+            the written RTTM falls short of ``MIN_SPEAKER_SPEECH_SECONDS`` -- unlike
+            ``enforce_num_speakers`` this floor is only a planned-word estimate until
+            synthesis runs, so this check catches ``ASSUMED_WORDS_PER_SECOND`` missing its
+            target on real audio rather than a bug in this module.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -606,9 +732,7 @@ def generate_corpus(
             wav_path = k_dir / f"session_{i}.wav"
             rttm_path = k_dir / f"session_{i}.rttm"
             if _session_is_complete(wav_path, rttm_path):
-                records_by_index[i] = _reconstruct_session_record(
-                    out_dir, k, i, seed, wav_path, rttm_path, voice_pool
-                )
+                records_by_index[i] = _reconstruct_session_record(out_dir, k, i, seed, wav_path, rttm_path, voice_pool)
             else:
                 todo_indices.append(i)
 
@@ -707,13 +831,39 @@ def generate_corpus(
                 # guarantee that matters is what a later reader (the evaluation script) sees
                 # on disk, and _plan_session's guarantee-by-construction is exactly the thing
                 # under test here, not assumed.
-                written_speakers = {line.split()[7] for line in rttm_path.read_text().splitlines() if line.strip()}
+                rttm_lines = [line for line in rttm_path.read_text().splitlines() if line.strip()]
+                written_speakers = {line.split()[7] for line in rttm_lines}
                 if len(written_speakers) != k:
                     raise RuntimeError(
                         f"k={k} session_{i}: enforce_num_speakers violated -- wrote "
                         f"{len(written_speakers)} distinct speakers ({sorted(written_speakers)}), "
                         f"requested {k}. _plan_session guarantees this by construction, so this "
                         "is a bug in this module, not a sampling outcome to retry past."
+                    )
+
+                # MIN_SPEAKER_SPEECH_SECONDS is only a *planned* floor (_plan_session works in
+                # words at ASSUMED_WORDS_PER_SECOND) -- checked here against the real synthesized
+                # durations just written, exactly as enforce_num_speakers is checked against the
+                # RTTM above rather than trusted from the in-memory plan. See the module
+                # docstring's "floor that keeps a quiet speaker detectable" section.
+                speech_seconds_by_speaker: Dict[str, float] = {}
+                for line in rttm_lines:
+                    fields = line.split()
+                    speech_seconds_by_speaker[fields[7]] = speech_seconds_by_speaker.get(fields[7], 0.0) + float(
+                        fields[4]
+                    )
+                short_speakers = {
+                    name: round(secs, 3)
+                    for name, secs in speech_seconds_by_speaker.items()
+                    if secs < MIN_SPEAKER_SPEECH_SECONDS
+                }
+                if short_speakers:
+                    raise RuntimeError(
+                        f"k={k} session_{i}: MIN_SPEAKER_SPEECH_SECONDS={MIN_SPEAKER_SPEECH_SECONDS}s "
+                        f"violated in the written RTTM -- {short_speakers} fell short. "
+                        "_plan_session's floor is a planned-word estimate (ASSUMED_WORDS_PER_SECOND), "
+                        "not a guarantee on real synthesized duration; this is that estimate missing "
+                        "its target on real audio, not a bug to silently retry past."
                     )
 
                 records_by_index[i] = {
@@ -753,16 +903,20 @@ def generate_corpus(
             "mean_silence": MEAN_SILENCE,
             "mean_silence_var": MEAN_SILENCE_VAR,
             "overlap_fraction_range": list(OVERLAP_FRACTION_RANGE),
+            "overlap_trigger_prob": OVERLAP_TRIGGER_PROB,
             "session_length_seconds": SESSION_LENGTH_SECONDS,
             "assumed_words_per_second": ASSUMED_WORDS_PER_SECOND,
+            "min_speaker_speech_seconds": MIN_SPEAKER_SPEECH_SECONDS,
             "enforce_num_speakers": True,
             "params_source": (
                 "turn_prob, dominance_var, min_dominance, sentence_length_params, mean_overlap, "
                 "mean_silence, mean_silence_var are NeMo's own shipped defaults "
                 "(tools/speech_data_simulator/conf/data_simulator.yaml); "
-                "overlap_fraction_range, session_length_seconds, assumed_words_per_second are "
-                "this module's own judgement, not NeMo's and not measured -- see generate.py's "
-                "module docstring."
+                "overlap_fraction_range, overlap_trigger_prob, session_length_seconds, "
+                "assumed_words_per_second, min_speaker_speech_seconds are this module's own "
+                "judgement, not NeMo's and not measured against a specific senselab backend -- "
+                "see generate.py's module docstring for the corpus-statistics measurement and "
+                "Monte Carlo tuning behind each."
             ),
         },
         "seed": seed,
