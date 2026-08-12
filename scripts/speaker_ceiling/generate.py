@@ -102,7 +102,7 @@ proportion of 0.103 — within noise of the 0.10 target.
 figure directly against the written turns, not the intent, so a future change to either constant
 that drifts the realized proportion away from target is caught here rather than trusted.
 
-``SESSION_LENGTH_SECONDS`` (45.0) and ``ASSUMED_WORDS_PER_SECOND`` (2.5) are **this
+``SESSION_LENGTH_SECONDS`` (45.0) is **this
 module's own judgement**, not measured and not NeMo's — NeMo's own default
 (``session_length: 600``) targets a ten-minute recording, which at Qwen3-TTS's measured
 RTF ~6.3 (H100, see the ``qwen_tts`` module docstring) would cost roughly an hour of GPU
@@ -223,10 +223,25 @@ MEAN_OVERLAP = 0.10
 MEAN_SILENCE = 0.15
 MEAN_SILENCE_VAR = 0.01
 
-# Ours, not NeMo's -- judgements, recorded in the manifest rather than left as bare
-# literals. See the module docstring for why 45 s and 2.5 words/s were chosen.
+# Ours, not NeMo's -- recorded in the manifest rather than left as bare literals. See the
+# module docstring for why 45 s was chosen.
 SESSION_LENGTH_SECONDS = 45.0
-ASSUMED_WORDS_PER_SECOND = 2.5
+
+# MEASURED, no longer a judgement. Derived from the first full sweep's own corpus: the planner
+# draws word counts from negative_binomial(0.4, 0.05) + 1, whose mean is 8.583 words
+# (400k-sample check), and the 2952 utterances that corpus actually produced average 2.4317 s of
+# realized audio -- so Qwen3-TTS speaks these texts at 8.583 / 2.4317 = 3.53 words/second.
+#
+# The previous value of 2.5 was a guess and was 41% too slow, which matters now that
+# _plan_session plans turns until every speaker clears MIN_SPEAKER_SPEECH_SECONDS: planning an
+# 8 s floor at 2.5 w/s buys 20 words, and 20 words of real speech is ~5.7 s -- under the floor,
+# which generate_corpus's post-hoc RTTM check would have rejected on essentially every high-k
+# session. A slow assumption does not fail safe here; it fails loudly on the cluster.
+#
+# This is a mean over ~3000 utterances, so per-session variance can still land a little under the
+# floor. That is why the floor is a detectability heuristic verified after the fact rather than a
+# hard contract the planner claims to guarantee exactly.
+ASSUMED_WORDS_PER_SECOND = 3.53
 
 # Ours, not NeMo's, and not measured against any specific senselab backend -- the "several
 # seconds" the speaker-embedding literature (x-vector/ECAPA-TDNN-style encoders) treats as
