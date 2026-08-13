@@ -66,6 +66,9 @@
                                 <a class="variable" href="#DiarizationCapabilities.max_speakers">max_speakers</a>
                         </li>
                         <li>
+                                <a class="variable" href="#DiarizationCapabilities.max_speakers_evidence">max_speakers_evidence</a>
+                        </li>
+                        <li>
                                 <a class="variable" href="#DiarizationCapabilities.honors_speaker_hints">honors_speaker_hints</a>
                         </li>
                 </ul>
@@ -520,48 +523,105 @@ wrapping that same id — that call would run Pyannote, not DiariZen.</p>
 
     </div>
     <a class="headerlink" href="#DiarizationCapabilities"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="DiarizationCapabilities-32"><a href="#DiarizationCapabilities-32"><span class="linenos">32</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="DiarizationCapabilities-33"><a href="#DiarizationCapabilities-33"><span class="linenos">33</span></a><span class="k">class</span><span class="w"> </span><span class="nc">DiarizationCapabilities</span><span class="p">:</span>
-</span><span id="DiarizationCapabilities-34"><a href="#DiarizationCapabilities-34"><span class="linenos">34</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What one diarization backend populates, and what its labels mean.</span>
-</span><span id="DiarizationCapabilities-35"><a href="#DiarizationCapabilities-35"><span class="linenos">35</span></a>
-</span><span id="DiarizationCapabilities-36"><a href="#DiarizationCapabilities-36"><span class="linenos">36</span></a><span class="sd">    Attributes:</span>
-</span><span id="DiarizationCapabilities-37"><a href="#DiarizationCapabilities-37"><span class="linenos">37</span></a><span class="sd">        populates_text: Whether the backend fills ``ScriptLine.text``. Without this a</span>
-</span><span id="DiarizationCapabilities-38"><a href="#DiarizationCapabilities-38"><span class="linenos">38</span></a><span class="sd">            consumer cannot tell &quot;this backend does not transcribe&quot; from &quot;this segment</span>
-</span><span id="DiarizationCapabilities-39"><a href="#DiarizationCapabilities-39"><span class="linenos">39</span></a><span class="sd">            had no words&quot; — both look like ``text=None``.</span>
-</span><span id="DiarizationCapabilities-40"><a href="#DiarizationCapabilities-40"><span class="linenos">40</span></a><span class="sd">        speaker_label_kind: ``&quot;identity&quot;`` when ``speaker`` names *who* is talking,</span>
-</span><span id="DiarizationCapabilities-41"><a href="#DiarizationCapabilities-41"><span class="linenos">41</span></a><span class="sd">            ``&quot;role&quot;`` when it names *what kind* of talker (child-adult emits</span>
-</span><span id="DiarizationCapabilities-42"><a href="#DiarizationCapabilities-42"><span class="linenos">42</span></a><span class="sd">            CHILD/ADULT/OVERLAP). Role labels must not reach embedding clustering: a</span>
-</span><span id="DiarizationCapabilities-43"><a href="#DiarizationCapabilities-43"><span class="linenos">43</span></a><span class="sd">            per-role centroid blends distinct speakers under one label.</span>
-</span><span id="DiarizationCapabilities-44"><a href="#DiarizationCapabilities-44"><span class="linenos">44</span></a><span class="sd">        labels_stable_across_files: Whether label ``&quot;1&quot;`` in one file denotes the same</span>
-</span><span id="DiarizationCapabilities-45"><a href="#DiarizationCapabilities-45"><span class="linenos">45</span></a><span class="sd">            speaker as ``&quot;1&quot;`` in another. False for any backend that numbers per audio.</span>
-</span><span id="DiarizationCapabilities-46"><a href="#DiarizationCapabilities-46"><span class="linenos">46</span></a><span class="sd">        max_speakers: The backend&#39;s ceiling, or ``None`` when nobody has measured it.</span>
-</span><span id="DiarizationCapabilities-47"><a href="#DiarizationCapabilities-47"><span class="linenos">47</span></a><span class="sd">            ``None`` does **not** mean unlimited. Counts distinguishable *speakers*,</span>
-</span><span id="DiarizationCapabilities-48"><a href="#DiarizationCapabilities-48"><span class="linenos">48</span></a><span class="sd">            not distinct ``speaker`` label values: the child-adult classifier emits</span>
-</span><span id="DiarizationCapabilities-49"><a href="#DiarizationCapabilities-49"><span class="linenos">49</span></a><span class="sd">            three label values (``CHILD``, ``ADULT``, ``OVERLAP``) but declares</span>
-</span><span id="DiarizationCapabilities-50"><a href="#DiarizationCapabilities-50"><span class="linenos">50</span></a><span class="sd">            ``max_speakers=2``, because ``OVERLAP`` marks two of the two known</span>
-</span><span id="DiarizationCapabilities-51"><a href="#DiarizationCapabilities-51"><span class="linenos">51</span></a><span class="sd">            talkers speaking at once, not a third talker.</span>
-</span><span id="DiarizationCapabilities-52"><a href="#DiarizationCapabilities-52"><span class="linenos">52</span></a><span class="sd">        honors_speaker_hints: Whether ``num_speakers``/``min_speakers``/``max_speakers``</span>
-</span><span id="DiarizationCapabilities-53"><a href="#DiarizationCapabilities-53"><span class="linenos">53</span></a><span class="sd">            passed to :func:`diarize_audios` do anything. Five of six ignore them.</span>
-</span><span id="DiarizationCapabilities-54"><a href="#DiarizationCapabilities-54"><span class="linenos">54</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="DiarizationCapabilities-55"><a href="#DiarizationCapabilities-55"><span class="linenos">55</span></a>
-</span><span id="DiarizationCapabilities-56"><a href="#DiarizationCapabilities-56"><span class="linenos">56</span></a>    <span class="n">populates_text</span><span class="p">:</span> <span class="nb">bool</span>
-</span><span id="DiarizationCapabilities-57"><a href="#DiarizationCapabilities-57"><span class="linenos">57</span></a>    <span class="n">speaker_label_kind</span><span class="p">:</span> <span class="n">SpeakerLabelKind</span>
-</span><span id="DiarizationCapabilities-58"><a href="#DiarizationCapabilities-58"><span class="linenos">58</span></a>    <span class="n">labels_stable_across_files</span><span class="p">:</span> <span class="nb">bool</span>
-</span><span id="DiarizationCapabilities-59"><a href="#DiarizationCapabilities-59"><span class="linenos">59</span></a>    <span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-</span><span id="DiarizationCapabilities-60"><a href="#DiarizationCapabilities-60"><span class="linenos">60</span></a>    <span class="n">honors_speaker_hints</span><span class="p">:</span> <span class="nb">bool</span>
-</span><span id="DiarizationCapabilities-61"><a href="#DiarizationCapabilities-61"><span class="linenos">61</span></a>
-</span><span id="DiarizationCapabilities-62"><a href="#DiarizationCapabilities-62"><span class="linenos">62</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="DiarizationCapabilities-63"><a href="#DiarizationCapabilities-63"><span class="linenos">63</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Reject declarations that cannot describe a real backend.&quot;&quot;&quot;</span>
-</span><span id="DiarizationCapabilities-64"><a href="#DiarizationCapabilities-64"><span class="linenos">64</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">speaker_label_kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_VALID_LABEL_KINDS</span><span class="p">:</span>
-</span><span id="DiarizationCapabilities-65"><a href="#DiarizationCapabilities-65"><span class="linenos">65</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="DiarizationCapabilities-66"><a href="#DiarizationCapabilities-66"><span class="linenos">66</span></a>                <span class="sa">f</span><span class="s2">&quot;speaker_label_kind must be one of </span><span class="si">{</span><span class="n">_VALID_LABEL_KINDS</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">speaker_label_kind</span><span class="si">!r}</span><span class="s2">. &quot;</span>
-</span><span id="DiarizationCapabilities-67"><a href="#DiarizationCapabilities-67"><span class="linenos">67</span></a>                <span class="s2">&quot;The distinction decides whether these labels may reach embedding clustering.&quot;</span>
-</span><span id="DiarizationCapabilities-68"><a href="#DiarizationCapabilities-68"><span class="linenos">68</span></a>            <span class="p">)</span>
-</span><span id="DiarizationCapabilities-69"><a href="#DiarizationCapabilities-69"><span class="linenos">69</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="DiarizationCapabilities-70"><a href="#DiarizationCapabilities-70"><span class="linenos">70</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="DiarizationCapabilities-71"><a href="#DiarizationCapabilities-71"><span class="linenos">71</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers must be &gt;= 1 or None (unmeasured), got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span><span class="si">!r}</span><span class="s2">. &quot;</span>
-</span><span id="DiarizationCapabilities-72"><a href="#DiarizationCapabilities-72"><span class="linenos">72</span></a>                <span class="s2">&quot;None means nobody has measured the ceiling; it does not mean unlimited.&quot;</span>
-</span><span id="DiarizationCapabilities-73"><a href="#DiarizationCapabilities-73"><span class="linenos">73</span></a>            <span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="DiarizationCapabilities-43"><a href="#DiarizationCapabilities-43"><span class="linenos"> 43</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="DiarizationCapabilities-44"><a href="#DiarizationCapabilities-44"><span class="linenos"> 44</span></a><span class="k">class</span><span class="w"> </span><span class="nc">DiarizationCapabilities</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-45"><a href="#DiarizationCapabilities-45"><span class="linenos"> 45</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What one diarization backend populates, and what its labels mean.</span>
+</span><span id="DiarizationCapabilities-46"><a href="#DiarizationCapabilities-46"><span class="linenos"> 46</span></a>
+</span><span id="DiarizationCapabilities-47"><a href="#DiarizationCapabilities-47"><span class="linenos"> 47</span></a><span class="sd">    Attributes:</span>
+</span><span id="DiarizationCapabilities-48"><a href="#DiarizationCapabilities-48"><span class="linenos"> 48</span></a><span class="sd">        populates_text: Whether the backend fills ``ScriptLine.text``. Without this a</span>
+</span><span id="DiarizationCapabilities-49"><a href="#DiarizationCapabilities-49"><span class="linenos"> 49</span></a><span class="sd">            consumer cannot tell &quot;this backend does not transcribe&quot; from &quot;this segment</span>
+</span><span id="DiarizationCapabilities-50"><a href="#DiarizationCapabilities-50"><span class="linenos"> 50</span></a><span class="sd">            had no words&quot; — both look like ``text=None``.</span>
+</span><span id="DiarizationCapabilities-51"><a href="#DiarizationCapabilities-51"><span class="linenos"> 51</span></a><span class="sd">        speaker_label_kind: ``&quot;identity&quot;`` when ``speaker`` names *who* is talking,</span>
+</span><span id="DiarizationCapabilities-52"><a href="#DiarizationCapabilities-52"><span class="linenos"> 52</span></a><span class="sd">            ``&quot;role&quot;`` when it names *what kind* of talker (child-adult emits</span>
+</span><span id="DiarizationCapabilities-53"><a href="#DiarizationCapabilities-53"><span class="linenos"> 53</span></a><span class="sd">            CHILD/ADULT/OVERLAP). Role labels must not reach embedding clustering: a</span>
+</span><span id="DiarizationCapabilities-54"><a href="#DiarizationCapabilities-54"><span class="linenos"> 54</span></a><span class="sd">            per-role centroid blends distinct speakers under one label.</span>
+</span><span id="DiarizationCapabilities-55"><a href="#DiarizationCapabilities-55"><span class="linenos"> 55</span></a><span class="sd">        labels_stable_across_files: Whether label ``&quot;1&quot;`` in one file denotes the same</span>
+</span><span id="DiarizationCapabilities-56"><a href="#DiarizationCapabilities-56"><span class="linenos"> 56</span></a><span class="sd">            speaker as ``&quot;1&quot;`` in another. False for any backend that numbers per audio.</span>
+</span><span id="DiarizationCapabilities-57"><a href="#DiarizationCapabilities-57"><span class="linenos"> 57</span></a><span class="sd">        max_speakers: The largest speaker count the backend has been observed to *emit*</span>
+</span><span id="DiarizationCapabilities-58"><a href="#DiarizationCapabilities-58"><span class="linenos"> 58</span></a><span class="sd">            — a structural ceiling, not a performance one. This is deliberately narrower</span>
+</span><span id="DiarizationCapabilities-59"><a href="#DiarizationCapabilities-59"><span class="linenos"> 59</span></a><span class="sd">            than an earlier reading of this field: a backend&#39;s counting *accuracy*</span>
+</span><span id="DiarizationCapabilities-60"><a href="#DiarizationCapabilities-60"><span class="linenos"> 60</span></a><span class="sd">            (does it report the right count?) degrades independently of whether it can</span>
+</span><span id="DiarizationCapabilities-61"><a href="#DiarizationCapabilities-61"><span class="linenos"> 61</span></a><span class="sd">            structurally emit a large count at all, and folding both into one integer</span>
+</span><span id="DiarizationCapabilities-62"><a href="#DiarizationCapabilities-62"><span class="linenos"> 62</span></a><span class="sd">            hid that distinction. See ``max_speakers_evidence`` for how a given value</span>
+</span><span id="DiarizationCapabilities-63"><a href="#DiarizationCapabilities-63"><span class="linenos"> 63</span></a><span class="sd">            was established.</span>
+</span><span id="DiarizationCapabilities-64"><a href="#DiarizationCapabilities-64"><span class="linenos"> 64</span></a>
+</span><span id="DiarizationCapabilities-65"><a href="#DiarizationCapabilities-65"><span class="linenos"> 65</span></a><span class="sd">            ``None`` means *no structural ceiling was found* within whatever was tested</span>
+</span><span id="DiarizationCapabilities-66"><a href="#DiarizationCapabilities-66"><span class="linenos"> 66</span></a><span class="sd">            — it does **not** mean unlimited, and it does **not** by itself distinguish</span>
+</span><span id="DiarizationCapabilities-67"><a href="#DiarizationCapabilities-67"><span class="linenos"> 67</span></a><span class="sd">            &quot;nobody has looked&quot; from &quot;we looked and found no cap&quot; (``max_speakers_evidence``</span>
+</span><span id="DiarizationCapabilities-68"><a href="#DiarizationCapabilities-68"><span class="linenos"> 68</span></a><span class="sd">            carries that distinction; see its docstring). Counts distinguishable</span>
+</span><span id="DiarizationCapabilities-69"><a href="#DiarizationCapabilities-69"><span class="linenos"> 69</span></a><span class="sd">            *speakers*, not distinct ``speaker`` label values: the child-adult classifier</span>
+</span><span id="DiarizationCapabilities-70"><a href="#DiarizationCapabilities-70"><span class="linenos"> 70</span></a><span class="sd">            emits three label values (``CHILD``, ``ADULT``, ``OVERLAP``) but declares</span>
+</span><span id="DiarizationCapabilities-71"><a href="#DiarizationCapabilities-71"><span class="linenos"> 71</span></a><span class="sd">            ``max_speakers=2``, because ``OVERLAP`` marks two of the two known talkers</span>
+</span><span id="DiarizationCapabilities-72"><a href="#DiarizationCapabilities-72"><span class="linenos"> 72</span></a><span class="sd">            speaking at once, not a third talker.</span>
+</span><span id="DiarizationCapabilities-73"><a href="#DiarizationCapabilities-73"><span class="linenos"> 73</span></a>
+</span><span id="DiarizationCapabilities-74"><a href="#DiarizationCapabilities-74"><span class="linenos"> 74</span></a><span class="sd">            The seed-17 speaker-ceiling probe (a 160-session, TTS-composed corpus swept</span>
+</span><span id="DiarizationCapabilities-75"><a href="#DiarizationCapabilities-75"><span class="linenos"> 75</span></a><span class="sd">            over true speaker counts 1..8; see</span>
+</span><span id="DiarizationCapabilities-76"><a href="#DiarizationCapabilities-76"><span class="linenos"> 76</span></a><span class="sd">            ``specs/20260809-112417-speaker-ceiling-probe/``) measured all six backends:</span>
+</span><span id="DiarizationCapabilities-77"><a href="#DiarizationCapabilities-77"><span class="linenos"> 77</span></a><span class="sd">            Sortformer and child-adult both plateau at a fixed count (4 and 2) regardless</span>
+</span><span id="DiarizationCapabilities-78"><a href="#DiarizationCapabilities-78"><span class="linenos"> 78</span></a><span class="sd">            of how many speakers are actually present — a real structural cap, confirming</span>
+</span><span id="DiarizationCapabilities-79"><a href="#DiarizationCapabilities-79"><span class="linenos"> 79</span></a><span class="sd">            what their names/architecture already implied. Pyannote, VibeVoice, MOSS and</span>
+</span><span id="DiarizationCapabilities-80"><a href="#DiarizationCapabilities-80"><span class="linenos"> 80</span></a><span class="sd">            DiariZen never plateaued across k=1..8 on that corpus; their predictions kept</span>
+</span><span id="DiarizationCapabilities-81"><a href="#DiarizationCapabilities-81"><span class="linenos"> 81</span></a><span class="sd">            tracking (or overshooting) the true count instead of collapsing to one value,</span>
+</span><span id="DiarizationCapabilities-82"><a href="#DiarizationCapabilities-82"><span class="linenos"> 82</span></a><span class="sd">            so they declare ``None`` here — &quot;no structural ceiling observed&quot;, a measured</span>
+</span><span id="DiarizationCapabilities-83"><a href="#DiarizationCapabilities-83"><span class="linenos"> 83</span></a><span class="sd">            claim, not a guess. Every number traces to one corpus and one seed, TTS-composed</span>
+</span><span id="DiarizationCapabilities-84"><a href="#DiarizationCapabilities-84"><span class="linenos"> 84</span></a><span class="sd">            with no room acoustics or channel variation — the probe&#39;s own profile carries</span>
+</span><span id="DiarizationCapabilities-85"><a href="#DiarizationCapabilities-85"><span class="linenos"> 85</span></a><span class="sd">            that caveat and this field points at it rather than restating it loosely; do not</span>
+</span><span id="DiarizationCapabilities-86"><a href="#DiarizationCapabilities-86"><span class="linenos"> 86</span></a><span class="sd">            read a probe result as a guarantee about real recordings.</span>
+</span><span id="DiarizationCapabilities-87"><a href="#DiarizationCapabilities-87"><span class="linenos"> 87</span></a><span class="sd">        max_speakers_evidence: How ``max_speakers`` was established, machine-readable</span>
+</span><span id="DiarizationCapabilities-88"><a href="#DiarizationCapabilities-88"><span class="linenos"> 88</span></a><span class="sd">            rather than only prose in a comment. Exactly :data:`UNMEASURED` when nobody</span>
+</span><span id="DiarizationCapabilities-89"><a href="#DiarizationCapabilities-89"><span class="linenos"> 89</span></a><span class="sd">            has run a probe against this backend — the same fact ``max_speakers=None``</span>
+</span><span id="DiarizationCapabilities-90"><a href="#DiarizationCapabilities-90"><span class="linenos"> 90</span></a><span class="sd">            alone used to carry before this field existed. Otherwise a string starting</span>
+</span><span id="DiarizationCapabilities-91"><a href="#DiarizationCapabilities-91"><span class="linenos"> 91</span></a><span class="sd">            ``&quot;measured:&quot;``, e.g. ``&quot;measured: saturates at 4 on 20/20 k=8 sessions</span>
+</span><span id="DiarizationCapabilities-92"><a href="#DiarizationCapabilities-92"><span class="linenos"> 92</span></a><span class="sd">            (probe seed-17)&quot;`` when a real ceiling was found, or ``&quot;measured: no</span>
+</span><span id="DiarizationCapabilities-93"><a href="#DiarizationCapabilities-93"><span class="linenos"> 93</span></a><span class="sd">            saturation, emits up to 8 (probe seed-17)&quot;`` when it was not. Checking</span>
+</span><span id="DiarizationCapabilities-94"><a href="#DiarizationCapabilities-94"><span class="linenos"> 94</span></a><span class="sd">            ``evidence == UNMEASURED`` vs. ``evidence.startswith(&quot;measured:&quot;)`` is enough</span>
+</span><span id="DiarizationCapabilities-95"><a href="#DiarizationCapabilities-95"><span class="linenos"> 95</span></a><span class="sd">            to recover which case applies without parsing the rest of the string — that</span>
+</span><span id="DiarizationCapabilities-96"><a href="#DiarizationCapabilities-96"><span class="linenos"> 96</span></a><span class="sd">            two-state check is what makes this field machine-readable rather than a</span>
+</span><span id="DiarizationCapabilities-97"><a href="#DiarizationCapabilities-97"><span class="linenos"> 97</span></a><span class="sd">            comment a reader has to trust. Rejected at construction (see</span>
+</span><span id="DiarizationCapabilities-98"><a href="#DiarizationCapabilities-98"><span class="linenos"> 98</span></a><span class="sd">            ``__post_init__``) if it claims :data:`UNMEASURED` while ``max_speakers``</span>
+</span><span id="DiarizationCapabilities-99"><a href="#DiarizationCapabilities-99"><span class="linenos"> 99</span></a><span class="sd">            holds a number: a number with no measurement behind it is exactly the</span>
+</span><span id="DiarizationCapabilities-100"><a href="#DiarizationCapabilities-100"><span class="linenos">100</span></a><span class="sd">            unfitted literal this repo&#39;s conventions warn against.</span>
+</span><span id="DiarizationCapabilities-101"><a href="#DiarizationCapabilities-101"><span class="linenos">101</span></a>
+</span><span id="DiarizationCapabilities-102"><a href="#DiarizationCapabilities-102"><span class="linenos">102</span></a><span class="sd">            Counting *accuracy* — a related but separate fact from the structural bound</span>
+</span><span id="DiarizationCapabilities-103"><a href="#DiarizationCapabilities-103"><span class="linenos">103</span></a><span class="sd">            this field is evidence for — is not carried here. It lives with the probe</span>
+</span><span id="DiarizationCapabilities-104"><a href="#DiarizationCapabilities-104"><span class="linenos">104</span></a><span class="sd">            (``specs/20260809-112417-speaker-ceiling-probe/``) and, summarized, in</span>
+</span><span id="DiarizationCapabilities-105"><a href="#DiarizationCapabilities-105"><span class="linenos">105</span></a><span class="sd">            ``model_registry.yaml``&#39;s ``recommended_for`` for each backend.</span>
+</span><span id="DiarizationCapabilities-106"><a href="#DiarizationCapabilities-106"><span class="linenos">106</span></a><span class="sd">        honors_speaker_hints: Whether ``num_speakers``/``min_speakers``/``max_speakers``</span>
+</span><span id="DiarizationCapabilities-107"><a href="#DiarizationCapabilities-107"><span class="linenos">107</span></a><span class="sd">            passed to :func:`diarize_audios` do anything. Five of six ignore them.</span>
+</span><span id="DiarizationCapabilities-108"><a href="#DiarizationCapabilities-108"><span class="linenos">108</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="DiarizationCapabilities-109"><a href="#DiarizationCapabilities-109"><span class="linenos">109</span></a>
+</span><span id="DiarizationCapabilities-110"><a href="#DiarizationCapabilities-110"><span class="linenos">110</span></a>    <span class="n">populates_text</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="DiarizationCapabilities-111"><a href="#DiarizationCapabilities-111"><span class="linenos">111</span></a>    <span class="n">speaker_label_kind</span><span class="p">:</span> <span class="n">SpeakerLabelKind</span>
+</span><span id="DiarizationCapabilities-112"><a href="#DiarizationCapabilities-112"><span class="linenos">112</span></a>    <span class="n">labels_stable_across_files</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="DiarizationCapabilities-113"><a href="#DiarizationCapabilities-113"><span class="linenos">113</span></a>    <span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+</span><span id="DiarizationCapabilities-114"><a href="#DiarizationCapabilities-114"><span class="linenos">114</span></a>    <span class="n">max_speakers_evidence</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="DiarizationCapabilities-115"><a href="#DiarizationCapabilities-115"><span class="linenos">115</span></a>    <span class="n">honors_speaker_hints</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="DiarizationCapabilities-116"><a href="#DiarizationCapabilities-116"><span class="linenos">116</span></a>
+</span><span id="DiarizationCapabilities-117"><a href="#DiarizationCapabilities-117"><span class="linenos">117</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-118"><a href="#DiarizationCapabilities-118"><span class="linenos">118</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Reject declarations that cannot describe a real backend.&quot;&quot;&quot;</span>
+</span><span id="DiarizationCapabilities-119"><a href="#DiarizationCapabilities-119"><span class="linenos">119</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">speaker_label_kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_VALID_LABEL_KINDS</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-120"><a href="#DiarizationCapabilities-120"><span class="linenos">120</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-121"><a href="#DiarizationCapabilities-121"><span class="linenos">121</span></a>                <span class="sa">f</span><span class="s2">&quot;speaker_label_kind must be one of </span><span class="si">{</span><span class="n">_VALID_LABEL_KINDS</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">speaker_label_kind</span><span class="si">!r}</span><span class="s2">. &quot;</span>
+</span><span id="DiarizationCapabilities-122"><a href="#DiarizationCapabilities-122"><span class="linenos">122</span></a>                <span class="s2">&quot;The distinction decides whether these labels may reach embedding clustering.&quot;</span>
+</span><span id="DiarizationCapabilities-123"><a href="#DiarizationCapabilities-123"><span class="linenos">123</span></a>            <span class="p">)</span>
+</span><span id="DiarizationCapabilities-124"><a href="#DiarizationCapabilities-124"><span class="linenos">124</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-125"><a href="#DiarizationCapabilities-125"><span class="linenos">125</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-126"><a href="#DiarizationCapabilities-126"><span class="linenos">126</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers must be &gt;= 1 or None (no structural ceiling observed), got &quot;</span>
+</span><span id="DiarizationCapabilities-127"><a href="#DiarizationCapabilities-127"><span class="linenos">127</span></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span><span class="si">!r}</span><span class="s2">. None does not mean unlimited.&quot;</span>
+</span><span id="DiarizationCapabilities-128"><a href="#DiarizationCapabilities-128"><span class="linenos">128</span></a>            <span class="p">)</span>
+</span><span id="DiarizationCapabilities-129"><a href="#DiarizationCapabilities-129"><span class="linenos">129</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span> <span class="o">!=</span> <span class="n">UNMEASURED</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_MEASURED_PREFIX</span><span class="p">):</span>
+</span><span id="DiarizationCapabilities-130"><a href="#DiarizationCapabilities-130"><span class="linenos">130</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-131"><a href="#DiarizationCapabilities-131"><span class="linenos">131</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers_evidence must be </span><span class="si">{</span><span class="n">UNMEASURED</span><span class="si">!r}</span><span class="s2"> or start with </span><span class="si">{</span><span class="n">_MEASURED_PREFIX</span><span class="si">!r}</span><span class="s2">, got &quot;</span>
+</span><span id="DiarizationCapabilities-132"><a href="#DiarizationCapabilities-132"><span class="linenos">132</span></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span><span class="si">!r}</span><span class="s2">. That two-state convention is what makes the field &quot;</span>
+</span><span id="DiarizationCapabilities-133"><a href="#DiarizationCapabilities-133"><span class="linenos">133</span></a>                <span class="s2">&quot;machine-readable instead of prose a reader has to trust.&quot;</span>
+</span><span id="DiarizationCapabilities-134"><a href="#DiarizationCapabilities-134"><span class="linenos">134</span></a>            <span class="p">)</span>
+</span><span id="DiarizationCapabilities-135"><a href="#DiarizationCapabilities-135"><span class="linenos">135</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span> <span class="o">==</span> <span class="n">UNMEASURED</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-136"><a href="#DiarizationCapabilities-136"><span class="linenos">136</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-137"><a href="#DiarizationCapabilities-137"><span class="linenos">137</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span><span class="si">!r}</span><span class="s2"> but max_speakers_evidence is </span><span class="si">{</span><span class="n">UNMEASURED</span><span class="si">!r}</span><span class="s2"> — a &quot;</span>
+</span><span id="DiarizationCapabilities-138"><a href="#DiarizationCapabilities-138"><span class="linenos">138</span></a>                <span class="s2">&quot;number with no measurement behind it is exactly the unfitted literal this repo&#39;s &quot;</span>
+</span><span id="DiarizationCapabilities-139"><a href="#DiarizationCapabilities-139"><span class="linenos">139</span></a>                <span class="s2">&quot;conventions warn against. Either supply the evidence that produced it or set &quot;</span>
+</span><span id="DiarizationCapabilities-140"><a href="#DiarizationCapabilities-140"><span class="linenos">140</span></a>                <span class="s2">&quot;max_speakers back to None.&quot;</span>
+</span><span id="DiarizationCapabilities-141"><a href="#DiarizationCapabilities-141"><span class="linenos">141</span></a>            <span class="p">)</span>
 </span></pre></div>
 
 
@@ -579,12 +639,55 @@ CHILD/ADULT/OVERLAP). Role labels must not reach embedding clustering: a
 per-role centroid blends distinct speakers under one label.</li>
 <li><strong>labels_stable_across_files:</strong>  Whether label <code>"1"</code> in one file denotes the same
 speaker as <code>"1"</code> in another. False for any backend that numbers per audio.</li>
-<li><strong>max_speakers:</strong>  The backend's ceiling, or <code>None</code> when nobody has measured it.
-<code>None</code> does <strong>not</strong> mean unlimited. Counts distinguishable <em>speakers</em>,
-not distinct <code>speaker</code> label values: the child-adult classifier emits
-three label values (<code>CHILD</code>, <code>ADULT</code>, <code>OVERLAP</code>) but declares
-<code>max_speakers=2</code>, because <code>OVERLAP</code> marks two of the two known
-talkers speaking at once, not a third talker.</li>
+<li><p><strong>max_speakers:</strong>  The largest speaker count the backend has been observed to <em>emit</em>
+— a structural ceiling, not a performance one. This is deliberately narrower
+than an earlier reading of this field: a backend's counting <em>accuracy</em>
+(does it report the right count?) degrades independently of whether it can
+structurally emit a large count at all, and folding both into one integer
+hid that distinction. See <code><a href="#DiarizationCapabilities.max_speakers_evidence">max_speakers_evidence</a></code> for how a given value
+was established.</p>
+
+<p><code>None</code> means <em>no structural ceiling was found</em> within whatever was tested
+— it does <strong>not</strong> mean unlimited, and it does <strong>not</strong> by itself distinguish
+"nobody has looked" from "we looked and found no cap" (<code><a href="#DiarizationCapabilities.max_speakers_evidence">max_speakers_evidence</a></code>
+carries that distinction; see its docstring). Counts distinguishable
+<em>speakers</em>, not distinct <code>speaker</code> label values: the child-adult classifier
+emits three label values (<code>CHILD</code>, <code>ADULT</code>, <code>OVERLAP</code>) but declares
+<code>max_speakers=2</code>, because <code>OVERLAP</code> marks two of the two known talkers
+speaking at once, not a third talker.</p>
+
+<p>The seed-17 speaker-ceiling probe (a 160-session, TTS-composed corpus swept
+over true speaker counts 1..8; see
+<code>specs/20260809-112417-speaker-ceiling-probe/</code>) measured all six backends:
+Sortformer and child-adult both plateau at a fixed count (4 and 2) regardless
+of how many speakers are actually present — a real structural cap, confirming
+what their names/architecture already implied. Pyannote, VibeVoice, MOSS and
+DiariZen never plateaued across k=1..8 on that corpus; their predictions kept
+tracking (or overshooting) the true count instead of collapsing to one value,
+so they declare <code>None</code> here — "no structural ceiling observed", a measured
+claim, not a guess. Every number traces to one corpus and one seed, TTS-composed
+with no room acoustics or channel variation — the probe's own profile carries
+that caveat and this field points at it rather than restating it loosely; do not
+read a probe result as a guarantee about real recordings.</p></li>
+<li><p><strong>max_speakers_evidence:</strong>  How <code><a href="#DiarizationCapabilities.max_speakers">max_speakers</a></code> was established, machine-readable
+rather than only prose in a comment. Exactly <code>UNMEASURED</code> when nobody
+has run a probe against this backend — the same fact <code>max_speakers=None</code>
+alone used to carry before this field existed. Otherwise a string starting
+<code>"measured:"</code>, e.g. <code>"measured: saturates at 4 on 20/20 k=8 sessions
+(probe seed-17)"</code> when a real ceiling was found, or <code>"measured: no
+saturation, emits up to 8 (probe seed-17)"</code> when it was not. Checking
+<code>evidence == UNMEASURED</code> vs. <code>evidence.startswith("measured:")</code> is enough
+to recover which case applies without parsing the rest of the string — that
+two-state check is what makes this field machine-readable rather than a
+comment a reader has to trust. Rejected at construction (see
+<code>__post_init__</code>) if it claims <code>UNMEASURED</code> while <code><a href="#DiarizationCapabilities.max_speakers">max_speakers</a></code>
+holds a number: a number with no measurement behind it is exactly the
+unfitted literal this repo's conventions warn against.</p>
+
+<p>Counting <em>accuracy</em> — a related but separate fact from the structural bound
+this field is evidence for — is not carried here. It lives with the probe
+(<code>specs/20260809-112417-speaker-ceiling-probe/</code>) and, summarized, in
+<code>model_registry.yaml</code>'s <code>recommended_for</code> for each backend.</p></li>
 <li><strong>honors_speaker_hints:</strong>  Whether <code>num_speakers</code>/<code>min_speakers</code>/<code><a href="#DiarizationCapabilities.max_speakers">max_speakers</a></code>
 passed to <code><a href="#diarize_audios">diarize_audios()</a></code> do anything. Five of six ignore them.</li>
 </ul>
@@ -594,7 +697,7 @@ passed to <code><a href="#diarize_audios">diarize_audios()</a></code> do anythin
                             <div id="DiarizationCapabilities.__init__" class="classattr">
                                 <div class="attr function">
             
-        <span class="name">DiarizationCapabilities</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">populates_text</span><span class="p">:</span> <span class="nb">bool</span>,</span><span class="param">	<span class="n">speaker_label_kind</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;identity&#39;</span><span class="p">,</span> <span class="s1">&#39;role&#39;</span><span class="p">]</span>,</span><span class="param">	<span class="n">labels_stable_across_files</span><span class="p">:</span> <span class="nb">bool</span>,</span><span class="param">	<span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>,</span><span class="param">	<span class="n">honors_speaker_hints</span><span class="p">:</span> <span class="nb">bool</span></span>)</span>
+        <span class="name">DiarizationCapabilities</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">populates_text</span><span class="p">:</span> <span class="nb">bool</span>,</span><span class="param">	<span class="n">speaker_label_kind</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;identity&#39;</span><span class="p">,</span> <span class="s1">&#39;role&#39;</span><span class="p">]</span>,</span><span class="param">	<span class="n">labels_stable_across_files</span><span class="p">:</span> <span class="nb">bool</span>,</span><span class="param">	<span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>,</span><span class="param">	<span class="n">max_speakers_evidence</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">honors_speaker_hints</span><span class="p">:</span> <span class="nb">bool</span></span>)</span>
 
         
     </div>
@@ -643,6 +746,17 @@ passed to <code><a href="#diarize_audios">diarize_audios()</a></code> do anythin
         
     </div>
     <a class="headerlink" href="#DiarizationCapabilities.max_speakers"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.max_speakers_evidence" class="classattr">
+                                <div class="attr variable">
+            <span class="name">max_speakers_evidence</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.max_speakers_evidence"></a>
     
     
 
