@@ -165,18 +165,29 @@
   recommended_for: High-accuracy English ASR (via subprocess venv)
 
 # Speaker Diarization
+#
+# max_speakers is the structural ceiling — the largest count a backend can emit — not its
+# counting accuracy, which is a separate, independently-measured property (see each entry's
+# recommended_for). Both come from the seed-17 speaker-ceiling probe: a 160-session,
+# TTS-composed corpus (k=1..8 true speakers, 20 sessions/k, no room acoustics or channel
+# variation — see specs/20260809-112417-speaker-ceiling-probe/). Every number below is a
+# measurement under those conditions, not a guarantee about real recordings.
 - name: Pyannote Diarization
   task: speaker_diarization
   source: pyannote
   model_id: pyannote/speaker-diarization-community-1
   parameters: N/A
   training_data: VoxConverse + DIHARD
-  recommended_for: Multi-speaker diarization (requires HF token)
+  recommended_for: >-
+    Multi-speaker diarization (requires HF token). Seed-17 probe: the only backend that counts
+    speakers reliably at all — 100% exact-count accuracy at k=1, 85% at k=2 — but falls to
+    <=45% for k>=3; treat counts above 2 as unverified on this evidence.
   capabilities:
     populates_text: false
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
+    max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
+    max_speakers_evidence: 'measured: no saturation, emits up to 8 (probe seed-17)'
     honors_speaker_hints: true
 
 - name: NeMo Sortformer
@@ -185,12 +196,16 @@
   model_id: nvidia/diar_sortformer_4spk-v1
   parameters: N/A
   training_data: NVIDIA proprietary
-  recommended_for: 4-speaker diarization (via subprocess venv)
+  recommended_for: >-
+    4-speaker diarization (via subprocess venv). Structurally capped at 4 (confirmed, seed-17
+    probe: 20/20 k=8 sessions predicted exactly 4). Exact-count accuracy peaks at k=2..4
+    (65-80%) but is 0% at k=1 and at k>=5, where predictions clamp to 4 regardless of truth.
   capabilities:
     populates_text: false
     speaker_label_kind: identity
     labels_stable_across_files: false
     max_speakers: 4
+    max_speakers_evidence: 'measured: saturates at 4 on 20/20 k=8 sessions (probe seed-17)'
     honors_speaker_hints: false
 
 - name: VibeVoice-ASR-HF
@@ -199,12 +214,16 @@
   model_id: microsoft/VibeVoice-ASR-HF
   parameters: 7B
   training_data: Not specified upstream — see model card
-  recommended_for: Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended)
+  recommended_for: >-
+    Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended). Seed-17 probe:
+    no structural ceiling observed (predicted up to 16, plus refusals, at k=8); exact-count
+    accuracy is uneven (95% at k=2, down to 20% by k=8) — best where a rough count suffices.
   capabilities:
     populates_text: true
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
+    max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
+    max_speakers_evidence: 'measured: no saturation, emits up to 16 (probe seed-17)'
     honors_speaker_hints: false
 
 - name: USC-SAIL Child-Adult Classifier
@@ -213,12 +232,17 @@
   model_id: AlexXu811/whisper-child-adult
   parameters: Whisper-base + LoRA
   training_data: Not specified upstream — see model card
-  recommended_for: Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only)
+  recommended_for: >-
+    Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only).
+    Structurally capped at 2 (confirmed, seed-17 probe: 20/20 k=8 sessions counted exactly 2).
+    Exact-count accuracy is 70% at k=2, 50% at k=1, and necessarily 0% for k>=3 since it cannot
+    emit more than 2 speakers.
   capabilities:
     populates_text: false
     speaker_label_kind: role
     labels_stable_across_files: false
     max_speakers: 2
+    max_speakers_evidence: 'measured: saturates at 2 on 20/20 k=8 sessions (probe seed-17)'
     honors_speaker_hints: false
 
 - name: MOSS-Transcribe-Diarize
@@ -227,12 +251,17 @@
   model_id: OpenMOSS-Team/MOSS-Transcribe-Diarize
   parameters: 0.9B
   training_data: Not specified upstream — see model card
-  recommended_for: Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6)
+  recommended_for: >-
+    Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv,
+    transformers>=5.6). Seed-17 probe: no structural ceiling observed (predicted up to 12 at
+    k=8), but exact-count accuracy is inconsistent (0% at k=1, 25-65% elsewhere) — do not rely
+    on its speaker count without independent verification.
   capabilities:
     populates_text: true
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
+    max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
+    max_speakers_evidence: 'measured: no saturation, emits up to 12 (probe seed-17)'
     honors_speaker_hints: false
 
 - name: DiariZen
@@ -243,13 +272,15 @@
   training_data: AMI, AISHELL-4, AliMeeting, NOTSOFAR-1 (public compound meeting corpora; published recipe, not proprietary)
   license: CC BY-NC 4.0 — non-commercial only
   recommended_for: >-
-    Diarization only, no transcription (via subprocess venv installing DiariZen's
-    forked pyannote-audio)
+    Diarization only, no transcription (via subprocess venv installing DiariZen's forked
+    pyannote-audio). Seed-17 probe: no structural ceiling observed (predicted up to 8 at k=8);
+    best exact-count accuracy at k=2-3 (75-90%), degrading beyond.
   capabilities:
     populates_text: false
     speaker_label_kind: identity
     labels_stable_across_files: false
-    max_speakers:  # unmeasured, not unlimited — the NeMo synthetic-speaker probe fills this in
+    max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
+    max_speakers_evidence: 'measured: no saturation, emits up to 8 (probe seed-17)'
     honors_speaker_hints: false
 
 # Speech Emotion Recognition

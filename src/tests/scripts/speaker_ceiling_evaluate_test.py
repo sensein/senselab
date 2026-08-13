@@ -58,6 +58,7 @@ def test_count_speakers_counts_distinct_identity_labels() -> None:
         speaker_label_kind="identity",
         labels_stable_across_files=False,
         max_speakers=None,
+        max_speakers_evidence="unmeasured",
         honors_speaker_hints=False,
     )
     lines = [_line("SPEAKER_00"), _line("SPEAKER_01"), _line("SPEAKER_00")]
@@ -77,6 +78,7 @@ def test_count_speakers_drops_overlap_for_role_backends() -> None:
         speaker_label_kind="role",
         labels_stable_across_files=False,
         max_speakers=2,
+        max_speakers_evidence="measured: saturates at 2 on 20/20 k=8 sessions (probe seed-17)",
         honors_speaker_hints=False,
     )
     lines = [_line("CHILD"), _line("ADULT"), _line("OVERLAP")]
@@ -90,6 +92,7 @@ def test_count_speakers_ignores_none_and_empty_speaker() -> None:
         speaker_label_kind="identity",
         labels_stable_across_files=False,
         max_speakers=None,
+        max_speakers_evidence="unmeasured",
         honors_speaker_hints=False,
     )
     lines = [ScriptLine(text="hello", start=0.0, end=1.0), _line("S0")]

@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from senselab.audio.tasks.speaker_diarization.api import ROLE_LABEL_ONLY_PREFIXES, capabilities_for
-from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
+from senselab.audio.tasks.speaker_diarization.capabilities import (
+    UNMEASURED,
+    DiarizationCapabilities,
+)
 
 
 def test_record_is_frozen() -> None:
@@ -20,24 +23,32 @@ def test_record_is_frozen() -> None:
         speaker_label_kind="identity",
         labels_stable_across_files=False,
         max_speakers=None,
+        max_speakers_evidence=UNMEASURED,
         honors_speaker_hints=False,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         caps.max_speakers = 4  # type: ignore[misc]
 
 
-def test_max_speakers_none_is_allowed_and_means_unmeasured() -> None:
-    """None is 'nobody has measured this', not 'unlimited'.
+def test_max_speakers_none_means_no_structural_ceiling_observed() -> None:
+    """None means 'no structural ceiling was found', which is not the same as unlimited.
 
-    Four of six backends have no published or measured ceiling. Encoding that as
-    None keeps it distinguishable from a real limit, so the NeMo probe can fill it
-    in later without anyone having guessed in the meantime.
+    CONTRACT CHANGED: this test used to be named
+    `test_max_speakers_none_is_allowed_and_means_unmeasured` and its docstring claimed
+    None always means "nobody has measured this". The seed-17 speaker-ceiling probe
+    measured all six backends and left four of them at None anyway -- Pyannote,
+    VibeVoice, MOSS and DiariZen never plateaued across k=1..8, so their structural
+    ceiling is genuinely unbounded within what was tested, not merely unlooked-at.
+    `max_speakers=None` alone can no longer tell those two situations apart; that is
+    exactly why `max_speakers_evidence` exists (see the tests below), and this test now
+    only asserts the part of the old claim that still holds: None never means unlimited.
     """
     caps = DiarizationCapabilities(
         populates_text=False,
         speaker_label_kind="identity",
         labels_stable_across_files=False,
         max_speakers=None,
+        max_speakers_evidence="measured: no saturation, emits up to 8 (probe seed-17)",
         honors_speaker_hints=False,
     )
     assert caps.max_speakers is None
@@ -55,6 +66,7 @@ def test_max_speakers_must_be_at_least_one_when_given() -> None:
             speaker_label_kind="identity",
             labels_stable_across_files=False,
             max_speakers=0,
+            max_speakers_evidence="measured: saturates at 0 on 20/20 k=8 sessions (probe seed-17)",
             honors_speaker_hints=False,
         )
 
@@ -71,8 +83,64 @@ def test_speaker_label_kind_rejects_an_unknown_value() -> None:
             speaker_label_kind="cluster",  # type: ignore[arg-type]
             labels_stable_across_files=False,
             max_speakers=None,
+            max_speakers_evidence=UNMEASURED,
             honors_speaker_hints=False,
         )
+
+
+def test_max_speakers_evidence_must_be_unmeasured_or_start_with_measured() -> None:
+    """The two-state prefix convention is what makes the field machine-readable.
+
+    A third spelling (a typo, or free prose with neither prefix) would defeat the
+    point: code checking `evidence == UNMEASURED` vs. `.startswith("measured:")`
+    would silently mis-sort it into neither bucket instead of raising here.
+    """
+    with pytest.raises(ValueError, match="max_speakers_evidence"):
+        DiarizationCapabilities(
+            populates_text=False,
+            speaker_label_kind="identity",
+            labels_stable_across_files=False,
+            max_speakers=None,
+            max_speakers_evidence="nobody checked",
+            honors_speaker_hints=False,
+        )
+
+
+def test_max_speakers_evidence_cannot_claim_unmeasured_for_a_declared_number() -> None:
+    """A number with no measurement behind it is exactly the unfitted literal this repo warns about.
+
+    Declaring `max_speakers=4` while `max_speakers_evidence="unmeasured"` would let a
+    guess masquerade as a measured value with nothing to catch it; construction must
+    refuse instead.
+    """
+    with pytest.raises(ValueError, match="max_speakers_evidence"):
+        DiarizationCapabilities(
+            populates_text=False,
+            speaker_label_kind="identity",
+            labels_stable_across_files=False,
+            max_speakers=4,
+            max_speakers_evidence=UNMEASURED,
+            honors_speaker_hints=False,
+        )
+
+
+def test_unmeasured_is_allowed_when_max_speakers_is_none() -> None:
+    """The genuinely-unmeasured state -- no probe has ever run -- is still representable.
+
+    Distinct from `max_speakers=None` paired with a "measured: no saturation..."
+    evidence string: both currently read `None`, but only one of them means "nobody
+    has looked yet". This is the case none of the six real backends are in anymore,
+    but the mechanism must still accept it for a future seventh backend.
+    """
+    caps = DiarizationCapabilities(
+        populates_text=False,
+        speaker_label_kind="identity",
+        labels_stable_across_files=False,
+        max_speakers=None,
+        max_speakers_evidence=UNMEASURED,
+        honors_speaker_hints=False,
+    )
+    assert caps.max_speakers_evidence == UNMEASURED
 
 
 _ALL_BACKEND_IDS = (
@@ -151,34 +219,55 @@ def test_child_adult_is_a_two_speaker_role_classifier() -> None:
     count. But its labels denote roles, which is what decides they must not reach
     embedding clustering. A 2-speaker identity diarizer would share the ceiling and
     need different handling, so one field cannot carry both.
+
+    The `2` used to be a structural claim from the model's architecture alone; the
+    seed-17 speaker-ceiling probe has since confirmed it directly (20/20 k=8 sessions
+    counted exactly 2), which `max_speakers_evidence` now records.
     """
     caps = capabilities_for("AlexXu811/whisper-child-adult")
     assert caps.max_speakers == 2
     assert caps.speaker_label_kind == "role"
+    assert caps.max_speakers_evidence == "measured: saturates at 2 on 20/20 k=8 sessions (probe seed-17)"
 
 
 def test_sortformer_declares_the_ceiling_in_its_own_name() -> None:
-    """`diar_sortformer_4spk` tops out at four."""
-    assert capabilities_for("nvidia/diar_sortformer_4spk-v1").max_speakers == 4
+    """`diar_sortformer_4spk` tops out at four.
+
+    The checkpoint name was the original source of the `4`; the seed-17 probe has
+    since confirmed it structurally (20/20 k=8 sessions predicted exactly 4), which
+    `max_speakers_evidence` now records rather than leaving the name as the only trace
+    of where the number came from.
+    """
+    caps = capabilities_for("nvidia/diar_sortformer_4spk-v1")
+    assert caps.max_speakers == 4
+    assert caps.max_speakers_evidence == "measured: saturates at 4 on 20/20 k=8 sessions (probe seed-17)"
 
 
 @pytest.mark.parametrize(
-    "model_id",
+    ("model_id", "highest_observed"),
     [
-        "pyannote/speaker-diarization-community-1",
-        "microsoft/VibeVoice-ASR-HF",
-        "OpenMOSS-Team/MOSS-Transcribe-Diarize",
-        "BUT-FIT/diarizen-wavlm-large-s80-md",
+        ("pyannote/speaker-diarization-community-1", 8),
+        ("microsoft/VibeVoice-ASR-HF", 16),
+        ("OpenMOSS-Team/MOSS-Transcribe-Diarize", 12),
+        ("BUT-FIT/diarizen-wavlm-large-s80-md", 8),
     ],
 )
-def test_unmeasured_ceilings_are_none_not_guessed(model_id: str) -> None:
-    """Four backends have no measured ceiling, so they declare None.
+def test_unmeasured_ceilings_are_none_not_guessed(model_id: str, highest_observed: int) -> None:
+    """Four backends still declare `max_speakers=None` -- but not because nobody measured them.
 
-    None means unmeasured. The NeMo synthetic-speaker probe fills these in with a
-    number that carries its measurement; a value copied from a model card would be
-    exactly the unfitted literal this repo's conventions warn against.
+    CONTRACT CHANGED: this test's name and docstring predate the seed-17 speaker-ceiling
+    probe and originally meant "None means unmeasured; the probe will fill these in with
+    a number". The probe ran, and for these four the answer was not a number: none of
+    them plateaued at a fixed output across k=1..8, so `None` here now means "measured,
+    and no structural ceiling was found" -- a different, and stronger, claim than "nobody
+    looked". `max_speakers=None` alone cannot tell the two apart (see
+    `capabilities.py`'s `UNMEASURED` docstring); `max_speakers_evidence` is the field
+    that can, and this test now asserts that too rather than treating `None` as
+    self-explanatory the way the original version did.
     """
-    assert capabilities_for(model_id).max_speakers is None
+    caps = capabilities_for(model_id)
+    assert caps.max_speakers is None
+    assert caps.max_speakers_evidence == f"measured: no saturation, emits up to {highest_observed} (probe seed-17)"
 
 
 def test_only_pyannote_honors_speaker_hints() -> None:

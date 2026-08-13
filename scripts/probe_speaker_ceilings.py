@@ -116,7 +116,12 @@ if str(_SPEAKER_CEILING_DIR) not in sys.path:
     sys.path.insert(0, str(_SPEAKER_CEILING_DIR))
 
 import aggregate  # noqa: E402
-from derive import DEFAULT_ACCURACY_THRESHOLD, derive_ceiling  # noqa: E402
+from derive import (  # noqa: E402
+    DEFAULT_ACCURACY_THRESHOLD,
+    derive_ceiling,
+    derive_structural_bound,
+    format_structural_bound_evidence,
+)
 from evaluate import (  # noqa: E402
     ALL_BACKENDS,
     BACKENDS_BY_NAME,
@@ -182,7 +187,21 @@ def build_profile(
     ceiling and what the underlying audio was, without cross-referencing the rest of the
     document. See the module docstring's caveat: this profile is a ceiling on clean,
     synthetically distinct voices, not a guarantee about real recordings.
+
+    Alongside `ceiling` (an accuracy-based verdict from `derive.derive_ceiling`), every
+    backend also gets `structural_bound` and `structural_bound_evidence` -- a structural
+    verdict from `derive.derive_structural_bound`, applied to the confusion at the *largest*
+    k in `counts` (see that function's docstring for why only the top of the sweep is
+    trustworthy evidence of a plateau). The two are independent: a backend can have a low
+    accuracy `ceiling` and no `structural_bound` at all (still trying and failing to track a
+    high true count), or a hard `structural_bound` at a count its accuracy curve alone would
+    not have flagged as a limit -- see `DiarizationCapabilities.max_speakers`'s docstring for
+    why folding both into one field was the mistake this profile's schema now avoids.
     """
+    seed = manifest.get("seed")
+    probe_label = f"probe seed-{seed}" if seed is not None else "probe (seed unknown)"
+    max_k = max(counts)
+
     backends_out: Dict[str, dict] = {}
     for name, by_k in outcomes.items():
         confusion = {str(k): confusion_from_outcomes(sessions) for k, sessions in sorted(by_k.items())}
@@ -192,6 +211,22 @@ def build_profile(
             if (reasons := refusal_reasons_from_outcomes(sessions))
         }
         curve = curve_from_outcomes(by_k)
+
+        # The structural-bound rule needs the confusion at the top of *this backend's own*
+        # sweep, which is `max_k` whenever every requested count was actually evaluated for
+        # it -- true for every real run, but a defensively-missing cell (e.g. a hand-built
+        # test fixture populating only some k) falls back to "unmeasured" rather than raising
+        # a KeyError.
+        max_k_confusion = confusion.get(str(max_k))
+        if max_k_confusion is not None:
+            structural_bound = derive_structural_bound(max_k_confusion, true_k=max_k)
+            structural_bound_evidence = format_structural_bound_evidence(
+                max_k_confusion, true_k=max_k, probe_label=probe_label
+            )
+        else:
+            structural_bound = None
+            structural_bound_evidence = "unmeasured"
+
         backends_out[name] = {
             "model_id": BACKENDS_BY_NAME[name].model_id,
             "confusion": confusion,
@@ -199,6 +234,8 @@ def build_profile(
             "accuracy_curve": {str(k): v for k, v in sorted(curve.items())},
             "ceiling": derive_ceiling(curve, threshold=threshold),
             "threshold": threshold,
+            "structural_bound": structural_bound,
+            "structural_bound_evidence": structural_bound_evidence,
         }
 
     return {

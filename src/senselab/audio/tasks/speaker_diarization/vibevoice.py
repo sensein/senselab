@@ -52,7 +52,10 @@ CAPABILITIES = DiarizationCapabilities(
     populates_text=True,  # joint ASR+diarization: measured 7/7 segments carried text
     speaker_label_kind="identity",
     labels_stable_across_files=False,  # per-audio numbering; not measured otherwise
-    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    # Seed-17 speaker-ceiling probe: at k=8, predicted counts ranged 6..16 (plus 5 refusals) —
+    # the widest spread of any backend, so no structural ceiling was observed.
+    max_speakers=None,
+    max_speakers_evidence="measured: no saturation, emits up to 16 (probe seed-17)",
     honors_speaker_hints=False,  # api.py warns that num_speakers is dropped here
 )
 
