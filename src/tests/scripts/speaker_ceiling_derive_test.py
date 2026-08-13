@@ -19,7 +19,9 @@ _spec.loader.exec_module(_derive)
 
 DEFAULT_ACCURACY_THRESHOLD = _derive.DEFAULT_ACCURACY_THRESHOLD
 derive_ceiling = _derive.derive_ceiling
+derive_structural_bound = _derive.derive_structural_bound
 exact_count_accuracy = _derive.exact_count_accuracy
+format_structural_bound_evidence = _derive.format_structural_bound_evidence
 
 
 def test_accuracy_counts_only_exact_matches() -> None:
@@ -99,3 +101,96 @@ def test_a_gap_in_the_curve_stops_the_ceiling_there() -> None:
     a pass would silently overstate the ceiling.
     """
     assert derive_ceiling({1: 1.0, 2: 1.0, 4: 1.0}) == 2
+
+
+# --- derive_structural_bound / format_structural_bound_evidence -----------------------------
+#
+# These answer "how large a count can the backend emit at all", independent of
+# derive_ceiling's "how large a count can it count correctly". The seed-17 probe's own
+# k=8 confusions are used directly as fixtures here (see the task-4 brief): Sortformer
+# 20x "4", child-adult 20x "2", and the other four backends spread across multiple
+# values with no single accumulation point.
+
+
+def test_a_backend_that_collapses_to_one_value_below_true_k_has_a_structural_bound() -> None:
+    """Sortformer's measured k=8 confusion: every session predicted exactly 4.
+
+    A checkpoint literally named `diar_sortformer_4spk` claimed 4; this is what
+    confirms it structurally rather than by name alone.
+    """
+    assert derive_structural_bound({"4": 20}, true_k=8) == 4
+
+
+def test_a_backend_confined_to_two_talkers_has_a_structural_bound_of_two() -> None:
+    """The child-adult classifier's measured k=8 confusion: every session counted 2."""
+    assert derive_structural_bound({"2": 20}, true_k=8) == 2
+
+
+def test_a_spread_of_predicted_counts_is_not_a_structural_bound() -> None:
+    """Pyannote and DiariZen's measured k=8 confusion: predictions spanned 5..8.
+
+    Still trying to track the true count, however inaccurately -- not the same failure
+    mode as a hard cap, and must not be reported as one.
+    """
+    assert derive_structural_bound({"5": 4, "6": 5, "7": 6, "8": 5}, true_k=8) is None
+
+
+def test_overshooting_the_true_count_is_not_a_structural_bound() -> None:
+    """MOSS and VibeVoice's measured k=8 confusions ranged well past the true count (12, 16).
+
+    A backend that predicts *more* than what is present is not exhibiting a ceiling at
+    all -- there is no plateau, just an unreliable count.
+    """
+    assert derive_structural_bound({"6": 2, "9": 10, "12": 8}, true_k=8) is None
+
+
+def test_a_uniform_correct_score_is_not_evidence_of_a_ceiling() -> None:
+    """Every session nailing the true count is an accuracy result, not a structural cap.
+
+    A backend that gets k=8 perfectly right has given no evidence it would fail at k=9;
+    reporting `max_speakers=8` here would fabricate a ceiling from a success.
+    """
+    assert derive_structural_bound({"8": 20}, true_k=8) is None
+
+
+def test_a_uniform_overcount_at_the_boundary_is_not_a_ceiling_either() -> None:
+    """A single value at or above true_k is excluded the same way a perfect score is.
+
+    `bound >= true_k` covers both: nothing in a uniform 9-out-of-8 says the backend
+    could not also reach 10.
+    """
+    assert derive_structural_bound({"9": 20}, true_k=8) is None
+
+
+def test_a_cell_with_only_refusals_has_no_structural_bound() -> None:
+    """A universal refusal says nothing about what the backend can emit, not that it emits 0."""
+    assert derive_structural_bound({"refused": 20}, true_k=8) is None
+
+
+def test_refusals_do_not_prevent_detecting_a_bound_among_completed_sessions() -> None:
+    """A few refusals alongside a consistent completed count still show the plateau."""
+    assert derive_structural_bound({"4": 15, "refused": 5}, true_k=8) == 4
+
+
+def test_saturation_evidence_matches_the_probes_own_wording() -> None:
+    """The exact string the task-4 brief gives for Sortformer's confirmed ceiling."""
+    evidence = format_structural_bound_evidence({"4": 20}, true_k=8, probe_label="probe seed-17")
+    assert evidence == "measured: saturates at 4 on 20/20 k=8 sessions (probe seed-17)"
+
+
+def test_no_saturation_evidence_reports_the_highest_observed_count() -> None:
+    """The exact string the task-4 brief gives for Pyannote's unbounded result."""
+    evidence = format_structural_bound_evidence({"5": 4, "6": 5, "7": 6, "8": 5}, true_k=8, probe_label="probe seed-17")
+    assert evidence == "measured: no saturation, emits up to 8 (probe seed-17)"
+
+
+def test_no_saturation_evidence_reports_overshoot_past_true_k() -> None:
+    """MOSS overshot to 12 at k=8; the evidence string must say 12, not 8."""
+    evidence = format_structural_bound_evidence({"6": 2, "9": 10, "12": 8}, true_k=8, probe_label="probe seed-17")
+    assert evidence == "measured: no saturation, emits up to 12 (probe seed-17)"
+
+
+def test_all_refusals_evidence_says_so_rather_than_inventing_a_maximum() -> None:
+    """Nothing was observed to report a maximum of, so the string must not claim one."""
+    evidence = format_structural_bound_evidence({"refused": 20}, true_k=8, probe_label="probe seed-17")
+    assert evidence == "measured: no completed sessions at k=8 (probe seed-17)"

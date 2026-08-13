@@ -39,12 +39,12 @@ All models supported by senselab, organized by task.
 
 | Model | Source | Model ID | Embedding Dim | Parameters | License | Speakers | Text | Recommended For |
 |-------|--------|----------|---------------|------------|---------|---|---|-----------------|
-| Pyannote Diarization | pyannote | `pyannote/speaker-diarization-community-1` | — | N/A | — | — | no | Multi-speaker diarization (requires HF token) |
-| NeMo Sortformer | nemo | `nvidia/diar_sortformer_4spk-v1` | — | N/A | — | 4 | no | 4-speaker diarization (via subprocess venv) |
-| VibeVoice-ASR-HF | microsoft | `microsoft/VibeVoice-ASR-HF` | — | 7B | — | — | yes | Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended) |
-| USC-SAIL Child-Adult Classifier | usc-sail | `AlexXu811/whisper-child-adult` | — | Whisper-base + LoRA | — | 2 | no | Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only) |
-| MOSS-Transcribe-Diarize | OpenMOSS-Team | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | — | 0.9B | — | — | yes | Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6) |
-| DiariZen | BUT-FIT | `BUT-FIT/diarizen-wavlm-large-s80-md` | — | WavLM-large + Conformer | CC BY-NC 4.0 — non-commercial only | — | no | Diarization only, no transcription (via subprocess venv installing DiariZen's forked pyannote-audio) |
+| Pyannote Diarization | pyannote | `pyannote/speaker-diarization-community-1` | — | N/A | — | — | no | Multi-speaker diarization (requires HF token). Seed-17 probe: the only backend that counts speakers reliably at all — 100% exact-count accuracy at k=1, 85% at k=2 — but falls to <=45% for k>=3; treat counts above 2 as unverified on this evidence. |
+| NeMo Sortformer | nemo | `nvidia/diar_sortformer_4spk-v1` | — | N/A | — | 4 | no | 4-speaker diarization (via subprocess venv). Structurally capped at 4 (confirmed, seed-17 probe: 20/20 k=8 sessions predicted exactly 4). Exact-count accuracy peaks at k=2..4 (65-80%) but is 0% at k=1 and at k>=5, where predictions clamp to 4 regardless of truth. |
+| VibeVoice-ASR-HF | microsoft | `microsoft/VibeVoice-ASR-HF` | — | 7B | — | — | yes | Unified ASR + diarization (in-process, transformers>=5.3, CUDA recommended). Seed-17 probe: no structural ceiling observed (predicted up to 16, plus refusals, at k=8); exact-count accuracy is uneven (95% at k=2, down to 20% by k=8) — best where a rough count suffices. |
+| USC-SAIL Child-Adult Classifier | usc-sail | `AlexXu811/whisper-child-adult` | — | Whisper-base + LoRA | — | 2 | no | Child/adult/overlap speaker-role labeling, not identity (via subprocess venv, CUDA only). Structurally capped at 2 (confirmed, seed-17 probe: 20/20 k=8 sessions counted exactly 2). Exact-count accuracy is 70% at k=2, 50% at k=1, and necessarily 0% for k>=3 since it cannot emit more than 2 speakers. |
+| MOSS-Transcribe-Diarize | OpenMOSS-Team | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | — | 0.9B | — | — | yes | Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6). Seed-17 probe: no structural ceiling observed (predicted up to 12 at k=8), but exact-count accuracy is inconsistent (0% at k=1, 25-65% elsewhere) — do not rely on its speaker count without independent verification. |
+| DiariZen | BUT-FIT | `BUT-FIT/diarizen-wavlm-large-s80-md` | — | WavLM-large + Conformer | CC BY-NC 4.0 — non-commercial only | — | no | Diarization only, no transcription (via subprocess venv installing DiariZen's forked pyannote-audio). Seed-17 probe: no structural ceiling observed (predicted up to 8 at k=8); best exact-count accuracy at k=2-3 (75-90%), degrading beyond. |
 
 ## Speech Emotion Recognition
 

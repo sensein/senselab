@@ -75,7 +75,10 @@ CAPABILITIES = DiarizationCapabilities(
     # Measured: VBx clusters per audio, so the same run gave ['1','2'] for one file
     # and ['0','0','1','0'] for another. A label means nothing outside its own file.
     labels_stable_across_files=False,
-    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    # Seed-17 speaker-ceiling probe: at k=8, predicted counts spanned {5,6,7,8}, never
+    # collapsing to one value, so no structural ceiling was observed in this sweep.
+    max_speakers=None,
+    max_speakers_evidence="measured: no saturation, emits up to 8 (probe seed-17)",
     honors_speaker_hints=False,
 )
 

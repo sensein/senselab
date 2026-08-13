@@ -45,7 +45,12 @@ CAPABILITIES = DiarizationCapabilities(
     populates_text=False,
     speaker_label_kind="identity",
     labels_stable_across_files=False,  # not measured; False is the conservative default
-    max_speakers=4,  # declared by the checkpoint's own name: diar_sortformer_4spk
+    # The checkpoint's own name (diar_sortformer_4spk) claimed 4; the seed-17 speaker-ceiling
+    # probe confirmed it structurally rather than by name alone: all 20 k=8 sessions predicted
+    # exactly "4", never higher, regardless of the true count. Its counting accuracy is a
+    # separate, much weaker fact — it never once reports k=1 correctly (0/20 across the probe).
+    max_speakers=4,
+    max_speakers_evidence="measured: saturates at 4 on 20/20 k=8 sessions (probe seed-17)",
     honors_speaker_hints=False,
 )
 

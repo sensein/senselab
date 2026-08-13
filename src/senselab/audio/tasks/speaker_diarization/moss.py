@@ -68,7 +68,10 @@ CAPABILITIES = DiarizationCapabilities(
     populates_text=True,  # joint ASR+diarization: measured 6/6 segments carried text
     speaker_label_kind="identity",  # emits S01/S02 tags parsed from its transcript
     labels_stable_across_files=False,  # not measured; False is the conservative default
-    max_speakers=None,  # unmeasured — pending the NeMo synthetic-speaker probe
+    # Seed-17 speaker-ceiling probe: at k=8, predicted counts ranged 6..12 — it overshoots
+    # the true count rather than plateauing, so no structural ceiling was observed.
+    max_speakers=None,
+    max_speakers_evidence="measured: no saturation, emits up to 12 (probe seed-17)",
     honors_speaker_hints=False,
 )
 

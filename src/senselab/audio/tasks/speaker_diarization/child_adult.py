@@ -62,7 +62,10 @@ CAPABILITIES = DiarizationCapabilities(
     # marks both talking at once, not a third speaker, so it does not raise the count.
     # (The worker does emit a literal "OVERLAP" label value — see the three-way split
     # below — but max_speakers counts distinguishable speakers, not label values.)
+    # The seed-17 speaker-ceiling probe confirmed this structurally, not just from its
+    # architecture: all 20 k=8 sessions counted exactly 2 speakers, never more.
     max_speakers=2,
+    max_speakers_evidence="measured: saturates at 2 on 20/20 k=8 sessions (probe seed-17)",
     honors_speaker_hints=False,
 )
 
