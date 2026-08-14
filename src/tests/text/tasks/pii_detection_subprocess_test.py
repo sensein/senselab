@@ -27,6 +27,7 @@ from senselab.text.tasks.pii_detection.subprocess_backend import (
     _GLINER_TO_PRESIDIO_CATEGORY,
     _PRESIDIO_PII_ENTITIES,
     DETECTOR_GLINER,
+    DETECTOR_LLM,
     DETECTOR_PRESIDIO,
     DETECTOR_RULES,
     detect_pii_via_subprocess,
@@ -256,4 +257,32 @@ def test_known_detectors_constant_matches_aliases() -> None:
     """The frozenset and the alias constants must agree — guards against drift."""
     from senselab.text.tasks.pii_detection.subprocess_backend import _KNOWN_DETECTORS
 
-    assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES}
+    assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES, DETECTOR_LLM}
+
+
+def test_the_llm_detector_is_known_but_not_default() -> None:
+    """The gap between the two sets is the whole point of the opt-in.
+
+    Collapsing them either way is a real defect: making ``llm`` default-on ties a scan's
+    result to whether a server happened to be listening, and dropping it from
+    ``_KNOWN_DETECTORS`` would reject it by name and leave it out of the agreement
+    denominator on the runs where a caller did enable it.
+    """
+    from senselab.text.tasks.pii_detection.subprocess_backend import _DEFAULT_DETECTORS, _KNOWN_DETECTORS
+
+    assert _DEFAULT_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES}
+    assert _KNOWN_DETECTORS - _DEFAULT_DETECTORS == {DETECTOR_LLM}
+
+
+def test_the_llm_detector_is_not_sent_to_the_worker(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """It runs host-side, so naming it must not put it in the worker's payload.
+
+    Leaving it in would have the worker report an unknown detector it cannot load,
+    turning an opt-in host-side scan into a spurious venv failure.
+    """
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO, DETECTOR_LLM])
+
+    assert recorder.calls[0]["input"]["detectors"] == [DETECTOR_PRESIDIO]
