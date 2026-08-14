@@ -223,7 +223,7 @@ def _get_installed_version(package_name: str) -> Optional[str]:
 def check_compatibility(function_key: str) -> bool:
     """Check if the dependencies for a function are available and compatible.
 
-    Verifies both speech_presence and version ranges.
+    Verifies both presence and version ranges.
 
     Args:
         function_key: Key in COMPATIBILITY_MATRIX.
@@ -251,7 +251,7 @@ def check_compatibility(function_key: str) -> bool:
             f"Function '{function_key}' requires Python {entry.python_versions}, but you are running Python {py_ver}."
         )
 
-    # Check each required dependency — speech_presence AND version
+    # Check each required dependency — presence AND version
     for dep in entry.required_deps:
         version = _get_installed_version(dep)
         if version is None:
