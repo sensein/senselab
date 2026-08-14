@@ -1,6 +1,17 @@
 """Standalone PII detection over plain text, ``ScriptLine``, and ASR transcripts.
 
-One public entry point, :func:`detect_pii`, over a ``str``, a ``ScriptLine`` (optionally
+Two halves, kept separate on purpose. :func:`scan_for_pii` **runs the detectors** and
+returns a :class:`PiiScan` -- spans, which detectors ran, what failed -- and decides
+nothing. :func:`decide_pii` **aggregates that evidence to a verdict**: how many detectors
+must agree, how scores and agreement combine into a confidence, what ``contains_pii``
+becomes. :func:`detect_pii` is the convenience composition of the two for the common case.
+
+The split is the point. Running a detector and concluding something from its output are
+different jobs with different parameters -- a score floor is a property of the tool, a
+corroboration rule is a judgement -- and a caller who needs a different judgement should
+be able to keep the scan and replace the decision without reimplementing either.
+
+All three accept a ``str``, a ``ScriptLine`` (optionally
 with nested word/segment ``chunks``), or a sequence of either. No dependency on any
 audio-workflow concept (a run "pass", a per-pass tag, an ASR-model ensemble) — this is
 what a caller reaches for to check arbitrary text or a transcript line for PII on its own.
@@ -80,9 +91,12 @@ __all__ = [
     "LocalLlmConfig",
     "PiiReport",
     "PiiSpan",
+    "PiiScan",
+    "decide_pii",
     "default_detectors",
     "detect_pii",
     "flatten_script_line",
+    "scan_for_pii",
 ]
 
 
@@ -110,6 +124,35 @@ class PiiSpan:
     source: str  # "presidio" or "gliner/<original_label>"
     asr_model: str
     score: float | None = None  # detector confidence in [0, 1]
+
+
+@dataclass
+class PiiScan:
+    """What the detectors found for one input, before anything is concluded from it.
+
+    The output of :func:`scan_for_pii` and the input to :func:`decide_pii`. It carries
+    evidence and nothing else: no ``contains_pii``, no confidence, no threshold applied.
+    Running the detectors and deciding what their agreement means are separate jobs, and a
+    caller that wants the second one done differently — a different corroboration rule, a
+    severity ordering this module deliberately does not impose, an aggregation across
+    several transcripts of the same recording — needs the evidence without a verdict
+    already baked into it.
+
+    Attributes:
+        spans: Deduped detections for this input. Deduplication is normalisation, not
+            judgement: two detectors reporting the same ``(category, text, source)`` are
+            one finding by definition.
+        detectors_used: Names of the detectors that actually ran. Load-bearing for any
+            agreement rule downstream — it is the denominator, and "two of two agreed" is
+            a different claim from "two of four agreed".
+        failures: Why a detector did not run, keyed by name. An empty ``spans`` with a
+            populated ``failures`` is "we could not check", which must never be read as
+            "we checked and it was clean".
+    """
+
+    spans: list[PiiSpan] = field(default_factory=list)
+    detectors_used: list[str] = field(default_factory=list)
+    failures: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -323,105 +366,56 @@ def _materialize_spans(raw_spans: list[dict[str, Any]], source_id: str) -> list[
     return spans
 
 
-def _empty_reports(n: int, failures: dict[str, str]) -> list[PiiReport]:
-    """Build ``n`` identical "detector did not run" reports, one per input.
-
-    Every early-return branch of ``detect_pii`` (disabled, all-empty, subprocess crash,
-    no detector loaded) shares this shape: ``detector_used=None`` and
-    ``detection_confidence=None`` so a caller can tell "did not run" apart from "ran and
-    found nothing" (``0.0``) — the same distinction the ``audio_analysis`` workflow's
-    per-pass PII adapter preserves on top of this.
-
-    Args:
-        n: Number of reports to produce (one per input in the caller's batch).
-        failures: Failure dict shared by every report in the batch.
-
-    Returns:
-        A list of ``n`` ``PiiReport`` objects, each a fresh, independent instance.
-    """
-    return [
-        PiiReport(
-            contains_pii=False,
-            n_spans=0,
-            categories=[],
-            spans=[],
-            failures=dict(failures),
-            detector_used=None,
-            detection_confidence=None,
-        )
-        for _ in range(n)
-    ]
-
-
-def detect_pii(
+def scan_for_pii(
     inputs: str | ScriptLine | Sequence[str | ScriptLine],
     detectors: list[str] | None = None,
     presidio_score_threshold: float = 0.4,
     gliner_model: str | None = None,
     gliner_labels: list[str] | None = None,
     gliner_threshold: float = 0.5,
-    require_cross_source_corroboration: bool = True,
     local_llm_config: LocalLlmConfig | None = None,
-) -> PiiReport | list[PiiReport]:
-    """Scan a string or ``ScriptLine`` (or a sequence of either) for PII.
+) -> PiiScan | list[PiiScan]:
+    """Run the detectors over a string or ``ScriptLine`` and return what they found.
 
-    Standalone entry point: no dependency on any audio-workflow concept (a run "pass", a
-    per-pass tag, an ASR-model ensemble). ``str`` and ``ScriptLine`` are two entry shapes
-    over one implementation — a ``ScriptLine`` is flattened to text via
+    Execution only. Every parameter here says *how to run the detectors* — which ones, at
+    what per-detector score floor, against which label set, at which endpoint. Nothing here
+    decides what the findings mean; that is :func:`decide_pii`'s job, and the two are
+    separate functions so a caller can keep one and replace the other.
+
+    Standalone: no dependency on any audio-workflow concept (a run "pass", a per-pass tag,
+    an ASR-model ensemble). A ``ScriptLine`` is flattened to text via
     :func:`flatten_script_line` first, then both shapes go through the same
     subprocess-backed detection.
 
-    Every non-empty input is sent to ``detect_pii_via_subprocess`` in a single batched
-    call (one entry per input index) rather than one subprocess per input — the venv's
-    model loads (~5-10s each for Presidio/GLiNER) dominate cost, so batching a whole
-    sequence avoids paying that repeatedly.
+    Every non-empty input is sent to ``detect_pii_via_subprocess`` in a single batched call
+    (one entry per input index) rather than one subprocess per input — the venv's model
+    loads (~5-10s each for Presidio/GLiNER) dominate cost, so batching a whole sequence
+    pays that once.
 
     Args:
-        inputs: A single ``str``, a single ``ScriptLine``, or a sequence of either
-            (may be mixed). A ``ScriptLine`` with no text anywhere in its tree (e.g. a
-            diarization line carrying only a ``speaker`` label) flattens to ``""`` and
-            is treated exactly like an empty string input — a documented empty result,
-            not an error.
+        inputs: A ``str``, a ``ScriptLine``, or a sequence of either.
         detectors: Subset of ``{"presidio", "gliner", "rules", "llm"}`` to run. ``None``
             (default) runs :func:`default_detectors` — the first three; ``"llm"`` is known
-            but never default-on, so it has to be named explicitly.
-            An empty list (``[]``) is the caller explicitly disabling detection:
-            no subprocess is spawned, every report gets ``detector_used=None`` and an
-            explicit ``"pii_disabled"`` failure note — the LLM-judge-shaped case: this
-            module ships no LLM judge, and there is deliberately no default-on path
-            that would require one.
-        presidio_score_threshold: Presidio entities below this score are dropped at
-            extraction time. 0.4 is permissive enough to catch standard phone-number
-            formats; cross-detector corroboration still gates the boolean flag for
-            borderline scores.
-        gliner_model: HuggingFace model id for GLiNER. ``None`` uses the subprocess
-            module's default (``nvidia/gliner-pii``). Ignored when ``"gliner"`` is
-            excluded from ``detectors``.
-        gliner_labels: Labels passed to GLiNER's ``predict_entities``. ``None`` uses
-            the subprocess module's curated HIPAA-18 default set.
+            but never default-on, so it has to be named explicitly. An empty list (``[]``)
+            is the caller explicitly disabling detection: no subprocess is spawned and the
+            scan comes back with an explicit ``"pii_disabled"`` failure note.
+        presidio_score_threshold: Drop Presidio detections below this score.
+        gliner_model: Override the GLiNER checkpoint.
+        gliner_labels: Labels passed to GLiNER's ``predict_entities``. ``None`` uses the
+            subprocess module's curated HIPAA-18 default set. Keep it flat — see
+            ``doc.md`` on competing-claim interference.
         gliner_threshold: Drop GLiNER predictions below this score.
-        require_cross_source_corroboration: When ``True`` (default) and ≥2 detectors
-            ran, only flip ``contains_pii`` to ``True`` for a ``(category,
-            normalized_text)`` pair that ≥2 of them independently
-            flagged. A caller corroborating across multiple ASR transcripts of the same
-            recording applies the same rationale one layer up (see the ``audio_analysis``
-            workflow's per-pass PII adapter); this generalizes it to cross-detector
-            agreement since a standalone input has exactly one transcript to corroborate.
-            When only one detector ran, any single detection counts (corroboration cannot
-            apply with one witness).
         local_llm_config: Endpoint for the optional local-LLM detector. Ignored unless
             ``"llm"`` is named in ``detectors``; defaults to
             :class:`~senselab.text.tasks.pii_detection.local_llm.LocalLlmConfig`'s own
-            loopback default. A non-loopback URL raises at construction — see that
-            module for why that is a checked invariant rather than a documented one.
+            loopback default. A non-loopback URL raises at construction — see that module
+            for why that is a checked invariant rather than a documented one.
 
     Returns:
-        A single ``PiiReport`` when ``inputs`` is a scalar ``str``/``ScriptLine``; a
-        list of ``PiiReport``, same length and order as ``inputs``, when it is a
-        sequence. ``detector_used=None`` and ``detection_confidence=None`` together
-        mean detection did not actually run for that input (disabled, empty input,
-        subprocess failure, or no detector loaded) — distinct from ``detection_confidence
-        == 0.0``, which means detection ran and found nothing.
+        A single :class:`PiiScan` when ``inputs`` is a scalar; a list of the same length and
+        order otherwise. An empty ``detectors_used`` means no detector ran for that batch,
+        and ``failures`` says why — never confuse it with "ran and found nothing", which is
+        an empty ``spans`` alongside a populated ``detectors_used``.
     """
     items: Sequence[str | ScriptLine]
     if isinstance(inputs, (str, ScriptLine)):
@@ -433,22 +427,25 @@ def detect_pii(
 
     texts: list[str] = [flatten_script_line(item) if isinstance(item, ScriptLine) else item for item in items]
 
+    def _finish(scans: list[PiiScan]) -> PiiScan | list[PiiScan]:
+        return scans[0] if is_scalar else scans
+
+    def _empty(failures: dict[str, str]) -> list[PiiScan]:
+        return [PiiScan(spans=[], detectors_used=[], failures=dict(failures)) for _ in texts]
+
     # Explicit ``detectors=[]`` means the caller has chosen to disable PII detection.
     # Checked before anything else so it wins regardless of input content, giving a clean
     # three-way distinction between "pii_disabled", "ran, found nothing", and "subprocess
     # failed" that any caller layered on top of this function can rely on.
     if detectors is not None and len(detectors) == 0:
-        disabled_reports = _empty_reports(
-            len(texts), {"pii_disabled": "PII detection disabled by caller (detectors=[])."}
-        )
-        return disabled_reports[0] if is_scalar else disabled_reports
+        return _finish(_empty({"pii_disabled": "PII detection disabled by caller (detectors=[])."}))
 
     # Index-keyed so a batch of inputs shares one subprocess call; empty/whitespace-only
     # entries never reach the detectors.
     transcripts_by_index: dict[str, str] = {str(i): t for i, t in enumerate(texts) if t and t.strip()}
 
     if not transcripts_by_index:
-        return _quick_return(texts, {}, is_scalar)
+        return _finish(_empty({}))
 
     try:
         subprocess_kwargs: dict[str, Any] = {
@@ -462,13 +459,13 @@ def detect_pii(
         if gliner_labels is not None:
             subprocess_kwargs["gliner_labels"] = gliner_labels
         result = detect_pii_via_subprocess(transcripts_by_index, **subprocess_kwargs)
-    except Exception as exc:  # noqa: BLE001 — caller needs reports to continue, not a crash
+    except Exception as exc:  # noqa: BLE001 — caller needs a scan to continue, not a crash
         msg = f"PII subprocess failed: {type(exc).__name__}: {exc}"
         print(f"warn: {msg}", file=sys.stderr)
-        return _quick_return(texts, {"pii_subprocess": msg}, is_scalar)
+        return _finish(_empty({"pii_subprocess": msg}))
 
     spans_by_index_raw = result.get("spans_by_asr", {})
-    subprocess_failures = dict(result.get("failures", {}))
+    failures = dict(result.get("failures", {}))
     detectors_used = list(result.get("detectors_used", []))
 
     # The local LLM runs here, not in the venv -- it needs nothing but stdlib urllib
@@ -489,55 +486,152 @@ def detect_pii(
             detectors_used.append(DETECTOR_LLM)
         else:
             # One failure fails the detector for the whole batch rather than leaving it
-            # counted as "ran" for some inputs and not others: `detectors_used` is
-            # per-report and feeds the agreement denominator, so a per-input denominator
-            # would make two reports in one batch incomparable.
-            subprocess_failures["llm"] = first_failure
+            # counted as "ran" for some inputs and not others: `detectors_used` is the
+            # agreement denominator, so a per-input denominator would make two scans in
+            # one batch incomparable.
+            failures["llm"] = first_failure
 
-    for name, msg in subprocess_failures.items():
+    for name, msg in failures.items():
         print(f"warn: PII / {name}: {msg}", file=sys.stderr)
 
     if not detectors_used:
-        no_detector_msg = "No PII detector (Presidio, GLiNER, rules, llm) ran; contains_pii=False reported by default."
-        subprocess_failures.setdefault("no_pii_detector", no_detector_msg)
+        no_detector_msg = "No PII detector (Presidio, GLiNER, rules, llm) ran."
+        failures.setdefault("no_pii_detector", no_detector_msg)
         print(f"warn: {no_detector_msg}", file=sys.stderr)
-        return _quick_return(texts, subprocess_failures, is_scalar)
+        return _finish(_empty(failures))
 
-    built_reports: list[PiiReport] = []
-    for i, _text in enumerate(texts):
-        spans = _materialize_spans(spans_by_index_raw.get(str(i), []), str(i))
-        contains_pii = _corroborated_contains_pii(spans, detectors_used, require_cross_source_corroboration)
-        built_reports.append(
+    return _finish(
+        [
+            PiiScan(
+                spans=_materialize_spans(spans_by_index_raw.get(str(i), []), str(i)),
+                detectors_used=list(detectors_used),
+                failures=dict(failures),
+            )
+            for i in range(len(texts))
+        ]
+    )
+
+
+def decide_pii(
+    scans: PiiScan | Sequence[PiiScan],
+    require_cross_source_corroboration: bool = True,
+    n_sources: int = 1,
+) -> PiiReport | list[PiiReport]:
+    """Turn detector evidence into a verdict.
+
+    The aggregation-and-threshold half, deliberately separate from :func:`scan_for_pii`.
+    Everything here is a *decision*: how many detectors must agree before a finding counts,
+    how per-detector scores and agreement combine into one confidence, and what
+    ``contains_pii`` ends up being. None of it re-runs a detector, and none of
+    :func:`scan_for_pii`'s parameters appear here — that separation is the point. A caller
+    with a different corroboration rule, a severity ordering this module declines to
+    impose, or an aggregation across several transcripts of one recording replaces this
+    function and keeps the scan.
+
+    Args:
+        scans: One :class:`PiiScan`, or a sequence of them.
+        require_cross_source_corroboration: When ``True`` (default) and ≥2 detectors ran,
+            only flip ``contains_pii`` for a ``(category, normalized_text)`` pair that ≥2
+            of them independently flagged. Agreement keys on a coarse family rather than
+            the raw category, so two detectors naming the same entity slightly differently
+            still corroborate. When only one detector ran, corroboration cannot apply and
+            any single detection counts — one witness is not a quorum, but it is not
+            nothing either.
+        n_sources: How many independent transcripts of the same underlying content this
+            evidence came from. ``1`` for standalone text. A workflow that scans several
+            ASR backends' transcripts of one recording passes the count so cross-source
+            agreement can raise confidence — a span only one transcript contains is the
+            prototypical ASR hallucination.
+
+    Returns:
+        A single ``PiiReport`` for a single scan; a list of the same length and order for a
+        sequence. ``detector_used=None`` and ``detection_confidence=None`` together mean
+        detection did not actually run — distinct from ``detection_confidence == 0.0``,
+        which means it ran and found nothing.
+    """
+    is_scalar = isinstance(scans, PiiScan)
+    scan_list = [scans] if isinstance(scans, PiiScan) else list(scans)
+
+    reports: list[PiiReport] = []
+    for scan in scan_list:
+        if not scan.detectors_used:
+            # Nothing ran, so there is nothing to decide. contains_pii=False is the safe
+            # report, and detection_confidence stays None so it cannot be read as 0.0
+            # ("checked, clean").
+            reports.append(
+                PiiReport(
+                    contains_pii=False,
+                    n_spans=0,
+                    categories=[],
+                    spans=[],
+                    failures=dict(scan.failures),
+                    detector_used=None,
+                    detection_confidence=None,
+                )
+            )
+            continue
+
+        reports.append(
             PiiReport(
-                contains_pii=contains_pii,
-                n_spans=len(spans),
-                categories=sorted({s.category for s in spans}),
-                spans=spans,
-                failures=dict(subprocess_failures),
-                detector_used=",".join(detectors_used),
+                contains_pii=_corroborated_contains_pii(
+                    scan.spans, scan.detectors_used, require_cross_source_corroboration
+                ),
+                n_spans=len(scan.spans),
+                categories=sorted({s.category for s in scan.spans}),
+                spans=scan.spans,
+                failures=dict(scan.failures),
+                detector_used=",".join(scan.detectors_used),
                 detection_confidence=_compute_detection_confidence(
-                    spans, n_asr_models=1, n_detectors_run=len(detectors_used)
+                    scan.spans, n_asr_models=n_sources, n_detectors_run=len(scan.detectors_used)
                 ),
             )
         )
-    return built_reports[0] if is_scalar else built_reports
+
+    return reports[0] if is_scalar else reports
 
 
-def _quick_return(texts: list[str], failures: dict[str, str], is_scalar: bool) -> PiiReport | list[PiiReport]:
-    """Shared tail for ``detect_pii``'s "detector did not run" branches.
+def detect_pii(
+    inputs: str | ScriptLine | Sequence[str | ScriptLine],
+    detectors: list[str] | None = None,
+    presidio_score_threshold: float = 0.4,
+    gliner_model: str | None = None,
+    gliner_labels: list[str] | None = None,
+    gliner_threshold: float = 0.5,
+    require_cross_source_corroboration: bool = True,
+    local_llm_config: LocalLlmConfig | None = None,
+) -> PiiReport | list[PiiReport]:
+    """Scan for PII and decide on the result: :func:`scan_for_pii` then :func:`decide_pii`.
+
+    The convenience path for the common case, and deliberately nothing more than the
+    composition of the two halves — it exists so a caller who wants the default decision
+    does not have to write both calls, not to hide the split. Reach for the halves directly
+    when the decision needs to differ from the default: ``scan_for_pii`` gives the evidence,
+    and any rule can be applied to it.
 
     Args:
-        texts: The flattened input texts (only its length matters here — one report
-            per input).
-        failures: Failure dict to attach to every report (empty for the "all inputs
-            were empty, nothing to scan" branch).
-        is_scalar: Whether the original ``detect_pii`` call took a scalar input.
+        inputs: See :func:`scan_for_pii`.
+        detectors: See :func:`scan_for_pii`.
+        presidio_score_threshold: See :func:`scan_for_pii`.
+        gliner_model: See :func:`scan_for_pii`.
+        gliner_labels: See :func:`scan_for_pii`.
+        gliner_threshold: See :func:`scan_for_pii`.
+        require_cross_source_corroboration: See :func:`decide_pii`.
+        local_llm_config: See :func:`scan_for_pii`.
 
     Returns:
-        A bare ``PiiReport`` when ``is_scalar``, else a list matching ``texts``' length.
+        A single ``PiiReport`` when ``inputs`` is a scalar; a list of the same length and
+        order otherwise.
     """
-    reports = _empty_reports(len(texts), failures)
-    return reports[0] if is_scalar else reports
+    scans = scan_for_pii(
+        inputs,
+        detectors=detectors,
+        presidio_score_threshold=presidio_score_threshold,
+        gliner_model=gliner_model,
+        gliner_labels=gliner_labels,
+        gliner_threshold=gliner_threshold,
+        local_llm_config=local_llm_config,
+    )
+    return decide_pii(scans, require_cross_source_corroboration=require_cross_source_corroboration)
 
 
 def _compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int, n_detectors_run: int) -> float:

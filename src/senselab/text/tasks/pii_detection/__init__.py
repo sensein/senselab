@@ -2,10 +2,13 @@
 
 from senselab.text.tasks.pii_detection.api import (
     PiiReport,
+    PiiScan,
     PiiSpan,
+    decide_pii,
     default_detectors,
     detect_pii,
     flatten_script_line,
+    scan_for_pii,
 )
 from senselab.text.tasks.pii_detection.local_llm import LocalLlmConfig
 from senselab.text.tasks.pii_detection.subprocess_backend import (
@@ -22,8 +25,11 @@ __all__ = [
     "DETECTOR_RULES",
     "LocalLlmConfig",
     "PiiReport",
+    "PiiScan",
     "PiiSpan",
+    "decide_pii",
     "default_detectors",
     "detect_pii",
     "flatten_script_line",
+    "scan_for_pii",
 ]
