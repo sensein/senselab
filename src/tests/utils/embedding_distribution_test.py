@@ -11,8 +11,8 @@ import pytest
 from senselab.utils.tasks.embedding_distribution import describe_embedding_distribution
 
 
-def _tight_cone(n: int, d: int, spread: float, seed: int = 0) -> np.ndarray:
-    """N vectors clustered around one random direction, with angular spread confined to a few axes.
+def _tight_cone(n: int, d: int, spread: float, seed: int = 0, rank: int = 5) -> np.ndarray:
+    """N vectors clustered around one random direction, with angular spread confined to `rank` axes.
 
     Noise isotropic across all d dimensions would leave the centred participation ratio pinned at
     its Marchenko-Pastur null no matter how small ``spread`` is -- PR is scale-invariant, so an
@@ -20,12 +20,14 @@ def _tight_cone(n: int, d: int, spread: float, seed: int = 0) -> np.ndarray:
     full-rank, noise-like shape. Confirmed numerically down to spread=1e-4 at d=192, n=400: PR
     never moved off ~129.7, the same value uniform random vectors give. A cluster that genuinely
     "occupies few directions" needs the noise itself to live in a low-rank subspace, not just be
-    small.
+    small. ``rank`` is parameterised (not fixed at 5) so a caller can also use this fixture to pin
+    the participation-ratio formula against a *known* value: with exactly ``rank`` roughly-equal
+    residual eigenvalues, PR should read close to ``rank`` itself, not merely "below something".
     """
     rng = np.random.default_rng(seed)
     axis = rng.normal(size=d)
     axis /= np.linalg.norm(axis)
-    rank = min(5, d - 1)
+    rank = min(rank, d - 1)
     basis = rng.normal(size=(rank, d))
     basis /= np.linalg.norm(basis, axis=1, keepdims=True)
     coeffs = rng.normal(size=(n, rank))
@@ -63,7 +65,30 @@ def test_a_tight_cone_has_high_rbar_and_low_effective_rank() -> None:
 
     assert dist.rbar > 0.9
     assert dist.rbar > 10 * dist.nulls.rbar_null
+    # Rank-5 noise forces rank(centred) <= 5 by construction, so this bound only checks that PR
+    # counts nonzero singular values roughly right, not that it combines them correctly -- an
+    # inverted or mis-squared formula would likely still clear it. See
+    # test_participation_ratio_matches_known_closed_form_rank for the assertion that actually
+    # pins the formula.
     assert dist.spectrum.participation_ratio < 0.5 * dist.nulls.participation_ratio_null
+
+
+@pytest.mark.parametrize("k", [3, 8])
+def test_participation_ratio_matches_known_closed_form_rank(k: int) -> None:
+    """A residual with k roughly-equal non-zero eigenvalues must give PR close to k, exactly.
+
+    ``test_a_tight_cone_has_high_rbar_and_low_effective_rank`` only bounds participation_ratio
+    from above (``< 0.5 * null``), and a rank-5 residual satisfies that bound almost regardless of
+    whether the formula is right -- the bound constrains the *count* of nonzero singular values,
+    not their combination. This pins the value instead: for a centred covariance with exactly k
+    equal eigenvalues, ``PR = (sum lambda)^2 / sum(lambda^2) = k`` exactly, so confining the
+    residual to k roughly-equal-variance directions gives a number the formula has to *hit*, which
+    catches an inverted, mis-squared, or accidentally-uncentred computation that the looser bound
+    would miss.
+    """
+    x = _tight_cone(n=400, d=192, spread=0.15, rank=k, seed=k)
+    _, dist = describe_embedding_distribution(x)
+    assert dist.spectrum.participation_ratio == pytest.approx(k, rel=0.15)
 
 
 def test_the_centroid_is_unit_norm() -> None:
@@ -143,27 +168,33 @@ def test_n_effective_is_none_without_window_information() -> None:
 
 
 def test_pc1_share_is_computed_on_centred_data() -> None:
-    """Uncentred, PC1 is just the mean direction and explains almost everything for any coherent set.
+    """Centring must actually run, or PC1 share reads near-1.0 for any coherent cluster regardless of shape.
 
-    That would make it a field that always reads the same. Centred, a high PC1 share is the
-    signature of bimodality, which is what makes it worth reporting.
+    Uncentred, PC1 of a tight, unimodal cluster *is* the mean direction and swallows nearly all the
+    variance -- a field that would read the same whether the residual is isotropic or structured,
+    so on its own it carries no information. Centred, that dominant direction is subtracted out and
+    what is left is the residual: an isotropic residual spreads its variance over ~d-1 directions
+    roughly equally, so a correctly centred PC1 share is small. A dropped centring step would
+    report the *uncentred* number here instead of the centred one -- both cleared a bare ``> 0.8``
+    bound on an earlier (bimodal) fixture for this test, which is why this version computes the
+    uncentred share explicitly with numpy and asserts the reported centred share sits far below it,
+    rather than asserting either number in isolation.
     """
-    d = 64
+    n, d = 400, 192
     rng = np.random.default_rng(5)
     axis = rng.normal(size=d)
     axis /= np.linalg.norm(axis)
-    perp = rng.normal(size=d)
-    perp -= (perp @ axis) * axis
-    perp /= np.linalg.norm(perp)
-
-    # Two lobes displaced along one perpendicular direction: one dominant axis of variation.
-    a = axis[None, :] + 0.35 * perp[None, :] + 0.02 * rng.normal(size=(100, d))
-    b = axis[None, :] - 0.35 * perp[None, :] + 0.02 * rng.normal(size=(100, d))
-    x = np.vstack([a, b])
+    x = axis[None, :] + 0.02 * rng.normal(size=(n, d))
     x /= np.linalg.norm(x, axis=1, keepdims=True)
 
+    sv_uncentred = np.linalg.svd(x, compute_uv=False)
+    lam_uncentred = sv_uncentred**2
+    uncentred_share = float(lam_uncentred[0] / lam_uncentred.sum())
+
     _, dist = describe_embedding_distribution(x)
-    assert dist.spectrum.pc1_share_centred > 0.8
+
+    assert uncentred_share > 0.8  # the mean direction dominates, as it does for any tight cluster
+    assert dist.spectrum.pc1_share_centred < 0.1 * uncentred_share
     assert len(dist.spectrum.eigenvalue_shares_top5) == 5
 
 
