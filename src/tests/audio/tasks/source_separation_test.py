@@ -304,6 +304,80 @@ def test_long_input_is_chunked_aligned_and_stitched(monkeypatch: pytest.MonkeyPa
         assert len(source.metadata["unasdiff_alignment_margins"]) == 1
 
 
+def test_irregular_final_window_aligns_on_its_true_shared_region(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flush-to-end final window overlaps by more than one hop, and alignment must follow it.
+
+    ``_window_starts`` appends a last window flush against the end of the signal, so its overlap
+    with its predecessor is wider than ``hop_samples``: 4.92 s of audio gives ``starts=[0, 14720]``,
+    a 49280-sample shared region rather than the regular 32000. Slicing a fixed ``overlap_samples``
+    off each side compares two regions offset by 17280 samples -- different audio -- and because
+    the score is a dot product after normalisation, content shared at *different indices*
+    contributes nothing. Every permutation then scores ~0 and the margin carries no information
+    about which one is right.
+
+    The fake worker returns exact slices of two known sources with the final window's two slots
+    deliberately swapped, which is precisely what alignment exists to undo. On the true shared
+    region the correct permutation wins by ~2.0 and the stitched output reproduces both sources;
+    on a misaligned region the margin collapses into the ambiguous band and the swap survives.
+    """
+    import types
+
+    from senselab.audio.tasks.source_separation import unasdiff as u
+
+    monkeypatch.setattr(u, "ensure_venv", lambda *a, **k: __import__("pathlib").Path("/tmp/fake-unasdiff-venv"))
+    monkeypatch.setattr(u, "venv_python", lambda venv_dir: "python3")
+
+    window_samples = int(u._WINDOW_S * u._TARGET_SR)
+    hop_samples = window_samples - int(u._OVERLAP_S * u._TARGET_SR)
+    n_samples = 78720  # 4.92 s -- one regular window plus a flush-to-end final one
+    starts = u._window_starts(n_samples, window_samples, hop_samples)
+    assert starts == [0, n_samples - window_samples], "test premise: two windows, the last one flush"
+    assert starts[1] != hop_samples, "test premise: the final window is irregularly spaced"
+
+    torch.manual_seed(0)
+    # Scaled well inside full scale: these go through a real WAV round-trip, and unit-variance
+    # noise clips on write, which would cap the reconstruction check near 0.95 for a reason
+    # having nothing to do with alignment.
+    truth = [0.1 * torch.randn(n_samples), 0.1 * torch.randn(n_samples)]
+
+    def fake_run(
+        cmd: list, *, input: str, capture_output: bool, text: bool, timeout: int, env: dict
+    ) -> "types.SimpleNamespace":
+        payload = __import__("json").loads(input)
+        for w, paths in enumerate(payload["out_paths"]):
+            # The final window comes back with its slots swapped -- the permutation alignment
+            # has to detect and undo. Every earlier window keeps the reference order.
+            order = [1, 0] if w == len(starts) - 1 else [0, 1]
+            for s, p in enumerate(paths):
+                segment = truth[order[s]][starts[w] : starts[w] + window_samples]
+                Audio(waveform=segment.unsqueeze(0), sampling_rate=u._TARGET_SR).save_to_file(p)
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=__import__("json").dumps({"output_paths": payload["out_paths"]}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    result = u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+    )
+
+    margin = result[0][0].metadata["unasdiff_alignment_margins"][0]
+    assert margin > 1.0, f"margin {margin} -- the compared regions do not correspond to the same audio"
+
+    # The swap was undone, so each stitched source follows one truth signal for its whole
+    # length; leaving it in place would cross the two over from sample 14720 onward.
+    for s, source in enumerate(result[0]):
+        stitched = source.waveform.squeeze(0)
+        assert torch.corrcoef(torch.stack([stitched, truth[s]]))[0, 1] > 0.99
+
+
 def test_diffusion_steps_defaults_to_the_dead_constants_value() -> None:
     """separate_with_unasdiff's default matches the module constant, not a second hardcoded 200.
 
