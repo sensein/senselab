@@ -27,6 +27,20 @@
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#pii-detection">PII detection</a>
+  <ul>
+    <li><a href="#four-detectors-and-why-each-is-here">Four detectors, and why each is here</a></li>
+    <li><a href="#why-a-subprocess-venv">Why a subprocess venv</a></li>
+    <li><a href="#long-transcripts-are-windowed">Long transcripts are windowed</a></li>
+    <li><a href="#the-gliner-label-list-must-stay-flat">The GLiNER label list must stay flat</a></li>
+    <li><a href="#confidence-and-its-denominator">Confidence, and its denominator</a></li>
+    <li><a href="#no-category-severity-weighting-deliberately">No category-severity weighting, deliberately</a></li>
+    <li><a href="#corroboration">Corroboration</a></li>
+  </ul></li>
+</ul>
+
 
 
             <h2>API Documentation</h2>
@@ -140,14 +154,136 @@
                     <h1 class="modulename">
 <a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../text.html">text</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.pii_detection    </h1>
 
-                        <div class="docstring"><p>Standalone PII detection over text, <code>ScriptLine</code>, and transcripts.</p>
+                        <div class="docstring"><h1 id="pii-detection">PII detection</h1>
+
+<p>Scan a <code>str</code>, a <code>ScriptLine</code>, or a sequence of either for personally identifiable
+information. One public entry point, <code><a href="#detect_pii">detect_pii</a></code>, plus <code>detect_pii_in_audios</code> in
+<code><a href="../../audio/tasks/pii_detection.html">senselab.audio.tasks.pii_detection</a></code> for the transcribe-then-detect composition.</p>
+
+<p>Nothing here knows about a run "pass", a per-pass tag, or an ASR ensemble. A caller that
+needs to merge several ASR backends' transcripts for one recording and corroborate across
+them builds an adapter on top — <code>audio_analysis</code> keeps its own for exactly that reason.</p>
+
+<h2 id="four-detectors-and-why-each-is-here">Four detectors, and why each is here</h2>
+
+<p>Three run inside an isolated subprocess venv; the fourth runs in the host process and is
+off by default.</p>
+
+<p><strong>Microsoft Presidio Analyzer</strong> — regex plus a spaCy NER orchestrator, with purpose-built
+recognizers for emails, phone numbers, SSNs, credit cards, IP addresses, dates and
+locations. Strong on structured identifiers, weak on the PHI categories that have no
+regular form.</p>
+
+<p><strong>GLiNER PII</strong> (<code>nvidia/gliner-pii</code>) — a zero-shot transformer NER fine-tuned on ~100k
+synthetic PII/PHI records, defaulting to the HIPAA Safe Harbor 18. It catches what
+Presidio has no recognizer for: medical record number, health plan number, account
+number, fax number, biometric / device / vehicle identifiers.</p>
+
+<p><strong>Rules cascade</strong> (<code>rules.py</code>, ported from PR #542) — regex, gazetteers, spaCy NER,
+self-disclosed demographics, age-over-90, and a combinatorial re-identification window.
+It earns its place next to two model-based detectors through its <em>precision guards</em>
+rather than its recall: a Zipf-frequency hard gate on common-word names, structured
+identifier format validation, and holiday reclassification. A false positive is what
+makes a PII tool unusable — more than a false negative is.</p>
+
+<p><strong>Optional local LLM</strong> (<code>local_llm.py</code>) — off by default and loopback-only, enforced at
+construction rather than documented. It is <code>"llm"</code> in <code>detectors</code>; <code><a href="#default_detectors">default_detectors()</a></code>
+omits it because a default-on network detector would make a scan depend on whether a
+server happened to be listening, and the same corpus would score differently on two
+machines with nothing in the report explaining the gap. An unreachable server is a
+recorded failure, never a clean pass.</p>
+
+<h2 id="why-a-subprocess-venv">Why a subprocess venv</h2>
+
+<p><code>presidio-analyzer</code>, <code>spacy</code> and <code>gliner</code> pull a dependency set that does not resolve on
+every Python the host may be running, and spaCy in particular has no wheel for some of
+them. Detection therefore runs in an isolated Python 3.13 venv built on first use, and
+the host process imports none of it. <code>subprocess_backend.py</code> owns that boundary.</p>
+
+<p>The rules cascade's source travels <em>with</em> the request rather than being duplicated inside
+the worker script — two copies of a 900-line cascade would drift the moment either was
+edited. It is sent whenever the rules <strong>or</strong> GLiNER detector is on, because GLiNER needs
+<code>_gliner_chunks</code> from it.</p>
+
+<h2 id="long-transcripts-are-windowed">Long transcripts are windowed</h2>
+
+<p>GLiNER checkpoints cap input at a few hundred subword tokens and silently truncate past
+it — a long transcript scanned whole loses its tail with no error, which reads downstream
+as "no PII down there". <code>_gliner_chunks</code> splits the text into overlapping word windows,
+each carrying its absolute character offset so a span can be re-based onto the original;
+a window-relative offset would make the masked preview redact the wrong characters. The
+overlap exists so an entity sitting on a boundary appears whole in at least one window.
+Spans are deduped across windows keeping the highest score, since a window containing an
+entity whole should outrank one that caught its edge.</p>
+
+<h2 id="the-gliner-label-list-must-stay-flat">The GLiNER label list must stay flat</h2>
+
+<p><strong>Do not add overlapping labels.</strong> <code>nvidia/gliner-pii</code> exhibits competing-claim
+interference: when two labels can plausibly cover the same span, the model commits the
+span to one and silently drops it from the other — <em>even when the other would have been
+correct</em>. Measured on <code>john.doe@example.com</code>:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Labels passed</th>
+  <th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>[person, first_name, last_name, email, email_address, …]</code></td>
+  <td><code>John</code> / <code>Doe</code> as first/last_name at 1.0; the full <code>john.doe@example.com</code> got <strong>no</strong> email span at any score above 0.0</td>
+</tr>
+<tr>
+  <td><code>[name, address, date, phone_number, email, ssn, …]</code> (flat, one <code>name</code>, one <code>email</code>)</td>
+  <td><code>John</code> / <code>Doe</code> as <code>name</code> at 1.0 <strong>and</strong> <code>john.doe@example.com</code> as <code>email</code> at 1.0</td>
+</tr>
+</tbody>
+</table>
+
+<p>Same model, same threshold, same input. The only difference was label overlap. Growing
+the list past the HIPAA-18 is how you lose detections you already had.</p>
+
+<h2 id="confidence-and-its-denominator">Confidence, and its denominator</h2>
+
+<p><code>detection_confidence</code> is a continuous <code>[0, 1]</code> value combining three signals per unique
+<code>(category, normalized_text)</code> finding: the maximum raw detector score on it, cross-detector
+agreement, and cross-ASR-model agreement where the caller supplied more than one transcript.</p>
+
+<p>The agreement denominator is <strong>the number of detectors that actually ran for this report</strong>,
+not the number that exist. Using the known-detector count would silently deflate every
+confidence the moment a fourth detector was added — which is why <code>_KNOWN_DETECTORS</code> growing
+to include <code>"llm"</code> does not move any existing score.</p>
+
+<p><code>None</code> and <code>0.0</code> are different answers: <code>None</code> means the detectors did not run (subprocess
+failure, <code>detectors=[]</code>, or every detector failing to load), <code>0.0</code> means they ran and found
+nothing. A caller that collapses the two turns "we never checked" into "we checked and it
+was clean".</p>
+
+<h2 id="no-category-severity-weighting-deliberately">No category-severity weighting, deliberately</h2>
+
+<p>It is tempting to weight <code>US_SSN</code> and <code>CREDIT_CARD</code> above <code>PERSON</code>. In pediatric and
+clinical voice data those categories have a near-zero true-positive rate and are dominated
+by ASR digit hallucinations, so weighting them up would inflate exactly the hits a reviewer
+should de-prioritize. Severity ordering is the caller's to apply with knowledge of their
+corpus.</p>
+
+<h2 id="corroboration">Corroboration</h2>
+
+<p>With <code>require_cross_source_corroboration=True</code> (the default) and ≥2 detectors running,
+<code>contains_pii</code> flips only for a <code>(category, normalized_text)</code> pair that ≥2 detectors
+independently flagged. Agreement keys on a coarse <em>family</em> rather than the raw category, so
+two detectors naming the same entity slightly differently still corroborate. With one
+detector running, corroboration cannot apply and any single hit counts — one witness is not
+a quorum, but it is also not nothing.</p>
 </div>
 
                         <input id="mod-pii_detection-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
                         <label class="view-source-button" for="mod-pii_detection-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Standalone PII detection over text, ``ScriptLine``, and transcripts.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.text.tasks.pii_detection.api</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
 </span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>    <span class="n">PiiReport</span><span class="p">,</span>
