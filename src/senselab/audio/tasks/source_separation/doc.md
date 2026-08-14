@@ -113,13 +113,19 @@ known-correct p05/p50 = 1.93 / 2.00, ambiguous p50/p95 = 2.3e-6 / 6.1e-6). That 
 scale-invariant correlation metric itself can tell a real permutation swap from a genuine tie — it
 does **not** constitute a measurement of real unasdiff output, since both categories are independent
 i.i.d.-Gaussian constructions, not the actual overlap-region statistics of two consecutive 4 s
-diffusion-sampled windows (which this environment cannot produce: no GPU, no built venv, no
-separated audio to measure against). Per this repository's standing rule against literals that were
-never fitted (see the top-level `CLAUDE.md`), `min_assignment_margin` is **intentionally absent**
-from that profile — not interpolated between the synthetic bounds, not left as a placeholder.
-Until a threshold is fitted against real unasdiff windows, `separate_with_unasdiff` reports every
-window boundary's margin in `metadata["unasdiff_alignment_margins"]` instead of gating on one; a
-caller who wants to distinguish a confident alignment from a coin flip reads that list itself.
+diffusion-sampled windows.
+
+**No margin gate is defined, and one does not belong here.** senselab ships unasdiff as a tool; it
+does not tune the tool's output. Deciding that a margin is too low to trust is a decision, with its
+own consequences and its own derivation, and it belongs to whatever layer is making that decision —
+not to a wrapper whose job is to invoke the sampler and hand back what it produced. So
+`separate_with_unasdiff` reports every window boundary's margin in
+`metadata["unasdiff_alignment_margins"]` as **data**, and a caller who wants to distinguish a
+confident alignment from a coin flip reads that list and sets its own bar.
+
+Keeping the two apart is what makes the tool's parameters legible: `mode`, `n_sources`,
+`source_class_indices`, `seed` and `diffusion_steps` all say *how to run unasdiff*, and nothing in
+this module says *what to conclude* from what comes back.
 
 ### The diffusion-step count is a parameter, not a constant
 

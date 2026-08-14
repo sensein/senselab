@@ -43,7 +43,7 @@ _NEMO_PYTHON = "3.12"
 
 CAPABILITIES = DiarizationCapabilities(
     populates_text=False,
-    speaker_label_kind="identity",
+    speaker_label_kind="index",
     labels_stable_across_files=False,  # not measured; False is the conservative default
     # The checkpoint's own name (diar_sortformer_4spk) claimed 4; the seed-17 speaker-ceiling
     # probe confirmed it structurally rather than by name alone: all 20 k=8 sessions predicted

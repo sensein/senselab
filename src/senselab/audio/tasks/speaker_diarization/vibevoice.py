@@ -1,25 +1,17 @@
 """This module implements the VibeVoice-ASR-HF diarization backend.
 
-Not wired into ``audio_analysis``
----------------------------------
-This VibeVoice-ASR-HF backend is reachable through :func:`diarize_audios` and
-deliberately **not** through ``scripts/analyze_audio.py --diarization-models``. Two
-hazard classes motivate that split: a **role-label** backend, whose ``speaker``
-output names a role (e.g. ``CHILD``/``ADULT``/``OVERLAP``) rather than a speaker
-identity, would build a per-role centroid blending distinct speakers under one
-label and snap ambiguous frames to whichever centroid is nearest; a
-**speaker-identity** backend with its own unreconciled labelling scheme would feed
-those labels straight into cross-diarizer agreement and embedding clustering
-before they are harmonized against the pass-wide cluster IDs those steps key on,
-reading as spurious disagreement against every real diarization model. This
-backend falls in the second class — it assigns its own per-audio ``Speaker`` tags
-parsed out of its structured JSON output, with no reconciliation against the
-pass-wide cluster IDs, so wiring it into ``--diarization-models`` as-is would feed
-unreconciled labels straight into cross-diarizer consensus and embedding
-clustering. The guards for both hazard classes live in
-``workflows/audio_analysis/{clustering,identity,presence}.py``, which this branch
-does not carry. Port those guards from PR #537 before wiring any of the four new
-backends into the workflow.
+What the ``speaker`` field means here
+-------------------------------------
+This backend assigns its own per-file speaker labels (``Speaker`` tags parsed out of its
+structured JSON output). They are labels, not
+identities: the same tag in two different files carries no claim of being the same
+person, which :func:`~senselab.audio.tasks.speaker_diarization.api.capabilities_for`
+reports as ``labels_stable_across_files=False``.
+
+That is true of diarizers generally -- ``SPEAKER_00`` is no more an identity than
+``S01`` is. Reconciling labels from different backends into one namespace is a separate
+concern with its own utility, and no backend module decides it. This one reports what it
+produced and stops there.
 """
 
 import json
@@ -50,7 +42,7 @@ except (ImportError, RuntimeError):
 
 CAPABILITIES = DiarizationCapabilities(
     populates_text=True,  # joint ASR+diarization: measured 7/7 segments carried text
-    speaker_label_kind="identity",
+    speaker_label_kind="index",
     labels_stable_across_files=False,  # per-audio numbering; not measured otherwise
     # Seed-17 speaker-ceiling probe: at k=8, predicted counts ranged 6..16 (plus 5 refusals) —
     # the widest spread of any backend, so no structural ceiling was observed.

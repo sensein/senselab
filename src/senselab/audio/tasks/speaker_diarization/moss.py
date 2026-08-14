@@ -19,26 +19,17 @@ Loading requires ``trust_remote_code=True`` (the model ships custom modeling
 code in its HF repo) — this executes inside the isolated venv, same trust
 consideration as any other ``trust_remote_code`` model.
 
-Not wired into ``audio_analysis``
----------------------------------
-This MOSS-Transcribe-Diarize backend is reachable through :func:`diarize_audios` and
-deliberately **not** through ``scripts/analyze_audio.py --diarization-models``. Two
-hazard classes motivate that split: a **role-label** backend, whose ``speaker``
-output names a role (e.g. ``CHILD``/``ADULT``/``OVERLAP``) rather than a speaker
-identity, would build a per-role centroid blending distinct speakers under one
-label and snap ambiguous frames to whichever centroid is nearest; a
-**speaker-identity** backend with its own unreconciled labelling scheme would feed
-those labels straight into cross-diarizer agreement and embedding clustering
-before they are harmonized against the pass-wide cluster IDs those steps key on,
-reading as spurious disagreement against every real diarization model. This
-backend falls in the second class — it assigns its own per-audio speaker
-identities (``Sxx`` tags parsed out of its transcript) with no reconciliation
-against the pass-wide cluster IDs, so wiring it into ``--diarization-models`` as-is
-would feed unreconciled labels straight into cross-diarizer consensus and
-embedding clustering. The guards for both hazard classes live in
-``workflows/audio_analysis/{clustering,identity,presence}.py``, which this branch
-does not carry. Port those guards from PR #537 before wiring any of the four new
-backends into the workflow.
+What the ``speaker`` field means here
+-------------------------------------
+This backend assigns its own per-file speaker labels (``Sxx`` tags parsed out of its transcript). They are labels, not
+identities: the same tag in two different files carries no claim of being the same
+person, which :func:`~senselab.audio.tasks.speaker_diarization.api.capabilities_for`
+reports as ``labels_stable_across_files=False``.
+
+That is true of diarizers generally -- ``SPEAKER_00`` is no more an identity than
+``S01`` is. Reconciling labels from different backends into one namespace is a separate
+concern with its own utility, and no backend module decides it. This one reports what it
+produced and stops there.
 """
 
 from __future__ import annotations
@@ -66,7 +57,7 @@ _MOSS_PYTHON = "3.12"
 
 CAPABILITIES = DiarizationCapabilities(
     populates_text=True,  # joint ASR+diarization: measured 6/6 segments carried text
-    speaker_label_kind="identity",  # emits S01/S02 tags parsed from its transcript
+    speaker_label_kind="index",  # emits S01/S02 tags parsed from its transcript
     labels_stable_across_files=False,  # not measured; False is the conservative default
     # Seed-17 speaker-ceiling probe: at k=8, predicted counts ranged 6..12 — it overshoots
     # the true count rather than plateauing, so no structural ceiling was observed.

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from senselab.audio.tasks.speaker_diarization.api import ROLE_LABEL_ONLY_PREFIXES, capabilities_for
+from senselab.audio.tasks.speaker_diarization.api import capabilities_for
 from senselab.audio.tasks.speaker_diarization.capabilities import (
     UNMEASURED,
     DiarizationCapabilities,
@@ -20,7 +20,7 @@ def test_record_is_frozen() -> None:
     """
     caps = DiarizationCapabilities(
         populates_text=False,
-        speaker_label_kind="identity",
+        speaker_label_kind="index",
         labels_stable_across_files=False,
         max_speakers=None,
         max_speakers_evidence=UNMEASURED,
@@ -45,7 +45,7 @@ def test_max_speakers_none_means_no_structural_ceiling_observed() -> None:
     """
     caps = DiarizationCapabilities(
         populates_text=False,
-        speaker_label_kind="identity",
+        speaker_label_kind="index",
         labels_stable_across_files=False,
         max_speakers=None,
         max_speakers_evidence="measured: no saturation, emits up to 8 (probe seed-17)",
@@ -63,7 +63,7 @@ def test_max_speakers_must_be_at_least_one_when_given() -> None:
     with pytest.raises(ValueError, match="max_speakers"):
         DiarizationCapabilities(
             populates_text=False,
-            speaker_label_kind="identity",
+            speaker_label_kind="index",
             labels_stable_across_files=False,
             max_speakers=0,
             max_speakers_evidence="measured: saturates at 0 on 20/20 k=8 sessions (probe seed-17)",
@@ -98,7 +98,7 @@ def test_max_speakers_evidence_must_be_unmeasured_or_start_with_measured() -> No
     with pytest.raises(ValueError, match="max_speakers_evidence"):
         DiarizationCapabilities(
             populates_text=False,
-            speaker_label_kind="identity",
+            speaker_label_kind="index",
             labels_stable_across_files=False,
             max_speakers=None,
             max_speakers_evidence="nobody checked",
@@ -116,7 +116,7 @@ def test_max_speakers_evidence_cannot_claim_unmeasured_for_a_declared_number() -
     with pytest.raises(ValueError, match="max_speakers_evidence"):
         DiarizationCapabilities(
             populates_text=False,
-            speaker_label_kind="identity",
+            speaker_label_kind="index",
             labels_stable_across_files=False,
             max_speakers=4,
             max_speakers_evidence=UNMEASURED,
@@ -134,7 +134,7 @@ def test_unmeasured_is_allowed_when_max_speakers_is_none() -> None:
     """
     caps = DiarizationCapabilities(
         populates_text=False,
-        speaker_label_kind="identity",
+        speaker_label_kind="index",
         labels_stable_across_files=False,
         max_speakers=None,
         max_speakers_evidence=UNMEASURED,
@@ -177,16 +177,14 @@ def test_every_dispatch_prefix_has_a_capability_record() -> None:
     `_CAPABILITIES_BY_PREFIX`: such a backend would silently report Pyannote's
     record via the fallback, including `honors_speaker_hints=True`, which is wrong
     for every backend but Pyannote. This test reads the dispatch tables directly
-    (any module-level name ending `_PREFIXES`, excluding `ROLE_LABEL_ONLY_PREFIXES`,
-    which is a derived cross-reference rather than a dispatch table) so a new prefix
-    table with no matching capabilities entry fails here instead of passing silently
-    through the fallback.
+    (any module-level name ending `_PREFIXES`) so a new prefix table with no matching
+    capabilities entry fails here instead of passing silently through the fallback.
     """
     import senselab.audio.tasks.speaker_diarization.api as api
 
     mapped = {p for prefixes, _ in api._CAPABILITIES_BY_PREFIX for p in prefixes}
     for name, value in vars(api).items():
-        if name.endswith("_PREFIXES") and name != "ROLE_LABEL_ONLY_PREFIXES":
+        if name.endswith("_PREFIXES"):
             for prefix in value:
                 assert prefix in mapped, f"{name} dispatches but declares no capabilities"
 
@@ -291,19 +289,6 @@ def test_diarizen_labels_are_not_stable_across_files() -> None:
     silently merge unrelated speakers.
     """
     assert capabilities_for("BUT-FIT/diarizen-wavlm-large-s80-md").labels_stable_across_files is False
-
-
-def test_role_kind_agrees_with_the_existing_prefix_list() -> None:
-    """The new declaration and the old ROLE_LABEL_ONLY_PREFIXES must not diverge.
-
-    Both encode "these labels are roles, keep them out of the identity axis". While
-    both exist, a backend appearing in one and not the other is a latent bug — the
-    audio_analysis guards read the prefix list, and future code will read the record.
-    """
-    for model_id in _ALL_BACKEND_IDS:
-        in_prefix_list = any(model_id.startswith(p) for p in ROLE_LABEL_ONLY_PREFIXES)
-        is_role = capabilities_for(model_id).speaker_label_kind == "role"
-        assert in_prefix_list == is_role, f"{model_id}: prefix list says {in_prefix_list}, record says {is_role}"
 
 
 def test_an_unknown_model_id_falls_back_like_the_dispatch_does() -> None:

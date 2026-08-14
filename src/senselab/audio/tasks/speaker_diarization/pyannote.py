@@ -22,7 +22,7 @@ except ModuleNotFoundError:
 
 CAPABILITIES = DiarizationCapabilities(
     populates_text=False,
-    speaker_label_kind="identity",  # SPEAKER_00, SPEAKER_01, ...
+    speaker_label_kind="index",  # SPEAKER_00, SPEAKER_01, ...
     labels_stable_across_files=False,  # not measured; False is the conservative default
     # Seed-17 speaker-ceiling probe (TTS corpus, k=1..8, 20 sessions/k): predicted counts at
     # k=8 spanned {5,6,7,8}, never collapsing to one value, so no structural ceiling was

@@ -184,7 +184,7 @@
     <=45% for k>=3; treat counts above 2 as unverified on this evidence.
   capabilities:
     populates_text: false
-    speaker_label_kind: identity
+    speaker_label_kind: index
     labels_stable_across_files: false
     max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
     max_speakers_evidence: 'measured: no saturation, emits up to 8 (probe seed-17)'
@@ -202,7 +202,7 @@
     (65-80%) but is 0% at k=1 and at k>=5, where predictions clamp to 4 regardless of truth.
   capabilities:
     populates_text: false
-    speaker_label_kind: identity
+    speaker_label_kind: index
     labels_stable_across_files: false
     max_speakers: 4
     max_speakers_evidence: 'measured: saturates at 4 on 20/20 k=8 sessions (probe seed-17)'
@@ -220,7 +220,7 @@
     accuracy is uneven (95% at k=2, down to 20% by k=8) — best where a rough count suffices.
   capabilities:
     populates_text: true
-    speaker_label_kind: identity
+    speaker_label_kind: index
     labels_stable_across_files: false
     max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
     max_speakers_evidence: 'measured: no saturation, emits up to 16 (probe seed-17)'
@@ -258,7 +258,7 @@
     on its speaker count without independent verification.
   capabilities:
     populates_text: true
-    speaker_label_kind: identity
+    speaker_label_kind: index
     labels_stable_across_files: false
     max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
     max_speakers_evidence: 'measured: no saturation, emits up to 12 (probe seed-17)'
@@ -277,7 +277,7 @@
     best exact-count accuracy at k=2-3 (75-90%), degrading beyond.
   capabilities:
     populates_text: false
-    speaker_label_kind: identity
+    speaker_label_kind: index
     labels_stable_across_files: false
     max_speakers:  # measured: no structural ceiling observed (probe seed-17) — see recommended_for
     max_speakers_evidence: 'measured: no saturation, emits up to 8 (probe seed-17)'
