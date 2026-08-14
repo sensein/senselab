@@ -170,3 +170,97 @@ def test_a_file_with_one_vector_still_reports_without_crashing() -> None:
     _, dist = describe_embedding_distribution(x, ids)
     assert dist.within_file["singleton"].n_vectors == 1
     assert dist.within_file["singleton"].rbar == pytest.approx(1.0)
+
+
+def test_auc_is_half_when_files_carry_no_effect() -> None:
+    """Exchangeable data must land on the exact null, 0.5.
+
+    That the null is exact -- not fitted, not simulated -- is why this statistic replaces
+    silhouette, whose value depends on whether you call it with cosine or Euclidean.
+
+    The ``< 0.99`` bound on the permutation quantile is not decorative: mutation-checking found
+    that a broken ``_eta_squared_between_files`` which returns a constant (ignoring ``ids``
+    entirely) makes the observed statistic equal every shuffled one, so ``exceeded`` counts every
+    permutation and the quantile saturates at 1.0 -- a value indistinguishable from a real strong
+    effect. Exchangeable data must *not* look extreme, so this bound is the one place that gap is
+    closed.
+    """
+    rng = np.random.default_rng(3)
+    d, n = 48, 200
+    x = rng.normal(size=(n, d))
+    x /= np.linalg.norm(x, axis=1, keepdims=True)
+    ids = ["a" if i % 2 == 0 else "b" for i in range(n)]
+
+    _, dist = describe_embedding_distribution(x, ids, n_permutations=200, seed=0)
+    assert dist.file_effect.auc_same_file_vs_diff_file == pytest.approx(0.5, abs=0.06)
+    assert dist.file_effect.permutation_quantile is not None
+    assert dist.file_effect.permutation_quantile < 0.99
+
+
+def test_auc_is_high_when_each_file_is_its_own_speaker() -> None:
+    """Same-file pairs then really are more similar, and the statistic should say so loudly."""
+    d = 48
+    rng = np.random.default_rng(4)
+    a_axis = rng.normal(size=d)
+    a_axis /= np.linalg.norm(a_axis)
+    b_axis = rng.normal(size=d)
+    b_axis -= (b_axis @ a_axis) * a_axis
+    b_axis /= np.linalg.norm(b_axis)
+
+    x = np.vstack([_file_of_vectors(a_axis, 60, 0.05, 1), _file_of_vectors(b_axis, 60, 0.05, 2)])
+    ids = ["a"] * 60 + ["b"] * 60
+
+    _, dist = describe_embedding_distribution(x, ids, n_permutations=200, seed=0)
+    assert dist.file_effect.auc_same_file_vs_diff_file is not None
+    assert dist.file_effect.auc_same_file_vs_diff_file > 0.95
+    assert dist.file_effect.permutation_quantile is not None
+    assert dist.file_effect.permutation_quantile > 0.99
+
+
+def test_the_permutation_block_length_follows_the_window_geometry() -> None:
+    """Blocks of ceil(window_s/hop_s), so the recorded length matches the window geometry.
+
+    Windows overlap, so a per-vector shuffle destroys dependence the observed statistic keeps
+    and the quantile comes out anti-conservative. The length used is recorded so the number is
+    auditable.
+
+    ``window_s=2.0, hop_s=1.0`` gives an exact ratio of 2, which a ``ceil`` and a ``floor``
+    (or a bare truncating ``int()``) both round to -- mutation-checking confirmed that swapping
+    ``ceil`` for ``floor`` in the implementation leaves that assertion green. The second call
+    below uses ``window_s=2.5`` where ``ceil(2.5) = 3 != floor(2.5) = 2``, which is the case that
+    actually distinguishes rounding directions.
+    """
+    x, ids = _two_files_same_speaker()
+    _, dist = describe_embedding_distribution(x, ids, window_s=2.0, hop_s=1.0, n_permutations=50)
+    assert dist.file_effect.permutation_block_len == 2
+    assert dist.file_effect.n_permutations == 50
+
+    _, dist_fractional = describe_embedding_distribution(x, ids, window_s=2.5, hop_s=1.0, n_permutations=50)
+    assert dist_fractional.file_effect.permutation_block_len == 3
+
+
+def test_the_guard_band_needs_window_times_and_says_so_when_absent() -> None:
+    """No window start times, no guard band -- reported as absent, not silently skipped.
+
+    At 50% overlap a window's neighbour is a near-duplicate, so same-file pairs drawn from
+    adjacent windows would inflate same-file similarity toward 1.0 for any input -- the statistic
+    would measure the hop size. Excluding them needs times; without times the guard is skipped and
+    reported as absent rather than silently not applied.
+    """
+    x, ids = _two_files_same_speaker()
+    _, without = describe_embedding_distribution(x, ids, window_s=2.0, hop_s=1.0, n_permutations=20)
+    assert without.file_effect.guard_band_s is None
+
+    starts = [float(i) for i in range(40)] * 2
+    _, with_times = describe_embedding_distribution(
+        x, ids, window_s=2.0, hop_s=1.0, window_starts_s=starts, n_permutations=20
+    )
+    assert with_times.file_effect.guard_band_s == 2.0
+
+
+def test_file_effect_is_absent_without_file_ids() -> None:
+    """No files, no file effect."""
+    x, _ = _two_files_same_speaker()
+    _, dist = describe_embedding_distribution(x)
+    assert dist.file_effect.auc_same_file_vs_diff_file is None
+    assert dist.file_effect.permutation_quantile is None

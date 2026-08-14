@@ -185,6 +185,36 @@ class CrossFileStats(BaseModel):
     file_centroid_pairwise_cos: Optional[SimilarityStats] = None
 
 
+class FileEffect(BaseModel):
+    """Whether file identity explains similarity, and how surprising that is.
+
+    Attributes:
+        auc_same_file_vs_diff_file: Mann-Whitney AUC of same-file pair cosines against
+            different-file pair cosines. Exact null 0.5 under exchangeability, which is what lets
+            it be read with no fitted scale. Rank-based, so unlike silhouette it does not change
+            when the same geometry is expressed as cosine rather than Euclidean distance. ``None``
+            without file ids or with fewer than two files.
+        permutation_quantile: Where the observed between-file share of angular variance falls in
+            the block-permutation reference, in ``[0, 1]``.
+        permutation_block_len: Block length used, ``ceil(window_s/hop_s)`` when both are known and
+            1 otherwise. Windows overlap, so shuffling single vectors would destroy dependence the
+            observed statistic retains and the quantile would come out anti-conservative.
+        n_permutations: How many shuffles produced the reference.
+        guard_band_s: Same-file pairs closer together in time than this were excluded. ``None``
+            when ``window_starts_s`` was not supplied, so a reader can tell "not applied" from
+            "applied with value X" -- at 50% overlap a window's neighbour is a near-duplicate, and
+            leaving those in makes the AUC measure the hop size.
+        seed: Permutation seed, recorded so the quantile is reproducible.
+    """
+
+    auc_same_file_vs_diff_file: Optional[float] = None
+    permutation_quantile: Optional[float] = None
+    permutation_block_len: int = 1
+    n_permutations: int = 0
+    guard_band_s: Optional[float] = None
+    seed: int = 0
+
+
 class EmbeddingDistribution(BaseModel):
     """Statistics describing one set of embedding vectors. Contains no verdict."""
 
@@ -200,6 +230,7 @@ class EmbeddingDistribution(BaseModel):
     # informative split known about this data. See `_per_file_stats`.
     within_file: dict[str, WithinFileStats] = Field(default_factory=dict)
     cross_file: CrossFileStats = Field(default_factory=CrossFileStats)
+    file_effect: FileEffect = Field(default_factory=FileEffect)
 
 
 def _as_array(
@@ -392,6 +423,128 @@ def _per_file_stats(
     return within, CrossFileStats(cos_file_centroid_to_pooled=to_pooled, file_centroid_pairwise_cos=pairwise)
 
 
+def _mann_whitney_auc(within: np.ndarray, between: np.ndarray) -> float:
+    """Probability that a randomly chosen within-group value exceeds a between-group one.
+
+    ``AUC = P(w > b) + 0.5*P(w == b)``, computed from ranks so it costs one sort rather than a
+    quadratic comparison. Rank-based is the point: the value is invariant to any monotone
+    reparametrisation of the similarity, which is exactly the property silhouette lacks.
+
+    Args:
+        within: 1-D array of within-group values.
+        between: 1-D array of between-group values.
+
+    Returns:
+        The AUC in ``[0, 1]``. Returns ``0.5`` when either side is empty -- no evidence either way.
+    """
+    if within.size == 0 or between.size == 0:
+        return 0.5
+    from scipy.stats import rankdata
+
+    combined = np.concatenate([within, between])
+    ranks = rankdata(combined)
+    r_within = float(ranks[: within.size].sum())
+    u = r_within - within.size * (within.size + 1) / 2.0
+    return float(u / (within.size * between.size))
+
+
+def _eta_squared_between_files(x: np.ndarray, ids: np.ndarray) -> float:
+    """Between-file share of angular variance.
+
+    ``1 - sum_f n_f (1 - Rbar_f^2) / [n (1 - Rbar^2)]``: the residual within-file dispersion
+    removed from the total. Bounded in ``[0, 1]`` for well-formed input.
+
+    Args:
+        x: ``(n, d)`` unit-norm array.
+        ids: ``(n,)`` array of file ids.
+
+    Returns:
+        The between-file share; ``0.0`` when the pooled set has no dispersion to explain.
+    """
+    n = x.shape[0]
+    rbar = float(np.linalg.norm(x.sum(axis=0)) / n)
+    total = n * (1.0 - rbar**2)
+    if total <= 0:
+        return 0.0
+    resid = 0.0
+    for f in np.unique(ids):
+        rows = x[ids == f]
+        nf = rows.shape[0]
+        rf = float(np.linalg.norm(rows.sum(axis=0)) / nf)
+        resid += nf * (1.0 - rf**2)
+    return float(1.0 - resid / total)
+
+
+def _file_effect(
+    x: np.ndarray,
+    file_ids: Optional[list[str]],
+    window_starts_s: Optional[list[float]],
+    window_s: Optional[float],
+    hop_s: Optional[float],
+    n_permutations: int,
+    seed: int,
+) -> FileEffect:
+    """Separability AUC plus a block-permutation reference for the between-file variance share.
+
+    Args:
+        x: ``(n, d)`` unit-norm array.
+        file_ids: One id per row, or ``None``.
+        window_starts_s: Window start times aligned to ``x``, or ``None``.
+        window_s: Window length, used for the guard band and the block length.
+        hop_s: Hop, used for the block length.
+        n_permutations: Shuffles for the reference.
+        seed: Permutation seed.
+
+    Returns:
+        The populated :class:`FileEffect`, or a default one when there is no file structure.
+    """
+    block_len = 1
+    if window_s is not None and hop_s is not None and hop_s > 0:
+        block_len = max(1, int(np.ceil(window_s / hop_s)))
+
+    if file_ids is None or len(set(file_ids)) < 2:
+        return FileEffect(permutation_block_len=block_len, n_permutations=0, seed=seed)
+
+    ids = np.asarray(file_ids)
+    gram = x @ x.T
+    iu = np.triu_indices(x.shape[0], k=1)
+    same = ids[iu[0]] == ids[iu[1]]
+    cos_pairs = gram[iu]
+
+    guard_band_s: Optional[float] = None
+    keep = np.ones(cos_pairs.shape, dtype=bool)
+    if window_starts_s is not None and window_s is not None:
+        # Adjacent windows share audio, so a same-file pair drawn from them is a near-duplicate.
+        # Excluded from both sides, or the AUC would report the hop size.
+        guard_band_s = float(window_s)
+        starts = np.asarray(window_starts_s, dtype=np.float64)
+        too_close = np.abs(starts[iu[0]] - starts[iu[1]]) < guard_band_s
+        keep = ~(same & too_close)
+
+    auc = _mann_whitney_auc(cos_pairs[keep & same], cos_pairs[keep & ~same])
+
+    observed = _eta_squared_between_files(x, ids)
+    rng = np.random.default_rng(seed)
+    n = x.shape[0]
+    n_blocks = int(np.ceil(n / block_len))
+    exceeded = 0
+    for _ in range(n_permutations):
+        block_order = rng.permutation(n_blocks)
+        shuffled = np.concatenate([ids[b * block_len : (b + 1) * block_len] for b in block_order])[:n]
+        if _eta_squared_between_files(x, shuffled) <= observed:
+            exceeded += 1
+    quantile = float(exceeded / n_permutations) if n_permutations > 0 else None
+
+    return FileEffect(
+        auc_same_file_vs_diff_file=auc,
+        permutation_quantile=quantile,
+        permutation_block_len=block_len,
+        n_permutations=n_permutations,
+        guard_band_s=guard_band_s,
+        seed=seed,
+    )
+
+
 def describe_embedding_distribution(
     vectors: Union[Sequence[Sequence[float]], np.ndarray, Any],  # noqa: ANN401 — torch.Tensor duck-typed
     file_ids: Optional[Sequence[str]] = None,
@@ -455,6 +608,9 @@ def describe_embedding_distribution(
 
     within_file, cross_file = _per_file_stats(x, kept_files, centroid)
 
+    starts_list = [float(s) for s, k in zip(window_starts_s, keep_mask) if k] if window_starts_s is not None else None
+    file_effect = _file_effect(x, kept_files, starts_list, window_s, hop_s, n_permutations, seed)
+
     per_file: dict[str, int] = {}
     if kept_files is not None:
         for f in kept_files:
@@ -495,4 +651,5 @@ def describe_embedding_distribution(
         spectrum=_spectrum(x),
         within_file=within_file,
         cross_file=cross_file,
+        file_effect=file_effect,
     )
