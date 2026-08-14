@@ -943,7 +943,10 @@ def call_in_venv(
     file_locks: list[SharedFileLock] = []
     for value in effective_args.values():
         if isinstance(value, FileRef) and value.lock:
-            fl = SharedFileLock(value.path, timeout=value.lock_timeout)
+            # manage_dir_mode=False: value.path is caller-supplied (an input file, often under a
+            # shared or read-restricted dataset tree). We drop a .lock beside it, but must not
+            # chmod that directory to setgid + group-write the way senselab's own cache dirs get.
+            fl = SharedFileLock(value.path, timeout=value.lock_timeout, manage_dir_mode=False)
             fl.__enter__()
             file_locks.append(fl)
 
