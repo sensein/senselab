@@ -12,7 +12,11 @@ from __future__ import annotations
 from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.source_separation.unasdiff import load_fsd_class_map_document, separate_with_unasdiff
+from senselab.audio.tasks.source_separation.unasdiff import (
+    _DIFFUSION_STEPS,
+    load_fsd_class_map_document,
+    separate_with_unasdiff,
+)
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel
 
 # unasdiff is the only backend this task has, so this is a containment check (reject anything
@@ -35,6 +39,7 @@ def separate_audios(
     source_classes: Optional[List[str]] = None,
     device: Optional[DeviceType] = None,
     seed: int = 17,
+    diffusion_steps: int = _DIFFUSION_STEPS,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -73,6 +78,12 @@ def separate_audios(
             :func:`resolve_source_classes`.
         device: Accepted for signature parity with other separation/enhancement entry points.
         seed: RNG seed, recorded in the worker's log line.
+        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window --
+            forwarded unchanged to :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
+            Defaults to ``200``, upstream's own quality setting and the only value with any
+            published basis; lower values trade quality for speed roughly proportionally but are
+            entirely unmeasured in this repository, so there is no recommended lower setting --
+            see that function's docstring for the full derivation.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order.
@@ -80,8 +91,8 @@ def separate_audios(
     Raises:
         ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is
             not one of the three supported modes; if a mode using the sound prior is missing
-            ``source_classes``; or if ``source_classes`` does not have exactly the number of
-            entries that mode's sound slots require.
+            ``source_classes``; if ``source_classes`` does not have exactly the number of
+            entries that mode's sound slots require; or if ``diffusion_steps`` is not positive.
     """
     if model is not None and not (
         isinstance(model, HFModel) and str(model.path_or_uri).startswith(_UNASDIFF_MODEL_PREFIX)
@@ -119,6 +130,7 @@ def separate_audios(
         mode=mode,
         device=device,
         seed=seed,
+        diffusion_steps=diffusion_steps,
     )
 
 
