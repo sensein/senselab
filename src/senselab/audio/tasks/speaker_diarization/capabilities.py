@@ -121,7 +121,7 @@ class DiarizationCapabilities:
         if self.speaker_label_kind not in _VALID_LABEL_KINDS:
             raise ValueError(
                 f"speaker_label_kind must be one of {_VALID_LABEL_KINDS}, got {self.speaker_label_kind!r}. "
-                "The distinction decides whether these labels may reach embedding clustering."
+                "It records what vocabulary the labels come from; what to do about that is the caller's."
             )
         if self.max_speakers is not None and self.max_speakers < 1:
             raise ValueError(
