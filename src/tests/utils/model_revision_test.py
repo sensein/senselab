@@ -186,3 +186,43 @@ def test_recording_a_non_sha_is_refused() -> None:
     """One bad write would poison every later participant, since entries are immutable."""
     with pytest.raises(RevisionResolutionError):
         record_resolution("org/model", "main", "main")
+
+
+def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mandatory model_info round-trip is retried on a transient error, not fatal.
+
+    Finding #3 of the #550 review: this was the one Hub call without ``retry_on_transient_error``,
+    so a 429 / connection blip during a parallel batch failed ``HFModel`` construction outright.
+    """
+    calls = {"n": 0}
+
+    class _Info:
+        sha = SHA_A
+
+    def _flaky(_self: object, *, repo_id: str, revision: str) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("transient")  # classified transient by dependencies._is_transient
+        return _Info()
+
+    # Force the network path (no local cache hit) and make the retry backoff instant.
+    monkeypatch.setattr("senselab.utils.dependencies._get_cached_commit_hash", lambda *a, **k: None)
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", _flaky)
+    monkeypatch.setattr("senselab.utils.dependencies.time.sleep", lambda *_a, **_k: None)
+
+    assert resolve_revision("org/model", "main") == SHA_A
+    assert calls["n"] == 2, "the transient error must have been retried once"
+
+
+def test_resolution_still_fails_on_a_persistent_hub_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-transient (e.g. 404) or persistent error still surfaces as RevisionResolutionError."""
+
+    def _always(_self: object, *, repo_id: str, revision: str) -> object:
+        raise ValueError("not found")  # non-transient → not retried
+
+    monkeypatch.setattr("senselab.utils.dependencies._get_cached_commit_hash", lambda *a, **k: None)
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", _always)
+    monkeypatch.setattr("senselab.utils.dependencies.time.sleep", lambda *_a, **_k: None)
+
+    with pytest.raises(RevisionResolutionError):
+        resolve_revision("org/model", "main")

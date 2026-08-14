@@ -67,6 +67,28 @@ def test_hfmodel_invalid_hf_repo_check() -> None:
             HFModel(path_or_uri="invalid/repo")
 
 
+def test_hfmodel_wraps_a_resolution_failure_as_validationerror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A commit-resolution failure surfaces as ValidationError, not a bare RuntimeError.
+
+    Finding #5 of the #550 review: ``_resolve_commit_sha`` runs in a ``model_validator`` and let
+    ``RevisionResolutionError`` (a ``RuntimeError``) escape. Pydantic only converts
+    ``ValueError``/``AssertionError`` into ``ValidationError``, so every caller that catches
+    ``ValidationError``/``ValueError`` around ``HFModel(...)`` saw an unhandled crash instead.
+    """
+    from pydantic import ValidationError
+
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+
+    def _boom(*a: object, **k: object) -> str:
+        raise RevisionResolutionError("cannot resolve org/model@main")
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _boom)
+    with pytest.raises(ValidationError):
+        HFModel(path_or_uri="org/model", revision="main")
+
+
 def test_get_huggingface_token_from_env_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test loading a Hugging Face token from an explicit `.env` file path."""
     for env_var in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
