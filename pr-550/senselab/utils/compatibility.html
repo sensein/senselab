@@ -361,7 +361,7 @@ requirements. Used for:</p>
 </span><span id="L-223"><a href="#L-223"><span class="linenos">223</span></a><span class="k">def</span><span class="w"> </span><span class="nf">check_compatibility</span><span class="p">(</span><span class="n">function_key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 </span><span id="L-224"><a href="#L-224"><span class="linenos">224</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if the dependencies for a function are available and compatible.</span>
 </span><span id="L-225"><a href="#L-225"><span class="linenos">225</span></a>
-</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a><span class="sd">    Verifies both speech_presence and version ranges.</span>
+</span><span id="L-226"><a href="#L-226"><span class="linenos">226</span></a><span class="sd">    Verifies both presence and version ranges.</span>
 </span><span id="L-227"><a href="#L-227"><span class="linenos">227</span></a>
 </span><span id="L-228"><a href="#L-228"><span class="linenos">228</span></a><span class="sd">    Args:</span>
 </span><span id="L-229"><a href="#L-229"><span class="linenos">229</span></a><span class="sd">        function_key: Key in COMPATIBILITY_MATRIX.</span>
@@ -389,7 +389,7 @@ requirements. Used for:</p>
 </span><span id="L-251"><a href="#L-251"><span class="linenos">251</span></a>            <span class="sa">f</span><span class="s2">&quot;Function &#39;</span><span class="si">{</span><span class="n">function_key</span><span class="si">}</span><span class="s2">&#39; requires Python </span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">python_versions</span><span class="si">}</span><span class="s2">, but you are running Python </span><span class="si">{</span><span class="n">py_ver</span><span class="si">}</span><span class="s2">.&quot;</span>
 </span><span id="L-252"><a href="#L-252"><span class="linenos">252</span></a>        <span class="p">)</span>
 </span><span id="L-253"><a href="#L-253"><span class="linenos">253</span></a>
-</span><span id="L-254"><a href="#L-254"><span class="linenos">254</span></a>    <span class="c1"># Check each required dependency — speech_presence AND version</span>
+</span><span id="L-254"><a href="#L-254"><span class="linenos">254</span></a>    <span class="c1"># Check each required dependency — presence AND version</span>
 </span><span id="L-255"><a href="#L-255"><span class="linenos">255</span></a>    <span class="k">for</span> <span class="n">dep</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">required_deps</span><span class="p">:</span>
 </span><span id="L-256"><a href="#L-256"><span class="linenos">256</span></a>        <span class="n">version</span> <span class="o">=</span> <span class="n">_get_installed_version</span><span class="p">(</span><span class="n">dep</span><span class="p">)</span>
 </span><span id="L-257"><a href="#L-257"><span class="linenos">257</span></a>        <span class="k">if</span> <span class="n">version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -812,7 +812,7 @@ declare breaking changes properly.</p>
             <div class="pdoc-code codehilite"><pre><span></span><span id="check_compatibility-224"><a href="#check_compatibility-224"><span class="linenos">224</span></a><span class="k">def</span><span class="w"> </span><span class="nf">check_compatibility</span><span class="p">(</span><span class="n">function_key</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
 </span><span id="check_compatibility-225"><a href="#check_compatibility-225"><span class="linenos">225</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Check if the dependencies for a function are available and compatible.</span>
 </span><span id="check_compatibility-226"><a href="#check_compatibility-226"><span class="linenos">226</span></a>
-</span><span id="check_compatibility-227"><a href="#check_compatibility-227"><span class="linenos">227</span></a><span class="sd">    Verifies both speech_presence and version ranges.</span>
+</span><span id="check_compatibility-227"><a href="#check_compatibility-227"><span class="linenos">227</span></a><span class="sd">    Verifies both presence and version ranges.</span>
 </span><span id="check_compatibility-228"><a href="#check_compatibility-228"><span class="linenos">228</span></a>
 </span><span id="check_compatibility-229"><a href="#check_compatibility-229"><span class="linenos">229</span></a><span class="sd">    Args:</span>
 </span><span id="check_compatibility-230"><a href="#check_compatibility-230"><span class="linenos">230</span></a><span class="sd">        function_key: Key in COMPATIBILITY_MATRIX.</span>
@@ -840,7 +840,7 @@ declare breaking changes properly.</p>
 </span><span id="check_compatibility-252"><a href="#check_compatibility-252"><span class="linenos">252</span></a>            <span class="sa">f</span><span class="s2">&quot;Function &#39;</span><span class="si">{</span><span class="n">function_key</span><span class="si">}</span><span class="s2">&#39; requires Python </span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">python_versions</span><span class="si">}</span><span class="s2">, but you are running Python </span><span class="si">{</span><span class="n">py_ver</span><span class="si">}</span><span class="s2">.&quot;</span>
 </span><span id="check_compatibility-253"><a href="#check_compatibility-253"><span class="linenos">253</span></a>        <span class="p">)</span>
 </span><span id="check_compatibility-254"><a href="#check_compatibility-254"><span class="linenos">254</span></a>
-</span><span id="check_compatibility-255"><a href="#check_compatibility-255"><span class="linenos">255</span></a>    <span class="c1"># Check each required dependency — speech_presence AND version</span>
+</span><span id="check_compatibility-255"><a href="#check_compatibility-255"><span class="linenos">255</span></a>    <span class="c1"># Check each required dependency — presence AND version</span>
 </span><span id="check_compatibility-256"><a href="#check_compatibility-256"><span class="linenos">256</span></a>    <span class="k">for</span> <span class="n">dep</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">required_deps</span><span class="p">:</span>
 </span><span id="check_compatibility-257"><a href="#check_compatibility-257"><span class="linenos">257</span></a>        <span class="n">version</span> <span class="o">=</span> <span class="n">_get_installed_version</span><span class="p">(</span><span class="n">dep</span><span class="p">)</span>
 </span><span id="check_compatibility-258"><a href="#check_compatibility-258"><span class="linenos">258</span></a>        <span class="k">if</span> <span class="n">version</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -865,7 +865,7 @@ declare breaking changes properly.</p>
 
             <div class="docstring"><p>Check if the dependencies for a function are available and compatible.</p>
 
-<p>Verifies both speech_presence and version ranges.</p>
+<p>Verifies both presence and version ranges.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
