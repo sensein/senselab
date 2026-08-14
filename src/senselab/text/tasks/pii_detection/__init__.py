@@ -1,4 +1,4 @@
-"""Standalone PII detection over text, ``ScriptLine``, and transcripts."""
+""".. include:: ./doc.md"""  # noqa: D415
 
 from senselab.text.tasks.pii_detection.api import (
     PiiReport,

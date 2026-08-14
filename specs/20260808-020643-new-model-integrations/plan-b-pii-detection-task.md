@@ -1,6 +1,6 @@
 # Plan B — Standalone PII detection over text and `ScriptLine`
 
-> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`, except Task 7, whose unticked boxes are genuinely outstanding — see the note there. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Task 7 was found outstanding by that audit and completed on 2026-08-13 — see the note there. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1142,26 +1142,24 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ### Task 7: Port the remaining `--selftest` checks and write `doc.md`
 
-> **NOT DONE as of 2026-08-13 (commit `ad4fffa2`).** Verified against the tree, not assumed.
-> Part of this task's coverage arrived early, under Task 4, when the cascade itself landed:
-> the precision guards, holiday reclassification, common-word-NAME lever and
-> structured-identifier format validation all have named tests in `pii_rules_test.py`.
-> Three pieces are genuinely outstanding:
+> **DONE 2026-08-13 (commit `b81729d2`+).** Completed late, after a code-vs-plan audit
+> found it outstanding. Part of its coverage had arrived early under Task 4 (precision
+> guards, holiday reclassification, common-word-NAME lever, structured-identifier
+> validation), which is what made it look finished. The three genuinely missing pieces are
+> now in:
 >
-> 1. **GLiNER windowing was never ported.** `_gliner_chunks` does not exist, so
->    `subprocess_backend.py` calls `predict_entities` on the whole string and a long
->    transcript is silently truncated at the model's token limit. This is a correctness
->    bug in shipped code, not only a missing test — fix it before writing the test the
->    step below specifies.
-> 2. **The `--flag-all-pii` interlock was never ported.** `postprocess_entities` has no
->    `flag_all` parameter, which is exactly the defect the step below was written to
->    guard: in #542 the flag was read only inside `if HIGH_RECALL:`, so on its own it did
->    nothing, silently.
-> 3. **`doc.md` does not exist.** Every other task module in this branch has one.
->
-> Task 4b was in the same state until 2026-08-13 and is now complete. Both were missed
-> because no checkbox in this plan was ticked during execution, so nothing recorded which
-> tasks had shipped.
+> 1. **GLiNER windowing.** `rules._gliner_chunks` windows long text with overlap and an
+>    absolute character offset per window; `subprocess_backend.py` scans window-by-window
+>    and dedupes across them keeping the highest score. This closed a live correctness bug:
+>    a long transcript was being silently truncated at the checkpoint's token limit, which
+>    reads downstream as "no PII down there". `rules.py`'s source is now shipped to the
+>    worker when GLiNER is on, not only when the rules detector is, since the chunker lives
+>    there — guarded by its own test.
+> 2. **The `--flag-all-pii` interlock.** `postprocess_entities(..., flag_all=...)`
+>    suppresses only the confidence guard, independently of `precision_mode`, and
+>    deliberately does not defeat format validation.
+> 3. **`doc.md`**, wired into pdoc through `__init__.py` the same way the other task
+>    modules do it.
 
 **Files:**
 - Modify: `src/tests/text/tasks/pii_rules_test.py`
@@ -1171,7 +1169,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: everything above.
 - Produces: no importable interface. Deliverable is coverage parity with #542's self-test on the PII half, plus rendered module documentation.
 
-- [ ] **Step 1: Enumerate #542's PII-side checks**
+- [x] **Step 1: Enumerate #542's PII-side checks**
 
 ```bash
 grep -n "def _selftest\|check(\|Part [A-K]" "$CLAUDE_JOB_DIR/tmp/pii542.py" | head -60
@@ -1179,7 +1177,7 @@ grep -n "def _selftest\|check(\|Part [A-K]" "$CLAUDE_JOB_DIR/tmp/pii542.py" | he
 
 #542 reports 138 checks across Parts A–K. Parts covering Tier A calibration, task→reference resolution, and the composite compliance bands are **out of scope** — compliance is not being ported. Port the rest: the precision guards, the GLiNER windowing offsets, the common-word-NAME lever, the structured-identifier format validation, the holiday reclassification, and the `--flag-all-pii` interlock.
 
-- [ ] **Step 2: Write the ported tests**
+- [x] **Step 2: Write the ported tests**
 
 For each check, write a named pytest function whose docstring states the defect it guards. Do not write one parametrised test over an opaque table — a failing row should name the guard it broke. Task 4 established the shape; follow it:
 
@@ -1211,7 +1209,7 @@ def test_flag_all_pii_takes_effect_independently_of_recall_mode() -> None:
 
 Work down the list from Step 1 and check each off. When a check has no meaningful analogue after the compliance code was dropped, say so in a one-line comment in the test module rather than leaving it silently absent — the count is the evidence that the port was complete.
 
-- [ ] **Step 3: Run the whole text suite**
+- [x] **Step 3: Run the whole text suite**
 
 ```bash
 uv run pytest src/tests/text/ -v 2>&1 | tail -30
@@ -1219,11 +1217,11 @@ uv run pytest src/tests/text/ -v 2>&1 | tail -30
 
 Expected: PASS. Note the count; #542's PII-side subset is roughly 60–80 checks.
 
-- [ ] **Step 4: Write `doc.md`**
+- [x] **Step 4: Write `doc.md`**
 
 Cover: the three detectors and why each exists; why detection runs in a subprocess venv (host Python versions without spaCy wheels); why the GLiNER label list must stay flat and must not grow beyond the HIPAA-18 (the competing-claim interference measured on `john.doe@example.com` — port that comment from `subprocess_backend.py`, it is the most useful paragraph in the module); the confidence formula and its denominator; and the deliberate absence of category-severity weighting.
 
-- [ ] **Step 5: Verify pdoc renders it**
+- [x] **Step 5: Verify pdoc renders it**
 
 ```bash
 grep -rn "doc.md" src/senselab/audio/workflows/audio_analysis/__init__.py \
@@ -1232,7 +1230,7 @@ grep -rn "doc.md" src/senselab/audio/workflows/audio_analysis/__init__.py \
 
 Match whatever mechanism the existing `doc.md` files use to get picked up, and mirror it in `text/tasks/pii_detection/__init__.py`.
 
-- [ ] **Step 6: Final check and commit**
+- [x] **Step 6: Final check and commit**
 
 ```bash
 uv run ruff format --check src/ && uv run ruff check src/ && uv run mypy src/senselab/
