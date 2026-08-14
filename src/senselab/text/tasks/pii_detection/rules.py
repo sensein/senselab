@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterator
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -267,8 +268,61 @@ def _valid_structured_identifier(text: str, category: str) -> bool:
     return True
 
 
+# GLiNER checkpoints cap their input at a few hundred subword tokens (384 in the common
+# configs) and silently truncate past it -- a long transcript scanned whole loses its tail
+# with no error. These are windowing knobs sized to stay under that cap, not fitted
+# thresholds: English runs ~1.3 subword tokens per word, so 250 words is ~325 tokens, and
+# the label prompt consumes context too. The overlap exists so an entity sitting on a
+# boundary appears whole in at least one window rather than being cut in half by both.
+GLINER_WINDOW_WORDS = 250
+GLINER_WINDOW_OVERLAP_WORDS = 50
+
+
+def _gliner_chunks(
+    text: str,
+    max_words: int = GLINER_WINDOW_WORDS,
+    overlap_words: int = GLINER_WINDOW_OVERLAP_WORDS,
+) -> "Iterator[tuple[str, int]]":
+    """Split ``text`` into overlapping word windows, each with its absolute character offset.
+
+    Args:
+        text: The full transcript to window.
+        max_words: Most words in one window.
+        overlap_words: Words shared between consecutive windows. Must be less than
+            ``max_words``; a stride of at least one word is enforced regardless, so a
+            caller passing an overlap that large gets slow progress rather than a
+            non-terminating loop.
+
+    Yields:
+        ``(window_text, offset)`` where ``text[offset:offset + len(window_text)]`` is
+        exactly ``window_text``. The offset is absolute — into ``text``, not into the
+        window — because a span located inside a window has to be re-based before it can
+        index the original, and a window-relative offset would redact the wrong
+        characters in the masked preview.
+    """
+    words = [(m.start(), m.end()) for m in re.finditer(r"\S+", text)]
+    if not words:
+        return
+    if len(words) <= max_words:
+        start, end = words[0][0], words[-1][1]
+        yield text[start:end], start
+        return
+
+    stride = max(1, max_words - overlap_words)
+    for i in range(0, len(words), stride):
+        window = words[i : i + max_words]
+        if not window:
+            break
+        start, end = window[0][0], window[-1][1]
+        yield text[start:end], start
+        # The final window is the one that reaches the last word; stepping past it would
+        # emit shrinking tail windows that add duplicates and no coverage.
+        if i + max_words >= len(words):
+            break
+
+
 def postprocess_entities(
-    entities: list[dict[str, Any]], source_text: str, *, precision_mode: bool = True
+    entities: list[dict[str, Any]], source_text: str, *, precision_mode: bool = True, flag_all: bool = False
 ) -> list[dict[str, Any]]:
     """Apply the precision guards to a flat list of engine detections.
 
@@ -288,6 +342,13 @@ def postprocess_entities(
             ``MIN_ENGINE_CONFIDENCE`` are dropped. When ``False``, they survive to be flagged
             downstream instead -- the high-recall posture. Format validation and holiday
             reclassification are unaffected by this flag either way.
+        flag_all: Report every surviving candidate regardless of confidence -- the
+            ``--flag-all-pii`` posture. An independent lever, not a synonym for
+            ``precision_mode=False``: "show me everything you considered" is a different
+            request from "lower the detection thresholds", and in PR #542 this flag was read
+            only inside ``if HIGH_RECALL:``, so on its own it did nothing at all, silently.
+            It suppresses only the confidence guard; format validation still runs, because
+            promoting a word-only "identifier" is wrong under every posture.
 
     Returns:
         The filtered/reclassified entity list, in the same dict shape as the input.
@@ -310,8 +371,10 @@ def postprocess_entities(
         if cat in ("IDNUM", "CONTACT", "URL") and not _valid_structured_identifier(span_text, cat):
             continue
         # 3) Low-confidence soft detections dropped (pattern/list hits are exempt).
-        #    This one IS the precision/recall knob, so high-recall keeps them.
-        if precision_mode:
+        #    This one IS the precision/recall knob, so high-recall keeps them -- and it is
+        #    the only guard `flag_all` may suppress, which is what makes the two levers
+        #    independent rather than one flag spelled two ways.
+        if precision_mode and not flag_all:
             method_root = e["method"].split(":")[0].split("+")[0]
             if e["confidence"] < MIN_ENGINE_CONFIDENCE and method_root not in _PATTERN_METHODS:
                 continue

@@ -286,3 +286,32 @@ def test_the_llm_detector_is_not_sent_to_the_worker(fake_venv: Path, monkeypatch
     detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO, DETECTOR_LLM])
 
     assert recorder.calls[0]["input"]["detectors"] == [DETECTOR_PRESIDIO]
+
+
+def test_gliner_only_still_ships_the_cascade_source_for_windowing(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GLiNER needs ``_gliner_chunks`` from rules.py even when the rules detector is off.
+
+    Without the source the worker falls back to one whole-text pass, which is the
+    truncation this windowing exists to remove — and it would fail silently, since a
+    truncated scan still returns spans.
+    """
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER])
+
+    sent = recorder.calls[0]["input"]
+    assert sent["rules_source"], "GLiNER-only must still carry the cascade source"
+    assert "_gliner_chunks" in sent["rules_source"]
+
+
+def test_presidio_only_does_not_pay_for_the_cascade_source(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The file read stays opt-in: neither detector that needs it is running here."""
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO])
+
+    assert recorder.calls[0]["input"]["rules_source"] is None

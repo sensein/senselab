@@ -368,23 +368,36 @@ try:
             failures["gliner"] = f"{type(exc).__name__}: {exc}"
             gliner_model = None
 
-    # ── Rules cascade ─────────────────────────────────────────────
+    # ── Shared cascade module ─────────────────────────────────────
     # ``rules.py``'s source travels in the request (see the request-shape comment above
     # this script) rather than being duplicated here; it is exec'd into a fresh module
     # namespace so its functions can be called the same way an import would allow.
+    # Exec'd whenever it is sent, not only when the rules detector is on: GLiNER needs
+    # ``_gliner_chunks`` from it too, and the exec itself only binds constants and
+    # function objects -- the expensive parts (gazetteers, spaCy) load below, still
+    # behind the rules gate.
+    cascade = None
+    if rules_source:
+        try:
+            import types
+            cascade = types.ModuleType("_pii_rules_cascade")
+            exec(compile(rules_source, "<pii_rules_cascade>", "exec"), cascade.__dict__)
+        except Exception as exc:
+            failures["rules_module"] = f"{type(exc).__name__}: {exc}"
+            cascade = None
+
+    # ── Rules cascade ─────────────────────────────────────────────
     rules_module = None
     rules_name_gazetteer = set()
     rules_place_gazetteer = set()
     rules_nlp = None
-    if "rules" in detectors_requested and rules_source:
+    if "rules" in detectors_requested and cascade is not None:
         try:
-            import types
-            rules_module = types.ModuleType("_pii_rules_cascade")
-            exec(compile(rules_source, "<pii_rules_cascade>", "exec"), rules_module.__dict__)
-            rules_name_gazetteer = rules_module.load_name_gazetteer()
-            rules_place_gazetteer = rules_module.load_place_gazetteer()
+            rules_name_gazetteer = cascade.load_name_gazetteer()
+            rules_place_gazetteer = cascade.load_place_gazetteer()
             import spacy
             rules_nlp = spacy.load("en_core_web_lg")
+            rules_module = cascade
             detectors_used.append("rules")
         except Exception as exc:
             failures["rules"] = f"{type(exc).__name__}: {exc}"
@@ -423,21 +436,38 @@ try:
     def _gliner_scan(text):
         if gliner_model is None:
             return []
-        entities = gliner_model.predict_entities(
-            text,
-            gliner_labels,
-            threshold=gliner_threshold,
-        )
-        out = []
-        for ent in entities:
-            label_raw = ent.get("label", "")
-            out.append({
-                "text": ent.get("text", ""),
-                "category": _normalize_category(label_raw),
-                "source": f"gliner/{label_raw}",
-                "score": float(ent.get("score", 0.0)),
-            })
-        return out
+        # Windowed, because the checkpoint caps its input at a few hundred subword tokens
+        # and silently truncates past it -- scanning a long transcript whole loses its tail
+        # with no error and no failure recorded, which reads as "no PII down there".
+        # Falls back to one whole-text pass only if the cascade module did not load, since
+        # a truncated scan still beats no scan; the failure is already recorded above.
+        if cascade is not None:
+            windows = list(cascade._gliner_chunks(text))
+        else:
+            windows = [(text, 0)]
+
+        # Overlapping windows re-detect boundary entities, so dedupe on what the span
+        # actually is. Keeps the highest score rather than the first: a window that
+        # contains an entity whole should outrank one that caught its edge.
+        best = {}
+        for window_text, _offset in windows:
+            for ent in gliner_model.predict_entities(
+                window_text,
+                gliner_labels,
+                threshold=gliner_threshold,
+            ):
+                label_raw = ent.get("label", "")
+                span_text = ent.get("text", "")
+                key = (span_text.strip().lower(), label_raw)
+                score = float(ent.get("score", 0.0))
+                if key not in best or score > best[key]["score"]:
+                    best[key] = {
+                        "text": span_text,
+                        "category": _normalize_category(label_raw),
+                        "source": f"gliner/{label_raw}",
+                        "score": score,
+                    }
+        return list(best.values())
 
     def _rules_scan(text):
         if rules_module is None:
@@ -644,10 +674,11 @@ def detect_pii_via_subprocess(
 
     # rules.py's own source travels with the request rather than being duplicated as a
     # second string literal inside _PII_WORKER_SCRIPT -- two ~400-line copies of the same
-    # cascade would drift the moment either one is edited. Only read/sent when actually
-    # requested, so callers who exclude "rules" never pay for the file read.
+    # cascade would drift the moment either one is edited. Sent for GLiNER too, which needs
+    # `_gliner_chunks` from it to window long transcripts; a caller running only Presidio
+    # still never pays for the file read.
     rules_source: Optional[str] = None
-    if "rules" in detectors_resolved:
+    if {DETECTOR_RULES, DETECTOR_GLINER} & set(detectors_resolved):
         rules_source = files("senselab.text.tasks.pii_detection").joinpath("rules.py").read_text(encoding="utf-8")
 
     input_json = json.dumps(
