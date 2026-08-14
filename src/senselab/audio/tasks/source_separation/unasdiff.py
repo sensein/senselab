@@ -768,8 +768,17 @@ def separate_with_unasdiff(
             aligned_tensors: List[List[torch.Tensor]] = [window_tensors[0]]
             margins: List[float] = []
             for k in range(1, len(window_tensors)):
-                prev_tail = [t[-overlap_samples:] for t in aligned_tensors[-1]]
-                next_head = [t[:overlap_samples] for t in window_tensors[k]]
+                # Derived per pair, not taken as the constant `overlap_samples`: `_window_starts`
+                # ends with a window flush against the signal, which overlaps its predecessor by
+                # more than `hop_samples`. Slicing a fixed `overlap_samples` off each side there
+                # compares regions offset by the difference -- and since the score is a dot
+                # product after normalisation, content shared at different indices contributes
+                # nothing, so every permutation scores ~0. A 4.92 s clip measured 0.027 that way
+                # against ~2.0 here, which is what `data/permutation_alignment.json` calls the
+                # ambiguous band.
+                shared_samples = starts[k - 1] + window_samples - starts[k]
+                prev_tail = [t[-shared_samples:] for t in aligned_tensors[-1]]
+                next_head = [t[:shared_samples] for t in window_tensors[k]]
                 perm = align_permutations(prev_tail, next_head)
                 scores = sorted(_assignment_scores(prev_tail, next_head), reverse=True)
                 margins.append(scores[0] - scores[1] if len(scores) > 1 else float("inf"))
