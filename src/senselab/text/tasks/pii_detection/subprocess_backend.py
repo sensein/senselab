@@ -262,7 +262,20 @@ _PRESIDIO_PII_ENTITIES = [
 DETECTOR_PRESIDIO = "presidio"
 DETECTOR_GLINER = "gliner"
 DETECTOR_RULES = "rules"
-_KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES})
+DETECTOR_LLM = "llm"
+_KNOWN_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES, DETECTOR_LLM})
+
+# What ``detectors=None`` means. Deliberately narrower than ``_KNOWN_DETECTORS``: the
+# local-LLM detector is known (so it is accepted by name and counts in the agreement
+# denominator when it runs) but never default-on, because a default-on network detector
+# would make a scan's result depend on whether a server happened to be listening -- the
+# same corpus scoring differently on two machines, with nothing in the report saying why.
+_DEFAULT_DETECTORS = frozenset({DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES})
+
+# Detectors this module does not run: they live in the host process, not the venv.
+# ``detect_pii`` runs them and merges their spans -- see ``local_llm.py`` for why the
+# LLM one needs no venv at all (stdlib ``urllib``, no model load).
+_HOST_SIDE_DETECTORS = frozenset({DETECTOR_LLM})
 
 
 # Worker script — runs inside the isolated venv. Reads a single JSON
@@ -578,17 +591,19 @@ def detect_pii_via_subprocess(
             failure and proceed without PII findings rather than crash.
     """
     if detectors is None:
-        detectors_resolved = sorted(_KNOWN_DETECTORS)
+        detectors_resolved = sorted(_DEFAULT_DETECTORS)
     else:
         unknown = [d for d in detectors if d not in _KNOWN_DETECTORS]
         if unknown:
             raise ValueError(f"Unknown PII detector(s): {unknown!r}. Known: {sorted(_KNOWN_DETECTORS)!r}.")
         # Preserve caller's order but dedupe; the worker treats the field
         # as a set anyway, so ordering only matters for readability.
+        # Host-side detectors are dropped here rather than rejected: the caller names
+        # them legitimately, they are just run by `detect_pii` instead of the worker.
         seen: set[str] = set()
         detectors_resolved = []
         for d in detectors:
-            if d not in seen:
+            if d not in seen and d not in _HOST_SIDE_DETECTORS:
                 seen.add(d)
                 detectors_resolved.append(d)
 

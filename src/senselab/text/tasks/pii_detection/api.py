@@ -31,6 +31,12 @@ venv contents and worker. Three detectors run inside the venv:
    rather than in place of them. Its category vocabulary is its own; see
    ``subprocess_backend.py`` for how it is reconciled with the others.
 
+A fourth, **the optional local-LLM detector** (``local_llm.py``), is known but never
+default-on: it has to be named in ``detectors`` explicitly. It runs in *this* process
+rather than the venv — it needs nothing but stdlib ``urllib`` — and refuses any
+non-loopback endpoint, so transcript text cannot leave the machine. See
+:func:`default_detectors` for why a network detector is opt-in.
+
 GLiNER's lowercase labels are normalized to Presidio's uppercase scheme
 inside the worker so the cross-detector corroboration logic below — which
 keys on ``(category, text.lower())`` — sees two detectors' hits on
@@ -50,10 +56,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from senselab.text.tasks.pii_detection.local_llm import LocalLlmConfig, scan_or_fail
 from senselab.text.tasks.pii_detection.subprocess_backend import (
+    _DEFAULT_DETECTORS,
     _KNOWN_DETECTORS,
     DETECTOR_GLINER,
+    DETECTOR_LLM,
     DETECTOR_PRESIDIO,
+    DETECTOR_RULES,
     detect_pii_via_subprocess,
 )
 from senselab.utils.data_structures import ScriptLine
@@ -64,12 +74,31 @@ from senselab.utils.data_structures import ScriptLine
 # than reaching into the subprocess-specific module.
 __all__ = [
     "DETECTOR_GLINER",
+    "DETECTOR_LLM",
     "DETECTOR_PRESIDIO",
+    "DETECTOR_RULES",
+    "LocalLlmConfig",
     "PiiReport",
     "PiiSpan",
+    "default_detectors",
     "detect_pii",
     "flatten_script_line",
 ]
+
+
+def default_detectors() -> list[str]:
+    """Return the detectors ``detectors=None`` runs, in sorted order.
+
+    Narrower than ``_KNOWN_DETECTORS``: the local-LLM detector is accepted by name and
+    counted in the cross-detector agreement denominator when a caller turns it on, but
+    is never default-on. A default-on network detector would make a scan depend on
+    whether a server happened to be listening, so the same corpus would score
+    differently on two machines with nothing in the report explaining the gap.
+
+    Returns:
+        Sorted detector names, e.g. ``["gliner", "presidio", "rules"]``.
+    """
+    return sorted(_DEFAULT_DETECTORS)
 
 
 @dataclass
@@ -332,6 +361,7 @@ def detect_pii(
     gliner_labels: list[str] | None = None,
     gliner_threshold: float = 0.5,
     require_cross_source_corroboration: bool = True,
+    local_llm_config: LocalLlmConfig | None = None,
 ) -> PiiReport | list[PiiReport]:
     """Scan a string or ``ScriptLine`` (or a sequence of either) for PII.
 
@@ -352,8 +382,10 @@ def detect_pii(
             diarization line carrying only a ``speaker`` label) flattens to ``""`` and
             is treated exactly like an empty string input — a documented empty result,
             not an error.
-        detectors: Subset of ``{"presidio", "gliner", "rules"}`` to run. ``None`` (default)
-            runs all three. An empty list (``[]``) is the caller explicitly disabling detection:
+        detectors: Subset of ``{"presidio", "gliner", "rules", "llm"}`` to run. ``None``
+            (default) runs :func:`default_detectors` — the first three; ``"llm"`` is known
+            but never default-on, so it has to be named explicitly.
+            An empty list (``[]``) is the caller explicitly disabling detection:
             no subprocess is spawned, every report gets ``detector_used=None`` and an
             explicit ``"pii_disabled"`` failure note — the LLM-judge-shaped case: this
             module ships no LLM judge, and there is deliberately no default-on path
@@ -377,6 +409,11 @@ def detect_pii(
             agreement since a standalone input has exactly one transcript to corroborate.
             When only one detector ran, any single detection counts (corroboration cannot
             apply with one witness).
+        local_llm_config: Endpoint for the optional local-LLM detector. Ignored unless
+            ``"llm"`` is named in ``detectors``; defaults to
+            :class:`~senselab.text.tasks.pii_detection.local_llm.LocalLlmConfig`'s own
+            loopback default. A non-loopback URL raises at construction — see that
+            module for why that is a checked invariant rather than a documented one.
 
     Returns:
         A single ``PiiReport`` when ``inputs`` is a scalar ``str``/``ScriptLine``; a
@@ -433,14 +470,35 @@ def detect_pii(
     spans_by_index_raw = result.get("spans_by_asr", {})
     subprocess_failures = dict(result.get("failures", {}))
     detectors_used = list(result.get("detectors_used", []))
+
+    # The local LLM runs here, not in the venv -- it needs nothing but stdlib urllib
+    # (see local_llm.py). Merged before the "did anything run?" check below so that
+    # `detectors=["llm"]`, which leaves the worker with nothing to do, is still a real
+    # scan rather than a no-detector early return.
+    if detectors is not None and DETECTOR_LLM in detectors:
+        # Keyed off transcripts_by_index, not texts: empty/whitespace-only inputs never
+        # reach the venv detectors either, and asking an LLM about an empty string costs
+        # a round trip to be told nothing.
+        llm_results = {
+            i: scan_or_fail(t, local_llm_config or LocalLlmConfig()) for i, t in transcripts_by_index.items()
+        }
+        first_failure = next((r.failure for r in llm_results.values() if r.failure), None)
+        if first_failure is None:
+            for index, llm_result in llm_results.items():
+                spans_by_index_raw.setdefault(index, []).extend(llm_result.spans)
+            detectors_used.append(DETECTOR_LLM)
+        else:
+            # One failure fails the detector for the whole batch rather than leaving it
+            # counted as "ran" for some inputs and not others: `detectors_used` is
+            # per-report and feeds the agreement denominator, so a per-input denominator
+            # would make two reports in one batch incomparable.
+            subprocess_failures["llm"] = first_failure
+
     for name, msg in subprocess_failures.items():
         print(f"warn: PII / {name}: {msg}", file=sys.stderr)
 
     if not detectors_used:
-        no_detector_msg = (
-            "No PII detector (Presidio, GLiNER, rules) loaded inside the subprocess venv; "
-            "contains_pii=False reported by default."
-        )
+        no_detector_msg = "No PII detector (Presidio, GLiNER, rules, llm) ran; contains_pii=False reported by default."
         subprocess_failures.setdefault("no_pii_detector", no_detector_msg)
         print(f"warn: {no_detector_msg}", file=sys.stderr)
         return _quick_return(texts, subprocess_failures, is_scalar)
