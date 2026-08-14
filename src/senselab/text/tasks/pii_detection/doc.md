@@ -1,8 +1,36 @@
 # PII detection
 
 Scan a `str`, a `ScriptLine`, or a sequence of either for personally identifiable
-information. One public entry point, `detect_pii`, plus `detect_pii_in_audios` in
-`senselab.audio.tasks.pii_detection` for the transcribe-then-detect composition.
+information.
+
+## Scanning and deciding are separate calls
+
+`scan_for_pii` **runs the detectors** and returns a `PiiScan`: the spans they found, which
+detectors actually ran, and what failed. It reaches no conclusion — there is no
+`contains_pii` on a `PiiScan`, and no confidence.
+
+`decide_pii` **aggregates that evidence into a verdict**: how many detectors must agree
+before a finding counts, how per-detector scores and agreement combine into one confidence,
+and what `contains_pii` becomes.
+
+`detect_pii` is the composition of the two, for callers who want the default decision.
+
+The split is deliberate, and the parameter lists are the reason. A Presidio score floor or a
+GLiNER label set describes *how to run a tool*; a corroboration requirement is *a judgement
+about what its output means*. Mixing them in one signature makes the second look like the
+first — a knob among knobs — when it is the part a downstream consumer is most likely to
+need to change. Keeping them apart means a caller can take the evidence and apply their own
+rule (a severity ordering this module declines to impose, an aggregation across several
+transcripts of one recording) without re-running detection or arguing with a verdict that
+was already computed:
+
+```python
+scan = scan_for_pii(transcript)                       # execution
+report = decide_pii(scan, require_cross_source_corroboration=False)   # decision
+```
+
+`detect_pii_in_audios` in `senselab.audio.tasks.pii_detection` is the transcribe-then-detect
+composition on top of these.
 
 Nothing here knows about a run "pass", a per-pass tag, or an ASR ensemble. A caller that
 needs to merge several ASR backends' transcripts for one recording and corroborate across

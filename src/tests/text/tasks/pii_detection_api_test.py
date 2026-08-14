@@ -101,3 +101,105 @@ def test_confidence_missing_per_span_score_treated_as_zero() -> None:
     conf = _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=2)
     # max_score collapses to 0.0 → overall 0.0
     assert conf == 0.0
+
+
+# ── The scan/decide split ───────────────────────────────────────────
+
+
+def test_a_scan_carries_evidence_and_no_verdict() -> None:
+    """``PiiScan`` must not have grown a verdict field.
+
+    The split only holds if the evidence type stays free of one. A ``contains_pii`` or a
+    confidence on ``PiiScan`` would mean the scan had decided something, and every caller
+    wanting a different rule would be arguing with a value already computed.
+    """
+    from senselab.text.tasks.pii_detection.api import PiiScan
+
+    scan = PiiScan()
+    for decided in ("contains_pii", "detection_confidence", "detector_used"):
+        assert not hasattr(scan, decided), f"PiiScan must not carry {decided!r} — that is a decision"
+    assert (scan.spans, scan.detectors_used, scan.failures) == ([], [], {})
+
+
+def test_deciding_runs_no_detectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``decide_pii`` must be pure aggregation — no subprocess, no venv, no model load.
+
+    If deciding could re-run detection, "apply a different rule to the same evidence" would
+    silently cost another scan, and two rules applied to one recording could disagree
+    because they saw different detector output rather than because the rules differ.
+    """
+    import subprocess
+
+    from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, decide_pii
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("decide_pii must not spawn a subprocess")),
+    )
+
+    scan = PiiScan(
+        spans=[PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="0", score=0.9)],
+        detectors_used=["presidio"],
+    )
+    report = decide_pii(scan)
+    assert report.contains_pii is True
+    assert report.detector_used == "presidio"
+
+
+def test_one_scan_can_yield_different_verdicts_under_different_rules() -> None:
+    """The same evidence, two corroboration rules, two answers — which is the whole point.
+
+    A single uncorroborated hit from one of two detectors counts under the permissive rule
+    and does not under the strict one. That the decision can change while the scan is
+    untouched is what makes the two functions genuinely separable rather than a cosmetic
+    split.
+    """
+    from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, decide_pii
+
+    scan = PiiScan(
+        spans=[PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="0", score=0.9)],
+        detectors_used=["presidio", "gliner"],
+    )
+
+    strict = decide_pii(scan, require_cross_source_corroboration=True)
+    permissive = decide_pii(scan, require_cross_source_corroboration=False)
+
+    assert strict.contains_pii is False, "one of two detectors is not corroboration"
+    assert permissive.contains_pii is True
+    assert strict.spans == permissive.spans, "the evidence must be identical; only the rule changed"
+
+
+def test_a_scan_that_never_ran_decides_to_none_not_zero() -> None:
+    """A failed scan and a clean scan must stay distinguishable.
+
+    An empty ``detectors_used`` is the first; ``detection_confidence`` therefore has to be
+    ``None`` rather than ``0.0``, or a caller reads a failed scan as an all-clear.
+    """
+    from senselab.text.tasks.pii_detection.api import PiiScan, decide_pii
+
+    report = decide_pii(PiiScan(failures={"pii_subprocess": "venv build failed"}))
+    assert report.contains_pii is False
+    assert report.detection_confidence is None
+    assert report.detector_used is None
+    assert report.failures == {"pii_subprocess": "venv build failed"}
+
+
+def test_detect_pii_is_exactly_the_composition(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``detect_pii`` must add no behaviour of its own beyond scan-then-decide.
+
+    A convenience wrapper that quietly differs from its parts is worse than no wrapper:
+    the split would be documented but not real.
+    """
+    from senselab.text.tasks.pii_detection import api
+
+    scan = api.PiiScan(
+        spans=[api.PiiSpan(text="Jane", category="PERSON", source="presidio", asr_model="0", score=0.8)],
+        detectors_used=["presidio", "gliner"],
+    )
+    monkeypatch.setattr(api, "scan_for_pii", lambda *a, **k: scan)
+
+    for rule in (True, False):
+        composed = api.detect_pii("some text", require_cross_source_corroboration=rule)
+        by_hand = api.decide_pii(scan, require_cross_source_corroboration=rule)
+        assert composed == by_hand
