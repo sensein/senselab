@@ -1,5 +1,7 @@
 # Plan B — Standalone PII detection over text and `ScriptLine`
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`, except Task 7, whose unticked boxes are genuinely outstanding — see the note there. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn PII detection into a standalone senselab task callable on a string, a `ScriptLine`, or an `Audio` — adding PR #542's rule cascade as a third detector inside the venv that already hosts Presidio and GLiNER.
@@ -64,7 +66,7 @@ A pure move. No behaviour changes — those come in Tasks 2–4. Doing it as its
   - `text.tasks.pii_detection.subprocess_backend.DETECTOR_PRESIDIO`, `DETECTOR_GLINER`, `_KNOWN_DETECTORS`
   - `text.tasks.pii_detection.api.PiiSpan`, `PiiReport`
 
-- [ ] **Step 1: Write a characterisation test against the current behaviour**
+- [x] **Step 1: Write a characterisation test against the current behaviour**
 
 Before moving anything, pin what exists. Create `src/tests/text/tasks/pii_detection_test.py`:
 
@@ -113,7 +115,7 @@ def test_cross_source_agreement_raises_confidence() -> None:
     )
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_detection_test.py -v
@@ -121,7 +123,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py -v
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'senselab.text.tasks.pii_detection'`.
 
-- [ ] **Step 3: Perform the move**
+- [x] **Step 3: Perform the move**
 
 ```bash
 mkdir -p src/senselab/text/tasks/pii_detection
@@ -179,7 +181,7 @@ from senselab.text.tasks.pii_detection.api import (  # noqa: F401
 )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_detection_test.py src/tests/audio/workflows/ -v 2>&1 | tail -20
@@ -187,7 +189,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py src/tests/audio/workflo
 
 Expected: the three new tests PASS; the existing `audio_analysis` tests that touch PII still pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -238,7 +240,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   ```
   A single input returns a single `PiiReport`; a sequence returns a list of the same length and order.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/tests/text/tasks/pii_detection_test.py`:
 
@@ -306,7 +308,7 @@ def test_detect_pii_single_input_returns_a_bare_report() -> None:
     assert not isinstance(detect_pii("", detectors=[]), list)
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_detection_test.py -v
@@ -314,7 +316,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py -v
 
 Expected: FAIL — `detect_pii` and `flatten_script_line` do not exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `api.py`, add `flatten_script_line`, rename `PiiPassReport` to `PiiReport` (dropping the `perturbation` field, which is workflow vocabulary — the adapter in Task 6 re-adds it), and add `detect_pii`. `flatten_script_line`:
 
@@ -341,7 +343,7 @@ def flatten_script_line(line: ScriptLine) -> str:
 
 `detect_pii` normalises `inputs` to a list of strings, remembers whether the caller passed a scalar, and reuses the existing corroboration and confidence logic with one report per input. Keep the three early-return branches from the current `detect_pii_in_pass` — empty transcript, `detectors=[]`, subprocess failure — each leaving `detector_used=None` and `detection_confidence=None`, because a caller must be able to tell "did not run" from "ran and found nothing".
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_detection_test.py -v
@@ -349,7 +351,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py -v
 
 Expected: PASS, 11 tests.
 
-- [ ] **Step 5: Uncomment the `__init__.py` exports and commit**
+- [x] **Step 5: Uncomment the `__init__.py` exports and commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -379,7 +381,7 @@ A live defect, fixed before Task 4 makes it worse. Its own task because a review
 - Consumes: `PiiSpan` from Task 1.
 - Produces: `_compute_detection_confidence(spans: list[PiiSpan], n_asr_models: int, n_detectors_run: int) -> float` — note the **new third parameter**. Task 2's call site and Task 6's adapter both pass it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_agreement_denominator_is_detectors_that_ran_not_detectors_that_exist() -> None:
@@ -425,7 +427,7 @@ def test_denominator_never_divides_by_zero() -> None:
     assert _compute_detection_confidence(spans, n_asr_models=1, n_detectors_run=0) >= 0.0
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_detection_test.py -k "denominator or rescale or partial_agreement" -v
@@ -433,7 +435,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py -k "denominator or resc
 
 Expected: FAIL — `_compute_detection_confidence() got an unexpected keyword argument 'n_detectors_run'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 def _compute_detection_confidence(
@@ -454,7 +456,7 @@ Update the docstring's "cross-detector agreement" bullet: the denominator is the
 
 Update the call site in `detect_pii` to pass `n_detectors_run=len(detectors_used)`.
 
-- [ ] **Step 3b: Update Task 1's characterisation tests for the new signature**
+- [x] **Step 3b: Update Task 1's characterisation tests for the new signature**
 
 Task 1 wrote three tests calling `_compute_detection_confidence(spans, n_asr_models=...)` with the old two-argument signature. They will now fail with a `TypeError`, which is correct — the signature changed deliberately. Add `n_detectors_run=2` to each (two detectors existed when those tests were written, which is what they were characterising), and check that their **assertions still hold** rather than only that they run:
 
@@ -465,7 +467,7 @@ def test_confidence_is_zero_when_no_spans() -> None:
 
 If an assertion no longer holds, stop — the fix has changed behaviour beyond the denominator and that needs explaining, not patching.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_detection_test.py -v
@@ -473,7 +475,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py -v
 
 Expected: PASS, 15 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -516,7 +518,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `_KNOWN_DETECTORS` from Task 1, the confidence signature from Task 3.
 - Produces: `DETECTOR_RULES = "rules"` in `subprocess_backend.py`, added to `_KNOWN_DETECTORS`; and worker-side `rules_scan(text: str) -> list[dict]` returning the same span shape as the Presidio and GLiNER scans (`{"text", "category", "source", "score"}`), with `source` prefixed `rules/<method>`.
 
-- [ ] **Step 1: Write the failing precision-guard tests**
+- [x] **Step 1: Write the failing precision-guard tests**
 
 Create `src/tests/text/tasks/pii_rules_test.py`. These are the guards #542's review found were broken; they are the reason this cascade is worth porting rather than reimplementing.
 
@@ -627,7 +629,7 @@ def test_age_over_ninety_is_flagged_and_under_is_not() -> None:
     assert not rules.age_scan("I am forty two years old", over_years=90)
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_rules_test.py -v
@@ -635,7 +637,7 @@ uv run pytest src/tests/text/tasks/pii_rules_test.py -v
 
 Expected: FAIL with `ModuleNotFoundError: ... 'rules'`.
 
-- [ ] **Step 3: Port the cascade**
+- [x] **Step 3: Port the cascade**
 
 ```bash
 git show origin/pii-compliance-pipeline:scripts/pii_compliance_pipeline.py \
@@ -671,7 +673,7 @@ def _zipf(word: str) -> float | None:
 3. **Gazetteer loading must not `nltk.download` at import time.** Keep it behind the existing lazy loader and make the loader's failure a logged warning that disables the gazetteer method, not an exception.
 4. **Type annotations throughout** — the repo runs `mypy` with the pydantic plugin, and `scripts/` was exempt where `src/` is not.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_rules_test.py -v
@@ -679,7 +681,7 @@ uv run pytest src/tests/text/tasks/pii_rules_test.py -v
 
 Expected: PASS, 12 tests.
 
-- [ ] **Step 5: Register the cascade as the third detector**
+- [x] **Step 5: Register the cascade as the third detector**
 
 In `subprocess_backend.py`:
 
@@ -692,7 +694,7 @@ Add `rules_scan(text)` to the worker script, emitting spans with `source="rules/
 
 The worker needs `rules.py`'s source. Read it with `importlib.resources` and pass it into the worker's stdin payload alongside the transcripts, rather than duplicating the cascade as a string literal — a second copy of 400 lines will drift.
 
-- [ ] **Step 6: Verify the venv rebuilds on the changed requirements**
+- [x] **Step 6: Verify the venv rebuilds on the changed requirements**
 
 ```bash
 uv run python -c "
@@ -705,7 +707,7 @@ print('requirements' in src and ('hash' in src or 'digest' in src or 'marker' in
 
 If `ensure_venv` does **not** key cache validity on the requirements list, a host with the old venv would silently run without `wordfreq` — and `_zipf` returning `None` means the guards quietly take their precision-safe branch, so nothing would look broken. In that case append a version suffix to the venv name (`_PII_VENV = "pii-detection-v2"`) and record why in a comment.
 
-- [ ] **Step 7: Run an end-to-end detection and commit**
+- [x] **Step 7: Run an end-to-end detection and commit**
 
 ```bash
 uv run python -c "
@@ -755,7 +757,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `DETECTOR_RULES` and `_KNOWN_DETECTORS` from Task 4.
 - Produces: `DETECTOR_LLM = "llm"` added to `_KNOWN_DETECTORS`; `LocalLlmConfig(base_url: str = "http://localhost:11434", model: str = "...", timeout_s: float = 60.0)`; and worker-side `llm_scan(text, config) -> list[dict]` in the same span shape as the other scans, `source="llm/<model>"`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """The optional local-LLM PII engine.
@@ -803,7 +805,7 @@ def test_an_unreachable_server_is_a_recorded_failure_not_a_clean_pass() -> None:
     assert "llm" in result.failure.lower() or "connect" in result.failure.lower()
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_llm_test.py -v
@@ -811,14 +813,14 @@ uv run pytest src/tests/text/tasks/pii_llm_test.py -v
 
 Expected: FAIL — `local_llm` does not exist.
 
-- [ ] **Step 3: Port `LocalLLM` with the loopback guard**
+- [x] **Step 3: Port `LocalLLM` with the loopback guard**
 
 Two required changes to #542's class:
 
 1. **Validate `base_url` is loopback in `__post_init__`.** #542 documents localhost-only as a property; making it a checked invariant is what stops a future edit quietly turning it into a remote call. Accept `localhost`, `127.0.0.0/8`, and `::1`.
 2. **Distinguish "did not run" from "found nothing".** `scan_or_fail` returns a small result object carrying `spans` and an optional `failure` string; a connection error, a timeout, or an unparsable response all populate `failure`, and `detect_pii` records it in `report.failures` and leaves the detector out of `detectors_used`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/text/tasks/pii_llm_test.py -v
@@ -826,7 +828,7 @@ uv run pytest src/tests/text/tasks/pii_llm_test.py -v
 
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Confirm the agreement denominator moved correctly**
+- [x] **Step 5: Confirm the agreement denominator moved correctly**
 
 Adding a fourth known detector is exactly the case Task 3 fixed. Verify it did:
 
@@ -836,7 +838,7 @@ uv run pytest src/tests/text/tasks/pii_detection_test.py -k "denominator or resc
 
 Expected: PASS unchanged — those tests pass `n_detectors_run` explicitly, so growing `_KNOWN_DETECTORS` cannot move them. If they now fail, the fix regressed to using the known-detector count.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -865,7 +867,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `detect_pii` from Task 2.
 - Produces: `detect_pii_in_audios(audios: list[Audio], asr_model: SenselabModel | None = None, device: DeviceType | None = None, **detect_kwargs) -> list[PiiReport]`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """PII detection run directly on an Audio object."""
@@ -906,7 +908,7 @@ def test_one_report_per_audio(mono_audio_sample: Audio) -> None:
 
 Use whatever audio fixture `src/tests/conftest.py` already provides; check its name first with `grep -n "def mono_audio_sample\|@pytest.fixture" src/tests/conftest.py`.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/pii_detection_test.py -v
@@ -914,7 +916,7 @@ uv run pytest src/tests/audio/tasks/pii_detection_test.py -v
 
 Expected: FAIL — module does not exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 """PII detection over audio: transcribe, then scan the transcript.
@@ -965,7 +967,7 @@ Verify `transcribe_audios`' real signature and return shape before relying on it
 grep -n "def transcribe_audios" -A 25 src/senselab/audio/tasks/speech_to_text/api.py
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/pii_detection_test.py -v
@@ -973,7 +975,7 @@ uv run pytest src/tests/audio/tasks/pii_detection_test.py -v
 
 Expected: PASS, 2 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -1044,7 +1046,7 @@ from `senselab.audio.workflows`. Without that, the vocabulary drifts back one fu
 
 </details>
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 """The workflow adapter preserves the contract audio_analysis already depends on."""
@@ -1089,7 +1091,7 @@ def test_cross_asr_corroboration_survives_the_move() -> None:
     assert report.contains_pii is False
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/audio/workflows/pii_adapter_test.py -v
@@ -1097,13 +1099,13 @@ uv run pytest src/tests/audio/workflows/pii_adapter_test.py -v
 
 Expected: FAIL — the shim re-exports `detect_pii_in_pass` from a module where Task 2 renamed it away.
 
-- [ ] **Step 3: Write the adapter**
+- [x] **Step 3: Write the adapter**
 
 Replace the shim with a real module: `PiiPassReport` (a `PiiReport` plus `perturbation`), `detect_pii_in_pass` building `{asr_model → flattened text}`, calling `detect_pii` once per ASR transcript, then applying the **cross-ASR** corroboration that the task API cannot do (it sees each input independently), and `report_to_dict`.
 
 Keep the docstring's explanation of why there is no category-severity weighting: in pediatric and clinical voice data the nominally most severe Presidio categories (`US_SSN`, `CREDIT_CARD`) have near-zero true-positive rate and are dominated by ASR digit hallucinations, so weighting them up inflates exactly the hits a reviewer should de-prioritise.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/workflows/pii_adapter_test.py -v
@@ -1112,7 +1114,7 @@ uv run pytest src/tests/audio/workflows/ -v 2>&1 | tail -20
 
 Expected: PASS, and no regression in the rest of the workflow tests.
 
-- [ ] **Step 5: Confirm nothing still imports the deleted module**
+- [x] **Step 5: Confirm nothing still imports the deleted module**
 
 ```bash
 grep -rn "pii_subprocess" src/ scripts/ || echo "no references to the old module"
@@ -1120,7 +1122,7 @@ grep -rn "pii_subprocess" src/ scripts/ || echo "no references to the old module
 
 Expected: `no references to the old module`. Per the pre-alpha convention the old path is gone outright — no alias, no shim.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -1139,6 +1141,27 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ---
 
 ### Task 7: Port the remaining `--selftest` checks and write `doc.md`
+
+> **NOT DONE as of 2026-08-13 (commit `ad4fffa2`).** Verified against the tree, not assumed.
+> Part of this task's coverage arrived early, under Task 4, when the cascade itself landed:
+> the precision guards, holiday reclassification, common-word-NAME lever and
+> structured-identifier format validation all have named tests in `pii_rules_test.py`.
+> Three pieces are genuinely outstanding:
+>
+> 1. **GLiNER windowing was never ported.** `_gliner_chunks` does not exist, so
+>    `subprocess_backend.py` calls `predict_entities` on the whole string and a long
+>    transcript is silently truncated at the model's token limit. This is a correctness
+>    bug in shipped code, not only a missing test — fix it before writing the test the
+>    step below specifies.
+> 2. **The `--flag-all-pii` interlock was never ported.** `postprocess_entities` has no
+>    `flag_all` parameter, which is exactly the defect the step below was written to
+>    guard: in #542 the flag was read only inside `if HIGH_RECALL:`, so on its own it did
+>    nothing, silently.
+> 3. **`doc.md` does not exist.** Every other task module in this branch has one.
+>
+> Task 4b was in the same state until 2026-08-13 and is now complete. Both were missed
+> because no checkbox in this plan was ticked during execution, so nothing recorded which
+> tasks had shipped.
 
 **Files:**
 - Modify: `src/tests/text/tasks/pii_rules_test.py`

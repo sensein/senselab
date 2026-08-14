@@ -1,5 +1,7 @@
 # Diarization Capabilities Implementation Plan
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give every diarization backend a declared, machine-readable record of which `ScriptLine` fields it populates, what its `speaker` labels denote, and what its speaker ceiling is — so a consumer can branch before paying for a 16 GB download.
@@ -63,7 +65,7 @@ Pyannote is the only backend honouring `num_speakers`/`min_speakers`/`max_speake
 - Consumes: nothing.
 - Produces: `DiarizationCapabilities(populates_text: bool, speaker_label_kind: Literal["identity", "role"], labels_stable_across_files: bool, max_speakers: int | None, honors_speaker_hints: bool)` — a frozen dataclass. Task 2 instantiates it six times.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `src/tests/audio/tasks/speaker_diarization_capabilities_test.py`:
 
@@ -143,7 +145,7 @@ def test_speaker_label_kind_rejects_an_unknown_value() -> None:
         )
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
@@ -151,7 +153,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
 
 Expected: FAIL — `ModuleNotFoundError: No module named 'senselab.audio.tasks.speaker_diarization.capabilities'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Create `src/senselab/audio/tasks/speaker_diarization/capabilities.py`:
 
@@ -226,7 +228,7 @@ class DiarizationCapabilities:
             )
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
@@ -234,7 +236,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
 
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Lint, type-check, commit**
+- [x] **Step 5: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/ && uv run ruff check src/ && uv run mypy src/senselab/
@@ -263,7 +265,7 @@ four of six backends have no measured ceiling yet."
 - Produces: `CAPABILITIES: DiarizationCapabilities` in each of the six backend modules, and in `api.py`:
   `capabilities_for(model_id: str) -> DiarizationCapabilities` — returns the record for whichever backend `diarize_audios` would dispatch that id to, falling back to Pyannote's record for any unmatched id, exactly as the dispatch itself falls back.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `src/tests/audio/tasks/speaker_diarization_capabilities_test.py`:
 
@@ -395,7 +397,7 @@ def test_an_unknown_model_id_falls_back_like_the_dispatch_does() -> None:
     assert capabilities_for("some/unknown-diarizer").honors_speaker_hints is True
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
@@ -403,7 +405,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
 
 Expected: FAIL — `ImportError: cannot import name 'capabilities_for'`.
 
-- [ ] **Step 3: Declare `CAPABILITIES` in each backend module**
+- [x] **Step 3: Declare `CAPABILITIES` in each backend module**
 
 Add to each module, near its other module-level constants. Use the exact values from the "Measured values" table above. For example, in `vibevoice.py`:
 
@@ -470,7 +472,7 @@ CAPABILITIES = DiarizationCapabilities(
 )
 ```
 
-- [ ] **Step 4: Add the lookup to `api.py`**
+- [x] **Step 4: Add the lookup to `api.py`**
 
 `api.py` imports the backends' **functions**, not their modules (verified: `from ...child_adult import diarize_audios_with_child_adult`, and so on for all six). So import the constants directly, with aliases, in the same style:
 
@@ -518,7 +520,7 @@ def capabilities_for(model_id: str) -> DiarizationCapabilities:
     return _PYANNOTE_CAPS
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
@@ -526,7 +528,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
 
 Expected: PASS, 20 tests.
 
-- [ ] **Step 6: Confirm nothing else regressed**
+- [x] **Step 6: Confirm nothing else regressed**
 
 ```bash
 uptime   # check load first; this box is often busy
@@ -535,7 +537,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -q
 
 Expected: unchanged from before this task (26 passed, 6 skipped).
 
-- [ ] **Step 7: Lint, type-check, commit**
+- [x] **Step 7: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/ && uv run ruff check src/ && uv run mypy src/senselab/
@@ -564,7 +566,7 @@ out of the identity axis' cannot diverge while both exist."
 - Consumes: `capabilities_for` from Task 2.
 - Produces: no importable interface. Deliverable is the registry entries plus a test binding them to the code.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to the capabilities test file:
 
@@ -607,7 +609,7 @@ def test_registry_capabilities_match_the_code() -> None:
 
 Add `from pathlib import Path` and `from typing import Iterator` to the test module's imports.
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -k registry -q
@@ -615,7 +617,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -k 
 
 Expected: FAIL — `assert 0 == 6`, because no entry has a `capabilities` block yet.
 
-- [ ] **Step 3: Add the `capabilities` block to each diarization entry**
+- [x] **Step 3: Add the `capabilities` block to each diarization entry**
 
 For each of the six diarization entries in `src/senselab/model_registry.yaml`, add a nested block using the exact values from the "Measured values" table. For example:
 
@@ -630,7 +632,7 @@ For each of the six diarization entries in `src/senselab/model_registry.yaml`, a
 
 `max_speakers: null` is deliberate and means unmeasured. Do not substitute a number.
 
-- [ ] **Step 4: Teach the generator to render them**
+- [x] **Step 4: Teach the generator to render them**
 
 `scripts/generate_model_registry.py` already renders an optional `License` column only for task sections where some entry declares one — `has_license = any("license" in m for m in task_models)` at line ~32, with the header and each row made conditional on it. Mirror that exactly:
 
@@ -659,7 +661,7 @@ and in the row loop:
 
 Append `speakers` and `text_col` to that section's row `print(...)`, matching how `license_` is appended in the existing branch.
 
-- [ ] **Step 5: Regenerate and verify**
+- [x] **Step 5: Regenerate and verify**
 
 ```bash
 uv run python scripts/generate_model_registry.py
@@ -669,7 +671,7 @@ uv run python scripts/generate_model_registry.py && git diff --exit-code src/sen
 
 Expected: the `.md` changes once, then a second run produces no diff.
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
@@ -677,7 +679,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_capabilities_test.py -q
 
 Expected: PASS, 21 tests.
 
-- [ ] **Step 7: Full check and commit**
+- [x] **Step 7: Full check and commit**
 
 ```bash
 uptime

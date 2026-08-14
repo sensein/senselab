@@ -1,5 +1,7 @@
 # Plan D — DriftSE one-step speech enhancement
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add [DriftSE](https://github.com/LiangXu123/DriftSE) (Interspeech 2026, oral) as a speech-enhancement backend reachable through `enhance_audios(model=HFModel(...))` — a **single** network evaluation per utterance, against 30 for SGMSE+.
@@ -62,7 +64,7 @@ Established by reading the repository at the pinned SHA; re-verify in Task 1 if 
 - Consumes: `subprocess_venv.ensure_venv`, `venv_python`, `_clean_subprocess_env`, `parse_subprocess_result`, `_cache_dir_path` (the last from Plan A, Task 4 — if Plan A has not run, add `_cache_dir_path` here and Plan A will find it present).
 - Produces: module constants `_DRIFTSE_VENV`, `_DRIFTSE_PYTHON`, `_DRIFTSE_REQUIREMENTS`, `_DRIFTSE_REPO_URL`, `_DRIFTSE_COMMIT`, `_DRIFTSE_HF_REPO`, `_DRIFTSE_CHECKPOINT_ENV`.
 
-- [ ] **Step 1: Write the failing constants test**
+- [x] **Step 1: Write the failing constants test**
 
 Add to `src/tests/audio/tasks/speech_enhancement_test.py`:
 
@@ -101,7 +103,7 @@ def test_torch_is_named_explicitly_so_ensure_venv_routes_cuda() -> None:
     assert "torchaudio" in named
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "driftse or upstream_is_pinned or training_and_metric or torch_is_named" -v
@@ -109,7 +111,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "driftse or up
 
 Expected: FAIL with `ImportError: cannot import name 'driftse'`.
 
-- [ ] **Step 3: Create the module with its constants and docstring**
+- [x] **Step 3: Create the module with its constants and docstring**
 
 ```python
 """DriftSE one-step speech enhancement via isolated subprocess venv.
@@ -211,7 +213,7 @@ _DRIFTSE_HF_REVISION = "76a9448aae12e4c232b1d52c24899d0835db5782"
 _DRIFTSE_CHECKPOINT_ENV = "SENSELAB_DRIFTSE_CHECKPOINT"
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "upstream_is_pinned or training_and_metric or torch_is_named" -v
@@ -219,7 +221,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "upstream_is_p
 
 Expected: PASS, 3 tests.
 
-- [ ] **Step 5: Verify the pin resolves and the inference imports are what this plan assumes**
+- [x] **Step 5: Verify the pin resolves and the inference imports are what this plan assumes**
 
 ```bash
 git ls-remote https://github.com/LiangXu123/DriftSE.git HEAD
@@ -229,7 +231,7 @@ gh api repos/LiangXu123/DriftSE/contents/enhancement.py?ref=695a64db187500fa0d7b
 
 Expected: the imports are `torch`, `torchaudio`, `numpy`, `librosa`, `soundfile`, `tqdm`, `backbones.ncsnpp_v2`, `backbones.ncsnpp_v2_drift`, `util.other`, and stdlib. If anything else appears, the pin has moved or this plan's dependency list is wrong — fix the list before continuing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/speech_enhancement/ src/tests/
@@ -317,7 +319,7 @@ Carried out on 2026-08-08. The repo is private, the model card records the prove
 - Consumes: the constants from Task 1.
 - Produces: `enhance_audios_with_driftse(audios: List[Audio], model: HFModel, device: Optional[DeviceType] = None, seed: int = 0) -> List[Audio]` — one enhanced `Audio` per input, at 16 kHz, same length as the input.
 
-- [ ] **Step 1: Write the failing contract tests**
+- [x] **Step 1: Write the failing contract tests**
 
 These run without the venv or the weights, so they gate the shape rather than the numerics.
 
@@ -353,7 +355,7 @@ def test_empty_input_returns_empty_without_spawning() -> None:
     assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "worker or empty_input" -v
@@ -361,7 +363,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "worker or emp
 
 Expected: FAIL — `_WORKER_SCRIPT` and `enhance_audios_with_driftse` do not exist.
 
-- [ ] **Step 3: Write the worker script**
+- [x] **Step 3: Write the worker script**
 
 Append to `driftse.py`. This is a transcription of upstream's `enhancement.py` main block, with the three deviations marked inline.
 
@@ -521,7 +523,7 @@ except Exception as exc:
 grep -n "def parse_subprocess_result" -A 30 src/senselab/utils/subprocess_venv.py
 ```
 
-- [ ] **Step 4: Write the host-side entry point**
+- [x] **Step 4: Write the host-side entry point**
 
 ```python
 def enhance_audios_with_driftse(
@@ -566,7 +568,7 @@ def enhance_audios_with_driftse(
 
 The body: return `[]` on empty input before doing anything; resolve the checkpoint from `os.environ[_DRIFTSE_CHECKPOINT_ENV]` if set, else `hf_hub_download` from `model.path_or_uri` at `model.revision`; `ensure_venv(_DRIFTSE_VENV, _DRIFTSE_REQUIREMENTS, python_version=_DRIFTSE_PYTHON)`; write inputs to a `tempfile.TemporaryDirectory` as 16 kHz mono WAVs; run `venv_python(...)` with `_clean_subprocess_env()`; `parse_subprocess_result`; read the outputs back into `Audio`.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "worker or empty_input" -v
@@ -574,7 +576,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k "worker or emp
 
 Expected: PASS, 4 tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/speech_enhancement/ src/tests/
@@ -604,7 +606,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `enhance_audios_with_driftse` from Task 3.
 - Produces: `enhance_audios(audios, model=None, device=None)` accepting an `HFModel` whose id starts with `sensein/driftse`; unchanged behaviour for `SpeechBrainModel` and unchanged default.
 
-- [ ] **Step 1: Write the failing dispatch tests**
+- [x] **Step 1: Write the failing dispatch tests**
 
 ```python
 from unittest.mock import patch
@@ -646,7 +648,7 @@ def test_an_unrecognised_model_still_raises_not_implemented(mono_audio_sample) -
         enhance_audios([mono_audio_sample], model=HFModel(path_or_uri="some/other-model"))
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k dispatch -v
@@ -654,7 +656,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k dispatch -v
 
 Expected: FAIL — the `HFModel` branch does not exist.
 
-- [ ] **Step 3: Implement the dispatch**
+- [x] **Step 3: Implement the dispatch**
 
 ```python
 _DRIFTSE_MODEL_PREFIX = "sensein/driftse"
@@ -673,7 +675,7 @@ _DRIFTSE_MODEL_PREFIX = "sensein/driftse"
 
 Add the matching branch to `model_for_task(model_id, task="enhancement")` so a bare model id resolves to `HFModel`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -v
@@ -681,7 +683,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -v
 
 Expected: PASS.
 
-- [ ] **Step 5: Verify no workflow behaviour moved**
+- [x] **Step 5: Verify no workflow behaviour moved**
 
 ```bash
 uv run pytest src/tests/audio/workflows/ -v 2>&1 | tail -20
@@ -689,7 +691,7 @@ uv run pytest src/tests/audio/workflows/ -v 2>&1 | tail -20
 
 Expected: unchanged from before this task.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -716,7 +718,7 @@ The spec flags one risk to verify rather than assume: upstream JIT-compiles a CU
 
 **Interfaces:** no new interface.
 
-- [ ] **Step 1: Add the skip-gated end-to-end test**
+- [x] **Step 1: Add the skip-gated end-to-end test**
 
 ```python
 import pytest
@@ -772,7 +774,7 @@ grep -rn "def resample_audios" src/senselab/audio/tasks/preprocessing/
 grep -n "@pytest.fixture" -A 3 src/tests/conftest.py | head -30
 ```
 
-- [ ] **Step 2: Build the venv and run it for real**
+- [x] **Step 2: Build the venv and run it for real**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k driftse -v -s
@@ -780,7 +782,7 @@ uv run pytest src/tests/audio/tasks/speech_enhancement_test.py -k driftse -v -s
 
 First run builds the venv, clones upstream, and downloads the checkpoint — several minutes. If this hangs, it is machine contention rather than a bug: rerun rather than disabling the backend.
 
-- [ ] **Step 3: Determine which `upfirdn2d` path was taken**
+- [x] **Step 3: Determine which `upfirdn2d` path was taken**
 
 ```bash
 uv run python - <<'PY'
@@ -801,11 +803,11 @@ PY
 
 Adjust the repo path to wherever Task 3's worker actually clones. Expected: either the JIT extension loaded, or the native fallback selected — **not** a compile error.
 
-- [ ] **Step 4: Force the native path if the fallback is not automatic**
+- [x] **Step 4: Force the native path if the fallback is not automatic**
 
 If Step 3 raises rather than falling back, set the environment variable upstream's loader checks (read `upfirdn2d.py` to find it) in `_clean_subprocess_env()`'s output for this backend, and record why in a comment: a JIT CUDA compile at first inference is a failure that surfaces minutes into a run, on a machine that may have no compiler.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A -- src/ docs/ pyproject.toml uv.lock
@@ -830,15 +832,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:** no new interface.
 
-- [ ] **Step 1: Add the registry entry**
+- [x] **Step 1: Add the registry entry**
 
 Match the shape of the existing isolated-backend entries. It must record: the model id, the task, that it is a subprocess-venv backend named `driftse`, the pinned upstream commit, and that the **upstream license is unresolved**.
 
-- [ ] **Step 2: Add the isolated-backends row**
+- [x] **Step 2: Add the isolated-backends row**
 
 In `docs/compatibility-matrix.md`, add DriftSE with its Python version (3.11), its pinned torch range, and its licence status.
 
-- [ ] **Step 3: Regenerate `model_registry.md` rather than hand-editing**
+- [x] **Step 3: Regenerate `model_registry.md` rather than hand-editing**
 
 ```bash
 ls scripts/ | grep -i registry
@@ -846,18 +848,18 @@ ls scripts/ | grep -i registry
 
 If a generator exists, run it. A hand-edited generated file drifts from its YAML source.
 
-- [ ] **Step 4: Write `doc.md`**
+- [x] **Step 4: Write `doc.md`**
 
 Cover, in this order: what DriftSE is and its published numbers; why inference is 1 NFE and needs no SSL encoder; why the venv omits upstream's training dependencies; the three deviations from upstream's script and the reason for each; the chunking scheme and why overlap-add is safe for enhancement but not for separation; the licence status with a link to the issue from Task 2 Step 1; and that this backend is not wired into `audio_analysis`.
 
-- [ ] **Step 5: Final check**
+- [x] **Step 5: Final check**
 
 ```bash
 uv run ruff format --check src/ && uv run ruff check src/ && uv run mypy src/senselab/
 uv run pytest src/tests/audio/tasks/speech_enhancement_test.py src/tests/audio/workflows/ -v 2>&1 | tail -20
 ```
 
-- [ ] **Step 6: Commit and report**
+- [x] **Step 6: Commit and report**
 
 ```bash
 git add -A -- src/ docs/ pyproject.toml uv.lock

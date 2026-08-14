@@ -1,5 +1,7 @@
 # HF Revision Pinning Implementation Plan
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Every senselab result can name the 40-hex commit that produced it, an upstream push invalidates the cache entries that depended on it, and every participant in one run uses the same commit.
@@ -54,7 +56,7 @@
   - `RevisionResolutionError(RuntimeError)`
   - `manifest_key(repo_id: str, ref: str) -> str` returning `f"{repo_id}@{ref}"`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `src/tests/utils/model_revision_test.py`:
 
@@ -167,12 +169,12 @@ def test_a_corrupt_manifest_does_not_crash_resolution(monkeypatch: pytest.Monkey
     assert resolve_revision("org/model", "main") == SHA_A
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run: `uv run pytest src/tests/utils/model_revision_test.py -q --noconftest -p no:cacheprovider`
 Expected: FAIL — `ModuleNotFoundError: No module named 'senselab.utils.model_revision'`
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `src/senselab/utils/model_revision.py`:
 
@@ -377,12 +379,12 @@ def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = 
     return binding
 ```
 
-- [ ] **Step 4: Run the tests and verify they pass**
+- [x] **Step 4: Run the tests and verify they pass**
 
 Run: `uv run pytest src/tests/utils/model_revision_test.py -q --noconftest -p no:cacheprovider`
 Expected: PASS (10 tests)
 
-- [ ] **Step 5: Add the concurrency test**
+- [x] **Step 5: Add the concurrency test**
 
 Mocking the lock would prove nothing about the case the lock exists for. Append to `src/tests/utils/model_revision_test.py`:
 
@@ -414,12 +416,12 @@ def test_concurrent_first_resolution_agrees_on_one_sha(tmp_path: Path) -> None:
     assert len(results) == 1, f"both processes must adopt one SHA, got {results}"
 ```
 
-- [ ] **Step 6: Run it and verify it passes**
+- [x] **Step 6: Run it and verify it passes**
 
 Run: `uv run pytest src/tests/utils/model_revision_test.py -q -p no:cacheprovider`
 Expected: PASS (11 tests). Drop `--noconftest` here — `multiprocessing` spawn needs the package importable.
 
-- [ ] **Step 7: Lint, type-check, commit**
+- [x] **Step 7: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/senselab/utils/model_revision.py src/tests/utils/model_revision_test.py
@@ -445,7 +447,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Why:** its docstring already admits "Returns `revision` unchanged only as a last resort". That last resort is the silent ref-fallback the design forbids — every caller downstream then believes it holds a SHA and records a ref.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `src/tests/utils/dependencies_test.py`:
 
@@ -462,12 +464,12 @@ def test_cached_commit_hash_raises_rather_than_returning_a_ref(
         _get_cached_commit_hash("org/never-downloaded", "main")
 ```
 
-- [ ] **Step 2: Run it and verify it fails**
+- [x] **Step 2: Run it and verify it fails**
 
 Run: `uv run pytest src/tests/utils/dependencies_test.py -k cached_commit_hash_raises -q`
 Expected: FAIL — it returns `"main"` instead of raising.
 
-- [ ] **Step 3: Replace the last-resort return**
+- [x] **Step 3: Replace the last-resort return**
 
 In `_get_cached_commit_hash`, replace the final `return revision` with:
 
@@ -489,12 +491,12 @@ Add the import at the top of the function body (deferred, to keep module import 
 
 Update the docstring: delete the "Returns `revision` unchanged only as a last resort" sentence and state that it raises instead.
 
-- [ ] **Step 4: Run the scoped tests**
+- [x] **Step 4: Run the scoped tests**
 
 Run: `uv run pytest src/tests/utils/dependencies_test.py -q`
 Expected: PASS. If any existing test relied on the ref-fallback, that test was asserting the bug — update it to expect the raise and say so in the commit message.
 
-- [ ] **Step 5: Lint, type-check, commit**
+- [x] **Step 5: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/senselab/utils/dependencies.py src/tests/utils/dependencies_test.py
@@ -520,7 +522,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Why this is nearly free:** `check_hf_repo_exists` already calls `ensure_hf_model(repo_id, revision)`, which resolves and returns the SHA, and then discards it to return a bool. The SHA is already computed at construction, above every load.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `src/tests/utils/model_test.py`:
 
@@ -538,12 +540,12 @@ def test_hf_model_records_the_resolved_commit_sha(monkeypatch: pytest.MonkeyPatc
     assert model.commit_sha == sha, "the resolved commit must be recorded"
 ```
 
-- [ ] **Step 2: Run it and verify it fails**
+- [x] **Step 2: Run it and verify it fails**
 
 Run: `uv run pytest src/tests/utils/model_test.py -k records_the_resolved -q`
 Expected: FAIL — `HFModel` has no attribute `commit_sha`.
 
-- [ ] **Step 3: Add the field and populate it**
+- [x] **Step 3: Add the field and populate it**
 
 In `HFModel`, add beside `revision`:
 
@@ -579,12 +581,12 @@ Add a `model_validator(mode="after")` that populates it, after the existing `rev
 
 Import `model_validator` from `pydantic` alongside the existing `field_validator`.
 
-- [ ] **Step 4: Run the scoped tests**
+- [x] **Step 4: Run the scoped tests**
 
 Run: `uv run pytest src/tests/utils/model_test.py -q`
 Expected: PASS. Any test constructing an `HFModel` must monkeypatch **both** `check_hf_repo_exists` and `resolve_revision` — an unmocked construction downloads a full snapshot.
 
-- [ ] **Step 5: Lint, type-check, commit**
+- [x] **Step 5: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/senselab/utils/data_structures/model.py src/tests/utils/model_test.py
@@ -611,7 +613,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Why this is the most serious of the four gaps:** today the key contains only `model_id`, so an upstream push makes `resolve_model` load *new* weights while `cache_key` produces the *same* hash. A result from the old commit is served as current.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `src/tests/utils/cached_inference_test.py`:
 
@@ -631,12 +633,12 @@ def test_two_commits_of_one_model_do_not_share_a_cache_key() -> None:
     assert cache_key(**common, commit_sha="a" * 40) != cache_key(**common, commit_sha="b" * 40)
 ```
 
-- [ ] **Step 2: Run it and verify it fails**
+- [x] **Step 2: Run it and verify it fails**
 
 Run: `uv run pytest src/tests/utils/cached_inference_test.py -k two_commits -q`
 Expected: FAIL — `cache_key() got an unexpected keyword argument 'commit_sha'`.
 
-- [ ] **Step 3: Add the parameter to the payload**
+- [x] **Step 3: Add the parameter to the payload**
 
 In `cache_key`, add `commit_sha: str | None,` to the keyword-only signature and `"commit_sha": commit_sha,` to the `payload` dict. Document why:
 
@@ -648,7 +650,7 @@ In `cache_key`, add `commit_sha: str | None,` to the keyword-only signature and 
 
 Bump `CACHE_SCHEMA_VERSION` from `22` to `23` — every existing entry predates SHA-awareness and cannot be attributed to a commit, so it must not be reused.
 
-- [ ] **Step 4: Thread it through `cache_key_for`**
+- [x] **Step 4: Thread it through `cache_key_for`**
 
 In `stage_context.py`, resolve before the lookup and pass it:
 
@@ -683,12 +685,12 @@ Add the helper to the same class:
         return resolve_revision(model_id)
 ```
 
-- [ ] **Step 5: Run the scoped tests**
+- [x] **Step 5: Run the scoped tests**
 
 Run: `uv run pytest src/tests/utils/cached_inference_test.py src/tests/audio/workflows/ -q`
 Expected: PASS. Existing callers of `cache_key` that now fail to type-check must be updated to pass `commit_sha`.
 
-- [ ] **Step 6: Lint, type-check, commit**
+- [x] **Step 6: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/senselab/utils/tasks/cached_inference.py src/senselab/audio/workflows/audio_analysis/stage_context.py src/tests/utils/cached_inference_test.py
@@ -713,7 +715,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Consumes: `_commit_sha_for` from Task 4.
 - Produces: `provenance_for` output gains `"revision"` and `"commit_sha"` keys.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 def test_provenance_records_the_commit_that_produced_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -725,12 +727,12 @@ def test_provenance_records_the_commit_that_produced_the_result(monkeypatch: pyt
     assert prov["revision"] == "main"
 ```
 
-- [ ] **Step 2: Run it and verify it fails**
+- [x] **Step 2: Run it and verify it fails**
 
 Run: `uv run pytest src/tests/audio/workflows/audio_analysis/stage_context_test.py -k records_the_commit -q`
 Expected: FAIL — `KeyError: 'commit_sha'`.
 
-- [ ] **Step 3: Add both keys**
+- [x] **Step 3: Add both keys**
 
 In `provenance_for`'s returned dict, after `"model_id": model_id,`:
 
@@ -742,16 +744,16 @@ In `provenance_for`'s returned dict, after `"model_id": model_id,`:
             "commit_sha": self._commit_sha_for(model_id),
 ```
 
-- [ ] **Step 4: Make Brouhaha's existing parquet column carry a real SHA**
+- [x] **Step 4: Make Brouhaha's existing parquet column carry a real SHA**
 
 `SignalRow.revision` already reaches `L1/signals/<signal>.parquet`, carrying the literal `"main"`. In `brouhaha.py`, leave `BROUHAHA_REVISION = "main"` as the ref, and pass the resolved SHA into the row's `revision` field at the point the row is built, so the column stops recording a ref. Add a comment naming what changed and why.
 
-- [ ] **Step 5: Run the scoped tests**
+- [x] **Step 5: Run the scoped tests**
 
 Run: `uv run pytest src/tests/audio/workflows/ -q`
 Expected: PASS
 
-- [ ] **Step 6: Lint, type-check, commit**
+- [x] **Step 6: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/senselab/audio/workflows/audio_analysis/stage_context.py src/senselab/audio/workflows/audio_analysis/scene_quality/brouhaha.py
@@ -778,7 +780,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 **Why:** parents currently send the *ref* (`"revision": model.revision or "main"`) and each worker re-resolves it against its own cache — so two nodes in one run can load different commits.
 
-- [ ] **Step 1: Write the failing guard test**
+- [x] **Step 1: Write the failing guard test**
 
 Create `src/tests/utils/revision_pinning_guard_test.py`:
 
@@ -815,12 +817,12 @@ def test_subprocess_env_propagates_the_run_id(monkeypatch) -> None:
 
 If `brouhaha` has no `_build_worker_input` helper, extract one in Step 3 — the payload construction must be callable without spawning a subprocess, or this rule cannot be tested at all.
 
-- [ ] **Step 2: Run it and verify it fails**
+- [x] **Step 2: Run it and verify it fails**
 
 Run: `uv run pytest src/tests/utils/revision_pinning_guard_test.py -q`
 Expected: FAIL — the payload carries `"main"`, and the env has no `SENSELAB_RUN_ID`.
 
-- [ ] **Step 3: Send the SHA and the run id**
+- [x] **Step 3: Send the SHA and the run id**
 
 In `hf_subprocess_env`, add the run id to the returned env:
 
@@ -842,12 +844,12 @@ At each of the three parent call sites, replace `model.revision or "main"` in th
 
 Extract `_build_worker_input` in `brouhaha.py` if needed so the payload is constructible without spawning.
 
-- [ ] **Step 4: Run the scoped tests**
+- [x] **Step 4: Run the scoped tests**
 
 Run: `uv run pytest src/tests/utils/revision_pinning_guard_test.py src/tests/utils/dependencies_test.py -q`
 Expected: PASS
 
-- [ ] **Step 5: Add the tiny-model contract test**
+- [x] **Step 5: Add the tiny-model contract test**
 
 This is the one test that touches the real Hub, and it exists because a mock asserting our own beliefs about `huggingface_hub` would pass just as happily when those beliefs are wrong:
 
@@ -872,7 +874,7 @@ def test_the_two_call_rule_holds_against_the_real_hub(tmp_path, monkeypatch) -> 
     assert snapshot_download(repo, revision=sha), "a full SHA must resolve from cache with no network"
 ```
 
-- [ ] **Step 6: Run it, lint, type-check, commit**
+- [x] **Step 6: Run it, lint, type-check, commit**
 
 ```bash
 uv run pytest src/tests/utils/revision_pinning_guard_test.py -q
@@ -893,15 +895,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Modify: `CLAUDE.md`
 - Modify: `src/senselab/audio/workflows/audio_analysis/doc.md`
 
-- [ ] **Step 1: Record the cache consequence in `CLAUDE.md`**
+- [x] **Step 1: Record the cache consequence in `CLAUDE.md`**
 
 Under the existing "Cache invalidation is free" bullet, add that `CACHE_SCHEMA_VERSION` reached 23 because cache keys became commit-aware, and that **the first run after this change recomputes everything** — existing entries cannot be attributed to a commit, so they are not reused. This is a one-time full recompute, not a silent no-op, and someone will otherwise report it as a regression.
 
-- [ ] **Step 2: Document `SENSELAB_RUN_ID` in the workflow doc**
+- [x] **Step 2: Document `SENSELAB_RUN_ID` in the workflow doc**
 
 Add a short section to `doc.md`: what the run id is for, that a Slurm submission should export one value so every node and subprocess shares it, that leaving it unset makes each launch its own run, and where the manifest lives (`$SENSELAB_CACHE/runs/<run_id>/resolutions.json`). Note that the manifest doubles as the run's provenance — one file naming every model and its exact commit.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md src/senselab/audio/workflows/audio_analysis/doc.md

@@ -1,5 +1,7 @@
 # Shared-Cache Locking Implementation Plan
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** One file lock that works when several users share a cache directory — group-writable, with a heartbeat that is actually read, and a holder identity a takeover can name — replacing both existing implementations.
@@ -56,7 +58,7 @@
   ```
   `path` is the resource being guarded; the lock and heartbeat are derived from it (`.lock`, `.heartbeat`), matching what both existing implementations do.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """A file lock that several users can share on one directory."""
@@ -185,7 +187,7 @@ def test_lock_holder_returns_none_for_a_missing_or_junk_file(tmp_path: Path) -> 
     assert lock_holder(junk) is None
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/utils/file_lock_test.py -q
@@ -193,7 +195,7 @@ uv run pytest src/tests/utils/file_lock_test.py -q
 
 Expected: FAIL — `ModuleNotFoundError: No module named 'senselab.utils.file_lock'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Write `src/senselab/utils/file_lock.py`. Requirements, each of which a test above pins:
 
@@ -205,7 +207,7 @@ Write `src/senselab/utils/file_lock.py`. Requirements, each of which a test abov
 - `SharedFileLock.__exit__` — stop the thread, join with a timeout, unlink the heartbeat, truncate the lock file's payload (so `lock_holder` reports unheld), release.
 - The heartbeat thread swallows `OSError` — but note in a comment that this is why group-writable modes matter: a swallowed permission error is how a live holder's heartbeat goes silently stale.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/utils/file_lock_test.py -q
@@ -213,7 +215,7 @@ uv run pytest src/tests/utils/file_lock_test.py -q
 
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Add the one real concurrency test**
+- [x] **Step 5: Add the one real concurrency test**
 
 Everything above is single-process. Add a test that forks a second process which holds the lock briefly, and assert the parent waited rather than proceeding — the one case a mocked test cannot establish.
 
@@ -247,7 +249,7 @@ def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
 
 Run it and confirm it passes. If `spawn` cannot pickle the local function, move `_hold` to module scope.
 
-- [ ] **Step 6: Lint, type-check, commit**
+- [x] **Step 6: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/ && uv run ruff check src/ && uv run mypy src/senselab/
@@ -278,7 +280,7 @@ scenario this exists for."
 - Consumes: `SharedFileLock` from Task 1.
 - Produces: no new public interface; `_HeartbeatLock` ceases to exist.
 
-- [ ] **Step 1: Find every call site**
+- [x] **Step 1: Find every call site**
 
 ```bash
 grep -n "_HeartbeatLock" src/senselab/ -r
@@ -287,13 +289,13 @@ grep -rn "_HeartbeatLock" src/tests/ || echo "no test references"
 
 Record what you find in your report. Replace each, and delete the class. Pre-alpha convention is rename-and-replace outright: no alias, no shim.
 
-- [ ] **Step 2: Preserve the behaviour that already worked**
+- [x] **Step 2: Preserve the behaviour that already worked**
 
 `_HeartbeatLock` acquired with a 60 s initial timeout and looped — waiting again when the heartbeat was fresh, breaking when stale. `SharedFileLock` does the same thing with `timeout` and `stale_after`. Choose values that preserve the effective behaviour (its defaults were `heartbeat_interval=30`, `stale_threshold=90`) and say in your report what you chose and why.
 
 Do **not** silently shorten how long a waiter tolerates a live download: these locks guard multi-GB model downloads, and a waiter that gives up early turns one slow download into two concurrent ones.
 
-- [ ] **Step 3: Run the tests**
+- [x] **Step 3: Run the tests**
 
 ```bash
 uptime
@@ -303,7 +305,7 @@ uv run pytest src/tests/utils -q
 
 Expected: no regression. Report both counts.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 uv run ruff format src/ && uv run ruff check src/ && uv run mypy src/senselab/
@@ -327,7 +329,7 @@ takeover on a shared cache can name the job it displaced."
 - Consumes: `SharedFileLock` from Task 1.
 - Produces: no new public interface; `_FileLockWithHeartbeat` ceases to exist.
 
-- [ ] **Step 1: Replace both locks in this module**
+- [x] **Step 1: Replace both locks in this module**
 
 Two distinct sites:
 1. `ensure_venv`'s `with FileLock(str(lock_path), timeout=600):` — the plain lock with no heartbeat. This is the one whose holder, if it dies mid-install, blocks every waiter for 600 s and then raises.
@@ -335,7 +337,7 @@ Two distinct sites:
 
 **Do not change the sequence inside `ensure_venv`'s lock.** The marker check, `shutil.rmtree`, install, and marker write stay exactly as they are; only the lock wrapping them changes. That sequence is what makes a half-built venv un-reusable and it is already correct.
 
-- [ ] **Step 2: Make a shared venv runnable by the group**
+- [x] **Step 2: Make a shared venv runnable by the group**
 
 Building it group-writable is only half the job — a second user has to execute the interpreter the first user created. After a successful install, walk the venv tree and add group read to files and group read+execute to directories, ignoring failures on entries owned by someone else.
 
@@ -343,7 +345,7 @@ Do this **before** the marker is written, so an interrupted chmod cannot leave a
 
 (An earlier revision of this step said "after", with the same rationale — which the order it prescribed did not deliver. Writing the marker first means a kill between the two steps leaves a venv advertising itself as ready with its modes half-fixed, and because the chmod pass only runs on the fresh-build path, every later call takes the reuse fast path and never repairs it. Chmod first, then mark: an interrupted pass leaves no marker, the next call's marker check fails, `rmtree` fires, and the rebuild completes the chmod.)
 
-- [ ] **Step 3: Write the failing test first**
+- [x] **Step 3: Write the failing test first**
 
 ```python
 def test_a_completed_venv_is_group_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -357,7 +359,7 @@ def test_a_completed_venv_is_group_readable(tmp_path: Path, monkeypatch: pytest.
 
 Drive it against a fake venv tree rather than a real install — building a real venv downloads packages and takes minutes. Create a directory structure, call the permission-fixing helper directly, and assert the modes. Factor that helper out so it is callable without running an install.
 
-- [ ] **Step 4: Verify no regression in the venv path**
+- [x] **Step 4: Verify no regression in the venv path**
 
 ```bash
 uptime
@@ -367,7 +369,7 @@ uv run pytest src/tests/utils -q
 
 The existing `_cache_dir_path` / `_cache_dir` tests must still pass unchanged — they pin the side-effect-free path query a test skip gate depends on.
 
-- [ ] **Step 5: Confirm `ensure_venv` still works end to end**
+- [x] **Step 5: Confirm `ensure_venv` still works end to end**
 
 This is the one place a real venv build is worth it, because the lock change wraps it:
 
@@ -382,7 +384,7 @@ print('marker:', (p / '.senselab-installed').is_file())
 
 Expected: builds, marker present. Run it twice — the second must reuse rather than rebuild, proving the marker path still short-circuits. Report both timings.
 
-- [ ] **Step 6: Update the module docstring and commit**
+- [x] **Step 6: Update the module docstring and commit**
 
 `subprocess_venv.py`'s docstring says "file locks with heartbeat for concurrent access safety". Make it accurate about what that now means: shared-safe modes, a heartbeat that is read, and takeover of a dead holder.
 
