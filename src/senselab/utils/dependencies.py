@@ -220,12 +220,14 @@ def _safe_key(repo_id: str, revision: str) -> str:
 def is_hf_model_cached(repo_id: str, revision: str = "main", repo_type: str = "model") -> bool:
     """Check whether a HuggingFace model snapshot exists in the local cache.
 
-    This is a **filesystem-only** check — no network calls are made.
-    Returns ``True`` when ``HF_HUB_OFFLINE=1`` is set.
+    This is a **filesystem-only** check — no network calls are made, so it is already
+    safe under ``HF_HUB_OFFLINE`` and does not special-case it. It used to answer ``True``
+    unconditionally when that flag was set, which inverted the question: offline means "do
+    not use the network", not "everything you might ask for is present". A caller that
+    believed it skipped the download and handed back a SHA anyway, and
+    :func:`resolve_model` then wrote ``refs/<ref>`` for a snapshot that had never been
+    staged — a cache entry that looks resolvable and is not.
     """
-    if os.environ.get("HF_HUB_OFFLINE", "0") == "1":
-        return True
-
     try:
         from huggingface_hub import try_to_load_from_cache
 
@@ -241,6 +243,41 @@ def is_hf_model_cached(repo_id: str, revision: str = "main", repo_type: str = "m
 
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _snapshot_dir(repo_id: str, sha: str) -> Path:
+    """Return the ``snapshots/<sha>/`` directory for ``repo_id`` in the *current* HF cache."""
+    from huggingface_hub import constants
+
+    return Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
+
+
+def _snapshot_is_present(repo_id: str, sha: str) -> bool:
+    """Whether ``repo_id``@``sha`` is actually staged in the HF cache this process will read.
+
+    The question every fast path in :func:`ensure_hf_model` needs answered, and the one none
+    of them used to ask. A recorded success lives under ``SENSELAB_CACHE``, which is
+    deliberately decoupled from ``HF_HOME`` (see :func:`_senselab_cache_dir`) — so it says
+    "this was downloaded", not "this was downloaded *into the cache you are about to read*".
+    On a cluster those differ routinely: weights go to a shared group tree while coordination
+    state stays per-user, and a job that switches ``HF_HOME`` replays a success recorded
+    against a different tree entirely.
+
+    Args:
+        repo_id: The HF repository id.
+        sha: A resolved 40-hex commit.
+
+    Returns:
+        ``True`` when the snapshot directory exists and is non-empty. Empty counts as absent:
+        ``_point_ref_at`` and an interrupted download can both leave the directory behind
+        with nothing in it, and returning ``True`` there reintroduces the same failure one
+        level deeper.
+    """
+    snapshot = _snapshot_dir(repo_id, sha)
+    try:
+        return snapshot.is_dir() and any(snapshot.iterdir())
+    except OSError:
+        return False
 
 
 def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
@@ -413,12 +450,21 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
     if is_hf_model_cached(repo_id, revision):
         return _get_cached_commit_hash(repo_id, revision)
 
-    # Fast path 2: result cached from a prior process (success or definitive failure)
+    # Fast path 2: result cached from a prior process (success or definitive failure).
+    # A recorded *success* is only usable if the weights are in the cache this process reads
+    # -- see _snapshot_is_present for why the two can disagree. When they do, fall through and
+    # download rather than returning a SHA whose snapshot is not here; the alternative is a
+    # FileNotFoundError surfacing inside a subprocess worker, far from the cause.
+    # A recorded *failure* still short-circuits: a 404 does not become truer or falser
+    # depending on which HF cache is mounted.
     cached = _read_result_cache(repo_id, revision)
     if cached is not None:
         if cached.get("status") == "ok":
-            return str(cached["commit_hash"])
-        raise _cached_error(cached)
+            recorded_sha = str(cached["commit_hash"])
+            if _snapshot_is_present(repo_id, recorded_sha):
+                return recorded_sha
+        else:
+            raise _cached_error(cached)
 
     # Slow path: acquire lock, re-check, then download. SharedFileLock derives the lock
     # filename by appending (never replacing) a fixed suffix onto this resource path (see
@@ -451,14 +497,18 @@ def ensure_hf_model(repo_id: str, revision: str = "main", token: Optional[str] =
             )
             continue
     try:
-        # Re-check after acquiring lock
+        # Re-check after acquiring lock, under the same "is it actually here?" rule as above:
+        # the holder we waited on may have recorded a success against a different HF cache.
         if is_hf_model_cached(repo_id, revision):
             return _get_cached_commit_hash(repo_id, revision)
         cached = _read_result_cache(repo_id, revision)
         if cached is not None:
             if cached.get("status") == "ok":
-                return str(cached["commit_hash"])
-            raise _cached_error(cached)
+                recorded_sha = str(cached["commit_hash"])
+                if _snapshot_is_present(repo_id, recorded_sha):
+                    return recorded_sha
+            else:
+                raise _cached_error(cached)
 
         # Download with retries on transient errors
         resolved_token = token or get_huggingface_token()
@@ -530,8 +580,24 @@ def resolve_model(repo_id: str, revision: str = "main", *, token: Optional[str] 
     # exactly that commit, rather than reusing an older snapshot its own ref still points at.
     sha = ensure_hf_model(repo_id, resolve_revision(repo_id, revision, token=token), token=token)
     repo_root = Path(constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}"
-    _point_ref_at(repo_root, revision, sha)
     snapshot_path = repo_root / "snapshots" / sha
+
+    # Verified before the ref is written, not after. Callers take this path away into another
+    # venv and open files under it, so a path to nothing surfaces as "[Errno 2] ...
+    # atten_unet_vctk.toml" inside a worker -- a message that names the file rather than the
+    # staging that never happened. Writing refs/<ref> first would additionally leave a pointer
+    # to an absent snapshot behind, which is what made a later offline load report the model as
+    # uncached-and-unreachable instead of simply missing.
+    if not _snapshot_is_present(repo_id, sha):
+        raise RuntimeError(
+            f"{repo_id}@{sha} resolved but its snapshot is not in this HF cache "
+            f"({constants.HF_HUB_CACHE}): expected {snapshot_path}. Staging did not complete here. "
+            "If HF_HOME changed since this model was first resolved, senselab's own result cache "
+            "(SENSELAB_CACHE) may still record the earlier download -- the two are deliberately "
+            "separate trees."
+        )
+
+    _point_ref_at(repo_root, revision, sha)
     return sha, snapshot_path
 
 
