@@ -1,5 +1,7 @@
 # Plan A — Four diarization backends (cherry-pick #537, task layer only)
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Land the four diarization backends from PR #537 — VibeVoice-ASR-HF, USC-SAIL child-adult, MOSS-Transcribe-Diarize, DiariZen — reachable through `diarize_audios(model=...)` and deliberately not through the `audio_analysis` workflow.
@@ -88,7 +90,7 @@ enforced when ~13 sites share the same exposure.
 - Consumes: nothing
 - Produces: a verified `feat/new-model-integrations` at or ahead of the merged `alpha`, which every later task and every other plan (B, C, D) builds on, plus a recorded baseline test state for Task 5 to compare against.
 
-- [ ] **Step 1: Confirm you are on the branch and it descends from the merged alpha**
+- [x] **Step 1: Confirm you are on the branch and it descends from the merged alpha**
 
 ```bash
 cd /Users/satra/software/sensein/senselab
@@ -104,7 +106,7 @@ Expected: `feat/new-model-integrations`, then both confirmations. If the branch 
 git rebase origin/alpha
 ```
 
-- [ ] **Step 2: Confirm the run_config lives where later plans expect**
+- [x] **Step 2: Confirm the run_config lives where later plans expect**
 
 ```bash
 test -f src/senselab/audio/workflows/audio_analysis/run_config.py && echo "run_config present"
@@ -112,7 +114,7 @@ test -f src/senselab/audio/workflows/audio_analysis/run_config.py && echo "run_c
 
 Expected: `run_config present`.
 
-- [ ] **Step 3: Confirm the working tree is clean before touching anything**
+- [x] **Step 3: Confirm the working tree is clean before touching anything**
 
 ```bash
 git status --short
@@ -120,7 +122,7 @@ git status --short
 
 Expected: no output. The only files the branch carries beyond `alpha` are this spec and its four plans.
 
-- [ ] **Step 4: Record the baseline test state**
+- [x] **Step 4: Record the baseline test state**
 
 ```bash
 uv sync --all-extras
@@ -129,7 +131,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -v 2>&1 | tail -
 
 Expected: all pass or skip. Note the counts — Task 6 compares against them. A failure here is pre-existing on `alpha` and is not this plan's to fix; record it and continue.
 
-- [ ] **Step 5: Commit nothing, report the baseline**
+- [x] **Step 5: Commit nothing, report the baseline**
 
 No commit. Report the baseline pass/skip counts to the reviewer.
 
@@ -151,7 +153,7 @@ No commit. Report the baseline pass/skip counts to the reviewer.
 
   Verify these exact names in Step 2 before relying on them; if #537 named one differently, use the name in the file and correct this plan's Task 3.
 
-- [ ] **Step 1: Copy the four new modules from the PR branch**
+- [x] **Step 1: Copy the four new modules from the PR branch**
 
 ```bash
 git checkout origin/feat/diarization-multi-speaker-uncertainty -- \
@@ -164,7 +166,7 @@ git status --short
 
 Expected: four files staged as new (`A`).
 
-- [ ] **Step 2: Extract the actual public names**
+- [x] **Step 2: Extract the actual public names**
 
 ```bash
 grep -n "^def \|^class \|    def diarize" \
@@ -173,7 +175,7 @@ grep -n "^def \|^class \|    def diarize" \
 
 Write down what you find. Task 3 dispatches to these names.
 
-- [ ] **Step 3: Verify each module imports standalone**
+- [x] **Step 3: Verify each module imports standalone**
 
 ```bash
 uv run python -c "
@@ -184,7 +186,7 @@ print('all four import')
 
 Expected: `all four import`. A failure here is almost certainly a missing symbol in a shared file — that is Task 3 and Task 4's work, so note which import failed and continue; re-run this step at the end of Task 4.
 
-- [ ] **Step 4: Add the no-workflow-wiring note to each module docstring**
+- [x] **Step 4: Add the no-workflow-wiring note to each module docstring**
 
 For each of the four files, append this paragraph to the module docstring (adjusting the first clause to name the backend). The wording matters: it is the only place a future maintainer learns why the workflow can't see this backend.
 
@@ -208,7 +210,7 @@ into the workflow.
 """
 ```
 
-- [ ] **Step 5: Format and commit**
+- [x] **Step 5: Format and commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/speaker_diarization/
@@ -238,7 +240,7 @@ Expected: commit succeeds. `ruff check` may report unused-import warnings until 
 - Consumes: the four backend entry points from Task 2.
 - Produces: `diarize_audios(audios, model, device, num_speakers=None, min_speakers=None, max_speakers=None, max_new_tokens=None) -> List[List[ScriptLine]]` dispatching by model-id prefix, and `model_for_task(model_id, task="diarization") -> HFModel | PyannoteAudioModel`. Also produces the module-level role-label prefix constant in `api.py` that later work (not this branch) imports as the one source of truth.
 
-- [ ] **Step 1: Write the failing test for prefix resolution**
+- [x] **Step 1: Write the failing test for prefix resolution**
 
 Add to `src/tests/audio/tasks/speaker_diarization_test.py`:
 
@@ -288,7 +290,7 @@ def test_vibevoice_prefix_does_not_capture_the_tts_checkpoints() -> None:
     )
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -k "model_for_task or vibevoice_prefix" -v
@@ -296,7 +298,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -k "model_for_ta
 
 Expected: FAIL — the four new ids resolve to `PyannoteAudioModel`.
 
-- [ ] **Step 3: Apply #537's `model.py` hunk with a three-way merge**
+- [x] **Step 3: Apply #537's `model.py` hunk with a three-way merge**
 
 ```bash
 git diff origin/alpha...origin/feat/diarization-multi-speaker-uncertainty \
@@ -318,7 +320,7 @@ If it conflicts, resolve by hand to this shape (the `VibeVoice-ASR` suffix on th
         return PyannoteAudioModel(path_or_uri=model_id)
 ```
 
-- [ ] **Step 4: Apply #537's `api.py` hunk**
+- [x] **Step 4: Apply #537's `api.py` hunk**
 
 ```bash
 git diff origin/alpha...origin/feat/diarization-multi-speaker-uncertainty \
@@ -331,7 +333,7 @@ Then read the result and confirm it contains all four of these, resolving by han
 3. A `logger.warning` when `num_speakers` / `min_speakers` / `max_speakers` are passed to any backend that ignores them (VibeVoice, child-adult, MOSS, DiariZen, and the pre-existing Sortformer branch).
 4. The module-level role-label prefix constant, as the single source of truth.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -k "model_for_task or vibevoice_prefix" -v
@@ -339,7 +341,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -k "model_for_ta
 
 Expected: PASS, 6 tests.
 
-- [ ] **Step 6: Add and run the speaker-hint warning test**
+- [x] **Step 6: Add and run the speaker-hint warning test**
 
 ```python
 def test_speaker_hints_warn_when_the_backend_ignores_them(caplog) -> None:
@@ -366,7 +368,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_test.py -k speaker_hints
 
 Expected: PASS.
 
-- [ ] **Step 7: Format and commit**
+- [x] **Step 7: Format and commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -397,7 +399,7 @@ Co-Authored-By: Evan Ng <evan.ng@sickkids.ca>"
 - Consumes: nothing from earlier tasks.
 - Produces: `subprocess_venv._cache_dir_path() -> Path` — returns the venv cache directory **without creating it**. Task 6's skip gates call it, and so do plans C and D.
 
-- [ ] **Step 1: Write the failing test for the side-effect-free cache path**
+- [x] **Step 1: Write the failing test for the side-effect-free cache path**
 
 Add to `src/tests/utils/subprocess_venv_test.py` (create the file if absent):
 
@@ -436,7 +438,7 @@ def test_cache_dir_path_honours_the_env_override(tmp_path, monkeypatch) -> None:
     assert str(tmp_path / "elsewhere") == str(subprocess_venv._cache_dir_path())
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/utils/subprocess_venv_test.py -v
@@ -444,7 +446,7 @@ uv run pytest src/tests/utils/subprocess_venv_test.py -v
 
 Expected: FAIL with `AttributeError: module ... has no attribute '_cache_dir_path'`.
 
-- [ ] **Step 3: Apply the three hunks**
+- [x] **Step 3: Apply the three hunks**
 
 ```bash
 for f in src/senselab/utils/subprocess_venv.py \
@@ -476,7 +478,7 @@ def _cache_dir() -> Path:
 
 **Critical:** `ensure_venv` must keep routing torch/torchaudio through the CUDA-aware PyTorch index. Do not let a conflict resolution drop that — it is what stops a CUDA 12.9 host resolving `torch` and `torchaudio` to mismatched toolchains.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/utils/subprocess_venv_test.py src/tests/utils/dependencies_test.py -v
@@ -484,7 +486,7 @@ uv run pytest src/tests/utils/subprocess_venv_test.py src/tests/utils/dependenci
 
 Expected: PASS.
 
-- [ ] **Step 5: Verify the four backends now import cleanly**
+- [x] **Step 5: Verify the four backends now import cleanly**
 
 ```bash
 uv run python -c "
@@ -496,7 +498,7 @@ print('dispatch wired')
 
 Expected: `dispatch wired`.
 
-- [ ] **Step 6: Format and commit**
+- [x] **Step 6: Format and commit**
 
 ```bash
 uv run ruff format src/senselab/utils/ src/tests/utils/
@@ -523,7 +525,7 @@ Co-Authored-By: Evan Ng <evan.ng@sickkids.ca>"
 - Consumes: nothing.
 - Produces: `transformers>=5.3` on the core dependency list. Every HuggingFace-backed module in the package now resolves against it.
 
-- [ ] **Step 1: Make the change**
+- [x] **Step 1: Make the change**
 
 In `pyproject.toml`, replace:
 
@@ -537,7 +539,7 @@ with:
   "transformers>=5.3",  # >=5.3 required for VibeVoiceAsrForConditionalGeneration (VibeVoice-ASR-HF diarization backend)
 ```
 
-- [ ] **Step 2: Re-resolve the lock file**
+- [x] **Step 2: Re-resolve the lock file**
 
 ```bash
 uv sync --all-extras
@@ -546,7 +548,7 @@ uv run python -c "import transformers; print(transformers.__version__)"
 
 Expected: a version `>= 5.3`. `uv.lock` is modified.
 
-- [ ] **Step 3: Prove the bump is inert for this resolution, then run only what can actually fail**
+- [x] **Step 3: Prove the bump is inert for this resolution, then run only what can actually fail**
 
 **This step was rewritten during execution on 2026-08-08.** The original text said to run
 `speech_to_text`, `classification`, `speaker_embeddings`, `ssl_embeddings`, `text` and `utils` and
@@ -610,7 +612,7 @@ a step wedged into this task.
 **Do not run the full `speech_to_text` / `classification` suites here.** They are a model-zoo
 integration run: hours long, tens of GB of downloads, and orthogonal to what this task changes.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add pyproject.toml uv.lock
@@ -635,7 +637,7 @@ Co-Authored-By: Evan Ng <evan.ng@sickkids.ca>"
 - Consumes: `subprocess_venv._cache_dir_path()` from Task 4; the four dispatch entry points from Task 3.
 - Produces: no importable interface. Deliverable is a green, honestly-skipped test module.
 
-- [ ] **Step 1: Apply #537's test additions**
+- [x] **Step 1: Apply #537's test additions**
 
 ```bash
 for f in src/tests/audio/tasks/speaker_diarization_test.py \
@@ -644,7 +646,7 @@ for f in src/tests/audio/tasks/speaker_diarization_test.py \
 done
 ```
 
-- [ ] **Step 2: Verify each skip gate is honest**
+- [x] **Step 2: Verify each skip gate is honest**
 
 Read every new `@pytest.mark.skipif` and check three things:
 
@@ -654,7 +656,7 @@ Read every new `@pytest.mark.skipif` and check three things:
 
 Fix any that fail these checks.
 
-- [ ] **Step 3: Verify the fixtures are long enough to be capable of failing**
+- [x] **Step 3: Verify the fixtures are long enough to be capable of failing**
 
 This is the trap #537 hit: a 4.9 s fixture sits under child-adult's 10 s window, so `all(...)` over an empty result list passes vacuously regardless of correctness.
 
@@ -671,7 +673,7 @@ Every test that asserts with `all(...)` over a result list must **also** assert 
 
 Add that assertion wherever it is missing.
 
-- [ ] **Step 4: Run the suite**
+- [x] **Step 4: Run the suite**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_test.py src/tests/utils/hf_load_coverage_test.py -v
@@ -679,7 +681,7 @@ uv run pytest src/tests/audio/tasks/speaker_diarization_test.py src/tests/utils/
 
 Expected: pass or skip, with skip reasons naming CUDA or a missing venv. Compare against Task 1's baseline — the pass count should rise and nothing previously passing should now skip.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 uv run ruff format src/tests/
@@ -706,7 +708,7 @@ Co-Authored-By: Evan Ng <evan.ng@sickkids.ca>"
 - Consumes: everything above.
 - Produces: one commit on `feat/new-model-integrations` containing workstream A in full.
 
-- [ ] **Step 1: Apply the registry and docs hunks**
+- [x] **Step 1: Apply the registry and docs hunks**
 
 ```bash
 for f in src/senselab/model_registry.yaml \
@@ -716,7 +718,7 @@ for f in src/senselab/model_registry.yaml \
 done
 ```
 
-- [ ] **Step 2: Verify `model_registry.md` is regenerated, not hand-edited**
+- [x] **Step 2: Verify `model_registry.md` is regenerated, not hand-edited**
 
 ```bash
 grep -n "generated by" src/senselab/model_registry.md | head -5
@@ -725,7 +727,7 @@ ls scripts/ | grep -i registry
 
 If a generator script exists, run it and diff the result against the applied file. A hand-edited generated file drifts from its YAML source — #537 itself picked up a stale YAMNet description that way.
 
-- [ ] **Step 3: Confirm DiariZen's licence is recorded**
+- [x] **Step 3: Confirm DiariZen's licence is recorded**
 
 DiariZen's pretrained weights are **CC BY-NC 4.0 — non-commercial only**, unlike every other diarization backend here. Check the registry entry and the module docstring both say so:
 
@@ -735,7 +737,7 @@ grep -rn "CC BY-NC\|non-commercial" src/senselab/model_registry.yaml src/sensela
 
 Expected: at least one hit in each file. Add it if missing — this is a licence obligation, not a nicety.
 
-- [ ] **Step 4: Run the full scoped suite one last time**
+- [x] **Step 4: Run the full scoped suite one last time**
 
 ```bash
 uv run pytest src/tests/audio/tasks/speaker_diarization_test.py src/tests/utils/ -v 2>&1 | tail -20
@@ -744,7 +746,7 @@ uv run ruff format --check src/ && uv run ruff check src/ && uv run mypy src/sen
 
 Expected: tests pass/skip, formatter clean, linter clean, mypy clean.
 
-- [ ] **Step 5: Do NOT squash — verify the history instead**
+- [x] **Step 5: Do NOT squash — verify the history instead**
 
 **This step was rewritten during execution on 2026-08-08.** It originally said to
 `git reset --soft $(git merge-base HEAD origin/alpha)` and recommit as one. Do not do that. Two
@@ -810,6 +812,6 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 
 </details>
 
-- [ ] **Step 6: Report — do not push**
+- [x] **Step 6: Report — do not push**
 
 Report the commit SHA, the test counts, and which files were deliberately excluded. Pushing and opening the PR is the user's call, per the repo's PR workflow (feature PRs target `alpha`).

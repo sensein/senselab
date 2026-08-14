@@ -1,5 +1,7 @@
 # Speaker Ceiling Probe Implementation Plan
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace four unmeasured `max_speakers=None` values with numbers derived from a synthetic sweep against known ground truth, and test the two declared ceilings against reality.
@@ -54,7 +56,7 @@ Deliberately first and standalone: it is the only part carrying a judgement, and
   ```
   `curve` maps true speaker count → accuracy in `[0, 1]`. `derive_ceiling` returns the largest `k` such that every count from the minimum up to and including `k` meets the threshold, or `None` if even the smallest fails.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 """The rule that turns a measured accuracy curve into a declared ceiling."""
@@ -133,7 +135,7 @@ def test_default_threshold_is_the_documented_one() -> None:
     assert DEFAULT_ACCURACY_THRESHOLD == 0.8
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [x] **Step 2: Run it and watch it fail**
 
 ```bash
 uv run pytest src/tests/scripts/speaker_ceiling_derive_test.py -q
@@ -143,7 +145,7 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'scripts.speaker_ceilin
 
 If the repo does not already make `scripts/` importable from tests, add `scripts/__init__.py` and `scripts/speaker_ceiling/__init__.py`. Check first: `ls src/tests/scripts/` and see how any existing test there imports.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```python
 """Turn a measured accuracy curve into a declared speaker ceiling.
@@ -202,7 +204,7 @@ def derive_ceiling(curve: Dict[int, float], threshold: float = DEFAULT_ACCURACY_
     return ceiling
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/scripts/speaker_ceiling_derive_test.py -q
@@ -210,7 +212,7 @@ uv run pytest src/tests/scripts/speaker_ceiling_derive_test.py -q
 
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Lint, type-check, commit**
+- [x] **Step 5: Lint, type-check, commit**
 
 ```bash
 uv run ruff format src/ scripts/ && uv run ruff check src/ && uv run mypy src/senselab/
@@ -292,7 +294,7 @@ the ground truth the whole probe rests on.
 - Consumes: nothing from Task 1.
 - Produces: `generate_corpus(out_dir: Path, counts: Sequence[int], sessions_per_count: int, seed: int) -> Path` — writes `out_dir/k=<k>/session_<i>.wav` with sibling `.rttm`, plus a `manifest.json` recording the NeMo config used and the seed.
 
-- [ ] **Step 1: Confirm NeMo's simulator API in the venv that already exists**
+- [x] **Step 1: Confirm NeMo's simulator API in the venv that already exists**
 
 Do this before writing code against it — the API is the main unknown in this task.
 
@@ -314,13 +316,13 @@ PY
 
 Record the real signature in your report. If `MultiSpeakerSimulator` is absent or renamed in the installed NeMo version, **stop and report BLOCKED** with what you found rather than substituting a different generator — the spec's ground-truth guarantee depends on this specific tool.
 
-- [ ] **Step 2: Write the generator**
+- [x] **Step 2: Write the generator**
 
 A worker script run inside the nemo venv, following the pattern in `nvidia.py`: build the `data_simulator.yaml`-equivalent config in Python, set the speaker count per batch, run the simulator, and collect the emitted audio plus RTTM.
 
 Seed the simulator explicitly and record the seed in `manifest.json`. An unseeded corpus makes a re-run incomparable to the profile it produced.
 
-- [ ] **Step 3: Generate one small corpus and inspect it by hand**
+- [x] **Step 3: Generate one small corpus and inspect it by hand**
 
 ```bash
 uv run python scripts/speaker_ceiling/generate.py --out /tmp/ceiling-smoke --counts 2 --sessions 2 --seed 17
@@ -340,7 +342,7 @@ for r in pathlib.Path('/tmp/ceiling-smoke').rglob('*.rttm'):
 
 Expected: exactly 2 distinct speakers per session. If not, the corpus is wrong and everything downstream is meaningless — report BLOCKED.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 uv run ruff format scripts/ && git add -A -- scripts/
@@ -363,13 +365,13 @@ produced."
 - Consumes: `derive_ceiling`, `exact_count_accuracy` (Task 1); `generate_corpus` (Task 2).
 - Produces: a profile JSON with, per backend: the full confusion (`{true_k: {predicted_count_or_"refused": n}}`), the accuracy curve, the derived ceiling, the threshold used, and the corpus manifest.
 
-- [ ] **Step 1: Write the evaluation loop**
+- [x] **Step 1: Write the evaluation loop**
 
 For each backend and each session: call `diarize_audios`, count distinct `speaker` values, record the integer. On any exception record `None` **and the exception type**, so a refusal (child-adult's `ValueError` under 10 s, or its CUDA requirement) stays distinguishable from a crash in the report.
 
 Reuse `scripts/run_diarization_backends.py`'s model construction — including that it builds the model *inside* the try, because a gated repo raises at construction and would otherwise abort the whole sweep.
 
-- [ ] **Step 2: Implement the refusals**
+- [x] **Step 2: Implement the refusals**
 
 Hard-error, not warn, when:
 1. any (backend, k) cell has fewer than the requested sessions completed;
@@ -377,7 +379,7 @@ Hard-error, not warn, when:
 
 Both messages must name the backend and the cell. Follow `scripts/calibrate_detection_margin.py`'s phrasing: state what was insufficient and what would fix it.
 
-- [ ] **Step 3: Dry-run the whole pipeline at tiny scale on CPU**
+- [x] **Step 3: Dry-run the whole pipeline at tiny scale on CPU**
 
 ```bash
 uv run python scripts/probe_speaker_ceilings.py --counts 1 2 --sessions 2 --out /tmp/ceiling-dry --device cpu --backends pyannote
@@ -385,7 +387,7 @@ uv run python scripts/probe_speaker_ceilings.py --counts 1 2 --sessions 2 --out 
 
 Expected: completes, emits a profile with a curve over `{1, 2}` for pyannote alone. This exercises generation → evaluation → derivation → refusal without a GPU. A tiny run should also *trip* the refusal if you ask for more sessions than you generated — verify that too, since an un-triggered refusal is an unverified one.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 uv run ruff format scripts/ && git add -A -- scripts/
@@ -407,29 +409,29 @@ handled them badly, and that bias runs in the direction of a lower ceiling."
 - Modify: `src/senselab/model_registry.yaml`, regenerate `model_registry.md`
 - Test: `src/tests/audio/tasks/speaker_diarization_capabilities_test.py`
 
-- [ ] **Step 1: Submit the full sweep**
+- [x] **Step 1: Submit the full sweep**
 
 `k` = 1…8, 20 sessions each, all six backends, on an H100. Use the `orcd-remote` skill's submit script and the existing `~/orcd/scratch/senselab-diar-test/env.sh`, which already exports `HF_TOKEN` from `~/.cache/huggingface/token` — without it, gated pyannote 401s and its entire row is lost.
 
 Request enough wall-clock: MOSS took ~120 s on a single 21 s file, so budget generously and check the partition's `MaxTime`.
 
-- [ ] **Step 2: Sanity-check before trusting any number**
+- [x] **Step 2: Sanity-check before trusting any number**
 
 Every backend should score near 1.0 at `k`=1. A backend that cannot count one speaker is measuring the harness, not itself — that is what the refusal in Task 3 catches, but check it by eye too.
 
 Confirm child-adult's curve collapses after `k`=2 and Sortformer's after `k`=4. If either *exceeds* its declared ceiling, that is a real finding: report it rather than quietly updating the declaration.
 
-- [ ] **Step 3: Update the four unmeasured declarations**
+- [x] **Step 3: Update the four unmeasured declarations**
 
 Replace `max_speakers=None` with the derived integer in `pyannote.py`, `vibevoice.py`, `moss.py`, `diarizen.py`, replacing the `# unmeasured — pending the NeMo synthetic-speaker probe` comment with one naming the profile and the measured accuracy at that `k`.
 
 Leave child-adult's `2` and Sortformer's `4` alone unless the probe contradicted them — in which case stop and report, because that is a spec question, not a mechanical update.
 
-- [ ] **Step 4: Update the registry and regenerate**
+- [x] **Step 4: Update the registry and regenerate**
 
 Update `max_speakers` in `model_registry.yaml` for the four, then `uv run python scripts/generate_model_registry.py`. Note the bare-key form (`max_speakers:`) exists only for unmeasured entries; a measured entry takes a plain integer and needs no comment.
 
-- [ ] **Step 5: Verify the whole chain**
+- [x] **Step 5: Verify the whole chain**
 
 ```bash
 uptime
@@ -440,7 +442,7 @@ uv run python scripts/generate_model_registry.py && git diff --exit-code src/sen
 
 The capabilities test compares the registry against the code via `dataclasses.asdict`, so it fails if you update one and not the other — which is the intended behaviour, not an obstacle.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A -- src/ scripts/

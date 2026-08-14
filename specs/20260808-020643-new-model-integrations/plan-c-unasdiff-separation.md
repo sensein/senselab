@@ -1,5 +1,7 @@
 # Plan C — unasdiff single-channel source separation
 
+> **Verification status (2026-08-13, commit `ad4fffa2`):** every task below was verified complete against the code on branch `feat/diarization-backends`. Boxes are ticked at *task-deliverable* granularity — the deliverable was confirmed present in the tree, not each TDD step observed independently.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add [unasdiff](https://github.com/RunwuShi/unasdiff) (AAAI 2026) as senselab's first **source separation** capability — speech–sound, sound–sound, and speech–speech — through a new `separate_audios()` task API.
@@ -76,7 +78,7 @@ Established by reading the repository at the pinned SHA. Re-verify in Task 1 if 
 - Consumes: `subprocess_venv` helpers.
 - Produces: constants `_UNASDIFF_VENV`, `_UNASDIFF_PYTHON`, `_UNASDIFF_REQUIREMENTS`, `_UNASDIFF_REPO_URL`, `_UNASDIFF_COMMIT`, `_UNASDIFF_HF_REPO`, `_UNASDIFF_CHECKPOINTS_ENV`; and `load_fsd_class_map_document() -> dict[str, Any]` (the whole profile: `version`, `derivation`, `num_embedding_slots`, `classes`) and `resolve_source_classes(names: list[str]) -> list[int]`.
 
-- [ ] **Step 1: Generate the class map from upstream**
+- [x] **Step 1: Generate the class map from upstream**
 
 ```bash
 mkdir -p src/senselab/audio/tasks/source_separation/data
@@ -105,7 +107,7 @@ PY
 
 Expected: `classes: 41 max index: 40`. If either differs, stop — this plan's class-space assumption is wrong.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```python
 """unasdiff source separation — API contract and class-space handling."""
@@ -163,7 +165,7 @@ def test_torch_is_pinned_for_cuda_routing() -> None:
     assert "torch" in named and "torchaudio" in named
 ```
 
-- [ ] **Step 3: Run them and watch them fail**
+- [x] **Step 3: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -v
@@ -171,7 +173,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -v
 
 Expected: FAIL — the module does not exist.
 
-- [ ] **Step 4: Create the module and constants**
+- [x] **Step 4: Create the module and constants**
 
 `unasdiff.py` opens with a module docstring covering: what the paper does; that upstream ships only benchmark scripts so the driver is ours; that the two priors have separate label spaces; the licensing position; and that the backend is not wired into `audio_analysis`. Then:
 
@@ -219,7 +221,7 @@ Add `load_fsd_class_map_document()` reading the JSON through `importlib.resource
 
 Note for any test that needs to vary the map: isolate it with `monkeypatch.setattr` on the loader, **never** `load_fsd_class_map_document.cache_clear()` — clearing a module-level cache mutates real state that outlives the test.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -v
@@ -227,7 +229,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -v
 
 Expected: PASS, 6 tests.
 
-- [ ] **Step 6: Verify the pin and the flash-attn fallback against upstream**
+- [x] **Step 6: Verify the pin and the flash-attn fallback against upstream**
 
 ```bash
 gh api "repos/RunwuShi/unasdiff/contents/models/atten_unet.py?ref=5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa" \
@@ -236,7 +238,7 @@ gh api "repos/RunwuShi/unasdiff/contents/models/atten_unet.py?ref=5a5d70cdc94fe9
 
 Expected: `use_flash = False`, a `try: from flash_attn import flash_attn_func`, and `except ImportError` setting `use_flash = False`. If the fallback is gone at this pin, `flash-attn` must go back into the requirements and this plan's cost estimates change.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/source_separation/ src/tests/
@@ -313,7 +315,7 @@ Carried out on 2026-08-08. The card records the provenance, the two separate lab
 - Consumes: Task 1's constants and class map.
 - Produces: `separate_with_unasdiff(audios, n_sources, source_class_indices, checkpoint_dir, device=None, seed=17) -> List[List[Audio]]`.
 
-- [ ] **Step 1: Write the failing worker-contract tests**
+- [x] **Step 1: Write the failing worker-contract tests**
 
 ```python
 def test_worker_script_compiles_standalone() -> None:
@@ -346,7 +348,7 @@ def test_worker_packs_the_mixture_so_degradation_reproduces_it() -> None:
     assert "orig_x" in unasdiff._WORKER_SCRIPT
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -k worker -v
@@ -354,7 +356,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -k worker -v
 
 Expected: FAIL — `_WORKER_SCRIPT` does not exist.
 
-- [ ] **Step 3: Write the worker**
+- [x] **Step 3: Write the worker**
 
 The clone block is identical in shape to Plan D, Task 3 (flock, sibling temp dir, `os.replace`, fetch the pinned commit) with `repo_dir` named `unasdiff` and the marker file `models/atten_unet.py`. After `sys.path.insert(0, str(repo_dir))`:
 
@@ -445,13 +447,13 @@ The `GaussianDiffusion` build, from the benchmark:
 
 Normalisation, per upstream's `_norm`: `peak = |x|.amax().clamp(min=1e-8)`, `x = x / peak * 0.95`, and the inverse applied to every output.
 
-- [ ] **Step 4: Write the host-side driver for a single window**
+- [x] **Step 4: Write the host-side driver for a single window**
 
 `separate_with_unasdiff` resamples to 16 kHz mono, **rejects inputs longer than one window for now** with a clear `NotImplementedError` naming Task 5, resolves the checkpoint directory from `_UNASDIFF_CHECKPOINTS_ENV` or `hf_hub_download`, builds the venv, writes WAVs, runs the worker, reads back `n_sources` `Audio` objects per input.
 
 Restricting to one window here is deliberate: it makes Task 5's chunking a separate, reviewable change rather than something entangled with getting the sampler call right.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -k worker -v
@@ -459,7 +461,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -k worker -v
 
 Expected: PASS, 4 tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 uv run ruff format src/senselab/audio/tasks/source_separation/ src/tests/
@@ -500,7 +502,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
   ) -> list[list[Audio]]: ...
   ```
 
-- [ ] **Step 1: Write the failing API tests**
+- [x] **Step 1: Write the failing API tests**
 
 ```python
 import pytest
@@ -560,7 +562,7 @@ def test_an_unknown_mode_raises(mono_audio_sample) -> None:
         separate_audios([mono_audio_sample], mode="music_speech", n_sources=2)
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -k "mode or source_classes or speech_" -v
@@ -568,7 +570,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -k "mode or source
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement `separate_audios`**
+- [x] **Step 3: Implement `separate_audios`**
 
 Validate `mode`; build the label list per mode; check `len(source_classes)` against the number of sound slots (`n_sources - 1` for `speech_sound`, `n_sources` for `sound_sound`, unused for `speech_speech`); delegate.
 
@@ -591,7 +593,7 @@ The `speech_speech` docstring must carry the authors' own caveat verbatim — a 
 
 Add `model_for_task(model_id, task="separation")` returning `HFModel` for the `sensein/unasdiff` prefix.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -v
@@ -599,7 +601,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -v
 
 Expected: PASS, 11 tests.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -630,7 +632,7 @@ The one place this plan introduces a number. It is derived by measurement, not c
 - Consumes: `separate_window` from Task 3.
 - Produces: `align_permutations(prev_tail: list[Tensor], next_head: list[Tensor]) -> list[int]` — the index permutation mapping the next window's slots onto the previous window's.
 
-- [ ] **Step 1: Write the failing alignment tests**
+- [x] **Step 1: Write the failing alignment tests**
 
 These test the alignment logic in isolation with synthetic signals, so they need neither the venv nor a GPU.
 
@@ -669,7 +671,7 @@ def test_alignment_survives_scaling_and_noise() -> None:
     assert align_permutations([a, b], [noisy_b, noisy_a]) == [1, 0]
 ```
 
-- [ ] **Step 2: Run them and watch them fail**
+- [x] **Step 2: Run them and watch them fail**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -k permutation -v
@@ -677,11 +679,11 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -k permutation -v
 
 Expected: FAIL — `align_permutations` does not exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Zero-mean and unit-normalise each candidate over the overlap region, build the `n × n` correlation matrix, and choose the assignment maximising total correlation (`scipy.optimize.linear_sum_assignment` if available in the host, otherwise `itertools.permutations` — `n ≤ 4` in practice, so brute force is fine and avoids a host dependency). Scale-invariance comes from the normalisation, which is what makes the fourth test pass.
 
-- [ ] **Step 4: Derive the confidence threshold by measurement, and record it**
+- [x] **Step 4: Derive the confidence threshold by measurement, and record it**
 
 Alignment can be ambiguous — two windows whose best and second-best assignments score almost identically. Report that rather than silently picking one.
 
@@ -724,11 +726,11 @@ PY
 
 **If the measurement does not support a value, do not invent one.** Write the profile with the margin absent and have the code report every window's margin in its result rather than gating on an unfitted threshold — the repository has two prior defects from literals that were never fitted, and this plan is not adding a third. `scripts/calibrate_detection_margin.py` is the model for a calibration script that refuses to emit a profile from insufficient measurement.
 
-- [ ] **Step 5: Wire chunking into the driver**
+- [x] **Step 5: Wire chunking into the driver**
 
 Replace Task 3's `NotImplementedError` with: 4 s windows at 50 % overlap; separate each; align window *k+1* onto window *k*; Hann-taper and overlap-add per aligned slot; carry the per-boundary alignment margins into the result so a caller can see where the assignment was close.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -v
@@ -736,7 +738,7 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -v
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 uv run ruff format src/senselab/ src/tests/
@@ -761,7 +763,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Modify: `src/senselab/model_registry.yaml` / `.md`, `docs/compatibility-matrix.md`
 - Create: `src/senselab/audio/tasks/source_separation/doc.md`
 
-- [ ] **Step 1: Add the skip-gated end-to-end test**
+- [x] **Step 1: Add the skip-gated end-to-end test**
 
 ```python
 import pytest
@@ -804,7 +806,7 @@ def test_unasdiff_separates_a_mixture_into_n_sources(mono_audio_sample) -> None:
     assert (a - b).abs().mean() > 1e-4, "both slots returned the same signal"
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 uv run pytest src/tests/audio/tasks/source_separation_test.py -k separates -v -s
@@ -812,19 +814,19 @@ uv run pytest src/tests/audio/tasks/source_separation_test.py -k separates -v -s
 
 On a CUDA host, first run builds the venv, clones upstream, and downloads both priors. Expect minutes per 4 s window: 200 steps × `n_sources` model evaluations, each with a backward pass through the prior. On a CPU host, expect a skip.
 
-- [ ] **Step 3: Record the measured runtime in `doc.md`**
+- [x] **Step 3: Record the measured runtime in `doc.md`**
 
 Time one 4-second, two-source separation and write the number down with the hardware it was measured on. "Impractical on CPU" is an assertion until someone has the number.
 
-- [ ] **Step 4: Registry and compatibility matrix**
+- [x] **Step 4: Registry and compatibility matrix**
 
 Add `sensein/unasdiff-diffusion-priors` with task `separation`, the venv name, Python 3.10, the pinned torch, the pinned upstream commit, and the unresolved licence.
 
-- [ ] **Step 5: Write `doc.md`**
+- [x] **Step 5: Write `doc.md`**
 
 Cover, in this order: the paper and what it does; that senselab writes the driver because upstream ships only benchmark scripts; **why `p_sample_loop_group(orig_x=...)` is not an oracle** — this is the single most important paragraph, because the call reads as cheating; the per-model label spaces and the 41-in-50 embedding; the three modes and the speech–speech caveat; the chunking scheme, marked as senselab's construction with the failure mode it prevents; the measured runtime; the licence status with the issue link; and that the backend is not wired into `audio_analysis`.
 
-- [ ] **Step 6: Final check, commit, report**
+- [x] **Step 6: Final check, commit, report**
 
 ```bash
 uv run ruff format --check src/ && uv run ruff check src/ && uv run mypy src/senselab/
