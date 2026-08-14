@@ -195,22 +195,31 @@ class StageContext:
         )
 
     def _commit_sha_for(self, model_id: str | None) -> str | None:
-        """Resolve ``model_id`` to this run's commit SHA, or ``None`` if not a Hub id.
+        """Resolve ``model_id`` to this run's commit SHA, or ``None`` when there is none to pin.
 
         Resolution has to happen here, above the load, because the cache key is computed to decide
         *whether* to load at all — a SHA harvested during loading would arrive too late to key on.
 
-        A bare ``None`` (a model-less stage, e.g. ``features``) and a non-Hub name (a local backend
-        like ``"yamnet"``, which has no ``/``) both resolve to ``None`` here, but for different
-        reasons: the first has nothing to pin, the second names something this run cannot look up
-        on the Hub. Neither should attempt a resolution — the ``/`` check is what tells them apart
-        from an id this run actually needs to pin.
+        Any id that cannot be resolved to a commit degrades to ``None`` rather than aborting:
+
+        - a bare ``None`` (a model-less stage, e.g. ``features``) or a name with no ``/`` (a local
+          backend): cannot be a Hub id, so short-circuit without a Hub round-trip;
+        - **any** resolution failure — the repo does not exist (a non-Hub backend whose alias
+          happens to contain a ``/``, e.g. YAMNet's ``"google/yamnet"``, or a local absolute path),
+          a transient rate-limit / network error, or a gated repo we lack access to. All of these
+          leave the cache key un-pinned instead of crashing the stage before any cache lookup runs.
+
+        This shares ``signal.resolved_commit_sha`` so there is a single place that decides how a
+        resolution failure degrades, and the two stay consistent. Degrading here is safe because the
+        cache key is not the load: reproducibility strictness (refusing a mutable ref) lives in the
+        loaders, so a genuine typo still fails at load — this only stops a Hub blip or a non-Hub id
+        from taking down cache-key computation.
         """
         if not model_id or "/" not in model_id:
             return None
-        from senselab.utils.model_revision import resolve_revision
+        from senselab.audio.workflows.audio_analysis.signal import resolved_commit_sha
 
-        return resolve_revision(model_id, ref=_DEFAULT_REVISION_REF)
+        return resolved_commit_sha(model_id, _DEFAULT_REVISION_REF)
 
     def align_key_for(
         self,

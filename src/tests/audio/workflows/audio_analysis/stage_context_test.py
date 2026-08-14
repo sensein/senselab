@@ -155,6 +155,58 @@ def test_commit_sha_for_a_hub_id_resolves(monkeypatch: pytest.MonkeyPatch) -> No
     assert seen == ["openai/whisper-tiny"]
 
 
+def test_commit_sha_for_a_hub_shaped_id_the_hub_lacks_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ``org/name``-shaped id the Hub reports does not exist has no commit to pin.
+
+    YAMNet's ``"google/yamnet"`` is the real case: it contains a ``/`` but loads via a TensorFlow
+    subprocess venv, so the Hub 404s. It shares ``signal.resolved_commit_sha``, which degrades any
+    resolution failure to ``None`` rather than aborting the run — so this joins the no-``/`` case at
+    ``None`` with no per-backend enumeration.
+    """
+    from huggingface_hub.errors import RepositoryNotFoundError
+
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    def _not_found(*a: object, **k: object) -> str:
+        # __new__ avoids the HF error's httpx.Response constructor requirement.
+        raise RevisionResolutionError("cannot resolve") from RepositoryNotFoundError.__new__(RepositoryNotFoundError)
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _not_found)
+    assert _ctx()._commit_sha_for("google/yamnet") is None  # noqa: SLF001
+
+
+def test_commit_sha_for_degrades_a_transient_failure_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient network / rate-limit failure degrades to ``None``, not a crash.
+
+    The cache key is computed *before* any cache lookup, so a Hub blip here must not take down the
+    whole stage. Load-time strictness (refusing a mutable ref) lives in the loaders, not here.
+    """
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    def _network(*a: object, **k: object) -> str:
+        raise RevisionResolutionError("connection reset") from ConnectionError("boom")
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _network)
+    assert _ctx()._commit_sha_for("openai/whisper-tiny") is None  # noqa: SLF001
+
+
+def test_commit_sha_for_degrades_a_gated_repo_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gated repo we lack access to also degrades to ``None`` for the cache key.
+
+    The un-pinned key just misses the cache and recomputes; the model still fails loudly at load
+    time, where the missing licence actually matters.
+    """
+    from huggingface_hub.errors import GatedRepoError
+
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    def _gated(*a: object, **k: object) -> str:
+        raise RevisionResolutionError("gated") from GatedRepoError.__new__(GatedRepoError)
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _gated)
+    assert _ctx()._commit_sha_for("some/gated-model") is None  # noqa: SLF001
+
+
 def test_align_key_differs_from_the_task_key() -> None:
     """Alignment keying stays independent of the ASR cache."""
     ctx = _ctx()
