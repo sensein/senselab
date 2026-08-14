@@ -51,11 +51,11 @@ def _line(speaker: Optional[str]) -> ScriptLine:
 # ---------------------------------------------------------------------------------------
 
 
-def test_count_speakers_counts_distinct_identity_labels() -> None:
-    """An identity-kind backend's distinct speaker labels are the predicted count."""
+def test_count_speakers_counts_distinct_index_labels() -> None:
+    """An index-kind backend's distinct speaker labels are the predicted count."""
     caps = evaluate.DiarizationCapabilities(
         populates_text=False,
-        speaker_label_kind="identity",
+        speaker_label_kind="index",
         labels_stable_across_files=False,
         max_speakers=None,
         max_speakers_evidence="unmeasured",
@@ -89,7 +89,7 @@ def test_count_speakers_ignores_none_and_empty_speaker() -> None:
     """A line with no speaker label contributes nothing to the count."""
     caps = evaluate.DiarizationCapabilities(
         populates_text=True,
-        speaker_label_kind="identity",
+        speaker_label_kind="index",
         labels_stable_across_files=False,
         max_speakers=None,
         max_speakers_evidence="unmeasured",

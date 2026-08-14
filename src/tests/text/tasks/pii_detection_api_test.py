@@ -130,7 +130,7 @@ def test_deciding_runs_no_detectors(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     import subprocess
 
-    from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, decide_pii
+    from senselab.text.tasks.pii_detection.api import PiiReport, PiiScan, PiiSpan, decide_pii
 
     monkeypatch.setattr(
         subprocess,
@@ -143,6 +143,7 @@ def test_deciding_runs_no_detectors(monkeypatch: pytest.MonkeyPatch) -> None:
         detectors_used=["presidio"],
     )
     report = decide_pii(scan)
+    assert isinstance(report, PiiReport)  # narrows the scalar/list union for mypy and for the reader
     assert report.contains_pii is True
     assert report.detector_used == "presidio"
 
@@ -155,7 +156,7 @@ def test_one_scan_can_yield_different_verdicts_under_different_rules() -> None:
     untouched is what makes the two functions genuinely separable rather than a cosmetic
     split.
     """
-    from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, decide_pii
+    from senselab.text.tasks.pii_detection.api import PiiReport, PiiScan, PiiSpan, decide_pii
 
     scan = PiiScan(
         spans=[PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="0", score=0.9)],
@@ -164,6 +165,7 @@ def test_one_scan_can_yield_different_verdicts_under_different_rules() -> None:
 
     strict = decide_pii(scan, require_cross_source_corroboration=True)
     permissive = decide_pii(scan, require_cross_source_corroboration=False)
+    assert isinstance(strict, PiiReport) and isinstance(permissive, PiiReport)
 
     assert strict.contains_pii is False, "one of two detectors is not corroboration"
     assert permissive.contains_pii is True
@@ -176,9 +178,10 @@ def test_a_scan_that_never_ran_decides_to_none_not_zero() -> None:
     An empty ``detectors_used`` is the first; ``detection_confidence`` therefore has to be
     ``None`` rather than ``0.0``, or a caller reads a failed scan as an all-clear.
     """
-    from senselab.text.tasks.pii_detection.api import PiiScan, decide_pii
+    from senselab.text.tasks.pii_detection.api import PiiReport, PiiScan, decide_pii
 
     report = decide_pii(PiiScan(failures={"pii_subprocess": "venv build failed"}))
+    assert isinstance(report, PiiReport)
     assert report.contains_pii is False
     assert report.detection_confidence is None
     assert report.detector_used is None
