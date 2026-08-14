@@ -290,10 +290,24 @@ entire error budget is also why the descriptor splits within-file from cross-fil
 
 ### Why no clustering
 
-PR #543 rejected contamination by clustering pooled windows and keeping the dominant cluster,
-measured as 24 of 32 non-speech recordings dropped with the centroid preserved at cos ≥ 0.99 in
-7 of 8 subjects. That property is real and this design gives it up deliberately, because
-selecting a dominant cluster is a *decision* made inside a function whose job is to describe.
+PR #543 rejected contamination by clustering and keeping the dominant cluster, measured as 24 of
+32 non-speech recordings dropped with the centroid preserved at cos ≥ 0.99 in 7 of 8 subjects.
+
+**That clustering is cross-file, once, over the pooled window set** — its own section header
+reads "Cross-file dominant-cluster aggregation". Per file it does speech gating only (dropping
+non-speech windows); every surviving window from every file then pools into one set, and the
+clustering runs on that. So a recording is excluded as a *side effect* of a cross-file decision,
+never by a per-file judgement — which is why #543 also has to report `per_file_dominant`
+(`file_id → windows_in_dominant_cluster`), since a pooled clustering decision is opaque without
+it.
+
+This design gives that property up deliberately, because selecting a dominant cluster is a
+*decision* made inside a function whose job is to describe. Note what #543's own bookkeeping
+implies: it made the decision and then reported per-file evidence *about* the decision. Here the
+per-file evidence is reported directly and the decision is left to the caller — `cross_file`
+cosines and `leave_one_file_out_cos` surface exactly the file that would have fallen out of a
+dominant cluster.
+
 Instead:
 
 - the descriptor reports per-file centroids, their cosine to the pooled centroid, and
@@ -307,6 +321,12 @@ statistics. The statistics are exactly what makes it readable, and `cos_mean_vs_
 A consequence worth recording: this removes any need for a clustering primitive in the task
 layer, so `cluster_pass_speakers` stays untouched in the workflow where it belongs and the repo
 gains no second clustering implementation.
+
+**And the door stays open.** Because the descriptor's contract is "one set of vectors in", a
+cross-file dominant-cluster step can be layered *above* it later without touching it: cluster
+the pooled vectors, hand the retained subset to `describe_embedding_distribution`. If #543's
+tolerance is wanted back, that is where it goes — outside the descriptor, as its own component
+with its own derivation, not inside a function that is supposed to describe what it is given.
 
 ### Layering: two primitives move down
 
