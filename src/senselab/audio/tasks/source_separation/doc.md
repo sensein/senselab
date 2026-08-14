@@ -121,6 +121,47 @@ Until a threshold is fitted against real unasdiff windows, `separate_with_unasdi
 window boundary's margin in `metadata["unasdiff_alignment_margins"]` instead of gating on one; a
 caller who wants to distinguish a confident alignment from a coin flip reads that list itself.
 
+### The diffusion-step count is a parameter, not a constant
+
+`separate_with_unasdiff` and `separate_audios` both take `diffusion_steps` (default `200`). Each
+step is one network evaluation per slot, so this is the backend's dominant cost: 200 steps is what
+produces the RTF ~22-26x measured on an H100. For contrast, DriftSE (`speech_enhancement/driftse.py`)
+reaches the clean-speech distribution in a single step, and SGMSE+ takes 30 — 200 is a lot, by the
+standard of the other diffusion-based backends in this repository.
+
+200 stays the default because it is upstream's own `config/*/config.toml: diffusion_step` value —
+the quality setting, and the only value with any published basis. Lowering it trades quality for
+speed roughly proportionally, but **no lower value has been measured in this repository**. There is
+no fitted threshold or "recommended" lower setting to offer instead (per this repository's standing
+rule against literals that were never fitted, see the top-level `CLAUDE.md`): a caller who passes
+`diffusion_steps < 200` is making their own unmeasured quality/speed trade, not following a validated
+recipe. `diffusion_steps <= 0` raises `ValueError` rather than being handed to the sampler, which
+would otherwise fail deep inside the worker with a less legible error.
+
+### flash-attn is opt-in, not unconditional
+
+flash-attn is absent from the venv's requirements by default (see the module docstring's "Why a
+subprocess venv" section for the verification that upstream's `atten_unet.py` treats it as optional
+in fact, not just in its README). Setting `SENSELAB_UNASDIFF_FLASH_ATTN` truthy (`1`/`true`/`yes`/`on`)
+appends `flash-attn==2.5.8` to the venv's requirements on the next build, matching the operator-override
+style of `SENSELAB_TORCH_INDEX_URL` and `SENSELAB_UNASDIFF_CHECKPOINTS`.
+
+The decision is opt-in rather than unconditional because of a failure mode this branch already hit:
+`av==14.4.0` had no wheel, fell back to a source build, and took the *entire* venv install down with
+it — a training-only dependency the inference path never even imports. flash-attn is considerably
+more build-fragile than that: it needs a matching CUDA toolkit, `--no-build-isolation`, and 10-30
+minutes with `MAX_JOBS` tuning to avoid an out-of-memory compile. Upstream's own code already handles
+a *missing* flash-attn gracefully (the `ImportError` fallback above); nothing handles the *install*
+failing, so making it unconditional would convert that graceful runtime fallback into a hard
+venv-creation failure on any host without a working `nvcc`.
+
+**Toggling the flag forces a full venv rebuild.** `ensure_venv` (`subprocess_venv.py`) keys venv reuse
+on a marker containing the requirements list, and the requirements list is exactly what this flag
+changes — so flipping it from unset to set (or back) costs a 10-30 minute reinstall, not an
+incremental change, the next time this backend runs. A failed opt-in build fails loudly for the
+person who set the env var, which is the point: they are the one who can supply a working `nvcc` or
+turn the flag back off.
+
 ### Measured runtime
 
 Not yet measured in this repository: every prior task in this plan, and this one, ran on a host

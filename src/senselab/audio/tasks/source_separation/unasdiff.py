@@ -40,14 +40,21 @@ would collide with unrelated names on the host ``sys.path``), so it clones into 
 isolated venv at a pinned commit rather than merging its dependency set (or its
 module names) into senselab core.
 
-flash-attn is deliberately absent from ``_UNASDIFF_REQUIREMENTS``:
+flash-attn is deliberately absent from ``_UNASDIFF_REQUIREMENTS`` by default:
 ``models/atten_unet.py`` sets ``use_flash = False`` up front and only flips it to
 ``True`` inside a ``try: from flash_attn import flash_attn_func`` that falls back
 to manual softmax attention on ``ImportError`` -- verified against the pinned
 commit, not assumed (see this task's report). The fallback materializes a
 ``[b, h, t, t]`` attention matrix and is therefore slower and heavier, an
-acceptable trade against building flash-attn 2.5.8 in every user's cache for a
-package that upstream itself treats as optional.
+acceptable trade against building flash-attn 2.5.8 unconditionally in every
+user's cache: this branch already watched a far milder case (``av==14.4.0``, no
+wheel available) fall back to a source build and take an *entire* venv install
+down with it, and flash-attn is considerably more build-fragile than that -- it
+needs a matching CUDA toolkit, ``--no-build-isolation``, and 10-30 minutes with
+``MAX_JOBS`` tuning to avoid OOM. Setting ``SENSELAB_UNASDIFF_FLASH_ATTN``
+truthy opts in for a host with a working ``nvcc`` (see :func:`_unasdiff_requirements`);
+because ``ensure_venv`` keys venv reuse on a marker containing the requirements
+list, toggling this env var forces a full rebuild.
 
 Licensing
 ---------
@@ -122,11 +129,13 @@ _UNASDIFF_MAX_CUDA_VERSION = (12, 4)
 # build comes from the Stage-1 index -- capped by _UNASDIFF_MAX_CUDA_VERSION above, because
 # host-CUDA routing alone picks an index this torch pin has no wheels on.
 #
-# flash-attn is deliberately absent: atten_unet.py sets use_flash=False on
+# flash-attn is absent by default: atten_unet.py sets use_flash=False on
 # ImportError and branches to a manual softmax attention, so it is optional in
 # fact and not merely in the README. The fallback materialises a [b, h, t, t]
-# attention matrix, so it is slower and heavier -- an acceptable trade against
-# building flash-attn 2.5.8 in every user's cache.
+# attention matrix, so it is slower and heavier -- but installing flash-attn
+# unconditionally trades a slow-but-working default for a build that can take
+# the whole venv down on a host without a matching CUDA toolkit (see
+# _unasdiff_requirements and SENSELAB_UNASDIFF_FLASH_ATTN below). Opt-in only.
 _UNASDIFF_REQUIREMENTS = [
     "torch==2.6.0",
     "torchaudio==2.6.0",
@@ -148,6 +157,45 @@ _UNASDIFF_REQUIREMENTS = [
     # was imported at module scope -- which is why this one was verified rather than assumed.
     "soundfile",
 ]
+
+# Operator override, same style as SENSELAB_TORCH_INDEX_URL (subprocess_venv.py) and
+# SENSELAB_UNASDIFF_CHECKPOINTS above: absent by default, read once at venv-build time via
+# _unasdiff_requirements(). Not read in the worker -- flash-attn's own presence in the venv
+# (or absence of it) is what the worker's `from flash_attn import flash_attn_func` observes.
+_UNASDIFF_FLASH_ATTN_ENV = "SENSELAB_UNASDIFF_FLASH_ATTN"
+
+
+def _unasdiff_requirements() -> List[str]:
+    """Return this venv's pip requirements, with flash-attn appended only if opted in.
+
+    flash-attn stays out of ``_UNASDIFF_REQUIREMENTS`` unconditionally (see the module
+    docstring and the comment above that list) because installing it is considerably more
+    build-fragile than the one dependency (``av``) that has already taken a venv build down in
+    this repository: flash-attn needs a matching CUDA toolkit, ``--no-build-isolation``, and
+    10-30 minutes with ``MAX_JOBS`` tuning to avoid OOM. Upstream's own code tolerates a
+    *missing* flash-attn gracefully (``atten_unet.py`` falls back to manual softmax attention on
+    ``ImportError``), but nothing tolerates the *install* failing -- so making it unconditional
+    would convert that graceful runtime fallback into a hard venv-creation failure on any host
+    without a working ``nvcc``.
+
+    Setting ``SENSELAB_UNASDIFF_FLASH_ATTN`` truthy (``1``/``true``/``yes``/``on``, case
+    insensitive) opts in for a host that has a working CUDA toolchain and wants the speedup.
+    ``ensure_venv`` keys venv reuse on a marker containing the requirements list
+    (``subprocess_venv.py``), so toggling this env var changes the requirements and therefore
+    forces a full rebuild -- flipping the flag costs a 10-30 minute reinstall, not a quick
+    incremental change. A failed opt-in build fails loudly, which is the point: the person who
+    asked for flash-attn is the person who can supply a working ``nvcc`` or turn the flag back
+    off.
+
+    Returns:
+        ``_UNASDIFF_REQUIREMENTS`` with ``"flash-attn==2.5.8"`` appended when the env var is
+        set truthy, unchanged otherwise.
+    """
+    requirements = list(_UNASDIFF_REQUIREMENTS)
+    if os.environ.get(_UNASDIFF_FLASH_ATTN_ENV, "").strip().lower() in ("1", "true", "yes", "on"):
+        requirements.append("flash-attn==2.5.8")
+    return requirements
+
 
 _UNASDIFF_REPO_URL = "https://github.com/RunwuShi/unasdiff.git"
 # Pinned, not a branch: the repository is unlicensed and unpackaged, so this SHA
@@ -175,7 +223,13 @@ _MODE_SPEECH_SPEECH = "speech_speech"
 _TARGET_SR = 16000
 _WINDOW_S = 4.0  # upstream's trained window; not a tunable
 _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
-_DIFFUSION_STEPS = 200  # config/*/config.toml: diffusion_step
+# config/*/config.toml: diffusion_step. Upstream's own quality default -- the only value with
+# any published basis -- so it stays the default for separate_with_unasdiff's diffusion_steps
+# parameter. 200 network evaluations per window is the dominant cost of this backend (measured
+# RTF ~22-26x on an H100, vs. DriftSE's 1 step and SGMSE+'s 30 in this same repository), so a
+# caller who wants to trade quality for speed can lower it -- see that parameter's docstring for
+# why no lower value is recommended here.
+_DIFFUSION_STEPS = 200
 
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
 
@@ -226,6 +280,7 @@ try:
     sound_ckpt_path = args.get("sound_ckpt_path")
     sound_config_path = args.get("sound_config_path")
     n_sources = int(args["n_sources"])
+    diffusion_steps = int(args["diffusion_steps"])
     labels = args["labels"]
     in_paths, out_paths = args["in_paths"], args["out_paths"]
     seed = int(args["seed"])
@@ -354,8 +409,11 @@ try:
     # beta_start/beta_end/diffusion_step are identical across both released configs (verified
     # against the pinned commit), so which config's train_para feeds the schedule does not
     # change the result -- diffusion_config always names a config this mode actually loaded.
+    # `steps` is the caller-supplied diffusion_steps, not config_file's own diffusion_step
+    # value: this is the knob separate_with_unasdiff exposes, and the host has already
+    # validated it is positive before this worker ever starts.
     gaussian = diffusion.GaussianDiffusion(
-        steps=200,
+        steps=diffusion_steps,
         config_file=diffusion_config,
         beta_start=diffusion_config["train_para"]["beta_start"],
         beta_end=diffusion_config["train_para"]["beta_end"],
@@ -524,6 +582,7 @@ def separate_with_unasdiff(
     checkpoint_dir: Optional[Union[str, Path]] = None,
     device: Optional[DeviceType] = None,
     seed: int = 17,
+    diffusion_steps: int = _DIFFUSION_STEPS,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -554,6 +613,16 @@ def separate_with_unasdiff(
         device: Accepted for signature parity with other separation/enhancement entry points.
             The worker selects CUDA when available and CPU otherwise.
         seed: RNG seed, recorded in the log line.
+        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window. Each
+            step is a network evaluation, so this is the backend's dominant cost -- 200 steps
+            measure at RTF ~22-26x on an H100, versus DriftSE's 1 step and SGMSE+'s 30 in this
+            same repository. The default, ``200``, is upstream's own ``config/*/config.toml:
+            diffusion_step`` value and is kept as the quality default: it is the only value
+            with any published basis. Lowering it trades quality for speed roughly
+            proportionally, but **no lower value has been measured in this repository** -- there
+            is no fitted threshold or "recommended" lower setting to fall back on (see this
+            module's ``CLAUDE.md``-derived convention against unfitted thresholds), so any value
+            below 200 is the caller's own unmeasured quality/speed trade.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
@@ -564,7 +633,8 @@ def separate_with_unasdiff(
         threshold).
 
     Raises:
-        ValueError: if ``len(source_class_indices) != n_sources``.
+        ValueError: if ``len(source_class_indices) != n_sources``, or if ``diffusion_steps`` is
+            not positive.
         RuntimeError: if the worker fails; the upstream traceback is included.
     """
     if not audios:
@@ -573,6 +643,8 @@ def separate_with_unasdiff(
         raise ValueError(
             f"source_class_indices must have exactly n_sources={n_sources} entries, got {len(source_class_indices)}"
         )
+    if diffusion_steps <= 0:
+        raise ValueError(f"diffusion_steps must be a positive integer, got {diffusion_steps}")
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
     from senselab.utils.data_structures.device import _select_device_and_dtype
@@ -593,7 +665,7 @@ def separate_with_unasdiff(
 
     venv_dir = ensure_venv(
         _UNASDIFF_VENV,
-        _UNASDIFF_REQUIREMENTS,
+        _unasdiff_requirements(),
         python_version=_UNASDIFF_PYTHON,
         max_cuda_version=_UNASDIFF_MAX_CUDA_VERSION,
     )
@@ -603,12 +675,13 @@ def separate_with_unasdiff(
     repo_dir = Path(venv_dir) / "unasdiff-src"
 
     logger.info(
-        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d",
+        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d, diffusion_steps=%d",
         len(mono_16k),
         sum(len(w) for w in windows_per_audio),
         mode,
         n_sources,
         seed,
+        diffusion_steps,
     )
 
     with tempfile.TemporaryDirectory(prefix="senselab-unasdiff-") as tmpdir:
@@ -646,6 +719,7 @@ def separate_with_unasdiff(
                 "in_paths": in_paths,
                 "out_paths": out_paths,
                 "seed": seed,
+                "diffusion_steps": diffusion_steps,
             }
         )
 
