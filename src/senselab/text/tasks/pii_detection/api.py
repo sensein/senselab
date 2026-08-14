@@ -8,10 +8,10 @@ A caller that needs to merge several ASR backends' transcripts for one recording
 corroborate findings across them wants a workflow-level adapter built on top of this
 module, not a feature of it -- ``audio_analysis`` keeps its own for exactly that reason.
 
-Detection runs in an isolated subprocess venv (Presidio + GLiNER on
-Python 3.13) so the host process doesn't need ``presidio-analyzer`` /
+Detection runs in an isolated subprocess venv (Presidio + GLiNER + the rules
+cascade on Python 3.13) so the host process doesn't need ``presidio-analyzer`` /
 ``spacy`` / ``gliner`` installed — see ``subprocess_backend.py`` for the
-venv contents and worker. Two detectors run in parallel inside the venv:
+venv contents and worker. Three detectors run inside the venv:
 
 1. **Microsoft Presidio Analyzer** — regex + spaCy-NER orchestrator with
    purpose-built recognizers for emails, phone numbers, SSNs, credit
@@ -23,13 +23,20 @@ venv contents and worker. Two detectors run in parallel inside the venv:
    recognize (medical record number, health plan number, account
    number, fax number, URL, biometric / device / vehicle identifiers,
    unique identifier, ...).
+3. **Rules cascade** (``rules.py``, ported from PR #542) — regex,
+   gazetteers, spaCy NER, self-disclosed demographics, age-over-90 and a
+   combinatorial re-identification window, with precision guards (a
+   Zipf-frequency name hard-gate, structured-identifier format validation)
+   that make it worth running alongside the two model-based detectors
+   rather than in place of them. Its category vocabulary is its own; see
+   ``subprocess_backend.py`` for how it is reconciled with the others.
 
 GLiNER's lowercase labels are normalized to Presidio's uppercase scheme
-inside the worker so the cross-model corroboration logic below — which
-keys on ``(category, text.lower())`` — sees the two detectors' hits on
+inside the worker so the cross-detector corroboration logic below — which
+keys on ``(category, text.lower())`` — sees two detectors' hits on
 the same entity as the same finding.
 
-When the subprocess fails to start or both detectors fail to load, the
+When the subprocess fails to start or every detector fails to load, the
 report records an explicit failure reason
 (``failures["pii_subprocess"]``) and ``contains_pii`` defaults to
 ``False`` — the caller learns the check didn't actually run rather
@@ -93,9 +100,9 @@ class PiiReport:
     spans: list[PiiSpan] = field(default_factory=list)
     failures: dict[str, str] = field(default_factory=dict)
     # Comma-joined list of detectors that successfully ran inside the
-    # subprocess venv for this report — e.g. ``"presidio,gliner"`` when
-    # both loaded cleanly, ``"presidio"`` when GLiNER failed but
-    # Presidio worked, or ``None`` when neither detector ran.
+    # subprocess venv for this report — e.g. ``"gliner,presidio,rules"`` when
+    # all three loaded cleanly, ``"presidio,rules"`` when GLiNER failed but
+    # the others worked, or ``None`` when no detector ran.
     detector_used: str | None = None
     # Continuous detection confidence in ``[0, 1]`` computed from per-
     # detector raw scores plus cross-detector and cross-ASR-model
@@ -153,9 +160,9 @@ def _corroborated_contains_pii(
     positive) -- that is what the ``audio_analysis`` workflow's per-pass PII adapter does on
     top of this function. A standalone ``str``/``ScriptLine`` input has exactly one
     transcript, so there is nothing to corroborate across sources in that sense. The
-    redundancy that *does* exist at this layer is cross-detector agreement — Presidio and
-    GLiNER independently flagging the same ``(category, normalized_text)`` — so that becomes
-    the corroboration signal here.
+    redundancy that *does* exist at this layer is cross-detector agreement — two of
+    Presidio, GLiNER and the rules cascade independently flagging the same ``(category,
+    normalized_text)`` — so that becomes the corroboration signal here.
 
     Args:
         spans: Materialized spans for this single input.
@@ -345,8 +352,8 @@ def detect_pii(
             diarization line carrying only a ``speaker`` label) flattens to ``""`` and
             is treated exactly like an empty string input — a documented empty result,
             not an error.
-        detectors: Subset of ``{"presidio", "gliner"}`` to run. ``None`` (default) runs
-            both. An empty list (``[]``) is the caller explicitly disabling detection:
+        detectors: Subset of ``{"presidio", "gliner", "rules"}`` to run. ``None`` (default)
+            runs all three. An empty list (``[]``) is the caller explicitly disabling detection:
             no subprocess is spawned, every report gets ``detector_used=None`` and an
             explicit ``"pii_disabled"`` failure note — the LLM-judge-shaped case: this
             module ships no LLM judge, and there is deliberately no default-on path
@@ -361,9 +368,9 @@ def detect_pii(
         gliner_labels: Labels passed to GLiNER's ``predict_entities``. ``None`` uses
             the subprocess module's curated HIPAA-18 default set.
         gliner_threshold: Drop GLiNER predictions below this score.
-        require_cross_source_corroboration: When ``True`` (default) and both detectors
+        require_cross_source_corroboration: When ``True`` (default) and ≥2 detectors
             ran, only flip ``contains_pii`` to ``True`` for a ``(category,
-            normalized_text)`` pair that both Presidio and GLiNER independently
+            normalized_text)`` pair that ≥2 of them independently
             flagged. A caller corroborating across multiple ASR transcripts of the same
             recording applies the same rationale one layer up (see the ``audio_analysis``
             workflow's per-pass PII adapter); this generalizes it to cross-detector
@@ -431,7 +438,8 @@ def detect_pii(
 
     if not detectors_used:
         no_detector_msg = (
-            "Neither Presidio nor GLiNER loaded inside the subprocess venv; contains_pii=False reported by default."
+            "No PII detector (Presidio, GLiNER, rules) loaded inside the subprocess venv; "
+            "contains_pii=False reported by default."
         )
         subprocess_failures.setdefault("no_pii_detector", no_detector_msg)
         print(f"warn: {no_detector_msg}", file=sys.stderr)
