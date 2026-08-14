@@ -273,10 +273,17 @@ class SharedFileLock:
         except Timeout:
             age = self._heartbeat_age()
             if previous_holder is not None:
-                held_for = time.time() - previous_holder["taken_at"]
+                # `.get`, not `[...]`, like every neighbouring field: lock_holder returns whatever
+                # JSON is on disk, including a holder written by an older senselab that predates
+                # `taken_at` (or a hand-edited/partial file that still parses). A bare subscript
+                # would raise KeyError (or TypeError on a non-numeric value) out of __enter__, and
+                # the retry loops in ensure_hf_model / ensure_venv / record_resolution only catch
+                # TimeoutError — so it would propagate as an unrelated crash instead of a timeout.
+                taken_at = previous_holder.get("taken_at")
+                held_for = f"{time.time() - taken_at:.1f}s" if isinstance(taken_at, (int, float)) else "an unknown time"
                 detail = (
                     f"held by user={previous_holder.get('user')} host={previous_holder.get('host')} "
-                    f"pid={previous_holder.get('pid')} for {held_for:.1f}s "
+                    f"pid={previous_holder.get('pid')} for {held_for} "
                     f"(heartbeat {age:.1f}s old)"
                 )
             else:

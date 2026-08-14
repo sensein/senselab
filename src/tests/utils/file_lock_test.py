@@ -250,3 +250,33 @@ def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
         waited = time.monotonic() - started
     proc.join(timeout=10)
     assert waited > 0.5, f"second acquirer did not wait (waited {waited:.2f}s)"
+
+
+def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An old-format holder file (no ``taken_at``) must still raise TimeoutError, not KeyError.
+
+    Finding #7 of the #550 review: the Timeout branch read ``previous_holder["taken_at"]`` as a
+    bare subscript while every neighbour used ``.get()``. A holder written by an older senselab (or
+    a partial file that still parses) made ``__enter__`` raise ``KeyError`` — which the retry loops
+    in ensure_hf_model / ensure_venv / record_resolution only catch as ``TimeoutError`` — so it
+    escaped as an unrelated crash.
+    """
+    import multiprocessing as mp
+
+    resource = tmp_path / "thing"
+    ctx = mp.get_context("spawn")
+    acquired = ctx.Event()
+    proc = ctx.Process(target=_hold, args=(str(resource), 3.0, acquired))
+    proc.start()
+    try:
+        assert acquired.wait(timeout=30), "child never acquired the lock within 30s"
+        # Simulate a holder file written by an older senselab that predates `taken_at`.
+        monkeypatch.setattr(
+            "senselab.utils.file_lock.lock_holder",
+            lambda *_a, **_k: {"user": "alice", "host": "node1", "pid": 4211},
+        )
+        with pytest.raises(TimeoutError):
+            with SharedFileLock(resource, timeout=0.5):
+                pass
+    finally:
+        proc.join(timeout=10)

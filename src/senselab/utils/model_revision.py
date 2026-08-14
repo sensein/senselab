@@ -193,7 +193,14 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
     try:
         from huggingface_hub import HfApi
 
-        sha = HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha
+        from senselab.utils.dependencies import retry_on_transient_error
+
+        # The one mandatory Hub round-trip on the cold-cache path. Wrap it in the same
+        # transient-retry (exponential backoff on 429 / 5xx / connection errors) every other
+        # Hub call already uses, so a rate-limit burst during a parallel batch is survived
+        # rather than fatal at HFModel construction and cache-key computation. A persistent
+        # or non-transient (4xx) error still surfaces below as RevisionResolutionError.
+        sha = retry_on_transient_error(lambda: HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha)
     except Exception as exc:
         raise RevisionResolutionError(
             f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
