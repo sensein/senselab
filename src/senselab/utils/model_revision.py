@@ -54,14 +54,22 @@ def run_id() -> str:
 
     Inherited from ``SENSELAB_RUN_ID`` when present, so a single Slurm submission
     that exports one value shares it across every node, task and subprocess venv.
-    When absent, a UUID4 is generated once and exported, so a bare launch is its
-    own self-consistent run with no configuration required — and any subprocess
-    senselab spawns inherits it through the environment.
+    When absent, the Slurm job identity is used so a submission is self-consistent
+    with no configuration required — ``SLURM_ARRAY_JOB_ID`` (shared by every task of
+    an array) is preferred over per-task ``SLURM_JOB_ID`` so an N-task array reuses
+    one ``runs/<id>/`` manifest dir instead of leaking N of them into an
+    inode-quota'd cache root. Only a truly bare launch falls through to a fresh
+    UUID4. Whatever is chosen is exported, so any subprocess senselab spawns inherits
+    it through the environment.
     """
     global _RUN_ID
     if _RUN_ID is None:
-        existing = os.environ.get("SENSELAB_RUN_ID")
-        _RUN_ID = existing if existing else str(uuid.uuid4())
+        _RUN_ID = (
+            os.environ.get("SENSELAB_RUN_ID")
+            or os.environ.get("SLURM_ARRAY_JOB_ID")
+            or os.environ.get("SLURM_JOB_ID")
+            or str(uuid.uuid4())
+        )
         os.environ["SENSELAB_RUN_ID"] = _RUN_ID
     return _RUN_ID
 

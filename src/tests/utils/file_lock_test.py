@@ -52,6 +52,28 @@ def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
         assert mode & 0o070 == 0o070, "directory should be group rwx"
 
 
+def test_a_caller_directory_is_not_chmodded_when_unmanaged(tmp_path: Path) -> None:
+    """A lock over a caller-supplied path must not touch that directory's permissions.
+
+    Finding #8 of the #550 review: locking a FileRef under a read-restricted dataset tree
+    silently chmodded the caller's directory to 2775 (setgid + group-write). With
+    ``manage_dir_mode=False`` the directory is left exactly as found.
+    """
+    data_dir = tmp_path / "restricted"
+    data_dir.mkdir()
+    os.chmod(data_dir, 0o700)  # pin an exact, non-shared mode regardless of umask
+    resource = data_dir / "input.wav"
+    resource.write_bytes(b"x")
+
+    before = stat.S_IMODE(data_dir.stat().st_mode)
+    with SharedFileLock(resource, manage_dir_mode=False):
+        pass
+    after = stat.S_IMODE(data_dir.stat().st_mode)
+
+    assert after == before == 0o700, f"caller dir mode changed: {oct(before)} -> {oct(after)}"
+    assert not (after & stat.S_ISGID), "setgid must not be set on a caller-owned directory"
+
+
 def test_holder_identity_is_recorded_while_held(tmp_path: Path) -> None:
     """A takeover must be able to name who it displaced.
 
