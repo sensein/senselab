@@ -25,6 +25,19 @@ from senselab.audio.workflows.audio_analysis.stage_context import (
 from senselab.utils.tasks.cached_inference import audio_signature, cache_store
 
 
+@pytest.fixture(autouse=True)
+def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub HF revision resolution so `cache_key_for` never touches the network.
+
+    `cache_key_for` resolves any Hub-shaped model id (containing ``/``, e.g.
+    ``"facebook/mms-1b-all"``) to a commit SHA before computing the key. A handful of tests below
+    use real-looking ids for exactly that reason; without this stub, resolving them would be a live
+    Hub call whose outcome depends on whether this machine already has that repo cached locally —
+    the same non-hermetic risk `HFModel` construction has, and the same fix.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+
+
 def _ctx(**kwargs: object) -> StageContext:
     base: dict[str, object] = {"perturbation": "raw", "audio_signature": "a" * 64, "senselab_ver": "1.2.3"}
     base.update(kwargs)
@@ -102,6 +115,46 @@ def test_cache_key_tracks_the_audio_signature() -> None:
     assert a != b
 
 
+def test_cache_key_tracks_the_resolved_commit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two commits of the same Hub model must not collide (the bug this task fixes)."""
+    ctx = _ctx()
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "a" * 40)
+    at_a = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "b" * 40)
+    at_b = ctx.cache_key_for("asr", "openai/whisper-tiny", {})
+    assert at_a != at_b
+
+
+def test_commit_sha_for_a_non_hub_id_skips_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A backend name with no ``/`` (e.g. ``"yamnet"``) has nothing to resolve on the Hub.
+
+    Distinct from a model-less stage's ``None`` -- both end up with no commit_sha, but for
+    different reasons, and neither should attempt a Hub lookup.
+    """
+
+    def _boom(*a: object, **k: object) -> str:
+        raise AssertionError("a non-Hub model id must never be resolved")
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _boom)
+    assert _ctx()._commit_sha_for("yamnet") is None  # noqa: SLF001
+    assert _ctx()._commit_sha_for(None) is None  # noqa: SLF001
+
+
+def test_commit_sha_for_a_hub_id_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``org/name``-shaped id is resolved through the run-scoped resolver."""
+    sha = "c" * 40
+    seen: list[str] = []
+
+    def _record(repo_id: str, *a: object, **k: object) -> str:
+        """Record the id it was asked to resolve, so the assertion can check what was passed."""
+        seen.append(repo_id)
+        return sha
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _record)
+    assert _ctx()._commit_sha_for("openai/whisper-tiny") == sha  # noqa: SLF001
+    assert seen == ["openai/whisper-tiny"]
+
+
 def test_align_key_differs_from_the_task_key() -> None:
     """Alignment keying stays independent of the ASR cache."""
     ctx = _ctx()
@@ -133,6 +186,30 @@ def test_provenance_records_the_stage_code_version() -> None:
     assert prov["cache_schema_version"] == CACHE_SCHEMA_VERSION
     assert prov["pass"] == "raw"
     assert prov["device"] == "auto"
+
+
+def test_provenance_records_the_commit_that_produced_the_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both "revision" and "commit_sha" travel: what was asked for, and what actually ran."""
+    sha = "d" * 40
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    ctx = _ctx()
+    prov = ctx.provenance_for("asr", "openai/whisper-large-v3-turbo", {"device": "cpu"})
+    assert prov["commit_sha"] == sha
+    assert prov["revision"] == "main"
+
+
+def test_provenance_revision_is_none_when_nothing_is_pinned() -> None:
+    """A model-less stage (e.g. "features") has no ref to have asked for, so both fields are None."""
+    prov = _ctx().provenance_for("features", None, {})
+    assert prov["commit_sha"] is None
+    assert prov["revision"] is None
+
+
+def test_provenance_revision_is_none_for_a_non_hub_backend() -> None:
+    """A local backend name (no "/") is never resolved, so "revision" must not claim one was asked."""
+    prov = _ctx().provenance_for("yamnet", "yamnet", {})
+    assert prov["commit_sha"] is None
+    assert prov["revision"] is None
 
 
 def test_provenance_joins_to_build_cache_index(tmp_path: Path) -> None:

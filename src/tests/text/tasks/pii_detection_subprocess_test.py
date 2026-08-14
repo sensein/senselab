@@ -8,6 +8,9 @@ require building the actual venv on every test run.
 Coverage focuses on the dispatch surface: detector selection (the
 ``detectors`` arg), JSON-request construction, response parsing, and
 the empty-detector short-circuit.
+
+Moved here from ``audio/workflows/audio_analysis/pii_subprocess_test.py``
+alongside the module under test (see plan-b Task 1).
 """
 
 import json
@@ -17,18 +20,33 @@ from typing import Any, Callable, Optional
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis import pii_subprocess
-from senselab.audio.workflows.audio_analysis.pii_subprocess import (
+from senselab.text.tasks.pii_detection import subprocess_backend as pii_subprocess
+from senselab.text.tasks.pii_detection.subprocess_backend import (
     _DEFAULT_GLINER_LABELS,
     _DEFAULT_GLINER_MODEL,
     _GLINER_TO_PRESIDIO_CATEGORY,
     _PRESIDIO_PII_ENTITIES,
     DETECTOR_GLINER,
+    DETECTOR_LLM,
     DETECTOR_PRESIDIO,
+    DETECTOR_RULES,
     detect_pii_via_subprocess,
 )
 
 # ── Fixtures ────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _fake_resolve_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fake the GLiNER ref resolution every gliner-enabled test triggers.
+
+    detect_pii_via_subprocess resolves the GLiNER ref to a commit SHA before staging;
+    faking it here keeps every test in this module independent of network reachability
+    or this host's local HF cache state. Autouse because most tests below exercise the
+    default detector set (both presidio and gliner), so opting in per-test would just
+    repeat this line everywhere it matters.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
 
 
 @pytest.fixture
@@ -70,17 +88,17 @@ class _SubprocessRecorder:
 # ── Default-detectors behavior ──────────────────────────────────────
 
 
-def test_default_runs_both_presidio_and_gliner(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without an explicit ``detectors`` argument both detectors are requested."""
+def test_default_runs_presidio_gliner_and_rules(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without an explicit ``detectors`` argument all three detectors are requested."""
     recorder = _SubprocessRecorder(
-        {"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio", "gliner"]}
+        {"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio", "gliner", "rules"]}
     )
     monkeypatch.setattr(subprocess, "run", recorder)
 
     detect_pii_via_subprocess({"whisper": "Sample transcript."})
 
     sent = recorder.calls[0]["input"]
-    assert set(sent["detectors"]) == {DETECTOR_PRESIDIO, DETECTOR_GLINER}
+    assert set(sent["detectors"]) == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES}
 
 
 def test_explicit_presidio_only_skips_gliner(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,6 +197,8 @@ def test_request_carries_defaults_for_threshold_and_gliner_settings(
     sent = recorder.calls[0]["input"]
     assert sent["presidio_score_threshold"] == 0.4
     assert sent["gliner_model"] == _DEFAULT_GLINER_MODEL
+    # A resolved commit SHA, never the mutable "main" ref (see _fake_resolve_revision).
+    assert sent["gliner_revision"] == "f" * 40
     assert sent["gliner_threshold"] == 0.5
     assert sent["gliner_labels"] == list(_DEFAULT_GLINER_LABELS)
     assert sent["presidio_entities"] == list(_PRESIDIO_PII_ENTITIES)
@@ -235,6 +255,63 @@ def test_response_passes_through_spans_failures_and_detectors_used(
 
 def test_known_detectors_constant_matches_aliases() -> None:
     """The frozenset and the alias constants must agree — guards against drift."""
-    from senselab.audio.workflows.audio_analysis.pii_subprocess import _KNOWN_DETECTORS
+    from senselab.text.tasks.pii_detection.subprocess_backend import _KNOWN_DETECTORS
 
-    assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER}
+    assert _KNOWN_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES, DETECTOR_LLM}
+
+
+def test_the_llm_detector_is_known_but_not_default() -> None:
+    """The gap between the two sets is the whole point of the opt-in.
+
+    Collapsing them either way is a real defect: making ``llm`` default-on ties a scan's
+    result to whether a server happened to be listening, and dropping it from
+    ``_KNOWN_DETECTORS`` would reject it by name and leave it out of the agreement
+    denominator on the runs where a caller did enable it.
+    """
+    from senselab.text.tasks.pii_detection.subprocess_backend import _DEFAULT_DETECTORS, _KNOWN_DETECTORS
+
+    assert _DEFAULT_DETECTORS == {DETECTOR_PRESIDIO, DETECTOR_GLINER, DETECTOR_RULES}
+    assert _KNOWN_DETECTORS - _DEFAULT_DETECTORS == {DETECTOR_LLM}
+
+
+def test_the_llm_detector_is_not_sent_to_the_worker(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """It runs host-side, so naming it must not put it in the worker's payload.
+
+    Leaving it in would have the worker report an unknown detector it cannot load,
+    turning an opt-in host-side scan into a spurious venv failure.
+    """
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO, DETECTOR_LLM])
+
+    assert recorder.calls[0]["input"]["detectors"] == [DETECTOR_PRESIDIO]
+
+
+def test_gliner_only_still_ships_the_cascade_source_for_windowing(
+    fake_venv: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GLiNER needs ``_gliner_chunks`` from rules.py even when the rules detector is off.
+
+    Without the source the worker falls back to one whole-text pass, which is the
+    truncation this windowing exists to remove — and it would fail silently, since a
+    truncated scan still returns spans.
+    """
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["gliner"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_GLINER])
+
+    sent = recorder.calls[0]["input"]
+    assert sent["rules_source"], "GLiNER-only must still carry the cascade source"
+    assert "_gliner_chunks" in sent["rules_source"]
+
+
+def test_presidio_only_does_not_pay_for_the_cascade_source(fake_venv: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The file read stays opt-in: neither detector that needs it is running here."""
+    recorder = _SubprocessRecorder({"spans_by_asr": {"whisper": []}, "failures": {}, "detectors_used": ["presidio"]})
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    detect_pii_via_subprocess({"whisper": "Sample."}, detectors=[DETECTOR_PRESIDIO])
+
+    assert recorder.calls[0]["input"]["rules_source"] is None

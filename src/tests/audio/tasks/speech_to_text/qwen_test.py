@@ -90,6 +90,11 @@ def test_qwen_asr_without_timestamps_returns_text_only() -> None:
 
 def test_align_with_qwen_maps_worker_output_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> None:
     """align_with_qwen assembles worker word spans into the align_transcriptions shape."""
+    # align_with_qwen resolves the aligner ref to a commit SHA and stages it via
+    # hf_subprocess_env before ever reaching subprocess.run; fake both so this test
+    # doesn't depend on network reachability or this host's local HF cache state.
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(qwen_mod, "hf_subprocess_env", lambda *a, **k: {})
     monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: "/fake/venv")
     monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "/fake/venv/bin/python")
     monkeypatch.setattr(qwen_mod.subprocess, "run", lambda *a, **k: None)

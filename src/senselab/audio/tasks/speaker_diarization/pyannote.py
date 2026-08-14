@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Union
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speaker_diarization.capabilities import DiarizationCapabilities
 from senselab.utils.data_structures import DeviceType, PyannoteAudioModel, ScriptLine, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
@@ -18,6 +19,20 @@ try:
     PYANNOTEAUDIO_AVAILABLE = True
 except ModuleNotFoundError:
     PYANNOTEAUDIO_AVAILABLE = False
+
+CAPABILITIES = DiarizationCapabilities(
+    populates_text=False,
+    speaker_label_kind="index",  # SPEAKER_00, SPEAKER_01, ...
+    labels_stable_across_files=False,  # not measured; False is the conservative default
+    # Seed-17 speaker-ceiling probe (TTS corpus, k=1..8, 20 sessions/k): predicted counts at
+    # k=8 spanned {5,6,7,8}, never collapsing to one value, so no structural ceiling was
+    # observed. That is a separate fact from counting accuracy, where Pyannote is actually the
+    # strongest of the six backends at low k (see model_registry.yaml's recommended_for) but
+    # falls off sharply above k=2 — a performance limit, not this structural one.
+    max_speakers=None,
+    max_speakers_evidence="measured: no saturation, emits up to 8 (probe seed-17)",
+    honors_speaker_hints=True,  # the only backend that acts on num_speakers
+)
 
 
 class PyannoteDiarization:

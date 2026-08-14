@@ -73,19 +73,39 @@ Key audio processing capabilities in `audio/tasks/`:
   plus a private copy of any model weights that worker loads. It has exhausted a 32 GB machine.
   Measured on a 16-core node, `-n 16` also buys nothing on the fast suites: 68 s against 70 s
   serial, because the import cost equals the test time. Run the directory you changed instead.
-  There is a second, independent reason: **`ensure_venv` takes no lock** and does
-  `shutil.rmtree(venv_dir)` before installing, so two workers that want the same subprocess venv
-  delete each other's tree mid-install. The macOS CI job carried `-n auto` and hung for 5.5 hours
+  There is a second, independent reason, now **partly fixed**: `ensure_venv` does
+  `shutil.rmtree(venv_dir)` before installing, and two workers wanting the same subprocess venv
+  would delete each other's tree mid-install. It has held a `FileLock` around the whole
+  marker-check / rmtree / install sequence since PR #444, gated on a `.senselab-installed`
+  completion marker, so that specific race is closed. The macOS CI job carried `-n auto` and hung for 5.5 hours
   until GitHub's 6-hour ceiling killed it (run 31218624423) — all three workers stalled at the same
   instant, nothing completed afterwards. Every CI job now runs serially and the macOS job carries
-  `timeout-minutes: 90`, so the next hang costs minutes. The missing lock is still there; adding one
-  is the real fix if a parallel suite is ever wanted.
+  `timeout-minutes: 90`, so the next hang costs minutes. What the venv lock still lacks is a
+  heartbeat: a holder that dies mid-install blocks every waiter for the full 600 s timeout and then
+  raises, rather than being detected as dead and taken over.
 - **`uv sync` is subtractive.** It removes extras not named in the command, so always pass the full
   set (`--all-extras`).
 - **Cache invalidation is free.** Bump `CACHE_SCHEMA_VERSION` in
   `src/senselab/utils/tasks/cached_inference.py` rather than reasoning about which
   `artifacts/analyze_audio_cache/` entries survive. A stale entry that *looks* readable costs far
   more than recomputing one, and the wipe is automatic on every host.
+- **Cache keys are commit-aware as of schema 23, so the first run after that change recomputes
+  everything.** Keys used to carry a bare `model_id`, so an upstream push to a tracked ref loaded
+  new weights under an unchanged key and served a result computed by the *old* commit as current.
+  Keys now include the resolved 40-hex commit, which is what makes an upstream push invalidate on
+  its own. Every pre-23 entry predates that and cannot be attributed to a commit, so none is
+  reused — a one-time full recompute, not a regression, and worth saying out loud before someone
+  reports it as one.
+- **A model load must pass a commit SHA, never a ref.** Resolving `main` to a SHA binds nothing by
+  itself: `snapshot_download(revision="main")` writes `refs/main` and the caller stays
+  ref-addressed, so a later load passing `"main"` goes back through that pointer, which may have
+  moved. Every load is therefore two calls — resolve, then load again with `revision=<sha>` — and
+  the second is free, because a full SHA triggers `huggingface_hub`'s commit-hash shortcut and
+  returns cached files with no network at all. `src/tests/utils/revision_pinning_guard_test.py`
+  enforces this by AST sweep over the subprocess-worker files: a new worker payload carrying a
+  `revision`-ish key fails the test until it is reviewed and allowlisted. Recording a SHA while
+  loading through a ref is the one outcome worse than recording nothing, because the provenance is
+  then confidently wrong.
 - **Thresholds belong in `data/` with a written derivation, never as code literals.** Two defects
   this session came from literals that were never fitted: a silhouette coefficient read directly as
   a probability, and a 2→10 dB HNR ramp under which ordinary voiced speech (median 8.12 dB) read as

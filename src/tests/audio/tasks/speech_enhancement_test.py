@@ -1,14 +1,244 @@
 """Tests for the speech enhancement task."""
 
+from pathlib import Path
 from typing import List
+from unittest.mock import patch
 
 import pytest
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.speech_enhancement import enhance_audios
+from senselab.audio.tasks.speech_enhancement import driftse, enhance_audios
+from senselab.audio.tasks.speech_enhancement.driftse import enhance_audios_with_driftse
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+from senselab.utils.data_structures import DeviceType, HFModel, SpeechBrainModel
+from senselab.utils.subprocess_venv import _cache_dir_path
+
+# Honor SENSELAB_VENV_CACHE the same way ensure_venv() does — hardcoding
+# Path.home()/".cache"/... here would silently disagree with a cache dir
+# override, so the gate below would never match where the venv actually lives.
+_DRIFTSE_VENV_ROOT = _cache_dir_path() / "driftse"
+driftse_venv_present = _DRIFTSE_VENV_ROOT.is_dir()
+
+
+@pytest.fixture
+def _offline_hfmodel_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let an ``HFModel`` be constructed without reaching the Hub.
+
+    Unmocked, the ``revision`` validator calls ``check_hf_repo_exists``, which
+    downloads the full snapshot -- this once pulled 20 GB for an unrelated model.
+    Both the existence check and the commit-SHA resolution are stubbed,
+    independently, per this project's rule against unmocked ``HFModel``
+    construction in tests.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+
+
+def test_default_model_is_unchanged(mono_audio_sample: Audio) -> None:
+    """No existing caller may change behaviour.
+
+    The workflow calls ``enhance_audios`` with the SpeechBrain default and must
+    keep reaching the SpeechBrain path.
+    """
+    with patch(
+        "senselab.audio.tasks.speech_enhancement.api.SpeechBrainEnhancer.enhance_audios_with_speechbrain",
+        return_value=[mono_audio_sample],
+    ) as sb:
+        enhance_audios([mono_audio_sample])
+    sb.assert_called_once()
+    assert sb.call_args.kwargs["model"].path_or_uri == "speechbrain/sepformer-wham16k-enhancement"
+
+
+def test_hfmodel_with_the_driftse_prefix_dispatches_to_driftse(
+    mono_audio_sample: Audio, _offline_hfmodel_construction: None
+) -> None:
+    """An ``HFModel`` whose id starts with ``sensein/driftse`` reaches DriftSE."""
+    with patch(
+        "senselab.audio.tasks.speech_enhancement.api.enhance_audios_with_driftse",
+        return_value=[mono_audio_sample],
+    ) as ds:
+        enhance_audios(
+            [mono_audio_sample],
+            model=HFModel(path_or_uri="sensein/driftse-distilhubert-three-layers"),
+        )
+    ds.assert_called_once()
+
+
+def test_an_unrecognised_model_still_raises_not_implemented(
+    mono_audio_sample: Audio, _offline_hfmodel_construction: None
+) -> None:
+    """Silently falling through to a default would enhance with a model the caller did not ask for."""
+    with pytest.raises(NotImplementedError):
+        enhance_audios([mono_audio_sample], model=HFModel(path_or_uri="some/other-model"))
+
+
+def test_upstream_is_pinned_to_a_full_commit_sha() -> None:
+    """Assert the DriftSE upstream pin is a full 40-char commit SHA.
+
+    A branch name or short SHA would let an upstream force-push change what
+    this backend runs without any change here. The repository is unlicensed and
+    unpackaged, so the pin is the only version contract available.
+    """
+    assert len(driftse._DRIFTSE_COMMIT) == 40
+    assert all(c in "0123456789abcdef" for c in driftse._DRIFTSE_COMMIT)
+
+
+def test_training_and_metric_dependencies_are_not_installed() -> None:
+    """Assert the DriftSE venv requirements omit training-only packages.
+
+    Upstream's requirements.txt lists these for training and scoring, and the inference path
+    does not reach them, so a build that installs one means the worker started importing
+    something it should not.
+
+    ``pesq`` and ``pystoi`` are deliberately NOT in this set, and that is a correction rather
+    than an exemption: an earlier revision excluded both on the belief that only
+    ``util/inference.py`` imports them. In fact ``util/other.py`` -- which the worker must
+    import for ``pad_spec`` -- does ``from pesq import pesq`` and ``from pystoi import stoi``
+    at module scope, so they are genuine inference dependencies. Asserting their absence made
+    this test pass while the real run failed with ``No module named 'pesq'``.
+    """
+    excluded = {
+        "scoreq",
+        "torch-pesq",
+        "asteroid-filterbanks",
+        "wandb",
+        "pytorch-optimizer",
+        "torchinfo",
+    }
+    named = {r.split(">=")[0].split("==")[0].strip().lower() for r in driftse._DRIFTSE_REQUIREMENTS}
+    assert not (named & excluded), f"training-only deps in the inference venv: {named & excluded}"
+
+
+def test_torch_is_named_explicitly_so_ensure_venv_routes_cuda() -> None:
+    """Assert torch and torchaudio are named explicitly in the DriftSE requirements.
+
+    ensure_venv's CUDA auto-detection triggers on an explicit torch pin. Left
+    transitive, the resolve skips CUDA-aware routing and can land a CPU-only
+    wheel on a GPU host.
+    """
+    named = {r.split(">=")[0].split("==")[0].strip().lower() for r in driftse._DRIFTSE_REQUIREMENTS}
+    assert "torch" in named
+    assert "torchaudio" in named
+
+
+def test_worker_script_compiles_standalone() -> None:
+    """Assert the worker script string is syntactically valid standalone Python.
+
+    The worker is a string literal executed by another interpreter, so a
+    syntax error in it surfaces only at first inference — after the venv build
+    and the model download. Compiling it here makes that a unit-test failure.
+    """
+    compile(driftse._WORKER_SCRIPT, "<driftse worker>", "exec")
+
+
+def test_worker_never_imports_util_inference() -> None:
+    """Assert the worker never imports upstream's util/inference.py.
+
+    util/inference.py imports pesq and pystoi, which are deliberately not in
+    the venv. enhancement.py does not import it and neither may the worker.
+    """
+    assert "util.inference" not in driftse._WORKER_SCRIPT
+    assert "from util import inference" not in driftse._WORKER_SCRIPT
+
+
+def test_worker_loads_the_checkpoint_with_weights_only() -> None:
+    """Assert the worker loads the checkpoint with weights_only=True.
+
+    Upstream omits weights_only. The checkpoint is a foreign pickle from an
+    unlicensed research repository; loading it with the unrestricted unpickler is
+    arbitrary code execution at enhancement time.
+    """
+    assert "weights_only=True" in driftse._WORKER_SCRIPT
+
+
+def test_empty_input_returns_empty_without_spawning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Assert an empty audio list returns [] without touching the Hub or a venv.
+
+    Constructing the HFModel below would otherwise perform a real Hub
+    existence check against a private repo; that check is mocked here per
+    this project's rule against unmocked HFModel construction in tests.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
+
+
+def test_checkpoint_download_routes_through_resolve_model(
+    monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio
+) -> None:
+    """Assert checkpoint/config resolution goes through resolve_model, not a raw download.
+
+    A raw ``hf_hub_download(..., revision=model.revision)`` call performs a Hub
+    HEAD/revision check on every invocation, in every parallel process, when
+    ``revision`` is an unresolved ref like "main" -- the 429-rate-limit hazard
+    ``resolve_model`` exists to remove by pinning to an immutable commit SHA
+    and downloading once. ``ensure_venv`` is mocked to raise right after the
+    resolution call, which lets this test observe that call without spawning a
+    real subprocess venv or touching the network. A raw ``hf_hub_download`` is
+    also mocked to fail the test if it is reached at all.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+
+    calls = []
+
+    def fake_resolve_model(repo_id: str, revision: str, **kwargs: object) -> tuple:
+        calls.append((repo_id, revision))
+        return "0" * 40, Path("/tmp/fake-driftse-snapshot")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", fake_resolve_model)
+
+    def fail_hf_hub_download(*args: object, **kwargs: object) -> None:
+        raise AssertionError("hf_hub_download must not be called directly; route through resolve_model")
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fail_hf_hub_download)
+
+    def fail_ensure_venv(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("stop-before-venv")
+
+    monkeypatch.setattr(driftse, "ensure_venv", fail_ensure_venv)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    with pytest.raises(RuntimeError, match="stop-before-venv"):
+        driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
+
+    assert calls == [(driftse._DRIFTSE_HF_REPO, driftse._DRIFTSE_HF_REVISION)]
+
+
+def test_checkpoint_override_skips_the_hub_entirely(
+    monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio, tmp_path: Path
+) -> None:
+    """Assert a local ``SENSELAB_DRIFTSE_CHECKPOINT`` override never calls the Hub.
+
+    An operator pointing at local checkpoint files must not need Hub access at
+    all -- neither ``resolve_model`` nor a raw ``hf_hub_download`` may run.
+    ``ensure_venv`` is mocked to raise right after the override branch, which
+    lets this test observe that neither Hub path was taken without spawning a
+    real subprocess venv or touching the network.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
+
+    def fail_resolve_model(*args: object, **kwargs: object) -> None:
+        raise AssertionError("resolve_model must not be called when a local checkpoint override is set")
+
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", fail_resolve_model)
+
+    def fail_hf_hub_download(*args: object, **kwargs: object) -> None:
+        raise AssertionError("hf_hub_download must not be called when a local checkpoint override is set")
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fail_hf_hub_download)
+
+    def fail_ensure_venv(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("stop-before-venv")
+
+    monkeypatch.setattr(driftse, "ensure_venv", fail_ensure_venv)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    with pytest.raises(RuntimeError, match="stop-before-venv"):
+        driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
 
 
 @pytest.fixture
@@ -155,3 +385,46 @@ def test_model_caching(resampled_mono_audio_sample: Audio) -> None:
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
     SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[resampled_mono_audio_sample], device=DeviceType.CPU)
     assert len(list(SpeechBrainEnhancer._models.keys())) == 1
+
+
+@pytest.mark.skipif(
+    not driftse_venv_present,
+    reason=f"driftse venv not provisioned at {_DRIFTSE_VENV_ROOT}; run manually to build it (first run takes minutes)",
+)
+def test_driftse_enhances_and_preserves_length(mono_audio_sample: Audio) -> None:
+    """Length preservation is the cheapest real correctness check available without a reference signal.
+
+    ``istft(length=T_orig)`` must round-trip, and a chunking bug in the
+    overlap-add path shows up here immediately as a short or long result.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    out = enhance_audios([audio], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO))
+
+    assert len(out) == 1
+    assert out[0].sampling_rate == 16000
+    assert out[0].waveform.shape[-1] == audio.waveform.shape[-1]
+    assert out[0].waveform.abs().max() > 0, "silent output — the model produced nothing"
+
+
+@pytest.mark.skipif(
+    not driftse_venv_present,
+    reason=f"driftse venv not provisioned at {_DRIFTSE_VENV_ROOT}; run manually to build it (first run takes minutes)",
+)
+def test_driftse_is_reproducible_under_a_fixed_seed(mono_audio_sample: Audio) -> None:
+    """Assert a fixed seed makes the stochastic forward pass reproducible.
+
+    ``train_add_gaussian`` (the released checkpoint's setting) makes the
+    forward pass consume a Gaussian sample, so without a seed a rerun would
+    produce different audio -- which would make any cached artifact keyed on
+    this output non-reproducible.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    a = enhance_audios_with_driftse([audio], model=model, seed=17)[0]
+    b = enhance_audios_with_driftse([audio], model=model, seed=17)[0]
+
+    assert (a.waveform - b.waveform).abs().max() < 1e-5

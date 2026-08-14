@@ -39,11 +39,25 @@ def test_check_hf_repo_exists_false() -> None:
         assert check_hf_repo_exists("invalid_repo") is False
 
 
-def test_hfmodel_valid_hf_repo_check() -> None:
+def test_hfmodel_valid_hf_repo_check(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test valid HFModel repo check."""
-    with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=True):
-        model: HFModel = HFModel(path_or_uri="valid_repo")
-        assert model.revision == "main"
+    sha = "a" * 40
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    model: HFModel = HFModel(path_or_uri="valid_repo")
+    assert model.revision == "main"
+    assert model.commit_sha == sha
+
+
+def test_hf_model_records_the_resolved_commit_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Revision keeps the ref asked for; commit_sha carries what it resolved to."""
+    sha = "c" * 40
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+
+    model: HFModel = HFModel(path_or_uri="org/model", revision="main")
+    assert model.revision == "main", "the requested ref must survive"
+    assert model.commit_sha == sha, "the resolved commit must be recorded"
 
 
 def test_hfmodel_invalid_hf_repo_check() -> None:
@@ -84,8 +98,9 @@ def test_get_huggingface_token_prefers_environment_over_dotenv(tmp_path: Path, m
     assert get_huggingface_token() == "hf_from_env"
 
 
+@patch("senselab.utils.model_revision.resolve_revision", return_value="c" * 40)
 @patch("senselab.utils.dependencies.ensure_hf_model", return_value="abc123")
-def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock) -> None:
+def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock, mock_resolve: MagicMock) -> None:
     """Test that we successfully cache HF repo checks and only make the check once."""
     _ = HFModel(path_or_uri="unique_repo_name_1")
     assert mock_ensure.call_count == 1
@@ -101,7 +116,24 @@ def test_hfmodel_caches_hf_repo_check(mock_ensure: MagicMock) -> None:
 # ── model_for_task / safe_model_id (T051 consolidation) ───────────────
 
 
-def test_model_for_task_routes_diarization_by_prefix() -> None:
+@pytest.fixture
+def _offline_model_construction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let ``model_for_task`` build models without reaching the Hub.
+
+    These tests assert *routing* — which class an id maps to — so any network at
+    all is incidental. Unmocked, each construction runs the ``revision``
+    validator into ``ensure_hf_model``, which downloads the entire snapshot: this
+    pair alone would pull Sortformer and Whisper on every cold run, and an
+    earlier revision of the diarization tests pulled 20 GB this way. Both the
+    existence check and the commit resolution are stubbed, independently, so the
+    tests never depend on a warm cache — verified under ``HF_HUB_OFFLINE=1`` with
+    an empty ``HF_HUB_CACHE``.
+    """
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "e" * 40)
+
+
+def test_model_for_task_routes_diarization_by_prefix(_offline_model_construction: None) -> None:
     """Sortformer ids are HF-hosted; every other diarizer is pyannote."""
     from senselab.utils.data_structures import model_for_task
     from senselab.utils.data_structures.model import HFModel, PyannoteAudioModel
@@ -110,13 +142,22 @@ def test_model_for_task_routes_diarization_by_prefix() -> None:
     assert isinstance(model_for_task("pyannote/speaker-diarization-3.1", task="diarization"), PyannoteAudioModel)
 
 
-def test_model_for_task_routes_remaining_tasks() -> None:
+def test_model_for_task_routes_remaining_tasks(_offline_model_construction: None) -> None:
     """ASR → HF; embeddings and enhancement → SpeechBrain."""
     from senselab.utils.data_structures import model_for_task
     from senselab.utils.data_structures.model import HFModel, SpeechBrainModel
 
     assert isinstance(model_for_task("openai/whisper-tiny", task="asr"), HFModel)
     assert isinstance(model_for_task("speechbrain/spkrec-ecapa-voxceleb", task="embeddings"), SpeechBrainModel)
+    assert isinstance(model_for_task("speechbrain/sepformer-wham16k-enhancement", task="enhancement"), SpeechBrainModel)
+
+
+def test_model_for_task_routes_driftse_enhancement_by_prefix(_offline_model_construction: None) -> None:
+    """A ``sensein/driftse`` id is HF-hosted; every other enhancement id is SpeechBrain."""
+    from senselab.utils.data_structures import model_for_task
+    from senselab.utils.data_structures.model import HFModel, SpeechBrainModel
+
+    assert isinstance(model_for_task("sensein/driftse-distilhubert-three-layers", task="enhancement"), HFModel)
     assert isinstance(model_for_task("speechbrain/sepformer-wham16k-enhancement", task="enhancement"), SpeechBrainModel)
 
 

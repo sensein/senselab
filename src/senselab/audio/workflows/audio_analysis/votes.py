@@ -378,7 +378,6 @@ def _signal_rows_from_buckets(
                         native_window_s=_as_float(measurement.get("native_window_s")),
                         resolution_s=_as_float(measurement.get("resolution_s")),
                         model_id=measurement.get("model_id") or signal,
-                        revision=measurement.get("revision"),
                     )
                 )
 

@@ -55,7 +55,7 @@ from senselab.audio.workflows.audio_analysis.embeddings import _slice_audio, _wi
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.resolution import resample_series
 from senselab.audio.workflows.audio_analysis.shapes import Series
-from senselab.audio.workflows.audio_analysis.signal import SignalProvenance
+from senselab.audio.workflows.audio_analysis.signal import SignalProvenance, resolved_commit_sha
 
 __all__ = [
     "QUALITY_ANALYSIS_HOP_S",
@@ -122,17 +122,33 @@ def _provenance(status_by_signal: dict[str, str]) -> dict[str, Any]:
     """Build the provenance block for one analysis window."""
     out: dict[str, Any] = {}
     for name in QUALITY_SIGNALS:
-        backend = "brouhaha venv" if _MODELS[name] == BROUHAHA_MODEL_ID else "main env"
+        is_brouhaha = _MODELS[name] == BROUHAHA_MODEL_ID
+        backend = "brouhaha venv" if is_brouhaha else "main env"
+        status = status_by_signal.get(name, "ok")
         out[name] = SignalProvenance(
             signal=name,
             model=_MODELS[name],
             units=_UNITS[name],
-            revision=BROUHAHA_REVISION if _MODELS[name] == BROUHAHA_MODEL_ID else None,
+            revision=BROUHAHA_REVISION if is_brouhaha else None,
+            # Resolved only for the Brouhaha signals, and only when this window actually measured
+            # one — an "unavailable" status means the model never ran here, so there is no commit
+            # to name and resolving one anyway would spend a Hub round-trip for no benefit.
+            #
+            # This block reaches no artifact yet, and that is worth stating rather than leaving a
+            # reader to discover it: `votes.py` strips the "provenance" key before building the
+            # SignalRow, and `quality_series` — the only other consumer — has no production caller.
+            # The commit that ships today comes from `compute.py`'s file-level `signal_provenance`
+            # metadata, which is the right granularity anyway since every row shares the model.
+            # Kept because it is correct and nearly free (resolution is memoised per process), and
+            # because whichever of those two consumers becomes live will need it.
+            commit_sha=(
+                resolved_commit_sha(BROUHAHA_MODEL_ID, BROUHAHA_REVISION) if is_brouhaha and status == "ok" else None
+            ),
             resolution_s=QUALITY_ANALYSIS_HOP_S,
             window_s=QUALITY_ANALYSIS_WIN_S,
             reduction=_REDUCTIONS[name],
             backend=backend,
-            status=status_by_signal.get(name, "ok"),
+            status=status,
         ).to_json()
     return out
 

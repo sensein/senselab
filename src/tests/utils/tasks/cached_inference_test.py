@@ -52,10 +52,50 @@ def test_cache_key_is_deterministic() -> None:
         "params": {"b": 2, "a": 1},
         "code_version": "diarization@1",
         "senselab_ver": "1.2.3",
+        "commit_sha": "a" * 40,
     }
     first = cache_key(**kwargs)  # type: ignore[arg-type]
     assert first == cache_key(**kwargs)  # type: ignore[arg-type]
     assert len(first) == 64
+
+
+def test_two_commits_of_one_model_do_not_share_a_cache_key() -> None:
+    """An upstream push must invalidate, not silently reuse.
+
+    Today's bug: the key only ever carried ``model_id``, so a model resolving to
+    a new commit loaded new weights under a hash that a stale entry still matches.
+    """
+
+    def _key(commit_sha: str) -> str:
+        """Build a key that differs only in the commit, so the assertion isolates that field.
+
+        A ``**dict`` splat here would widen every value to a common supertype and lose the
+        per-parameter types mypy --extra-checks needs.
+        """
+        return cache_key(
+            audio_sig="sig",
+            task="asr",
+            model_id="openai/whisper-large-v3-turbo",
+            params={"device": "cpu"},
+            code_version="v1",
+            senselab_ver="0.1.0",
+            commit_sha=commit_sha,
+        )
+
+    assert _key("a" * 40) != _key("b" * 40)
+
+
+def test_cache_key_requires_commit_sha_as_a_keyword() -> None:
+    """An omitted ``commit_sha`` must be a type error, not a silent ``None`` key.
+
+    That silent default is exactly how the staleness bug would come back: a
+    caller that forgets to thread the SHA would still get a key, just a wrong
+    one that collides with every other commit of the same model.
+    """
+    with pytest.raises(TypeError):
+        cache_key(  # type: ignore[call-arg]
+            audio_sig="s", task="t", model_id="m", params={}, code_version="t@1", senselab_ver="v"
+        )
 
 
 def test_transcript_signature_matches_pre_refactor_digest() -> None:
@@ -91,19 +131,37 @@ def test_schema_version_is_pinned() -> None:
 
 def test_param_order_does_not_change_the_key() -> None:
     """Params are canonicalized, so dict ordering can't fragment the cache."""
-    a = cache_key(audio_sig="s", task="t", model_id="m", params={"a": 1, "b": 2}, code_version="t@1", senselab_ver="v")
-    b = cache_key(audio_sig="s", task="t", model_id="m", params={"b": 2, "a": 1}, code_version="t@1", senselab_ver="v")
+    a = cache_key(
+        audio_sig="s",
+        task="t",
+        model_id="m",
+        params={"a": 1, "b": 2},
+        code_version="t@1",
+        senselab_ver="v",
+        commit_sha="a" * 40,
+    )
+    b = cache_key(
+        audio_sig="s",
+        task="t",
+        model_id="m",
+        params={"b": 2, "a": 1},
+        code_version="t@1",
+        senselab_ver="v",
+        commit_sha="a" * 40,
+    )
     assert a == b
 
 
 @pytest.mark.parametrize(
     "field",
-    ["audio_sig", "task", "model_id", "params", "code_version", "senselab_ver"],
+    ["audio_sig", "task", "model_id", "params", "code_version", "senselab_ver", "commit_sha"],
 )
 def test_every_keyed_field_changes_the_key(field: str) -> None:
     """Each component genuinely participates — none is silently ignored (FR-010).
 
-    Moved here from analyze_audio_test.py with the code it covers.
+    Moved here from analyze_audio_test.py with the code it covers. ``commit_sha`` joined the list
+    when the key became commit-aware — it is the whole point of this task, so it gets the same
+    proof every other field already had.
     """
     base = {
         "audio_sig": "s",
@@ -112,10 +170,52 @@ def test_every_keyed_field_changes_the_key(field: str) -> None:
         "params": {"a": 1},
         "code_version": "t@1",
         "senselab_ver": "v",
+        "commit_sha": "a" * 40,
     }
     altered = dict(base)
-    altered[field] = {"a": 2} if field == "params" else "CHANGED"
+    altered[field] = {"a": 2} if field == "params" else "b" * 40 if field == "commit_sha" else "CHANGED"
     assert cache_key(**base) != cache_key(**altered)  # type: ignore[arg-type]
+
+
+def test_two_commits_of_one_aligner_do_not_share_an_align_key() -> None:
+    """An upstream push to the aligner repo must invalidate, not silently reuse.
+
+    Same bug as `cache_key`, same fix: `align_cache_key` carried `aligner_model_id` with no SHA, so
+    a forced-aligner repo moving upstream served stale timestamps under an unchanged key.
+    """
+
+    def _key(aligner_commit_sha: str) -> str:
+        """Build a key that differs only in the aligner commit.
+
+        Spelled out rather than splatted from a shared dict: ``**dict`` widens every value to a
+        common supertype, which loses the per-parameter types mypy --extra-checks needs.
+        """
+        return align_cache_key(
+            audio_sig="sig",
+            transcript_sha="ts",
+            language="en",
+            aligner_model_id="facebook/mms-1b-all",
+            aligner_params={"x": 1},
+            code_version="alignment@1",
+            senselab_ver="0.1.0",
+            aligner_commit_sha=aligner_commit_sha,
+        )
+
+    assert _key("a" * 40) != _key("b" * 40)
+
+
+def test_align_cache_key_requires_aligner_commit_sha_as_a_keyword() -> None:
+    """An omitted `aligner_commit_sha` must be a type error, not a silent `None` key."""
+    with pytest.raises(TypeError):
+        align_cache_key(  # type: ignore[call-arg]
+            audio_sig="s",
+            transcript_sha="ts",
+            language="en",
+            aligner_model_id="mms",
+            aligner_params={},
+            code_version="t@1",
+            senselab_ver="v",
+        )
 
 
 def test_alignment_key_is_independent_of_the_task_key() -> None:
@@ -131,9 +231,16 @@ def test_alignment_key_is_independent_of_the_task_key() -> None:
         aligner_params={"x": 1},
         code_version="t@1",
         senselab_ver="v",
+        aligner_commit_sha="a" * 40,
     )
     task = cache_key(
-        audio_sig="s", task="alignment", model_id="mms", params={"x": 1}, code_version="t@1", senselab_ver="v"
+        audio_sig="s",
+        task="alignment",
+        model_id="mms",
+        params={"x": 1},
+        code_version="t@1",
+        senselab_ver="v",
+        commit_sha="a" * 40,
     )
     assert align != task
     assert len(align) == 64
@@ -148,6 +255,7 @@ def test_alignment_key_tracks_the_transcript() -> None:
         "aligner_params": {},
         "code_version": "t@1",
         "senselab_ver": "v",
+        "aligner_commit_sha": "a" * 40,
     }
     assert align_cache_key(transcript_sha="a", **kwargs) != align_cache_key(transcript_sha="b", **kwargs)  # type: ignore[arg-type]
 
@@ -398,7 +506,15 @@ def test_audio_signature_joins_summary_to_cache_provenance(tmp_path: Path) -> No
     audio = _fake_audio([0.1, 0.2, 0.3])
     sig = audio_signature(audio)
     provenance = {"audio_signature": sig, "task": "asr", "model_id": "whisper"}
-    key = cache_key(audio_sig=sig, task="asr", model_id="whisper", params={}, code_version="asr@1", senselab_ver="v")
+    key = cache_key(
+        audio_sig=sig,
+        task="asr",
+        model_id="whisper",
+        params={},
+        code_version="asr@1",
+        senselab_ver="v",
+        commit_sha=None,
+    )
     cache_store(tmp_path, key, {"status": "ok", "result": [], "provenance": provenance})
 
     entry = cache_lookup(tmp_path, key)

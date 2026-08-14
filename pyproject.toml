@@ -36,7 +36,7 @@ dependencies = [
   "torchaudio>=2.8",
   # ML frameworks (these pull packaging, joblib, etc.)
   "huggingface-hub>=1.3",  # transformers>=5.0 needs hf-hub>=1.3
-  "transformers>=5.0",  # >=5.0 required for huggingface-hub>=1.0 compatibility
+  "transformers>=5.3",  # >=5.3 required for VibeVoiceAsrForConditionalGeneration (VibeVoice-ASR-HF diarization backend)
   "datasets>=3.6",
   "accelerate",
   "peft>=0.13",  # required by Granite Speech 3.3's LoRA adapter
@@ -226,4 +226,4 @@ skip = [
   "*.cha",
   "*.ipynb"
 ]
-ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie", "g2p", "pres", "befores", "trough", "bellow", "coo", "patter", "AER"]
+ignore-words-list = ["senselab", "nd", "astroid", "wil", "SER", "te", "EXPRESSO", "VAI", "vie", "g2p", "pres", "befores", "trough", "bellow", "coo", "patter", "AER", "preemptable"]
