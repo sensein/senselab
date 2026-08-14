@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional, get_args
 
-SpeakerLabelKind = Literal["identity", "role"]
+SpeakerLabelKind = Literal["index", "role"]
 
 _VALID_LABEL_KINDS = get_args(SpeakerLabelKind)
 
@@ -47,10 +47,13 @@ class DiarizationCapabilities:
         populates_text: Whether the backend fills ``ScriptLine.text``. Without this a
             consumer cannot tell "this backend does not transcribe" from "this segment
             had no words" — both look like ``text=None``.
-        speaker_label_kind: ``"identity"`` when ``speaker`` names *who* is talking,
-            ``"role"`` when it names *what kind* of talker (child-adult emits
-            CHILD/ADULT/OVERLAP). Role labels must not reach embedding clustering: a
-            per-role centroid blends distinct speakers under one label.
+        speaker_label_kind: What vocabulary the ``speaker`` field draws from.
+            ``"index"`` for an anonymous per-file counter (``SPEAKER_00``, ``S01``),
+            ``"role"`` for a fixed semantic vocabulary (child-adult emits
+            CHILD/ADULT/OVERLAP). Neither is a speaker *identity* — no diarizer here
+            claims to know who is talking, only that it grouped some frames together —
+            so this field describes the labels, and any decision about how to treat
+            them belongs to whoever is making it.
         labels_stable_across_files: Whether label ``"1"`` in one file denotes the same
             speaker as ``"1"`` in another. False for any backend that numbers per audio.
         max_speakers: The largest speaker count the backend has been observed to *emit*

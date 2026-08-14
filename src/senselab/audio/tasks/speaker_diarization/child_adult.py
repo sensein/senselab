@@ -19,25 +19,19 @@ requires manually editing their source). Rather than patch upstream code at runt
 this backend is **CUDA-only**: it raises immediately, before spawning the subprocess,
 if CUDA isn't available.
 
-Not wired into ``audio_analysis``
----------------------------------
-This USC-SAIL child-adult backend is reachable through :func:`diarize_audios` and
-deliberately **not** through ``scripts/analyze_audio.py --diarization-models``. Two
-hazard classes motivate that split: a **role-label** backend, whose ``speaker``
-output names a role (e.g. ``CHILD``/``ADULT``/``OVERLAP``) rather than a speaker
-identity, would build a per-role centroid blending distinct speakers under one
-label and snap ambiguous frames to whichever centroid is nearest; a
-**speaker-identity** backend with its own unreconciled labelling scheme would feed
-those labels straight into cross-diarizer agreement and embedding clustering
-before they are harmonized against the pass-wide cluster IDs those steps key on,
-reading as spurious disagreement against every real diarization model. This
-backend falls in the first class — its ``speaker`` field is already a role, not an
-identity, so wiring it into ``--diarization-models`` as-is would build exactly
-that blended ``CHILD`` centroid and misroute ``OVERLAP`` frames onto whichever
-centroid is nearest. The guards for both hazard classes live in
-``workflows/audio_analysis/{clustering,identity,presence}.py``, which this branch
-does not carry. Port those guards from PR #537 before wiring any of the four new
-backends into the workflow.
+What the ``speaker`` field means here
+-------------------------------------
+This backend's ``speaker`` values are ``CHILD`` / ``ADULT`` / ``OVERLAP``: a small
+fixed vocabulary describing a *role*, and the same label means the same thing in
+every file. That is a description of the tool's output, not a judgement about it —
+:func:`~senselab.audio.tasks.speaker_diarization.api.capabilities_for` reports it as
+``speaker_label_kind="role"`` so a caller can read it programmatically.
+
+Every diarizer emits labels rather than identities; ``SPEAKER_00`` is no more an
+identity than ``CHILD`` is. What differs between backends is only the vocabulary and
+whether a label carries across files. Reconciling labels from different backends into
+one namespace is a separate concern with its own utility, and no backend module
+decides it. This one reports what it produced and stops there.
 """
 
 from __future__ import annotations

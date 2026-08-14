@@ -37,15 +37,14 @@ _CHILD_ADULT_PREFIXES = ("AlexXu811/whisper-child-adult",)
 _MOSS_PREFIXES = ("OpenMOSS-Team/MOSS-Transcribe-Diarize",)
 _DIARIZEN_PREFIXES = ("BUT-FIT/diarizen",)
 
-# Backends dispatched above whose "speaker" label is a role (e.g. CHILD/ADULT/
-# OVERLAP), not a speaker identity. Single source of truth for this distinction:
-# once ported from PR #537 (see the module docstrings' "Not wired into
-# audio_analysis" sections), clustering.py/identity.py/presence.py will import
-# it from here (rather than each restating the literal) so adding a second
-# role-only backend here can't silently miss excluding it from identity
-# clustering / presence voting too. No consumer imports this yet on this
-# branch — it is not dead code, it is pre-wired for that port.
-ROLE_LABEL_ONLY_PREFIXES = _CHILD_ADULT_PREFIXES
+# What a backend's labels *are* is declared once, on its capabilities record:
+# `speaker_label_kind` ("role" vs "index") and `labels_stable_across_files`. There is
+# deliberately no second prefix list encoding the same fact -- one existed here as
+# pre-wiring for a consumer in the workflow layer, and two encodings of one property is
+# the parallel-field shape this repository's pre-alpha convention rules out. It was also
+# the wrong layer: a backend describes what it emits, and what to *do* about labels from
+# different backends -- reconcile them, exclude some from a given axis -- is a decision
+# for whoever is making it, with its own derivation.
 
 
 def _warn_if_speaker_hints_ignored(
