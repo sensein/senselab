@@ -251,7 +251,23 @@ def test_the_two_call_rule_holds_against_the_real_hub(tmp_path: Path, monkeypatc
     )
 
 
-def test_resolve_model_stages_the_manifest_commit_not_the_local_ref(monkeypatch: pytest.MonkeyPatch) -> None:
+def _stage(hub_root: Path, repo_id: str, sha: str) -> Path:
+    """Create the ``snapshots/<sha>/`` directory a real ``ensure_hf_model`` would leave behind.
+
+    The stubs below return a SHA without downloading, which ``resolve_model`` now refuses to
+    accept: returning a path to an absent snapshot is what surfaced, much later and in another
+    venv, as ``[Errno 2] ... atten_unet_vctk.toml``. A stub that skips staging is therefore
+    fabricating a state the code is right to reject, so it stages too.
+    """
+    snapshot = hub_root / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
+    snapshot.mkdir(parents=True, exist_ok=True)
+    (snapshot / "config.json").write_text("{}")
+    return snapshot
+
+
+def test_resolve_model_stages_the_manifest_commit_not_the_local_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The loader must resolve through the run manifest, not this host's refs/<ref>.
 
     The regression this guards is the one that makes provenance lie. Before the fix,
@@ -263,10 +279,14 @@ def test_resolve_model_stages_the_manifest_commit_not_the_local_ref(monkeypatch:
     manifest_sha = "1" * 40
     staged: dict[str, str] = {}
 
+    from huggingface_hub import constants
+
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "hub"))
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: manifest_sha)
 
     def _record(repo_id: str, revision: str = "main", token: object = None) -> str:
         staged["revision"] = revision
+        _stage(tmp_path / "hub", repo_id, revision)
         return revision
 
     monkeypatch.setattr("senselab.utils.dependencies.ensure_hf_model", _record)
@@ -295,7 +315,10 @@ def test_resolve_model_points_the_ref_at_the_pinned_commit(tmp_path: Path, monke
     repo = "org/model"
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: pinned)
-    monkeypatch.setattr("senselab.utils.dependencies.ensure_hf_model", lambda *a, **k: pinned)
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.ensure_hf_model",
+        lambda repo_id, *a, **k: (_stage(tmp_path / "hub", repo_id, pinned), pinned)[1],
+    )
 
     import importlib
 
@@ -316,7 +339,10 @@ def test_resolve_model_does_not_write_a_ref_for_a_sha_revision(tmp_path: Path, m
     pinned = "8" * 40
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: pinned)
-    monkeypatch.setattr("senselab.utils.dependencies.ensure_hf_model", lambda *a, **k: pinned)
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.ensure_hf_model",
+        lambda repo_id, *a, **k: (_stage(tmp_path / "hub", repo_id, pinned), pinned)[1],
+    )
 
     from huggingface_hub import constants
 

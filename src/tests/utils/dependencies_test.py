@@ -32,6 +32,10 @@ def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revis
     (repo_dir / "refs" / revision).write_text(sha)
     snap = repo_dir / "snapshots" / sha
     snap.mkdir(parents=True)
+    # A real snapshot is never empty, and an empty one is exactly what an interrupted
+    # download leaves behind — `_snapshot_is_present` treats it as absent on purpose, so a
+    # fixture that omits this would be fabricating a state the code is right to reject.
+    (snap / "config.json").write_text("{}")
     return snap
 
 
@@ -93,9 +97,15 @@ def test_load_hf_resilient_pins_sha_without_local_files_only(monkeypatch: pytest
     assert captured["task"] == "asr"
 
 
-def test_load_hf_resilient_no_hub_call_when_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A cached model loads with zero HfApi.model_info (Hub version-check) calls."""
+def test_load_hf_resilient_no_hub_call_when_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cached model loads with zero HfApi.model_info (Hub version-check) calls.
+
+    The cache is fabricated on disk rather than only stubbed: "cached" now has to be true of
+    the filesystem, since that is the disagreement — a stub saying yes while the snapshot is
+    absent — that let a ref be written for weights that were never staged.
+    """
     sha = "d" * 40
+    _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
     monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: True)
     monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: sha)
 
@@ -244,3 +254,76 @@ def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPat
     )
     assert staged == ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"]
     assert env["HF_HUB_OFFLINE"] == "1"
+
+
+# ── A recorded success is a fact about one HF cache, not a global one ──
+
+
+def test_a_recorded_success_is_not_reused_when_the_snapshot_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The result cache and the weights live in different trees, so it can lie.
+
+    ``_senselab_cache_dir`` is deliberately NOT derived from ``HF_HOME`` — the weights go to a
+    group tree, the coordination state stays per-user. That means a success recorded while
+    ``HF_HOME`` pointed at cache A gets replayed when it points at cache B, and the fast path
+    returns a SHA for a snapshot that was never downloaded here. Measured on ORCD: a job left
+    ``models--openai--whisper-base/refs/main`` written and no ``snapshots/`` directory at all,
+    and the worker then failed offline with "couldn't find it in the cached files".
+    """
+    import huggingface_hub.constants as hf_constants
+
+    sha = "c" * 40
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "empty-hf-cache"))
+    monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
+    monkeypatch.setattr(dep, "_read_result_cache", lambda *a, **k: {"status": "ok", "commit_hash": sha})
+    monkeypatch.setattr(dep, "_write_result_cache", lambda *a, **k: None)
+    monkeypatch.setattr(dep, "_senselab_cache_dir", lambda: tmp_path / "senselab")
+
+    downloaded: list[str] = []
+
+    def fake_snapshot_download(repo_id: str, **kwargs: object) -> str:
+        downloaded.append(repo_id)
+        snap = Path(hf_constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
+        snap.mkdir(parents=True, exist_ok=True)
+        return str(snap)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+
+    dep.ensure_hf_model("org/model", sha)
+
+    assert downloaded == ["org/model"], "a recorded success must not stand in for weights that are not here"
+
+
+def test_resolve_model_refuses_to_return_a_snapshot_path_that_does_not_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handing back a path to nothing turns a staging failure into a confusing FileNotFoundError.
+
+    The caller is a worker in another venv that will open files under this path, so the error
+    surfaces there — far from the code that failed to stage — as "[Errno 2] ... atten_unet_vctk.toml".
+    """
+    import huggingface_hub.constants as hf_constants
+
+    sha = "d" * 40
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "hf"))
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr(dep, "ensure_hf_model", lambda *a, **k: sha)
+
+    with pytest.raises(RuntimeError, match="snapshot"):
+        resolve_model("org/model", "main")
+
+
+def test_offline_mode_does_not_make_every_model_report_as_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``HF_HUB_OFFLINE=1`` means "do not use the network", not "everything is present".
+
+    Answering True for an absent model makes ``ensure_hf_model`` skip the download and hand back
+    a SHA anyway, which is how a ref gets written for a snapshot that was never staged.
+    """
+    import huggingface_hub.constants as hf_constants
+
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "empty"))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    assert dep.is_hf_model_cached("org/definitely-not-here", "main") is False
