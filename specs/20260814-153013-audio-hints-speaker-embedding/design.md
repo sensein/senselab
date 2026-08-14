@@ -17,8 +17,9 @@ Two things, neither of which changes any existing output:
 ## Scope, explicitly
 
 **In:** the `AudioHints` type and its attachment to `Audio`; a vector-distribution descriptor
-in `utils/`; `estimate_speaker_embedding_from_audios` in the speaker-embeddings task; two
-primitives promoted down a layer; two defect fixes in `audio_analysis/embeddings.py`.
+in `utils/`; an opt-in contamination-rejection selector beside it;
+`estimate_speaker_embedding_from_audios` in the speaker-embeddings task; two primitives promoted
+down a layer; two defect fixes in `audio_analysis/embeddings.py`.
 
 **Out, by decision:**
 
@@ -35,7 +36,8 @@ primitives promoted down a layer; two defect fixes in `audio_analysis/embeddings
 - **No artifact I/O, no `workflows/speaker_profile/` package, no `compare.py` /
   `score_voice_groups`.** The last belongs with the per-speaker uncertainty work, as #543 says
   itself.
-- **No clustering.** See "Why no clustering" below.
+- **No clustering inside the descriptor.** Contamination rejection exists, but as an opt-in
+  component layered above it. See "Contamination rejection" below.
 - **No multi-model embedding.** One model per call. #543 defaulted to ECAPA+ResNet because
   `analyze_audio` scores both per-window; decoupled from that consumer, a second model is
   unused cost. `provenance.model_id` records which model produced a vector.
@@ -277,6 +279,7 @@ def estimate_speaker_embedding_from_audios(
     window_s: float = 2.0,
     hop_s: float = 1.0,
     aggregator: str = "spherical_mean",
+    reject_contamination: bool = False,
 ) -> TargetSpeakerEmbedding
 ```
 
@@ -288,7 +291,7 @@ gave cross-file centroid stability 0.890 and cross-subject separation 0.168, aga
 a 0.5/0.25 grid carrying four times the windows. Their finding that cross-file variation is the
 entire error budget is also why the descriptor splits within-file from cross-file.
 
-### Why no clustering
+### Contamination rejection — opt-in, layered above the descriptor
 
 PR #543 rejected contamination by clustering and keeping the dominant cluster, measured as 24 of
 32 non-speech recordings dropped with the centroid preserved at cos ≥ 0.99 in 7 of 8 subjects.
@@ -301,32 +304,69 @@ never by a per-file judgement — which is why #543 also has to report `per_file
 (`file_id → windows_in_dominant_cluster`), since a pooled clustering decision is opaque without
 it.
 
-This design gives that property up deliberately, because selecting a dominant cluster is a
-*decision* made inside a function whose job is to describe. Note what #543's own bookkeeping
-implies: it made the decision and then reported per-file evidence *about* the decision. Here the
-per-file evidence is reported directly and the decision is left to the caller — `cross_file`
-cosines and `leave_one_file_out_cos` surface exactly the file that would have fallen out of a
-dominant cluster.
+This design keeps that capability but moves it **out of the descriptor and behind a flag**,
+because selecting a dominant cluster is a decision and `describe_embedding_distribution`'s job is
+to describe what it is handed.
 
-Instead:
+```python
+def select_dominant_vectors(
+    vectors,
+    file_ids: Sequence[str] | None = None,
+    linkage: str = "average",
+    cut_theta: float | None = None,
+    min_file_share: float | None = None,
+) -> DominantSelection
+```
 
-- the descriptor reports per-file centroids, their cosine to the pooled centroid, and
-  leave-one-file-out stability, so a contaminated file is visible;
-- the caller curates the input set and re-runs.
+`estimate_speaker_embedding_from_audios` gains `reject_contamination: bool = False`. With the
+flag on it selects first and hands only the retained subset to the descriptor, so the descriptor
+is unchanged and its statistics then describe the *kept* set.
 
-The cost is that a dirty file set yields a blended centroid unless the caller reads the
-statistics. The statistics are exactly what makes it readable, and `cos_mean_vs_trimmed10` /
-`cos_mean_vs_medoid` say directly whether aggregation choice mattered.
+**Off by default.** The default path stays pure description, and the flag is the only place a
+decision enters this component.
 
-A consequence worth recording: this removes any need for a clustering primitive in the task
-layer, so `cluster_pass_speakers` stays untouched in the workflow where it belongs and the repo
-gains no second clustering implementation.
+**Agglomerative hierarchical clustering, average linkage, angular distance** — not #543's
+spectral, for three reasons. It is deterministic, where `SpectralClustering(assign_labels=
+"kmeans")` is stochastic and #543 pins `random_state=0` / `n_init=5`, which hides that variance
+rather than removing it. k-means-family clustering carries an equal-size bias and will split one
+speaker's prosodic halves before isolating an 8% intruder — the exact failure
+`_merge_close_clusters` was written to undo after the fact. And AHC turns "choose *k*" into a
+merge-height profile, which is reportable rather than decided.
 
-**And the door stays open.** Because the descriptor's contract is "one set of vectors in", a
-cross-file dominant-cluster step can be layered *above* it later without touching it: cluster
-the pooled vectors, hand the retained subset to `describe_embedding_distribution`. If #543's
-tolerance is wanted back, that is where it goes — outside the descriptor, as its own component
-with its own derivation, not inside a function that is supposed to describe what it is given.
+**The cut gets no numeric default, because that is where an unfitted literal would enter.**
+`cut_theta=None` means the cut is derived from the data by a stated rule: the largest gap in the
+merge-height sequence. That is a *rule*, not a fitted constant, which is what keeps it inside
+this repository's prohibition on literals nobody measured. A caller who disagrees passes an
+explicit `cut_theta`. Either way the value used and the full merge profile are recorded in
+`DominantSelection.rule_used`, so the choice is auditable and reversible.
+
+**#543's four literals are deliberately not carried over** — `coherent_silhouette_threshold=0.10`,
+`merge_threshold=0.55`, `min_cluster_fraction=0.10`, `n_clusters_max=6`. Each is justified against
+`analyze_audio`'s bucket structure rather than against this use, and the first gates on silhouette,
+which this design rejects as parameterisation-dependent (see "Deliberately absent").
+
+**Dominant selection is by file-balanced share**, with raw window share reported alongside. The
+target is the speaker present in *most files*, not the one occupying most seconds — otherwise a
+single ten-minute off-target recording outvotes three one-minute target recordings. When the two
+shares disagree that is diagnostic in itself, so both are reported, along with the runner-up's
+share and `cos(dominant_centroid, runner_up_centroid)`: "0.52 / 0.46 at cos 0.31" and
+"0.94 / 0.05 at cos 0.88" are different situations and both must stay legible.
+
+**Rejection is recorded, never silent.** `provenance.method` becomes
+`"spherical_mean+dominant_cluster"`, `provenance.n_windows_dropped` reflects what rejection
+removed, and `DominantSelection` names which files lost windows and how many.
+
+**The honest cost.** With the flag on, the returned statistics describe a curated set, so they
+will look better than the raw input warranted. That is inherent to rejection rather than a flaw
+in the reporting — and it is why the flag defaults off, why `n_windows_dropped` sits in
+provenance rather than buried, and why `cos_mean_vs_trimmed10` and the leave-one-file-out cosines
+remain the check on whether rejection actually cleaned anything up.
+
+**With the flag off**, contamination is still *visible* without being acted on: the descriptor
+reports per-file centroids, their cosine to the pooled centroid, and leave-one-file-out
+stability, so the caller can curate the input set and re-run. `cluster_pass_speakers` stays
+untouched in the workflow where it belongs; the AHC step here is a generic vector-level
+primitive, not a second copy of that workflow's calibrated clustering.
 
 ### Layering: two primitives move down
 
@@ -423,7 +463,20 @@ consistent with the standing rule against constructing an unmocked `HFModel` in 
    `audio/workflows/`. The repo already uses this pattern (`hf_load_coverage_test`,
    `revision_pinning_guard_test`), and since two primitives move down a layer, a guard is what
    stops them drifting back.
-10. **One skip-gated integration test** that runs only when an embedding model is already
+10. **Contamination rejection** — with `reject_contamination=True` on a set where one file is a
+    different speaker, that file's windows are dropped, `provenance.method` records
+    `+dominant_cluster`, `n_windows_dropped` is non-zero, and `DominantSelection` names the file.
+    With the flag off, the same input keeps every window and the contamination is instead visible
+    in `cross_file` / `leave_one_file_out_cos`.
+11. **The cut rule is a rule, not a literal** — `cut_theta=None` derives from the largest
+    merge-height gap and records the value used; an explicit `cut_theta` overrides it and is
+    recorded verbatim. A test asserts no numeric cut default exists in the signature.
+12. **AHC determinism** — the same input produces byte-identical `kept_indices` and
+    `merge_heights` across repeated calls, with no seed passed.
+13. **File-balanced vs raw share** — a set with one long off-target file and several short
+    on-target files selects the on-target group, and both shares are reported so the
+    disagreement is visible.
+14. **One skip-gated integration test** that runs only when an embedding model is already
     cached locally.
 
 ## File structure
@@ -432,7 +485,7 @@ consistent with the standing rule against constructing an unmocked `HFModel` in 
 | --- | --- | --- |
 | `src/senselab/audio/data_structures/audio_hints.py` | `AudioHints` and its nested types | Create |
 | `src/senselab/audio/data_structures/audio.py` | gains `hints: AudioHints \| None` | Modify |
-| `src/senselab/utils/tasks/embedding_distribution.py` | `describe_embedding_distribution`, `EmbeddingDistribution` | Create |
+| `src/senselab/utils/tasks/embedding_distribution.py` | `describe_embedding_distribution`, `EmbeddingDistribution`, `select_dominant_vectors`, `DominantSelection` | Create |
 | `src/senselab/audio/tasks/speaker_embeddings/windowing.py` | `_window_starts`, `extract_per_window_embeddings`, promoted | Create |
 | `src/senselab/audio/tasks/speaker_embeddings/api.py` | gains `estimate_speaker_embedding_from_audios` | Modify |
 | `src/senselab/audio/tasks/speaker_embeddings/doc.md` | suggested hint vocabulary; estimator contract | Create |
@@ -449,6 +502,10 @@ consistent with the standing rule against constructing an unmocked `HFModel` in 
 - `estimate_speaker_embedding_from_audios` returns a unit-norm centroid plus a statistics block
   in which every field is bounded on an interpretable scale or paired with an analytic null.
 - No field in the block is a verdict, a boolean, a probability, or a thresholded label.
+- Contamination rejection is off by default; when on, what it removed is recorded in provenance
+  and in `DominantSelection`, never silent.
+- No numeric cut threshold exists as a code default; the cut is caller-supplied or derived by a
+  stated rule, and the value used is always reported.
 - Within-file and cross-file dispersion are separately readable.
 - Nothing under `audio/tasks/` imports from `audio/workflows/`.
 - The two `embeddings.py` defects are gone, and the `1.0/0.5` detection default is unchanged.
