@@ -23,6 +23,10 @@ def test_qwen_worker_env_built_via_hf_subprocess_env(tmp_path: Path, monkeypatch
     import senselab.audio.tasks.speech_to_text.qwen as qwen_mod
 
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    # Every ref this backend resolves (the ASR model via HFModel construction, and the
+    # forced-aligner companion via a bare resolve_revision call) fakes to the same SHA, so
+    # this test observes routing rather than depending on network/local-cache resolution.
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     monkeypatch.setattr(qwen_mod, "ensure_venv", lambda *a, **k: tmp_path)
     monkeypatch.setattr(qwen_mod, "venv_python", lambda *a, **k: "python")
 
@@ -32,6 +36,7 @@ def test_qwen_worker_env_built_via_hf_subprocess_env(tmp_path: Path, monkeypatch
         repo_id: str, revision: str = "main", *, also: object = None, base_env: object = None, **k: object
     ) -> None:
         captured["repo_id"] = repo_id
+        captured["revision"] = revision
         captured["also"] = also
         raise _StopBeforeSubprocess
 
@@ -44,4 +49,6 @@ def test_qwen_worker_env_built_via_hf_subprocess_env(tmp_path: Path, monkeypatch
         qwen_mod.QwenASR.transcribe_with_qwen([audio], model=model, return_timestamps=True, device=DeviceType.CPU)
 
     assert captured["repo_id"] == "Qwen/Qwen3-ASR-1.7B"
-    assert captured["also"] == [("Qwen/Qwen3-ForcedAligner-0.6B", "main")]
+    # A resolved commit SHA, never the mutable "main" ref -- the fix this test guards.
+    assert captured["revision"] == "f" * 40
+    assert captured["also"] == [("Qwen/Qwen3-ForcedAligner-0.6B", "f" * 40)]

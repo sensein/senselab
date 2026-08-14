@@ -61,7 +61,7 @@ __all__ = [
     "write_json",
 ]
 
-CACHE_SCHEMA_VERSION = 22
+CACHE_SCHEMA_VERSION = 23
 """Bump to invalidate every on-disk entry (see :func:`sync_cache_with_schema_version`).
 
 Bumped 1 → 2 when ``wrapper_hash`` became ``code_version``: the key payload
@@ -245,6 +245,15 @@ reads.
 Every number keyed to the speaker axis moves with it: region proposal, convergence, residual mass,
 the disagreements ranking and the LS bins. ``theta_low`` / ``theta_high`` were not tuned against this
 composition and must be re-measured rather than carried over.
+
+Bumped 22 → 23 when the key became commit-aware. Every load resolves ``model_id`` to an immutable
+40-hex commit SHA (:func:`senselab.utils.model_revision.resolve_revision`), and :func:`cache_key`
+now hashes that SHA alongside the ref-shaped ``model_id`` it already carried. Before this, the key
+was blind to *which* commit produced an entry: an upstream push to a tracked ref (``"main"``, a
+branch) made every load pick up the new weights while the key stayed byte-identical, so a stale
+result computed from the old commit was served as current with no signal that anything had moved.
+Every pre-existing entry predates commit-awareness and cannot be retroactively attributed to a
+commit, so none may be reused — the first run after this change recomputes everything.
 """
 
 
@@ -349,8 +358,28 @@ def cache_key(
     params: dict[str, Any],
     code_version: str,
     senselab_ver: str,
+    commit_sha: str | None,
 ) -> str:
-    """Compute the deterministic cache key for one (audio, task, model, params) combo."""
+    """Compute the deterministic cache key for one (audio, task, model, params, commit) combo.
+
+    ``commit_sha`` is keyword-only and has no default on purpose: an omitted argument must fail
+    mypy/type-checking rather than silently keying on ``None`` for every commit of a model. A
+    default is exactly how the staleness bug this parameter fixes would come back — a caller could
+    forget to pass it and still get a key, just one that can't tell two commits apart.
+
+    Args:
+        audio_sig: Output of :func:`audio_signature` for the clip.
+        task: The stage name, e.g. ``"asr"``.
+        model_id: The Hub id or backend name, or ``None`` for a model-less stage.
+        params: The call's other keyword arguments, canonicalized.
+        code_version: Caller-supplied wrapper-behavior version (see module docstring).
+        senselab_ver: Installed senselab version.
+        commit_sha: The immutable 40-hex commit this call resolved ``model_id`` to, or ``None``
+            when ``model_id`` names no Hub repo (a local backend name, or no model at all).
+
+    Returns:
+        A 64-character hex sha256 digest.
+    """
     payload = {
         "schema": CACHE_SCHEMA_VERSION,
         "audio_signature": audio_sig,
@@ -359,6 +388,9 @@ def cache_key(
         "params": params,
         "code_version": code_version,
         "senselab_version": senselab_ver,
+        # Without this, an upstream push to a tracked ref loads new weights under
+        # an unchanged key and a stale result is served as current.
+        "commit_sha": commit_sha,
     }
     return hashlib.sha256(canonical_params(payload).encode()).hexdigest()
 
@@ -372,12 +404,33 @@ def align_cache_key(
     aligner_params: dict[str, Any],
     code_version: str,
     senselab_ver: str,
+    aligner_commit_sha: str | None,
 ) -> str:
-    """Cache key for one (audio, transcript, language, aligner) alignment call.
+    """Cache key for one (audio, transcript, language, aligner, commit) alignment call.
 
     Independent from the ASR cache: an alignment cache hit replays prior
     timestamps without invoking the aligner; an ASR-cache miss + alignment-cache
     hit (or vice versa) is supported by construction.
+
+    ``aligner_commit_sha`` is keyword-only and has no default, mirroring :func:`cache_key`'s
+    ``commit_sha``: this payload carried only the ref-shaped ``aligner_model_id`` and no commit,
+    so an upstream push to a forced-aligner repo (e.g. an MMS or Qwen aligner checkpoint) served
+    timestamps computed by the old commit under an unchanged key. A default would let a caller
+    forget to pass it and reopen exactly that hole.
+
+    Args:
+        audio_sig: Output of :func:`audio_signature` for the clip.
+        transcript_sha: Output of :func:`transcript_signature` for the text being aligned.
+        language: ISO language code passed to the aligner, or ``None``.
+        aligner_model_id: The aligner's Hub id or backend name.
+        aligner_params: The aligner's other keyword arguments, canonicalized.
+        code_version: Caller-supplied wrapper-behavior version.
+        senselab_ver: Installed senselab version.
+        aligner_commit_sha: The immutable 40-hex commit ``aligner_model_id`` resolved to, or
+            ``None`` when it names no Hub repo.
+
+    Returns:
+        A 64-character hex sha256 digest.
     """
     payload = {
         "schema": CACHE_SCHEMA_VERSION,
@@ -389,6 +442,9 @@ def align_cache_key(
         "aligner_params": aligner_params,
         "code_version": code_version,
         "senselab_version": senselab_ver,
+        # Same reasoning as cache_key's commit_sha: without it, an upstream push to the
+        # aligner repo serves timestamps from the old commit under an unchanged key.
+        "aligner_commit_sha": aligner_commit_sha,
     }
     return hashlib.sha256(canonical_params(payload).encode()).hexdigest()
 

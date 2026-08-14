@@ -72,6 +72,7 @@ REVIEWED_INPROCESS = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
     "audio/tasks/forced_alignment/forced_alignment.py",
     "audio/tasks/speaker_diarization/pyannote.py",
+    "audio/tasks/speaker_diarization/vibevoice.py",
     "audio/tasks/speaker_embeddings/speechbrain.py",
     "audio/tasks/speech_enhancement/speechbrain.py",
     "audio/tasks/speech_to_text/granite.py",
@@ -91,11 +92,15 @@ REVIEWED_INPROCESS = {
 # hf_subprocess_env and runs the worker offline.
 REVIEWED_SUBPROCESS = {
     "audio/tasks/classification/speech_emotion_recognition/api.py",
+    "audio/tasks/speaker_diarization/child_adult.py",
+    "audio/tasks/speaker_diarization/diarizen.py",
+    "audio/tasks/speaker_diarization/moss.py",
     "audio/tasks/speaker_diarization/nvidia.py",
     "audio/tasks/speech_to_text/canary_qwen.py",
     "audio/tasks/speech_to_text/nemo.py",
     "audio/tasks/speech_to_text/qwen.py",
-    "audio/workflows/audio_analysis/pii_subprocess.py",
+    "audio/tasks/text_to_speech/qwen_tts.py",
+    "text/tasks/pii_detection/subprocess_backend.py",
     # scene-quality / ASR (branch-only, #536)
     "audio/tasks/scene_quality/brouhaha.py",
     "audio/tasks/speech_to_text/crisperwhisper.py",
@@ -109,6 +114,15 @@ RAW_LOAD_EXCEPTIONS = {
     # Diagnostic CLI probe (`_probe`) that intentionally exercises a raw
     # AutoConfig.from_pretrained to report whether a model is loadable.
     "audio/tasks/classification/speech_emotion_recognition/__main__.py",
+    # supported_speakers() resolves the ref to a commit SHA via resolve_revision
+    # (the same manifest-backed resolver resolve_model uses internally) and only then
+    # calls hf_hub_download(..., revision=<sha>) for a single small file
+    # (config.json) -- a full commit hash triggers huggingface_hub's commit-hash
+    # shortcut, so a cached file loads with zero network, same as resolve_model's
+    # guarantee. It deliberately does not call resolve_model itself: that downloads
+    # the *entire* multi-GB checkpoint snapshot, which would defeat the point of this
+    # function (enumerate named speakers without paying for the weights).
+    "audio/tasks/text_to_speech/qwen_tts.py",
 }
 
 

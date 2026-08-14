@@ -8,6 +8,8 @@ behavior across the three real subprocess-venv backends.
 """
 
 import json
+import os
+import stat
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -82,6 +84,120 @@ class _SubprocessRecorder:
         if self.hook is not None:
             return self.hook(self.calls)
         return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+
+# ── Group-readable venv permissions ────────────────────────────────
+
+
+def test_a_completed_venv_is_group_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second user must be able to run the interpreter the first user built.
+
+    Group-writable lock files let user B take over a stale build; they do not let
+    B execute A's venv. Venv trees are created under the default umask, so without
+    this a shared cache is buildable but not usable.
+    """
+    venv_dir = tmp_path / "venv"
+    bin_dir = venv_dir / "bin"
+    site_packages = venv_dir / "lib" / "python3.12" / "site-packages"
+    site_packages.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+
+    interpreter = bin_dir / "python3.12"
+    interpreter.write_text("#!/bin/sh\n")
+    interpreter.chmod(0o700)  # owner rwx only -- typical default-umask result for an executable
+
+    module = site_packages / "pkg.py"
+    module.write_text("x = 1\n")
+    module.chmod(0o600)  # owner rw only, no execute bit to mirror
+
+    for d in (venv_dir, bin_dir, site_packages):
+        d.chmod(0o700)
+
+    subprocess_venv._make_group_readable(venv_dir)
+
+    # An already-executable file gets group-execute mirrored alongside group-read.
+    assert stat.S_IMODE(interpreter.stat().st_mode) & 0o070 == 0o050
+    # A plain, non-executable file gets group-read only -- it must not become runnable
+    # just because it lives in the same tree as bin/python.
+    assert stat.S_IMODE(module.stat().st_mode) & 0o070 == 0o040
+    # Directories always need group read+execute, or the group can't traverse them
+    # regardless of what's inside.
+    for d in (venv_dir, bin_dir, site_packages):
+        assert stat.S_IMODE(d.stat().st_mode) & 0o070 == 0o050
+
+
+def test_group_readable_ignores_chmod_failures_on_foreign_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry owned by a different user must not abort the walk for the rest.
+
+    A shared cache directory can hold leftovers from a different user's earlier,
+    unrelated build; this process cannot re-permission those, and raising on the
+    first one would stop the group-readable pass before it reaches everything else
+    in the tree that this process *does* own.
+    """
+    venv_dir = tmp_path / "venv"
+    bin_dir = venv_dir / "bin"
+    bin_dir.mkdir(parents=True)
+    owned = bin_dir / "mine.py"
+    owned.write_text("x = 1\n")
+    foreign = bin_dir / "not-mine.py"
+    foreign.write_text("y = 2\n")
+
+    real_chmod = os.chmod
+
+    def _flaky_chmod(path: object, mode: int, *args: object, **kwargs: object) -> None:
+        if str(path) == str(foreign):
+            raise PermissionError("not the owner")
+        real_chmod(path, mode, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "chmod", _flaky_chmod)
+
+    subprocess_venv._make_group_readable(venv_dir)  # must not raise
+
+    assert stat.S_IMODE(owned.stat().st_mode) & 0o040 == 0o040
+
+
+def test_group_readable_runs_before_the_marker_write(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker must not exist yet while the chmod pass is still running.
+
+    A hard kill (OOM, CI timeout -- both have happened in this repo) between the chmod
+    pass and the marker write must leave NO marker, so the next call's marker check fails,
+    `shutil.rmtree` fires, and the rebuild reruns chmod to completion. Marker-first would
+    instead let that same kill leave `.senselab-installed` present with the chmod pass
+    incomplete: every later `ensure_venv` call takes the reuse fast path on seeing the
+    marker and returns immediately, and since that path never calls
+    `_make_group_readable`, the half-permissioned venv would never be repaired -- a second
+    user hits a permission error deep in `site-packages` with no remedy short of deleting
+    the venv by hand. A real kill mid-chmod needs a process signal to demonstrate for real;
+    this asserts the cheaper, equivalent property -- that the marker is absent for the
+    entire duration of the chmod pass -- via a real (non-mocked) `ensure_venv` call against
+    torch-free requirements, so no 2.5 GB install is needed to exercise it.
+    """
+    name = "t-order"
+    venv_dir = fake_cache_dir / name
+    marker = venv_dir / ".senselab-installed"
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+
+    real_make_group_readable = subprocess_venv._make_group_readable
+    marker_seen_during_chmod: list[bool] = []
+
+    def _spy(path: Path) -> None:
+        marker_seen_during_chmod.append(marker.exists())
+        real_make_group_readable(path)
+
+    monkeypatch.setattr(subprocess_venv, "_make_group_readable", _spy)
+
+    ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
+
+    assert marker_seen_during_chmod == [False], "marker existed while the chmod pass was still running"
+    assert marker.is_file(), "marker must exist once the (successful) chmod pass has completed"
 
 
 # ── Marker mismatch + rebuild paths ────────────────────────────────
@@ -678,6 +794,37 @@ def test_an_operators_own_ca_bundle_is_left_alone(monkeypatch: pytest.MonkeyPatc
     env = _clean_subprocess_env()
     assert env["SSL_CERT_FILE"] == "/etc/pki/corp/ca-bundle.pem"
     assert env["REQUESTS_CA_BUNDLE"] == "/etc/pki/corp/ca-bundle.pem"
+
+
+def test_cache_dir_path_does_not_create_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test's skip gate must be able to ask *where* a venv would live without creating anything.
+
+    At import time, on a read-only or sandboxed HOME, the mkdir in _cache_dir() would fail
+    and take collection down with it.
+    """
+    target = tmp_path / "does-not-exist-yet"
+    monkeypatch.setenv("SENSELAB_VENV_CACHE", str(target))
+
+    assert subprocess_venv._cache_dir_path() == Path(str(target))
+    assert not target.exists()
+
+
+def test_cache_dir_creates_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_cache_dir() keeps its creating behaviour — callers that are about to build a venv rely on it."""
+    target = tmp_path / "created-on-demand"
+    monkeypatch.setenv("SENSELAB_VENV_CACHE", str(target))
+
+    assert subprocess_venv._cache_dir() == Path(str(target))
+    assert target.is_dir()
+
+
+def test_cache_dir_path_honours_the_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate must match where the venv is actually built.
+
+    Otherwise it skips on a host that has the venv and runs on a host that does not.
+    """
+    monkeypatch.setenv("SENSELAB_VENV_CACHE", str(tmp_path / "elsewhere"))
+    assert str(tmp_path / "elsewhere") == str(subprocess_venv._cache_dir_path())
 
 
 def test_every_worker_spawn_goes_through_the_shared_env_helper() -> None:

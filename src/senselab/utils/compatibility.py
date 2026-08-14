@@ -66,6 +66,18 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         install_hint="pip install senselab",
     ),
     # ── Audio: Speaker Diarization ──
+    # NOTE: this entry documents the default in-process backend (Pyannote) only.
+    # diarize_audios also dispatches, by model_id prefix, to: NeMo Sortformer, the
+    # USC-SAIL child-adult classifier, MOSS-Transcribe-Diarize, and DiariZen (all
+    # ISOLATED subprocess venvs — see nvidia.py / child_adult.py / moss.py /
+    # diarizen.py, venv_name="nemo-diarization" / "child-adult-diarization" /
+    # "moss-transcribe-diarize" / "diarizen" respectively; child-adult additionally
+    # requires CUDA, no CPU path), and VibeVoice-ASR-HF (in-process like Pyannote,
+    # but needs transformers>=5.3, not just >=5.0). This flat schema can't
+    # represent multiple dispatch paths with different isolation profiles under
+    # one function — same simplification the pre-existing NeMo Sortformer entry
+    # already made. See docs/compatibility-matrix.md's "Isolated Backends" table
+    # for each isolated backend's actual pinned versions.
     "audio.tasks.speaker_diarization.diarize_audios": CompatibilityEntry(
         required_deps=["pyannote-audio", "torchaudio"],
         dep_versions={"pyannote-audio": ">=3.0", "torchaudio": ">=2.8"},
@@ -211,7 +223,7 @@ def _get_installed_version(package_name: str) -> Optional[str]:
 def check_compatibility(function_key: str) -> bool:
     """Check if the dependencies for a function are available and compatible.
 
-    Verifies both speech_presence and version ranges.
+    Verifies both presence and version ranges.
 
     Args:
         function_key: Key in COMPATIBILITY_MATRIX.
@@ -239,7 +251,7 @@ def check_compatibility(function_key: str) -> bool:
             f"Function '{function_key}' requires Python {entry.python_versions}, but you are running Python {py_ver}."
         )
 
-    # Check each required dependency — speech_presence AND version
+    # Check each required dependency — presence AND version
     for dep in entry.required_deps:
         version = _get_installed_version(dep)
         if version is None:

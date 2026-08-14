@@ -70,9 +70,18 @@ try:
     args = json.loads(sys.stdin.read())
     pairs = args["pairs"]
     aligner_name = args["aligner_model"]
+    aligner_revision = args["aligner_revision"]
     device = args["device"]
 
-    fa = Qwen3ForcedAligner.from_pretrained(aligner_name)
+    # Qwen3ForcedAligner.from_pretrained forwards **kwargs straight to
+    # transformers.AutoModel.from_pretrained, which does accept `revision` -- so the
+    # resolved commit SHA the parent staged pins the model weights. Its own internal
+    # AutoProcessor.from_pretrained(pretrained_model_name_or_path, fix_mistral_regex=True)
+    # call, however, does NOT forward revision at all (upstream hardcodes that second
+    # call with no revision passthrough), so the processor/tokenizer config still
+    # resolves the mutable "main" ref regardless of what's requested here -- a partial
+    # pin this call site cannot close without patching qwen_asr itself.
+    fa = Qwen3ForcedAligner.from_pretrained(aligner_name, revision=aligner_revision)
     if device == "cuda" and torch.cuda.is_available():
         try:
             fa.model = fa.model.cuda()
@@ -116,13 +125,24 @@ try:
     args = json.loads(sys.stdin.read())
     audio_paths = args["audio_paths"]
     model_name = args["model_name"]
+    model_revision = args["model_revision"]
     device = args["device"]
     return_timestamps = bool(args.get("return_timestamps", True))
     aligner_name = args.get("forced_aligner") if return_timestamps else None
+    aligner_revision = args.get("forced_aligner_revision") if return_timestamps else None
 
-    load_kwargs = {}
+    # revision is forwarded through **kwargs to transformers.AutoModel.from_pretrained,
+    # which does accept it -- so the resolved commit SHA the parent staged pins the ASR
+    # model weights. forced_aligner_kwargs is forwarded the same way into
+    # Qwen3ForcedAligner.from_pretrained(forced_aligner, **forced_aligner_kwargs), which
+    # forwards its own revision the same route. Both wrappers' internal
+    # AutoProcessor.from_pretrained(...) calls do NOT take revision at all (see
+    # align_with_qwen's worker-script comment), so the tokenizer/processor config is a
+    # known, upstream-caused partial-pin gap this call site cannot close.
+    load_kwargs = {"revision": model_revision}
     if aligner_name:
         load_kwargs["forced_aligner"] = aligner_name
+        load_kwargs["forced_aligner_kwargs"] = {"revision": aligner_revision}
 
     asr = Qwen3ASRModel.from_pretrained(model_name, **load_kwargs)
     # The wrapper holds inner HF modules on .model / .forced_aligner.model;
@@ -210,12 +230,25 @@ class QwenASR:
             ``return_timestamps=True``, ``chunks`` is a list of word /
             CJK-char-level ``ScriptLine`` entries with ``start``/``end``.
         """
-        model_name = model.path_or_uri if model is not None else "Qwen/Qwen3-ASR-1.7B"
+        if model is None:
+            model = HFModel(path_or_uri="Qwen/Qwen3-ASR-1.7B")
+        model_name = str(model.path_or_uri)
         device_type = device or _select_device_and_dtype(compatible_devices=[DeviceType.CUDA, DeviceType.CPU])[0]
         aligner_name = forced_aligner or _DEFAULT_FORCED_ALIGNER
 
         venv_dir = ensure_venv(_QWEN_VENV, _QWEN_REQUIREMENTS, python_version=_QWEN_PYTHON)
         python = venv_python(venv_dir)
+
+        # Resolve both the ASR model and (when requested) its forced-aligner companion to
+        # immutable commit SHAs before staging -- never the ref -- so the worker's
+        # Qwen3ASRModel.from_pretrained(..., revision=...) pins the exact run-agreed
+        # commit rather than whatever this host's mutable "main" ref currently points at.
+        # Deferred import (not at module top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        revision = model.commit_sha or resolve_revision(model_name, model.revision)
+        aligner_revision = resolve_revision(aligner_name, "main") if return_timestamps else None
 
         with tempfile.TemporaryDirectory(prefix="senselab-qwen-asr-") as tmpdir:
             tmp = Path(tmpdir)
@@ -230,9 +263,11 @@ class QwenASR:
                 {
                     "audio_paths": audio_paths,
                     "model_name": model_name,
+                    "model_revision": revision,
                     "device": device_type.value,
                     "return_timestamps": return_timestamps,
                     "forced_aligner": aligner_name if return_timestamps else None,
+                    "forced_aligner_revision": aligner_revision,
                 }
             )
 
@@ -241,8 +276,8 @@ class QwenASR:
             # from_pretrained loads from cache with no per-call Hub version check (the 429
             # source under many parallel jobs). The child imports fresh, so the offline
             # flag is honored (unlike an in-process toggle).
-            also = [(aligner_name, "main")] if return_timestamps else None
-            env = hf_subprocess_env(str(model_name), "main", also=also, base_env=_clean_subprocess_env())
+            also = [(aligner_name, aligner_revision)] if return_timestamps and aligner_revision is not None else None
+            env = hf_subprocess_env(model_name, revision, also=also, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_WORKER_SCRIPT],
                 input=input_json,
@@ -331,6 +366,14 @@ class QwenASR:
         venv_dir = ensure_venv(_QWEN_VENV, _QWEN_REQUIREMENTS, python_version=_QWEN_PYTHON)
         python = venv_python(venv_dir)
 
+        # Resolve the ref to a commit SHA before staging, never the ref -- so the worker's
+        # Qwen3ForcedAligner.from_pretrained(..., revision=...) pins the exact run-agreed
+        # commit. Deferred import (not at module top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        from senselab.utils.model_revision import resolve_revision
+
+        aligner_revision = resolve_revision(aligner_name, "main")
+
         with tempfile.TemporaryDirectory(prefix="senselab-qwen-align-") as tmpdir:
             tmp = Path(tmpdir)
             pairs: List[dict] = []
@@ -345,14 +388,26 @@ class QwenASR:
                     }
                 )
 
-            input_json = json.dumps({"pairs": pairs, "aligner_model": aligner_name, "device": device_type.value})
+            input_json = json.dumps(
+                {
+                    "pairs": pairs,
+                    "aligner_model": aligner_name,
+                    "aligner_revision": aligner_revision,
+                    "device": device_type.value,
+                }
+            )
+            # Stage the aligner once (cross-process, via the heartbeat lock) + run the
+            # worker offline so its from_pretrained makes no per-call Hub version check —
+            # the 429 source under parallel batch. This call previously ran with no
+            # staging/offline env at all, unlike every other subprocess-venv backend.
+            env = hf_subprocess_env(aligner_name, aligner_revision, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_ALIGN_WORKER_SCRIPT],
                 input=input_json,
                 capture_output=True,
                 text=True,
                 timeout=1800,
-                env=_clean_subprocess_env(),
+                env=env,
             )
             output = parse_subprocess_result(result, "Qwen forced aligner")
 

@@ -21,7 +21,7 @@ Upper bounds verified by running the full test suite (490+ tests passing).
 | torchaudio | >=2.8 | 2.8.0 | 2.8.0 | 2.8.0 | 2.9.0 | 2.11.0 |
 | torchvision | >=0.23 | 0.23.0 | 0.23.0 | 0.23.0 | 0.24.0 | 0.26.0 |
 | torchcodec | >=0.7 | 0.7.0 | 0.7.0 | 0.7.0 | 0.9.0 | 0.11.1 |
-| transformers | >=5.0 | 5.0.0 | 5.0.0 | 5.0.0 | 5.0.0 | 5.5.4 |
+| transformers | >=5.3 | 5.3.0 | 5.3.0 | 5.3.0 | 5.3.0 | 5.5.4 |
 | huggingface-hub | >=1.3 | 1.3.0 | 1.3.0 | 1.3.0 | 1.3.0 | 1.11.0 |
 | speechbrain | >=1.0 | 1.0.0 | 1.0.0 | 1.0.0 | 1.0.0 | 1.1.0 |
 | pyannote-audio | >=4.0 | 4.0.0 | 4.0.0 | 4.0.0 | 4.0.0 | 4.0.4 |
@@ -56,6 +56,11 @@ They are not installed in the main senselab environment.
 | ppgs >=0.0.9 | 3.11 | >=2.8,<2.9 | espnet, snorkel, lightning | Phonetic posteriorgrams |
 | sparc >=0.1 | 3.11 | >=2.8,<2.9 | librosa, torchcrepe, penn | Articulatory features + voice cloning |
 | continuous-ser | 3.12 | >=2.8 | transformers <5, hf-hub <1.0 | Continuous emotion (audeering model) |
+| child-adult-diarization | 3.10 | ==2.3.0 | transformers==4.30.2, loralib | Child/adult/overlap speaker-role classification (CUDA only, no CPU path) |
+| moss-transcribe-diarize | 3.12 | >=2.8,<2.9 | moss-transcribe-diarize (git), transformers>=5.6 | Unified ASR + diarization (0.9B, weights Apache 2.0) |
+| diarizen | 3.12 | >=2.1,<2.9 | forked pyannote-audio (git), lightning, speechbrain | Diarization only, no transcription (weights CC BY-NC 4.0 — non-commercial only) |
+| driftse | 3.11 | >=2.3 | torchaudio>=2.3, librosa>=0.10.2 | One-step (1 NFE) speech enhancement, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08) |
+| unasdiff | 3.10 | ==2.6.0 | torchaudio==2.6.0, numpy==1.23.5, librosa==0.10.2.post1 | Unsupervised speech/sound source separation via two diffusion priors, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08, mirror private) |
 
 ## System Dependencies
 

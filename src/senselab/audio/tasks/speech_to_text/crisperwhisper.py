@@ -24,7 +24,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, ScriptLine, _select_device_and_dtype
-from senselab.utils.dependencies import hf_subprocess_env
+from senselab.utils.dependencies import hf_subprocess_env, resolve_model
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
 _CRISPER_VENV = "crisperwhisper"
@@ -82,6 +82,13 @@ try:
     compute_type = args.get("compute_type", "float32")
     language = args.get("language") or "en"
 
+    # CrisperWhisperModel's __init__ (and both backends it dispatches to -- CT2's
+    # ensure_ct2_model/_resolve_hf_or_local, and the transformers backend's
+    # AutoProcessor/AutoModelForSpeechSeq2Seq.from_pretrained) take no revision kwarg
+    # anywhere in the chain. `model_id` here is therefore the *local snapshot directory*
+    # the parent already resolved+staged for the run-agreed commit, not a repo id --
+    # `_resolve_hf_or_local`/`from_pretrained` both treat an existing local directory as
+    # already pinned and never touch the Hub for it, which is what actually pins the load.
     model = CrisperWhisperModel(model_id, backend=backend, device=device, compute_type=compute_type)
 
     def _first_attr(obj, names):
@@ -153,7 +160,9 @@ class CrisperWhisperASR:
             ``chunks`` carrying timestamps + ``score`` (native word confidence
             when exposed), and a line-level ``score``.
         """
-        model_id = str(model.path_or_uri) if model is not None else "nyralabs/CrisperWhisper2.0_turbo"
+        if model is None:
+            model = HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")
+        model_id = str(model.path_or_uri)
         device_type, _ = _select_device_and_dtype(
             user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
         )
@@ -163,6 +172,13 @@ class CrisperWhisperASR:
 
         venv_dir = ensure_venv(_CRISPER_VENV, _CRISPER_REQUIREMENTS, python_version=_CRISPER_PYTHON)
         python = venv_python(venv_dir)
+
+        # CrisperWhisperModel has no revision parameter anywhere in its call chain (see
+        # the worker-script comment), so resolve the ref to the run-agreed commit SHA
+        # (download-once via the cross-process heartbeat lock) and point the worker at
+        # that commit's already-staged local snapshot directory instead of the mutable
+        # repo id -- both backends treat an existing local directory as already pinned.
+        revision, snapshot_path = resolve_model(model_id, model.revision or "main")
 
         with tempfile.TemporaryDirectory(prefix="senselab-crisperwhisper-") as tmpdir:
             tmp = Path(tmpdir)
@@ -175,7 +191,7 @@ class CrisperWhisperASR:
             input_json = json.dumps(
                 {
                     "audio_paths": audio_paths,
-                    "model_id": model_id,
+                    "model_id": str(snapshot_path),
                     "backend": _CRISPER_BACKEND,
                     "device": device_str,
                     "compute_type": compute_type,
@@ -186,7 +202,7 @@ class CrisperWhisperASR:
             # offline so its weight fetch makes no per-call Hub version check — the
             # 429 source under parallel batch. If staging fails, hf_subprocess_env
             # leaves the env online so the worker's current fetch path still runs.
-            env = hf_subprocess_env(str(model_id), "main", base_env=_clean_subprocess_env())
+            env = hf_subprocess_env(model_id, revision, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _CRISPER_WORKER_SCRIPT],
                 input=input_json,

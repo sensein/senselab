@@ -243,7 +243,9 @@ def compute_run_global_summary(
         passes: ``{perturbation → pass_summary}``, for the per-pass quality and diarization blocks.
         asr_resolved_by_pass: ``{perturbation → {asr_model_id → resolved}}`` for the hallucination
             scan.
-        pii_reports: ``{perturbation → PiiPassReport | None}``.
+        pii_reports: ``{perturbation → PiiPassReport | None}`` (the workflow's own ``pii.PiiPassReport``,
+            a ``senselab.text.tasks.pii_detection.api.PiiReport`` plus the pass tag — plan-b Task 6). Only
+            the base ``PiiReport`` fields are read below, so a bare ``PiiReport`` also satisfies this signature.
         expects_speech: When ``True`` (default), n_speakers=0 → uncertainty 1.0
             (no-speech recording violates the "single speaker" claim). Set
             ``False`` when the caller wants n=0 to count as compliant.

@@ -14,14 +14,22 @@ except Exception:
 
 
 @pytest.mark.skipif(not UVLOOP_AVAILABLE, reason="uvloop not available")
-def test_senselab_init_with_uvloop() -> None:
+def test_senselab_init_with_uvloop(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test senselab init with uvloop."""
     # Force uvloop policy
     asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
     try:
-        # Force fresh import of senselab to trigger __init__.py
-        sys.modules.pop("senselab", None)
+        # Force fresh import of senselab to trigger __init__.py. A bare
+        # `sys.modules.pop("senselab", None)` would leave the *new* module object
+        # installed permanently: senselab/__init__.py doesn't import any submodules
+        # itself, so the fresh object never regains `.utils`/`.audio`/etc as attributes,
+        # while `sys.modules["senselab.utils"]` etc. stay cached from the old object.
+        # Any later `monkeypatch.setattr("senselab.utils...")` in a subsequent test then
+        # walks getattr(sys.modules["senselab"], "utils") and fails, because a submodule
+        # already in sys.modules is a cache hit that skips re-setting the parent attribute.
+        # monkeypatch.delitem restores the original entry at teardown, undoing this.
+        monkeypatch.delitem(sys.modules, "senselab", raising=False)
         import senselab  # noqa: F401
 
         async def dummy() -> int:

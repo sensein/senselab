@@ -233,10 +233,21 @@ class CanaryQwenASR:
                     chunk.save_to_file(path)
                     audio_paths.append(path)
 
-            # Forward the requested revision to the worker so its
-            # SALM.from_pretrained loads that snapshot rather than defaulting
-            # to "main".
-            revision = (model.revision if model is not None else None) or "main"
+            # Forward the resolved commit SHA to the worker, never the ref (e.g. "main") --
+            # the worker has no senselab install and cannot re-resolve, so a bare ref would
+            # load whatever "main" happens to point to on this host at this instant, which can
+            # disagree with what the rest of a multi-node run resolved. model.commit_sha is
+            # already populated by HFModel's constructor-time resolution when model is given;
+            # resolve directly for the no-model-passed default path. Deferred import (not at
+            # module top) keeps this monkeypatch-friendly at
+            # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+            from senselab.utils.model_revision import resolve_revision
+
+            revision = (
+                model.commit_sha
+                if model is not None and model.commit_sha
+                else resolve_revision(str(model_name), model.revision if model is not None else "main")
+            )
             input_json = json.dumps(
                 {
                     "audio_paths": audio_paths,

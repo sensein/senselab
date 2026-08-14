@@ -64,6 +64,7 @@ from senselab.audio.workflows.audio_analysis.reliability import (
 from senselab.audio.workflows.audio_analysis.reliability import (
     signal_names as _signal_names,
 )
+from senselab.audio.workflows.audio_analysis.signal import resolved_commit_sha
 from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
 from senselab.audio.workflows.audio_analysis.speech_presence import harvest_speech_presence_evidence
 from senselab.audio.workflows.audio_analysis.speech_presence_link import (
@@ -278,7 +279,19 @@ def harvest_pass(
                 "calibration_version": (calibration or {}).get("calibration_version"),
                 "model": {
                     "id": BROUHAHA_MODEL_ID,
+                    # Both, deliberately (mirrors StageContext.provenance_for): "revision" is the
+                    # ref Brouhaha is pinned to, "commit_sha" is the immutable commit that ref
+                    # resolved to for this run. This used to record only the ref, indistinguishable
+                    # from a moving "main" that happened to answer the same way on a given day.
+                    # Resolved only when the model actually loaded — a model that never loaded has
+                    # no commit to name, and resolving one anyway would spend a Hub round-trip on
+                    # every null-quality run for no benefit.
                     "revision": BROUHAHA_REVISION,
+                    "commit_sha": (
+                        resolved_commit_sha(BROUHAHA_MODEL_ID, BROUHAHA_REVISION)
+                        if brouhaha_frames is not None
+                        else None
+                    ),
                     "available": brouhaha_frames is not None,
                 },
             }
@@ -313,7 +326,11 @@ def harvest_pass(
         # distinguishable from "this voter was never asked for".
         frame_posteriors_provenance["brouhaha_vad"] = {
             "id": _VAD_MODEL_ID,
+            # Same reasoning as the scene-quality "model" block above: keep the ref, add the
+            # resolved commit rather than replacing one with the other, and only resolve when the
+            # model actually loaded.
             "revision": _VAD_REVISION,
+            "commit_sha": (resolved_commit_sha(_VAD_MODEL_ID, _VAD_REVISION) if vad_frames is not None else None),
             "available": vad_frames is not None,
         }
 

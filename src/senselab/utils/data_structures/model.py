@@ -13,7 +13,7 @@ from dotenv import dotenv_values, find_dotenv
 from huggingface_hub import HfApi
 from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, RevisionNotFoundError
 from huggingface_hub.hf_api import ModelInfo
-from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, ValidationInfo, field_validator, model_validator
 from typing_extensions import Annotated
 
 from senselab.utils.dependencies import torchaudio_available
@@ -65,6 +65,13 @@ class HFModel(SenselabModel[PROVIDER_T]):
     """
 
     revision: Annotated[str, Field(validate_default=True)] = "main"
+    commit_sha: Optional[str] = None
+    """The immutable 40-hex commit this run pins to, resolved at construction.
+
+    Distinct from ``revision``, which records what was *asked for*. Keeping both
+    lets provenance distinguish "pinned to abc123" from "tracked main, which
+    resolved to abc123" -- drift is only diagnosable when those are tellable apart.
+    """
     info: Optional[ModelInfo] = None
     _hf_cache: ClassVar[Dict[Tuple[str, str], bool]] = {}
 
@@ -93,6 +100,27 @@ class HFModel(SenselabModel[PROVIDER_T]):
                     "environment variables."
                 )
         return value
+
+    @model_validator(mode="after")
+    def _resolve_commit_sha(self) -> "HFModel":
+        """Pin this model to an immutable commit, once, at construction.
+
+        Skipped for local paths, which have no Hub revision. The resolution is one
+        the constructor already performs -- ``check_hf_repo_exists`` calls
+        ``ensure_hf_model``, which computes this SHA and discards it -- so this
+        adds no network call and no download.
+
+        Plain assignment, not ``object.__setattr__``: ``HFModel`` sets neither
+        ``frozen`` nor ``validate_assignment`` in its config, so pydantic's normal
+        ``__setattr__`` just stores the value -- no frozen-field bypass is needed,
+        and no assignment-time re-validation loop to worry about either.
+        """
+        if isinstance(self.path_or_uri, Path) or self.commit_sha is not None:
+            return self
+        from senselab.utils.model_revision import resolve_revision
+
+        self.commit_sha = resolve_revision(str(self.path_or_uri), self.revision)
+        return self
 
     def get_model_info(self) -> ModelInfo:
         """Gets the model info using the HuggingFace API and saves it as a property."""
@@ -311,7 +339,8 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
 
     Args:
         model_id: HuggingFace-style model identifier.
-        task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``.
+        task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``,
+            ``"separation"``.
 
     Returns:
         The provider-specific `SenselabModel` subclass instance.
@@ -320,22 +349,45 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
         ValueError: If ``task`` is not recognized.
 
     Note:
-        The diarization branch duplicates ``diarize_audios``'s internal dispatch
-        (Sortformer ids are HF, everything else is pyannote). That duplication is
-        pre-existing and worth collapsing into one source of truth eventually.
+        The diarization branch duplicates ``diarize_audios``'s internal dispatch:
+        five separate prefix conditions (Sortformer, VibeVoice-ASR-HF, USC-SAIL
+        child-adult, MOSS-Transcribe-Diarize, DiariZen — everything else falls
+        through to Pyannote) each independently repeated here and in
+        ``speaker_diarization/api.py``'s ``elif`` chain. That duplication is
+        pre-existing and worth collapsing into one source of truth eventually;
+        the two tables must be kept in sync by hand until then. The enhancement
+        branch below duplicates ``enhance_audios``'s ``sensein/driftse`` prefix
+        check the same way, for the same reason: importing the literal from
+        ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend
+        on ``audio``, inverting the package layering. The separation branch has
+        only one backend (unasdiff) and always returns ``HFModel`` unconditionally;
+        it exists for parity with the other tasks' model-id → class routing, not
+        because there is a second backend to dispatch away from.
 
     Example:
         >>> model_for_task("openai/whisper-tiny", task="asr").path_or_uri
         'openai/whisper-tiny'
     """
     if task == "diarization":
-        if model_id.startswith("nvidia/diar_sortformer"):
+        if (
+            model_id.startswith("nvidia/diar_sortformer")
+            or model_id.startswith("microsoft/VibeVoice-ASR")
+            or model_id.startswith("AlexXu811/whisper-child-adult")
+            or model_id.startswith("OpenMOSS-Team/MOSS-Transcribe-Diarize")
+            or model_id.startswith("BUT-FIT/diarizen")
+        ):
             return HFModel(path_or_uri=model_id)
         return PyannoteAudioModel(path_or_uri=model_id)
     if task == "asr":
         return HFModel(path_or_uri=model_id)
-    if task in ("embeddings", "enhancement"):
+    if task == "embeddings":
         return SpeechBrainModel(path_or_uri=model_id)
+    if task == "enhancement":
+        if model_id.startswith("sensein/driftse"):
+            return HFModel(path_or_uri=model_id)
+        return SpeechBrainModel(path_or_uri=model_id)
+    if task == "separation":
+        return HFModel(path_or_uri=model_id)
     raise ValueError(f"unknown task: {task}")
 
 

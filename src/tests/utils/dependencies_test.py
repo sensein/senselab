@@ -5,6 +5,8 @@ requested ref to an immutable commit SHA once and loading pinned by that SHA
 (``revision=<sha>`` — huggingface_hub's commit-hash shortcut then does no HEAD).
 """
 
+import logging
+import os
 from pathlib import Path
 
 import huggingface_hub
@@ -17,6 +19,7 @@ from senselab.utils.dependencies import (
     load_hf_resilient,
     resolve_model,
 )
+from senselab.utils.file_lock import lock_holder
 
 
 def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revision: str, sha: str) -> Path:
@@ -29,6 +32,10 @@ def _fake_cache(monkeypatch: pytest.MonkeyPatch, root: Path, repo_id: str, revis
     (repo_dir / "refs" / revision).write_text(sha)
     snap = repo_dir / "snapshots" / sha
     snap.mkdir(parents=True)
+    # A real snapshot is never empty, and an empty one is exactly what an interrupted
+    # download leaves behind — `_snapshot_is_present` treats it as absent on purpose, so a
+    # fixture that omits this would be fabricating a state the code is right to reject.
+    (snap / "config.json").write_text("{}")
     return snap
 
 
@@ -44,6 +51,16 @@ def test_sha_revision_is_passed_through(tmp_path: Path, monkeypatch: pytest.Monk
     sha = "e" * 40
     _fake_cache(monkeypatch, tmp_path, "org/model", "main", "f" * 40)
     assert _get_cached_commit_hash("org/model", sha) == sha
+
+
+def test_cached_commit_hash_raises_rather_than_returning_a_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cold cache must raise, not hand back the mutable ref as if it were a SHA."""
+    from senselab.utils.dependencies import _get_cached_commit_hash
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "hub"))
+    with pytest.raises(RevisionResolutionError):
+        _get_cached_commit_hash("org/never-downloaded", "main")
 
 
 def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -80,9 +97,15 @@ def test_load_hf_resilient_pins_sha_without_local_files_only(monkeypatch: pytest
     assert captured["task"] == "asr"
 
 
-def test_load_hf_resilient_no_hub_call_when_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A cached model loads with zero HfApi.model_info (Hub version-check) calls."""
+def test_load_hf_resilient_no_hub_call_when_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cached model loads with zero HfApi.model_info (Hub version-check) calls.
+
+    The cache is fabricated on disk rather than only stubbed: "cached" now has to be true of
+    the filesystem, since that is the disagreement — a stub saying yes while the snapshot is
+    absent — that let a ref be written for weights that were never staged.
+    """
     sha = "d" * 40
+    _fake_cache(monkeypatch, tmp_path, "org/model", "main", sha)
     monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: True)
     monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: sha)
 
@@ -110,16 +133,111 @@ def test_hf_subprocess_env_sets_offline_when_all_cached(monkeypatch: pytest.Monk
     assert env["TRANSFORMERS_OFFLINE"] == "1"
 
 
-def test_hf_subprocess_env_left_unchanged_when_uncacheable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If a model cannot be staged, the env is returned unchanged so the child may still download online."""
+def test_hf_subprocess_env_left_unchanged_when_uncacheable(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If a model cannot be staged, the env is returned unchanged so the child may still download online.
+
+    It must also warn: the silent version of this fallback reverts to the per-call Hub version-check
+    path, which is the 429 source ``hf_subprocess_env`` exists to remove. A future refactor that drops
+    the ``logger.warning`` call would restore that silent revert with nothing to catch it, so the
+    assertion checks the message content (names the failing repo, states the online-fallback
+    consequence) rather than merely that some record was emitted — a record that just said "error"
+    would pass a count-only check without proving the regression this delta guards against.
+    """
 
     def boom(*a: object, **k: object) -> None:
         raise RuntimeError("cannot download")
 
     monkeypatch.setattr(dep, "resolve_model", boom)
-    env = hf_subprocess_env("org/model", "main", base_env={})
+    with caplog.at_level(logging.WARNING, logger="senselab"):
+        env = hf_subprocess_env("org/model", "main", base_env={})
     assert "HF_HUB_OFFLINE" not in env
     assert "TRANSFORMERS_OFFLINE" not in env
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "hf_subprocess_env must warn when a model can't be staged for offline use"
+    message = warnings[0].getMessage()
+    assert "org/model" in message, "warning must name the repo that failed to stage"
+    assert "online" in message.lower(), "warning must state the fallback consequence (online Hub loading)"
+
+
+def test_senselab_cache_dir_honors_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SENSELAB_CACHE, when set, is used verbatim as the cache directory."""
+    custom = tmp_path / "custom_cache"
+    monkeypatch.setenv("SENSELAB_CACHE", str(custom))
+    result = dep._senselab_cache_dir()
+    assert result == custom
+
+
+def test_senselab_cache_dir_defaults_under_senselab_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Absent SENSELAB_CACHE, the cache lives under ~/.cache/senselab, not ~/.cache/huggingface."""
+    monkeypatch.delenv("SENSELAB_CACHE", raising=False)
+    monkeypatch.delenv("HF_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    result = dep._senselab_cache_dir()
+    assert result == tmp_path / ".cache" / "senselab" / "hf"
+    assert "huggingface" not in str(result)
+
+
+def test_senselab_cache_dir_ignores_hf_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting HF_HOME to a shared tree must not relocate senselab's own cache.
+
+    This is the regression guard: on a shared HPC cluster, HF_HOME is routinely pointed at a
+    large group-writable tree so model weights are downloaded once and reused. This directory
+    also holds per-process lock files (see resolve_model), so deriving it from HF_HOME would put
+    those locks in a tree contended by every other user of the shared tree.
+    """
+    monkeypatch.delenv("SENSELAB_CACHE", raising=False)
+    shared_hf_home = tmp_path / "shared_group_tree" / "huggingface"
+    monkeypatch.setenv("HF_HOME", str(shared_hf_home))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
+    result = dep._senselab_cache_dir()
+    assert "shared_group_tree" not in str(result)
+    assert result == tmp_path / "home" / ".cache" / "senselab" / "hf"
+
+
+def test_senselab_cache_dir_created_on_first_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The cache directory is created if it does not already exist."""
+    custom = tmp_path / "not_yet_created"
+    monkeypatch.setenv("SENSELAB_CACHE", str(custom))
+    assert not custom.exists()
+    result = dep._senselab_cache_dir()
+    assert result.is_dir()
+
+
+def test_heartbeat_lock_class_removed() -> None:
+    """Pre-alpha rename-and-replace: `_HeartbeatLock` must not survive alongside `SharedFileLock`."""
+    assert not hasattr(dep, "_HeartbeatLock")
+
+
+def test_ensure_hf_model_locks_via_shared_file_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The slow path in ensure_hf_model must acquire via SharedFileLock, not a bare filelock.FileLock.
+
+    SharedFileLock is what stamps a JSON holder identity (user/host/pid) into the lock file
+    while it is held; a bare `filelock.FileLock` never writes any content there. Reading that
+    identity back from *inside* the locked `snapshot_download` call proves the real class is
+    wired in as the thing serialising the download, not merely imported and unused.
+    """
+    monkeypatch.setattr(dep, "_senselab_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
+    monkeypatch.setattr(dep, "_read_result_cache", lambda *a, **k: None)
+    monkeypatch.setattr(dep, "_write_result_cache", lambda *a, **k: None)
+    monkeypatch.setattr(dep, "_get_cached_commit_hash", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr("senselab.utils.data_structures.model.get_huggingface_token", lambda: None)
+
+    captured: dict = {}
+
+    def fake_snapshot_download(**kwargs: object) -> None:
+        lock_path = tmp_path / f"{dep._safe_key('org/model', 'main')}.lock"
+        captured["holder"] = lock_holder(lock_path)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+
+    dep.ensure_hf_model("org/model", "main")
+
+    assert captured["holder"] is not None, "no SharedFileLock holder identity was recorded during the download"
+    assert captured["holder"]["pid"] == os.getpid()
 
 
 def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,3 +254,76 @@ def test_hf_subprocess_env_stages_companion_models(monkeypatch: pytest.MonkeyPat
     )
     assert staged == ["Qwen/Qwen3-ASR-1.7B", "Qwen/Qwen3-ForcedAligner-0.6B"]
     assert env["HF_HUB_OFFLINE"] == "1"
+
+
+# ── A recorded success is a fact about one HF cache, not a global one ──
+
+
+def test_a_recorded_success_is_not_reused_when_the_snapshot_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The result cache and the weights live in different trees, so it can lie.
+
+    ``_senselab_cache_dir`` is deliberately NOT derived from ``HF_HOME`` — the weights go to a
+    group tree, the coordination state stays per-user. That means a success recorded while
+    ``HF_HOME`` pointed at cache A gets replayed when it points at cache B, and the fast path
+    returns a SHA for a snapshot that was never downloaded here. Measured on ORCD: a job left
+    ``models--openai--whisper-base/refs/main`` written and no ``snapshots/`` directory at all,
+    and the worker then failed offline with "couldn't find it in the cached files".
+    """
+    import huggingface_hub.constants as hf_constants
+
+    sha = "c" * 40
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "empty-hf-cache"))
+    monkeypatch.setattr(dep, "is_hf_model_cached", lambda *a, **k: False)
+    monkeypatch.setattr(dep, "_read_result_cache", lambda *a, **k: {"status": "ok", "commit_hash": sha})
+    monkeypatch.setattr(dep, "_write_result_cache", lambda *a, **k: None)
+    monkeypatch.setattr(dep, "_senselab_cache_dir", lambda: tmp_path / "senselab")
+
+    downloaded: list[str] = []
+
+    def fake_snapshot_download(repo_id: str, **kwargs: object) -> str:
+        downloaded.append(repo_id)
+        snap = Path(hf_constants.HF_HUB_CACHE) / f"models--{repo_id.replace('/', '--')}" / "snapshots" / sha
+        snap.mkdir(parents=True, exist_ok=True)
+        return str(snap)
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", fake_snapshot_download)
+
+    dep.ensure_hf_model("org/model", sha)
+
+    assert downloaded == ["org/model"], "a recorded success must not stand in for weights that are not here"
+
+
+def test_resolve_model_refuses_to_return_a_snapshot_path_that_does_not_exist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Handing back a path to nothing turns a staging failure into a confusing FileNotFoundError.
+
+    The caller is a worker in another venv that will open files under this path, so the error
+    surfaces there — far from the code that failed to stage — as "[Errno 2] ... atten_unet_vctk.toml".
+    """
+    import huggingface_hub.constants as hf_constants
+
+    sha = "d" * 40
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "hf"))
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: sha)
+    monkeypatch.setattr(dep, "ensure_hf_model", lambda *a, **k: sha)
+
+    with pytest.raises(RuntimeError, match="snapshot"):
+        resolve_model("org/model", "main")
+
+
+def test_offline_mode_does_not_make_every_model_report_as_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``HF_HUB_OFFLINE=1`` means "do not use the network", not "everything is present".
+
+    Answering True for an absent model makes ``ensure_hf_model`` skip the download and hand back
+    a SHA anyway, which is how a ref gets written for a snapshot that was never staged.
+    """
+    import huggingface_hub.constants as hf_constants
+
+    monkeypatch.setattr(hf_constants, "HF_HUB_CACHE", str(tmp_path / "empty"))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    assert dep.is_hf_model_cached("org/definitely-not-here", "main") is False

@@ -41,7 +41,7 @@ class SignalRow:
     """One signal's measurement in one bucket of one pass — the level-1 emission.
 
     No axis and no fold. ``measurement`` holds what the tool reported, in the tool's own units,
-    exactly as harvested; ``units``/``model_id``/``revision``/``native_window_s``/``resolution_s``
+    exactly as harvested; ``units``/``model_id``/``native_window_s``/``resolution_s``
     are the provenance a different lab would need to reproduce the number from the audio alone.
 
     A signal that said nothing in a bucket has no row here rather than a zero-filled one: zero is a
@@ -56,7 +56,6 @@ class SignalRow:
     native_window_s: float | None = None
     resolution_s: float | None = None
     model_id: str | None = None
-    revision: str | None = None
     status: ComparisonStatus = "ok"
 
 

@@ -34,10 +34,16 @@ def _no_brouhaha(monkeypatch: pytest.MonkeyPatch) -> None:
     to report the model as unavailable so the workflow exercises its null-safe
     quality path (FR-023) without any Hub call. Individual tests can re-patch it
     to inject synthetic frames.
+
+    ``resolve_revision`` is stubbed alongside it: a handful of tests below re-patch
+    ``extract_brouhaha_frames`` to return real frames, and ``harvest_pass`` now resolves
+    Brouhaha's ref to a commit SHA for provenance whenever the model reports as available
+    (Task 5) -- without this, those tests would make a live Hub call for a gated model.
     """
     import senselab.audio.tasks.scene_quality as sq
 
     monkeypatch.setattr(sq, "extract_brouhaha_frames", lambda audios, *a, **k: [None] * len(audios))
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
 
 
 # ── Test fixture builders ─────────────────────────────────────────────
@@ -511,6 +517,10 @@ def test_speech_presence_rows_carry_quality_columns_when_brouhaha_available(monk
     prov = linked["raw"].provenance["scene_quality"]
     assert prov["enabled"] is True
     assert prov["model"]["available"] is True
+    # Both, deliberately (Task 5): "revision" is the ref Brouhaha is pinned to, "commit_sha" is
+    # the immutable commit it resolved to. The autouse fixture stubs resolve_revision to "f" * 40.
+    assert prov["model"]["revision"] == "main"
+    assert prov["model"]["commit_sha"] == "f" * 40
 
 
 def test_speech_presence_rows_carry_source_columns() -> None:
@@ -617,7 +627,10 @@ def test_speech_presence_confidence_uncertainty_split_and_instability(monkeypatc
     assert all(r.units == "probability" for r in dispersion.rows)
     # The frame voter is brouhaha's VAD head now, and its provenance is recorded whether or not
     # the model loaded — a voter with no provenance is a number nobody can reproduce.
-    assert linked["raw"].provenance["frame_posteriors"]["brouhaha_vad"]["available"] is True
+    vad_prov = linked["raw"].provenance["frame_posteriors"]["brouhaha_vad"]
+    assert vad_prov["available"] is True
+    assert vad_prov["revision"] == "main"
+    assert vad_prov["commit_sha"] == "f" * 40
 
 
 def test_speech_presence_quality_null_when_scene_quality_disabled() -> None:
@@ -644,6 +657,37 @@ def test_speech_presence_quality_null_when_scene_quality_disabled() -> None:
     assert speech_presence.rows
     assert all(r.get("quality_snr") is None for r in speech_presence.rows)
     assert linked["raw"].provenance["scene_quality"]["enabled"] is False
+
+
+def test_brouhaha_commit_sha_is_none_when_the_model_never_loaded() -> None:
+    """A model that failed to load has no commit to name (Task 5): never fall back to the ref.
+
+    The default autouse fixture reports Brouhaha as unavailable; ``resolve_revision`` must not
+    even be called in that case (it is stubbed but unused here), matching the FR-023 null-safe
+    path rather than spending a Hub round-trip on a model that never ran.
+    """
+    raw_pass = {
+        "duration_s": 2.0,
+        "diarization": {"by_model": {"pyannote": _diar_block([(0.0, 2.0, "SPEAKER_00")])}},
+    }
+    linked: dict = {}
+    compute_uncertainty_axes(
+        linked_out=linked,
+        passes={"raw": raw_pass},
+        grid=BucketGrid(win_length=0.5, hop_length=0.5),
+        params={},
+        audio={"raw": _noise_audio(2.0)},
+        speaker_embedding_models=[],
+        aggregator="min",
+        speech_presence_labels=["Speech"],
+        snr_floor_db=10.0,
+        snr_gated_passes=frozenset(),
+    )
+    prov = linked["raw"].provenance
+    assert prov["scene_quality"]["model"]["available"] is False
+    assert prov["scene_quality"]["model"]["commit_sha"] is None
+    assert prov["frame_posteriors"]["brouhaha_vad"]["available"] is False
+    assert prov["frame_posteriors"]["brouhaha_vad"]["commit_sha"] is None
 
 
 # ── T094a: the three axes survive the per-speaker change (SC-010) ─────

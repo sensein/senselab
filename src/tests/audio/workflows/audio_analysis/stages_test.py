@@ -28,6 +28,21 @@ from senselab.audio.workflows.audio_analysis.stages import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_commit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub HF revision resolution so cache-key derivation never touches the network.
+
+    Every stage's ``cache_key_for`` call now resolves a Hub-shaped model id (e.g.
+    ``"pyannote/speaker-diarization-3.1"``, ``"openai/whisper-tiny"``) to a commit SHA before
+    computing the key. Those ids are fixtures standing in for whichever backend a stage would call
+    — resolving them for real would be a live Hub call per test, and would pass or fail depending
+    on whether this machine happens to already have that repo cached locally, which is exactly the
+    non-hermetic failure mode the rest of this file avoids by monkeypatching the backend call
+    itself.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda repo_id, ref="main", **kw: "f" * 40)
+
+
 @pytest.fixture
 def audio() -> Audio:
     """One second of quiet 16 kHz mono audio."""
