@@ -153,6 +153,38 @@ class SpectrumStats(BaseModel):
     eigenvalue_shares_top5: list[float]
 
 
+class WithinFileStats(BaseModel):
+    """Coherence inside one file.
+
+    Attributes:
+        n_vectors: Rows from this file that survived normalisation.
+        rbar: Mean resultant length of this file's rows. ``1.0`` for a single row, by definition.
+        cos_to_own_centroid_q05: 5th percentile of cosine to *this file's* centroid.
+        cos_to_own_centroid_q50: Median cosine to this file's centroid.
+    """
+
+    n_vectors: int
+    rbar: float
+    cos_to_own_centroid_q05: float
+    cos_to_own_centroid_q50: float
+
+
+class CrossFileStats(BaseModel):
+    """How the files sit relative to each other and to the pooled centroid.
+
+    Attributes:
+        cos_file_centroid_to_pooled: Per file, the cosine of its own centroid to the pooled
+            centroid. A contaminated file shows up here directly, which is what lets a caller
+            curate its input without any clustering.
+        file_centroid_pairwise_cos: Quantiles of the pairwise cosines between file centroids.
+            ``None`` with fewer than two files, because no pair exists and a reported number would
+            be invented.
+    """
+
+    cos_file_centroid_to_pooled: dict[str, float] = Field(default_factory=dict)
+    file_centroid_pairwise_cos: Optional[SimilarityStats] = None
+
+
 class EmbeddingDistribution(BaseModel):
     """Statistics describing one set of embedding vectors. Contains no verdict."""
 
@@ -162,6 +194,12 @@ class EmbeddingDistribution(BaseModel):
     cos_to_centroid_loo: SimilarityStats
     rbar: float
     spectrum: SpectrumStats
+    # Kept as two separate blocks rather than one pooled dispersion figure: prior measurement on
+    # this pipeline puts essentially the whole error budget cross-file (within-file cosine
+    # stability 0.984 against cross-file 0.891), so averaging the two would destroy the most
+    # informative split known about this data. See `_per_file_stats`.
+    within_file: dict[str, WithinFileStats] = Field(default_factory=dict)
+    cross_file: CrossFileStats = Field(default_factory=CrossFileStats)
 
 
 def _as_array(
@@ -302,6 +340,58 @@ def _spectrum(x: np.ndarray) -> SpectrumStats:
     return SpectrumStats(participation_ratio=pr, pc1_share_centred=float(shares[0]), eigenvalue_shares_top5=top5)
 
 
+def _per_file_stats(
+    x: np.ndarray, file_ids: Optional[list[str]], pooled_centroid: np.ndarray
+) -> tuple[dict[str, WithinFileStats], CrossFileStats]:
+    """Within-file coherence and cross-file agreement.
+
+    Kept strictly apart because the measured error budget on this pipeline is almost entirely
+    cross-file (within-file cosine stability 0.984 against cross-file 0.891). Pooling them would
+    average away the most informative split there is.
+
+    Args:
+        x: ``(n, d)`` unit-norm array.
+        file_ids: One id per row, or ``None``.
+        pooled_centroid: The centroid over all rows.
+
+    Returns:
+        ``(within_file, cross_file)``. Both are empty when ``file_ids`` is ``None``.
+    """
+    if file_ids is None:
+        return {}, CrossFileStats()
+
+    order: list[str] = []
+    for f in file_ids:
+        if f not in order:
+            order.append(f)
+
+    within: dict[str, WithinFileStats] = {}
+    centroids: dict[str, np.ndarray] = {}
+    ids = np.asarray(file_ids)
+    for f in order:
+        rows = x[ids == f]
+        c = _spherical_mean(rows)
+        centroids[f] = c
+        cos_own = rows @ c
+        within[f] = WithinFileStats(
+            n_vectors=int(rows.shape[0]),
+            rbar=float(np.linalg.norm(rows.sum(axis=0)) / rows.shape[0]),
+            cos_to_own_centroid_q05=float(np.quantile(cos_own, 0.05)),
+            cos_to_own_centroid_q50=float(np.quantile(cos_own, 0.50)),
+        )
+
+    to_pooled = {f: float(centroids[f] @ pooled_centroid) for f in order}
+
+    pairwise: Optional[SimilarityStats] = None
+    if len(order) >= 2:
+        stacked = np.stack([centroids[f] for f in order])
+        gram = stacked @ stacked.T
+        iu = np.triu_indices(len(order), k=1)
+        pairwise = _similarity_stats(gram[iu])
+
+    return within, CrossFileStats(cos_file_centroid_to_pooled=to_pooled, file_centroid_pairwise_cos=pairwise)
+
+
 def describe_embedding_distribution(
     vectors: Union[Sequence[Sequence[float]], np.ndarray, Any],  # noqa: ANN401 — torch.Tensor duck-typed
     file_ids: Optional[Sequence[str]] = None,
@@ -363,6 +453,8 @@ def describe_embedding_distribution(
 
     centroid = _spherical_mean(x)  # Tasks 4-5 replace this with the aggregator dispatch.
 
+    within_file, cross_file = _per_file_stats(x, kept_files, centroid)
+
     per_file: dict[str, int] = {}
     if kept_files is not None:
         for f in kept_files:
@@ -401,4 +493,6 @@ def describe_embedding_distribution(
         cos_to_centroid_loo=_similarity_stats(_loo_cos_to_centroid(x)),
         rbar=float(np.linalg.norm(x.sum(axis=0)) / n),
         spectrum=_spectrum(x),
+        within_file=within_file,
+        cross_file=cross_file,
     )
