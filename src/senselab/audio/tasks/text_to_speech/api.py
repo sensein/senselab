@@ -60,7 +60,14 @@ def synthesize_texts(
 
     if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_QWEN_TTS_PREFIXES):
         qwen_tts_kwargs: Dict[str, Any] = {}
-        for key in ("language", "speaker", "instruct"):
+        # `speaker` and `instruct` have no named parameter to bind to, so they do arrive in
+        # kwargs. `language` does have one -- testing `if "language" in kwargs` could never
+        # match it, so the caller's language was dropped and the worker synthesized on its
+        # "Auto" default with no error. Omitted entirely when None so that default still
+        # applies; the checkpoint speaks language *names* ("Italian"), not ISO codes.
+        if language is not None:
+            qwen_tts_kwargs["language"] = language.name
+        for key in ("speaker", "instruct"):
             if key in kwargs:
                 qwen_tts_kwargs[key] = kwargs.pop(key)
         return synthesize_texts_with_qwen(texts=texts, model=model, device=device, **qwen_tts_kwargs)

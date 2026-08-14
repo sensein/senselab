@@ -147,6 +147,49 @@ def test_qwen_tts_prefix_dispatches_to_qwen(_offline_hfmodel_construction: None,
     assert qt.call_args.kwargs["instruct"] == "Very happy."
 
 
+def test_qwen_tts_receives_the_named_language_argument(
+    _offline_hfmodel_construction: None, mono_audio_sample: Audio
+) -> None:
+    """``language`` is a named parameter, so it never lands in ``**kwargs``.
+
+    The Qwen branch collects its options by testing ``if key in kwargs``, which works for
+    ``speaker`` and ``instruct`` -- they have no named parameter to bind to -- but silently
+    drops ``language``, leaving the worker on its ``"Auto"`` default and synthesizing in a
+    language the caller did not ask for, with no error. The backend speaks the checkpoint's
+    language *names*, so the ISO-639-3 ``Language`` is handed over as ``.name``.
+    """
+    with patch(
+        "senselab.audio.tasks.text_to_speech.api.synthesize_texts_with_qwen",
+        return_value=[mono_audio_sample],
+    ) as qt:
+        synthesize_texts(
+            texts=["Hello world"],
+            model=HFModel(path_or_uri="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
+            language=Language(language_code="it"),
+        )
+    assert qt.call_args.kwargs["language"] == "Italian"
+
+
+def test_qwen_tts_without_a_language_leaves_the_backend_default_alone(
+    _offline_hfmodel_construction: None, mono_audio_sample: Audio
+) -> None:
+    """No ``language`` must mean no ``language`` kwarg, not an explicit ``None``.
+
+    ``synthesize_texts_with_qwen`` defaults to ``"Auto"`` and forwards whatever it gets
+    straight into ``generate_custom_voice``; passing ``None`` through would override that
+    default with a value the checkpoint does not recognize.
+    """
+    with patch(
+        "senselab.audio.tasks.text_to_speech.api.synthesize_texts_with_qwen",
+        return_value=[mono_audio_sample],
+    ) as qt:
+        synthesize_texts(
+            texts=["Hello world"],
+            model=HFModel(path_or_uri="Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
+        )
+    assert "language" not in qt.call_args.kwargs
+
+
 def test_qwen_tts_requirements_pin_the_package_but_float_torch() -> None:
     """``qwen-tts`` is pinned exactly; ``torch``/``torchaudio`` carry a floor, not a pin.
 
