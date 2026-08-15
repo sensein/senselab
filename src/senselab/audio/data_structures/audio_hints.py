@@ -18,6 +18,13 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+# Imported from the submodule path, not the `utils.tasks` package `__init__`: that package's
+# `__init__` pulls in sibling task modules (batching, pooling, ...) that have nothing to do with
+# a hint, and `data_structures` importing all of them just to reach one leaf class would be a
+# needless dependency surface. `embedding_distribution.py` itself imports only numpy, pydantic,
+# scipy and stdlib, so this edge stays a leaf.
+from senselab.utils.tasks.embedding_distribution import EmbeddingDistribution
+
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -101,14 +108,14 @@ class TargetSpeakerEmbedding(BaseModel):
             so a hint is interpretable on its own -- a reference that outlives its file is the
             dangling-pointer failure this avoids.
         provenance: Required. A vector with no provenance cannot be interpreted or reproduced.
-        distribution: Optional statistics describing the set the vector was estimated from. Typed
-            loosely here to keep ``data_structures`` from importing ``utils.tasks``; narrowed by
-            the estimator's own signature.
+        distribution: Optional statistics describing the set the vector was estimated from --
+            produced by ``estimate_speaker_embedding_from_audios``, absent for a hint declared by
+            other means (e.g. a corpus-supplied enrollment vector with no windowed audio behind it).
     """
 
     vector: list[float]
     provenance: SpeakerEmbeddingProvenance
-    distribution: Optional[Any] = None
+    distribution: Optional[EmbeddingDistribution] = None
 
 
 class AudioHints(BaseModel):

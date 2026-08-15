@@ -27,7 +27,12 @@ import numpy as np
 import torch
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
+
+# Imported from the submodule, not the `speaker_embeddings` package `__init__`: Task 8's estimator
+# (`api.py`) imports this module, so importing the package here instead would re-enter `__init__`
+# while it is still mid-import and hand back a partially initialized module -- exactly the
+# `ImportError: ... partially initialized module` failure this leaf-edge form avoids.
+from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
 from senselab.utils.data_structures import DeviceType, SpeechBrainModel
 
 
