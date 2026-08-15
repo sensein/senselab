@@ -49,6 +49,9 @@
             <li>
                     <a class="variable" href="#DTYPE_MAP">DTYPE_MAP</a>
             </li>
+            <li>
+                    <a class="function" href="#device_run_opt">device_run_opt</a>
+            </li>
     </ul>
 
 
@@ -248,6 +251,38 @@ user preference, and falls back to a sensible fastest-available choice.</p>
 </span><span id="L-146"><a href="#L-146"><span class="linenos">146</span></a>            <span class="k">return</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">,</span> <span class="n">DTYPE_MAP</span><span class="p">[</span><span class="n">DeviceType</span><span class="o">.</span><span class="n">CPU</span><span class="p">]</span>
 </span><span id="L-147"><a href="#L-147"><span class="linenos">147</span></a>        <span class="k">else</span><span class="p">:</span>
 </span><span id="L-148"><a href="#L-148"><span class="linenos">148</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Something went wrong and no devices were available or compatible.&quot;</span><span class="p">)</span>
+</span><span id="L-149"><a href="#L-149"><span class="linenos">149</span></a>
+</span><span id="L-150"><a href="#L-150"><span class="linenos">150</span></a>
+</span><span id="L-151"><a href="#L-151"><span class="linenos">151</span></a><span class="k">def</span><span class="w"> </span><span class="nf">device_run_opt</span><span class="p">(</span><span class="n">device</span><span class="p">:</span> <span class="n">DeviceType</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="L-152"><a href="#L-152"><span class="linenos">152</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a concrete device string suitable for a library&#39;s ``run_opts[&quot;device&quot;]``.</span>
+</span><span id="L-153"><a href="#L-153"><span class="linenos">153</span></a>
+</span><span id="L-154"><a href="#L-154"><span class="linenos">154</span></a><span class="sd">    ``DeviceType.CUDA.value`` is the bare string ``&quot;cuda&quot;``, which several libraries cannot</span>
+</span><span id="L-155"><a href="#L-155"><span class="linenos">155</span></a><span class="sd">    parse. SpeechBrain in particular does ``device.split(&quot;:&quot;)`` and, when that unpack fails,</span>
+</span><span id="L-156"><a href="#L-156"><span class="linenos">156</span></a><span class="sd">    logs &quot;Could not parse CUDA device string&quot; and calls ``torch.cuda.set_device(0)`` itself</span>
+</span><span id="L-157"><a href="#L-157"><span class="linenos">157</span></a><span class="sd">    (``speechbrain/inference/interfaces.py``). That silently discards the caller&#39;s choice:</span>
+</span><span id="L-158"><a href="#L-158"><span class="linenos">158</span></a><span class="sd">    on a node with several visible GPUs it moves the model to card 0 no matter which one was</span>
+</span><span id="L-159"><a href="#L-159"><span class="linenos">159</span></a><span class="sd">    selected.</span>
+</span><span id="L-160"><a href="#L-160"><span class="linenos">160</span></a>
+</span><span id="L-161"><a href="#L-161"><span class="linenos">161</span></a><span class="sd">    The index therefore comes from ``torch.cuda.current_device()`` rather than a hardcoded</span>
+</span><span id="L-162"><a href="#L-162"><span class="linenos">162</span></a><span class="sd">    ``0``. That is what makes this correct on a cluster: under Slurm, ``CUDA_VISIBLE_DEVICES``</span>
+</span><span id="L-163"><a href="#L-163"><span class="linenos">163</span></a><span class="sd">    masks the allocation so the granted GPU is index 0 *inside the process* and this returns</span>
+</span><span id="L-164"><a href="#L-164"><span class="linenos">164</span></a><span class="sd">    ``&quot;cuda:0&quot;`` — the allocated card, not merely the first one on the host — while a caller</span>
+</span><span id="L-165"><a href="#L-165"><span class="linenos">165</span></a><span class="sd">    who selected a device explicitly gets the card they chose.</span>
+</span><span id="L-166"><a href="#L-166"><span class="linenos">166</span></a>
+</span><span id="L-167"><a href="#L-167"><span class="linenos">167</span></a><span class="sd">    Args:</span>
+</span><span id="L-168"><a href="#L-168"><span class="linenos">168</span></a><span class="sd">        device: The selected device.</span>
+</span><span id="L-169"><a href="#L-169"><span class="linenos">169</span></a>
+</span><span id="L-170"><a href="#L-170"><span class="linenos">170</span></a><span class="sd">    Returns:</span>
+</span><span id="L-171"><a href="#L-171"><span class="linenos">171</span></a><span class="sd">        ``&quot;cuda:&lt;index&gt;&quot;`` for CUDA when a GPU is actually visible, otherwise the device&#39;s</span>
+</span><span id="L-172"><a href="#L-172"><span class="linenos">172</span></a><span class="sd">        bare value. ``cpu`` and ``mps`` take no index -- ``&quot;cpu:0&quot;`` is not a valid device</span>
+</span><span id="L-173"><a href="#L-173"><span class="linenos">173</span></a><span class="sd">        string -- and a CUDA request with no visible GPU stays bare so the downstream</span>
+</span><span id="L-174"><a href="#L-174"><span class="linenos">174</span></a><span class="sd">        library raises its own clearer error rather than this helper failing first.</span>
+</span><span id="L-175"><a href="#L-175"><span class="linenos">175</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="L-176"><a href="#L-176"><span class="linenos">176</span></a>    <span class="k">if</span> <span class="n">device</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">:</span>
+</span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a>        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+</span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
+</span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a>        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;cuda:</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_device</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
 </span></pre></div>
 
 
@@ -338,6 +373,83 @@ user preference, and falls back to a sensible fastest-available choice.</p>
     <a class="headerlink" href="#DTYPE_MAP"></a>
     
     
+
+                </section>
+                <section id="device_run_opt">
+                            <input id="device_run_opt-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">device_run_opt</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">device</span><span class="p">:</span> <span class="n"><a href="#DeviceType">DeviceType</a></span></span><span class="return-annotation">) -> <span class="nb">str</span>:</span></span>
+
+                <label class="view-source-button" for="device_run_opt-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#device_run_opt"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="device_run_opt-152"><a href="#device_run_opt-152"><span class="linenos">152</span></a><span class="k">def</span><span class="w"> </span><span class="nf">device_run_opt</span><span class="p">(</span><span class="n">device</span><span class="p">:</span> <span class="n">DeviceType</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="device_run_opt-153"><a href="#device_run_opt-153"><span class="linenos">153</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return a concrete device string suitable for a library&#39;s ``run_opts[&quot;device&quot;]``.</span>
+</span><span id="device_run_opt-154"><a href="#device_run_opt-154"><span class="linenos">154</span></a>
+</span><span id="device_run_opt-155"><a href="#device_run_opt-155"><span class="linenos">155</span></a><span class="sd">    ``DeviceType.CUDA.value`` is the bare string ``&quot;cuda&quot;``, which several libraries cannot</span>
+</span><span id="device_run_opt-156"><a href="#device_run_opt-156"><span class="linenos">156</span></a><span class="sd">    parse. SpeechBrain in particular does ``device.split(&quot;:&quot;)`` and, when that unpack fails,</span>
+</span><span id="device_run_opt-157"><a href="#device_run_opt-157"><span class="linenos">157</span></a><span class="sd">    logs &quot;Could not parse CUDA device string&quot; and calls ``torch.cuda.set_device(0)`` itself</span>
+</span><span id="device_run_opt-158"><a href="#device_run_opt-158"><span class="linenos">158</span></a><span class="sd">    (``speechbrain/inference/interfaces.py``). That silently discards the caller&#39;s choice:</span>
+</span><span id="device_run_opt-159"><a href="#device_run_opt-159"><span class="linenos">159</span></a><span class="sd">    on a node with several visible GPUs it moves the model to card 0 no matter which one was</span>
+</span><span id="device_run_opt-160"><a href="#device_run_opt-160"><span class="linenos">160</span></a><span class="sd">    selected.</span>
+</span><span id="device_run_opt-161"><a href="#device_run_opt-161"><span class="linenos">161</span></a>
+</span><span id="device_run_opt-162"><a href="#device_run_opt-162"><span class="linenos">162</span></a><span class="sd">    The index therefore comes from ``torch.cuda.current_device()`` rather than a hardcoded</span>
+</span><span id="device_run_opt-163"><a href="#device_run_opt-163"><span class="linenos">163</span></a><span class="sd">    ``0``. That is what makes this correct on a cluster: under Slurm, ``CUDA_VISIBLE_DEVICES``</span>
+</span><span id="device_run_opt-164"><a href="#device_run_opt-164"><span class="linenos">164</span></a><span class="sd">    masks the allocation so the granted GPU is index 0 *inside the process* and this returns</span>
+</span><span id="device_run_opt-165"><a href="#device_run_opt-165"><span class="linenos">165</span></a><span class="sd">    ``&quot;cuda:0&quot;`` — the allocated card, not merely the first one on the host — while a caller</span>
+</span><span id="device_run_opt-166"><a href="#device_run_opt-166"><span class="linenos">166</span></a><span class="sd">    who selected a device explicitly gets the card they chose.</span>
+</span><span id="device_run_opt-167"><a href="#device_run_opt-167"><span class="linenos">167</span></a>
+</span><span id="device_run_opt-168"><a href="#device_run_opt-168"><span class="linenos">168</span></a><span class="sd">    Args:</span>
+</span><span id="device_run_opt-169"><a href="#device_run_opt-169"><span class="linenos">169</span></a><span class="sd">        device: The selected device.</span>
+</span><span id="device_run_opt-170"><a href="#device_run_opt-170"><span class="linenos">170</span></a>
+</span><span id="device_run_opt-171"><a href="#device_run_opt-171"><span class="linenos">171</span></a><span class="sd">    Returns:</span>
+</span><span id="device_run_opt-172"><a href="#device_run_opt-172"><span class="linenos">172</span></a><span class="sd">        ``&quot;cuda:&lt;index&gt;&quot;`` for CUDA when a GPU is actually visible, otherwise the device&#39;s</span>
+</span><span id="device_run_opt-173"><a href="#device_run_opt-173"><span class="linenos">173</span></a><span class="sd">        bare value. ``cpu`` and ``mps`` take no index -- ``&quot;cpu:0&quot;`` is not a valid device</span>
+</span><span id="device_run_opt-174"><a href="#device_run_opt-174"><span class="linenos">174</span></a><span class="sd">        string -- and a CUDA request with no visible GPU stays bare so the downstream</span>
+</span><span id="device_run_opt-175"><a href="#device_run_opt-175"><span class="linenos">175</span></a><span class="sd">        library raises its own clearer error rather than this helper failing first.</span>
+</span><span id="device_run_opt-176"><a href="#device_run_opt-176"><span class="linenos">176</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="device_run_opt-177"><a href="#device_run_opt-177"><span class="linenos">177</span></a>    <span class="k">if</span> <span class="n">device</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">DeviceType</span><span class="o">.</span><span class="n">CUDA</span><span class="p">:</span>
+</span><span id="device_run_opt-178"><a href="#device_run_opt-178"><span class="linenos">178</span></a>        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+</span><span id="device_run_opt-179"><a href="#device_run_opt-179"><span class="linenos">179</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">():</span>
+</span><span id="device_run_opt-180"><a href="#device_run_opt-180"><span class="linenos">180</span></a>        <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">device</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+</span><span id="device_run_opt-181"><a href="#device_run_opt-181"><span class="linenos">181</span></a>    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;cuda:</span><span class="si">{</span><span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">current_device</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Return a concrete device string suitable for a library's <code>run_opts["device"]</code>.</p>
+
+<p><code>DeviceType.CUDA.value</code> is the bare string <code>"cuda"</code>, which several libraries cannot
+parse. SpeechBrain in particular does <code>device.split(":")</code> and, when that unpack fails,
+logs "Could not parse CUDA device string" and calls <code>torch.cuda.set_device(0)</code> itself
+(<code>speechbrain/inference/interfaces.py</code>). That silently discards the caller's choice:
+on a node with several visible GPUs it moves the model to card 0 no matter which one was
+selected.</p>
+
+<p>The index therefore comes from <code>torch.cuda.current_device()</code> rather than a hardcoded
+<code>0</code>. That is what makes this correct on a cluster: under Slurm, <code>CUDA_VISIBLE_DEVICES</code>
+masks the allocation so the granted GPU is index 0 <em>inside the process</em> and this returns
+<code>"cuda:0"</code> — the allocated card, not merely the first one on the host — while a caller
+who selected a device explicitly gets the card they chose.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>device:</strong>  The selected device.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p><code>"cuda:&lt;index&gt;"</code> for CUDA when a GPU is actually visible, otherwise the device's
+  bare value. <code>cpu</code> and <code>mps</code> take no index -- <code>"cpu:0"</code> is not a valid device
+  string -- and a CUDA request with no visible GPU stays bare so the downstream
+  library raises its own clearer error rather than this helper failing first.</p>
+</blockquote>
+</div>
+
 
                 </section>
     </main>
