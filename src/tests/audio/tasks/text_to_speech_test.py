@@ -246,11 +246,12 @@ def test_synthesis_stages_via_the_ref_but_pins_the_worker_payload_to_the_sha(
     """``hf_subprocess_env`` is staged with the caller's ref; the worker payload gets the SHA.
 
     Passing the resolved SHA to ``hf_subprocess_env`` instead (the pattern
-    ``speech_to_text/qwen.py`` and ``speaker_diarization/moss.py`` use) would skip writing
-    ``refs/<ref>`` entirely -- ``_point_ref_at`` no-ops once its ``ref`` argument is already
-    a SHA -- and strand the wrapper's own two unpinned ``cached_file()`` reads (see the
-    module docstring's "partial-pin gap" section) with nothing to resolve offline. This test
-    would fail if that ref/SHA split were collapsed back to passing the SHA everywhere.
+    ``speaker_diarization/moss.py`` still uses, whose loader takes a revision throughout)
+    would leave ``refs/<ref>`` un-re-pointed -- ``_point_ref_at`` returns immediately once its
+    ``ref`` argument is already a SHA -- so the wrapper's own two unpinned ``cached_file()``
+    reads (see the module docstring's "partial-pin gap" section) would follow whatever commit
+    that ref last named on the host, or find nothing to resolve where no such ref exists. This
+    test would fail if that ref/SHA split were collapsed back to passing the SHA everywhere.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "c" * 40)
