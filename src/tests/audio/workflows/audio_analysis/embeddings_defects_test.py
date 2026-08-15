@@ -9,7 +9,11 @@ import inspect
 import re
 from pathlib import Path
 
+import yaml
+
+from senselab.audio.tasks.speaker_embeddings import windowing
 from senselab.audio.workflows.audio_analysis import embeddings as emb
+from senselab.audio.workflows.audio_analysis.run_config import DEFAULT_CONFIG_PATH
 
 _SOURCE = Path(emb.__file__).read_text(encoding="utf-8")
 
@@ -49,3 +53,28 @@ def test_the_module_docstring_agrees_with_the_signature() -> None:
         f"docstring claims window_s default {doc_window_s}, signature default is {window_default}"
     )
     assert doc_hop_s == hop_default, f"docstring claims hop_s default {doc_hop_s}, signature default is {hop_default}"
+
+
+def test_windowing_docstring_cites_the_real_production_setting_not_its_own_fallback() -> None:
+    """Check that windowing.py's docstring cites the real production setting, not its own fallback.
+
+    `windowing.py`'s 1.0/0.5 defaults are never exercised in production; its module docstring must
+    say so and cite the config values that are, rather than presenting 1.0/0.5 as *the* measured
+    detection setting.
+
+    Regression: the docstring used to open with "The defaults here are the detection defaults, and
+    they are deliberate", naming ``window_s=1.0``/``hop_s=0.5`` as the measured production setting.
+    Both real callers (`compute.harvest_pass`, `adaptive.backends.embed_windows`) actually pass
+    explicit values sourced from `data/run_config/default.yaml`'s `embeddings:` block, and that
+    file's own derivation measured 1.0 s as *worse* (ARI 0.70 at 0.5 s against 0.48 at 1.0 s). This
+    reads the values straight out of the packaged config so a future config change that isn't
+    mirrored into the docstring fails here rather than silently drifting again.
+    """
+    config = yaml.safe_load(DEFAULT_CONFIG_PATH.read_text())
+    window_s = config["embeddings"]["window_s"]
+    hop_s = config["embeddings"]["hop_s"]
+
+    doc = windowing.__doc__ or ""
+    assert str(window_s) in doc, f"docstring does not cite the production window_s ({window_s}) from default.yaml"
+    assert str(hop_s) in doc, f"docstring does not cite the production hop_s ({hop_s}) from default.yaml"
+    assert "fallback" in doc.lower(), "docstring must not present its own 1.0/0.5 defaults as the measured setting"

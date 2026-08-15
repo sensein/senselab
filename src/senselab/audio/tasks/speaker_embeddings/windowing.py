@@ -6,15 +6,18 @@ that workflow; a task importing it there would invert the dependency direction, 
 compose tasks and not the reverse. Promoted rather than duplicated -- two copies of a windowing
 grid drift the moment either is edited.
 
-**The defaults here are the detection defaults, and they are deliberate.** ``window_s=1.0`` with
-``hop_s=0.5`` trades embedding precision for temporal resolution: SpeechBrain speaker models are
-trained on multi-second utterances so an embedding below 1 s is noisier, but a 1.0 s window on a
-0.5 s hop yields one embedding per 0.5 s bucket, which is what eliminated the same-window dedup
-that previously dropped half of all consecutive same-cluster comparisons. Profile *enrollment*
-wants the opposite trade and passes ``window_s=2.0, hop_s=1.0`` explicitly -- measured at
-cross-file centroid stability 0.890 and cross-subject separation 0.168, against 0.331 for a
-0.5/0.25 grid carrying four times the windows. Two purposes, two measured settings; do not
-collapse them.
+**``window_s=1.0``, ``hop_s=0.5`` here are this function's own fallback, exercised only when a
+caller passes nothing -- neither production caller does.** ``audio_analysis.compute.harvest_pass``
+and ``adaptive.backends.embed_windows`` both pass explicit values sourced from
+``workflows/audio_analysis/data/run_config/default.yaml``'s ``embeddings:`` block, currently
+``window_s=0.5, hop_s=0.25``. That file's own derivation measured 1.0 s as *worse* for this job --
+ARI 0.70 at 0.5 s against 0.48 at 1.0 s on a 4-speaker validation clip, because a 1.0 s window
+straddles turn boundaries. The 1.0/0.5 pair below predates that measurement and is kept only as a
+conservative fallback for a caller that supplies no config. Profile *enrollment* wants a third,
+different trade and passes ``window_s=2.0, hop_s=1.0`` explicitly -- measured at cross-file
+centroid stability 0.890 and cross-subject separation 0.168, against 0.331 for a 0.5/0.25 grid
+carrying four times the windows. Three numbers, three separately measured jobs; do not collapse
+them.
 """
 
 from __future__ import annotations
@@ -90,6 +93,7 @@ def extract_per_window_embeddings(
     hop_s: float = 0.5,
     device: DeviceType | None = None,
     failures: dict[str, str] | None = None,
+    revision: str | None = None,
 ) -> dict[str, list[WindowEmbedding]]:
     """Run each embedding model on every fixed window of ``audio``.
 
@@ -103,6 +107,15 @@ def extract_per_window_embeddings(
             ``{model_id → reason}`` for any model that produced an empty result.
             The caller can fold these into ``incomparable_reasons`` so silent
             empty-vote behavior is auditable.
+        revision: The commit SHA (or ref) to load every model in ``models`` at. ``None`` (the
+            default) resolves each model's own ``"main"`` to a SHA independently, which is what
+            the two existing production callers get since neither passes this. Always resolved to
+            a full 40-hex SHA before ``SpeechBrainModel`` construction -- through
+            ``resolve_revision``, which short-circuits for free when this is already a SHA -- so
+            the model that loads is never addressed by a mutable ref. A caller that has already
+            resolved its own commit (e.g. ``estimate_speaker_embedding_from_audios``) passes it
+            here specifically so the SHA it records in provenance is the SHA that produced the
+            vector, not a second, possibly different, resolution of ``"main"``.
 
     Returns:
         ``{model_id → [WindowEmbedding, ...]}``. Each list shares the same window
@@ -140,7 +153,15 @@ def extract_per_window_embeddings(
     out: dict[str, list[WindowEmbedding]] = {}
     for model_id in models:
         try:
-            sb_model: SpeechBrainModel = SpeechBrainModel(path_or_uri=model_id, revision="main")
+            # Imported inside the loop, not at module scope: a test patches
+            # `model_revision.resolve_revision` to avoid a live Hub call, and that patch is only
+            # visible to a call-time lookup of the name -- a module-level `from ... import` would
+            # bind the pre-patch function object here and never see the substitution. Same
+            # constraint as `api._resolve_embedding_model`.
+            from senselab.utils.model_revision import resolve_revision
+
+            resolved_revision = resolve_revision(model_id, revision or "main")
+            sb_model: SpeechBrainModel = SpeechBrainModel(path_or_uri=model_id, revision=resolved_revision)
             tensors = extract_speaker_embeddings_from_audios(audios=audio_slices, model=sb_model, device=device)
             entries: list[WindowEmbedding] = []
             for (start_s, end_s), t in zip(spans, tensors, strict=False):

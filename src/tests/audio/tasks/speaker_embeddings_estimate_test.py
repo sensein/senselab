@@ -163,6 +163,132 @@ def test_source_files_are_recorded_when_available(monkeypatch: pytest.MonkeyPatc
     assert isinstance(result.provenance.source_files, list)
 
 
+def test_the_resolved_commit_sha_is_what_gets_threaded_to_extraction(monkeypatch: pytest.MonkeyPatch, axes) -> None:  # noqa: ANN001
+    """Provenance must record the same commit that extraction was actually asked to load with.
+
+    Regression: `estimate_speaker_embedding_from_audios` resolved `commit_sha` for provenance but
+    never passed it onward, so `extract_per_window_embeddings` (before its own fix) loaded
+    `revision="main"` regardless -- a caller pinning an old commit got that SHA recorded while
+    current-main weights loaded. This freezes that `commit_sha` is threaded through as the
+    `revision=` kwarg, so the two cannot drift apart silently again.
+    """
+    from senselab.audio.tasks.speaker_embeddings import api as est_api
+
+    target, _ = axes
+    captured_revisions: list[object] = []
+
+    def fake(audio, models, device=None, window_s=2.0, hop_s=1.0, revision=None, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        captured_revisions.append(revision)
+        model_id = str(models[0]) if models else "stub/model"
+        vectors = _cone(target, 10, 0.03, 1)
+        return {
+            model_id: [
+                est_api.WindowEmbedding(start_s=float(i) * hop_s, end_s=float(i) * hop_s + window_s, vector=v)
+                for i, v in enumerate(vectors)
+            ]
+        }
+
+    monkeypatch.setattr(est_api, "extract_per_window_embeddings", fake)
+    monkeypatch.setattr(
+        est_api, "_resolve_embedding_model", lambda model: ("speechbrain/spkrec-ecapa-voxceleb", "e" * 40, None)
+    )
+
+    result = estimate_speaker_embedding_from_audios([_audio()])
+
+    assert captured_revisions == ["e" * 40]
+    assert result.provenance.model_commit_sha == "e" * 40
+
+
+def test_a_partial_extraction_failure_is_recorded_not_swallowed(monkeypatch: pytest.MonkeyPatch, axes) -> None:  # noqa: ANN001
+    """One file's model failure must be visible in provenance, not just a silently thinner estimate.
+
+    Regression: this function was the only caller of `extract_per_window_embeddings` that omitted
+    `failures=`, so a model crashing on one file out of several vanished into an empty window list
+    with no trace -- `n_windows_dropped` stayed 0 and the failed file still appeared unmarked in
+    `source_files`.
+    """
+    from senselab.audio.tasks.speaker_embeddings import api as est_api
+
+    target, _ = axes
+    call_index = {"i": 0}
+
+    def fake(audio, models, device=None, window_s=2.0, hop_s=1.0, failures=None, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        model_id = str(models[0])
+        i = call_index["i"]
+        call_index["i"] += 1
+        if i == 0:
+            if failures is not None:
+                failures[model_id] = "model failed during extraction: RuntimeError('boom')"
+            return {model_id: []}
+        vectors = _cone(target, 10, 0.03, 2)
+        return {
+            model_id: [
+                est_api.WindowEmbedding(start_s=float(j) * hop_s, end_s=float(j) * hop_s + window_s, vector=v)
+                for j, v in enumerate(vectors)
+            ]
+        }
+
+    monkeypatch.setattr(est_api, "extract_per_window_embeddings", fake)
+    monkeypatch.setattr(
+        est_api, "_resolve_embedding_model", lambda model: ("speechbrain/spkrec-ecapa-voxceleb", "f" * 40, None)
+    )
+
+    result = estimate_speaker_embedding_from_audios([_audio(), _audio()], file_ids=["failed-file", "ok-file"])
+
+    assert result.provenance.extraction_failures == {
+        "failed-file": "model failed during extraction: RuntimeError('boom')"
+    }
+    assert "ok-file" not in result.provenance.extraction_failures
+    assert result.provenance.n_windows_used == 10
+
+
+def test_every_file_failing_raises_the_real_cause_not_a_duration_guess(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A model that cannot load must not be misdiagnosed as "are the inputs shorter than window_s?".
+
+    Regression: with no `failures=` collector, a total extraction failure and a genuinely
+    too-short input produced the exact same generic message, hiding which one actually happened.
+    """
+    from senselab.audio.tasks.speaker_embeddings import api as est_api
+
+    def fake(audio, models, device=None, window_s=2.0, hop_s=1.0, failures=None, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        model_id = str(models[0])
+        if failures is not None:
+            failures[model_id] = "model failed during extraction: OSError('no space left on device')"
+        return {model_id: []}
+
+    monkeypatch.setattr(est_api, "extract_per_window_embeddings", fake)
+    monkeypatch.setattr(
+        est_api, "_resolve_embedding_model", lambda model: ("speechbrain/spkrec-ecapa-voxceleb", "f" * 40, None)
+    )
+
+    with pytest.raises(ValueError, match="no space left on device"):
+        estimate_speaker_embedding_from_audios([_audio()])
+
+
+def test_file_ids_replace_the_positional_placeholder(monkeypatch: pytest.MonkeyPatch, axes) -> None:  # noqa: ANN001
+    """Caller-supplied ids must key every per-file block, not the `audio-0`/`audio-1` fallback.
+
+    Regression: `Audio.filepath()` is empty for any in-memory or preprocessed audio (this module's
+    own docstring recommends `resample_audios`, which drops `filepath`), so the positional fallback
+    made `source_files`, `vectors_per_file`, `within_file` and `leave_one_file_out_cos` all
+    unmappable back to a real recording.
+    """
+    target, _ = axes
+    _patch_extraction(monkeypatch, [_cone(target, 10, 0.03, 1), _cone(target, 10, 0.03, 2)])
+
+    result = estimate_speaker_embedding_from_audios([_audio(), _audio()], file_ids=["patient-01", "patient-02"])
+
+    assert result.provenance.source_files == ["patient-01", "patient-02"]
+    assert result.distribution is not None
+    assert set(result.distribution.within_file) == {"patient-01", "patient-02"}
+
+
+def test_file_ids_length_mismatch_raises(monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    """A miscounted id list must fail loudly rather than silently mis-map files to ids."""
+    with pytest.raises(ValueError, match="file_ids"):
+        estimate_speaker_embedding_from_audios([_audio(), _audio()], file_ids=["only-one"])
+
+
 def test_the_real_extraction_boundary_is_crossed_correctly(monkeypatch: pytest.MonkeyPatch, axes) -> None:  # noqa: ANN001
     """Regression test for a boundary bug the other tests structurally cannot see.
 

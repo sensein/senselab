@@ -1,4 +1,4 @@
-# Speech to text evaluation
+# Speaker embedding extraction
 
 
 <button class="tutorial-button" onclick="window.location.href='https://github.com/sensein/senselab/blob/main/tutorials/audio/extract_speaker_embeddings.ipynb'">Tutorial</button>
@@ -41,11 +41,14 @@ Always refer to the most recent literature for up-to-date benchmarks.
 Windowing appears in two places in this task family, tuned for two different jobs, and the two settings must not be
 collapsed into one "the" default:
 
-- **Detection / temporal resolution** -- `windowing.extract_per_window_embeddings`'s own defaults,
-  `window_s=1.0, hop_s=0.5`. ECAPA / ResNet embeddings get noisier below 1 s but stay functional; the 0.5 s hop was
-  chosen to land one embedding per 0.5 s bucket on `audio_analysis`'s bucket grid, which is what removed the
-  same-window dedup that used to drop half of consecutive same-cluster comparisons. See
-  `workflows/audio_analysis/embeddings.py`'s "Why 1.0 s / 0.5 s defaults" section for the full measurement.
+- **Detection / temporal resolution** -- `windowing.extract_per_window_embeddings`'s own fallback defaults,
+  `window_s=1.0, hop_s=0.5`, exercised only when a caller passes nothing. Neither production caller does:
+  `audio_analysis`'s `data/run_config/default.yaml` runs the workflow at `window_s=0.5, hop_s=0.25`, and that file's
+  own derivation measured 1.0 s as *worse* for this job -- ARI 0.70 at 0.5 s against 0.48 at 1.0 s on a 4-speaker
+  validation clip, because a 1.0 s window straddles turn boundaries. See
+  `workflows/audio_analysis/embeddings.py`'s "Why 1.0 s / 0.5 s defaults" section for the function-level rationale
+  behind the fallback pair, and `default.yaml`'s own derivation comment for the measurement that supersedes it in
+  every real run.
 - **Profile enrollment / centroid stability** -- `estimate_speaker_embedding_from_audios`'s defaults,
   `window_s=2.0, hop_s=1.0` (`PROFILE_WINDOW_S`, `PROFILE_HOP_S` in `api.py`). Measured directly for this job: a
   2.0 s window on a 1.0 s hop gave cross-file centroid stability 0.890 and cross-subject separation 0.168, against
