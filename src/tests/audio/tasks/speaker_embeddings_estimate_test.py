@@ -46,7 +46,12 @@ def _patch_extraction(monkeypatch: pytest.MonkeyPatch, per_audio_vectors: list[n
     def fake(audio, models, device=None, window_s=2.0, hop_s=1.0, **kwargs):  # noqa: ANN001, ANN003, ANN202
         vectors = per_audio_vectors[calls["i"]]
         calls["i"] += 1
-        model_id = str(models[0].path_or_uri) if models else "stub/model"
+        # `models` is a list of plain id strings -- `extract_per_window_embeddings`'s real
+        # contract -- not model objects; a fake that expected `.path_or_uri` here would pass
+        # even when the estimator called the real function with the wrong type, which is
+        # exactly the boundary bug `test_the_real_extraction_boundary_is_crossed_correctly`
+        # below exists to catch instead.
+        model_id = str(models[0]) if models else "stub/model"
         return {
             model_id: [
                 est_api.WindowEmbedding(start_s=float(i) * hop_s, end_s=float(i) * hop_s + window_s, vector=v)
@@ -156,3 +161,52 @@ def test_source_files_are_recorded_when_available(monkeypatch: pytest.MonkeyPatc
     audio.metadata["source"] = "unused"
     result = estimate_speaker_embedding_from_audios([audio])
     assert isinstance(result.provenance.source_files, list)
+
+
+def test_the_real_extraction_boundary_is_crossed_correctly(monkeypatch: pytest.MonkeyPatch, axes) -> None:  # noqa: ANN001
+    """Regression test for a boundary bug the other tests structurally cannot see.
+
+    Every other test in this file monkeypatches `extract_per_window_embeddings` itself, which is
+    precisely the seam a call-site type mismatch lives on -- a fake standing in for the whole
+    function can accept whatever the estimator happens to pass it, real contract or not. A prior
+    version of the estimator passed a `SenselabModel` object where `extract_per_window_embeddings`
+    declares (and its real body assumes) a plain model-id string; every one of the other tests
+    still passed, because their fake never exercised that body.
+
+    This test instead lets the real `extract_per_window_embeddings` run -- real `window_starts`,
+    real `slice_audio`, real per-window loop, real `SpeechBrainModel(path_or_uri=model_id, ...)`
+    construction -- and only replaces the one call inside it that would otherwise load a model:
+    `extract_speaker_embeddings_from_audios`. `SpeechBrainModel` construction still runs for real,
+    so a wrong-typed id would still fail pydantic's `path_or_uri: Union[str, Path]` validation
+    exactly as it did in production; only the two network-touching leaf calls inside that
+    construction (`check_hf_repo_exists`, `resolve_revision`) are stubbed, so no HTTP request and
+    no model download happen anywhere in this test.
+    """
+    from senselab.audio.tasks.speaker_embeddings import windowing as windowing_module
+    from senselab.utils import model_revision as model_revision_module
+    from senselab.utils.data_structures import model as model_module
+
+    monkeypatch.setattr(model_module, "check_hf_repo_exists", lambda **kwargs: True)  # noqa: ANN003
+    monkeypatch.setattr(model_revision_module, "resolve_revision", lambda *a, **k: "d" * 40)  # noqa: ANN002, ANN003
+
+    target, _ = axes
+    synthetic_vector = torch.from_numpy(_cone(target, 1, 0.0, 7)[0]).float()
+
+    def fake_extract_embeddings(audios, model=None, device=None):  # noqa: ANN001, ANN202
+        # Stands in for the one call in `extract_per_window_embeddings` that would otherwise load
+        # ECAPA and run real inference; everything upstream of it (windowing, model construction)
+        # is real.
+        return [synthetic_vector for _ in audios]
+
+    monkeypatch.setattr(windowing_module, "extract_speaker_embeddings_from_audios", fake_extract_embeddings)
+
+    result = estimate_speaker_embedding_from_audios([_audio()])
+
+    assert isinstance(result.vector, list)
+    assert np.linalg.norm(np.asarray(result.vector)) == pytest.approx(1.0)
+    # provenance.model_id must still be the plain id string, and _resolve_embedding_model's own
+    # resolution (shared with HFModel's, both routed through the same patched `resolve_revision`)
+    # must still produce a real 40-hex commit rather than a ref.
+    assert result.provenance.model_id == "speechbrain/spkrec-ecapa-voxceleb"
+    assert result.provenance.model_commit_sha == "d" * 40
+    assert result.provenance.unresolved_reason is None
