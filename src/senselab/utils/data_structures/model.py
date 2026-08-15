@@ -86,9 +86,30 @@ class HFModel(SenselabModel[PROVIDER_T]):
         path_or_uri = info.data["path_or_uri"]
         if not isinstance(path_or_uri, Path):
             if (str(path_or_uri), value) not in cls._hf_cache:
-                cls._hf_cache[(str(path_or_uri), value)] = check_hf_repo_exists(
-                    repo_id=str(path_or_uri), revision=value, repo_type="model"
-                )
+                try:
+                    cls._hf_cache[(str(path_or_uri), value)] = check_hf_repo_exists(
+                        repo_id=str(path_or_uri), revision=value, repo_type="model"
+                    )
+                except Exception as exc:
+                    # check_hf_repo_exists answers False only for "genuinely absent"; it
+                    # deliberately re-raises GatedRepoError and transient Hub errors rather than
+                    # letting either masquerade as "missing". Those are OSError / httpx.HTTPError
+                    # subclasses, and pydantic converts only ValueError and AssertionError raised
+                    # inside a validator into ValidationError -- so they escaped this validator
+                    # unwrapped, the same defect fixed in _resolve_commit_sha below. A caller
+                    # guarding HFModel(...) with `except ValidationError` saw an unrelated crash
+                    # from whichever of the two validators failed first.
+                    #
+                    # The cost, measured on pydantic 2.13.3: wrapping erases the failure's type.
+                    # The resulting ValidationError has __cause__ is None, and
+                    # errors()[0]["ctx"]["error"] is this ValueError, so a caller can no longer
+                    # tell "Hub outage" from "no such model" by exception type -- only by message,
+                    # which is why the original type's name is put in it. The original exception
+                    # itself survives one level deeper, at
+                    # errors()[0]["ctx"]["error"].__cause__, solely because of the `from exc`.
+                    raise ValueError(
+                        f"Could not verify the huggingface model {path_or_uri}@{value}: {type(exc).__name__}: {exc}"
+                    ) from exc
 
             if not cls._hf_cache[(str(path_or_uri), value)]:
                 raise ValueError(
@@ -123,7 +144,9 @@ class HFModel(SenselabModel[PROVIDER_T]):
         # ValueError/AssertionError raised inside a validator into ValidationError, so a RuntimeError
         # would escape unhandled — and every caller that catches ValidationError/ValueError around
         # HFModel(...) (the pattern the `revision` field validator above establishes) would see an
-        # unrelated crash instead. Re-raise as ValueError so it wraps consistently.
+        # unrelated crash instead. Re-raise as ValueError so it wraps consistently -- at the cost
+        # of the failure's type, which pydantic erases from the ValidationError; see the same
+        # trade-off spelled out in validate_hf_model_id above.
         try:
             self.commit_sha = resolve_revision(str(self.path_or_uri), self.revision)
         except RevisionResolutionError as exc:
