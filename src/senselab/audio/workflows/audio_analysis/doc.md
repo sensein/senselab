@@ -160,13 +160,25 @@ split; it does not prevent it, and a split run is usually worthless rather than 
 So a run resolves each `(repo_id, ref)` **exactly once**, and every participant binds to that answer:
 
 ```bash
-# One submission, one run: every node, task and subprocess venv shares the id.
-export SENSELAB_RUN_ID="$SLURM_JOB_ID"
+# One submission, one run: leave the variable unset and senselab derives the id itself.
 uv run python scripts/analyze_audio.py audio.wav
 ```
 
-Leave it unset and senselab generates a UUID4 at first use and exports it to every subprocess it
-spawns, so a bare launch is its own self-consistent run with no configuration required.
+**Leave it unset.** Senselab derives a run id at first use — `SLURM_ARRAY_JOB_ID` if set, else
+`SLURM_JOB_ID`, else a UUID4 — and exports it to every subprocess it spawns. The array job id comes
+first because it is the one identifier every task of an array shares: a bare launch, a single job
+and an N-task array each end up as one self-consistent run with no configuration required.
+
+Set it explicitly only to force a grouping senselab cannot infer — several submissions that must
+count as one run, or one submission you want split into several. If you do set it for an array,
+set it to `$SLURM_ARRAY_JOB_ID`:
+
+```bash
+# Correct for an array. $SLURM_JOB_ID is *per-task*, so exporting that gives each task its own
+# run id and reintroduces exactly the split this section exists to prevent -- and an explicit
+# SENSELAB_RUN_ID outranks the fallback above, so it is not rescued.
+export SENSELAB_RUN_ID="$SLURM_ARRAY_JOB_ID"
+```
 
 The bindings live in `$SENSELAB_CACHE/runs/<run_id>/resolutions.json`, mapping
 `"<repo_id>@<ref>" -> "<40-hex commit>"`. Resolution consults it before the local `refs/` read and

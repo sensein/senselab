@@ -55,9 +55,13 @@ def test_lock_directory_is_setgid_and_group_writable(tmp_path: Path) -> None:
 def test_a_caller_directory_is_not_chmodded_when_unmanaged(tmp_path: Path) -> None:
     """A lock over a caller-supplied path must not touch that directory's permissions.
 
-    Finding #8 of the #550 review: locking a FileRef under a read-restricted dataset tree
-    silently chmodded the caller's directory to 2775 (setgid + group-write). With
-    ``manage_dir_mode=False`` the directory is left exactly as found.
+    Finding #8 of the #550 review: locking a FileRef in a caller's own private directory
+    chmodded that directory from 0700 to 0o2775 -- setgid and group-write, and also
+    other-read and other-execute, so a directory its owner deliberately made private became
+    world-traversable as a side effect of dropping a ``.lock`` in it. (A directory owned by
+    someone *else* was never at risk: chmod returns EPERM there and ``_ensure_dir`` swallows
+    it. The victim is the invoking user.) With ``manage_dir_mode=False`` the directory is
+    left exactly as found.
     """
     data_dir = tmp_path / "restricted"
     data_dir.mkdir()
