@@ -17,6 +17,7 @@ torch *and* transformers, and :attr:`StageContext.device_label` only reads
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,10 @@ if TYPE_CHECKING:  # pragma: no cover — avoids a runtime torch+transformers im
     from senselab.utils.data_structures import DeviceType
 
 __all__ = ["STAGE_VERSIONS", "PassPlan", "StageContext", "stage_code_version"]
+
+# The package logger by name rather than through ``senselab.utils.data_structures``, whose import
+# is exactly the torch+transformers pull this module's header refuses.
+logger = logging.getLogger("senselab")
 
 
 _DEFAULT_REVISION_REF: Final[str] = "main"
@@ -195,31 +200,61 @@ class StageContext:
         )
 
     def _commit_sha_for(self, model_id: str | None) -> str | None:
-        """Resolve ``model_id`` to this run's commit SHA, or ``None`` when there is none to pin.
+        """Resolve ``model_id`` to this run's commit SHA, or ``None`` when there is no commit to pin.
 
         Resolution has to happen here, above the load, because the cache key is computed to decide
         *whether* to load at all — a SHA harvested during loading would arrive too late to key on.
 
-        Any id that cannot be resolved to a commit degrades to ``None`` rather than aborting:
+        That placement is also why this is *not* the same decision as
+        ``signal.resolved_commit_sha``'s, which degrades every failure to ``None``. That function
+        fills in a provenance **record**, where "unknown commit" is an honest and cheap answer.
+        Here ``None`` is a **key** component (``cached_inference.cache_key``'s ``commit_sha``), and
+        every id that degrades to it shares one bucket — so two different upstream commits of the
+        same model would collide, and the second run would be served the first one's result. Three
+        outcomes, therefore, three treatments:
 
-        - a bare ``None`` (a model-less stage, e.g. ``features``) or a name with no ``/`` (a local
-          backend): cannot be a Hub id, so short-circuit without a Hub round-trip;
-        - **any** resolution failure — the repo does not exist (a non-Hub backend whose alias
-          happens to contain a ``/``, e.g. YAMNet's ``"google/yamnet"``, or a local absolute path),
-          a transient rate-limit / network error, or a gated repo we lack access to. All of these
-          leave the cache key un-pinned instead of crashing the stage before any cache lookup runs.
+        - **Not a Hub id at all** — a bare ``None`` (a model-less stage, e.g. ``features``) or a
+          name with no ``/`` (a local backend). Short-circuits with no Hub round-trip.
+        - **A definitive not-found** (``RepositoryNotFoundError``) — the Hub has answered, and the
+          answer is that no commit exists. ``None`` is then the *correct* value rather than a
+          degradation, and it is stable across runs, so no two commits can collide behind it. This
+          is the crash being fixed: ``default.yaml`` ships ``yamnet: google/yamnet``, a TensorFlow
+          backend whose id happens to contain a ``/`` and so trips the Hub-id heuristic above.
+        - **Anything else** — a 429, a network error, a ``GatedRepoError`` — propagates. Those all
+          mean "we could not tell", which is unsound for a key: the load may well succeed, and its
+          result would be stored under a commit-blind key that a later run cannot distinguish from
+          any other commit's. ``GatedRepoError`` **subclasses** ``RepositoryNotFoundError``, so it
+          has to be excluded by hand; ``dependencies._ensure_hf_model`` makes the identical split
+          for the identical reason.
 
-        This shares ``signal.resolved_commit_sha`` so there is a single place that decides how a
-        resolution failure degrades, and the two stay consistent. Degrading here is safe because the
-        cache key is not the load: reproducibility strictness (refusing a mutable ref) lives in the
-        loaders, so a genuine typo still fails at load — this only stops a Hub blip or a non-Hub id
-        from taking down cache-key computation.
+        Alternatives considered: ``_YAMNET_ALIASES`` already accepts a bare ``"yamnet"``
+        (``classification/api.py``), so setting ``default.yaml``'s ``yamnet:`` to ``yamnet`` would
+        remove this specific crash without touching cache-key semantics at all — strictly smaller.
+        It was not taken because it fixes one config value rather than the class: any non-Hub
+        backend whose id carries a ``/`` hits the same abort, and the heuristic cannot tell them
+        apart without asking the Hub.
         """
         if not model_id or "/" not in model_id:
             return None
-        from senselab.audio.workflows.audio_analysis.signal import resolved_commit_sha
+        from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
 
-        return resolved_commit_sha(model_id, _DEFAULT_REVISION_REF)
+        try:
+            return resolve_revision(model_id, ref=_DEFAULT_REVISION_REF)
+        except RevisionResolutionError as exc:
+            # Imported here, not at module scope, so the success path never pays for it — and so
+            # this module stays importable by a caller that only wants a cache key.
+            from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+
+            cause = exc.__cause__  # resolve_revision wraps the Hub error it failed on.
+            if isinstance(cause, RepositoryNotFoundError) and not isinstance(cause, GatedRepoError):
+                logger.warning(
+                    "%s is not a Hub repository (%s); its cache key carries no commit. "
+                    "Expected for a local backend whose id contains a '/'.",
+                    model_id,
+                    type(cause).__name__,
+                )
+                return None
+            raise
 
     def align_key_for(
         self,
