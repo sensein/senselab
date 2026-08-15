@@ -32,6 +32,7 @@
             <ul>
                     <li><a href="data_structures/audio.html">audio</a></li>
                     <li><a href="data_structures/audio_classification_result.html">audio_classification_result</a></li>
+                    <li><a href="data_structures/audio_hints.html">audio_hints</a></li>
             </ul>
 
 
@@ -55,10 +56,16 @@
 
                         <label class="view-source-button" for="mod-data_structures-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module contains data structures for audio processing.&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.audio</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span><span class="p">,</span> <span class="n">batch_audios</span><span class="p">,</span> <span class="n">unbatch_audios</span>  <span class="c1"># noqa: F401</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.audio_classification_result</span><span class="w"> </span><span class="kn">import</span> <span class="n">AudioClassificationResult</span>  <span class="c1"># noqa: F401</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;This module contains data structures for audio processing.&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.audio</span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span><span class="p">,</span> <span class="n">batch_audios</span><span class="p">,</span> <span class="n">unbatch_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.audio_classification_result</span><span class="w"> </span><span class="kn">import</span> <span class="n">AudioClassificationResult</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.audio_hints</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">AudioHints</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">ExpectedSpeech</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">SpeakerEmbeddingProvenance</span><span class="p">,</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">TargetSpeakerEmbedding</span><span class="p">,</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="p">)</span>
 </span></pre></div>
 
 
