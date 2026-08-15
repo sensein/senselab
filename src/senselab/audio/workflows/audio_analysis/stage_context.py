@@ -260,11 +260,15 @@ class StageContext:
                 # Not memoized, and deliberately so: `model_revision` remembers successes only, so a
                 # definitive not-found is re-resolved on every call — twice per stage, since
                 # `stages.py` asks once for the key and once for the provenance. Acceptable because
-                # the verdict is cheap: `HFValidationError` never leaves the process, and a 404 is a
-                # single request (`retry_on_transient_error` does not retry a non-transient 4xx). A
-                # negative memo would buy back milliseconds and owe an invalidation story a positive
-                # one does not — a repo that 404s while it is being created, or a path that appears
-                # mid-run, must not stay not-found for the life of the process.
+                # the verdict is cheap: `HFValidationError` never leaves the process, and the 404 is
+                # one request — `_resolve_uncached` calls `HfApi.model_info` directly, so it never
+                # passes through `retry_on_transient_error`, which on this branch still reads a 404
+                # as transient and would spend 1s + 2s of backoff on it. (That misclassification is
+                # #554's subject; fixing it there is what keeps this cheap if the resolution path is
+                # ever wrapped in retries.) A negative memo would buy back those milliseconds and owe
+                # an invalidation story a positive one does not — a repo that 404s while it is being
+                # created, or a path that appears mid-run, must not stay not-found for the life of
+                # the process.
                 logger.warning(
                     "%s is not a Hub repository (%s); its cache key carries no commit. "
                     "Expected for a local backend whose id contains a '/', or a local filesystem path.",
