@@ -256,12 +256,23 @@ def diarize_audios_with_diarizen(
         # Stage via the *ref*, not a resolved SHA. DiariZenPipeline.from_pretrained() loads bare
         # (no revision parameter) and resolves the "main" ref inside the offline cache, so its only
         # link to the run's commit is the refs/<ref> pointer that hf_subprocess_env -> resolve_model
-        # -> _point_ref_at writes at the manifest-pinned commit. Passing a SHA here makes
-        # _point_ref_at a no-op -- its ref argument is already a SHA -- leaving the bare offline load
-        # with no pointer to resolve, so it fails outright under HF_HUB_OFFLINE=1 (reproduced on a
-        # cold cache). resolve_model still pins through the run manifest either way, so the staged
-        # commit is unchanged; only whether refs/<ref> is written differs. The embedding-model
-        # dependency (pyannote/wespeaker-voxceleb-resnet34-LM) is staged at "main" as before, since
+        # -> _point_ref_at re-points at the manifest-pinned commit. Passing a SHA here makes
+        # _point_ref_at return immediately -- its ref argument is already a SHA -- so refs/<ref> is
+        # never re-pointed and keeps whatever "main" resolved to when it was last written on this
+        # host.
+        #
+        # The severe form needs no unusual cache state. On node B of a multi-node sweep where the
+        # manifest pins sha1 and upstream has since moved to sha2: the HFModel *field* validator
+        # runs first and stages live "main" (refs/main = sha2), the *model* validator then sets
+        # commit_sha = sha1 from the manifest, this backend stages sha1 by SHA, _point_ref_at
+        # no-ops, and the bare worker loads sha2 while provenance records sha1 -- the
+        # confidently-wrong provenance model_revision.py exists to prevent, in exactly the sweep
+        # the manifest was built for. Where no refs/main exists at all (a cache reached only as
+        # snapshots/<sha>), the same defect fails loudly instead: the bare offline load has no
+        # pointer to resolve and dies under HF_HUB_OFFLINE=1 (reproduced on a cold cache).
+        # resolve_model still pins through the run manifest either way, so the staged commit is
+        # unchanged; only where refs/<ref> points differs. The embedding-model dependency
+        # (pyannote/wespeaker-voxceleb-resnet34-LM) is staged at "main" as before, since
         # DiariZenPipeline resolves it internally with no hook for the caller to pin it. Matches
         # text_to_speech/qwen_tts.py and revision_pinning_guard_test's
         # LOADER_CANNOT_PIN_SUBPROCESS_FILES invariant.
