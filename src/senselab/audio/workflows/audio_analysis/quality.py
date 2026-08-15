@@ -51,7 +51,7 @@ from senselab.audio.tasks.quality_control.metrics import (
     spectral_gating_snr_metric,
 )
 from senselab.audio.tasks.scene_quality.brouhaha import BROUHAHA_MODEL_ID, BROUHAHA_REVISION, BrouhahaFrames
-from senselab.audio.workflows.audio_analysis.embeddings import _slice_audio, _window_starts
+from senselab.audio.tasks.speaker_embeddings.windowing import slice_audio, window_starts
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.resolution import resample_series
 from senselab.audio.workflows.audio_analysis.shapes import Series
@@ -266,11 +266,11 @@ def harvest_quality_measurements(
     if duration_s <= 0:
         return []
 
-    starts = _window_starts(duration_s, QUALITY_ANALYSIS_WIN_S, QUALITY_ANALYSIS_HOP_S)
+    starts = window_starts(duration_s, QUALITY_ANALYSIS_WIN_S, QUALITY_ANALYSIS_HOP_S)
     analysis: list[dict[str, Any]] = []
     for t in starts:
         end = min(duration_s, t + QUALITY_ANALYSIS_WIN_S)
-        window = _analysis_window(_slice_audio(audio, t, end), brouhaha, t, end)
+        window = _analysis_window(slice_audio(audio, t, end), brouhaha, t, end)
         window["_center"] = 0.5 * (t + end)
         analysis.append(window)
 
@@ -353,14 +353,14 @@ def quality_series(*, audio: Audio, brouhaha: Optional[BrouhahaFrames]) -> dict[
     duration_s = float(audio.waveform.shape[-1]) / float(audio.sampling_rate)
     if duration_s <= 0:
         return {}
-    starts = _window_starts(duration_s, QUALITY_ANALYSIS_WIN_S, QUALITY_ANALYSIS_HOP_S)
+    starts = window_starts(duration_s, QUALITY_ANALYSIS_WIN_S, QUALITY_ANALYSIS_HOP_S)
     if not starts:
         return {}
 
     windows = []
     for t in starts:
         end = min(duration_s, t + QUALITY_ANALYSIS_WIN_S)
-        windows.append(_analysis_window(_slice_audio(audio, t, end), brouhaha, t, end))
+        windows.append(_analysis_window(slice_audio(audio, t, end), brouhaha, t, end))
 
     out: dict[str, Series] = {}
     for name in QUALITY_SIGNALS:
