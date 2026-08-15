@@ -943,7 +943,15 @@ def call_in_venv(
     file_locks: list[SharedFileLock] = []
     for value in effective_args.values():
         if isinstance(value, FileRef) and value.lock:
-            fl = SharedFileLock(value.path, timeout=value.lock_timeout)
+            # manage_dir_mode=False: value.path is caller-supplied, so the directory we are about
+            # to drop a .lock into is the *invoking user's own* — a stranger's would be left alone
+            # anyway, since chmod(2) returns EPERM unless the effective UID owns it and
+            # `_ensure_dir` swallows that. The user's own directory is the one that actually
+            # changes, and the change widens it: measured, a 0o700 input directory comes back
+            # 0o2775 — setgid + group-write *and* other-read + other-execute, i.e. world traversal
+            # of a directory its owner made private, as a side effect of taking a lock. So the mode
+            # management senselab's own cache dirs want is exactly wrong here.
+            fl = SharedFileLock(value.path, timeout=value.lock_timeout, manage_dir_mode=False)
             fl.__enter__()
             file_locks.append(fl)
 

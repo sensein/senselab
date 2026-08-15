@@ -887,3 +887,56 @@ def test_every_worker_spawn_goes_through_the_shared_env_helper() -> None:
 
     assert not missing_env, "venv-python spawns with no env (they inherit os.environ): " + ", ".join(missing_env)
     assert not hand_rolled, "env built from os.environ outside subprocess_venv.py: " + ", ".join(hand_rolled)
+
+
+def test_a_file_ref_lock_leaves_the_callers_directory_mode_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Locking an input file must not widen the directory the caller keeps it in.
+
+    `file_lock_test` covers the primitive: `SharedFileLock(..., manage_dir_mode=False)` leaves a
+    directory's mode alone. It cannot cover the thing that actually broke, which is that
+    `call_in_venv` is the only construction site of a locked `FileRef` in the repo and the
+    primitive's default is still `True` — drop the keyword there and every test in that file
+    still passes while a caller's `0700` directory goes back to being chmodded to `0o2775`
+    (setgid, group-write, *and* other-read/other-execute) on every locked call.
+
+    So this drives the real call path with the subprocess faked out, and asserts on the
+    directory rather than on the argument: an assertion about a call signature would survive
+    the argument moving into a helper or a default, and would say nothing about permissions.
+    """
+    data_dir = tmp_path / "private"
+    data_dir.mkdir()
+    os.chmod(data_dir, 0o700)  # pin an exact private mode regardless of the runner's umask
+    audio = data_dir / "input.wav"
+    audio.write_bytes(b"x")
+
+    monkeypatch.setattr(subprocess_venv, "ensure_venv", lambda *a, **k: tmp_path / "venv")
+    monkeypatch.setattr(subprocess_venv, "venv_python", lambda *a, **k: str(tmp_path / "venv" / "bin" / "python"))
+
+    mode_while_held: list[int] = []
+    lock_seen: list[bool] = []
+
+    def fake_run(*args: object, **kwargs: object) -> "subprocess.CompletedProcess[str]":
+        # Sampled while the lock is held. `__exit__` never restores a mode it changed, so a
+        # post-hoc check would catch a regression too -- but the window the subprocess runs in
+        # is the window a directory would be exposed for, so that is where this looks.
+        mode_while_held.append(stat.S_IMODE(data_dir.stat().st_mode))
+        lock_seen.append(Path(str(audio) + ".lock").exists())
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout="OK", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    subprocess_venv.call_in_venv(
+        name="fake",
+        requirements=[],
+        module="fake_module",
+        function="fake_function",
+        args={"audio": subprocess_venv.FileRef(path=audio, lock=True)},
+    )
+
+    # The lock really was taken -- otherwise the mode assertion below would pass vacuously,
+    # for the uninteresting reason that nothing ever tried to chmod anything.
+    assert lock_seen == [True], "expected a .lock beside the input file; the FileRef lock path did not run"
+    assert mode_while_held == [0o700], f"caller dir was widened while held: {[oct(m) for m in mode_while_held]}"
+    assert stat.S_IMODE(data_dir.stat().st_mode) == 0o700
