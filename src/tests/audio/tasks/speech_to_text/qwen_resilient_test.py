@@ -49,6 +49,15 @@ def test_qwen_worker_env_built_via_hf_subprocess_env(tmp_path: Path, monkeypatch
         qwen_mod.QwenASR.transcribe_with_qwen([audio], model=model, return_timestamps=True, device=DeviceType.CPU)
 
     assert captured["repo_id"] == "Qwen/Qwen3-ASR-1.7B"
-    # A resolved commit SHA, never the mutable "main" ref -- the fix this test guards.
-    assert captured["revision"] == "f" * 40
-    assert captured["also"] == [("Qwen/Qwen3-ForcedAligner-0.6B", "f" * 40)]
+    # The *ref*, not the resolved SHA -- and this assertion is inverted from what it originally
+    # claimed, because the property it pinned was the defect. Staging is what makes
+    # resolve_model -> _point_ref_at re-point refs/<ref> at the run's pinned commit, and
+    # _point_ref_at returns immediately when its ref argument is already a SHA. Since upstream
+    # qwen_asr reads its processor config bare (AutoProcessor.from_pretrained(path,
+    # fix_mistral_regex=True), no revision passthrough), that read follows refs/<ref> whatever the
+    # payload pins: staging by SHA leaves it naming whatever "main" last resolved to on this host,
+    # or nothing at all on a cold cache. The pin itself is untouched -- the worker payload still
+    # carries the resolved SHA for the loads that accept one, which
+    # revision_pinning_guard_test.REVISION_RESOLVED_SUBPROCESS_FILES covers.
+    assert captured["revision"] == "main"
+    assert captured["also"] == [("Qwen/Qwen3-ForcedAligner-0.6B", "main")]
