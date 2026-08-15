@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import pytest
+from huggingface_hub.errors import RepositoryNotFoundError
 
 from senselab.utils.model_revision import (
     RevisionResolutionError,
@@ -16,6 +17,7 @@ from senselab.utils.model_revision import (
     resolve_revision,
     run_id,
 )
+from tests.utils.conftest import hub_error
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -202,7 +204,10 @@ def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatc
     def _flaky(_self: object, *, repo_id: str, revision: str) -> object:
         calls["n"] += 1
         if calls["n"] == 1:
-            raise ConnectionError("transient")  # classified transient by dependencies._is_transient
+            # A real 429 rather than a stand-in: the rate-limit burst is the case finding #3 is
+            # about, and it only classifies as transient because ``_is_transient`` reads the
+            # status off ``.response`` -- which no hand-rolled double would have exercised.
+            raise hub_error(429)
         return _Info()
 
     # Force the network path (no local cache hit) and make the retry backoff instant.
@@ -214,11 +219,21 @@ def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatc
     assert calls["n"] == 2, "the transient error must have been retried once"
 
 
-def test_resolution_still_fails_on_a_persistent_hub_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-transient (e.g. 404) or persistent error still surfaces as RevisionResolutionError."""
+def test_a_missing_repo_fails_without_being_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A genuine 404 surfaces as RevisionResolutionError on the first attempt.
+
+    The version of this test that shipped with the retry raised ``ValueError("not found")`` as a
+    stand-in for a 404. That passed for a reason a real 404 did not share -- a ``ValueError``
+    matches nothing in ``_TRANSIENT_EXCEPTIONS`` -- while the real
+    ``RepositoryNotFoundError`` classified as *transient* and was retried three times, which is
+    the opposite of what the docstring claimed. Use the real error, and assert the attempt count,
+    so the test fails if that regresses.
+    """
+    calls = {"n": 0}
 
     def _always(_self: object, *, repo_id: str, revision: str) -> object:
-        raise ValueError("not found")  # non-transient → not retried
+        calls["n"] += 1
+        raise hub_error(404, RepositoryNotFoundError)
 
     monkeypatch.setattr("senselab.utils.dependencies._get_cached_commit_hash", lambda *a, **k: None)
     monkeypatch.setattr("huggingface_hub.HfApi.model_info", _always)
@@ -226,3 +241,4 @@ def test_resolution_still_fails_on_a_persistent_hub_error(monkeypatch: pytest.Mo
 
     with pytest.raises(RevisionResolutionError):
         resolve_revision("org/model", "main")
+    assert calls["n"] == 1, "a 404 is a verdict, not a blip -- it must not be retried"
