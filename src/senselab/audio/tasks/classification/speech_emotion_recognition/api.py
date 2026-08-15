@@ -37,6 +37,7 @@ from senselab.utils.data_structures import (
     SenselabModel,
     SpeechBrainModel,
     _select_device_and_dtype,
+    device_run_opt,
     logger,
 )
 from senselab.utils.dependencies import hf_subprocess_env, resolve_model, speechbrain_loading_cwd, speechbrain_savedir
@@ -961,7 +962,7 @@ def _load_speechbrain_ser_model(model: SpeechBrainModel, device_type: DeviceType
         {"MODULES_NEEDED": modules_needed},
     )
 
-    run_opts = {"device": device_type.value}
+    run_opts = {"device": device_run_opt(device_type)}
     savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
     with speechbrain_loading_cwd(savedir):
         recognizer = recognizer_cls.from_hparams(  # type: ignore[attr-defined]

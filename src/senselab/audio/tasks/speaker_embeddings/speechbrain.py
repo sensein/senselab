@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F
 
 from senselab.audio.data_structures import Audio
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype, device_run_opt
 from senselab.utils.dependencies import (
     resolve_model,
     retry_on_transient_error,
@@ -71,7 +71,7 @@ class SpeechBrainEmbeddings:
                     EncoderClassifier.from_hparams,
                     source=str(snapshot_path),
                     savedir=str(savedir),
-                    run_opts={"device": device.value},
+                    run_opts={"device": device_run_opt(device)},
                 )
         return cls._models[key]
 
