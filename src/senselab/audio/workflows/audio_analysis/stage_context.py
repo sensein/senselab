@@ -17,6 +17,7 @@ torch *and* transformers, and :attr:`StageContext.device_label` only reads
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,10 @@ if TYPE_CHECKING:  # pragma: no cover — avoids a runtime torch+transformers im
     from senselab.utils.data_structures import DeviceType
 
 __all__ = ["STAGE_VERSIONS", "PassPlan", "StageContext", "stage_code_version"]
+
+# The package logger by name rather than through ``senselab.utils.data_structures``, whose import
+# is exactly the torch+transformers pull this module's header refuses.
+logger = logging.getLogger("senselab")
 
 
 _DEFAULT_REVISION_REF: Final[str] = "main"
@@ -195,22 +200,83 @@ class StageContext:
         )
 
     def _commit_sha_for(self, model_id: str | None) -> str | None:
-        """Resolve ``model_id`` to this run's commit SHA, or ``None`` if not a Hub id.
+        """Resolve ``model_id`` to this run's commit SHA, or ``None`` when there is no commit to pin.
 
         Resolution has to happen here, above the load, because the cache key is computed to decide
         *whether* to load at all — a SHA harvested during loading would arrive too late to key on.
 
-        A bare ``None`` (a model-less stage, e.g. ``features``) and a non-Hub name (a local backend
-        like ``"yamnet"``, which has no ``/``) both resolve to ``None`` here, but for different
-        reasons: the first has nothing to pin, the second names something this run cannot look up
-        on the Hub. Neither should attempt a resolution — the ``/`` check is what tells them apart
-        from an id this run actually needs to pin.
+        That placement is also why this is *not* the same decision as
+        ``signal.resolved_commit_sha``'s, which degrades every failure to ``None``. That function
+        fills in a provenance **record**, where "unknown commit" is an honest and cheap answer.
+        Here ``None`` is a **key** component (``cached_inference.cache_key``'s ``commit_sha``), and
+        every id that degrades to it shares one bucket — so two different upstream commits of the
+        same model would collide, and the second run would be served the first one's result. Three
+        outcomes, therefore, three treatments:
+
+        - **Not a Hub id at all** — a bare ``None`` (a model-less stage, e.g. ``features``) or a
+          name with no ``/`` (a local backend). Short-circuits with no Hub round-trip.
+        - **A definitive "there is no commit"** (``RepositoryNotFoundError`` or
+          ``HFValidationError``) — ``None`` is then the *correct* value rather than a degradation,
+          and it is the same answer every run, so no two commits can collide behind it. Two shapes
+          reach it. ``RepositoryNotFoundError`` is the Hub having answered that no such repo
+          exists: ``default.yaml`` ships ``yamnet: google/yamnet``, a TensorFlow backend whose id
+          happens to contain a ``/`` and so trips the Hub-id heuristic above — the crash being
+          fixed. ``HFValidationError`` is the *client* refusing to ask, because the string is not a
+          well-formed repo id at all: a local filesystem path (``/scratch/models/foo``) contains
+          ``/`` and so trips the same heuristic, but ``model_info`` rejects it before any request.
+          That verdict is offline, deterministic and independent of Hub availability, which is what
+          makes it definitive rather than a "could not tell" — it cannot be a transient failure
+          wearing a not-found's clothes, because no network was involved in reaching it.
+        - **Anything else** — a 429, a network error, a ``GatedRepoError`` — propagates. Those all
+          mean "we could not tell", which is unsound for a key: the load may well succeed, and its
+          result would be stored under a commit-blind key that a later run cannot distinguish from
+          any other commit's. ``GatedRepoError`` **subclasses** ``RepositoryNotFoundError``, so it
+          has to be excluded by hand; ``dependencies._ensure_hf_model`` makes the identical split
+          for the identical reason.
+
+        Alternatives considered: ``_YAMNET_ALIASES`` already accepts a bare ``"yamnet"``
+        (``classification/api.py``), so setting ``default.yaml``'s ``yamnet:`` to ``yamnet`` would
+        remove this specific crash without touching cache-key semantics at all — strictly smaller.
+        It was not taken because it fixes one config value rather than the class: any non-Hub
+        backend whose id carries a ``/`` hits the same abort, and the heuristic cannot tell them
+        apart without asking the Hub.
         """
         if not model_id or "/" not in model_id:
             return None
-        from senselab.utils.model_revision import resolve_revision
+        from senselab.utils.model_revision import RevisionResolutionError, resolve_revision
 
-        return resolve_revision(model_id, ref=_DEFAULT_REVISION_REF)
+        try:
+            return resolve_revision(model_id, ref=_DEFAULT_REVISION_REF)
+        except RevisionResolutionError as exc:
+            # Imported here, not at module scope, so the success path never pays for it — and so
+            # this module stays importable by a caller that only wants a cache key.
+            from huggingface_hub.errors import GatedRepoError, HFValidationError, RepositoryNotFoundError
+
+            cause = exc.__cause__  # resolve_revision wraps the Hub error it failed on.
+            definitive = isinstance(cause, HFValidationError) or (
+                isinstance(cause, RepositoryNotFoundError) and not isinstance(cause, GatedRepoError)
+            )
+            if definitive:
+                # Not memoized, and deliberately so: `model_revision` remembers successes only, so a
+                # definitive not-found is re-resolved on every call — twice per stage, since
+                # `stages.py` asks once for the key and once for the provenance. Acceptable because
+                # the verdict is cheap: `HFValidationError` never leaves the process, and the 404 is
+                # one request — `_resolve_uncached` calls `HfApi.model_info` directly, so it never
+                # passes through `retry_on_transient_error`, which on this branch still reads a 404
+                # as transient and would spend 1s + 2s of backoff on it. (That misclassification is
+                # #554's subject; fixing it there is what keeps this cheap if the resolution path is
+                # ever wrapped in retries.) A negative memo would buy back those milliseconds and owe
+                # an invalidation story a positive one does not — a repo that 404s while it is being
+                # created, or a path that appears mid-run, must not stay not-found for the life of
+                # the process.
+                logger.warning(
+                    "%s is not a Hub repository (%s); its cache key carries no commit. "
+                    "Expected for a local backend whose id contains a '/', or a local filesystem path.",
+                    model_id,
+                    type(cause).__name__,
+                )
+                return None
+            raise
 
     def align_key_for(
         self,

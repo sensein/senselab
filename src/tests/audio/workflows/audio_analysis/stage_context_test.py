@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from senselab.audio.workflows.audio_analysis.stage_context import (
     StageContext,
     stage_code_version,
 )
+from senselab.utils.model_revision import RevisionResolutionError
 from senselab.utils.tasks.cached_inference import audio_signature, cache_store
 
 
@@ -155,6 +157,107 @@ def test_commit_sha_for_a_hub_id_resolves(monkeypatch: pytest.MonkeyPatch) -> No
     assert seen == ["openai/whisper-tiny"]
 
 
+def _raising(exc: BaseException) -> Callable[..., str]:
+    """Return a `resolve_revision` stand-in that fails the way `resolve_revision` itself fails.
+
+    The wrapping matters to the three tests below, not just the exception type: `_resolve_uncached`
+    raises `RevisionResolutionError(...) from <the Hub error>`, and `_commit_sha_for` reads
+    `__cause__` to decide which of the three outcomes it is looking at. A stub that raised the Hub
+    error bare would exercise a path production never takes.
+    """
+
+    def _stub(*a: object, **k: object) -> str:
+        raise RevisionResolutionError("resolution failed") from exc
+
+    return _stub
+
+
+def test_commit_sha_for_a_hub_shaped_id_the_hub_lacks_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A definitive not-found is the one failure that may become ``None``.
+
+    YAMNet's ``"google/yamnet"`` is the real case: it contains a ``/`` but loads via a TensorFlow
+    subprocess venv, so the Hub 404s. The Hub *answered* — there is no commit — so ``None`` is the
+    correct key component rather than a degradation, and it is the same answer every run, so no two
+    commits can ever collide behind it. `__new__` builds the error without the httpx response its
+    constructor wants.
+    """
+    from huggingface_hub.errors import RepositoryNotFoundError
+
+    monkeypatch.setattr(
+        "senselab.utils.model_revision.resolve_revision",
+        _raising(RepositoryNotFoundError.__new__(RepositoryNotFoundError)),
+    )
+    assert _ctx()._commit_sha_for("google/yamnet") is None  # noqa: SLF001
+
+
+def test_a_local_path_is_rejected_client_side_by_the_hub_client() -> None:
+    """Pin the exception a local-path model id actually produces, unmocked and offline.
+
+    The degrade branch keys off `HFValidationError`, so this asserts the premise the stub in the
+    next test would otherwise be free to invent. `model_info` validates the repo-id *shape* before
+    it opens a connection, so this runs with no network and cannot flake — which is the property
+    that makes the verdict definitive rather than a "could not tell". It is also a live check on
+    `huggingface_hub`: were a future release to raise something else (or to reach the network and
+    return a 404), the degrade set here would need revisiting rather than silently reverting to the
+    abort this PR removes.
+    """
+    from huggingface_hub import HfApi
+    from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError
+
+    with pytest.raises(HFValidationError) as caught:
+        HfApi().model_info(repo_id="/scratch/models/foo", revision="main")
+    # Not a RepositoryNotFoundError, which is why it needs its own arm in the degrade set.
+    assert not isinstance(caught.value, RepositoryNotFoundError)
+
+
+def test_commit_sha_for_a_local_path_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local filesystem path is the *other* definitive not-a-Hub-model.
+
+    ``/scratch/models/foo`` contains a ``/``, so it trips the Hub-id heuristic exactly as
+    ``google/yamnet`` does — but the client rejects it before any request (see the test above).
+    Deterministic and offline, so ``None`` is a stable key component; propagating instead would
+    abort cache-key computation for every run that names a local checkpoint, which is the case the
+    commit message cites as motivation.
+    """
+    from huggingface_hub.errors import HFValidationError
+
+    monkeypatch.setattr(
+        "senselab.utils.model_revision.resolve_revision",
+        _raising(HFValidationError("Repo id must be in the form 'repo_name' or 'namespace/repo_name'")),
+    )
+    assert _ctx()._commit_sha_for("/scratch/models/foo") is None  # noqa: SLF001
+
+
+def test_commit_sha_for_propagates_a_transient_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient failure must abort, because "we could not tell" is unsound for a *key*.
+
+    Distinct from `signal.resolved_commit_sha`, which degrades this same failure to ``None`` — and
+    correctly, because it fills in a provenance *record*. Here ``None`` is a value in the cache-key
+    payload, so a 429 during one run and a success in the next puts two different commits' results
+    in the same bucket. The load would very likely have succeeded, which is what makes swallowing
+    this a silent-staleness bug rather than a crash avoided.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _raising(ConnectionError("reset")))
+    with pytest.raises(RevisionResolutionError):
+        _ctx()._commit_sha_for("openai/whisper-tiny")  # noqa: SLF001
+
+
+def test_commit_sha_for_propagates_a_gated_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A gated repo propagates even though `GatedRepoError` *subclasses* `RepositoryNotFoundError`.
+
+    The subclassing is the trap this test exists for: the repo demonstrably exists and has commits,
+    we simply lack the licence to see them, so it is a "could not tell", not a not-found. A bare
+    ``except RepositoryNotFoundError`` would silently take the degrade branch here.
+    """
+    from huggingface_hub.errors import GatedRepoError
+
+    monkeypatch.setattr(
+        "senselab.utils.model_revision.resolve_revision", _raising(GatedRepoError.__new__(GatedRepoError))
+    )
+    with pytest.raises(RevisionResolutionError):
+        _ctx()._commit_sha_for("some/gated-model")  # noqa: SLF001
+
+
 def test_align_key_differs_from_the_task_key() -> None:
     """Alignment keying stays independent of the ASR cache."""
     ctx = _ctx()
@@ -278,18 +381,29 @@ def test_stage_context_is_frozen() -> None:
 
 
 def test_stage_context_import_stays_light() -> None:
-    """Importing the config types must not drag in torch/transformers.
+    """Computing a cache key must not drag in torch/transformers.
 
-    `DeviceType` is behind TYPE_CHECKING precisely for this: a caller that only
-    wants a cache key shouldn't pay for the ML stack. Run in a subprocess because
-    the parent test session has already imported everything.
+    `DeviceType` is behind TYPE_CHECKING precisely for this: a caller that only wants a cache key
+    shouldn't pay for the ML stack. Run in a subprocess because the parent test session has already
+    imported everything.
+
+    The assertion is made *after* a real `cache_key_for` call, not merely after the import, because
+    the version of this guard that only imported the module could not fail: `_commit_sha_for`'s
+    resolver import is deferred inside the function body, so an import of the whole ML stack from
+    there was invisible to it — which is exactly how one got added and shipped. Resolution is
+    stubbed so the call makes no Hub request; the stub is installed by importing `model_revision`
+    directly, which is itself part of what must stay torch-free.
     """
     code = (
         "import sys; "
+        "import senselab.utils.model_revision as r; "
+        "r.resolve_revision = lambda repo_id, ref='main', **kw: 'f' * 40; "
         "import senselab.audio.workflows.audio_analysis.stage_context as m; "
+        "ctx = m.StageContext(perturbation='raw', audio_signature='a' * 64, senselab_ver='1.2.3'); "
+        "ctx.cache_key_for('asr', 'openai/whisper-tiny', {}); "
         "print('transformers' in sys.modules, 'torch' in sys.modules)"
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     transformers_loaded, torch_loaded = out.stdout.strip().split()
-    assert transformers_loaded == "False", "stage_context pulled in transformers"
-    assert torch_loaded == "False", "stage_context pulled in torch"
+    assert transformers_loaded == "False", "computing a cache key pulled in transformers"
+    assert torch_loaded == "False", "computing a cache key pulled in torch"
