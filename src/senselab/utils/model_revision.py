@@ -193,7 +193,24 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
     try:
         from huggingface_hub import HfApi
 
-        sha = HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha
+        from senselab.utils.dependencies import retry_on_transient_error
+
+        # The mandatory Hub round-trip on the cold-cache path, and the *first* network call a
+        # cold run makes: resolve_model calls resolve_revision before ensure_hf_model. Wrap it in
+        # the same transient-retry every other Hub call uses, so a rate-limit burst during a
+        # parallel batch is survived rather than fatal at cache-key computation. It also has to be
+        # retried here rather than left to load_hf_resilient's outer retry, because the wrapper
+        # below turns any failure into RevisionResolutionError -- a RuntimeError, which
+        # _is_transient classifies as non-transient, so a 429 escaping this line would defeat that
+        # outer retry as well.
+        #
+        # What is retried is _is_transient's judgement (dependencies.py): 429, 5xx and statusless
+        # connection/timeout failures. A definitive 4xx -- 401, 403, 404 -- is not retried and
+        # surfaces below as RevisionResolutionError on the first attempt. That last part only
+        # became true when _is_transient learned to read exc.response.status_code, which is the
+        # only place huggingface_hub records a status; before that every one of its errors read as
+        # statusless and a genuine 404 cost three attempts and 3s of backoff.
+        sha = retry_on_transient_error(lambda: HfApi(token=token).model_info(repo_id=repo_id, revision=ref).sha)
     except Exception as exc:
         raise RevisionResolutionError(
             f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
