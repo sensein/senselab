@@ -240,9 +240,10 @@ class QwenASR:
         python = venv_python(venv_dir)
 
         # Resolve both the ASR model and (when requested) its forced-aligner companion to
-        # immutable commit SHAs before staging -- never the ref -- so the worker's
-        # Qwen3ASRModel.from_pretrained(..., revision=...) pins the exact run-agreed
-        # commit rather than whatever this host's mutable "main" ref currently points at.
+        # immutable commit SHAs for the *worker payload*, so the loads that do take a revision
+        # (Qwen3ASRModel/Qwen3ForcedAligner.from_pretrained) pin the exact run-agreed commit
+        # rather than whatever this host's mutable "main" ref currently points at. Staging is a
+        # separate decision and goes via the ref -- see the hf_subprocess_env call below.
         # Deferred import (not at module top) keeps this monkeypatch-friendly at
         # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
         from senselab.utils.model_revision import resolve_revision
@@ -276,8 +277,28 @@ class QwenASR:
             # from_pretrained loads from cache with no per-call Hub version check (the 429
             # source under many parallel jobs). The child imports fresh, so the offline
             # flag is honored (unlike an in-process toggle).
-            also = [(aligner_name, aligner_revision)] if return_timestamps and aligner_revision is not None else None
-            env = hf_subprocess_env(model_name, revision, also=also, base_env=_clean_subprocess_env())
+            #
+            # Stage via the *ref*, not the resolved SHA, even though the payload below still
+            # carries the SHA (see the worker script): both wrappers' internal
+            # AutoProcessor.from_pretrained(path, fix_mistral_regex=True) calls take no revision,
+            # so the processor/tokenizer config resolves refs/<ref> inside the offline cache, and
+            # the only thing that re-points that ref at the commit this run pinned is
+            # _point_ref_at, reached through hf_subprocess_env -> resolve_model. Handing it a SHA
+            # makes _point_ref_at return immediately -- its ref argument is already a SHA -- so
+            # refs/<ref> keeps whatever "main" resolved to when this host last staged the repo.
+            #
+            # On node B of a multi-node sweep that is a silent mismatch rather than an error: the
+            # HFModel *field* validator stages live "main" first (refs/main = sha2), the *model*
+            # validator then adopts the manifest's sha1, the backend stages sha1 by SHA, and the
+            # bare processor load reads sha2 while provenance records sha1 -- the confidently-wrong
+            # provenance model_revision.py exists to prevent, in exactly the sweep the manifest was
+            # built for. Where no refs/<ref> exists at all (a cache reached only as
+            # snapshots/<sha>), the same defect fails loudly instead, under HF_HUB_OFFLINE=1.
+            # resolve_model still pins through the run manifest either way, so the staged commit --
+            # and the SHA in the payload -- is unchanged; only where refs/<ref> points differs.
+            # Matches text_to_speech/qwen_tts.py and the three bare-loader backends.
+            also = [(aligner_name, "main")] if return_timestamps and aligner_revision is not None else None
+            env = hf_subprocess_env(model_name, model.revision, also=also, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_WORKER_SCRIPT],
                 input=input_json,
@@ -366,10 +387,12 @@ class QwenASR:
         venv_dir = ensure_venv(_QWEN_VENV, _QWEN_REQUIREMENTS, python_version=_QWEN_PYTHON)
         python = venv_python(venv_dir)
 
-        # Resolve the ref to a commit SHA before staging, never the ref -- so the worker's
+        # Resolve the ref to a commit SHA for the worker payload, so the worker's
         # Qwen3ForcedAligner.from_pretrained(..., revision=...) pins the exact run-agreed
-        # commit. Deferred import (not at module top) keeps this monkeypatch-friendly at
-        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
+        # commit. Staging is a separate decision and goes via the ref -- see the
+        # hf_subprocess_env call below. Deferred import (not at module top) keeps this
+        # monkeypatch-friendly at senselab.utils.model_revision.resolve_revision, matching the
+        # rest of the codebase.
         from senselab.utils.model_revision import resolve_revision
 
         aligner_revision = resolve_revision(aligner_name, "main")
@@ -400,7 +423,20 @@ class QwenASR:
             # worker offline so its from_pretrained makes no per-call Hub version check —
             # the 429 source under parallel batch. This call previously ran with no
             # staging/offline env at all, unlike every other subprocess-venv backend.
-            env = hf_subprocess_env(aligner_name, aligner_revision, base_env=_clean_subprocess_env())
+            #
+            # Stage via the *ref* while the payload above keeps the resolved SHA (which
+            # Qwen3ForcedAligner.from_pretrained does accept): the aligner's internal
+            # AutoProcessor.from_pretrained(path, fix_mistral_regex=True) takes no revision and so
+            # resolves refs/<ref> in the offline cache. This is the sharpest instance in the
+            # codebase because aligner_name is a bare string that is never wrapped in an HFModel,
+            # so nothing anywhere stages it via "main" first: on a genuinely cold cache, staging by
+            # SHA leaves snapshots/<sha> with no refs/ entry at all and the bare processor load
+            # then dies under HF_HUB_OFFLINE=1. Where a refs/main does exist from an earlier host
+            # download, the failure is quieter and worse -- the processor silently reads whatever
+            # commit that stale pointer names while provenance records the pinned one. Passing the
+            # ref makes _point_ref_at write refs/<ref> at the pinned commit; the staged commit is
+            # unchanged.
+            env = hf_subprocess_env(aligner_name, "main", base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _QWEN_ALIGN_WORKER_SCRIPT],
                 input=input_json,

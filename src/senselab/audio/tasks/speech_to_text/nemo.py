@@ -157,20 +157,28 @@ class NeMoASR:
                 }
             )
 
-            # Forward the resolved commit SHA to hf_subprocess_env, never the ref -- so the
-            # parent's staging pins the exact run-agreed commit, even though the worker's
-            # own from_pretrained call cannot be pointed at it (see the worker-script
-            # comment). Deferred import (not at module top) keeps this monkeypatch-friendly
-            # at senselab.utils.model_revision.resolve_revision, matching the rest of the
-            # codebase.
-            from senselab.utils.model_revision import resolve_revision
-
-            revision = model.commit_sha or resolve_revision(model_name, model.revision)
-
-            # Stage the model once (cross-process, via the heartbeat lock) + run the
-            # worker offline so its from_pretrained makes no per-call Hub version
-            # check — the 429 source under parallel batch.
-            env = hf_subprocess_env(model_name, revision, base_env=_clean_subprocess_env())
+            # Stage via the *ref*, not a resolved SHA. This worker loads bare
+            # (ASRModel.from_pretrained takes no revision and always resolves the "main" ref
+            # inside the offline cache), so its only link to the run's commit is the refs/<ref>
+            # pointer that hf_subprocess_env -> resolve_model -> _point_ref_at re-points at the
+            # manifest-pinned commit. Passing a SHA here makes _point_ref_at return immediately --
+            # its ref argument is already a SHA -- so refs/<ref> is never re-pointed and keeps
+            # whatever "main" resolved to when it was last written on this host.
+            #
+            # The severe form needs no unusual cache state. On node B of a multi-node sweep where
+            # the manifest pins sha1 and upstream has since moved to sha2: the HFModel *field*
+            # validator runs first and stages live "main" (refs/main = sha2), the *model* validator
+            # then sets commit_sha = sha1 from the manifest, this backend stages sha1 by SHA,
+            # _point_ref_at no-ops, and the bare worker loads sha2 while provenance records sha1 --
+            # the confidently-wrong provenance model_revision.py exists to prevent, in exactly the
+            # sweep the manifest was built for. Where no refs/main exists at all (a cache reached
+            # only as snapshots/<sha>), the same defect fails loudly instead: the bare offline load
+            # has no pointer to resolve and dies under HF_HUB_OFFLINE=1 (reproduced on a cold
+            # cache). resolve_model still pins through the run manifest either way, so the staged
+            # commit is unchanged; only where refs/<ref> points differs. Matches
+            # text_to_speech/qwen_tts.py and revision_pinning_guard_test's
+            # LOADER_CANNOT_PIN_SUBPROCESS_FILES invariant.
+            env = hf_subprocess_env(model_name, model.revision, base_env=_clean_subprocess_env())
             result = subprocess.run(
                 [python, "-c", _ASR_WORKER_SCRIPT],
                 input=input_json,
