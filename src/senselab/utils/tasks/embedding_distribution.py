@@ -215,6 +215,27 @@ class FileEffect(BaseModel):
     seed: int = 0
 
 
+class CentroidRobustness(BaseModel):
+    """Whether the centroid depends on how it was aggregated, or on one file.
+
+    Attributes:
+        cos_mean_vs_trimmed10: Cosine between the spherical mean and the 10%-trimmed spherical
+            mean. Near 1.0 means aggregation choice did not matter; a visible gap means the
+            estimate is contamination-sensitive. With no clustering rejecting contamination, this
+            is how a caller learns that.
+        cos_mean_vs_medoid: Cosine between the spherical mean and the medoid. The medoid has a
+            ~50% breakdown point but *is* one real vector, so its error does not shrink with ``n``;
+            it is reported as a diagnostic rather than used as the default centroid.
+        leave_one_file_out_cos: Per file, the cosine between the full centroid and the centroid
+            recomputed with that file removed. A jackknife along the cross-file axis, where the
+            measured error budget sits. Empty without file ids.
+    """
+
+    cos_mean_vs_trimmed10: float = 1.0
+    cos_mean_vs_medoid: float = 1.0
+    leave_one_file_out_cos: dict[str, float] = Field(default_factory=dict)
+
+
 class EmbeddingDistribution(BaseModel):
     """Statistics describing one set of embedding vectors. Contains no verdict."""
 
@@ -231,6 +252,7 @@ class EmbeddingDistribution(BaseModel):
     within_file: dict[str, WithinFileStats] = Field(default_factory=dict)
     cross_file: CrossFileStats = Field(default_factory=CrossFileStats)
     file_effect: FileEffect = Field(default_factory=FileEffect)
+    centroid_robustness: CentroidRobustness = Field(default_factory=CentroidRobustness)
 
 
 def _as_array(
@@ -343,6 +365,76 @@ def _loo_cos_to_centroid(x: np.ndarray) -> np.ndarray:
     nz = denom > 0
     out[nz] = numer[nz] / denom[nz]
     return out
+
+
+def _trimmed_spherical_mean(x: np.ndarray, fraction: float = _TRIM_FRACTION) -> np.ndarray:
+    """Spherical mean after dropping the ``fraction`` of rows least aligned with the full mean.
+
+    Args:
+        x: ``(n, d)`` unit-norm array.
+        fraction: Share of rows to drop, from the low end of leave-one-out cosine.
+
+    Returns:
+        A unit-norm direction. Falls back to the untrimmed mean when trimming would leave fewer
+        than two rows.
+    """
+    n = x.shape[0]
+    k = int(np.floor(fraction * n))
+    if k < 1 or n - k < 2:
+        return _spherical_mean(x)
+    keep = np.argsort(_loo_cos_to_centroid(x))[k:]
+    return _spherical_mean(x[keep])
+
+
+def _medoid(x: np.ndarray) -> np.ndarray:
+    """The input row minimising total geodesic distance to the others.
+
+    Uses angular distance ``arccos(clip(cos))`` rather than ``1-cos``, because only the former is
+    a metric on the sphere and "medoid" is defined against a metric.
+
+    Args:
+        x: ``(n, d)`` unit-norm array.
+
+    Returns:
+        A copy of the selected row.
+    """
+    theta = np.arccos(np.clip(x @ x.T, -1.0, 1.0))
+    return x[int(np.argmin(theta.sum(axis=1)))].copy()
+
+
+def _centroid_robustness(x: np.ndarray, file_ids: Optional[list[str]], mean_centroid: np.ndarray) -> CentroidRobustness:
+    """Aggregation sensitivity plus leave-one-file-out stability.
+
+    Args:
+        x: ``(n, d)`` unit-norm array.
+        file_ids: One id per row, or ``None``.
+        mean_centroid: The spherical mean over all rows. Kept as the one reference for every
+            comparison here regardless of which aggregator the caller selected for the returned
+            centroid, so e.g. ``cos_mean_vs_medoid`` never ends up comparing the medoid to itself.
+
+    Returns:
+        The populated robustness block.
+    """
+    trimmed = _trimmed_spherical_mean(x)
+    medoid = _medoid(x)
+
+    lofo: dict[str, float] = {}
+    if file_ids is not None:
+        ids = np.asarray(file_ids)
+        order: list[str] = []
+        for f in file_ids:
+            if f not in order:
+                order.append(f)
+        for f in order:
+            rows = x[ids != f]
+            # A single remaining row still has a direction; zero remaining rows does not.
+            lofo[f] = float(mean_centroid @ _spherical_mean(rows)) if rows.shape[0] >= 1 else 1.0
+
+    return CentroidRobustness(
+        cos_mean_vs_trimmed10=float(mean_centroid @ trimmed),
+        cos_mean_vs_medoid=float(mean_centroid @ medoid),
+        leave_one_file_out_cos=lofo,
+    )
 
 
 def _spectrum(x: np.ndarray) -> SpectrumStats:
@@ -604,9 +696,18 @@ def describe_embedding_distribution(
 
     kept_files = [str(f) for f, k in zip(file_ids, keep_mask) if k] if file_ids is not None else None
 
-    centroid = _spherical_mean(x)  # Tasks 4-5 replace this with the aggregator dispatch.
+    # The robustness comparisons and per-file statistics stay pinned to the spherical mean
+    # regardless of `aggregator`, so a caller who picked "medoid" still gets a diagnostic
+    # comparing the medoid *against* the mean rather than against itself.
+    mean_centroid = _spherical_mean(x)
+    if aggregator == AGGREGATOR_SPHERICAL_MEAN:
+        centroid = mean_centroid
+    elif aggregator == AGGREGATOR_TRIMMED_MEAN:
+        centroid = _trimmed_spherical_mean(x)
+    else:
+        centroid = _medoid(x)
 
-    within_file, cross_file = _per_file_stats(x, kept_files, centroid)
+    within_file, cross_file = _per_file_stats(x, kept_files, mean_centroid)
 
     starts_list = [float(s) for s, k in zip(window_starts_s, keep_mask) if k] if window_starts_s is not None else None
     file_effect = _file_effect(x, kept_files, starts_list, window_s, hop_s, n_permutations, seed)
@@ -652,4 +753,5 @@ def describe_embedding_distribution(
         within_file=within_file,
         cross_file=cross_file,
         file_effect=file_effect,
+        centroid_robustness=_centroid_robustness(x, kept_files, mean_centroid),
     )
