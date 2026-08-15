@@ -388,3 +388,61 @@ def test_loaders_that_cannot_pin_still_get_a_ref_pointer() -> None:
         "dependencies._point_ref_at is gone; the workers in LOADER_CANNOT_PIN_SUBPROCESS_FILES "
         "load bare and rely on it to reach the run's pinned commit"
     )
+
+
+# The bare-loader backends whose parent stages the primary model through ``hf_subprocess_env``.
+# (``crisperwhisper.py``, the fourth LOADER_CANNOT_PIN file, is pinned by a staged local snapshot
+# path rather than an ``hf_subprocess_env`` ref, so the ref-vs-SHA choice below does not apply to
+# it.) These must hand ``hf_subprocess_env`` the *ref*, not a resolved SHA.
+_BARE_LOADER_REF_STAGED_FILES = {
+    "audio/tasks/speaker_diarization/nvidia.py",
+    "audio/tasks/speech_to_text/nemo.py",
+    "audio/tasks/speaker_diarization/diarizen.py",
+}
+
+
+def _hf_subprocess_env_revision_arg(tree: ast.AST) -> "ast.expr | None":
+    """Return the node passed as ``hf_subprocess_env``'s ``revision`` argument (2nd positional)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "hf_subprocess_env":
+            for kw in node.keywords:
+                if kw.arg == "revision":
+                    return kw.value
+            if len(node.args) >= 2:
+                return node.args[1]
+    return None
+
+
+def test_bare_loaders_stage_via_the_ref_not_a_resolved_sha() -> None:
+    """The bare-loader backends must hand ``hf_subprocess_env`` the ref, so ``refs/<ref>`` is written.
+
+    ``test_resolve_model_points_the_ref_at_the_pinned_commit`` proves ``resolve_model`` writes
+    ``refs/main`` *when called with a ref* -- but only the call site decides whether ``resolve_model``
+    ever sees one. These three previously passed ``model.commit_sha`` (a SHA), which makes
+    ``_point_ref_at`` a no-op (its ``ref`` argument is already a SHA), so ``refs/main`` was never
+    written and the bare ``from_pretrained`` failed under ``HF_HUB_OFFLINE=1`` on a cold cache --
+    reproduced end-to-end on a GPU node. This closes that gap by asserting each site passes
+    ``model.revision``, the ref.
+
+    AST, not text (the file's convention): a comment mentioning ``.revision`` cannot satisfy it --
+    only the executable argument node can.
+    """
+    from tests.utils.hf_load_coverage_test import _SRC
+
+    assert _BARE_LOADER_REF_STAGED_FILES <= LOADER_CANNOT_PIN_SUBPROCESS_FILES, (
+        "every ref-staged bare loader must also be classified as unable to pin"
+    )
+
+    wrong: list[str] = []
+    for relpath in sorted(_BARE_LOADER_REF_STAGED_FILES):
+        arg = _hf_subprocess_env_revision_arg(ast.parse((_SRC / relpath).read_text()))
+        if arg is None:
+            wrong.append(f"{relpath}: no hf_subprocess_env(...) call found")
+        elif not (isinstance(arg, ast.Attribute) and arg.attr == "revision"):
+            got = getattr(arg, "attr", type(arg).__name__)
+            wrong.append(f"{relpath}: hf_subprocess_env revision arg is {got!r}, must be model.revision (the ref)")
+
+    assert not wrong, (
+        "A bare-loader backend stages via something other than the ref, so refs/<ref> would not be "
+        "written and its offline load would fail:\n" + "\n".join(f"  {w}" for w in wrong)
+    )
