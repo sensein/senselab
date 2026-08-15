@@ -65,6 +65,13 @@ class SpeakerEmbeddingProvenance(BaseModel):
             Kept beside ``n_windows_used`` so a curated estimate cannot look like a clean one.
         created_at: ISO-8601 timestamp, stamped by the caller. Not defaulted to "now": a library
             that stamps wall-clock time makes its own output unreproducible.
+        extraction_failures: ``{file_id -> reason}`` for any file in ``source_files`` whose
+            extraction raised or loaded nothing. Extraction swallows a per-file exception into an
+            empty window list, so without this a model failing on *some* files produced a silently
+            thinner estimate -- ``n_windows_dropped`` stayed 0 and every file still appeared in
+            ``source_files`` -- with no way to tell "this file had no target speaker" from "this
+            file's extraction crashed". Empty means every file that was attempted produced at
+            least one window.
     """
 
     model_id: str
@@ -77,6 +84,7 @@ class SpeakerEmbeddingProvenance(BaseModel):
     n_windows_used: int = 0
     n_windows_dropped: int = 0
     created_at: Optional[str] = None
+    extraction_failures: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("model_commit_sha")
     @classmethod

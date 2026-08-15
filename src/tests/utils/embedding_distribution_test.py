@@ -167,6 +167,30 @@ def test_n_effective_is_none_without_window_information() -> None:
     assert dist.counts.n_effective is None
 
 
+def test_n_effective_sums_per_file_duration_for_multi_file_input() -> None:
+    """A pooled multi-file set has no single timeline, so `n_effective` must sum per file.
+
+    Regression for a defect where `n_effective` was `(hop*(n-1)+window)/window` over the *pooled*
+    row count -- correct for one contiguous recording, wrong once the rows come from several
+    independent files. 100 single-window files (one embedding each) is the sharpest case: the
+    pooled-timeline formula reports 50.5 (as if 100 rows were one recording with 99 hops between
+    them), while the correct answer -- this estimator's only real use case -- is 100.0 (100 files,
+    one full `window_s` of coverage each). ``CountsInfo.n_effective``'s own contract is
+    `total_windowed_duration / window_s`, and 100 independent single-window files cover 100 *
+    window_s seconds, not 50.5 * window_s.
+    """
+    rng = np.random.default_rng(0)
+    axis = rng.normal(size=16)
+    axis /= np.linalg.norm(axis)
+    n_files = 100
+    x = np.stack([axis + 0.01 * rng.normal(size=16) for _ in range(n_files)])
+    file_ids = [f"file-{i}" for i in range(n_files)]
+
+    _, dist = describe_embedding_distribution(x, file_ids, window_s=1.0, hop_s=0.5)
+
+    assert dist.counts.n_effective == pytest.approx(100.0)
+
+
 def test_pc1_share_is_computed_on_centred_data() -> None:
     """Centring must actually run, or PC1 share reads near-1.0 for any coherent cluster regardless of shape.
 

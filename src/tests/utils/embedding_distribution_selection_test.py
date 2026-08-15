@@ -5,12 +5,14 @@ did is recorded. The cut has no numeric default: it is either supplied by the ca
 from the data by a stated rule, and whichever was used is reported.
 """
 
+from pathlib import Path
 from typing import Union
 
 import numpy as np
 import pytest
 
-from senselab.utils.tasks.embedding_distribution import select_dominant_vectors
+import senselab.utils.tasks.embedding_distribution as embedding_distribution_module
+from senselab.utils.tasks.embedding_distribution import _load_gap_significance_margin, select_dominant_vectors
 
 
 def _cone(axis: np.ndarray, n: int, spread: float, seed: Union[int, np.random.Generator]) -> np.ndarray:
@@ -46,6 +48,31 @@ def test_the_intruder_group_is_dropped() -> None:
     assert len(sel.kept_indices) == 60
     assert len(sel.dropped_indices) == 20
     assert sel.dropped_per_file == {"intruder": 20}
+
+
+def test_a_missing_bundled_profile_raises_instead_of_silently_substituting(tmp_path: Path) -> None:
+    """A missing profile must fail loudly, not silently patch in an unfitted constant.
+
+    Regression: `_load_gap_significance_margin` used to return `DEFAULT_GAP_SIGNIFICANCE_MARGIN`
+    when the bundled JSON was absent, while `select_dominant_vectors` still recorded
+    `gap_significance_margin_source="profile"` -- an undocumented, unfitted constant labelled as
+    if it had been measured. Raising is what makes a broken install visible instead of shipping
+    that mislabeled provenance.
+    """
+    with pytest.raises(ValueError, match="missing from this install"):
+        _load_gap_significance_margin(path=tmp_path / "does-not-exist.json")
+
+
+def test_select_dominant_vectors_raises_when_the_bundled_profile_is_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The same failure must surface end-to-end through the public entry point, not just the loader."""
+    monkeypatch.setattr(
+        embedding_distribution_module, "_GAP_SIGNIFICANCE_PROFILE_PATH", tmp_path / "embedding_gap_significance.json"
+    )
+    x, ids = _two_speakers()
+    with pytest.raises(ValueError, match="missing from this install"):
+        select_dominant_vectors(x, ids)
 
 
 def test_no_numeric_cut_default_exists() -> None:

@@ -148,6 +148,7 @@ def estimate_speaker_embedding_from_audios(
     aggregator: str = "spherical_mean",
     reject_contamination: bool = False,
     created_at: Optional[str] = None,
+    file_ids: Optional[List[str]] = None,
 ) -> TargetSpeakerEmbedding:
     """Estimate one speaker embedding from files that *may* contain that speaker.
 
@@ -170,16 +171,27 @@ def estimate_speaker_embedding_from_audios(
             ``provenance.n_windows_dropped``.
         created_at: ISO-8601 timestamp for provenance. Not defaulted to "now": a library that
             stamps wall-clock time makes its own output unreproducible.
+        file_ids: Optional caller-supplied id per audio, same length and order as ``audios``.
+            Preferred over the positional fallback below: ``Audio.filepath()`` is empty for any
+            in-memory or preprocessed audio -- ``resample_audios``, which this module's own
+            docstring recommends running first, drops ``filepath`` entirely -- so the positional
+            form (``"audio-0"``, ``"audio-1"``, ...) is unmappable back to a real recording. Those
+            same ids key ``vectors_per_file``, ``within_file``, ``cross_file`` and
+            ``leave_one_file_out_cos`` in the returned distribution, so an uninformative id makes
+            the whole per-file block uninterpretable, not just ``source_files``.
 
     Returns:
         A :class:`TargetSpeakerEmbedding` carrying the vector, its provenance, and the
         distribution it was estimated from.
 
     Raises:
-        ValueError: If ``audios`` is empty, or if no window survived extraction.
+        ValueError: If ``audios`` is empty, if ``file_ids`` is supplied with a different length
+            than ``audios``, or if no window survived extraction.
     """
     if not audios:
         raise ValueError("estimate_speaker_embedding_from_audios needs at least one audio")
+    if file_ids is not None and len(file_ids) != len(audios):
+        raise ValueError(f"file_ids has {len(file_ids)} entries for {len(audios)} audios")
 
     model_id, commit_sha, unresolved = _resolve_embedding_model(model)
     # `extract_per_window_embeddings`'s contract is `models: list[str]` -- plain ids, not model
@@ -194,31 +206,52 @@ def estimate_speaker_embedding_from_audios(
     # raised `KeyError`/`TypeError` before returning a single vector.)
 
     vectors: list[np.ndarray] = []
-    file_ids: list[str] = []
+    row_file_ids: list[str] = []
     starts: list[float] = []
     source_files: list[str] = []
+    extraction_failures: dict[str, str] = {}
     for idx, audio in enumerate(audios):
-        # `Audio.filepath` is a method, not a property (`getattr(audio, "filepath")` alone
-        # returns the bound-method object, which is truthy for every audio and stringifies
-        # off the object's *field* repr rather than its identity or path -- two audios with
-        # equal metadata then collide onto one file id). Calling it is required to get the
-        # actual path, or `None` for an in-memory audio with no backing file.
-        file_id = str(audio.filepath() or f"audio-{idx}")
+        if file_ids is not None:
+            file_id = str(file_ids[idx])
+        else:
+            # `Audio.filepath` is a method, not a property (`getattr(audio, "filepath")` alone
+            # returns the bound-method object, which is truthy for every audio and stringifies
+            # off the object's *field* repr rather than its identity or path -- two audios with
+            # equal metadata then collide onto one file id). Calling it is required to get the
+            # actual path, or `None` for an in-memory audio with no backing file. This positional
+            # form is the fallback of last resort -- pass `file_ids` to keep the per-file block
+            # mappable back to a real recording.
+            file_id = str(audio.filepath() or f"audio-{idx}")
         source_files.append(file_id)
+        # A fresh dict per file: `extract_per_window_embeddings` keys its `failures` output by
+        # `model_id`, which is the same single value on every call in this loop, so reusing one
+        # dict across files would let a later file's success silently erase an earlier file's
+        # failure under that shared key.
+        this_file_failures: dict[str, str] = {}
         per_model: dict[str, list[WindowEmbedding]] = extract_per_window_embeddings(
             audio=audio,
             models=[model_id],
             device=device,
             window_s=window_s,
             hop_s=hop_s,
+            revision=commit_sha,
+            failures=this_file_failures,
         )
+        if model_id in this_file_failures:
+            extraction_failures[file_id] = this_file_failures[model_id]
         for windows in per_model.values():
             for w in windows:
                 vectors.append(np.asarray(w.vector, dtype=np.float64))
-                file_ids.append(file_id)
+                row_file_ids.append(file_id)
                 starts.append(float(w.start_s))
 
     if not vectors:
+        if extraction_failures:
+            # Every file that failed extraction has a recorded reason -- surface it instead of
+            # the generic "shorter than window_s?" guess, which misdiagnoses a load failure (a
+            # missing model, an unresolvable revision, ...) as a duration problem.
+            detail = "; ".join(f"{fid}: {reason}" for fid, reason in extraction_failures.items())
+            raise ValueError(f"no embedding windows were produced -- every file failed extraction ({detail})")
         raise ValueError("no embedding windows were produced; are the inputs shorter than window_s?")
 
     pooled = np.vstack(vectors)
@@ -226,16 +259,16 @@ def estimate_speaker_embedding_from_audios(
     method = aggregator
 
     if reject_contamination:
-        selection = select_dominant_vectors(pooled, file_ids)
+        selection = select_dominant_vectors(pooled, row_file_ids)
         keep = selection.kept_indices
         pooled = pooled[keep]
-        file_ids = [file_ids[i] for i in keep]
+        row_file_ids = [row_file_ids[i] for i in keep]
         starts = [starts[i] for i in keep]
         method = f"{aggregator}+dominant_cluster"
 
     centroid, distribution = describe_embedding_distribution(
         pooled,
-        file_ids,
+        row_file_ids,
         aggregator=aggregator,
         window_s=window_s,
         hop_s=hop_s,
@@ -255,6 +288,7 @@ def estimate_speaker_embedding_from_audios(
             n_windows_used=int(distribution.counts.n_scored),
             n_windows_dropped=n_input - int(distribution.counts.n_scored),
             created_at=created_at,
+            extraction_failures=extraction_failures,
         ),
         distribution=distribution,
     )

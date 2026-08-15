@@ -1,9 +1,9 @@
 """Describe one set of embedding vectors: a centroid, and statistics about the distribution.
 
-This module **describes and never decides**. There is no verdict field, no boolean, no
-probability, and no thresholded label anywhere in its output. A consumer applies its own
-threshold, so every statistic here is either bounded on an interpretable scale or paired with an
-analytic null it can be read against.
+This module **describes and never decides**. There is no verdict field, no probability, and no
+thresholded label anywhere in its output. A consumer applies its own threshold, so every statistic
+here is either bounded on an interpretable scale or paired with an analytic null it can be read
+against.
 
 Every reference scale is closed-form, which is what keeps the module free of literals nobody
 fitted:
@@ -267,13 +267,14 @@ _GAP_SIGNIFICANCE_PROFILE_PATH = Path(__file__).parent / "data" / "embedding_gap
 _GAP_SIGNIFICANCE_PROFILE_VERSION = 1
 DEFAULT_GAP_SIGNIFICANCE_MARGIN = 5.0
 """Mirrors the bundled profile's ``margin`` (achieved false-split rate 0.88% at n=1600 draws); see
-`data/embedding_gap_significance.json`. Used only if that file is absent from the install, which
-should not happen for a properly packaged senselab -- an absent bundled profile is itself worth
-noticing rather than silently patching over."""
+`data/embedding_gap_significance.json`. Documentation only -- it is never substituted silently when
+that file is missing (`_load_gap_significance_margin` raises instead; see there for why), so its
+only live use is as `SelectionRule.gap_significance_margin`'s pydantic schema default, which no real
+call path exercises since that field is always populated explicitly."""
 
 
 def _load_gap_significance_margin(path: Optional[Path] = None) -> float:
-    """Load the gap-significance margin, ``None`` (the default) reading the bundled profile.
+    """Load the gap-significance margin from the bundled profile.
 
     Args:
         path: Profile path, or ``None`` for the bundled default.
@@ -284,12 +285,21 @@ def _load_gap_significance_margin(path: Optional[Path] = None) -> float:
         fluctuation.
 
     Raises:
-        ValueError: If the profile's version does not match, or ``margin`` is missing or not
-            positive -- a malformed profile must fail loudly rather than silently gate nothing.
+        ValueError: If the profile file is missing, its version does not match, or ``margin`` is
+            missing or not positive. A missing profile used to fall back to
+            ``DEFAULT_GAP_SIGNIFICANCE_MARGIN`` while the caller still recorded
+            ``gap_significance_margin_source="profile"`` -- an unfitted constant mislabeled as a
+            measured one. Raising is what closes that gap: a broken install now fails loudly here
+            instead of shipping confidently-wrong provenance.
     """
     target = path if path is not None else _GAP_SIGNIFICANCE_PROFILE_PATH
     if not Path(target).exists():
-        return DEFAULT_GAP_SIGNIFICANCE_MARGIN
+        raise ValueError(
+            f"gap-significance profile {target} is missing from this install. Refusing to "
+            f"substitute the undocumented constant {DEFAULT_GAP_SIGNIFICANCE_MARGIN} for it and "
+            "report the result as profile-derived; reinstall senselab or pass an explicit "
+            "gap_significance_margin."
+        )
     profile = json.loads(Path(target).read_text())
     if int(profile.get("version", -1)) != _GAP_SIGNIFICANCE_PROFILE_VERSION:
         raise ValueError(
@@ -901,13 +911,17 @@ def _file_effect(
     rng = np.random.default_rng(seed)
     n = x.shape[0]
     n_blocks = int(np.ceil(n / block_len))
-    exceeded = 0
+    # Named for what it counts, not what it sounds like it should: each iteration tests
+    # `shuffled_eta_sq <= observed`, i.e. a permutation draw that does *not* exceed the observed
+    # statistic, so the resulting quantile is "share of the null at or below observed" -- a
+    # variable called `exceeded` here previously counted the opposite of its own name.
+    n_le_observed = 0
     for _ in range(n_permutations):
         block_order = rng.permutation(n_blocks)
         shuffled = np.concatenate([ids[b * block_len : (b + 1) * block_len] for b in block_order])[:n]
         if _eta_squared_between_files(x, shuffled) <= observed:
-            exceeded += 1
-    quantile = float(exceeded / n_permutations) if n_permutations > 0 else None
+            n_le_observed += 1
+    quantile = float(n_le_observed / n_permutations) if n_permutations > 0 else None
 
     return FileEffect(
         auc_same_file_vs_diff_file=auc,
@@ -1001,9 +1015,18 @@ def describe_embedding_distribution(
 
     n_effective: Optional[float] = None
     if window_s is not None and hop_s is not None and window_s > 0:
-        # total covered duration / window_s: overlapping windows do not carry independent
-        # information, and pretending they do makes every n^-1/2 null overconfident.
-        n_effective = float((hop_s * (n - 1) + window_s) / window_s)
+        # total covered duration / window_s (this class's own contract, see `CountsInfo`):
+        # overlapping windows do not carry independent information, and pretending they do makes
+        # every n^-1/2 null overconfident. Per file, not over the pooled set as one timeline --
+        # a multi-file pool has no single timeline to begin with, and treating `n` rows as one
+        # contiguous recording undercounts duration by roughly half whenever there are several
+        # files (measured: 100 single-window files reported 50.5 against the correct 100.0).
+        # `per_file` already holds one count per file (or one entry for the whole set when no
+        # file ids were supplied), so this reduces to the single-timeline formula in that case.
+        if per_file:
+            n_effective = float(sum((hop_s * (nf - 1) + window_s) / window_s for nf in per_file.values()))
+        else:
+            n_effective = float((hop_s * (n - 1) + window_s) / window_s)
 
     return centroid.tolist(), EmbeddingDistribution(
         geometry=GeometryInfo(
