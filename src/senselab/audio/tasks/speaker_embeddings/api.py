@@ -182,14 +182,16 @@ def estimate_speaker_embedding_from_audios(
         raise ValueError("estimate_speaker_embedding_from_audios needs at least one audio")
 
     model_id, commit_sha, unresolved = _resolve_embedding_model(model)
-    # Deliberately *not* `SpeechBrainModel(path_or_uri=model_id, revision="main")` here: HFModel's
-    # validators (`validate_hf_model_id`, `_resolve_commit_sha`) call the Hub over the network on
-    # a cache miss, and on a cold cache `check_hf_repo_exists` -> `ensure_hf_model` runs a full
-    # `snapshot_download` -- exactly the 20 GB mistake this task was warned against, and it would
-    # fire regardless of any patch to `_resolve_embedding_model`, since it is a *separate*
-    # construction. The plain `SenselabModel` base class carries `path_or_uri` with no such
-    # validator, which is all `extract_per_window_embeddings` and its own tests need from it.
-    speaker_model: SenselabModel = model if model is not None else SenselabModel(path_or_uri=model_id)
+    # `extract_per_window_embeddings`'s contract is `models: list[str]` -- plain ids, not model
+    # objects. It constructs its own `SpeechBrainModel` per id internally, so passing the id
+    # string here is what keeps this function from ever constructing a network-validated model at
+    # all: no `SpeechBrainModel`/`HFModel` object is built anywhere in this function, on any path.
+    # (An earlier version of this code passed a `SenselabModel` object instead, matching neither
+    # the callee's declared type nor its runtime expectations -- mypy flagged the mismatch via a
+    # `# type: ignore` that should have been read as "this call is wrong" rather than suppressed;
+    # the object's `path_or_uri` was never reachable inside `extract_per_window_embeddings`'s own
+    # `SpeechBrainModel(path_or_uri=model_id, ...)` construction, so every real, unmocked call
+    # raised `KeyError`/`TypeError` before returning a single vector.)
 
     vectors: list[np.ndarray] = []
     file_ids: list[str] = []
@@ -203,14 +205,9 @@ def estimate_speaker_embedding_from_audios(
         # actual path, or `None` for an in-memory audio with no backing file.
         file_id = str(audio.filepath() or f"audio-{idx}")
         source_files.append(file_id)
-        # `models` is typed `list[str]` on the real `extract_per_window_embeddings` (plain model
-        # ids), but the model object is passed through here instead: the extraction seam -- real
-        # or, in tests, monkeypatched -- reads `.path_or_uri` off it rather than re-deriving an id
-        # string, so provenance and the mocked extraction agree on one source of truth. See the
-        # comment above on why this can't instead be a network-validated `SpeechBrainModel`.
         per_model: dict[str, list[WindowEmbedding]] = extract_per_window_embeddings(
             audio=audio,
-            models=[speaker_model],  # type: ignore[list-item]
+            models=[model_id],
             device=device,
             window_s=window_s,
             hop_s=hop_s,
