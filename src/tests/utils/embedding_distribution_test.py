@@ -8,7 +8,7 @@ measured and maintained, while 1/sqrt(d) is true by construction.
 import numpy as np
 import pytest
 
-from senselab.utils.tasks.embedding_distribution import describe_embedding_distribution
+from senselab.utils.tasks.embedding_distribution import _medoid, describe_embedding_distribution
 
 
 def _tight_cone(n: int, d: int, spread: float, seed: int = 0, rank: int = 5) -> np.ndarray:
@@ -211,3 +211,119 @@ def test_too_few_vectors_raises_rather_than_returning_a_meaningless_block() -> N
     """One vector has no distribution. Returning a block of zeros would look like a measurement."""
     with pytest.raises(ValueError, match="at least 2"):
         describe_embedding_distribution(np.ones((1, 8)))
+
+
+def test_the_aggregator_selects_the_returned_centroid() -> None:
+    """A tool parameter, not a decision -- but it must actually take effect."""
+    x = _tight_cone(n=60, d=32, spread=0.2, seed=9)
+    mean_c, mean_d = describe_embedding_distribution(x, aggregator="spherical_mean")
+    medoid_c, medoid_d = describe_embedding_distribution(x, aggregator="medoid")
+
+    assert mean_d.geometry.centroid_rule == "spherical_mean"
+    assert medoid_d.geometry.centroid_rule == "medoid"
+    assert not np.allclose(mean_c, medoid_c)
+    # The medoid is one of the input rows; the spherical mean generally is not.
+    assert np.isclose(np.abs(np.asarray(medoid_c) @ x.T).max(), 1.0, atol=1e-9)
+
+
+def test_an_unknown_aggregator_is_rejected() -> None:
+    """Silently falling back would make the reported centroid_rule a lie."""
+    with pytest.raises(ValueError, match="aggregator"):
+        describe_embedding_distribution(_tight_cone(n=5, d=8, spread=0.1), aggregator="median")
+
+
+def test_contamination_opens_a_gap_between_mean_and_trimmed_mean() -> None:
+    """With no clustering to reject contamination, this gap is how a caller learns the estimate.
+
+    It is contamination-sensitive -- a robustness statement carrying no threshold and no verdict.
+    """
+    d = 48
+    rng = np.random.default_rng(21)
+    target = rng.normal(size=d)
+    target /= np.linalg.norm(target)
+    other = rng.normal(size=d)
+    # Orthogonalise against target (Gram-Schmidt) rather than merely "keep it independent-ish": a
+    # contaminating direction that leaked component along target would understate the gap the
+    # test is meant to demonstrate.
+    other -= (other @ target) * target
+    other /= np.linalg.norm(other)
+
+    clean = _tight_cone(n=80, d=d, spread=0.05, seed=1)
+    dirty = np.vstack([clean, np.repeat(other[None, :], 20, axis=0)])
+
+    _, clean_dist = describe_embedding_distribution(clean)
+    _, dirty_dist = describe_embedding_distribution(dirty)
+
+    assert clean_dist.centroid_robustness.cos_mean_vs_trimmed10 > 0.999
+    # A bare "<" here is float64-noise-sensitive precisely when trimming is a no-op: mutation
+    # testing showed that disabling the trim (so both sides read the untrimmed mean against
+    # itself) still passed a plain "<", because rounding put the clean side a few ULPs above 1.0
+    # and the dirty side exactly at 1.0 -- the assertion was measuring rounding order, not
+    # trimming. Requiring a fixed gap fails closed instead: 1e-3 sits far above the ~1e-16 noise
+    # floor and far below the ~8e-3 gap this fixture actually produces, so it can only pass when
+    # trimming changed the centroid.
+    gap = clean_dist.centroid_robustness.cos_mean_vs_trimmed10 - dirty_dist.centroid_robustness.cos_mean_vs_trimmed10
+    assert gap > 1e-3
+
+
+def test_medoid_minimises_total_geodesic_distance() -> None:
+    """Pins the medoid to its definition rather than merely "some input row".
+
+    ``test_the_aggregator_selects_the_returned_centroid`` only checks that the dispatched centroid
+    is *a* row of ``x`` -- returning an arbitrary row (e.g. ``x[0]``) would also clear that check on
+    most seeds. This recomputes the minimiser by brute force and requires an exact match.
+    """
+    x = _tight_cone(n=40, d=16, spread=0.3, seed=6)
+    medoid = _medoid(x)
+
+    theta = np.arccos(np.clip(x @ x.T, -1.0, 1.0))
+    expected = x[int(np.argmin(theta.sum(axis=1)))]
+
+    assert np.allclose(medoid, expected)
+    # And a plain "first row" or "last row" shortcut would not generally coincide with the minimiser.
+    assert not np.allclose(medoid, x[0]) or np.argmin(theta.sum(axis=1)) == 0
+
+
+def test_leave_one_file_out_finds_the_file_driving_the_centroid() -> None:
+    """A jackknife along the cross-file axis, which is where the measured error budget sits.
+
+    It answers a caller's real question -- is this centroid an artefact of one file -- more
+    directly than any dispersion number.
+    """
+    d = 48
+    rng = np.random.default_rng(31)
+    target = rng.normal(size=d)
+    target /= np.linalg.norm(target)
+    intruder = rng.normal(size=d)
+    intruder -= (intruder @ target) * target
+    intruder /= np.linalg.norm(intruder)
+
+    def cone(axis: np.ndarray, n: int, seed: int) -> np.ndarray:
+        r = np.random.default_rng(seed)
+        v = axis[None, :] + 0.03 * r.normal(size=(n, d))
+        return v / np.linalg.norm(v, axis=1, keepdims=True)
+
+    x = np.vstack([cone(target, 30, 1), cone(target, 30, 2), cone(intruder, 30, 3)])
+    ids = ["good1"] * 30 + ["good2"] * 30 + ["bad"] * 30
+
+    _, dist = describe_embedding_distribution(x, ids, n_permutations=20)
+    lofo = dist.centroid_robustness.leave_one_file_out_cos
+    assert set(lofo) == {"good1", "good2", "bad"}
+    # Removing the intruder moves the centroid most, so its LOFO cosine is the lowest.
+    assert lofo["bad"] < lofo["good1"]
+    assert lofo["bad"] < lofo["good2"]
+
+    # Pins the *quantity*, not just its ordering: mutation testing found that swapping the mask
+    # (comparing the full centroid to file f's own centroid, instead of to the centroid recomputed
+    # with f *excluded*) still gets the ordering above right by coincidence on this fixture -- the
+    # intruder file's own centroid is also far from the pooled one. A direct recomputation with
+    # `!=` is the only thing that catches that swap.
+    ids_arr = np.asarray(ids)
+    mean_centroid = np.asarray(
+        describe_embedding_distribution(x)[0]
+    )  # pooled centroid over all rows, independent of file grouping
+    for f in ("good1", "good2", "bad"):
+        rest = x[ids_arr != f]
+        naive = rest.sum(axis=0)
+        naive /= np.linalg.norm(naive)
+        assert lofo[f] == pytest.approx(float(mean_centroid @ naive), abs=1e-9)
