@@ -86,10 +86,11 @@ revision=download_revision)`` — confirmed by reading the installed wheel's
 :func:`~senselab.utils.dependencies.hf_subprocess_env` — which writes ``refs/<ref>`` at
 the resolved commit — while still sending the **resolved commit SHA** to the worker for
 the actual ``from_pretrained(..., revision=...)`` call. Passing the SHA to
-``hf_subprocess_env`` instead (the pattern ``speech_to_text/qwen.py`` and
-``speaker_diarization/moss.py`` use) would skip writing that pointer entirely —
-``_point_ref_at`` no-ops once its ``ref`` argument is already a SHA — and leave those two
-unpinned reads with nothing to resolve.
+``hf_subprocess_env`` instead (the pattern ``speaker_diarization/moss.py`` still uses,
+whose loader takes a revision throughout) would leave ``refs/<ref>`` un-re-pointed —
+``_point_ref_at`` returns immediately once its ``ref`` argument is already a SHA — so
+those two unpinned reads would resolve through whatever commit that ref last named on
+this host, or fail outright where no such ref exists.
 
 **This backend cannot run air-gapped, and that is measured rather than assumed.** On an
 H100, ``qwen_tts``'s ``from_pretrained`` makes a live call to
