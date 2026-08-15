@@ -253,13 +253,17 @@ def test_a_second_process_waits_rather_than_proceeding(tmp_path: Path) -> None:
 
 
 def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An old-format holder file (no ``taken_at``) must still raise TimeoutError, not KeyError.
+    """A holder file senselab did not write must still raise TimeoutError, not KeyError.
 
     Finding #7 of the #550 review: the Timeout branch read ``previous_holder["taken_at"]`` as a
-    bare subscript while every neighbour used ``.get()``. A holder written by an older senselab (or
-    a partial file that still parses) made ``__enter__`` raise ``KeyError`` — which the retry loops
-    in ensure_hf_model / ensure_venv / record_resolution only catch as ``TimeoutError`` — so it
-    escaped as an unrelated crash.
+    bare subscript while every neighbour used ``.get()``, so a payload lacking that key made
+    ``__enter__`` raise ``KeyError`` — which no caller expects: the retry loops in
+    ensure_hf_model / ensure_venv / record_resolution catch only ``TimeoutError``, and
+    ``call_in_venv``'s FileRef locks catch nothing at all.
+
+    The reachable source is a hand-edited lock file, or a foreign ``<resource>.lock`` on the
+    FileRef path — *not* an older senselab, which never wrote such a payload (see the comment at
+    the fix). The fabricated holder below is therefore a stand-in for a hand-edited file.
     """
     import multiprocessing as mp
 
@@ -270,7 +274,7 @@ def test_timeout_tolerates_a_holder_without_taken_at(tmp_path: Path, monkeypatch
     proc.start()
     try:
         assert acquired.wait(timeout=30), "child never acquired the lock within 30s"
-        # Simulate a holder file written by an older senselab that predates `taken_at`.
+        # A hand-edited holder payload: legible JSON, correct shape, no `taken_at`.
         monkeypatch.setattr(
             "senselab.utils.file_lock.lock_holder",
             lambda *_a, **_k: {"user": "alice", "host": "node1", "pid": 4211},
