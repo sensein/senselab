@@ -190,6 +190,44 @@ def test_commit_sha_for_a_hub_shaped_id_the_hub_lacks_degrades_to_none(monkeypat
     assert _ctx()._commit_sha_for("google/yamnet") is None  # noqa: SLF001
 
 
+def test_a_local_path_is_rejected_client_side_by_the_hub_client() -> None:
+    """Pin the exception a local-path model id actually produces, unmocked and offline.
+
+    The degrade branch keys off `HFValidationError`, so this asserts the premise the stub in the
+    next test would otherwise be free to invent. `model_info` validates the repo-id *shape* before
+    it opens a connection, so this runs with no network and cannot flake — which is the property
+    that makes the verdict definitive rather than a "could not tell". It is also a live check on
+    `huggingface_hub`: were a future release to raise something else (or to reach the network and
+    return a 404), the degrade set here would need revisiting rather than silently reverting to the
+    abort this PR removes.
+    """
+    from huggingface_hub import HfApi
+    from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError
+
+    with pytest.raises(HFValidationError) as caught:
+        HfApi().model_info(repo_id="/scratch/models/foo", revision="main")
+    # Not a RepositoryNotFoundError, which is why it needs its own arm in the degrade set.
+    assert not isinstance(caught.value, RepositoryNotFoundError)
+
+
+def test_commit_sha_for_a_local_path_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local filesystem path is the *other* definitive not-a-Hub-model.
+
+    ``/scratch/models/foo`` contains a ``/``, so it trips the Hub-id heuristic exactly as
+    ``google/yamnet`` does — but the client rejects it before any request (see the test above).
+    Deterministic and offline, so ``None`` is a stable key component; propagating instead would
+    abort cache-key computation for every run that names a local checkpoint, which is the case the
+    commit message cites as motivation.
+    """
+    from huggingface_hub.errors import HFValidationError
+
+    monkeypatch.setattr(
+        "senselab.utils.model_revision.resolve_revision",
+        _raising(HFValidationError("Repo id must be in the form 'repo_name' or 'namespace/repo_name'")),
+    )
+    assert _ctx()._commit_sha_for("/scratch/models/foo") is None  # noqa: SLF001
+
+
 def test_commit_sha_for_propagates_a_transient_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """A transient failure must abort, because "we could not tell" is unsound for a *key*.
 
