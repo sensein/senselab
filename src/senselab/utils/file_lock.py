@@ -39,14 +39,36 @@ LOCK_FILE_MODE = 0o664
 LOCK_DIR_MODE = 0o2775
 
 
-def _ensure_dir(path: Path) -> None:
-    """Create ``path`` (with parents) and force it group-writable and setgid.
+def _ensure_dir(path: Path, *, manage_mode: bool = True) -> None:
+    """Create ``path`` (with parents); when ``manage_mode`` force it group-writable and setgid.
+
+    ``manage_mode`` is True for senselab's own cache dirs, where the shared-tree modes are the
+    whole point. It is False when the lock guards a caller-supplied path — e.g. a ``FileRef`` over
+    an input file sitting in the caller's *own* private directory.
+
+    The harm this guards against is self-inflicted, not inflicted on a stranger. ``chmod(2)``
+    returns ``EPERM`` unless the effective UID owns the directory, and the ``except OSError``
+    below swallows that — so a directory belonging to another user is never modified and never
+    raises. The chmod only lands on directories the invoking user owns, and there
+    ``LOCK_DIR_MODE`` is a widening: measured, a ``0o700`` directory comes back ``0o2775``, which
+    is not merely setgid + group-write but also **other-read and other-execute** — world traversal
+    of a directory its owner deliberately made private, as a side effect of dropping a ``.lock``
+    file in it.
+
+    Skipping the chmod also stops the lock from defeating a deliberately read-only directory.
+    Measured on a ``0o500`` directory: with ``manage_mode`` the chmod widens it to ``0o2775`` and
+    the lock file is then written successfully; with ``manage_mode`` False the write raises
+    ``PermissionError``. That is a behaviour change — a caller-supplied path under a read-only
+    directory now fails loudly instead of being silently made writable — and failing is the
+    intended outcome.
 
     A failed ``chmod`` is ignored: on a shared tree the directory may already
     belong to another user with the mode already correct, and raising here
     would break exactly the multi-user case this module exists for.
     """
     path.mkdir(parents=True, exist_ok=True)
+    if not manage_mode:
+        return
     try:
         os.chmod(path, LOCK_DIR_MODE)
     except OSError:
@@ -58,6 +80,12 @@ def _touch_shared(path: Path) -> None:
 
     Used for both the lock file and the heartbeat file. As with
     :func:`_ensure_dir`, a failed ``chmod`` is ignored rather than raised.
+
+    This stays unconditional while :func:`_ensure_dir`'s became opt-out, and the boundary is
+    narrower than it looks: these are files senselab itself creates, so widening them alters
+    nothing the caller made, whereas the directory chmod alters a directory the caller did.
+    Group-write on the heartbeat is also load-bearing — a second user must be able to refresh it,
+    or a live holder reads as stale (see :meth:`SharedFileLock._heartbeat_loop`).
     """
     path.touch(exist_ok=True)
     try:
@@ -138,6 +166,7 @@ class SharedFileLock:
         timeout: float = 600.0,
         heartbeat_interval: float = 30.0,
         stale_after: float = 120.0,
+        manage_dir_mode: bool = True,
     ) -> None:
         """Configure a lock over ``path`` without acquiring it.
 
@@ -158,6 +187,14 @@ class SharedFileLock:
                 ``heartbeat_interval``) leaves headroom for both a couple of
                 missed beats and plausible cross-node clock skew (see the
                 module docstring) without waiting for the full ``timeout``.
+            manage_dir_mode: When True (default, for senselab's own cache dirs),
+                the lock file's parent directory is chmod'ed to ``LOCK_DIR_MODE`` so a
+                later user's files inherit the shared group. Set False when the guarded
+                path is caller-supplied (e.g. a ``FileRef`` over an input file in the
+                caller's own private directory): the chmod can only succeed on a
+                directory the invoking user owns, and there it *widens* — a ``0o700``
+                directory becomes ``0o2775``, world-traversable. See :func:`_ensure_dir`
+                for the measurements and for the read-only-directory behaviour change.
         """
         self._path = path
         # Append, don't replace -- see the class docstring for the concrete collision
@@ -168,6 +205,7 @@ class SharedFileLock:
         self._timeout = timeout
         self._heartbeat_interval = heartbeat_interval
         self._stale_after = stale_after
+        self._manage_dir_mode = manage_dir_mode
         self._lock = FileLock(str(self._lock_path))
         self._stop_event = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
@@ -261,7 +299,7 @@ class SharedFileLock:
         Raises:
             TimeoutError: The lock is held by a live process (see above).
         """
-        _ensure_dir(self._lock_path.parent)
+        _ensure_dir(self._lock_path.parent, manage_mode=self._manage_dir_mode)
         _touch_shared(self._lock_path)
         # Read whatever identity is on disk *before* we touch anything else,
         # for both branches below: the uncontended-acquire check needs it to

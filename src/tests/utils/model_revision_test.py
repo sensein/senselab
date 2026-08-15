@@ -28,6 +28,10 @@ def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Point SENSELAB_CACHE at a temp dir and clear any inherited run id."""
     monkeypatch.setenv("SENSELAB_CACHE", str(tmp_path / "senselab"))
     monkeypatch.delenv("SENSELAB_RUN_ID", raising=False)
+    # Also drop any Slurm identity: run_id() now falls back to it, so a test running inside an
+    # allocation would otherwise see the real job id instead of a hermetic value.
+    monkeypatch.delenv("SLURM_ARRAY_JOB_ID", raising=False)
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
     import senselab.utils.model_revision as mr
 
     mr._RUN_ID = None
@@ -49,6 +53,40 @@ def test_run_id_is_inherited_when_already_set(monkeypatch: pytest.MonkeyPatch) -
 
     mr._RUN_ID = None
     assert run_id() == "job-12345"
+
+
+def test_run_id_falls_back_to_the_slurm_job_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without SENSELAB_RUN_ID, a Slurm job shares one manifest via its job id.
+
+    Finding #9 of the #550 review: a fresh UUID4 per process leaked one ``runs/<id>/`` dir per
+    array task into an inode-quota'd cache root. A plain job now reuses ``SLURM_JOB_ID``.
+    """
+    monkeypatch.setenv("SLURM_JOB_ID", "778899")
+    import senselab.utils.model_revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "778899"
+    assert os.environ["SENSELAB_RUN_ID"] == "778899", "the chosen id must be exported for subprocesses"
+
+
+def test_run_id_prefers_the_array_job_id_so_an_array_shares_one_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SLURM_ARRAY_JOB_ID (shared by the whole array) wins over per-task SLURM_JOB_ID."""
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "112233")
+    monkeypatch.setenv("SLURM_JOB_ID", "112240")  # differs across an array's tasks
+    import senselab.utils.model_revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "112233"
+
+
+def test_explicit_run_id_wins_over_slurm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit SENSELAB_RUN_ID still takes precedence over any Slurm identity."""
+    monkeypatch.setenv("SENSELAB_RUN_ID", "explicit")
+    monkeypatch.setenv("SLURM_ARRAY_JOB_ID", "112233")
+    import senselab.utils.model_revision as mr
+
+    mr._RUN_ID = None
+    assert run_id() == "explicit"
 
 
 def test_a_full_sha_short_circuits_without_touching_the_manifest() -> None:
