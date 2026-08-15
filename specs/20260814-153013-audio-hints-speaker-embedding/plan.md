@@ -927,10 +927,10 @@ def _loo_cos_to_centroid(x: np.ndarray) -> np.ndarray:
     s = x.sum(axis=0)
     diff = s[None, :] - x
     denom = np.linalg.norm(diff, axis=1)
-    numer = np.einsum("ij,ij->i", x, diff)
+    numerator = np.einsum("ij,ij->i", x, diff)
     out = np.zeros_like(denom)
     nz = denom > 0
-    out[nz] = numer[nz] / denom[nz]
+    out[nz] = numerator[nz] / denom[nz]
     return out
 
 
