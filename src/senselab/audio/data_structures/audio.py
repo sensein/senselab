@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from pydantic import BaseModel, Field, PrivateAttr
 
+from senselab.audio.data_structures.audio_hints import AudioHints
 from senselab.utils.constants import SENSELAB_NAMESPACE
 
 try:
@@ -41,6 +42,9 @@ class Audio(BaseModel):
 
     Attributes:
         metadata: A dictionary containing any additional metadata.
+        hints: Declared expectations about this recording (see ``audio_hints``). ``None`` means
+            nobody declared anything, which is deliberately distinct from an empty ``AudioHints``.
+            Nothing in senselab consumes hints; they are carried.
     """
 
     # Private attributes used for lazy loading and internal state.
@@ -53,6 +57,7 @@ class Audio(BaseModel):
 
     # Public fields:
     metadata: Dict = Field(default={})
+    hints: Optional[AudioHints] = None
     model_config = {"arbitrary_types_allowed": True}
 
     def __init__(self, **data: Any) -> None:  # noqa: ANN401,D417

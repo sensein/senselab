@@ -182,6 +182,12 @@ data/
 # file, and failed on every fresh clone (Engaging, CI) with the bare `data/` pattern above hiding why.
 !src/tests/**/data/
 !src/tests/**/data/**
+# ...and the same for utils/tasks' fitted profiles (embedding_gap_significance.json): the bare
+# `data/` pattern above silently gitignored it on first add, so `uv build` produced a wheel missing
+# the file `_load_gap_significance_margin` reads, and a clone with no bundled profile would fall
+# back to the undocumented in-code default instead of failing loudly.
+!src/senselab/utils/tasks/data/
+!src/senselab/utils/tasks/data/**
 # pdoc documentation
 docs/
 

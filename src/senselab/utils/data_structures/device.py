@@ -146,3 +146,35 @@ def _select_device_and_dtype(
             return DeviceType.CPU, DTYPE_MAP[DeviceType.CPU]
         else:
             raise ValueError("Something went wrong and no devices were available or compatible.")
+
+
+def device_run_opt(device: DeviceType) -> str:
+    """Return a concrete device string suitable for a library's ``run_opts["device"]``.
+
+    ``DeviceType.CUDA.value`` is the bare string ``"cuda"``, which several libraries cannot
+    parse. SpeechBrain in particular does ``device.split(":")`` and, when that unpack fails,
+    logs "Could not parse CUDA device string" and calls ``torch.cuda.set_device(0)`` itself
+    (``speechbrain/inference/interfaces.py``). That silently discards the caller's choice:
+    on a node with several visible GPUs it moves the model to card 0 no matter which one was
+    selected.
+
+    The index therefore comes from ``torch.cuda.current_device()`` rather than a hardcoded
+    ``0``. That is what makes this correct on a cluster: under Slurm, ``CUDA_VISIBLE_DEVICES``
+    masks the allocation so the granted GPU is index 0 *inside the process* and this returns
+    ``"cuda:0"`` — the allocated card, not merely the first one on the host — while a caller
+    who selected a device explicitly gets the card they chose.
+
+    Args:
+        device: The selected device.
+
+    Returns:
+        ``"cuda:<index>"`` for CUDA when a GPU is actually visible, otherwise the device's
+        bare value. ``cpu`` and ``mps`` take no index -- ``"cpu:0"`` is not a valid device
+        string -- and a CUDA request with no visible GPU stays bare so the downstream
+        library raises its own clearer error rather than this helper failing first.
+    """
+    if device is not DeviceType.CUDA:
+        return str(device.value)
+    if not torch.cuda.is_available():
+        return str(device.value)
+    return f"cuda:{torch.cuda.current_device()}"
