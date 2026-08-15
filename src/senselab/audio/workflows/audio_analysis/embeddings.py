@@ -1,9 +1,11 @@
 """Per-window speaker-embedding extraction.
 
-Slices the pass audio into uniform fixed-duration windows (default 2.0 s with 1.0 s
+Slices the pass audio into uniform fixed-duration windows (default 1.0 s with 0.5 s
 hop) and runs each requested embedding model on every window. Output is a list of
 ``(start_s, end_s, vector_np)`` per model, written to disk by the caller and consumed
-by the speaker workflow.
+by the speaker workflow. Profile enrollment wants the opposite trade and passes
+``window_s=2.0, hop_s=1.0`` explicitly — see ``tasks/speaker_embeddings``. Two
+purposes, two measured settings.
 
 Why windows, not diarization segments
 -------------------------------------
@@ -50,7 +52,6 @@ __all__ = [
     "window_embedding_at",
     "window_index_at",
     "cluster_pass_speakers",
-    "silhouette_voice_score",
     "calibrate_cosine_uncertainty",
 ]
 
@@ -118,8 +119,8 @@ def cluster_pass_speakers(
         is_speech_per_window: Boolean mask per ``entries`` index indicating
             whether the window contains speech (per YAMNet / AST / loudness).
             When provided, only ``True`` windows participate in clustering;
-            ``False`` windows get ``cluster_id="NOISE"`` and ``p_voice = 0.0``.
-            This stops silent / background windows from being counted as a
+            ``False`` windows get ``cluster_id="NOISE"``. This stops silent
+            / background windows from being counted as a
             "speaker" — the bug that previously inflated ``n_speakers`` on
             recordings with long silent stretches. ``None`` clusters every
             non-zero-norm window (legacy behavior).
@@ -138,7 +139,7 @@ def cluster_pass_speakers(
        clustering algorithm on L2-normalized embedding vectors.
     3. **Pick k\* = argmax silhouette_score** across the sweep.
     4. **If best silhouette ≥ coherent_silhouette_threshold** → multi-cluster regime:
-       ``n_speakers = k\*``; per-window ``p_voice`` is the rescaled silhouette.
+       ``n_speakers = k\*``.
     5. **Else** → single-cluster regime (1 if the speech windows cluster
        tightly around the mean, 0 if even that fails).
 
@@ -147,14 +148,13 @@ def cluster_pass_speakers(
     pass-wide cluster ids (``C0``…) that harmonise labels across diar models, and from the
     fused speaker ids (``S0``…) in ``final/speakers.json``; three namespaces that all read
     as "S0" made the label-correspondence table unreadable on a real run. Non-speech
-    or zero-norm windows are tagged ``"NOISE"``. ``p_voice`` is keyed by the
-    window index in ``entries``.
+    or zero-norm windows are tagged ``"NOISE"``.
 
     Returns ``None`` when too few windows to cluster, or sklearn unavailable.
     """
     try:
         from sklearn.cluster import KMeans, SpectralClustering
-        from sklearn.metrics import silhouette_samples, silhouette_score
+        from sklearn.metrics import silhouette_score
     except ImportError as exc:
         msg = f"sklearn unavailable for clustering: {exc!r}"
         print(f"warn: cluster_pass_speakers skipped: {msg}", file=sys.stderr)
@@ -179,11 +179,9 @@ def cluster_pass_speakers(
         valid_indices.append(i)
 
     cluster_labels: dict[int, str] = {}
-    p_voice: dict[int, float] = {}
     for i in range(len(entries)):
         if i not in valid_indices:
             cluster_labels[i] = "NOISE"
-            p_voice[i] = 0.0
 
     if not valid_indices:
         msg = "no valid speech embedding windows (all filtered as zero-norm or non-speech)"
@@ -194,7 +192,6 @@ def cluster_pass_speakers(
             "n_speakers": 0,
             "best_silhouette": None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": [],
         }
 
@@ -205,14 +202,12 @@ def cluster_pass_speakers(
     if len(vectors) < min_windows_for_clustering:
         for idx in valid_indices:
             cluster_labels[idx] = "spk0"
-            p_voice[idx] = 1.0
         band = _within_cluster_band(np.stack(vectors, axis=0)) if vectors else None
         same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
@@ -333,16 +328,8 @@ def cluster_pass_speakers(
         # Renumber to spk0..spk(n-1) so downstream label sets are dense.
         relabel = {old: new for new, old in enumerate(unique_after_merge)}
         best_labels = np.array([relabel[int(x)] for x in best_labels], dtype=int)
-        try:
-            per_sample = silhouette_samples(X, best_labels, metric="cosine") if n_speakers_final >= 2 else None
-        except ValueError:
-            per_sample = None
         for vi, idx in enumerate(valid_indices):
             cluster_labels[idx] = f"spk{int(best_labels[vi])}"
-            if per_sample is None:
-                p_voice[idx] = 1.0 if n_speakers_final == 1 else 0.5
-            else:
-                p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(per_sample[vi]) + 1.0)))
         # Empirical per-pass calibration band for the speaker-axis cosine
         # validation: ``same_floor`` = 75th percentile of within-cluster
         # pairwise cos_dist (most same-speaker pairs are below this),
@@ -358,7 +345,6 @@ def cluster_pass_speakers(
             "n_speakers": n_speakers_final,
             "best_silhouette": float(best_overall),
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
@@ -373,12 +359,10 @@ def cluster_pass_speakers(
         # All-zero pass — no detectable voice.
         for idx in valid_indices:
             cluster_labels[idx] = "NOISE"
-            p_voice[idx] = 0.0
         return {
             "n_speakers": 0,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
         }
     centroid_unit = centroid / centroid_norm
@@ -386,32 +370,40 @@ def cluster_pass_speakers(
     mean_sim = float(np.mean(sims))
     if mean_sim >= coherent_silhouette_threshold:
         # Single coherent speaker.
-        for vi, idx in enumerate(valid_indices):
+        for idx in valid_indices:
             cluster_labels[idx] = "spk0"
-            # cos sim → [0,1] via (s+1)/2.
-            p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
         band = _within_cluster_band(X)
         same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
         }
     # No coherent cluster — likely noise / silence dominated.
-    for vi, idx in enumerate(valid_indices):
+    for idx in valid_indices:
         cluster_labels[idx] = "NOISE"
-        p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
     return {
         "n_speakers": 0,
         "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
         "labels": cluster_labels,
-        "p_voice": p_voice,
         "valid_indices": list(valid_indices),
     }
+
+
+# A per-window map computed as ``0.5 * (silhouette + 1)`` used to live here, rescaling a
+# clustering-geometry index into a value that reads as a probability. A silhouette
+# coefficient is a property of a chosen partition on a chosen metric, not a probability:
+# silhouette computed with cosine and with Euclidean return different numbers for identical
+# geometry on unit vectors, so any probability read off it is a probability about a
+# parameterisation choice. The L1 post-processing register (item 12) removed the consumer —
+# the presence voter that read it as confidence with no ramp and no anchors, contributing a
+# near-constant ~0.44 doubt across every bucket while earning the highest fusion weight of
+# fifteen signals precisely because it was near-constant (see ``speech_presence_link.py``'s
+# comment on ``_silhouette_votes_by_bucket``). Nothing else reads the per-window value, so
+# this removes the computation rather than leaving a renamed field with no reader.
 
 
 def _merge_close_clusters(
@@ -614,26 +606,6 @@ def _within_cluster_band(
         # out rather than returning an inverted band that would score every comparison.
         diff_floor = min(0.95, same_floor + 0.20)
     return same_floor, diff_floor
-
-
-def silhouette_voice_score(
-    entries: list[WindowEmbedding],
-    *,
-    n_clusters_max: int = 6,
-    min_windows_for_clustering: int = 4,
-) -> dict[int, float] | None:
-    """Backwards-compatible thin wrapper returning just the per-window p_voice map.
-
-    Prefer ``cluster_pass_speakers`` for new code — it also exposes the
-    estimated speaker count and per-window cluster labels (used to synthesise
-    an embedding-derived diarization source).
-    """
-    res = cluster_pass_speakers(
-        entries,
-        n_clusters_max=n_clusters_max,
-        min_windows_for_clustering=min_windows_for_clustering,
-    )
-    return None if res is None else res["p_voice"]
 
 
 def calibrate_cosine_uncertainty(

@@ -441,7 +441,7 @@ def test_derive_window_clusters_exposes_the_whole_result() -> None:
     derived = derive_window_clusters({"ecapa": _two_speaker_windows()})
     assert derived is not None
     assert derived["model"] == "ecapa"
-    assert set(derived["clusters"]) >= {"n_speakers", "labels", "p_voice"}
+    assert set(derived["clusters"]) >= {"n_speakers", "labels", "best_silhouette"}
     assert derived["clusters"]["n_speakers"] == 2
 
 
