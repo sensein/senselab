@@ -52,6 +52,8 @@ true metric is needed (medoid, linkage) the geodesic ``arccos(clip(cos,-1,1))`` 
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
 import numpy as np
@@ -257,6 +259,48 @@ class EmbeddingDistribution(BaseModel):
 
 LINKAGE_AVERAGE = "average"
 
+# Where the fitted gap-significance margin lives -- see `data/embedding_gap_significance.json`
+# for the full derivation (what was swept, the null distribution's quantiles, the achieved
+# false-split rate). Thresholds belong in `data/` with a written derivation, never as code
+# literals; this constant is only ever a fallback for the rare case the packaged file is missing.
+_GAP_SIGNIFICANCE_PROFILE_PATH = Path(__file__).parent / "data" / "embedding_gap_significance.json"
+_GAP_SIGNIFICANCE_PROFILE_VERSION = 1
+DEFAULT_GAP_SIGNIFICANCE_MARGIN = 5.0
+"""Mirrors the bundled profile's ``margin`` (achieved false-split rate 0.88% at n=1600 draws); see
+`data/embedding_gap_significance.json`. Used only if that file is absent from the install, which
+should not happen for a properly packaged senselab -- an absent bundled profile is itself worth
+noticing rather than silently patching over."""
+
+
+def _load_gap_significance_margin(path: Optional[Path] = None) -> float:
+    """Load the gap-significance margin, ``None`` (the default) reading the bundled profile.
+
+    Args:
+        path: Profile path, or ``None`` for the bundled default.
+
+    Returns:
+        The margin: how many times larger the top merge-height gap must be than the runner-up gap
+        before it is trusted as a real cluster split rather than a single coherent group's largest
+        fluctuation.
+
+    Raises:
+        ValueError: If the profile's version does not match, or ``margin`` is missing or not
+            positive -- a malformed profile must fail loudly rather than silently gate nothing.
+    """
+    target = path if path is not None else _GAP_SIGNIFICANCE_PROFILE_PATH
+    if not Path(target).exists():
+        return DEFAULT_GAP_SIGNIFICANCE_MARGIN
+    profile = json.loads(Path(target).read_text())
+    if int(profile.get("version", -1)) != _GAP_SIGNIFICANCE_PROFILE_VERSION:
+        raise ValueError(
+            f"gap-significance profile {target} has version {profile.get('version')!r}; "
+            f"expected {_GAP_SIGNIFICANCE_PROFILE_VERSION!r}"
+        )
+    margin = float(profile.get("margin", 0.0))
+    if margin <= 0:
+        raise ValueError(f"gap-significance profile {target}: margin must be > 0; got {margin}")
+    return margin
+
 
 class ClusterSummary(BaseModel):
     """One group found by the selector.
@@ -291,6 +335,13 @@ class SelectionRule(BaseModel):
             caller's judgement.
         merge_heights: The full ascending merge-height sequence. This is the threshold-free form of
             the "how many clusters" question; a consumer can re-cut it anywhere.
+        gap_significance_margin: How many times larger the top merge-height gap had to be than the
+            runner-up gap before it was trusted as a real split. Fitted from data
+            (`data/embedding_gap_significance.json`), not a code literal -- reported the same way
+            as ``cut_theta`` for the same reason: the number alone is not auditable without knowing
+            where it came from.
+        gap_significance_margin_source: ``"caller"`` when supplied, ``"profile"`` when loaded from
+            the bundled derivation. Mirrors ``cut_source``.
         min_file_share: Optional minimum per-file share for a file to count toward a group's
             file-balanced share. ``None`` means unused.
     """
@@ -299,6 +350,8 @@ class SelectionRule(BaseModel):
     cut_theta: float
     cut_source: str
     merge_heights: list[float] = Field(default_factory=list)
+    gap_significance_margin: float = DEFAULT_GAP_SIGNIFICANCE_MARGIN
+    gap_significance_margin_source: str = "profile"
     min_file_share: Optional[float] = None
 
 
@@ -321,6 +374,7 @@ def select_dominant_vectors(
     *,
     linkage: str = LINKAGE_AVERAGE,
     cut_theta: Optional[float] = None,
+    gap_significance_margin: Optional[float] = None,
     min_file_share: Optional[float] = None,
 ) -> DominantSelection:
     """Group vectors and return the dominant group, for optional contamination rejection.
@@ -341,9 +395,15 @@ def select_dominant_vectors(
         file_ids: One id per row. Enables file-balanced selection and per-file drop accounting.
         linkage: Passed to ``scipy.cluster.hierarchy.linkage``. ``"average"`` by default.
         cut_theta: Angular cut in radians. ``None`` derives it from the largest gap in the merge
-            heights, accepted only when it structurally dominates the runner-up gap -- a *rule*,
-            not a fitted constant; see the derivation below. Supply a value to override; either way
-            the value used and its source are recorded.
+            heights, accepted only when it beats the runner-up gap by ``gap_significance_margin``
+            -- a *rule*, not a fitted constant; see the derivation below. Supply a value to
+            override; either way the value used and its source are recorded.
+        gap_significance_margin: How many times larger the top merge-height gap must be than the
+            runner-up gap before it is trusted as a real split. ``None`` (the default) loads the
+            fitted value from `data/embedding_gap_significance.json`, derived from a 1600-draw
+            sweep of the null (single coherent group) merge-gap-ratio distribution to hold the
+            false-split rate at or below 1%; see that file for the full derivation. Supply a value
+            to override; either way the value used and its source are recorded.
         min_file_share: Optional floor on a file's share within a group before that file counts
             toward the group's file-balanced share. ``None`` counts every contributing file.
 
@@ -378,25 +438,30 @@ def select_dominant_vectors(
     z = scipy_linkage(squareform(theta, checks=False), method=linkage)
     merge_heights = [float(h) for h in z[:, 2]]
 
+    if gap_significance_margin is None:
+        margin_value = _load_gap_significance_margin()
+        margin_source = "profile"
+    else:
+        margin_value = float(gap_significance_margin)
+        margin_source = "caller"
+
     if cut_theta is None:
         # The largest gap between consecutive merge heights is where the data itself separates --
-        # but the raw argmax is not enough on its own. Measured on 50 vectors drawn from one vMF
-        # cone (no intruder at all): the single biggest gap sits down near the leaves (ratio to the
-        # runner-up gap ~1.87x) purely from sampling noise in how tightly the first few points
-        # happen to land, while a real two-population split (60 target / 20 intruder) puts the
-        # biggest gap at the root with the runner-up gap dwarfed 86x-190x over. That gap between
-        # "noise's biggest fluctuation" and "an actual population boundary" is two orders of
-        # magnitude, not a close call -- so the biggest gap is only trusted as a cut when it beats
-        # the runner-up gap by a wide, structural margin (taken as 2x: any single coherent cluster's
-        # noisiest gap was, in the measurement above, within a factor of 2 of its own runner-up).
-        # Below that margin nothing stands out from the rest, and the cut is set at the maximum
-        # merge height, which folds every row into one cluster rather than fabricating a split.
+        # but the raw argmax is not enough on its own. A single coherent group (no intruder at all)
+        # still has *some* largest gap, and it is usually down near the leaves from sampling noise
+        # in how tightly the first few points happen to land, not at the root where a real
+        # population split would show up. `margin_value` is the fitted answer to "how much bigger
+        # than the runner-up gap must the top gap be before it is trusted": see
+        # `data/embedding_gap_significance.json` for the 1600-draw sweep of the null distribution
+        # and the false-split rate the bundled margin achieves. Below that margin nothing stands
+        # out from the rest, and the cut is set at the maximum merge height, which folds every row
+        # into one cluster rather than fabricating a split.
         heights = np.asarray(merge_heights)
         gaps = np.diff(heights)
         if gaps.size >= 2:
             order = np.argsort(gaps)
             top1_idx, top2_idx = int(order[-1]), int(order[-2])
-            if gaps[top1_idx] > 2.0 * gaps[top2_idx]:
+            if gaps[top1_idx] > margin_value * gaps[top2_idx]:
                 resolved_cut = float((heights[top1_idx] + heights[top1_idx + 1]) / 2.0)
             else:
                 resolved_cut = float(heights.max())
@@ -465,6 +530,8 @@ def select_dominant_vectors(
             cut_theta=resolved_cut,
             cut_source=cut_source,
             merge_heights=merge_heights,
+            gap_significance_margin=margin_value,
+            gap_significance_margin_source=margin_source,
             min_file_share=min_file_share,
         ),
     )

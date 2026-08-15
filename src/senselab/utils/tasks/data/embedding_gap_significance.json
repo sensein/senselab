@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "margin": 5.0,
+  "scope": "The significance margin select_dominant_vectors requires the largest merge-height gap to beat the runner-up gap by before trusting it as a real cluster split, rather than the largest fluctuation a single coherent group produces by chance. Guards only the derived branch (cut_theta=None); a caller-supplied cut_theta, and a caller-supplied gap_significance_margin, bypass this file entirely and are recorded with source='caller'.",
+  "derivation": "A first implementation used argmax(diff(merge_heights)) with no significance test and failed the brief's own fixed-seed single-coherent fixture (n=50, d=32, spread=0.02): the top gap sat near the leaves from sampling noise, not at the root. Fixed by requiring the top gap to exceed margin * runner-up-gap. The first-cut margin (2.0) was chosen from that one fixture's ratio (1.87x) against two other fixed-seed fixtures' ratios (86x, 187x) -- a single-seed eyeball, not a distribution, and code review caught it: an independent 300-draw sweep at the same fixture measured a 4.03x max and a 15.7% rate of ratio > 2.0, i.e. a 1-in-6 false-split rate on genuinely homogeneous input. This file replaces that eyeball with a proper sweep and a stated target. Swept the null (single coherent vMF cone, no intruder) over n in {30,50,100,200,300}, d in {32,64,192,256} (192-256 bracket real speaker-embedding dimensionality), spread in {0.01,0.02,0.05,0.1}, 20 independent-seed draws per (n,d,spread) cell -- 80 cells, 1600 draws total, seeds 100000..101599 via numpy.random.default_rng, each draw an independent axis plus a fresh cone. For each draw: AHC average-linkage on geodesic angular distance (identical to the runtime path), then top-gap / runner-up-gap over the merge-height diffs. Observed quantiles of that ratio: p50=1.399, p90=2.590, p95=3.060, p99=4.840, p99.5=5.462, p99.9=6.363, max=9.330 (n=1600). False-split rate (fraction of the 1600 draws whose ratio exceeds the margin) by candidate margin: 2.0 -> 20.31%, 3.0 -> 5.56%, 4.0 -> 2.12%, 4.5 -> 1.38%, 5.0 -> 0.88%, 6.0 -> 0.31%, 8.0 -> 0.06%, 10.0 -> 0.00%. Target stated up front: false-split rate <= 1%. margin=5.0 is the smallest tested value clearing that target (0.88% achieved, with 4.5 at 1.38% failing it), so it is chosen as the value with the least unnecessary insensitivity to genuine splits while meeting the stated rate. Real-split ratios measured on this module's own fixed-seed fixtures for comparison, none of which this margin should ever gate: two_speakers (60 target/20 intruder, near-orthogonal) ~86x; file_balanced (200 long-file vs 30 target across 3 files) ~187x; the 0.35 rad-separated cut-scaling regression fixture ~23x. All three clear margin=5.0 by at least 4.5x, so the chosen value costs no known real-split test in this module.",
+  "sweep": {
+    "n_values": [30, 50, 100, 200, 300],
+    "d_values": [32, 64, 192, 256],
+    "spread_values": [0.01, 0.02, 0.05, 0.1],
+    "draws_per_cell": 20,
+    "n_cells": 80,
+    "n_draws_total": 1600,
+    "seed_scheme": "numpy.random.default_rng(100000 + i) for i in range(1600), row-major over (n, d, spread, draw)",
+    "statistic": "top-gap / runner-up-gap over np.diff(merge_heights), average-linkage AHC on geodesic angular distance",
+    "quantiles": {
+      "p50": 1.399,
+      "p90": 2.590,
+      "p95": 3.060,
+      "p99": 4.840,
+      "p995": 5.462,
+      "p999": 6.363,
+      "max": 9.330
+    },
+    "false_split_rate_by_margin": {
+      "2.0": 0.20313,
+      "3.0": 0.05563,
+      "4.0": 0.02125,
+      "4.5": 0.01375,
+      "5.0": 0.00875,
+      "6.0": 0.00313,
+      "8.0": 0.00063,
+      "10.0": 0.0
+    },
+    "target_false_split_rate": 0.01,
+    "chosen_margin": 5.0,
+    "achieved_false_split_rate": 0.00875
+  }
+}
