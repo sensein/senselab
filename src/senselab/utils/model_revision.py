@@ -61,6 +61,28 @@ def run_id() -> str:
     inode-quota'd cache root. Only a truly bare launch falls through to a fresh
     UUID4. Whatever is chosen is exported, so any subprocess senselab spawns inherits
     it through the environment.
+
+    That shrinks the manifest-dir leak without closing it: an array goes from N dirs to 1, but a
+    non-array job still leaves one dir per job and a bare launch is unchanged (a fresh UUID4 dir
+    every time). Run dirs are small and cleanup remains manual, as ``audio_analysis/doc.md``
+    documents.
+
+    Two consequences of preferring the Slurm identity, both real behaviour changes:
+
+    - **Same-allocation merging.** Every senselab invocation inside one allocation now shares a
+      manifest, where previously each process minted its own identity. Entries are immutable for
+      the run's life (see :func:`record_resolution`), so a second experiment later in the same
+      batch script — or unrelated work in a long-lived ``salloc`` — is silently pinned to the SHAs
+      the first one resolved, with no way to re-resolve. Setting ``SENSELAB_RUN_ID`` explicitly is
+      the escape hatch: it outranks everything here, so give each experiment its own value when
+      they must resolve independently.
+    - **Job-id reuse (known edge, unmitigated).** Slurm ids wrap at ``MaxJobId`` and reset when a
+      controller is reinstalled, and nothing garbage-collects ``runs/``. A recycled id can
+      therefore land on a months-old ``runs/<jobid>/resolutions.json`` and adopt its SHAs as
+      authoritative — confidently wrong provenance, which the module docstring names as the
+      outcome worse than no provenance at all. Low probability, and deliberately not handled here:
+      the cheap mitigations (folding ``SLURM_CLUSTER_NAME`` into the id, or ageing a manifest out
+      by mtime) each change what an id *means* and belong in their own change, measured.
     """
     global _RUN_ID
     if _RUN_ID is None:

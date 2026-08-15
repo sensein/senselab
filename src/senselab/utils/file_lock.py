@@ -44,8 +44,23 @@ def _ensure_dir(path: Path, *, manage_mode: bool = True) -> None:
 
     ``manage_mode`` is True for senselab's own cache dirs, where the shared-tree modes are the
     whole point. It is False when the lock guards a caller-supplied path — e.g. a ``FileRef`` over
-    an input file living in a read-restricted dataset tree: senselab must not silently grant setgid
-    and group-write on someone else's directory just to drop a ``.lock`` file in it.
+    an input file sitting in the caller's *own* private directory.
+
+    The harm this guards against is self-inflicted, not inflicted on a stranger. ``chmod(2)``
+    returns ``EPERM`` unless the effective UID owns the directory, and the ``except OSError``
+    below swallows that — so a directory belonging to another user is never modified and never
+    raises. The chmod only lands on directories the invoking user owns, and there
+    ``LOCK_DIR_MODE`` is a widening: measured, a ``0o700`` directory comes back ``0o2775``, which
+    is not merely setgid + group-write but also **other-read and other-execute** — world traversal
+    of a directory its owner deliberately made private, as a side effect of dropping a ``.lock``
+    file in it.
+
+    Skipping the chmod also stops the lock from defeating a deliberately read-only directory.
+    Measured on a ``0o500`` directory: with ``manage_mode`` the chmod widens it to ``0o2775`` and
+    the lock file is then written successfully; with ``manage_mode`` False the write raises
+    ``PermissionError``. That is a behaviour change — a caller-supplied path under a read-only
+    directory now fails loudly instead of being silently made writable — and failing is the
+    intended outcome.
 
     A failed ``chmod`` is ignored: on a shared tree the directory may already
     belong to another user with the mode already correct, and raising here
@@ -65,6 +80,12 @@ def _touch_shared(path: Path) -> None:
 
     Used for both the lock file and the heartbeat file. As with
     :func:`_ensure_dir`, a failed ``chmod`` is ignored rather than raised.
+
+    This stays unconditional while :func:`_ensure_dir`'s became opt-out, and the boundary is
+    narrower than it looks: these are files senselab itself creates, so widening them alters
+    nothing the caller made, whereas the directory chmod alters a directory the caller did.
+    Group-write on the heartbeat is also load-bearing — a second user must be able to refresh it,
+    or a live holder reads as stale (see :meth:`SharedFileLock._heartbeat_loop`).
     """
     path.touch(exist_ok=True)
     try:
@@ -167,11 +188,13 @@ class SharedFileLock:
                 missed beats and plausible cross-node clock skew (see the
                 module docstring) without waiting for the full ``timeout``.
             manage_dir_mode: When True (default, for senselab's own cache dirs),
-                the lock file's parent directory is made setgid + group-writable so
-                a later user's files inherit the shared group. Set False when the
-                guarded path is caller-supplied (e.g. a ``FileRef`` over an input in
-                a read-restricted dataset tree), so senselab does not silently
-                change permissions on a directory it does not own.
+                the lock file's parent directory is chmod'ed to ``LOCK_DIR_MODE`` so a
+                later user's files inherit the shared group. Set False when the guarded
+                path is caller-supplied (e.g. a ``FileRef`` over an input file in the
+                caller's own private directory): the chmod can only succeed on a
+                directory the invoking user owns, and there it *widens* — a ``0o700``
+                directory becomes ``0o2775``, world-traversable. See :func:`_ensure_dir`
+                for the measurements and for the read-only-directory behaviour change.
         """
         self._path = path
         # Append, don't replace -- see the class docstring for the concrete collision
