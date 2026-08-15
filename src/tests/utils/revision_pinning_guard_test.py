@@ -378,9 +378,16 @@ def test_the_two_revision_allowlists_are_disjoint_and_current() -> None:
 def test_loaders_that_cannot_pin_still_get_a_ref_pointer() -> None:
     """The staged-only backends depend on ``_point_ref_at``, so it must not quietly disappear.
 
-    These four load bare. Their only link to the run's commit is that ``resolve_model`` points
-    ``refs/<ref>`` at it after staging. Deleting that helper would leave them loading whatever the
-    ref last named -- or failing outright offline, since SHA-addressed staging writes no ref at all.
+    Three of these four (``nvidia.py``, ``nemo.py``, ``diarizen.py``) load bare, and their only
+    link to the run's commit is that ``resolve_model`` re-points ``refs/<ref>`` at it after
+    staging. Deleting that helper would leave them loading whatever the ref last named on the host
+    -- or failing outright offline, since SHA-addressed staging writes no ref at all.
+
+    ``crisperwhisper.py`` is the exception and is listed here for a different reason: it passes the
+    *ref* to ``resolve_model`` and hands the worker the returned local ``snapshots/<sha>`` path, so
+    the commit it loads is pinned by that path rather than by any pointer. It belongs in
+    ``LOADER_CANNOT_PIN_SUBPROCESS_FILES`` because ``CrisperWhisperModel`` takes no revision, not
+    because it depends on ``refs/<ref>``.
     """
     from senselab.utils import dependencies
 
@@ -388,3 +395,147 @@ def test_loaders_that_cannot_pin_still_get_a_ref_pointer() -> None:
         "dependencies._point_ref_at is gone; the workers in LOADER_CANNOT_PIN_SUBPROCESS_FILES "
         "load bare and rely on it to reach the run's pinned commit"
     )
+
+
+# Subprocess backends that must stage through ``hf_subprocess_env`` with a *ref*, because some load
+# inside their worker resolves ``refs/<ref>`` instead of taking a revision. Two shapes qualify, and
+# both belong here:
+#
+#   * the fully bare loaders -- ``nvidia.py`` / ``nemo.py`` / ``diarizen.py``, whose upstream
+#     ``from_pretrained`` has no revision parameter at all;
+#   * the *partially* pinned wrappers -- ``qwen.py`` and ``qwen_tts.py``, which do pin the weights
+#     by SHA but whose upstream reads of the small config/processor files ignore revision
+#     (``AutoProcessor.from_pretrained(path, fix_mistral_regex=True)`` in ``qwen_asr``;
+#     ``cached_file(..., revision=kwargs.pop("revision", None))`` in ``qwen_tts``), so those reads
+#     go through the ref regardless of what the payload carries.
+#
+# ``crisperwhisper.py`` -- the remaining LOADER_CANNOT_PIN file -- is deliberately absent: it hands
+# the worker the staged local ``snapshots/<sha>`` path, so it is pinned by that path and no ref is
+# involved.
+_REF_STAGED_SUBPROCESS_FILES = {
+    "audio/tasks/speaker_diarization/nvidia.py",
+    "audio/tasks/speech_to_text/nemo.py",
+    "audio/tasks/speaker_diarization/diarizen.py",
+    "audio/tasks/speech_to_text/qwen.py",
+    "audio/tasks/text_to_speech/qwen_tts.py",
+}
+
+
+def _hf_subprocess_env_revision_args(tree: ast.AST) -> list[tuple[int, "ast.expr | None"]]:
+    """Return ``(lineno, revision-argument)`` for **every** ``hf_subprocess_env(...)`` call.
+
+    Every call, not the first match: ``qwen.py`` makes two (the ASR worker and the standalone
+    forced aligner), and a checker that stopped at the first would have declared that file clean
+    while the second site staged by SHA -- which is precisely how a site added later escapes a
+    guard that was green when it was written.
+
+    Blind spot, stated rather than half-covered: the ``also=`` companion models are not inspected.
+    Their argument is often a local name or a conditional expression rather than a literal, so a
+    check over literals alone would pass silently on the cases that matter most.
+    """
+    calls: list[tuple[int, "ast.expr | None"]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "hf_subprocess_env":
+            arg: "ast.expr | None" = next((kw.value for kw in node.keywords if kw.arg == "revision"), None)
+            if arg is None and len(node.args) >= 2:
+                arg = node.args[1]
+            calls.append((node.lineno, arg))
+    return sorted(calls, key=lambda c: c[0])
+
+
+def _stages_via_a_ref(node: ast.expr) -> bool:
+    """Whether an ``hf_subprocess_env`` revision argument is a ref rather than a resolved commit.
+
+    Three shapes pass, all of which reach ``_point_ref_at`` with a name it will actually write:
+
+    * ``model.revision`` -- an attribute access on a plain name, so a stray ``foo().revision`` or
+      ``args["x"].revision`` still has to be looked at by a human;
+    * ``model.revision or "main"`` -- the idiom ``qwen_tts.py`` uses for an optional field. Handled
+      as a general ``or``: every branch must itself be a ref, so ``model.commit_sha or ...`` fails;
+    * a literal ref string that is not 40-hex, for a companion model with no ``HFModel`` of its own
+      (``qwen.py``'s forced aligner is a bare id).
+
+    Everything else fails -- notably a local variable, which is how the pre-fix sites read
+    (``revision = model.commit_sha or resolve_revision(...)``) and which no static check can prove
+    holds a ref.
+    """
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return all(_stages_via_a_ref(value) for value in node.values)
+    if isinstance(node, ast.Attribute) and node.attr == "revision":
+        return isinstance(node.value, ast.Name)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return not SHA_RE.match(node.value)
+    return False
+
+
+def test_ref_staged_backends_stage_via_the_ref_not_a_resolved_sha() -> None:
+    """These backends must hand ``hf_subprocess_env`` the ref, so ``refs/<ref>`` names the pinned commit.
+
+    ``test_resolve_model_points_the_ref_at_the_pinned_commit`` proves ``resolve_model`` re-points
+    ``refs/<ref>`` *when called with a ref* -- but only the call site decides whether it ever sees
+    one. These sites previously passed a resolved SHA, and ``_point_ref_at`` returns immediately
+    once its ``ref`` argument is already a SHA. The ref is not thereby absent (``HFModel``
+    construction writes it, via ``validate_hf_model_id`` -> ``check_hf_repo_exists`` ->
+    ``ensure_hf_model(repo, "main")``); it is simply never *re-pointed*, so it keeps whatever
+    ``main`` resolved to on that host.
+
+    That distinction is the severity of the bug. The loud failure -- a bare load dying under
+    ``HF_HUB_OFFLINE=1`` -- needs a cache holding ``snapshots/<sha>`` with no ``refs/`` entry.
+    The silent one needs nothing unusual: on node B of a multi-node sweep the field validator
+    stages live ``main`` (``refs/main`` = sha2), the model validator adopts the manifest's sha1,
+    the backend stages sha1 by SHA, and the worker's unpinned load reads sha2 while provenance
+    records sha1 -- the confidently-wrong provenance ``model_revision.py`` exists to prevent.
+
+    AST, not text (the file's convention): a comment mentioning ``.revision`` cannot satisfy it --
+    only the executable argument node can.
+    """
+    from tests.utils.hf_load_coverage_test import _SRC
+
+    unclassified = _REF_STAGED_SUBPROCESS_FILES - (
+        REVISION_RESOLVED_SUBPROCESS_FILES | LOADER_CANNOT_PIN_SUBPROCESS_FILES
+    )
+    assert not unclassified, f"ref-staged backend(s) missing from both revision allowlists: {sorted(unclassified)}"
+
+    wrong: list[str] = []
+    for relpath in sorted(_REF_STAGED_SUBPROCESS_FILES):
+        calls = _hf_subprocess_env_revision_args(ast.parse((_SRC / relpath).read_text()))
+        if not calls:
+            wrong.append(f"{relpath}: no hf_subprocess_env(...) call found")
+        for lineno, arg in calls:
+            if arg is None:
+                wrong.append(f"{relpath}:{lineno}: hf_subprocess_env called with no revision argument")
+            elif not _stages_via_a_ref(arg):
+                wrong.append(
+                    f"{relpath}:{lineno}: hf_subprocess_env revision arg is {ast.unparse(arg)!r}, "
+                    'must be a ref (model.revision, model.revision or "main", or a literal ref)'
+                )
+
+    assert not wrong, (
+        "A backend whose worker has an unpinned load stages via something other than the ref, so "
+        "refs/<ref> would keep naming whatever commit it last named on the host:\n" + "\n".join(f"  {w}" for w in wrong)
+    )
+
+
+def test_the_ref_check_accepts_refs_and_rejects_resolved_commits() -> None:
+    """The guard above is only as good as ``_stages_via_a_ref``, so pin its verdicts directly.
+
+    A checker asserting a property of five real files passes for two reasons -- the files are
+    correct, or the checker accepts everything -- and the suite cannot tell them apart. The
+    rejected list below is the pre-fix source of these very call sites; the accepted list is every
+    shape currently in use, including the ``or "main"`` idiom a stricter attribute-only check would
+    have wrongly failed.
+    """
+    accepted = ["model.revision", 'model.revision or "main"', '"main"', '"refs/pr/7"']
+    rejected = [
+        "model.commit_sha",
+        "revision",  # the pre-fix local: commit_sha or resolve_revision(...)
+        "aligner_revision",
+        'resolve_revision(model_name, "main")',
+        'model.commit_sha or "main"',
+        f'"{"a" * 40}"',  # a SHA literal is not a ref, however it is spelled
+    ]
+
+    for expr in accepted:
+        assert _stages_via_a_ref(ast.parse(expr, mode="eval").body), f"{expr} is a ref and must pass"
+    for expr in rejected:
+        assert not _stages_via_a_ref(ast.parse(expr, mode="eval").body), f"{expr} is not a ref and must fail"
