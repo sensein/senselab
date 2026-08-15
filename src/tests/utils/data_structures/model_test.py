@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from huggingface_hub import HfApi
 
@@ -65,6 +66,63 @@ def test_hfmodel_invalid_hf_repo_check() -> None:
     with patch("senselab.utils.data_structures.model.check_hf_repo_exists", return_value=False):
         with pytest.raises(ValueError):
             HFModel(path_or_uri="invalid/repo")
+
+
+def test_hfmodel_wraps_a_gated_repo_error_as_validationerror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Hub error that ``check_hf_repo_exists`` re-raises must also arrive as ValidationError.
+
+    ``check_hf_repo_exists`` answers False only for a genuinely absent repo; ``GatedRepoError`` and
+    transient errors it re-raises on purpose. Both are ``OSError`` subclasses, so before this was
+    wrapped they escaped the ``revision`` *field* validator unwrapped -- the same defect finding #5
+    fixed one validator further down, on a path that runs first.
+
+    The message must name the original type, because the wrap is what destroys it: pydantic gives
+    the ValidationError no ``__cause__``, so "gated" and "Hub outage" are otherwise
+    indistinguishable to a caller.
+    """
+    from huggingface_hub.errors import GatedRepoError
+    from pydantic import ValidationError
+
+    # A fresh cache, not `.clear()`: `_hf_cache` is a ClassVar shared by every test in this
+    # process, and an earlier test constructing the same repo id leaves a True in it that would
+    # make this validator skip the call under test entirely.
+    monkeypatch.setattr(HFModel, "_hf_cache", {})
+
+    def _gated(**_kw: object) -> bool:
+        raise GatedRepoError(
+            "403 gated",
+            response=httpx.Response(403, request=httpx.Request("GET", "https://huggingface.co/org/gated")),
+        )
+
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", _gated)
+    with pytest.raises(ValidationError) as caught:
+        HFModel(path_or_uri="org/gated", revision="main")
+    assert "GatedRepoError" in str(caught.value), "the erased type must survive in the message"
+    assert caught.value.errors()[0]["ctx"]["error"].__cause__.__class__ is GatedRepoError, (
+        "the original exception must stay reachable through ctx, which is what `from exc` buys"
+    )
+
+
+def test_hfmodel_wraps_a_resolution_failure_as_validationerror(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A commit-resolution failure surfaces as ValidationError, not a bare RuntimeError.
+
+    Finding #5 of the #550 review: ``_resolve_commit_sha`` runs in a ``model_validator`` and let
+    ``RevisionResolutionError`` (a ``RuntimeError``) escape. Pydantic only converts
+    ``ValueError``/``AssertionError`` into ``ValidationError``, so every caller that catches
+    ``ValidationError``/``ValueError`` around ``HFModel(...)`` saw an unhandled crash instead.
+    """
+    from pydantic import ValidationError
+
+    from senselab.utils.model_revision import RevisionResolutionError
+
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda **kw: True)
+
+    def _boom(*a: object, **k: object) -> str:
+        raise RevisionResolutionError("cannot resolve org/model@main")
+
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", _boom)
+    with pytest.raises(ValidationError):
+        HFModel(path_or_uri="org/model", revision="main")
 
 
 def test_get_huggingface_token_from_env_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

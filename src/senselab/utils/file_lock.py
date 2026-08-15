@@ -273,10 +273,29 @@ class SharedFileLock:
         except Timeout:
             age = self._heartbeat_age()
             if previous_holder is not None:
-                held_for = time.time() - previous_holder["taken_at"]
+                # `.get`, not `[...]`, like every neighbouring field. This guards against a lock
+                # file senselab did not write: a hand-edited one, or a foreign `<resource>.lock`
+                # met on the FileRef path in subprocess_venv.call_in_venv, which appends `.lock` to
+                # a caller-supplied path and so can land on some other tool's file of that name.
+                #
+                # It is not version tolerance, and the comment should not claim to be: no senselab
+                # ever wrote a holder without `taken_at`. `_write_holder` has emitted it since this
+                # class was introduced (61840d7b), and the `_HeartbeatLock` it replaced (removed in
+                # 51589e6f) wrote no payload at all -- an empty file, which `lock_holder` maps to
+                # None. A truncated write cannot produce one either: `taken_at` is serialised last,
+                # so a partial file has no closing brace, `json.loads` fails, and `lock_holder`
+                # returns None again.
+                #
+                # A bare subscript would raise KeyError (or TypeError on a non-numeric value) out
+                # of __enter__, where nothing expects a non-timeout: the retry loops in
+                # ensure_hf_model / ensure_venv / record_resolution catch only TimeoutError, and
+                # the fourth call site -- the FileRef locks in call_in_venv -- has no handler at
+                # all. Failing to report a lock timeout is not worth a crash on any of them.
+                taken_at = previous_holder.get("taken_at")
+                held_for = f"{time.time() - taken_at:.1f}s" if isinstance(taken_at, (int, float)) else "an unknown time"
                 detail = (
                     f"held by user={previous_holder.get('user')} host={previous_holder.get('host')} "
-                    f"pid={previous_holder.get('pid')} for {held_for:.1f}s "
+                    f"pid={previous_holder.get('pid')} for {held_for} "
                     f"(heartbeat {age:.1f}s old)"
                 )
             else:
