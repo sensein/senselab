@@ -215,11 +215,18 @@ class StageContext:
 
         - **Not a Hub id at all** — a bare ``None`` (a model-less stage, e.g. ``features``) or a
           name with no ``/`` (a local backend). Short-circuits with no Hub round-trip.
-        - **A definitive not-found** (``RepositoryNotFoundError``) — the Hub has answered, and the
-          answer is that no commit exists. ``None`` is then the *correct* value rather than a
-          degradation, and it is stable across runs, so no two commits can collide behind it. This
-          is the crash being fixed: ``default.yaml`` ships ``yamnet: google/yamnet``, a TensorFlow
-          backend whose id happens to contain a ``/`` and so trips the Hub-id heuristic above.
+        - **A definitive "there is no commit"** (``RepositoryNotFoundError`` or
+          ``HFValidationError``) — ``None`` is then the *correct* value rather than a degradation,
+          and it is the same answer every run, so no two commits can collide behind it. Two shapes
+          reach it. ``RepositoryNotFoundError`` is the Hub having answered that no such repo
+          exists: ``default.yaml`` ships ``yamnet: google/yamnet``, a TensorFlow backend whose id
+          happens to contain a ``/`` and so trips the Hub-id heuristic above — the crash being
+          fixed. ``HFValidationError`` is the *client* refusing to ask, because the string is not a
+          well-formed repo id at all: a local filesystem path (``/scratch/models/foo``) contains
+          ``/`` and so trips the same heuristic, but ``model_info`` rejects it before any request.
+          That verdict is offline, deterministic and independent of Hub availability, which is what
+          makes it definitive rather than a "could not tell" — it cannot be a transient failure
+          wearing a not-found's clothes, because no network was involved in reaching it.
         - **Anything else** — a 429, a network error, a ``GatedRepoError`` — propagates. Those all
           mean "we could not tell", which is unsound for a key: the load may well succeed, and its
           result would be stored under a commit-blind key that a later run cannot distinguish from
@@ -243,13 +250,24 @@ class StageContext:
         except RevisionResolutionError as exc:
             # Imported here, not at module scope, so the success path never pays for it — and so
             # this module stays importable by a caller that only wants a cache key.
-            from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+            from huggingface_hub.errors import GatedRepoError, HFValidationError, RepositoryNotFoundError
 
             cause = exc.__cause__  # resolve_revision wraps the Hub error it failed on.
-            if isinstance(cause, RepositoryNotFoundError) and not isinstance(cause, GatedRepoError):
+            definitive = isinstance(cause, HFValidationError) or (
+                isinstance(cause, RepositoryNotFoundError) and not isinstance(cause, GatedRepoError)
+            )
+            if definitive:
+                # Not memoized, and deliberately so: `model_revision` remembers successes only, so a
+                # definitive not-found is re-resolved on every call — twice per stage, since
+                # `stages.py` asks once for the key and once for the provenance. Acceptable because
+                # the verdict is cheap: `HFValidationError` never leaves the process, and a 404 is a
+                # single request (`retry_on_transient_error` does not retry a non-transient 4xx). A
+                # negative memo would buy back milliseconds and owe an invalidation story a positive
+                # one does not — a repo that 404s while it is being created, or a path that appears
+                # mid-run, must not stay not-found for the life of the process.
                 logger.warning(
                     "%s is not a Hub repository (%s); its cache key carries no commit. "
-                    "Expected for a local backend whose id contains a '/'.",
+                    "Expected for a local backend whose id contains a '/', or a local filesystem path.",
                     model_id,
                     type(cause).__name__,
                 )
