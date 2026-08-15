@@ -7,7 +7,7 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import concatenate_audios, evenly_segment_audios
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype
+from senselab.utils.data_structures import DeviceType, SpeechBrainModel, _select_device_and_dtype, device_run_opt
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import (
     resolve_model,
@@ -73,7 +73,7 @@ class SpeechBrainEnhancer:
                         enhance_model.from_hparams,
                         source=str(snapshot_path),
                         savedir=str(savedir),
-                        run_opts={"device": device.value},
+                        run_opts={"device": device_run_opt(device)},
                     )
                 except Exception as e:
                     logger.info("Trying SepformerSeparation model after SpectralMaskEnhancement failed: %s", e)
@@ -81,7 +81,7 @@ class SpeechBrainEnhancer:
                         separator.from_hparams,
                         source=str(snapshot_path),
                         savedir=str(savedir),
-                        run_opts={"device": device.value},
+                        run_opts={"device": device_run_opt(device)},
                     )
 
         return cls._models[key], device, dtype

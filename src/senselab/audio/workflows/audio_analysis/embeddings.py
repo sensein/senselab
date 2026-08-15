@@ -1,9 +1,11 @@
 """Per-window speaker-embedding extraction.
 
-Slices the pass audio into uniform fixed-duration windows (default 2.0 s with 1.0 s
+Slices the pass audio into uniform fixed-duration windows (default 1.0 s with 0.5 s
 hop) and runs each requested embedding model on every window. Output is a list of
 ``(start_s, end_s, vector_np)`` per model, written to disk by the caller and consumed
-by the speaker workflow.
+by the speaker workflow. Profile enrollment wants the opposite trade and passes
+``window_s=2.0, hop_s=1.0`` explicitly — see ``tasks/speaker_embeddings``. Two
+purposes, two measured settings.
 
 Why windows, not diarization segments
 -------------------------------------
@@ -31,167 +33,27 @@ and ``hop_s``.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-import torch
 
-from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.speaker_embeddings import extract_speaker_embeddings_from_audios
-from senselab.utils.data_structures import DeviceType, SpeechBrainModel
+from senselab.audio.tasks.speaker_embeddings.windowing import (
+    WindowEmbedding,
+    extract_per_window_embeddings,
+    slice_audio,
+    window_starts,
+)
 
-
-@dataclass(frozen=True)
-class WindowEmbedding:
-    """One embedding vector for a fixed time window."""
-
-    start_s: float
-    end_s: float
-    vector: np.ndarray
-
-
-def _slice_audio(audio: Audio, start_s: float, end_s: float) -> Audio:
-    """Return a new ``Audio`` covering ``[start_s, end_s]`` (clamped to audio bounds).
-
-    Assumes the input is shaped ``(channels, samples)``. Multichannel audio is
-    sliced unchanged — the embedding backend's own preprocessor handles it.
-    """
-    sr = audio.sampling_rate
-    n_samples = audio.waveform.shape[-1]
-    start_sample = max(0, int(start_s * sr))
-    end_sample = min(n_samples, max(start_sample + 1, int(end_s * sr)))
-    waveform = audio.waveform[:, start_sample:end_sample]
-    return Audio(waveform=waveform, sampling_rate=sr)
-
-
-def _window_starts(duration_s: float, window_s: float, hop_s: float) -> list[float]:
-    """Return window start times spanning ``[0, duration_s]``.
-
-    The last window is anchored to ``duration_s - window_s`` (or 0) so it always
-    covers exactly ``window_s`` seconds — the embedding model needs the full
-    minimum-length input.
-    """
-    if duration_s <= 0 or window_s <= 0 or hop_s <= 0:
-        return []
-    if duration_s <= window_s:
-        return [0.0]
-    starts: list[float] = []
-    t = 0.0
-    while t + window_s <= duration_s + 1e-9:
-        starts.append(t)
-        t += hop_s
-    # Pin the last window to the audio tail so we don't drop the final speaker turn.
-    last = max(0.0, duration_s - window_s)
-    if not starts or starts[-1] < last - 1e-6:
-        starts.append(last)
-    return starts
-
-
-def extract_per_window_embeddings(
-    *,
-    audio: Audio,
-    models: list[str],
-    window_s: float = 1.0,
-    hop_s: float = 0.5,
-    device: DeviceType | None = None,
-    failures: dict[str, str] | None = None,
-) -> dict[str, list[WindowEmbedding]]:
-    """Run each embedding model on every fixed window of ``audio``.
-
-    Args:
-        audio: The pass's full ``Audio`` object.
-        models: HuggingFace model ids for the embedding backends (ECAPA, ResNet, ...).
-        window_s: Window length in seconds. Defaults to 1.0.
-        hop_s: Window hop in seconds. Defaults to 0.5.
-        device: Optional device override.
-        failures: Optional dict the function will populate with
-            ``{model_id → reason}`` for any model that produced an empty result.
-            The caller can fold these into ``incomparable_reasons`` so silent
-            empty-vote behavior is auditable.
-
-    Returns:
-        ``{model_id → [WindowEmbedding, ...]}``. Each list shares the same window
-        grid across models, so ``out[m_a][i]`` and ``out[m_b][i]`` cover the same
-        time span. A model that fails to load returns ``[]`` (and writes a reason
-        into ``failures`` when provided).
-    """
-    if not models:
-        return {}
-    if audio.waveform.ndim < 2:
-        raise ValueError(
-            f"extract_per_window_embeddings expects a (channels, samples) waveform; "
-            f"got shape {tuple(audio.waveform.shape)}."
-        )
-    duration_s = audio.waveform.shape[-1] / audio.sampling_rate
-    starts = _window_starts(duration_s, window_s, hop_s)
-    if not starts:
-        msg = (
-            f"audio duration ({duration_s:.3f} s) is shorter than the embedding "
-            f"window ({window_s} s); no window grid producible"
-        )
-        print(f"warn: {msg}", file=sys.stderr)
-        if failures is not None:
-            for m in models:
-                failures[m] = msg
-        return {m: [] for m in models}
-
-    audio_slices: list[Audio] = []
-    spans: list[tuple[float, float]] = []
-    for s in starts:
-        e = min(duration_s, s + window_s)
-        audio_slices.append(_slice_audio(audio, s, e))
-        spans.append((s, e))
-
-    out: dict[str, list[WindowEmbedding]] = {}
-    for model_id in models:
-        try:
-            sb_model: SpeechBrainModel = SpeechBrainModel(path_or_uri=model_id, revision="main")
-            tensors = extract_speaker_embeddings_from_audios(audios=audio_slices, model=sb_model, device=device)
-            entries: list[WindowEmbedding] = []
-            for (start_s, end_s), t in zip(spans, tensors, strict=False):
-                vec = _flatten_to_1d(t)
-                entries.append(WindowEmbedding(start_s=start_s, end_s=end_s, vector=vec))
-            out[model_id] = entries
-        except Exception as exc:  # noqa: BLE001
-            # Surface per-model failure to the caller via stderr so the user can
-            # tell "model crashed" from "audio too short" — both produce an empty
-            # list, but only one is a real configuration problem.
-            msg = f"model failed during extraction: {exc!r}"
-            print(
-                f"warn: speaker-embedding model {model_id!r} {msg}",
-                file=sys.stderr,
-            )
-            if failures is not None:
-                failures[model_id] = msg
-            out[model_id] = []
-    return out
-
-
-def _flatten_to_1d(t: Any) -> np.ndarray:  # noqa: ANN401
-    """Coerce an embedding tensor / array to a 1-D ``float32`` numpy vector.
-
-    SpeechBrain returns ``(1, D)``, ``(B, D)``, or ``(K, D)`` depending on the
-    backend; ``.squeeze()`` would silently leave a 2-D ``(K, D)`` if K>1, which
-    the cosine helper then sees as a length-mismatch and drops to ``None``. Here
-    we always reshape to a single 1-D vector — when the backend returns multiple
-    candidate vectors we average them (the closest the workflow can do without
-    backend-specific knowledge).
-    """
-    if t is None:
-        return np.zeros(0, dtype=np.float32)
-    if isinstance(t, torch.Tensor):
-        arr = t.detach().cpu().numpy()
-    else:
-        arr = np.asarray(t)
-    if arr.size == 0:
-        return np.zeros(0, dtype=np.float32)
-    while arr.ndim > 1 and arr.shape[0] == 1:
-        arr = arr[0]
-    if arr.ndim > 1:
-        # Multiple candidate vectors → average to a single representative.
-        arr = arr.mean(axis=tuple(range(arr.ndim - 1)))
-    return arr.astype(np.float32, copy=False)
+__all__ = [
+    "WindowEmbedding",
+    "extract_per_window_embeddings",
+    "slice_audio",
+    "window_starts",
+    "window_embedding_at",
+    "window_index_at",
+    "cluster_pass_speakers",
+    "calibrate_cosine_uncertainty",
+]
 
 
 def window_embedding_at(
@@ -257,8 +119,8 @@ def cluster_pass_speakers(
         is_speech_per_window: Boolean mask per ``entries`` index indicating
             whether the window contains speech (per YAMNet / AST / loudness).
             When provided, only ``True`` windows participate in clustering;
-            ``False`` windows get ``cluster_id="NOISE"`` and ``p_voice = 0.0``.
-            This stops silent / background windows from being counted as a
+            ``False`` windows get ``cluster_id="NOISE"``. This stops silent
+            / background windows from being counted as a
             "speaker" — the bug that previously inflated ``n_speakers`` on
             recordings with long silent stretches. ``None`` clusters every
             non-zero-norm window (legacy behavior).
@@ -277,7 +139,7 @@ def cluster_pass_speakers(
        clustering algorithm on L2-normalized embedding vectors.
     3. **Pick k\* = argmax silhouette_score** across the sweep.
     4. **If best silhouette ≥ coherent_silhouette_threshold** → multi-cluster regime:
-       ``n_speakers = k\*``; per-window ``p_voice`` is the rescaled silhouette.
+       ``n_speakers = k\*``.
     5. **Else** → single-cluster regime (1 if the speech windows cluster
        tightly around the mean, 0 if even that fails).
 
@@ -286,14 +148,13 @@ def cluster_pass_speakers(
     pass-wide cluster ids (``C0``…) that harmonise labels across diar models, and from the
     fused speaker ids (``S0``…) in ``final/speakers.json``; three namespaces that all read
     as "S0" made the label-correspondence table unreadable on a real run. Non-speech
-    or zero-norm windows are tagged ``"NOISE"``. ``p_voice`` is keyed by the
-    window index in ``entries``.
+    or zero-norm windows are tagged ``"NOISE"``.
 
     Returns ``None`` when too few windows to cluster, or sklearn unavailable.
     """
     try:
         from sklearn.cluster import KMeans, SpectralClustering
-        from sklearn.metrics import silhouette_samples, silhouette_score
+        from sklearn.metrics import silhouette_score
     except ImportError as exc:
         msg = f"sklearn unavailable for clustering: {exc!r}"
         print(f"warn: cluster_pass_speakers skipped: {msg}", file=sys.stderr)
@@ -318,11 +179,9 @@ def cluster_pass_speakers(
         valid_indices.append(i)
 
     cluster_labels: dict[int, str] = {}
-    p_voice: dict[int, float] = {}
     for i in range(len(entries)):
         if i not in valid_indices:
             cluster_labels[i] = "NOISE"
-            p_voice[i] = 0.0
 
     if not valid_indices:
         msg = "no valid speech embedding windows (all filtered as zero-norm or non-speech)"
@@ -333,7 +192,6 @@ def cluster_pass_speakers(
             "n_speakers": 0,
             "best_silhouette": None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": [],
         }
 
@@ -344,14 +202,12 @@ def cluster_pass_speakers(
     if len(vectors) < min_windows_for_clustering:
         for idx in valid_indices:
             cluster_labels[idx] = "spk0"
-            p_voice[idx] = 1.0
         band = _within_cluster_band(np.stack(vectors, axis=0)) if vectors else None
         same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
@@ -472,16 +328,8 @@ def cluster_pass_speakers(
         # Renumber to spk0..spk(n-1) so downstream label sets are dense.
         relabel = {old: new for new, old in enumerate(unique_after_merge)}
         best_labels = np.array([relabel[int(x)] for x in best_labels], dtype=int)
-        try:
-            per_sample = silhouette_samples(X, best_labels, metric="cosine") if n_speakers_final >= 2 else None
-        except ValueError:
-            per_sample = None
         for vi, idx in enumerate(valid_indices):
             cluster_labels[idx] = f"spk{int(best_labels[vi])}"
-            if per_sample is None:
-                p_voice[idx] = 1.0 if n_speakers_final == 1 else 0.5
-            else:
-                p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(per_sample[vi]) + 1.0)))
         # Empirical per-pass calibration band for the speaker-axis cosine
         # validation: ``same_floor`` = 75th percentile of within-cluster
         # pairwise cos_dist (most same-speaker pairs are below this),
@@ -497,7 +345,6 @@ def cluster_pass_speakers(
             "n_speakers": n_speakers_final,
             "best_silhouette": float(best_overall),
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
@@ -512,12 +359,10 @@ def cluster_pass_speakers(
         # All-zero pass — no detectable voice.
         for idx in valid_indices:
             cluster_labels[idx] = "NOISE"
-            p_voice[idx] = 0.0
         return {
             "n_speakers": 0,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
         }
     centroid_unit = centroid / centroid_norm
@@ -525,32 +370,40 @@ def cluster_pass_speakers(
     mean_sim = float(np.mean(sims))
     if mean_sim >= coherent_silhouette_threshold:
         # Single coherent speaker.
-        for vi, idx in enumerate(valid_indices):
+        for idx in valid_indices:
             cluster_labels[idx] = "spk0"
-            # cos sim → [0,1] via (s+1)/2.
-            p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
         band = _within_cluster_band(X)
         same_floor, diff_floor = band if band is not None else (None, None)
         return {
             "n_speakers": 1,
             "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
             "labels": cluster_labels,
-            "p_voice": p_voice,
             "valid_indices": list(valid_indices),
             "empirical_same_speaker_floor": same_floor,
             "empirical_diff_speaker_floor": diff_floor,
         }
     # No coherent cluster — likely noise / silence dominated.
-    for vi, idx in enumerate(valid_indices):
+    for idx in valid_indices:
         cluster_labels[idx] = "NOISE"
-        p_voice[idx] = max(0.0, min(1.0, 0.5 * (float(sims[vi]) + 1.0)))
     return {
         "n_speakers": 0,
         "best_silhouette": float(best_overall) if best_overall > -1.0 else None,
         "labels": cluster_labels,
-        "p_voice": p_voice,
         "valid_indices": list(valid_indices),
     }
+
+
+# A per-window map computed as ``0.5 * (silhouette + 1)`` used to live here, rescaling a
+# clustering-geometry index into a value that reads as a probability. A silhouette
+# coefficient is a property of a chosen partition on a chosen metric, not a probability:
+# silhouette computed with cosine and with Euclidean return different numbers for identical
+# geometry on unit vectors, so any probability read off it is a probability about a
+# parameterisation choice. The L1 post-processing register (item 12) removed the consumer —
+# the presence voter that read it as confidence with no ramp and no anchors, contributing a
+# near-constant ~0.44 doubt across every bucket while earning the highest fusion weight of
+# fifteen signals precisely because it was near-constant (see ``speech_presence_link.py``'s
+# comment on ``_silhouette_votes_by_bucket``). Nothing else reads the per-window value, so
+# this removes the computation rather than leaving a renamed field with no reader.
 
 
 def _merge_close_clusters(
@@ -753,26 +606,6 @@ def _within_cluster_band(
         # out rather than returning an inverted band that would score every comparison.
         diff_floor = min(0.95, same_floor + 0.20)
     return same_floor, diff_floor
-
-
-def silhouette_voice_score(
-    entries: list[WindowEmbedding],
-    *,
-    n_clusters_max: int = 6,
-    min_windows_for_clustering: int = 4,
-) -> dict[int, float] | None:
-    """Backwards-compatible thin wrapper returning just the per-window p_voice map.
-
-    Prefer ``cluster_pass_speakers`` for new code — it also exposes the
-    estimated speaker count and per-window cluster labels (used to synthesise
-    an embedding-derived diarization source).
-    """
-    res = cluster_pass_speakers(
-        entries,
-        n_clusters_max=n_clusters_max,
-        min_windows_for_clustering=min_windows_for_clustering,
-    )
-    return None if res is None else res["p_voice"]
 
 
 def calibrate_cosine_uncertainty(
