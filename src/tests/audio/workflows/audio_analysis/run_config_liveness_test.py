@@ -40,12 +40,18 @@ _RUN_CONFIG_FILE = (_SRC_SENSELAB / "audio" / "workflows" / "audio_analysis" / "
 # transcribe it.
 #
 # The five ``*_policy`` fields (``rounds_policy``, ``speaker_policy``, ``quality_policy``,
-# ``labelstudio_policy``, ``support_policy``) are each read exactly once outside this module: by
-# ``run_config_test.py``'s ``getattr(cfg, section)`` / ``getattr(cfg, attr)`` (its
-# ``MOVED_CONSTANTS`` and ``probes`` dicts name all five), which is real, currently-passing
-# regression coverage of the D2 migration -- not a decorative mention. Task 2's own instruction is
-# "a field read only by a test still counts as read -- say so and leave it," so none of the five
-# are deleted here; deleting any would break that test file, which is not in this task's file list.
+# ``labelstudio_policy``, ``support_policy``) have **no production reader**. Their only reader
+# anywhere is ``run_config_test.py``'s ``getattr(cfg, section)`` / ``getattr(cfg, attr)``, and that
+# file is not scanned here at all -- the sweep covers ``src/senselab/`` and ``scripts/`` only. So
+# they are unread in the sense this test measures, and a generic ``getattr`` loop over every field
+# could not distinguish a live field from a dead one in any case.
+#
+# They are kept rather than deleted for a reason that is about the fix, not about the test: the
+# register's remedy for D5-D13 is to *thread* these keys to the call sites that currently ignore
+# them (``quality.floor_percentile`` should reach ``acoustic.py``'s ``FLOOR_PERCENTILE``,
+# ``support.min_evidence_spread`` should reach ``support.py``'s constant, and so on). The field is
+# the vehicle for that fix; deleting it now means re-adding it later. What was unacceptable was the
+# silence -- a key that advertises control it does not have -- and listing it here ends that.
 #
 # This also resolves the register's apparent contradiction. Its summary counts "four dead fields
 # plus two orphaned keys inside speaker_policy," while its D3/D4 rows say ``speaker_policy`` itself
@@ -75,10 +81,9 @@ KNOWN_UNREAD = {
     "run_features",
     "run_asr",
     "run_alignment",
-    # Same dead-predecessor-of-skipped_stages family as the six above, but with one test reader:
-    # ``src/tests/scripts/analyze_audio_test.py`` asserts ``cfg.run_comparisons is False``. Same
-    # "read only by a test still counts as read" rule as the policy fields; same out-of-scope
-    # reasoning as the six above for why it is not deleted by this task.
+    # Same dead-predecessor-of-skipped_stages family as the six above. It differs only in having a
+    # test reader (``src/tests/scripts/analyze_audio_test.py`` asserts ``cfg.run_comparisons is
+    # False``), which this sweep does not see and which would not make it live if it did.
     "run_comparisons",
 }
 
