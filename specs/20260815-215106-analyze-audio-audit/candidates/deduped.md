@@ -62,7 +62,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/adaptive/provenance.py:1-22
 - defect: stale-or-false — module docstring claims every state change in the loop is attributable per FR-011g via `RevisionRecord`/`classify_resolution`; repo-wide grep finds zero call sites for either in `loop.py`, `interventions.py`, or `belief.py`.
 - failure: a reader believes every revision in a run is audit-traceable and does not check whether the mechanism is reachable — it is not, so nothing in a real run is attributed by it.
-- note: possible duplicate of F-171 (B-21), which reports the live consequence (convergence math cannot distinguish genuine-evidence drops from self-confirming re-scores) of this same dead module — kept separate because fixing the docstring (F-5) does not by itself fix the missing convergence-math distinction (F-171); wiring `provenance.py` in for real would fix both.
+- note: possible duplicate of F-159 (B-21), which reports the live consequence (convergence math cannot distinguish genuine-evidence drops from self-confirming re-scores) of this same dead module — kept separate because fixing the docstring (F-5) does not by itself fix the missing convergence-math distinction (F-159); wiring `provenance.py` in for real would fix both.
 
 ### F-6
 - raised-by: A-6
@@ -247,7 +247,8 @@ for the "possible duplicate, kept separate" calls.
 - layer: prose
 - location: src/senselab/audio/workflows/audio_analysis/support.py:276-298 (`MIN_LOW_FRACTION`)
 - defect: rationale-to-migrate, flagged for content risk — the docstring cites specific measured numbers (503/697, 601/697, 0.500, 0.897) that it simultaneously disowns as taken under a since-fixed reading bug ("must be re-measured before they are cited again"); destination: support/reliability design, migrated with the numbers replaced or dropped, not carried forward as-is.
-- failure: UNVERIFIED as a runtime defect (the constant's own live threshold behavior is F-135/B-5); this entry is specifically about the docstring citing numbers it disowns.
+- failure: UNVERIFIED as a runtime defect (the constant's own live threshold behavior is F-143/B-5); this entry is specifically about the docstring citing numbers it disowns.
+- note: coupled with F-143 more tightly than most kept-separate pairs — re-deriving `MIN_LOW_FRACTION` properly (F-143's fix) would naturally replace the disowned numbers this entry objects to, so a fixer of either should check the other.
 
 ### F-32
 - raised-by: A-32
@@ -269,7 +270,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/degradation.py:1-18
 - defect: rationale-to-migrate — measured "clip((25-snr_db)/20,0,1) returns 0.0 in every bucket of every recording" L1/L2 boundary rationale; destination: layered-architecture.md (L1/L2 calibration boundary).
 - failure: UNVERIFIED.
-- note: same file as F-172 (D-6), which is a distinct (assumption-class) finding about the same anchor lacking task-conditioning — different fix, kept separate.
+- note: same file as F-169 (D-6), which is a distinct (assumption-class) finding about the same anchor lacking task-conditioning — different fix, kept separate.
 
 ### F-35
 - raised-by: A-35
@@ -434,7 +435,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/mask_harvest.py:37-52 (`TARGET_POLARITY`)
 - defect: rationale-to-migrate — task-gated polarity rationale (breathing task: speech vote means target absence); destination: background-scene design (task-gated polarity).
 - failure: UNVERIFIED.
-- note: this is the same task-vocabulary gap D-5 (F-175) later reports from an assumption angle — kept separate (F-57 is prose rationale for existing polarity logic; F-175/D-5 is a gap in the task→target-event vocabulary the logic depends on).
+- note: this is the same task-vocabulary gap D-5 (F-168) later reports from an assumption angle — kept separate (F-57 is prose rationale for existing polarity logic; F-168/D-5 is a gap in the task→target-event vocabulary the logic depends on).
 
 ### F-58
 - raised-by: A-58
@@ -617,7 +618,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/adaptive/belief.py:1108-1125
 - defect: rationale-to-migrate — "every lookup missed, floor assigned 0.0 everywhere — the confident claim of no floor" incident; destination: belief/fusion design (aleatoric floor).
 - failure: UNVERIFIED.
-- note: same "0.0 conflates absence-of-measurement with a real zero" pattern as F-140 (B-8), F-141 (B-9), F-147 (B-12), F-148 (B-18) — see Cross-sweep patterns.
+- note: same "0.0 conflates absence-of-measurement with a real zero" pattern as F-146 (B-8), F-147 (B-9), F-150 (B-12), F-156 (B-18) — see Cross-sweep patterns.
 
 ### F-84
 - raised-by: A-84
@@ -838,7 +839,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/acoustic.py:50-56, 105-113 (`lufs_track`, `loudness_confidence_track`)
 - defect: restates-code — both docstrings restate the return tuple / one-line composition already visible in the signature and body.
 - failure: UNVERIFIED.
-- note: same function (`lufs_track`) as F-181 (B-14)'s promotion-candidate; different fix (docstring rewrite vs. module relocation) — kept separate.
+- note: same function (`lufs_track`) as F-152 (B-14)'s promotion-candidate; different fix (docstring rewrite vs. module relocation) — kept separate.
 
 ### F-115
 - raised-by: A-114
@@ -902,7 +903,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/occupancy.py:160-169 (`_union_length`)
 - defect: restates-code — exact restatement of the sweep-line accumulation below it.
 - failure: UNVERIFIED.
-- note: same function as F-184 (B-15)'s promotion-candidate; different fix (docstring vs. relocation) — kept separate.
+- note: same function as F-153 (B-15)'s promotion-candidate; different fix (docstring vs. relocation) — kept separate.
 
 ### F-124
 - raised-by: A-124
@@ -938,7 +939,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/global_summary.py:20-37
 - defect: restates-code — close paraphrase of the `if/elif` chain at lines 292-306, despite framing itself as semantics documentation.
 - failure: UNVERIFIED.
-- note: overlaps lines with F-173 (D-9)'s assumption finding about the same `n_speakers`/`single_speaker_uncertainty` logic; different fixes (shorten a redundant docstring vs. change the scoring to be task-aware) — kept separate.
+- note: overlaps lines with F-172 (D-9)'s assumption finding about the same `n_speakers`/`single_speaker_uncertainty` logic; different fixes (shorten a redundant docstring vs. change the scoring to be task-aware) — kept separate.
 
 ### F-129
 - raised-by: A-129
@@ -946,7 +947,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/global_summary.py:160-174 (`_aggregate_quality`)
 - defect: restates-code — re-derives, almost line for line, the `ramp(...)` calls and thresholds two lines below it.
 - failure: UNVERIFIED.
-- note: overlaps topic (not lines) with F-180 (B-11)'s unfitted-threshold finding on the same PESQ/STOI/SI-SDR ramps; different fixes (trim a redundant docstring vs. derive/cite the actual bounds) — kept separate.
+- note: overlaps topic (not lines) with F-149 (B-11)'s unfitted-threshold finding on the same PESQ/STOI/SI-SDR ramps; different fixes (trim a redundant docstring vs. derive/cite the actual bounds) — kept separate.
 
 ### F-130
 - raised-by: A-130
@@ -1049,7 +1050,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/support.py:276 (`MIN_LOW_FRACTION`), used at :301-353 (`informative_evidence`)
 - defect: unfitted-threshold — `MIN_LOW_FRACTION=0.02` gates evidence-pool admission for speech-presence corroboration, but the only numbers ever offered to justify it were measured under a bug the docstring itself disowns ("must be re-measured before they are cited again").
 - failure: a signal whose "no speech" fraction sits just under/over 0.02 is silently included/excluded from evidence with no valid measurement behind the cutoff, feeding `speaker_count_posterior` and `reliability.measured_weights`'s `backing` factor.
-- note: cross-referenced (not re-reported) by Sweep D — excluded from its assumption population as population-neutral (no age/task-specific angle).
+- note: cross-referenced (not re-reported) by Sweep D — excluded from its assumption population as population-neutral (no age/task-specific angle). Coupled with F-31 more tightly than most kept-separate pairs — re-deriving this threshold properly would naturally replace the disowned numbers F-31 objects to, so a fixer of either should check the other.
 
 ### F-144
 - raised-by: B-6
@@ -1201,7 +1202,7 @@ for the "possible duplicate, kept separate" calls.
 - location: src/senselab/audio/workflows/audio_analysis/compute.py:890-1009 (`_speech_window_mask`), mirrored at stages.py:763-806, sound_sources.py:193, background_mask.py:534
 - defect: model-in-control-flow — whether an embedding-clustering window counts as "speech" is decided by a hardcoded backend-priority ladder keyed on the literal strings `"yamnet"`/`"ast"` ("YAMNet is authoritative when available"), not on anything measured about the two classifiers' relative confidence; the same closed two-classifier assumption is hardcoded at four call sites, and `PassPlan` only ever exposes `ast_model`/`yamnet_model` as named fields — unlike the ASR/diarization/embedding-model lists elsewhere in the package, which take arbitrary model-id lists through config.
 - failure: on a window where AST's top-1 is `Speech` at high confidence and YAMNet's top-1 is `Music`/`Singing` (a documented YAMNet confusion on child/sung voices, named in the function's own docstring), the window is unconditionally marked non-speech and excluded from `cluster_pass_speakers`'s input, with no config knob to reweight or disable the YAMNet-first rule. Acknowledged/documented tradeoff, not a hidden bug.
-- note: possible duplicate of F-176 (D-7), which reports the population-specific harm (YAMNet's child-voice miss rate) enabled by this same hardcoded ladder — kept separate because fixing the pluggability gap (a config knob for trust order) does not by itself fix the unvalidated population claim (D-7 wants the miss rate actually measured and a default that protects an unattended run); the two fixes are complementary, not identical.
+- note: possible duplicate of F-170 (D-7), which reports the population-specific harm (YAMNet's child-voice miss rate) enabled by this same hardcoded ladder — kept separate because fixing the pluggability gap (a config knob for trust order) does not by itself fix the unvalidated population claim (D-7 wants the miss rate actually measured and a default that protects an unattended run); the two fixes are complementary, not identical.
 
 ---
 
