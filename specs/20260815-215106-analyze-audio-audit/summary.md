@@ -1,5 +1,17 @@
 # Summary — analyze_audio audit
 
+**Tier counts (updated to include `statistical-review.md`'s N1–N10, folded into the register as
+F-177..F-186):** Demonstrated: 40 (33 original + 7 new: F-177/N1, F-178/N2, F-179/N3, F-180/N4,
+F-181/N5, F-185/N9, F-186/N10 — each rerun against the live module in this task, no corpus
+required). Verified-latent: 14 (11 original + 3 new: F-182/N6, F-183/N7, F-184/N8 — real
+mechanism confirmed by reading/grep, magnitude needs a real audio corpus this task lacks).
+Refuted: 2. Ungated classification: 130. **Total: 186 = 186.** Five existing rows also carry a
+statistical-review verdict applied in place rather than added as new rows: F-146 (severity
+medium→low), F-147 (annotated — the register's implied fix is wrong; MNAR, three-part treatment
+required), F-148 (endorsed with a reuse precondition), F-156 (reframed — absent-vs-measured
+conflation, not a bad fallback number), F-158 (severity medium→high). See `register.md`'s
+`## Statistical-review verdicts on existing findings` for the reasoning behind each.
+
 ## 1. Five cross-sweep patterns (the actionable unit, not 176 individual rows)
 
 `candidates/deduped.md`'s "Cross-sweep patterns" section is the headline of this audit: a defect
@@ -95,10 +107,13 @@ at is real design rationale that would be lost, not noise that would be improved
 
 ## 4. What the register implies for the graph
 
-Of the 44 gated-and-survived findings, **27 are `consumed`** by at least one of the seven planned
-triage outputs (human-review flag, transcript, speaker count, PII, recording quality, task match,
+Of the 54 gated-and-survived findings (44 original + 10 from `statistical-review.md`'s N1–N10,
+folded in as F-177..F-186), **37 are `consumed`** by at least one of the seven planned triage
+outputs (human-review flag, transcript, speaker count, PII, recording quality, task match,
 trim) — the graph cannot treat these as someone else's problem; a fix or an explicit acceptance
-is needed before the triage numbers can be trusted. **3 are `routed-around`**: `F-146`
+is needed before the triage numbers can be trusted. All 10 of the statistical-review additions
+land in this `consumed` bucket — none of N1–N10 shapes only internal search priority or sits
+unwired, unlike three of the original findings. **3 are `routed-around`**: `F-146`
 (`binding_agreement`, currently unwired into any production call path — dead until someone wires
 it in), `F-157` and `F-158` (both shape internal adaptive-loop search priority/budget, not a
 published value directly — the graph reads whatever the loop converges to, regardless of how
@@ -106,10 +121,24 @@ efficiently it got there). **14 are `irrelevant`**: the 8 prose `stale-or-false`
 mismatches (no runtime effect) and 6 dev-experience/placement findings (5 promotion-candidates,
 plus `F-161`'s `types.py` stdlib shadow, which only bites a process whose cwd is inside the
 package — not how the triage graph invokes it). Practical reading: the graph can be built today
-treating the `routed-around`/`irrelevant` 17 as out of scope, but the 27 `consumed` findings —
-19 of them `high` severity (13 already `demonstrated`, 6 `verified-latent` pending a pediatric
-corpus) — are live defects in exactly the signals the graph is supposed to read, and the
-register's `failure` column names the concrete corrupted value for each.
+treating the `routed-around`/`irrelevant` 17 as out of scope, but the 37 `consumed` findings —
+27 of them `high` severity (19 already `demonstrated` — 13 original plus F-177/F-178/F-179/
+F-180/F-185/F-186, i.e. N1/N2/N3/N4/N9/N10 — and 8 `verified-latent`, 6 original pending a
+pediatric corpus plus F-182/F-183 (N6/N7) pending a real-audio corpus for their magnitude) — are
+live defects in exactly the signals the graph is supposed to read, and the register's `failure`
+column names the concrete corrupted value (or, for the three N6-N8 latent additions, the exact
+experiment) for each.
+
+The statistical-review additions change the *character* of what "consumed" means for this graph,
+not just the count: the original 176 were found by auditors reading code for mismatches between
+comment and behavior; N1–N10 were found by someone asking whether the arithmetic the pipeline
+performs on its own uncertainty numbers is coherent, and the answer for several core operations
+(the aggregator fold N1 uses, the direction-only zero-fill N2 relies on, the vote-share-as-
+posterior construction N3/N10 share) is that it is not — independent of any single threshold being
+mistuned. `register.md`'s `## Coverage gap` section records a parallel finding at the
+config-remediation level: a sweep asking one narrow question (which numeric thresholds are
+unfitted) found 60 instances against this register's 7, a ratio suggesting the original 176 found
+a fraction of what exists in whichever direction a sweep does not happen to look.
 
 One `high`-severity item deserves its own line rather than folding into a pattern: refutation
 found, while checking `F-144`, that `default.yaml`'s `multimodal_threshold: 0.15` is never
