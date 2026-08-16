@@ -119,12 +119,24 @@ Under the rule above, zero harvest means zero evidence, which flags.
 Four layers, in dependency order. Layers 1–3 are lifted from `analyze_audio` by the decomposition
 inventory; only layer 4 is new code.
 
-**Layer 1 — extraction.** `stages.py` + `stage_context.py` move to
-`senselab/audio/workflows/audio_analysis_extraction/`, and `audio_analysis` re-exports `run_pass` /
-`StageContext` / `PassPlan` from there. These 836 lines are already round-agnostic — six
-`stage_*` functions returning plain dict fragments, no `VoteStore`, no `Region`, no round numbers.
-They are already the single-pass extraction layer the graph needs; they are merely trapped inside a
-91-file package the graph otherwise uses none of. This move is the whole of the change.
+**Layer 1 — extraction.** `stages.py`'s six `stage_*` functions plus `run_pass` are already
+round-agnostic — plain dict fragments out, no `VoteStore`, no `Region`, no round numbers — and
+`run_pass` is genuinely production-exercised, from `scripts/analyze_audio.py:611` rather than from
+anywhere inside the package. This is the layer the graph extracts against.
+
+**Correction, measured 2026-08-16, superseding this section's first draft.** The lift was justified
+above on the claim that a graph wanting only `run_pass` must import "`contracts.py`, `adaptive/`,
+and every other file in the 91-file package". That is false. The package resolves public symbols
+through a lazy PEP-562 `__getattr__`, so importing it costs one module, and resolving `run_pass`
+loads **9** submodules with `contracts` and `adaptive` both provably unloaded. Meanwhile the real
+dependency closure of `stages.py` + `stage_context.py` is **14 modules / 5,523 lines**, not the
+2 files / 1,224 lines assumed here, and it reaches `axes.py` — the refiner's own axis vocabulary —
+transitively through `calibration`, `types` and `grid`.
+
+The lift therefore buys a conceptual boundary, not an import saving, and it is a seven-times larger
+refactor than costed. **It moves out of Phase 1 into Phase 2**, where the four chains relocate
+anyway and the boundary can be drawn once with the `axes.py` dependency understood rather than
+inherited. Phase 1 ships the two pieces that need no boundary decision.
 
 **Layer 2 — four chain workflows**, each independently importable:
 
@@ -208,12 +220,15 @@ careful:
 
 Three PRs. Sequential, not independent — each is testable on its own.
 
-**Phase 1 — foundation.** The `Estimate` type and its shrinkage, the layer-1 extraction lift with
-`audio_analysis` re-exporting, and the config discipline test. No new outputs. This phase is
-plan-able immediately and everything else depends on it.
+**Phase 1 — foundation.** The `Estimate` type and its shrinkage, and the config-discipline guard —
+which deletes the four `RunConfig` fields built by `_build()` and never read, rather than
+allowlisting them, since pre-alpha policy is to remove outright. No new outputs, no file moves, no
+boundary decisions. Everything else depends on this phase.
 
-**Phase 2 — chains.** The four chain workflows lifted, each with its listed wiring defect fixed and
-its `population` values filled in. Each chain is one task with its own review gate.
+**Phase 2 — chains, and the extraction boundary.** The four chain workflows lifted, each with its
+listed wiring defect fixed and its `population` values filled in — and, drawn in the same pass, the
+layer-1 extraction boundary deferred from Phase 1, including what to do about the transitive
+`axes.py` dependency. Each chain is one task with its own review gate.
 
 **Phase 3 — outputs.** The seven builders and the flag rule.
 
