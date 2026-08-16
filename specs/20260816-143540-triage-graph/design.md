@@ -145,7 +145,14 @@ the chain that needs it, not as a separate sweep — a task promoted with no cal
 
 **Layer 4 — seven output builders plus the flag.** Small, one per output, none looping, none
 importing `adaptive/`. `pii.py`'s `detect_pii_in_pass` is already a thin single-pass adapter over
-the standalone `senselab.text.tasks.pii_detection` task and moves nearly unchanged.
+the standalone `senselab.text.tasks.pii_detection` task and moves structurally unchanged — but it
+does **not** move as-is. No register finding touches `pii.py`, which reads as "the one clean
+output" and is not what it means: the config sweep found three unfitted thresholds gating the PII
+verdict directly (`presidio_score_threshold=0.4`, `gliner_threshold=0.5`, and a `count >= 2`
+cross-model corroboration gate) with **no `pii:` config section in existence**, so none can be
+changed without editing Python. The PII builder therefore carries the same config work as every
+other output, and its `count >= 2` gate is precisely an evidence count — it becomes an `Estimate`
+rather than a boolean.
 
 ## Input
 
