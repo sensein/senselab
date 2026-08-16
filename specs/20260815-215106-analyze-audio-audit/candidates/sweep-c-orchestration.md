@@ -38,11 +38,19 @@ failure mechanism):
   through: `slot_overlap = float(getattr(policy, "asr_slot_overlap", 0.3)) if policy is not None else
   0.3` and the same for `asr_slot_mid_tol_s` (`0.15`). `default.yaml` declares both as
   run-configurable (`linking.asr_slot_overlap: 0.3`, `linking.asr_slot_mid_tol_s: 0.15`,
-  `data/run_config/default.yaml:309-310`). A repo-wide grep for `fuse_consensus_words(` finds exactly
-  two call sites in the whole package: this one, and `asr.py:287`'s own internal fallback inside
-  `_consensus_word_doubt` (which has no policy in scope either, and is documented as "what a
-  standalone caller wants" — not the production path). Neither passes `policy`, so the parameter,
-  the docstring's threading story, and the config keys are all dead in every real run.
+  `data/run_config/default.yaml:309-310`). A repo-wide grep for `fuse_consensus_words(` finds four
+  call sites total: this one; `asr.py:287`'s internal fallback inside `_consensus_word_doubt`
+  (zero production callers — its only caller is `asr_word_resampling_test.py:271`); `asr.py:466`'s
+  internal fallback inside `harvest_asr_votes` (documented at asr.py:453-455 as "what a standalone
+  caller wants" when no fold is supplied); and a direct call from
+  `asr_word_resampling_test.py:298`. None of the four passes `policy`. Of the three non-test sites,
+  only `compute.py:433` is reachable in a real run: `compute.py:447-452` always calls
+  `harvest_asr_votes(..., fused=consensus_fold)`, so `asr.py:466`'s fallback branch is never taken
+  in production, exactly like `asr.py:287`'s. So the parameter, the docstring's threading story,
+  and the config keys are dead in every real run — not because there is only one call site, but
+  because the one call site that runs (`compute.py:433`) is the one that drops `policy`, and the
+  two call sites that would honor `policy` if reached (the fallbacks) are structurally unreachable
+  given how the real caller always supplies `fused=`.
 - failure: A user setting `linking.asr_slot_overlap: 0.5` (or any value other than the 0.3 default)
   in their run config sees no change in the published `asr` axis or in the `speaker` axis's
   word-location doubt — both are downstream of this one fold (`compute.py:424-452`: the same
@@ -52,14 +60,19 @@ failure mechanism):
   of what the config asked for — the exact "recorded value and used value cannot drift" guarantee
   the docstring claims is not actually being exercised, because the recorded value is always the
   hardcoded default.
-- callers: `compute.py:433` (production path, drops `policy`); `asr.py:287` (`_consensus_word_doubt`'s
-  own fallback, no policy available there either — not a mismatch, just confirms the parameter has
-  no live caller anywhere).
+- callers: `compute.py:433` (production path, live, drops `policy`); `asr.py:287`
+  (`_consensus_word_doubt`'s fallback, no policy available there either, and no production caller —
+  only exercised by `asr_word_resampling_test.py:271`); `asr.py:466` (`harvest_asr_votes`'s fallback,
+  same policy-less shape, and also never reached in production since `compute.py:447-452` always
+  passes `fused=consensus_fold`); `asr_word_resampling_test.py:298` (direct test call, no policy,
+  not a production path). Four call sites of `fuse_consensus_words(` total; zero pass `policy`; one
+  is live.
 
 ### C-2
 - kind: model-in-control-flow
 - location: `compute.py:890-1009` (`_speech_window_mask`), mirrored at `stages.py:763-806`
-  (`_scene_source_mass`)
+  (`_scene_source_mass`), `sound_sources.py:193` (`window_label_mass`/category harvesting), and
+  `background_mask.py:534` (label-mass evidence for FR-033a targets)
 - defect: Whether an embedding-clustering window counts as "speech" (and therefore participates in
   speaker-count/cluster estimation) is decided by a hardcoded backend-priority ladder keyed on the
   literal dict keys `"yamnet"` (`compute.py:920`) and `"ast"` (`compute.py:919`): "YAMNet is
@@ -68,12 +81,17 @@ failure mechanism):
   *decision* (which scene classifier's verdict is trusted) gated on which specific named model ran,
   not on anything measured about the two classifiers' relative confidence in that window, and there
   is no config knob to change the trust order or add a third scene classifier without editing this
-  function. `stages.py:785`'s `for classifier in ("ast", "yamnet"):` loop in `_scene_source_mass`
-  (feeding the background-mask's non-target-content evidence) hardcodes the identical two-classifier
-  assumption. Both are structural: `PassPlan` (`stage_context.py:353-354`) only ever exposes
+  function. The identical hardcoded two-classifier assumption recurs in three more places, all
+  in-scope orchestration files: `stages.py:785`'s `for classifier in ("ast", "yamnet"):` loop in
+  `_scene_source_mass` (background-mask's non-target-content evidence); `sound_sources.py:193`'s
+  `for key in ("ast", "yamnet"):` loop that builds `per_classifier` for sound-source categorization;
+  and `background_mask.py:534`'s `for key in ("ast", "yamnet"):` loop that gathers classifier
+  windows for FR-033a label-mass evidence. Four call sites, not one, hardcode the same closed pair.
+  All are structural: `PassPlan` (`stage_context.py:353-354`) only ever exposes
   `ast_model`/`yamnet_model` as named fields, so the whole pipeline supports exactly two
   interchangeable-in-name-only scene classifiers, unlike the ASR/diarization/embedding-model lists
-  elsewhere in this same package, which take arbitrary model-id lists through config.
+  elsewhere in this same package, which take arbitrary model-id lists through config. Adding a third
+  scene classifier (or dropping to one) means editing all four sites, not a config change.
 - failure: On a window where AST's top-1 is `Speech` at high confidence and YAMNet's top-1 happens
   to be `Music` or `Singing` (a documented YAMNet confusion on child/sung voices — the function's own
   docstring names this exact tradeoff, `compute.py:906-913`, and prescribes tuning
