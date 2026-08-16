@@ -192,14 +192,21 @@ class RunConfig:
     # Grouped by the question they answer rather than by the module they came from, since a reader
     # asking "how is support measured" should not have to know it lived in ``support.py``.
     #
-    # None of these five is threaded to a production call site (remediation-config.md D5-D14, D3-D4):
-    # each is read exactly once outside this module, by run_config_liveness_test.py's regression test
-    # for the D2 migration -- not by anything that changes pipeline behaviour. They are kept rather
-    # than deleted because that test reads them; deleting one would break real, currently-passing
-    # coverage, not just a config knob nobody uses. `speaker_policy` is not a fifth dead field beyond
-    # the other four, despite the audit summary's phrasing -- it has the identical status, resolved in
-    # run_config_liveness_test.py's KNOWN_UNREAD comment. Threading them to real call sites is its own
-    # register finding, out of scope for triage-graph Phase 1 (see plan-phase1.md).
+    # None of these five is threaded to a production call site (remediation-config.md D3-D4, D5-D14).
+    # Their only reader anywhere is run_config_test.py's ``getattr(cfg, section)`` loop, which is a
+    # generic enumerator over every field -- it would "read" a dead field just as readily as a live
+    # one, so it says nothing about whether these are live.
+    #
+    # They are kept rather than deleted for a reason about the fix, not about that reader: the
+    # register's remedy is to *thread* each key to the call site that currently ignores it
+    # (``quality.floor_percentile`` should reach acoustic.py's ``FLOOR_PERCENTILE``), and the field is
+    # the vehicle for that fix, so deleting it now only means re-adding it later. What was
+    # unacceptable was the silence -- a key advertising control it does not have -- and
+    # run_config_liveness_test.py's KNOWN_UNREAD ends that by listing all twelve.
+    #
+    # ``speaker_policy`` is not a fifth dead field beyond the other four, despite the audit summary's
+    # phrasing: it has the identical status. Threading is its own register finding, out of scope for
+    # triage-graph Phase 1 (see plan-phase1.md).
     rounds_policy: Mapping[str, Any]
     speaker_policy: Mapping[str, Any]
     quality_policy: Mapping[str, Any]
