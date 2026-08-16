@@ -18,9 +18,11 @@ support. It has no consumers yet; wiring into `analyze_audio` outputs is Phases 
 triage graph.
 """
 
-from typing import Optional
+import math
+from typing import Any, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from typing_extensions import Self
 
 
 class Estimate(BaseModel):
@@ -32,6 +34,16 @@ class Estimate(BaseModel):
     construct an `Estimate` whose published value disagrees with the evidence behind it — see
     `test_value_is_not_settable`, which pins down that `extra="forbid"` rejects a `value=` kwarg
     even though `value` is not a declared field.
+
+    `model_copy(update=...)` is overridden to re-validate (see below) because pydantic's own
+    implementation writes straight into `__dict__` and skips every validator, which is exactly the
+    gap that let `good.model_copy(update={"n_evidence": 0})` produce an `Estimate` with `raw` still
+    set and `n_evidence == 0` — the raw/n_evidence invariant silently broken with no error.
+    `model_construct` is *not* closed the same way: it is pydantic's documented, explicit
+    validation-skipping constructor, not an API a caller reaches for by accident, so closing it
+    would fight the library rather than the defect. A reader who calls `Estimate.model_construct`
+    directly is opting out of the invariant on purpose; `model_copy(update=...)` is the one call
+    that looks safe and isn't.
 
     Attributes:
         raw: The unshrunk sample statistic. `None` iff `n_evidence == 0` — there is no sample
@@ -69,6 +81,20 @@ class Estimate(BaseModel):
             raise ValueError("population must not be blank")
         return v
 
+    @field_validator("raw", "prior")
+    @classmethod
+    def _finite(cls, v: Optional[float], info: ValidationInfo) -> Optional[float]:
+        """Reject NaN/Inf.
+
+        Reviewer minor: a non-finite `raw` or `prior` propagates silently into `value` (e.g.
+        `nan` poisons the blend, `inf` swamps it) with no validation error to say where it came
+        from — the same "published number with no traceable evidence" defect this type exists to
+        rule out, just arriving through a different door than `n_evidence`.
+        """
+        if v is not None and not math.isfinite(v):
+            raise ValueError(f"{info.field_name} must be finite, got {v!r}")
+        return v
+
     @model_validator(mode="after")
     def _raw_matches_evidence(self) -> "Estimate":
         """Enforce `raw is None` iff `n_evidence == 0`.
@@ -93,7 +119,10 @@ class Estimate(BaseModel):
         """
         if self.n_evidence == 0:
             return self.prior
-        assert self.raw is not None  # guaranteed by _raw_matches_evidence
+        if self.raw is None:  # pragma: no cover — guaranteed by _raw_matches_evidence
+            # A plain `assert` here would vanish under `python -O`, silently returning `None` where
+            # a `float` is promised. Raise instead so the invariant holds even with optimizations on.
+            raise RuntimeError("raw is None with n_evidence > 0; _raw_matches_evidence should have rejected this")
         return (self.n_evidence * self.raw + self.prior_weight * self.prior) / (self.n_evidence + self.prior_weight)
 
     @property
@@ -120,3 +149,20 @@ class Estimate(BaseModel):
             prior_weight=prior_weight,
             population=population,
         )
+
+    def model_copy(self, *, update: Optional[Mapping[str, Any]] = None, deep: bool = False) -> Self:
+        """Copy, re-validating when `update` is given.
+
+        `BaseModel.model_copy(update=...)` writes straight into `__dict__` and never re-runs a
+        validator — the pydantic docs say so explicitly ("the data is not validated before
+        creating the new model"). For most models that is a reasonable default; for this one it
+        defeats the entire point, since `good.model_copy(update={"n_evidence": 0})` would return an
+        `Estimate` with `raw` still set and `n_evidence == 0`, silently breaking the raw/n_evidence
+        invariant with no error at the one call site most likely to be reached for by a caller who
+        wants "the same estimate, but with this field changed." Routing `update` back through the
+        constructor costs one extra validation pass and closes that gap. The no-update path is
+        unaffected and delegates to `super()`.
+        """
+        if update is None:
+            return super().model_copy(deep=deep)
+        return type(self)(**{**self.model_dump(), **update})
