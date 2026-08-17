@@ -118,7 +118,10 @@ if dj.exists():
             ):
                 mism.append(f"{e['axis']}@{e['start']}: parquet={pq_t} index={ix_t}")
         check("index triage matches the parquet it points at", not mism, "; ".join(mism[:3]))
-    print(f"\nhigh_uncertainty_rate: {d['totals']['high_uncertainty_rate']:.4f} (was 0.9941)")
+    # ``None`` since F-150 when the run harvested no rows at all; formatting it as a float would
+    # raise here, and printing it as 0.0000 would restate the very defect that change removed.
+    _rate = d["totals"]["high_uncertainty_rate"]
+    print(f"\nhigh_uncertainty_rate: {'not measured (no rows)' if _rate is None else f'{_rate:.4f}'} (was 0.9941)")
 
 print(f"\n=== {len(ok)} held, {len(bad)} violated ===")
 for line in ok:
