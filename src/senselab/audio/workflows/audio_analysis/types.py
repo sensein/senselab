@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-__all__ = ["ComparisonStatus", "FusedAxis", "PerSegmentEmbedding", "SignalResult", "SignalRow", "UncertaintyAxis"]
+__all__ = ["ComparisonStatus", "FusedAxis", "SignalResult", "SignalRow", "UncertaintyAxis"]
 
 UncertaintyAxis = str
 """An axis is a plain ``str``, not a ``Literal``.
@@ -98,19 +98,3 @@ class FusedAxis:
     axis: UncertaintyAxis
     rows: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class PerSegmentEmbedding:
-    """One speaker-embedding vector for one diarization segment.
-
-    Used by the speaker axis's across-time sub-signal: per-bucket cosine distance is
-    computed against the embedding of the most recent prior bucket on the same speaker
-    track.
-    """
-
-    seg_start: float
-    seg_end: float
-    speaker_label: str
-    model_id: str
-    vector: list[float]
