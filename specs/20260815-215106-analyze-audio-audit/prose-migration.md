@@ -1794,8 +1794,16 @@ ramp anchored on speech levels, so a quiet frame reads quiet.
 
 - destination (as filed): speaker attribution design (speaker-axis-attribution-design.md, already cross-referenced)
 - rationale: measured "same-speaker-as-before" gate replacement (0.666 vs 0.168 doubt)
+- **superseded by `d8cb7449` (F-165), for the gate sentence only.** The quote below is left verbatim
+  because that is this document's contract — it records what the docstring said when the sweep read
+  it — but a migration pass must not reinstate the sentence "Both are gated by ``word_coverage``: a
+  bucket with no words has no speech to attribute and gets no claim." The gate is now skipped where
+  the mask's region state is ``target_active`` or ``nontarget_active`` (``speaker._VOCAL_ACTIVITY``),
+  because both voters are word-independent and word absence is only a proxy for speech absence that
+  holds for adult connected speech. The live docstring at `speaker.py:157-167` carries the current
+  wording; migrate from there, not from here. Line numbers have also moved (139-153 → 155-172).
 
-Lines 139-153:
+Lines 139-153 (as read by the sweep, pre-`d8cb7449`):
 ```python
     """Yield ``{"start", "end", "votes"}`` per bucket for the speaker axis.
 

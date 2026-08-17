@@ -41,6 +41,29 @@ the originally filed one) is what each entry below reproduces or names an experi
   `target_free`) has `bucket_dict["votes"]` replaced by `{}` under the real wordless gate — wiping
   every one of those measurements, not just the two word-dependent attribution voters
   (`speaker_assignment`, `target_activity`) the gate is meant to null.
+- **superseded 2026-08-16 by `d8cb7449`** (the observation above is kept as the record of what ran
+  against the code as audited, and is not rewritten). The fix exempts the word gate wherever the
+  mask region state is `target_active` or `nontarget_active`, and `target_active` is precisely the
+  state this fixture builds — chosen at the time only to clear the *first* gate. Rerun against
+  `fix/f165-mask-aware-word-gate`, the script prints
+  `gate-enabled bucket_dict['votes'] wiped to {}: False` and then
+  `Could not reproduce the defect as specified.`, exiting 1. That non-reproduction is the fix
+  reading correctly on the audit's own fixture, not a broken script.
+- **the fixture is deliberately not changed**, though switching `target_active` → `indeterminate`
+  would still reproduce and would restore a zero exit. Three reasons, in order. (1) These scripts are
+  dated evidence of what was demonstrated against the code as it stood, not a maintained test suite;
+  editing the input to keep the output green destroys the one thing the file is for. (2) The green
+  exit would be bought with an equal-or-worse fixture: `indeterminate` describes production no better
+  than `target_active` did. (3) The honest complication, which is the reason this cannot be settled
+  by picking a state at all — **in production the defect persists for every bucket regardless of the
+  fix**, because the mask's per-region table never reaches `harvest_speaker_votes` (F-187 in
+  `../register.md`: `stages.py` writes `BackgroundMask.to_json()`, which emits counters only, so
+  `mask_regions` is `[]` and `state` is always `None`, a state the gate still applies to). This
+  script's `target_active` fixture therefore never described production either; it described a
+  document shape production does not produce. Any fixture choice here demonstrates a synthetic-shape
+  defect, so the choice is between one that reads the fix and one that hides it, and the first is
+  more useful. A dated STATUS note now sits in the script's docstring saying so; no executable line
+  was touched.
 
 ### F-166
 - outcome: LATENT
@@ -160,6 +183,13 @@ F-171, F-173, F-174, F-175, F-176). All LATENT experiments name a corpus/propert
 explicit comparison per the task's own bar; none could be executed here (no child/pediatric/
 non-verbal-vocalization corpus is available in this environment), which is the expected outcome for
 findings in this population-coverage class.
+
+**This tally is the gate's outcome against the code as audited (2026-08-15), not a statement about
+HEAD**, and it is left standing as that record. Since it was written, two of the three DEMONSTRATED
+have been fixed — F-162 in `5c0b10a6`, F-165 in `d8cb7449` — and `repro/F-165.py` no longer
+reproduces on its own fixture as a result (see its entry above, which carries the superseded note
+and the reasoning). Read "3 DEMONSTRATED" as "3 were demonstrated", never as "3 are live"; each
+entry above, not this line, is where a finding's current status is recorded.
 
 ---
 

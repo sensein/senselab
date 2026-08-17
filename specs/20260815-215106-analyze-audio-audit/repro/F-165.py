@@ -33,6 +33,21 @@ the real `fused_words` (gate enabled) to show every one of those entries is repl
 
 Must be run from the repository root. Loads no model, downloads nothing -- pure Python/numpy over
 synthetic dicts.
+
+STATUS, 2026-08-16: this script no longer reproduces, and that is the correct reading, not a
+breakage. `d8cb7449` fixed F-165 by exempting the word gate wherever the mask's region state is
+`target_active` or `nontarget_active` -- and `target_active` is exactly the state this fixture
+builds (see `_make_pass_summary`, chosen at the time only to get past the *first* gate). So the run
+now prints "gate-enabled bucket_dict['votes'] wiped to {}: False" and exits 1, which is the fix
+working on the very fixture the audit filed against it.
+
+Nothing here is edited to make it green again. The fixture is left at `target_active` deliberately:
+this file is the audit's dated evidence of what was demonstrated against pre-`d8cb7449` code, not a
+maintained test, and switching it to `indeterminate` (which does still reproduce) would trade that
+reading for a green exit while describing production no better -- in production the state is always
+`None`, because the mask's region table never reaches this code at all (F-187 in `../register.md`),
+so the wordless clear is still live there for every bucket, for a reason this script never tested.
+See `../verdicts/reproduction.md`'s F-165 entry for the full record.
 """
 
 from __future__ import annotations
