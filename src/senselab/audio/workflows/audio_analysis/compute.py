@@ -565,7 +565,7 @@ def compute_uncertainty_axes(
             ``"raw"`` and ``"enhanced"``.
         grid: The run's one bucket grid — every axis is harvested on it, so row *i* of one axis is
             row *i* of another and cross-axis coupling needs no projection. Defaults to
-            :data:`~.axes.DEFAULT_TIME_GRID`; there is deliberately no per-axis override.
+            :data:`~.grid.DEFAULT_TIME_GRID`; there is deliberately no per-axis override.
         params: Comparator-relevant CLI flags — recorded into each row's parquet
             provenance for reproducibility.
         audio: Per-pass ``Audio`` objects, used to slice waveforms for per-segment

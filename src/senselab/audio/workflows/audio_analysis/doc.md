@@ -16,7 +16,7 @@ enumerated three axes in literal tuples.
 
 ## One grid
 
-**Every axis is harvested on `axes.DEFAULT_TIME_GRID`** — a 0.1 s window at a 0.1 s hop — so row *i*
+**Every axis is harvested on `grid.DEFAULT_TIME_GRID`** — a 0.1 s window at a 0.1 s hop — so row *i*
 of one axis is row *i* of another and a cross-axis join needs no reconciliation.
 
 This was measured, not assumed. With a per-axis grid the four axes carried 242 / 242 / 19 / 8 rows

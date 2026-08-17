@@ -134,7 +134,7 @@ downstream of it changes**, so this is the widest invalidation on this list:
 
 - the grid. ``speech_presence`` and ``background_mask`` ran at a 0.1 s window on a 0.02 s hop,
   ``speaker`` at 0.25/0.25, ``asr`` at 1.0/0.5 — four grids sharing zero bucket keys. Every axis is
-  now on ``axes.DEFAULT_TIME_GRID`` (0.1 s, window == hop), so a cached row's ``(start, end)`` names
+  now on ``grid.DEFAULT_TIME_GRID`` (0.1 s, window == hop), so a cached row's ``(start, end)`` names
   a bucket the run no longer has.
 - the asr axis has **one** voter, ``consensus_words``, and no per-bucket text. Gone with it:
   ``__pairwise_phoneme_distances__``, and the per-bucket ``avg_logprob`` / ``token_entropy`` /

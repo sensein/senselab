@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal, Mapping, cast
 
-from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
+from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
@@ -337,7 +337,7 @@ def _validate(merged: Mapping[str, Any]) -> None:
         print(
             f"warn: grid.win_length={win} > grid.hop_length={hop}, so adjacent rows share "
             f"{100 * (1 - hop / win):.0f}% of their audio; N rows are not N independent measurements "
-            "(axes.DEFAULT_TIME_GRID sets window == hop for this reason)",
+            "(grid.DEFAULT_TIME_GRID sets window == hop for this reason)",
             file=sys.stderr,
         )
 
