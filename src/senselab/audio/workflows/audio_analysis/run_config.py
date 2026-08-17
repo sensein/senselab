@@ -35,8 +35,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal, Mapping, cast
 
-from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
-
 __all__ = [
     "DEFAULT_CONFIG_PATH",
     "ConfigIdentity",
@@ -329,9 +327,14 @@ def _validate(merged: Mapping[str, Any]) -> None:
         raise ValueError(f"grid.win_length must be > 0, got {win}")
     if not 0 < hop <= win:
         raise ValueError(f"grid.hop_length must be in (0, {win}], got {hop}")
-    if (win, hop) != DEFAULT_TIME_GRID and hop < win:
+    if hop < win:
         # Not forbidden — a caller with a measured reason may overlap — but it is the failure D-24
         # names, so it is announced rather than accepted in silence.
+        #
+        # The condition used to also require ``(win, hop) != DEFAULT_TIME_GRID``, which could never
+        # change the outcome: the check above has already established ``0 < hop <= win``, so
+        # ``hop < win`` means the pair has window != hop and cannot be a constant whose two members
+        # are equal. It read as a second, independent guard and was neither.
         import sys
 
         print(

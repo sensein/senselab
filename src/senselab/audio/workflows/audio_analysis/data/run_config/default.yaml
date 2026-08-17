@@ -97,8 +97,17 @@ output_dir: artifacts/analyze_audio
 # to CPU while Whisper and SepFormer can use it, so one global choice is wrong on Apple silicon.
 device: auto
 
-# The run's one bucket grid. Equals `axes.DEFAULT_TIME_GRID`; `run_config` asserts they agree at load
-# rather than trusting two copies of a pair of floats.
+# The run's one bucket grid. Equals `grid.DEFAULT_TIME_GRID`, which is `BucketGrid`'s own default —
+# two copies of the same pair of floats, pinned together by
+# `src/tests/scripts/analyze_audio_test.py::test_every_axis_is_configured_on_one_grid`.
+#
+# The pinning is a test rather than a load-time assertion, and this comment claimed the opposite
+# until it was checked. `run_config` cannot assert it: an override that *deliberately* changes the
+# grid is a supported thing to configure — `_validate` only warns about it — so an assertion at load
+# would either reject legitimate overrides or need a packaged-vs-merged special case that exists
+# solely to compare a constant. A test can compare the packaged file to the constant without being
+# able to fail a run.
+
 grid:
   win_length: 0.1
   hop_length: 0.1
