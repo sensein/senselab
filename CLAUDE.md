@@ -206,7 +206,7 @@ next to the code they describe:
   background-scene and per-speaker-identity design.
 - `specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md` — decisions D-1…D-27.
 - `specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md` — every L1/L2
-  boundary violation, one row each (numbered 1-16, no `F-*` ids), with its status and the
+  boundary violation, one item each (numbered 1-27, no `F-*` ids), with its status and the
   measurement behind it.
 - `specs/20260815-215106-analyze-audio-audit/register.md` — the audit's findings, `F-1`..`F-187`,
   one row each with its tier, severity and what the triage graph should do about it. This is where
