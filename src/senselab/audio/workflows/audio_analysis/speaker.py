@@ -59,6 +59,7 @@ from senselab.audio.workflows.audio_analysis.attribution import (
     target_activity_doubt,
     word_coverage,
 )
+from senselab.audio.workflows.audio_analysis.background_mask import MaskState
 from senselab.audio.workflows.audio_analysis.embeddings import (
     WindowEmbedding,
     calibrate_cosine_uncertainty,
@@ -124,13 +125,18 @@ latter question answered instead.
 """
 
 
-_VOCAL_ACTIVITY: Final[tuple[str, ...]] = ("target_active", "nontarget_active")
+_VOCAL_ACTIVITY: Final[tuple[MaskState, ...]] = ("target_active", "nontarget_active")
 """Mask states that positively report a voice, whether or not it is the target's.
 
 Named because they are the states under which the speaker axis's word gate does not apply: a mask
 saying someone is vocalising outranks word absence as evidence about whether there is speech here.
 The other three states — ``target_free``, ``indeterminate`` and ``None`` — report no voice, decline
 to say, and "no region covered this bucket, possibly because the mask never ran" respectively.
+
+Typed as :data:`~.background_mask.MaskState` rather than ``str`` so a member the mask does not
+define is a type error here instead of a branch that silently never fires; the reverse direction —
+a *fifth* state added upstream, to which this gate would silently keep applying — is what
+``speaker_attribution_test`` pins against ``MASK_STATES``.
 """
 
 
@@ -524,6 +530,17 @@ def harvest_speaker_votes(
     # evidence (the consensus words, the mask regions) and the third reads the cluster assignments
     # the loop above has just finished writing.
     buckets = [(round(float(b["start"]), 6), round(float(b["end"]), 6)) for b in out]
+    # **``regions`` is a key the current producer does not emit, so every state below is
+    # unreachable on a real run.** ``stages.py`` puts ``BackgroundMask.to_json()`` into the pass
+    # summary under ``background_mask.result``, and ``to_json`` serializes only the aggregate
+    # counters (``total_masked_s``, ``regions_total``, …) — the per-region table exists solely in
+    # ``to_rows()`` → ``L2/background_mask.parquet``. So ``mask_regions`` is always ``[]`` here,
+    # ``target_activity_doubt`` returns ``(None, None)`` for every bucket, and the ``target_free``
+    # clear, the ``_VOCAL_ACTIVITY`` exemption and the ``target_activity`` voter have all never
+    # fired. Confirmed against the artifacts: every other vote name has an
+    # ``L1/signals/*.parquet`` in the repo's runs, ``target_activity`` has none. Wiring the region
+    # table through the summary is a separate, deliberately deferred decision; until it happens the
+    # tests covering these branches exercise a document shape production does not produce.
     mask_doc = ((pass_summary.get("background_mask") or {}).get("result")) or {}
     mask_regions = mask_doc.get("regions") or []
     coverage = word_coverage(list(fused_words or ()), buckets)
