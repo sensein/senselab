@@ -154,6 +154,85 @@ def test_a_target_active_mask_adds_nothing() -> None:
         assert "target_activity" not in (bucket["votes"] or {})
 
 
+def _wordless_buckets(mask_state: str | None) -> list[dict[str, Any]]:
+    """Buckets from 0.2 s on: worded nowhere, with one whole-clip mask region in ``mask_state``.
+
+    The word gate needs at least one word *somewhere* to be a measurement, so the clip carries one
+    over ``[0.0, 0.2]`` and every bucket after it is the wordless case under test.
+    """
+    buckets = _votes(pass_summary=_summary(mask_state=mask_state), fused_words=[{"start": 0.0, "end": 0.2}])
+    return [b for b in buckets if b["start"] >= 0.2]
+
+
+def test_a_wordless_bucket_the_mask_calls_target_active_keeps_the_speaker_voter() -> None:
+    """An ASR miss is not silence, and must not null the speaker axis.
+
+    Word absence stands in for speech absence, and the mask is the one source that can contradict
+    it: ``target_active`` is a positive report that the target was vocalising here, so a bucket with
+    no words is an ASR failure rather than a gap between turns. Zeroing the axis there hides the
+    failure behind a confident-looking empty bucket.
+
+    ``target_activity`` is *not* among the survivors: ``target_activity_doubt`` returns ``None`` for
+    ``target_active``, since the mask being sure the target is up leaves the attribution question
+    simply live. ``speaker_assignment`` alone is what the gate was discarding.
+    """
+    buckets = _wordless_buckets("target_active")
+    assert buckets, "the fixture produced no wordless buckets"
+    for bucket in buckets:
+        assert set(per_signal_uncertainty(bucket)) == {"speaker_assignment"}, f"at {bucket['start']}"
+
+
+def test_a_wordless_nontarget_active_bucket_keeps_its_word_independent_voters() -> None:
+    """A non-lexical vocalization has no words and is still someone making a sound.
+
+    This is the infant-cry case. ``data/audioset_source_map.json`` maps "Baby cry, infant cry" to
+    the ``people`` *background source* category, while the speech task's target vocabulary is
+    speech/breath/mouth_noise — so a cry lands in a ``nontarget_active`` region rather than a
+    ``target_free`` one, reaches the word gate with no words, and used to be zeroed outright. Both
+    voters after the gate are word-independent (diarizer-cluster entropy, mask region state), so
+    word absence is the wrong reason to discard either.
+    """
+    buckets = _wordless_buckets("nontarget_active")
+    assert buckets, "the fixture produced no wordless buckets"
+    for bucket in buckets:
+        read = per_signal_uncertainty(bucket)
+        assert set(read) == {"speaker_assignment", "target_activity"}, f"at {bucket['start']}"
+        assert read["target_activity"] == pytest.approx(1.0), f"at {bucket['start']}"
+
+
+def test_a_wordless_indeterminate_bucket_still_makes_no_claim() -> None:
+    """The case the gate exists for: the mask reports no vocal activity, so silence is the reading.
+
+    ``indeterminate`` is the mask declining to say, which is not a positive report of anyone
+    vocalising — so nothing contradicts the word proxy, and adult inter-turn silence keeps being
+    read as inter-turn silence. 22 of the 29 buckets the axis flagged on a clean two-speaker
+    conversation were exactly this.
+    """
+    for bucket in _wordless_buckets("indeterminate"):
+        assert bucket["votes"] == {}, f"at {bucket['start']}"
+
+
+def test_a_wordless_target_free_bucket_still_clears_everything() -> None:
+    """``target_free`` is decided before the word gate is consulted, and stays that way.
+
+    The mask positively reporting nobody present is a stronger statement than any word evidence, so
+    its branch runs first. Making the gate mask-aware must not reorder the two.
+    """
+    for bucket in _wordless_buckets("target_free"):
+        assert bucket["votes"] == {}, f"at {bucket['start']}"
+        assert per_signal_uncertainty(bucket) == {}, f"at {bucket['start']}"
+
+
+def test_a_wordless_bucket_with_no_mask_region_still_makes_no_claim() -> None:
+    """No mask is not evidence of vocal activity, so the word proxy is all there is.
+
+    A ``None`` state covers both "no region covers this bucket" and "the mask stage never ran", and
+    neither can license retaining evidence the word gate would otherwise drop.
+    """
+    for bucket in _wordless_buckets(None):
+        assert bucket["votes"] == {}, f"at {bucket['start']}"
+
+
 def test_no_intervention_recomputes_the_per_speaker_term() -> None:
     """The axis follows the per-speaker presence, so nothing may overwrite that term mid-loop.
 
