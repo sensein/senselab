@@ -29,7 +29,9 @@ backends' confidences are not on a common scale — and dropping the fields woul
 values already on disk. But they are declared-and-unread until ``fuse_axis`` takes them, and
 ``axes.CALIBRATED_AXES`` names the axes that would receive them; see the note there.
 
-Stdlib-only; safe to import anywhere.
+Stdlib plus one intra-package import, ``axes.CALIBRATED_AXES`` — so importing this module loads the
+axis vocabulary. `stages.py` therefore imports it from inside function bodies; the edge is accepted
+and recorded in ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction boundary".
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+# The one intra-package import; accepted edge, see the module docstring.
 from senselab.audio.workflows.audio_analysis.axes import CALIBRATED_AXES
 
 PROFILE_VERSION = "1"

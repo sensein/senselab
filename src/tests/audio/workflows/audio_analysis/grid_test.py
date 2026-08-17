@@ -7,7 +7,7 @@ ran and did nothing, and each round came out byte-identical to the last. Nothing
 
 These tests state the directive as a check: same row count, same ``(window, hop)``, and the same keys,
 for every axis a run produces. They also pin the two things that made the old arrangement possible —
-``axes.DEFAULT_TIME_GRID`` being declared and unread, and ``compute_uncertainty_axes`` accepting a
+``grid.DEFAULT_TIME_GRID`` being declared and unread, and ``compute_uncertainty_axes`` accepting a
 per-axis override — because a re-introduced override would restore the defect with these assertions
 still passing on the default.
 """
@@ -19,7 +19,8 @@ import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.audio_analysis import BucketGrid, compute_uncertainty_axes
-from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES, DEFAULT_TIME_GRID
+from senselab.audio.workflows.audio_analysis.axes import AXIS_NAMES
+from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
 
 
 @pytest.fixture(autouse=True)

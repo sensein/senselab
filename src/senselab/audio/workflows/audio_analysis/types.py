@@ -16,15 +16,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from senselab.audio.workflows.audio_analysis.axes import AxisName as UncertaintyAxis
+__all__ = ["ComparisonStatus", "FusedAxis", "SignalResult", "SignalRow", "UncertaintyAxis"]
 
-__all__ = ["ComparisonStatus", "FusedAxis", "PerSegmentEmbedding", "SignalResult", "SignalRow", "UncertaintyAxis"]
+UncertaintyAxis = str
+"""An axis name. A plain ``str`` because the axis set is open; what an axis *is* lives in
+``axes.AXES``, and a caller wanting only the harvested ones asks ``axes.HARVESTED_AXES``.
 
-# ``UncertaintyAxis`` is ``axes.AxisName`` — a plain ``str``, because the axis set is open. It
-# used to be a three-member ``Literal`` justified as "narrower than the set L2 fuses", and that
-# narrowing is precisely what made ``background_mask`` unrepresentable in every consumer that
-# needed to act on it. Which axes a *harvest* produces is now ``axes.HARVESTED_AXES``: a subset
-# asked for by property, not a type that forbids the others from existing.
+Declared here rather than imported from ``axes``; ``axes_test`` pins that neither declaration
+narrows. Why, in ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction boundary".
+"""
 
 # A perturbation is a plain ``str``, not a Literal. The set is **open** — raw is the identity,
 # enhancement is one more, and a future L2 round may propose another — so anything that enumerates
@@ -89,19 +89,3 @@ class FusedAxis:
     axis: UncertaintyAxis
     rows: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True)
-class PerSegmentEmbedding:
-    """One speaker-embedding vector for one diarization segment.
-
-    Used by the speaker axis's across-time sub-signal: per-bucket cosine distance is
-    computed against the embedding of the most recent prior bucket on the same speaker
-    track.
-    """
-
-    seg_start: float
-    seg_end: float
-    speaker_label: str
-    model_id: str
-    vector: list[float]

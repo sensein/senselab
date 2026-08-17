@@ -11,7 +11,7 @@ Four things used to ride on every bucket beside it, and all four are gone:
   what ``final/transcript.json`` already holds at word resolution. It is also what forced the
   1.0 s / 0.5 s grid: with a bucket narrower than a word, a fully-contained read returns nothing,
   so the grid had to be widened and overlapped until words fit. With the derivative as the voter
-  that reason is gone, and the axis sits on ``axes.DEFAULT_TIME_GRID`` like the other three.
+  that reason is gone, and the axis sits on ``grid.DEFAULT_TIME_GRID`` like the other three.
 - **the pairwise phoneme distance** between recognizers, which was already recorded rather than
   scored (D-21 rule 6: its source closure is a subset of the consensus fold's, so counting both
   counts one body of evidence twice). Recorded-and-never-read is not a middle ground; the

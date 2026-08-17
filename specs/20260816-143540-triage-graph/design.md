@@ -128,15 +128,35 @@ anywhere inside the package. This is the layer the graph extracts against.
 above on the claim that a graph wanting only `run_pass` must import "`contracts.py`, `adaptive/`,
 and every other file in the 91-file package". That is false. The package resolves public symbols
 through a lazy PEP-562 `__getattr__`, so importing it costs one module, and resolving `run_pass`
-loads **9** submodules with `contracts` and `adaptive` both provably unloaded. Meanwhile the real
-dependency closure of `stages.py` + `stage_context.py` is **14 modules / 5,523 lines**, not the
-2 files / 1,224 lines assumed here, and it reaches `axes.py` — the refiner's own axis vocabulary —
-transitively through `calibration`, `types` and `grid`.
+loads **9** submodules with `contracts` and `adaptive` both provably unloaded.
 
-The lift therefore buys a conceptual boundary, not an import saving, and it is a seven-times larger
-refactor than costed. **It moves out of Phase 1 into Phase 2**, where the four chains relocate
-anyway and the boundary can be drawn once with the `axes.py` dependency understood rather than
-inherited. Phase 1 ships the two pieces that need no boundary decision.
+**Second correction, same date, superseding the first's second half.** That draft went on to say
+the closure of `stages.py` + `stage_context.py` was "14 modules / 5,523 lines" reaching `axes.py`
+"transitively through `calibration`, `types` and `grid`", concluded the lift was **a seven-times
+larger refactor than costed**, and moved it into Phase 2 on that basis. The 14-module figure counts
+every *function-local* import; what an import actually loaded was **8 modules / 2,939 lines**, and
+at import time the only path to `axes` was `stages` → `sound_sources` → `grid` → `axes`, for one
+constant. `calibration` and `types` were never on it. Three symbols crossed the edge in total.
+
+The edge is now gone: `DEFAULT_TIME_GRID` moved to `grid.py` (which axes *read*, so it was the
+arrow that was inverted), `sound_sources`'s `grid` import went under `TYPE_CHECKING`, and
+`types.UncertaintyAxis` — a bare `str` — is declared locally. A fresh interpreter importing
+`stages` now loads **6 package submodules** with `axes` absent, where it loaded 8 before; the
+AST closure counting `TYPE_CHECKING` blocks is 7, and counting function-local imports as well is
+still 14, because those are upper bounds on what an import costs rather than measurements of it.
+`phase2-notes.md`, "Extraction boundary", carries all three rows with their line totals.
+
+The 6-module figure is pinned by
+`stages_test.py::test_importing_the_extraction_layer_loads_none_of_the_refiner`, which checks
+**import time only**. One runtime edge is accepted and recorded: `calibration.py` imports
+`axes.CALIBRATED_AXES` at module level, and `stages.py` imports `calibration` from inside two
+function bodies, so `run_pass` under the default plan does load `axes` while importing the
+extraction layer does not. `CALIBRATED_AXES` is used only in `validate_profile`, which the
+extraction closure never calls.
+
+The lift therefore buys a conceptual boundary, not an import saving — that part stands — but it is
+not a large refactor, and **Phase 2's four chain lifts need not be sequenced behind it**. Phase 1
+shipped the two pieces that needed no boundary decision.
 
 **Layer 2 — four chain workflows**, each independently importable:
 
@@ -225,10 +245,12 @@ which deletes the four `RunConfig` fields built by `_build()` and never read, ra
 allowlisting them, since pre-alpha policy is to remove outright. No new outputs, no file moves, no
 boundary decisions. Everything else depends on this phase.
 
-**Phase 2 — chains, and the extraction boundary.** The four chain workflows lifted, each with its
-listed wiring defect fixed and its `population` values filled in — and, drawn in the same pass, the
-layer-1 extraction boundary deferred from Phase 1, including what to do about the transitive
-`axes.py` dependency. Each chain is one task with its own review gate.
+**Phase 2 — chains.** The four chain workflows lifted, each with its listed wiring defect fixed and
+its `population` values filled in. Each chain is one task with its own review gate. The layer-1
+extraction boundary was deferred into this phase and is **already drawn**, on
+`fix/extraction-axes-edge`: `stages` no longer reaches `axes` at import time, a guard test pins it,
+and the one runtime edge that remains (`stages` → `calibration` → `axes`, from inside a function
+body) is accepted and recorded above. Nothing about it sequences the chains.
 
 **Phase 3 — outputs.** The seven builders and the flag rule.
 
