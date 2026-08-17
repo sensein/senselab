@@ -102,18 +102,23 @@ measured first — over the three completed runs, each run's final consensus wor
 | run | wordless buckets | states | would stop being cleared |
 | --- | --- | --- | --- |
 | 21 s two-speaker conversation | 28 | 25 `indeterminate`, 3 `target_active` | 3 |
-| each streaming-audio run | 39 | 33 `nontarget_active`, 1 `target_active` | 34 |
+| each streaming-audio run | 39 | 33 `nontarget_active`, 5 `indeterminate`, 1 `target_active` | 34 |
 
 **And one semantic question is open, which is the real reason not to wire it blind.** A reviewer
-asked whether `nontarget_active` belongs in `_VOCAL_ACTIVITY` at all. It requires only
-`nontarget_confidence >= 0.5` (`background_mask.py:261`); that quantity is a `max` over every
-non-speech source category (`nontarget_confidence_by_bucket`, `:691-728`, excluding `speech` alone);
-and 292 of the 527 labels in `data/audioset_source_map.json` map to `environment`, which is also the
-map's `default` for an unmapped label and where `Silence` itself lands. So `nontarget_active` may
-mean "something non-speech has mass here", not "a voice was heard" — and 33 of the 34 buckets in the
-table above are `nontarget_active`. If that reading is right, the membership is wrong and the fix
-spares the wrong buckets. Nobody has measured what those 33 contain. **Open question, not a
-verdict**, and it must be answered before the regions are threaded through.
+asked whether `nontarget_active` belongs in `_VOCAL_ACTIVITY` at all. `_classify_bucket`
+(`background_mask.py:252-266`) reaches the `nontarget_confidence >= 0.5` test at `:261` only after
+the bucket has passed `uncertainty <= max_free_uncertainty` **and** `confidence <= free_at`, so the
+state means "the target is confidently *absent*, and some non-speech source scored ≥ 0.5" — the
+conjunction the function's own docstring at `:252-254` states. That reading **strengthens** the
+concern rather than dissolving it. The second conjunct is a `max` over every non-speech source
+category (`nontarget_confidence_by_bucket`, `:691-728`, excluding `speech` alone), and 292 of the
+527 labels in `data/audioset_source_map.json` map to `environment`, which is also the map's
+`default` for an unmapped label and where `Silence` itself lands. So `nontarget_active` is reachable
+with the target confidently absent and nothing but environmental mass present — "something
+non-speech has mass here", not "a voice was heard" — and 33 of the 34 buckets in the table above are
+`nontarget_active`. If that reading is right, the membership is wrong and the fix spares the wrong
+buckets. Nobody has measured what those 33 contain. **Open question, not a verdict**, and it must be
+answered before the regions are threaded through.
 
 ## F-165 and F-168 are serially dependent — the register has them as independent
 
