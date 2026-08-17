@@ -360,18 +360,17 @@ def test_run_pass_honors_align_asr_false(audio: Audio, ctx: StageContext, monkey
 
 
 def test_importing_the_extraction_layer_loads_none_of_the_refiner() -> None:
-    """Extraction must not import the vocabulary of the layer that consumes it.
+    """Importing ``stages`` must not load ``axes``, ``contracts`` or ``adaptive``.
 
-    ``stages.py`` + ``stage_context.py`` are the extraction layer: they run models over audio and
-    emit plain dict fragments. What an *axis* is, what a *contract* declares and what the adaptive
-    loop believes are all downstream of that, and an extraction layer that imports them cannot be
-    lifted out of the refiner without carrying the refiner with it.
+    Import-time only, and that is the whole claim. One runtime edge survives and is accepted:
+    ``stages.py`` imports ``calibration`` inside two function bodies and ``calibration`` imports
+    ``axes`` at module level, so ``run_pass`` on the unmodified variant under the default
+    ``PassPlan.background_mask=True`` does load ``axes``. An ``axes`` import moved inside a function
+    body would likewise pass here.
 
-    Measured rather than asserted from the source: the one import-time path to ``axes`` was
-    ``stages`` → ``sound_sources`` → ``grid`` → ``axes``, for a single constant, and neither the
-    source of ``sound_sources`` nor of ``grid`` looked like a dependency on the axis vocabulary.
-    A subprocess is the only place this is checkable, because the parent test session has already
-    imported the whole package.
+    A subprocess is the only place even the import-time claim is checkable, because the parent test
+    session has already imported the whole package. The accepted edge and the measurements are in
+    ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction boundary".
     """
     pkg = "senselab.audio.workflows.audio_analysis"
     code = (

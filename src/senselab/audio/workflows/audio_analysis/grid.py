@@ -1,7 +1,8 @@
 """BucketGrid — the one time grid every model output projects onto before voting.
 
-Stdlib-only, and deliberately so: this module is imported by the extraction layer, which must not
-reach the axis vocabulary that consumes its output.
+Stdlib-only: this module has no intra-package import, which is what keeps the extraction layer off
+the axis vocabulary. See ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction
+boundary".
 """
 
 from __future__ import annotations
@@ -11,24 +12,13 @@ from dataclasses import dataclass
 from typing import Final
 
 DEFAULT_TIME_GRID: Final[tuple[float, float]] = (0.1, 0.1)
-"""``(win_length, hop_length)`` in seconds for every ``"time"``-gridded axis. **Configurable** — a
-downstream need for finer or coarser buckets changes this, or the run's params override it.
+"""``(win_length, hop_length)`` in seconds for every ``"time"``-gridded axis. Window equals hop, so
+no two rows share a frame.
 
-**Window equals hop, so the buckets do not overlap**, and that is the point rather than a coincidence.
-The run that motivated this used a 0.1 s window at a 0.02 s hop: adjacent rows shared 80% of their
-audio, so 1070 rows were not 1070 independent measurements and nothing told a consumer so. A fine
-*resolution* is what the question justifies; reporting five near-duplicate rows per window is not the
-same thing, and the near-duplication was invisible in the output.
-
-100 ms is sufficient for the downstream needs known today — speech and target-activity onsets are
-resolved at it, and speaker turns and mask regions are much longer.
-
-**It lives here, not in ``axes``, because it is a property of the grid rather than of the axes.**
-It was declared in ``axes.py``, which inverted the arrow: an axis *reads* the grid it is estimated
-on, so the grid does not belong to the axes — and the one line importing it back the other way
-(``grid`` → ``axes``) was, at import time, the *only* path from the extraction layer to the
-refiner's axis vocabulary. ``grid.py`` now has no intra-package import at all, which is what makes
-that boundary checkable instead of incidental.
+Configurable: the run config's ``grid:`` block overrides it, and
+``src/senselab/audio/workflows/audio_analysis/data/run_config/default.yaml`` carries the derivation
+of the shipped pair. Why window equals hop, and why the constant lives here rather than in ``axes``,
+are in ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction boundary".
 """
 
 
