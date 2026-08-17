@@ -9,6 +9,8 @@ asymmetry between what ``stage_features`` returns and what it writes.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -352,3 +354,34 @@ def test_run_pass_honors_align_asr_false(audio: Audio, ctx: StageContext, monkey
     monkeypatch.setattr(stages_mod, "transcribe_audios", lambda *a, **k: [ScriptLine(text="hello")])
     summary = run_pass(audio, ctx, PassPlan(asr_models=("ibm-granite/granite-speech-3.3-8b",), align_asr=False))
     assert "alignment" not in summary
+
+
+# ── the extraction boundary ───────────────────────────────────────────
+
+
+def test_importing_the_extraction_layer_loads_none_of_the_refiner() -> None:
+    """Extraction must not import the vocabulary of the layer that consumes it.
+
+    ``stages.py`` + ``stage_context.py`` are the extraction layer: they run models over audio and
+    emit plain dict fragments. What an *axis* is, what a *contract* declares and what the adaptive
+    loop believes are all downstream of that, and an extraction layer that imports them cannot be
+    lifted out of the refiner without carrying the refiner with it.
+
+    Measured rather than asserted from the source: the one import-time path to ``axes`` was
+    ``stages`` → ``sound_sources`` → ``grid`` → ``axes``, for a single constant, and neither the
+    source of ``sound_sources`` nor of ``grid`` looked like a dependency on the axis vocabulary.
+    A subprocess is the only place this is checkable, because the parent test session has already
+    imported the whole package.
+    """
+    pkg = "senselab.audio.workflows.audio_analysis"
+    code = (
+        "import sys; "
+        f"import {pkg}.stages; "
+        f"pkg = {pkg!r}; "
+        "forbidden = tuple(pkg + s for s in ('.axes', '.contracts', '.adaptive')); "
+        "print(','.join(sorted(m for m, v in sys.modules.items() "
+        "if v is not None and m.startswith(forbidden))))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    leaked = [m for m in out.stdout.strip().split(",") if m]
+    assert leaked == [], f"importing the extraction layer pulled in refiner modules: {leaked}"

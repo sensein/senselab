@@ -18,12 +18,18 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from importlib import resources
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.harvesters import classification_windows
 from senselab.utils.data_structures.logging import logger
+
+if TYPE_CHECKING:
+    # Annotation-only: the runtime uses are `grid.iter_buckets(...)` on the instance the caller
+    # passes, so nothing here needs the class object. Deferring it keeps `sound_sources` — and
+    # through it `stages`, the extraction layer — off the one import-time path that reached the
+    # refiner's axis vocabulary. `stages_test.py` pins that.
+    from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 
 SOURCE_CATEGORIES = ("speech", "people", "machine", "environment")
 _MAP_RESOURCE = "audioset_source_map.json"
