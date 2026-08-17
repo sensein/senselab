@@ -19,20 +19,11 @@ from typing import Any, Literal
 __all__ = ["ComparisonStatus", "FusedAxis", "SignalResult", "SignalRow", "UncertaintyAxis"]
 
 UncertaintyAxis = str
-"""An axis is a plain ``str``, not a ``Literal``.
+"""An axis name. A plain ``str`` because the axis set is open; what an axis *is* lives in
+``axes.AXES``, and a caller wanting only the harvested ones asks ``axes.HARVESTED_AXES``.
 
-The set is **open**: ``task`` is declared-but-punted, a fifth may follow, and a type that
-enumerates the members is a promise the pipeline is not allowed to keep. This alias *was* a
-three-member ``Literal``, justified as "narrower than the set L2 fuses", and that narrowing is
-precisely what made ``background_mask`` unrepresentable in every consumer that needed to act on it.
-What an axis *is* lives in ``axes.AXES``, where the properties travel with the name; a caller that
-wants only the harvested ones asks ``axes.HARVESTED_AXES`` rather than narrowing a type.
-
-Declared here rather than re-exported from ``axes``, because ``str`` is the whole content of the
-alias and importing it bought nothing but an edge: this module is reachable from the extraction
-layer, which must not depend on the axis vocabulary that consumes its output. That the two
-declarations cannot drift is checked at the source level in ``axes_test.py`` — an equality
-assertion could not fail, since both sides are ``str``.
+Declared here rather than imported from ``axes``; ``axes_test`` pins that neither declaration
+narrows. Why, in ``specs/20260816-143540-triage-graph/phase2-notes.md``, "Extraction boundary".
 """
 
 # A perturbation is a plain ``str``, not a Literal. The set is **open** — raw is the identity,

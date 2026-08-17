@@ -25,10 +25,8 @@ from senselab.audio.workflows.audio_analysis.harvesters import classification_wi
 from senselab.utils.data_structures.logging import logger
 
 if TYPE_CHECKING:
-    # Annotation-only: the runtime uses are `grid.iter_buckets(...)` on the instance the caller
-    # passes, so nothing here needs the class object. Deferring it keeps `sound_sources` — and
-    # through it `stages`, the extraction layer — off the one import-time path that reached the
-    # refiner's axis vocabulary. `stages_test.py` pins that.
+    # Annotation-only, and deferred deliberately — see
+    # specs/20260816-143540-triage-graph/phase2-notes.md, "Extraction boundary".
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 
 SOURCE_CATEGORIES = ("speech", "people", "machine", "environment")
