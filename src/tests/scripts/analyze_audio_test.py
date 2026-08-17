@@ -183,7 +183,7 @@ def test_every_axis_is_configured_on_one_grid(aa: types.ModuleType) -> None:
     Four grid pairs used to be configurable independently, and their *defaults* disagreed: presence
     and mask at 0.1/0.02, speaker at 0.25/0.25, asr at 1.0/0.5.
     """
-    from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
+    from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
 
     cfg = aa.load_run_config(None)
     assert (cfg.grid_win_length, cfg.grid_hop_length) == DEFAULT_TIME_GRID
@@ -244,7 +244,7 @@ def test_pass_plan_reads_every_field_it_needs(aa: types.ModuleType) -> None:
     plan = aa._pass_plan(aa.load_run_config(None))
     assert plan.asr_models, "defaults should populate ASR models"
     assert plan.align_asr is True, "alignment is on unless stages.align_asr is false"
-    from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
+    from senselab.audio.workflows.audio_analysis.grid import DEFAULT_TIME_GRID
 
     assert (plan.mask_grid.win_length, plan.mask_grid.hop_length) == DEFAULT_TIME_GRID
 

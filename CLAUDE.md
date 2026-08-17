@@ -61,10 +61,11 @@ Key audio processing capabilities in `audio/tasks/`:
 - Google-style docstrings (enforced by ruff, `convention = "google"`)
 - Line length 120; type hints required (mypy with the pydantic plugin)
 - Tests in `src/tests/` mirroring the package, named `*_test.py`
-- **Explain *why* in comments and docstrings, not *what*.** The codebase's convention is that a
-  non-obvious choice records the measurement or failure that drove it, so a later reader can
-  disagree with the reasoning rather than guess at it. Several sections below are that convention
-  applied to the module docs.
+- **Rationale does not go in code.** Docstrings and comments say what a thing is and how to call it;
+  the measurement behind a choice, the failure that drove it and the rejected alternatives go in
+  `specs/`. This reverses an earlier convention, so much of the tree still carries multi-paragraph
+  rationale inline — move it out when you edit such a file rather than extending it. A `derivation:`
+  block in a `data/` profile is not code and stays where it is.
 
 ## Traps that have cost time
 

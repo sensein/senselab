@@ -35,8 +35,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Literal, Mapping, cast
 
-from senselab.audio.workflows.audio_analysis.axes import DEFAULT_TIME_GRID
-
 __all__ = [
     "DEFAULT_CONFIG_PATH",
     "ConfigIdentity",
@@ -329,15 +327,15 @@ def _validate(merged: Mapping[str, Any]) -> None:
         raise ValueError(f"grid.win_length must be > 0, got {win}")
     if not 0 < hop <= win:
         raise ValueError(f"grid.hop_length must be in (0, {win}], got {hop}")
-    if (win, hop) != DEFAULT_TIME_GRID and hop < win:
-        # Not forbidden — a caller with a measured reason may overlap — but it is the failure D-24
-        # names, so it is announced rather than accepted in silence.
+    if hop < win:
+        # Overlap is warned about, not forbidden: it is the failure D-24 names. A second conjunct
+        # here could never fire; see F-188 in specs/20260815-215106-analyze-audio-audit/register.md.
         import sys
 
         print(
             f"warn: grid.win_length={win} > grid.hop_length={hop}, so adjacent rows share "
             f"{100 * (1 - hop / win):.0f}% of their audio; N rows are not N independent measurements "
-            "(axes.DEFAULT_TIME_GRID sets window == hop for this reason)",
+            "(grid.DEFAULT_TIME_GRID sets window == hop for this reason)",
             file=sys.stderr,
         )
 
