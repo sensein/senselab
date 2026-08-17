@@ -145,17 +145,52 @@ def test_no_pipeline_module_writes_the_axis_set_out_by_hand() -> None:
     assert offenders == [], f"the axis set is written out by hand in {offenders}"
 
 
-def test_the_type_aliases_come_from_the_declaration() -> None:
-    """Three modules each declared a three-member ``Literal``, so they could disagree — and did."""
-    import typing
+def test_no_module_narrows_the_axis_alias_to_an_enumeration() -> None:
+    """Three modules each declared a three-member ``Literal``, so they could disagree — and did.
 
-    from senselab.audio.workflows.audio_analysis import types as workflow_types
-    from senselab.audio.workflows.audio_analysis.adaptive import types as adaptive_types
-    from senselab.audio.workflows.audio_analysis.axes import AxisName
+    Checked at the **source** level, not by identity. ``types.UncertaintyAxis`` is declared in
+    ``types.py`` rather than imported from ``axes``, so extraction-layer code that reaches
+    ``types`` does not thereby reach the axis vocabulary — and the obvious guard,
+    ``types.UncertaintyAxis is axes.AxisName``, is then a test that cannot fail, because both sides
+    are the builtin ``str`` whatever either module did. What actually has to hold is that no
+    module re-narrows the alias, and only the source says that: a ``Literal[...]``, an ``Enum``, or
+    anything other than a bare ``str`` on the right-hand side is the defect.
+    """
+    aliases = {
+        "axes.py": "AxisName",
+        "types.py": "UncertaintyAxis",
+        "adaptive/types.py": "AxisName",
+    }
+    seen: dict[str, str] = {}
+    for rel, name in aliases.items():
+        tree = ast.parse((WORKFLOW_DIR / rel).read_text())
+        assignments = [
+            node
+            for node in tree.body
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+            if isinstance(target, ast.Name) and target.id == name
+        ]
+        imported = [
+            f"{node.module}.{a.name}"
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            for a in node.names
+            if (a.asname or a.name) == name
+        ]
+        assert len(assignments) + len(imported) == 1, f"{rel}: {name} must be declared exactly once"
+        if imported:
+            seen[rel] = f"import {imported[0]}"
+            continue
+        value = assignments[0].value
+        assert isinstance(value, ast.Name) and value.id == "str", (
+            f"{rel}: {name} must be a bare `str` — the axis set is open, and a type that enumerates "
+            f"its members is what made `background_mask` unrepresentable"
+        )
+        seen[rel] = "str"
 
-    assert workflow_types.UncertaintyAxis is AxisName
-    assert adaptive_types.AxisName is AxisName
-    assert typing.get_origin(AxisName) is None and AxisName is str, "the axis set is open"
+    assert seen["types.py"] == "str", "types.py declares the alias itself, so extraction cannot reach axes through it"
+    assert seen["axes.py"] == "str"
 
 
 # ── the fourth axis participates on the same terms ───────────────────────────
