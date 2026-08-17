@@ -49,7 +49,13 @@ This is a separate defect from the threshold-scale bug fixed in `a38d5292`. That
 |---|---|---|
 | `speaker_assignment` | normalised Shannon entropy of the diarizers' distribution over the answers they gave (their cluster ids, plus `SIL` as its own answer) | mean 0.049, 94% exactly 0 |
 | `target_activity` | the mask **region's** `uncertainty`, **only where its `state != "target_active"`** | 1.0 over the 25 indeterminate buckets (12% of the clip) |
-| *(gate)* `word_coverage` | fraction of the bucket a fused word occupies; `0.0` clears the bucket's votes so the axis reads `None` | 23 buckets nulled |
+| *(gate)* `word_coverage` | fraction of the bucket a fused word occupies; `0.0` clears the bucket's votes so the axis reads `None` — **unless the region `state` is `target_active` or `nontarget_active`**, where the mask has positively measured a voice and outranks the word proxy (F-165, `speaker._VOCAL_ACTIVITY`) | 23 buckets nulled |
+
+The gate's measured column above ("23 buckets nulled") is the pre-exemption figure, and it stands:
+the exemption changes nothing on a run today, because the mask's region table never reaches
+`harvest_speaker_votes` (F-187 in the analyze_audio audit register) — so `state` is always `None`,
+which is one of the states the gate still applies to. What the exemption specifies is the behaviour
+once that wiring exists.
 
 **No speaker is privileged.** This started as `max` over the speakers present of each one's *binary*
 entropy, on the argument that a confidently-placed speaker must not hide doubt about a contested one —

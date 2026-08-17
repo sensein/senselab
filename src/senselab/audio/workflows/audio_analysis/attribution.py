@@ -14,7 +14,10 @@ It now asks about **attribution**, from three terms, each a function here:
   question is "do we know who is talking" rather than "is this particular person here".
 - :func:`word_coverage` — is there any speech here to attribute? A **gate, not a voter**: a bucket
   with no word in it gets no claim at all, because attributing speech requires speech. Word timing
-  bounds *where* a speaker change can be; it is not evidence about *who*.
+  bounds *where* a speaker change can be; it is not evidence about *who*. The gate is skipped where
+  the mask's region state positively reports a voice (``target_active``/``nontarget_active``, see
+  ``speaker._VOCAL_ACTIVITY``): word absence is only a *proxy* for speech absence, and it holds for
+  adult connected speech, not for a cry, a cough or a groan (F-165).
 - :func:`target_activity_doubt` — do we know whether the target was active at all? Not knowing that
   is not knowing whether there is anyone to attribute.
 
@@ -110,7 +113,9 @@ def word_coverage(
     """Per bucket, the fraction of it occupied by a recognized word, in ``[0, 1]``.
 
     **A measurement, not a vote.** The speaker axis reads it as a *gate*: a bucket with no word in it
-    has no speech to attribute, so the axis makes no claim there. It does not enter the fold.
+    has no speech to attribute, so the axis makes no claim there — *unless* the background mask
+    positively reports a voice in that bucket (``target_active`` or ``nontarget_active``), which is
+    measured evidence against the proxy this gate rests on. Either way it does not enter the fold.
 
     That distinction was learned the hard way. This started as ``word_location_doubt`` —
     ``1 - temporal_confidence``, coverage-weighted — and *voted* on the axis. Measured on a clean
@@ -131,7 +136,9 @@ def word_coverage(
 
     Returns:
         ``{bucket → covered fraction}``. ``0.0`` is a genuine measurement — no word occupies any of
-        this bucket — and is what the caller gates on.
+        this bucket — and is what the caller gates on, in the states where it gates at all: the
+        caller checks the mask region first and lets a positively-reported voice override this
+        reading (``speaker.harvest_speaker_votes``).
     """
     spans: list[tuple[float, float]] = []
     for word in words:
