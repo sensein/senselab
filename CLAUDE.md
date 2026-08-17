@@ -211,13 +211,13 @@ next to the code they describe:
 - `specs/20260815-215106-analyze-audio-audit/register.md` — the audit's findings, `F-1`..`F-187`,
   one row each with its tier, severity and what the triage graph should do about it. This is where
   every `F-*` id lives; the L1/L2 register above holds none of them.
-
-**Open items are tracked in those two registers, not in this file.** Which one depends on what the
-item is: an L1 emitting a decision instead of a measurement goes in the first, a defect claim with a
-mechanism goes in the second.
 - `specs/20260508-173136-compare-uncertainty/` — the comparator's contracts.
 - `specs/20260506-154425-audio-analysis-asr-extensions/` — the ASR backend extensions
   (Canary-Qwen, Qwen3-ASR, MMS alignment) and the separable ASR/alignment caches.
+
+**Open items are tracked in the two registers above, not in this file.** Which one depends on what
+the item is: an L1 emitting a decision instead of a measurement goes in the first, a defect claim
+with a mechanism goes in the second.
 
 Three id namespaces stay distinct because all three once rendered as `S0`: a model's own speaker
 labels (`SPEAKER_00`, `spk0`), the pass-wide cluster harmonising labels across diarizers (`C0`), and
