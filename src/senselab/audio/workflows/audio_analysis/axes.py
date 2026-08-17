@@ -348,7 +348,10 @@ attribution is a live question, used instead as an answer to it. Word timing bec
 ``attribution.word_coverage``, a gate; these become nothing at all, because the gating work is
 already done — and done better — at harvest time:
 
-- ``attribution.word_coverage`` nulls a bucket no recognized word reaches.
+- ``attribution.word_coverage`` nulls a bucket no recognized word reaches, except where the mask
+  positively reports a voice there (``target_active``/``nontarget_active``): word absence is a proxy
+  for speech absence that holds for adult connected speech and not for a cry or a cough, so a
+  measured vocalization outranks it (F-165, ``speaker._VOCAL_ACTIVITY``).
 - ``attribution.target_activity_doubt`` nulls a bucket the mask confidently calls ``target_free``.
 
 Both read a **claim** (a word is there; the mask's ``state``). What a coupled row carries is the
