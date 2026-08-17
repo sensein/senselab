@@ -199,8 +199,11 @@ def fuse_consensus_words(
     """Fold the recognizers' words once, returning the fused words and the fold's provenance.
 
     Split out of :func:`_consensus_word_doubt` because **two axes read these words**: the asr axis
-    resamples their accuracy, and the speaker axis reads their ``temporal_confidence`` as
-    word-location doubt (``attribution.word_location_doubt``). The fold runs g2p phoneme similarity
+    resamples their accuracy, and the speaker axis reads their *spans* as a gate
+    (``attribution.word_coverage`` — a bucket no word reaches has no speech to attribute). The
+    speaker axis used to read their ``temporal_confidence`` as word-location doubt and vote on it;
+    that voter is gone, because it contributed ~0.223 of standing doubt in every bucket of a clean
+    two-speaker conversation whose per-speaker evidence read 0.0. The fold runs g2p phoneme similarity
     per word pair, so doing it twice per pass would double that cost to obtain one answer — and
     worse, would let the two axes disagree about a fold neither of them owns.
 
@@ -451,7 +454,7 @@ def harvest_asr_votes(
     resolution where the recognizers were actually compared.
 
     ``fused`` accepts a consensus fold the caller already performed — ``compute.harvest_pass`` shares
-    one with the speaker axis, which reads the same words' ``temporal_confidence``. Omitted, the
+    one with the speaker axis, which reads the same words' spans as its gate. Omitted, the
     harvest folds them itself, which is what a standalone caller wants.
     """
     duration_s = float(pass_summary.get("duration_s", 0.0) or 0.0)
