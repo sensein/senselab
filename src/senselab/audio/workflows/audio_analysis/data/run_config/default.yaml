@@ -24,7 +24,7 @@ version: 3
 name: senselab-audio-analysis/default
 
 derivation: |
-  Grid (0.1 s window, 0.1 s hop) — axes.DEFAULT_TIME_GRID, and the reason it is a single pair is
+  Grid (0.1 s window, 0.1 s hop) — grid.DEFAULT_TIME_GRID, and the reason it is a single pair is
   measured: with a per-axis grid the four axes carried 242 / 242 / 19 / 8 rows on four different
   spacings and shared zero bucket keys, so every cross-axis coupling in the pipeline ran and did
   nothing. Window equals hop so no two rows share a frame; a 0.1 s window at a 0.02 s hop reported
