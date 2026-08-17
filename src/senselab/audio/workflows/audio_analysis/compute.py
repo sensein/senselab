@@ -430,7 +430,13 @@ def harvest_pass(
         for m, b in asr_blocks.items()
         if isinstance(b, dict) and b.get("status") == "ok"
     }
-    consensus_fold = fuse_consensus_words(asr_resolved)
+    # ``policy=`` is not optional here even though it defaults to None: without it the fold silently
+    # falls back to ``fuse_consensus_words``'s own 0.3 / 0.15, and ``linking.asr_slot_overlap`` /
+    # ``asr_slot_mid_tol_s`` never reach the word-slot join on the only production path (F-162). The
+    # packaged defaults happen to equal the fallbacks, so the bug is inert today and shows up only
+    # when someone changes the config and nothing happens -- which is the worse failure, because the
+    # run's own provenance then records the value that ran and the config records a different one.
+    consensus_fold = fuse_consensus_words(asr_resolved, policy=speech_presence_policy)
 
     speaker_votes = harvest_speaker_votes(
         pass_summary=harvest_summary,
