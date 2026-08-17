@@ -191,7 +191,12 @@ exclude = [
   "dist",
   "node_modules",
   "venv",
-  "scripts"
+  "scripts",
+  # Spec trees hold design documents plus the one-off scripts that reproduce a finding. Those are
+  # evidence: several deliberately contain the defective pattern they demonstrate, so linting them
+  # to library standards asks them to stop being reproductions. Same category as `scripts`, which
+  # this list and the mypy hook already exclude for the same reason.
+  "specs"
 ]
 line-length = 120
 indent-width = 4
