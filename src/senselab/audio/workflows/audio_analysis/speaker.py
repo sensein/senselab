@@ -162,6 +162,10 @@ def harvest_speaker_votes(
     to attribute and gets no claim, unless the region state is ``target_active`` or
     ``nontarget_active``, in which case the mask has positively measured a vocalization and neither
     of these word-independent voters may be dropped for lacking words (see :data:`_VOCAL_ACTIVITY`).
+    **No mask state reaches this function on a run today** — the region table is never put in the
+    pass summary — so the exemption, the ``target_free`` clear and the ``target_activity`` voter are
+    all inert, and the fold sees one voter where this docstring declares two (F-187 in
+    ``specs/20260815-215106-analyze-audio-audit/register.md``).
     Everything else this emits is a *measurement* other consumers read — the cluster assignments, the
     embedding cosines, the change points, the overlap distribution — and is deliberately unscored, so
     the fold sees two voters.
