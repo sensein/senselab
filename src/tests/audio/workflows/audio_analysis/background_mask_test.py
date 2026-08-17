@@ -630,7 +630,9 @@ def test_the_cli_cuts_the_mask_on_the_runs_one_grid() -> None:
     """The wiring, not the knob — the same gap the variant test above was written for.
 
     ``stage_background_mask`` accepted a ``grid`` from the day it was written and no caller ever
-    passed one, so the mask ran at ``BucketGrid()``'s 0.5 s while presence ran at 0.1 s. A unit test
+    passed one, so the mask ran at ``BucketGrid()``'s then-default 0.5 s while presence ran at
+    0.1 s. That default is now ``grid.DEFAULT_TIME_GRID`` itself, which closes the gap by one more
+    route, but the wiring is what this pins. A unit test
     that hands the stage a grid by hand cannot see that; this reads the source. It now asserts the
     plan takes the run's *single* grid through the one constructor, rather than rebuilding it from
     presence's two CLI values — which was a second construction of a pair of floats that could only
