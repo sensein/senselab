@@ -271,7 +271,7 @@ host rather than requiring anyone to delete a directory by hand.</p>
 </span><span id="L-134"><a href="#L-134"><span class="linenos">134</span></a>
 </span><span id="L-135"><a href="#L-135"><span class="linenos">135</span></a><span class="sd">- the grid. ``speech_presence`` and ``background_mask`` ran at a 0.1 s window on a 0.02 s hop,</span>
 </span><span id="L-136"><a href="#L-136"><span class="linenos">136</span></a><span class="sd">  ``speaker`` at 0.25/0.25, ``asr`` at 1.0/0.5 — four grids sharing zero bucket keys. Every axis is</span>
-</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a><span class="sd">  now on ``axes.DEFAULT_TIME_GRID`` (0.1 s, window == hop), so a cached row&#39;s ``(start, end)`` names</span>
+</span><span id="L-137"><a href="#L-137"><span class="linenos">137</span></a><span class="sd">  now on ``grid.DEFAULT_TIME_GRID`` (0.1 s, window == hop), so a cached row&#39;s ``(start, end)`` names</span>
 </span><span id="L-138"><a href="#L-138"><span class="linenos">138</span></a><span class="sd">  a bucket the run no longer has.</span>
 </span><span id="L-139"><a href="#L-139"><span class="linenos">139</span></a><span class="sd">- the asr axis has **one** voter, ``consensus_words``, and no per-bucket text. Gone with it:</span>
 </span><span id="L-140"><a href="#L-140"><span class="linenos">140</span></a><span class="sd">  ``__pairwise_phoneme_distances__``, and the per-bucket ``avg_logprob`` / ``token_entropy`` /</span>
@@ -960,7 +960,7 @@ downstream of it changes</strong>, so this is the widest invalidation on this li
 <ul>
 <li>the grid. <code>speech_presence</code> and <code>background_mask</code> ran at a 0.1 s window on a 0.02 s hop,
 <code>speaker</code> at 0.25/0.25, <code>asr</code> at 1.0/0.5 — four grids sharing zero bucket keys. Every axis is
-now on <code>axes.DEFAULT_TIME_GRID</code> (0.1 s, window == hop), so a cached row's <code>(start, end)</code> names
+now on <code>grid.DEFAULT_TIME_GRID</code> (0.1 s, window == hop), so a cached row's <code>(start, end)</code> names
 a bucket the run no longer has.</li>
 <li>the asr axis has <strong>one</strong> voter, <code>consensus_words</code>, and no per-bucket text. Gone with it:
 <code>__pairwise_phoneme_distances__</code>, and the per-bucket <code>avg_logprob</code> / <code>token_entropy</code> /
