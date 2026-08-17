@@ -354,6 +354,10 @@ already done — and done better — at harvest time:
   measured vocalization outranks it (F-165, ``speaker._VOCAL_ACTIVITY``).
 - ``attribution.target_activity_doubt`` nulls a bucket the mask confidently calls ``target_free``.
 
+Both mask-state readings are inert on a run today — the region table never reaches the harvester, so
+the state is always ``None`` (F-187) — which changes nothing here: the gating work these replace was
+already the wrong shape, and wiring the mask through is what makes them fire, not re-coupling.
+
 Both read a **claim** (a word is there; the mask's ``state``). What a coupled row carries is the
 other axis's *doubt*, which is not a presence claim at all: ``speech_presence`` doubt near zero means
 that axis is confident, not that speech is present. Gating on it would read "confidently silent" and
