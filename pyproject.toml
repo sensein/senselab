@@ -133,6 +133,18 @@ profiling = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/senselab"]
 
+# The wheel is scoped by `packages` above, but the sdist had no target config at all, so hatchling's
+# default swept in everything git tracks: `.claude/` (511 entries, including a whole abandoned
+# worktree), `.superpowers/`, `.specify/`, `.uv-cache/`, and 223 files of `specs/` design notes.
+# An 81 MB source distribution of a package whose importable code is a few MB, and every one of
+# those trees is working state for this repository rather than anything a consumer builds from.
+#
+# `only-include` rather than `exclude`: a new agent-tooling directory should be absent by default
+# and added deliberately, which is the opposite of what an exclude list does. `src` carries both
+# `senselab` and its tests, so a downstream rebuild can still run the suite.
+[tool.hatch.build.targets.sdist]
+only-include = ["src", "pyproject.toml", "README.md", "LICENSE.md", "SECURITY.md", "uv.lock"]
+
 [tool.hatch.version]
 source = "vcs"
 
