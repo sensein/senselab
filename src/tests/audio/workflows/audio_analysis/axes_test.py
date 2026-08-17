@@ -29,6 +29,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[5] / "scripts"
 
 THE_THREE = frozenset({"speech_presence", "speaker", "asr"})
 
+AXES_MODULE = "senselab.audio.workflows.audio_analysis.axes"
+
 
 def _sources() -> list[Path]:
     return sorted(WORKFLOW_DIR.rglob("*.py")) + [SCRIPTS_DIR / "analyze_audio.py", SCRIPTS_DIR / "adaptive_loop.py"]
@@ -191,6 +193,12 @@ def test_no_module_narrows_the_axis_alias_to_an_enumeration() -> None:
 
     assert seen["types.py"] == "str", "types.py declares the alias itself, so extraction cannot reach axes through it"
     assert seen["axes.py"] == "str"
+    # Not merely "imported from somewhere": an import of an `AxisName` that a third module declared
+    # as a `Literal` satisfies the loop above and re-narrows the alias anyway.
+    assert seen["adaptive/types.py"] == f"import {AXES_MODULE}.AxisName", (
+        f"adaptive/types.py must take AxisName from {AXES_MODULE}, the declaration this test checks; "
+        f"it takes it from {seen['adaptive/types.py']}"
+    )
 
 
 # ── the fourth axis participates on the same terms ───────────────────────────
