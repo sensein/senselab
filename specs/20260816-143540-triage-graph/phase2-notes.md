@@ -155,11 +155,58 @@ not scale-free — a diarizer that *agrees with the majority* flips `is_multimod
 `speaker_identity.py:585` gates `converged` on it, so deleting it changes convergence. It needs the
 evidence-carrying replacement Phase 3 builds when speaker count becomes an `Estimate`.
 
-## Extraction boundary — still open
+## Extraction boundary — resolved, and it was much smaller than this file recorded
 
 Deferred from Phase 1 after measuring that the design's justification was wrong (the lazy
-`__getattr__` already prevents the import cost; `contracts` and `adaptive` stay unloaded). The real
-closure of `stages.py` + `stage_context.py` is 14 modules / 5,523 lines and reaches `axes.py` — the
-refiner's own axis vocabulary — transitively through `calibration`, `types` and `grid`. That
-`axes.py` edge is the thing to resolve before any move: extraction should not depend on the axis
-vocabulary it is supposed to be independent of.
+`__getattr__` already prevents the import cost; `contracts` and `adaptive` stay unloaded). The note
+then said the closure of `stages.py` + `stage_context.py` "reaches `axes.py` … transitively through
+`calibration`, `types` and `grid`", and treated that as the thing to resolve before any move.
+
+**That sentence conflated two graphs, and the conflation is what made the edge look big.**
+Re-measured 2026-08-16 by AST over the package and confirmed against `sys.modules` in fresh
+subprocesses:
+
+| closure of `stages` + `stage_context` | before | after |
+| --- | --- | --- |
+| module-level (what an import actually costs) | 8 modules / 2,939 lines | **7 / 2,503** |
+| including every function-local import | 14 / 5,530 | 14 / 5,539 |
+
+At **import time the only path to `axes` was `stages` → `sound_sources` → `grid` → `axes`.**
+`calibration` and `types` are reached solely by function-local imports inside `stages.py`
+(`:531`, `:717` → `calibration`; `:533`, `:718` → `io` → `types`), so neither was ever on the
+import-time path. `import …stage_context` on its own did not load `axes` at all — every path came
+through `stages`. And exactly three symbols crossed the edge: `DEFAULT_TIME_GRID`, `AxisName`,
+`CALIBRATED_AXES`.
+
+Three edits removed it, none of them a refactor:
+
+1. **`DEFAULT_TIME_GRID` moved `axes.py` → `grid.py`.** `axes.py` never read it — it appeared once,
+   as its own assignment target, and every other mention was prose. A grid constant belongs in the
+   module named for the grid; housing it in `axes` inverted the arrow, since axes *read* the grid.
+   `grid.py` now has **zero intra-package imports**.
+2. **`sound_sources.py`'s `grid` import is under `TYPE_CHECKING`** — the module has
+   `from __future__ import annotations` and uses `BucketGrid` only as an annotation. That single
+   line was the whole import-time edge.
+3. **`types.UncertaintyAxis` is declared locally** instead of aliasing `axes.AxisName`, carrying
+   across the open-set rationale. `AxisName` is a bare `AxisName = str`, so the import bought an
+   edge and nothing else.
+
+`stages_test.py::test_importing_the_extraction_layer_loads_none_of_the_refiner` is the guard: fresh
+interpreter, import `stages`, assert `axes`, `contracts` and `adaptive.*` are all absent from
+`sys.modules`. It failed before these edits (`['…audio_analysis.axes']`) and passes after. Without
+it the edge grows back silently, which is how it arrived.
+
+**The `calibration` → `axes` edge is accepted, not removed**, and the reasoning is the record:
+`calibration.py:43` imports `CALIBRATED_AXES`, which is genuine axis vocabulary, but its only use is
+in `validate_profile` (`:104`) — reached from `load_calibration_profile`, which the extraction
+closure never calls. The closure uses the *detection-margin* half of the module
+(`load_detection_margin_profile` → `validate_detection_margin_profile`, from `stages.py:531,717`)
+and `noise_floor.py`'s `quantile_bias_correction_db`; neither touches `CALIBRATED_AXES`. It is a
+function-local import, so it costs nothing at import time, and it guards a `temperature` block that
+`calibration.py:26-31` itself declares reaches no fold. `calibration.py`'s two-schema split is
+deliberate and documented, so the edge is cheaper to accept in writing than to refactor around.
+
+**Consequence for Phase 2: the four chain lifts need not be sequenced behind this.** The design's
+"seven-times larger refactor" was an artefact of counting function-local imports against an
+import-time claim. The boundary now holds as a checked fact rather than an intention, and the
+chains can be lifted in whatever order their own dependencies allow.

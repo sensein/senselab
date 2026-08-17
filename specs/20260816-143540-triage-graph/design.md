@@ -128,15 +128,28 @@ anywhere inside the package. This is the layer the graph extracts against.
 above on the claim that a graph wanting only `run_pass` must import "`contracts.py`, `adaptive/`,
 and every other file in the 91-file package". That is false. The package resolves public symbols
 through a lazy PEP-562 `__getattr__`, so importing it costs one module, and resolving `run_pass`
-loads **9** submodules with `contracts` and `adaptive` both provably unloaded. Meanwhile the real
-dependency closure of `stages.py` + `stage_context.py` is **14 modules / 5,523 lines**, not the
-2 files / 1,224 lines assumed here, and it reaches `axes.py` — the refiner's own axis vocabulary —
-transitively through `calibration`, `types` and `grid`.
+loads **9** submodules with `contracts` and `adaptive` both provably unloaded.
 
-The lift therefore buys a conceptual boundary, not an import saving, and it is a seven-times larger
-refactor than costed. **It moves out of Phase 1 into Phase 2**, where the four chains relocate
-anyway and the boundary can be drawn once with the `axes.py` dependency understood rather than
-inherited. Phase 1 ships the two pieces that need no boundary decision.
+**Second correction, same date, superseding the first's second half.** That draft went on to say
+the closure of `stages.py` + `stage_context.py` was "14 modules / 5,523 lines" reaching `axes.py`
+"transitively through `calibration`, `types` and `grid`", concluded the lift was **a seven-times
+larger refactor than costed**, and moved it into Phase 2 on that basis. The 14-module figure counts
+every *function-local* import; the import-time closure was **8 modules / 2,939 lines**, and at
+import time the only path to `axes` was `stages` → `sound_sources` → `grid` → `axes`, for one
+constant. `calibration` and `types` were never on it. Three symbols crossed the edge in total.
+
+The edge is now gone: `DEFAULT_TIME_GRID` moved to `grid.py` (which axes *read*, so it was the
+arrow that was inverted), `sound_sources`'s `grid` import went under `TYPE_CHECKING`, and
+`types.UncertaintyAxis` — a bare `str` — is declared locally. Import-time closure is **7 modules /
+2,503 lines** with `axes` absent, pinned by
+`stages_test.py::test_importing_the_extraction_layer_loads_none_of_the_refiner`. One edge is
+accepted with its reasoning written down: `calibration` → `axes` for `CALIBRATED_AXES`, used only
+in `validate_profile`, which the extraction closure never calls.
+
+The lift therefore buys a conceptual boundary, not an import saving — that part stands — but it is
+not a large refactor, and **Phase 2's four chain lifts need not be sequenced behind it**. See
+`phase2-notes.md`, "Extraction boundary", for the measurements. Phase 1 shipped the two pieces that
+needed no boundary decision.
 
 **Layer 2 — four chain workflows**, each independently importable:
 
