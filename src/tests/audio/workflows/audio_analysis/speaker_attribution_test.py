@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.background_mask import MASK_STATES
+from senselab.audio.workflows.audio_analysis.background_mask import MASK_STATES, MaskState
 from senselab.audio.workflows.audio_analysis.fuse import per_signal_uncertainty
 from senselab.audio.workflows.audio_analysis.grid import BucketGrid
 from senselab.audio.workflows.audio_analysis.speaker import harvest_speaker_votes
@@ -321,7 +321,7 @@ def test_a_partly_word_covered_bucket_is_not_gated() -> None:
 # Every mask state, and the wordless reading each one must produce. Keyed by state rather than
 # written as separate cases so the enumeration is checked for completeness below: a fifth state
 # added to ``MASK_STATES`` upstream fails here instead of silently inheriting the gate's behaviour.
-_WORDLESS_READING: dict[str, set[str]] = {
+_WORDLESS_READING: dict[MaskState, set[str]] = {
     "target_active": {"speaker_assignment"},
     "nontarget_active": {"speaker_assignment", "target_activity"},
     "indeterminate": set(),
@@ -348,7 +348,7 @@ def test_the_gate_exemption_is_drawn_from_the_masks_own_vocabulary() -> None:
 
 
 @pytest.mark.parametrize("state", MASK_STATES)
-def test_every_mask_state_has_a_pinned_wordless_reading(state: str) -> None:
+def test_every_mask_state_has_a_pinned_wordless_reading(state: MaskState) -> None:
     """One case per state the mask defines, so a new state cannot arrive unread.
 
     The named tests above carry the reasoning for each state; this one carries the enumeration, and
