@@ -110,3 +110,49 @@ are expected to fail, and to fail hardest where the signal matters most:
 So the D6 rule holds in shape — the fold needs at least one non-classifier member — while these
 particular numbers are a single-subject observation. Any use as a threshold requires a derivation over
 a population spanning age and disorder, in `data/` per CLAUDE.md, and none exists.
+
+## Verified cough windows, and what they reveal about CrisperWhisper — 2026-08-18
+
+Human-verified spans, not just onsets:
+
+| event | window | duration |
+| --- | --- | --- |
+| cough 1 | 7.926 - 8.494 s | 568 ms |
+| cough 2 | 9.610 - 10.250 s | 640 ms |
+
+`nyralabs/CrisperWhisper2.0_turbo` transcribed the file as
+`[breath] [breath] [cough] [UH] [breath] There's something going on.` with token timings. Scored
+against those windows:
+
+| token | verdict |
+| --- | --- |
+| `[cough]` 7.90-8.48 | cough 1: onset −26 ms, offset −14 ms, duration 580 ms against 568 ms. Correct label, near-exact bounds. |
+| `[UH]` 9.60-9.94 | cough 2: onset −10 ms, **offset −310 ms**, 340 ms of a 640 ms event. Wrong label. |
+| `[breath]` 10.12-10.22 | **entirely inside cough 2**, 100 ms, 510 ms after its onset. Wrong label. |
+
+**One physiological event became two mislabelled tokens.** The two tokens cover 440 of cough 2's
+640 ms with a 180 ms gap between them. The mechanism is legible: cough 2 is the louder one — 9 ms
+rise, 48.5 dB step — and carries a descending harmonic chirp from 9.65 to 10.00 s, its voiced phase.
+A speech model maps that voiced phase to the nearest thing it knows, a filler vowel, and the aspirate
+tail to a breath. It is a speech prior imposed on a non-speech event, not a random error.
+
+### The two instrument classes are exact inverses
+
+| | timing | label | event grouping |
+| --- | --- | --- | --- |
+| CrisperWhisper | **10-52 ms edges** | unreliable on non-speech | fragments one event into several |
+| YAMNet / AST / HeAR | 480-960 ms smear, unfixable by hop | confident and correct at clip level | one window, one verdict |
+
+So neither is a taxonomy instrument alone, and the split is not "models versus DSP" as recorded
+earlier — it is **boundaries from CrisperWhisper, identity from the clip-level classifiers, and
+grouping from neither**. Deciding that a burst, a voiced phase and an aspirate tail are one cough
+rather than three events is a third problem, and nothing measured here solves it. It is the same
+defect as D12's cough-bout question one level down: bout → cough → phase.
+
+### And it corrects an earlier claim about offsets
+
+The measurement note recorded that cough offsets carry 1.04-1.10 s of ambiguity, from moving an
+envelope threshold between floor+12 dB and floor+3 dB. With verified windows the coughs are 568 and
+640 ms, and CrisperWhisper bounded cough 1's offset to within 14 ms. So that ambiguity was an artifact
+of the envelope method, not a property of the event. The breath-offset ambiguity (2.03 s) has not been
+retested against verified windows and may be the same artifact.
