@@ -208,3 +208,34 @@ quantified rather than asserted:
 An earlier note in this file claimed the two instrument classes were "exact inverses". That is right
 about labels and timing and wrong about coverage: both under-cover, and both fragment. The inversion
 is narrower than stated.
+
+## Speech window, and the coverage ordering across all five verified events — 2026-08-18
+
+Speech: **11.653 - 13.207 s, 1554 ms**.
+
+| instrument | onset | offset | coverage |
+| --- | --- | --- | --- |
+| CrisperWhisper words | −13 ms | −27 ms | **98.3%** |
+| Brouhaha VAD raw >0.5 | −110 ms | −28 ms | 98.2% |
+| community-1 segment (thresholded) | −29 ms | −149 ms | 90.4% |
+| community-1 raw >0.5 | −60 ms | −179 ms | 88.5% |
+| Whisper large-v3-turbo words | **+187 ms** | −7 ms | 87.5% |
+| segmentation-3.0 (dropped model) | −43 ms | −179 ms | 88.5% |
+
+**Coverage is a property of the element, not of the instrument:**
+
+| element | duration | coverage across instruments |
+| --- | --- | --- |
+| speech | 1554 ms | **87 - 98%** |
+| cough | 568, 640 ms | 64 - 98% |
+| breath | 1221, 983 ms | **10 - 52%** |
+
+The breaths are *longer* than the coughs and are covered far worse, so this is not about duration — it
+is the gradual energy profile of turbulent flow against the sharp onset and voiced phase of a cough,
+and against the sustained modulation of speech. Every instrument, whatever its architecture, marks
+where a breath begins and then loses it.
+
+This also settles a question raised earlier about whether the airway branch could report breath
+duration. On this evidence it cannot, from any instrument measured — and unlike the offset-threshold
+artifact that was corrected above, this is not a harness problem: five independent detectors agree in
+direction and all fall short.
