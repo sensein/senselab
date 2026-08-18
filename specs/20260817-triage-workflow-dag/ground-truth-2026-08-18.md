@@ -47,3 +47,31 @@ holds **three distinct things** — breath, mouth noise and silence — and cann
 The pair separates lexical speech from voiced non-lexical vocalization and nothing else. Every
 unvoiced vocal element needs the DSP envelope and HeAR route, and HeAR's false positive here means
 that route needs its own verification before it is trusted.
+
+## Where the labels came from, and what that says about the fold
+
+**Locations: DSP only.** Short-time RMS at 5 ms hop, a 1 ms envelope, and onset detection on spectral
+flux at 5.33 ms hop produced every onset. No model.
+
+**Identities: four independent sources.** YAMNet over 0.96 s windows; AST over the same; HeAR's bundled
+event detector at 2 s / 0.25 s hop; and two Whisper models whose identical transcript fixed the speech
+label and its boundaries.
+
+**The tie was broken by a non-model measurement.** AST said `Throat clearing` 0.96 against YAMNet's
+`Cough` 1.000. What settled it in YAMNet's favour was rise time and level step from the envelope —
+9-17 ms and 45-49 dB for the coughs against 60-127 ms and 20-29 dB for the breaths — plus the
+descending harmonic striations after each burst. Verification confirmed that call.
+
+**The pattern in the two errors is the useful part.** Every label that proved correct had at least two
+independent sources, **at least one of them not a classifier** — the DSP envelope, or an ASR transcript.
+Both labels that proved wrong had exactly one source and it was a model score:
+
+- the mouth sound was labelled from *absence* — no model classified it, so a level step with no
+  harmonic structure became "handling click" by default;
+- the phantom breath came from HeAR alone at **0.49, below its own threshold**, with no DSP support.
+
+Two rules follow, and they are sharper than D6's "families with uncorrelated failure modes":
+
+1. **The fold must include at least one non-classifier member.** Classifier agreement was not what made
+   the correct labels correct; the envelope was, both as corroboration and as tiebreaker.
+2. **A sub-threshold score from a single model must not become a label.** It may become a question.
