@@ -266,3 +266,40 @@ scope. It must not sit inside C implying coverage that does not exist.
 **`pediatric.noisy-sounds` stops being anomalous.** Under mechanism it is B plus C material whose
 acoustic target happens to be non-vocal. That framing is what stops a source classifier from
 discarding the child for correctly identifying the animal being imitated.
+
+## D11 — The taxonomy vocabulary, and the branches it implies
+
+Eighteen elements, merged as agreed: isolated words absorbs rote sequence recitation, and connected
+speech absorbs the read/spontaneous split, because that split is carried by whether the hint supplies
+a reference text rather than by anything acoustic.
+
+**The stacks are not a runtime construct.** A-D in D10 were how the branches were derived; they do
+not survive as a separate layer. Stacks C and D share their material — syllables and words — and
+differ only in what is computed from it, so they collapse into one branch.
+
+| branch | elements | selected when |
+| --- | --- | --- |
+| airway | inhalation, exhalation, cough, throat clear | those elements are present, or the hint names a respiratory task |
+| phonation | sustained vowel, pitch glide, loud phonation | present, or the hint names a phonation task |
+| speech | syllable repetition, word production, connected speech, singing | present, or the hint names any speech task |
+| imitation | vocal imitation of a non-vocal target | **only with a hint** — see the hazard below |
+
+Elements that are always measured and never select a branch, because each changes a decision without
+being anyone's target: other-speaker speech, laughter, crying, environmental sound, device and
+handling noise, silence.
+
+**Element 14 is not identifiable without a hint, and that is a discard hazard.** A child imitating a
+dog and a dog are the same event to a source classifier, which will be correct and unhelpful. A
+`pediatric.noisy-sounds` recording contains imitation and little else, so with no hint the classifier
+family reports environmental sound, no vocal element fires, and a liberal gate can still discard a
+perfectly good recording.
+
+What protects it is that human imitation keeps vocal-tract structure — formants, F0, harmonic
+structure — that the imitated source does not. That evidence comes from the acoustic family, not the
+classifier family, which is the concrete reason those two families must stay independent rather than
+being folded into a single "content" score.
+
+**Other-speaker speech is expected, not anomalous.** Every pediatric and elicited task has an
+examiner or parent speaking by design. Off-target detection therefore cannot be "is there a second
+speaker"; it is "is there a voice this protocol does not account for". The anomaly is an unaccounted
+voice, and that is a different question from the one the memory-recorded goal states.
