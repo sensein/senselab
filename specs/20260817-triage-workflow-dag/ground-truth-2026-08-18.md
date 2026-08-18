@@ -156,3 +156,55 @@ envelope threshold between floor+12 dB and floor+3 dB. With verified windows the
 640 ms, and CrisperWhisper bounded cough 1's offset to within 14 ms. So that ambiguity was an artifact
 of the envelope method, not a property of the event. The breath-offset ambiguity (2.03 s) has not been
 retested against verified windows and may be the same artifact.
+
+## Verified breath windows, and the systematic failure they expose — 2026-08-18
+
+| event | window | duration |
+| --- | --- | --- |
+| breath 1 | 2.2995 - 3.5205 s | 1221 ms |
+| breath 2 | 5.3285 - 6.3115 s | 983 ms |
+| cough 1 | 7.926 - 8.494 s | 568 ms |
+| cough 2 | 9.610 - 10.250 s | 640 ms |
+
+Scored against all four, for the two instruments that emit timed events:
+
+| | CrisperWhisper | HeAR event detector |
+| --- | --- | --- |
+| onset error | +20, +32, −26, −10 ms | +20, **+532**, −26, −30 ms |
+| labels correct | 3 of 4 (cough 2 → `[UH]` + `[breath]`) | **4 of 4** |
+| coverage, breath 1 / 2 | **26.2% / 10.2%** | 52.4% / 24.4% |
+| coverage, cough 1 / 2 | **97.5%** / 67.2% | 82.4% / 64.1% |
+| events fragmented | 1 of 4 | **3 of 4** |
+
+### Three findings
+
+**1. Onsets are solved; two independent instruments agree to within ~30 ms.** The exception is HeAR on
+breath 2 at +532 ms, which is its 2 s window and 0.25 s hop showing through — so its onset accuracy is
+not uniform and cannot be relied on alone.
+
+**2. Extent is not recoverable from anything measured, and breath is far worse than cough.** Coverage
+runs 64-98% for coughs but **10-52% for breaths**. The instruments mark where a breath *starts* and
+then lose it. This is the gap that matters clinically: respiratory rate, inspiratory-to-expiratory
+ratio and maximum phonation time are all extent measurements, and no instrument here supports one.
+The mechanism is the same one D12 identified — a turbulent event has no sharp offset — but the
+conclusion is stronger than recorded: it is not that the offset is threshold-dependent, it is that
+every available detector stops early.
+
+**3. Fragmentation is the rule, not the exception.** HeAR split 3 of 4 events; CrisperWhisper split 1.
+Grouping sub-events into one physiological event is a third problem, distinct from timing and from
+labelling, and nothing measured this session solves it.
+
+### What this means for the instrument split
+
+Neither instrument is sufficient, and their strengths are complementary in a way that is now
+quantified rather than asserted:
+
+- **cough boundaries** → CrisperWhisper (97.5% coverage on cough 1, offset within 14 ms);
+- **identity** → HeAR (4 of 4, where CrisperWhisper imposes a speech prior and calls a voiced cough
+  phase a filler vowel);
+- **breath extent** → neither. Open.
+- **grouping** → neither. Open.
+
+An earlier note in this file claimed the two instrument classes were "exact inverses". That is right
+about labels and timing and wrong about coverage: both under-cover, and both fragment. The inversion
+is narrower than stated.
