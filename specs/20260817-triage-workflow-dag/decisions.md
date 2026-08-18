@@ -496,3 +496,48 @@ Independently, senselab's own path **cannot succeed even if the gate were lifted
 outright and the hub config's inner `pyannote/segmentation@Interspeech2021` reference is never
 rewritten. `pyannote_vad.py:79` pins the outer pipeline's revision and leaves the inner one as the
 config supplies it. The path is untested against a real load.
+
+## D18 — Only pyannote 4.x models are candidates; the pre-4.x ones are dropped, not repaired
+
+pyannote.audio 4.0.4 is installed, and its pipeline classes are `MultiLabelSegmentation`,
+`SpeakerDiarization`, `SpeechSeparation` and `VoiceActivityDetection`. Pre-4.x checkpoints are out of
+consideration entirely — their READMEs bind them to earlier library versions, and repairing a path to
+them is work spent on a model that is not a candidate.
+
+**Kept** — both verified loading under 4.0.4 today:
+
+- `pyannote/speaker-diarization-community-1` — the count gate (D16) and the voiced-vocalization half of
+  the discriminator.
+- `pyannote/brouhaha` — the speech half of the discriminator, plus SNR and C50. It is a
+  `MultiLabelSegmentation` model, which is the shape the taxonomy wants: several labels active at once
+  rather than a partition.
+
+**Dropped:**
+
+- `pyannote/voice-activity-detection` — a config-only repo delegating to `pyannote/segmentation`
+  (Interspeech2021), which its README binds to pyannote.audio 2.x. **D17's resolution therefore changes
+  from repair to removal**: the `@`-revision failure in senselab's dedicated-VAD path is not worth
+  fixing, because the destination is not a model we will use. Delete the path.
+- `pyannote/segmentation` (2021) and `pyannote/segmentation-3.0` — the latter was already dropped in
+  `5dd416f0`; its dead constant and stale docstring in `frame_posteriors.py` are what let a probe
+  resurrect it, so they go too.
+- `pyannote/speaker-diarization-3.1` — superseded by community-1.
+
+**Two 4.x pipelines worth evaluating that nothing currently uses:**
+
+- `SpeechSeparation` — pyannote's own joint separation and diarization. Given that the configured
+  SepFormer enhancer is net-harmful above ≈5 dB SNR, and that a 2-source SepFormer assigns cough
+  bursts to whichever stream is free rather than isolating a class, a separation pipeline that is
+  jointly trained with diarization is a better-founded candidate than either.
+- `MultiLabelSegmentation` — the pipeline class behind Brouhaha, and the natural home for a taxonomy
+  that must report overlapping classes. Whether a suitable multi-label checkpoint exists for our
+  vocabulary is unmeasured; training one would need the labels we do not have.
+
+**Cleanup this implies**, all pre-existing and now unambiguous:
+`voice_activity_detection/pyannote_vad.py` (the whole dedicated path),
+`voice_activity_detection/api.py:28,47,66,90` (`_PYANNOTE_VAD_PREFIXES` and its docs),
+`voice_activity_detection/frame_posteriors.py:3,14,44,63,113` (dead `SEGMENTATION_MODEL_ID` and the
+paragraphs describing a model the same docstring says is no longer loaded), and the registry's
+`speaker-diarization-3.1` entry. `speaker_diarization/pyannote.py:140` and `scene_quality/brouhaha.py:34`
+mention `segmentation-3.0` descriptively — as community-1's internal segmentation model and Brouhaha's
+extractor respectively — which stays true and stays.
