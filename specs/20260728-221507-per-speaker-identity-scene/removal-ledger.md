@@ -633,8 +633,13 @@ unverified.
    instant. A soft probability would need a model that reports one, and manufacturing one from hard
    spans would fabricate confidence. It depends on `exclusive=False`, which is wired and verified.
 
-`SEGMENTATION_MODEL_ID` remains as an unused constant, deliberately left rather than removed by a
-regex that had already over-stripped the module once.
+`SEGMENTATION_MODEL_ID` remained as an unused constant, deliberately left rather than removed by a
+regex that had already over-stripped the module once. **Reversed on 2026-08-18**: the constant, the
+`SEGMENTATION_REVISION` beside it, `_get_inference` (the segmentation `Model` + `Inference` loader)
+and `_declared_classes` are all deleted, along with the three docstring paragraphs that still
+described how the model loads. Leaving them was what let a later probe reload `segmentation-3.0` and
+produce a measurement that had to be discarded. See
+`specs/20260818-093000-drop-pre-4x-pyannote/decision.md`.
 
 ## Correction 3: unmeasured rows sort *last*, and the run-1 asr discrepancy is a writer problem
 
