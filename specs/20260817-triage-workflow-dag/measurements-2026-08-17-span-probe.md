@@ -77,3 +77,74 @@ proximity effect. Stationary tones at 85.0, 108.4, 164.1, 1564.5 and 1757.8 Hz. 
 `pyannote/voice-activity-detection` is **gated (403)** for this account, so the dedicated VAD pipeline
 could not run; raw `segmentation-3.0` frame posteriors were substituted, which is what surfaced
 Finding 4.
+
+---
+
+# Extraction and HeAR on the same recording — measured, 2026-08-18
+
+Nine separation/enhancement checkpoints and Google's HeAR, all pinned to commit SHAs. Intended for
+Engaging; a `monthly_maint` reservation covered 1423 nodes with no GPU node outside it, so it ran
+locally instead — the file is 14 s and the largest model took 13 s.
+
+## Finding 7 — every SepFormer checkpoint fails on this recording
+
+Five checkpoints (`sepformer-whamr16k`, `-wsj02mix`, `-libri2mix`, `-dns4-16k-enhancement`,
+`-wham16k-enhancement`). Their streams explain only 8-50% of input energy while emitting **10-27 dB
+more energy than the input**, at zero lag, with Whisper reading the same sentence off both streams.
+That is duplication, not separation, and the residual after least-squares fitting is indistinguishable
+from the original. Peak-normalising the input first changed nothing to within 0.04 dB.
+
+This matters beyond the probe: `speech_enhancement/` currently wires
+`speechbrain/sepformer-wham16k-enhancement`, which is in the failing set, and that model is what the
+existing `speech_enhancement` perturbation applies.
+
+## Finding 8 — enhancement sorts cough and breath differently, and the split is usable
+
+Energy retained per event, relative to the input, streams least-squares gain-fitted:
+
+| model | breaths | coughs | speech |
+| --- | --- | --- | --- |
+| `MossFormer2_SE_48K` | **−39 to −45 dB** | **−0 to −1 dB** | −0 dB |
+| `MossFormerGAN_SE_16K` | −51 dB | −42 to −53 dB (2 of 4) | ~0 dB |
+| `FRCRN_SE_16K` | −0 to −13 dB | −0 to −5 dB | 0 dB |
+| `MossFormer2_SS_16K` | split stream 1 / residual | split alternately between streams | stream 1 |
+
+`MossFormer2_SE_48K` destroys breaths and keeps coughs. Every breath lands whole in the residual,
+where the detector scores Breathe = 1.00. So breath **is** recoverable from what enhancement leaves
+behind — but cough is not, because cough survives into the speech stream. D8 assumed a single
+residual would carry all non-speech vocal material; it does not, and the two elements need different
+routes.
+
+`MossFormer2_SS_16K` assigns each cough burst to whichever stream is free rather than isolating cough
+as a class, so a 2-source separator is not a class decomposer.
+
+## Finding 9 — HeAR needs 2 s of real context, and padding destroys it
+
+Declared input is 2 s mono 16 kHz to a 512-d embedding. It **silently accepts shorter input** — no
+error, no padding, no NaN, at every length from 0.01 s to 4 s — so the static shape is not enforced
+and a caller can feed it a 0.3 s cough and get a plausible-looking vector back.
+
+Length and framing then dominate content:
+
+- **Padding versus real context**: centred cosine between the same event under different framings runs
+  0.0-0.5, and `native|real_context` ranges −0.21 to +0.26, against a class margin of ~0.9. Padding a
+  0.3 s cough out to 2 s moves its embedding about as far as substituting unrelated audio.
+- **Window shift is benign**: ±50-200 ms gives 0.93-0.98. So a boundary error of 100 ms costs almost
+  nothing, while the padding decision costs an order of magnitude more.
+- **Amplitude invariant**: gains from ×0.1 to ×10 give cosine 1.0000.
+
+Minimum usable length, from fixed-length crops of real audio centred on 13 events, as centred
+within-minus-between class margin and leave-one-out nearest-neighbour accuracy over 4 classes
+(chance 0.19):
+
+| duration | 0.10 s | 0.15 s | 0.30 s | 0.50 s | 1.0 s | 1.5 s | 2.0 s | 3.0 s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| margin | +0.12 | +0.32 | +0.29 | +0.28 | +0.46 | +0.81 | **+0.91** | +0.67 |
+| LOO-NN | 0.46 | 0.77 | 0.62 | 0.62 | 0.77 | **0.85** | **0.85** | 0.77 |
+
+A 0.3 s cough retains about a third of the separation available at 2 s; 3 s is worse than 2 s. The
+elements do separate cleanly at 2 s — within-class +0.653, between-class −0.256, LOO-NN 0.846 — but
+**only after mean-centring**: raw cosines are 0.977 within and 0.918 between, which would report
+everything as similar to everything.
+
+HeAR's own detector found a quiet breath at 6.60-7.10 s that had been hand-labelled silence.
