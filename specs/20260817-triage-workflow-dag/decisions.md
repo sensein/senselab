@@ -422,3 +422,77 @@ diarizers that were never compared — not as a structure to be preserved or ref
 
 Pieces are built for the triage graph as it is designed here. Whether any current module is reused is
 decided per node, on merit, after the node's ports are declared.
+
+## D16 — The vocal-versus-lexical discriminator, from two raw posteriors
+
+Supersedes an earlier draft that rested on `pyannote/segmentation-3.0`, which senselab dropped in
+commit `5dd416f0` and which a probe reached only through a dead constant. Re-measured on currently
+supported models.
+
+**The count gate is pyannote alone, and only to two voices.** Seed-17 probe, recorded in
+`model_registry.yaml:168-280`: exact speaker-count accuracy at k=1 is 100% for pyannote, 0% for
+Sortformer (0/20) and MOSS, 50% for child-adult, unrecorded for VibeVoice and DiariZen. Pyannote holds
+85% at k=2 and falls to ≤45% for k≥3. Two caveats travel with those numbers: the corpus is
+TTS-composed with no room acoustics or channel variation, 20 sessions per k, and the raw
+`profile.json` is **not in the repository** — the per-k figures exist only as summaries transcribed
+from a cluster-side artifact and cannot be recomputed from a checkout.
+
+**The discriminator is `speaker-diarization-community-1`'s raw posterior against Brouhaha's raw
+posterior.** Measured per event on the probe recording:
+
+| event | Brouhaha VAD (raw mean) | community-1 segmentation, max over speakers (raw mean) |
+| --- | --- | --- |
+| breath ~2.28 s | 0.0049 | **0.0000** |
+| breath ~5.31 s | 0.0055 | **0.0000** |
+| silence [0, 2] | 0.0068 | 0.0000 |
+| cough @ 7.924 s | 0.0053 | 0.574 |
+| cough @ 9.609 s | 0.0085 | 0.906 |
+| utterance [11.5, 13.3] | 0.689 | 0.790 |
+
+Three classes separate, not two:
+
+| | community-1 responds | community-1 silent |
+| --- | --- | --- |
+| **Brouhaha responds** | lexical speech | unexpected — flag if seen |
+| **Brouhaha silent** | **voiced non-lexical vocalization** | breath, or no voice |
+
+Breath is invisible to **both**, so it cannot come from this pair at all — it needs the DSP envelope
+and HeAR route, which is consistent with breath's own measurements.
+
+Brouhaha is not missing the coughs for lack of energy: its SNR head reads 9.37 and 13.31 dB on them
+against 2.50 dB for silence. Its VAD head is declining to call them speech, which is a semantic
+decision, not a sensitivity limit. That is what makes the contrast trustworthy.
+
+**Use raw posteriors, never thresholded segments.** community-1's segment list reports the coughs as
+two clean speech spans with no hesitancy. The raw posterior underneath is *partial* — mean 0.69, 20%
+of frames below 0.5, only 3.4% above 0.99 — against 78.5% above 0.99 in the real utterance. The
+thresholded view flattens a graded response into a binary claim and destroys exactly the distinction
+the discriminator depends on. It also corrects the earlier draft's magnitude: a saturated 1.0 across
+the whole cough region overstated what a supported model gives.
+
+Neither model is a boundary detector: the repo records frame-posterior VADs firing through a 0.4 s
+inter-turn gap with onset/offset MAE ≈ 2.6 s (`SPEECH_DETECTION_SOTA_REVIEW_2026.md:56-61`). They
+contribute presence; edges come from DSP.
+
+**Incidental, and useful for attribution:** community-1 assigns both coughs to `SPEAKER_00`, the same
+label as the genuine utterance, and finds one speaker in total. Non-lexical vocalizations therefore
+arrive already attributed to the same source as that speaker's speech, which is what D14's
+per-source measurement needs.
+
+## D17 — The dedicated pyannote VAD path is broken, independently of gating
+
+`pyannote/voice-activity-detection` cannot be used, for two unrelated reasons.
+
+It is a **config-only repo** whose pipeline delegates to `pyannote/segmentation@Interspeech2021`, and
+`pyannote/segmentation` still returns `GatedRepoError: 403` on every file fetch for this account. What
+was ungated was the wrapper config, not the weights. On the same account `segmentation-3.0`,
+`speaker-diarization-community-1` and `brouhaha` all fetch normally. Note that `api.model_info()`
+succeeds on the gated repo, so an access check based on metadata reports success wrongly.
+
+Independently, senselab's own path **cannot succeed even if the gate were lifted**:
+`detect_human_voice_activity_in_audios` with that model raises
+`ValueError: Revisions must be passed with 'revision' keyword argument` from
+`pyannote/audio/core/model.py:573`, because pyannote-audio 4.x rejects the `repo@revision` syntax
+outright and the hub config's inner `pyannote/segmentation@Interspeech2021` reference is never
+rewritten. `pyannote_vad.py:79` pins the outer pipeline's revision and leaves the inner one as the
+config supplies it. The path is untested against a real load.
