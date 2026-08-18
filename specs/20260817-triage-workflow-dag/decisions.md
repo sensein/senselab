@@ -103,3 +103,22 @@ the two confident verdicts.
 background source category, while `Babbling` goes to `speech`. The classifiers already produce these
 labels; the map discards them. Whispered speech being filed as background is a target-speech failure,
 not only the pediatric one the register filed as F-168.
+
+## D5 — The task hint is optional, and it conditions the decision, not the measurement
+
+`AudioHints` becomes an optional parameter port on the gate.
+
+- **Without a hint**, the gate defaults to speech: a file with no confident speech presence is
+  discarded, everything else proceeds down the speech branch.
+- **With a hint**, the gate uses that task's target vocabulary and may discard a file that does not
+  meet it, then branches to the breathing, coughing or speaking target branch. A hint may name more
+  than one target.
+
+**TAXONOMY measures the full vocabulary either way.** The hint never changes what is measured, only
+what the verdict is compared against and which branch runs next. This is the repo's existing
+L1-measures / L2-decides rule applied to the gate: a task-conditioned measurement cannot be reused
+to answer a different task's question, and it was task-conditioning inside the measurement that made
+the background mask unusable as evidence for attribution.
+
+It also gives `AudioHints` its first reader. It has been declared in
+`audio/data_structures/audio_hints.py` with zero consumers anywhere in the workflow.
