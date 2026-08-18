@@ -212,3 +212,57 @@ conversation).
 **Untested and would change the conclusion:** a normalisation the SpeechBrain recipe applies at
 inference that neither `separate_batch` nor `separate_file` applies. Also untested: reverberant
 mixtures (no RIR applied), the 8 kHz variants, MossFormerGAN, and DriftSE.
+
+---
+
+# unasdiff's conditioning vocabulary, and its licence — 2026-08-18
+
+Answered without inference, from `source_separation/data/fsd41_classes.json` and upstream.
+
+## 41 classes, and only four are vocal
+
+`Cough`, `Laughter`, `Burping_or_eructation`, `Fart`. Nothing else human.
+
+**Absent:** `Breathing`, `Sneeze`, `Sigh`, `Gasp`, `Whispering`, `Crying`, `Screaming`,
+`Throat clearing`, `Singing`. Speech is the separate prior, so it is not in this list by design.
+
+**Nineteen of the 41 are musical instruments** — acoustic guitar, bass drum, cello, chime, clarinet,
+cowbell, double bass, electric piano, flute, glockenspiel, gong, harmonica, hi-hat, oboe, saxophone,
+snare drum, tambourine, trumpet, violin. The remainder are domestic and mechanical events (applause,
+fireworks, gunshot, knock, shatter, squeak, tearing, telephone, writing, scissors, keys jangling,
+computer keyboard, drawer, microwave, bus) plus two animals (bark, meow).
+
+This is the DCASE / FSD Kaggle 2018 41-class set. `unasdiff.py`'s description of the prior as
+"FSD50K-conditioned" is loose: FSD50K carries ~200 classes including most of the vocal ones missing
+here.
+
+## What that settles
+
+**Cough is conditionable, breath is not.** So `speech_sound` conditioned on `Cough` can plausibly pull
+a cough out **as a named source**, which no supervised separator tested here can do — SepFormer
+duplicated one voice across two streams, and MossFormer2's two-source mode assigned cough bursts to
+whichever slot was free. Naming is the capability that matters, because a named channel is
+simultaneously a detector and a span.
+
+**Breath has no conditioning slot**, so it stays on the DSP-envelope and HeAR route. That is now forced
+by three independent findings: neither VAD responds to it, enhancement puts it in a residual shared with
+music, and the only conditioned separator in the repo cannot name it.
+
+**Laughter is conditionable**, which covers one of D11's always-measured confounds.
+
+**The music has named channels.** With 19 instrument classes and music confirmed in the probe recording,
+the tonal content is separable by name rather than being an unlabelled residual — which is what made
+the D8 residual route ambiguous. Whether the specific background music here matches any of the 19 is
+unmeasured.
+
+**As a general taxonomy instrument it is narrow.** Four vocal classes out of 41, with the vocabulary
+weighted toward instruments, means this cannot carry the taxonomy — it is a targeted tool for the
+classes it happens to hold.
+
+## Licence: our note is accurate, unlike DriftSE's
+
+Upstream `RunwuShi/unasdiff` reports `license: null`, has **no LICENSE file**, and its **only issue is
+open** — the same "Request: an explicit license (and optionally a HuggingFace weights mirror)" that was
+filed for DriftSE, here unanswered. Repository last updated 2026-06-03. So `unasdiff.py`'s and
+`doc.md`'s "mirror is public, with the licence still unknown" is correct and stays; the DriftSE
+parallel does not hold, and the guess that it might be stale was wrong.
