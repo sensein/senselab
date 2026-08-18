@@ -76,12 +76,6 @@ All models supported by senselab, organized by task.
 |-------|--------|----------|---------------|------------|---------|-----------------|
 | unasdiff | RunwuShi (unpackaged upstream repo, via subprocess venv, Python 3.10, torch==2.6.0) | `sensein/unasdiff-diffusion-priors` | — | N/A | Unknown — unresolved upstream. The source repository https://github.com/RunwuShi/unasdiff carries no LICENSE file and no README licence statement, so no terms have been granted for these weights. A licence request was opened 2026-08-08 and is unanswered: https://github.com/RunwuShi/unasdiff/issues/1. The mirror is public so the backend is usable during the alpha, which is a deliberate decision taken with that unknown status visible rather than resolved: reachability grants no rights. Treat the weights as all-rights-reserved by default, and consult upstream before any use that depends on licence terms. SENSELAB_UNASDIFF_CHECKPOINTS remains for a caller supplying their own checkpoints. | Unsupervised speech/sound source separation via two independently trained diffusion priors (speech_sound, sound_sound, speech_speech modes); reachable only via an explicit HFModel id, not in any default model list and not wired into audio_analysis (via subprocess venv, pinned upstream commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa) |
 
-## Voice Activity Detection
-
-| Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
-|-------|--------|----------|---------------|------------|-----------------|
-| Pyannote VAD | pyannote | `pyannote/voice-activity-detection` | — | N/A | Dedicated voice activity detection (requires HF token) |
-
 ## Features Extraction
 
 | Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |
