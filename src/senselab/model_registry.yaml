@@ -401,15 +401,6 @@
     model list and not wired into audio_analysis (via subprocess venv,
     pinned upstream commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa)
 
-# Voice Activity Detection
-- name: Pyannote VAD
-  task: voice_activity_detection
-  source: pyannote
-  model_id: pyannote/voice-activity-detection
-  parameters: N/A
-  training_data: Various
-  recommended_for: Dedicated voice activity detection (requires HF token)
-
 # Feature Extraction
 - name: SPARC (Articulatory)
   task: features_extraction
