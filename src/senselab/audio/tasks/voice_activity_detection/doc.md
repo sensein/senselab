@@ -8,7 +8,7 @@ Voice Activity Detection (VAD) is a binary classification task that identifies t
 
 ## Models
 
-In `senselab`, we integrate [pyannote.audio](https://github.com/pyannote/pyannote-audio) models for VAD. These models can be explored on the [Hugging Face Hub](https://huggingface.co/pyannote). Additional approaches for VAD may be integrated into the package in the future.
+In `senselab`, VAD is derived from diarization: `pyannote/speaker-diarization-community-1` via [pyannote.audio](https://github.com/pyannote/pyannote-audio) (the default) or `nvidia/diar_sortformer_4spk-v1`, whose speaker segments are relabelled `VOICE`. There is no dedicated-VAD backend. Additional approaches for VAD may be integrated into the package in the future.
 
 ## Evaluation
 
