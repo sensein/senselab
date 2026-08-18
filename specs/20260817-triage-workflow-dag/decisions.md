@@ -54,3 +54,52 @@ What exists today is thin. `speech_enhancement/` wires `speechbrain/sepformer-wh
 a denoiser rather than a speaker separator; `source_separation/` has an API and `unasdiff.py` with
 no separation model configured in `default.yaml`. This is a new capability, not a rewiring, and
 separation-first versus classifier-first is a measurement to run, not a claim to draw.
+
+## D4 — TAXONOMY is a file-level question, and it is the workflow's real gate
+
+The question is **does this recording contain these kinds of sound** — vocal, cough, breathing —
+not where they are. Localisation is a later question, asked only of files that got past this one and
+only by the consumers that need spans.
+
+Three outcomes, not two:
+
+| verdict | condition | what happens |
+| --- | --- | --- |
+| present | a target class is confidently present | the file proceeds |
+| absent | every target class is confidently absent | the file is discarded, with the reason |
+| uncertain | neither of the above | the file is flagged for a human, never discarded |
+
+**Both edges need confidence, and they are not symmetric.** Confident absence is not a low presence
+posterior: with weakly-supervised classifiers a low score can mean "not there" or "there but quiet or
+masked". Discarding is the destructive action, so it requires positive agreement that nothing is
+there — every family low, and the families agreeing with each other. Anything else is `uncertain`,
+which flags. The default under doubt is to keep and flag.
+
+The keep and discard thresholds are config parameters with written derivations, and they are
+separate values: the cost of discarding a usable recording is not the cost of admitting an empty one.
+
+**This is the first real consumer of `Estimate`** (`utils/data_structures/estimate.py:28`), which has
+had none since Phase 1 built it. A per-class presence verdict carrying its evidence count and its
+spread is exactly what the type is for.
+
+**Aggregation over time is a decision, not arithmetic.** Clip-level posteriors come from window-level
+scores, and a cough is ~0.3 s in a recording of minutes. A mean over windows dilutes a short event
+into nothing; a max fires on one spurious window. The aggregator is therefore a named config
+parameter per class, and short-duration classes need a high quantile or top-k mean rather than either
+extreme. This is the same failure the four-axis grid had: a default that silently disabled what it
+claimed to measure.
+
+**SSL frame embeddings are dropped** from the evidence set. They need a trained probe, the repo has
+no labelled vocal spans, and an unvalidated probe would be another unfitted decision.
+
+**Evidence families for the fold**, chosen so their failure modes do not correlate:
+AudioSet posteriors from two independent classifiers over the vocal label subset; periodicity, HNR
+and jitter/shimmer aggregated over the file; and recognised words as corroboration only, never as a
+gate. Disagreement between families is the uncertainty, and it is what separates `uncertain` from
+the two confident verdicts.
+
+**Blocking prerequisite.** `data/audioset_source_map.json` currently sends `Baby cry, infant cry`,
+`Crying, sobbing`, `Laughter`, `Cough`, `Breathing`, `Whispering` and `Singing` to `people`, a
+background source category, while `Babbling` goes to `speech`. The classifiers already produce these
+labels; the map discards them. Whispered speech being filed as background is a target-speech failure,
+not only the pediatric one the register filed as F-168.
