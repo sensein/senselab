@@ -266,3 +266,48 @@ open** — the same "Request: an explicit license (and optionally a HuggingFace 
 filed for DriftSE, here unanswered. Repository last updated 2026-06-03. So `unasdiff.py`'s and
 `doc.md`'s "mirror is public, with the licence still unknown" is correct and stays; the DriftSE
 parallel does not hold, and the guess that it might be stale was wrong.
+
+---
+
+# DriftSE returns unnormalised output — verified defect, 2026-08-18
+
+Measured peaks of each model's returned waveform, and the fraction of samples a PCM_16 write would clip:
+
+| model | output peak | samples clipped by PCM_16 | clipping error energy re signal |
+| --- | --- | --- | --- |
+| **DriftSE v1** (`distillhubert_three_layers_with_z`, senselab's default) | **51 741.7** | **98.47%** | −0.0 dB |
+| DriftSE v2 (`..._pesq_sisdr_ccmse_with_z`) | 0.996 | 0.0% | −65.8 dB |
+| `sepformer-dns4-16k-enhancement` | 14.01 | 8.71% | −3.18 dB |
+| `sepformer-libri2mix` src0 | 34.44 | 2.16% | −1.47 dB |
+| `sepformer-wsj02mix` src1 | 21.16 | 1.06% | −2.11 dB |
+| `sepformer-wham16k-enhancement` (repo default) | 5.43 | 0.08% | −9.32 dB |
+| all ClearerVoice models | ≤ 0.95 | 0.0% | ≤ −53.7 dB |
+
+## The defect
+
+`speech_enhancement/speechbrain.py:165-177` peak-normalises the enhanced waveform back to the input's
+peak, and its comment states why: SpeechBrain enhancement models produce arbitrarily-scaled output,
+and downstream consumers that assume [−1, +1] — PPG and wav2vec2 CTC alignment, mel-spectrogram
+extractors without internal normalisation, openSMILE LLDs — degrade on out-of-distribution amplitudes.
+
+`speech_enhancement/driftse.py` does **not** do this. Its only normalisation, at `:193`, divides the
+*input* by its own peak before the STFT and never restores the scale, so the returned waveform is in
+the model's internal scale. DriftSE was added on 2026-08-13, after the SpeechBrain backend had already
+recorded the lesson.
+
+Consequence, from the preserve/destroy matrix: DriftSE v1 through a PCM_16 write shows cough 1 and
+cough 2 **destroyed at −21.8 and −25.2 dB**, where the same output written as FLOAT keeps them at +0.3
+and −0.4 dB. The clipping is silent — nothing raises, and the waveform looks bounded afterwards.
+
+For v2 the peak is 0.996, so the defect is **latent rather than absent**: it survives by luck of scale,
+not by design.
+
+## Two things this also settles
+
+**The earlier PCM_16 harness bug was material, not theoretical.** `dns4-16k-enhancement` lost 8.71% of
+its samples with clipping error only 3.18 dB below the signal; `libri2mix` src0 2.16% at −1.47 dB;
+`wsj02mix` src1 1.06% at −2.11 dB. Any earlier figure for those three is wrong, not merely imprecise.
+
+**The fix is precedented and local**: apply `speechbrain.py`'s approach — peak-normalise back to the
+input's peak, above a silence threshold, recording the applied gain so the operation is reversible and
+auditable. It belongs in `driftse.py` before the branch is merged.
