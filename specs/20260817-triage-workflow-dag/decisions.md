@@ -303,3 +303,45 @@ being folded into a single "content" score.
 examiner or parent speaking by design. Off-target detection therefore cannot be "is there a second
 speaker"; it is "is there a voice this protocol does not account for". The anomaly is an unaccounted
 voice, and that is a different question from the one the memory-recorded goal states.
+
+## D12 — Onset, offset and span detection, per branch
+
+The three branches need different detectors because their events have different shapes and, more
+importantly, different timing tolerances. The tolerance is what drives the machinery, so it is stated
+first and the detector chosen to meet it.
+
+| branch | unit | timing tolerance needed | why that number |
+| --- | --- | --- | --- |
+| speech, syllable repetition | syllable onset | ~10 ms | rate is 5-7 syllables/s; a 50 ms error is a third of a syllable and corrupts the rate |
+| airway | event onset and offset | ~50 ms | a cough's explosive phase is ~50 ms; counting needs separation, not precision |
+| phonation | phonation onset and offset | ~50 ms, but the offset is definitional | maximum phonation time is a duration, so the offset is the measurement |
+| speech, connected | turn and word spans | ~100 ms | word boundaries at conversational rate; alignment supplies these where text is known |
+
+**Airway.** Cough is a transient: broadband energy rise with high-frequency emphasis, detectable by
+onset detection on the energy envelope and spectral flux. Countable, so each event carries an onset
+and an offset, and bouts need a second level — a bout is several coughs, and reporting a bout as one
+event or as N independent events are different clinical claims. Inhalation and exhalation are the
+opposite shape: low-amplitude turbulent noise, gradual edges, 0.3-1 s, so hysteresis thresholds on a
+band-limited envelope suit them and hard onset detection does not. The protocol supplies a count
+prior — `breath-sounds` asks for three deep breaths — and a detected count that disagrees with the
+protocol is itself a finding.
+
+**Phonation.** The event is one long steady span, and its offset is the hard part. Phonation at the
+end of a breath degrades into creak and irregularity before it stops, so "when did phonation end"
+has no single answer: voicing-based offset, amplitude-based offset and regularity-based offset
+disagree by hundreds of milliseconds, and maximum phonation time is exactly that duration. The
+offset criterion must therefore be named and its alternatives reported, not silently chosen. Glides
+are spans whose interior is an F0 trajectory rather than sub-events; `loudness` is two short events
+whose comparison, not whose timing, is the measurement.
+
+**Speech.** Syllable repetition is the tightest requirement in the workflow: plosive bursts at
+5-7/s, needing ~10 ms onset precision, which no window-level classifier can supply and which
+forced alignment can if a reference is available. Word and turn spans come from alignment where the
+hint supplies text and from ASR word times where it does not — with the standing caveat that word
+absence is not evidence of speech absence.
+
+**Imitation.** Worth testing rather than assuming: a speech extractor may pull vocalic imitation out
+of a mixture precisely because it is vocal-tract produced, even though the imitated target is not
+vocal. If it does, imitation gets spans from the extracted stream like any other vocal element, and
+the classifier's confident "dog" becomes a label on the residual rather than on the child. This is a
+measurement to run, and `test-examples.md` records the material to run it on.
