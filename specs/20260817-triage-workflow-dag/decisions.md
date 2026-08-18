@@ -345,3 +345,40 @@ of a mixture precisely because it is vocal-tract produced, even though the imita
 vocal. If it does, imitation gets spans from the extracted stream like any other vocal element, and
 the classifier's confident "dog" becomes a label on the residual rather than on the child. This is a
 measurement to run, and `test-examples.md` records the material to run it on.
+
+## D13 — Inside a branch: detect, attribute, select target, then measure
+
+Every branch runs the same four steps. Only the first and last are branch-specific; the two in the
+middle are one shared sub-workflow, parameterised by the element, because the evidence for which
+source is the participant does not depend on which element it produced.
+
+1. **Detect element spans** — branch-specific, per D12. Produces candidate spans with element labels
+   and their own uncertainty. Everyone's spans, not just the participant's.
+2. **Attribute spans to sources** — shared.
+3. **Select which source is the target** — shared.
+4. **Measure the branch's quantities on target spans** — branch-specific, and the only step that
+   produces the clinical numbers.
+
+**Attribution rests on three legs, and their reliability differs by element:**
+
+- *Channel and proximity* — level, spectral tilt and direct-to-reverberant ratio. The participant is
+  close-miked and an examiner or bystander is not. Speaker-independent, element-independent, and the
+  only leg that works for a cough, so it carries the airway branch almost alone.
+- *Speaker identity* — embeddings and clustering. Strong for connected speech, weak for sustained
+  vowels, and close to unusable for cough and breath, because the embedders are trained on speech.
+  The branch that most needs attribution has the weakest version of this leg.
+- *Protocol structure* — the prompt precedes the response, the expected count and duration are known
+  from the task. Available only with a hint, and it is the leg that can catch the case the other two
+  agree on and get wrong.
+
+**Selection without an anchor is a prior, and must be reported as one.** With a target embedding
+supplied, selection is direct. Without it, the target is the dominant close-miked source — a prior
+that is usually right and sometimes exactly wrong, which is why it is an `Estimate` carrying the
+possibility of being wrong rather than a label. On the airway and phonation branches the participant
+may produce very little speech, so the loudest and most speech-like voice in the file can easily be
+the examiner; dominance alone would invert the answer precisely where the branch is not speech.
+
+**The common case is cheap and should stay cheap.** Most protocol recordings hold one participant and
+possibly one examiner. When the channel evidence shows a single source, attribution and selection
+collapse to a confirmation, and the expensive clustering runs only where the evidence says more than
+one source is present. That gating is a measurement, not a configuration flag.
