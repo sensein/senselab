@@ -311,3 +311,73 @@ its samples with clipping error only 3.18 dB below the signal; `libri2mix` src0 
 **The fix is precedented and local**: apply `speechbrain.py`'s approach — peak-normalise back to the
 input's peak, above a silence threshold, recording the applied gain so the operation is reversible and
 auditable. It belongs in `driftse.py` before the branch is merged.
+
+---
+
+# unasdiff, run — the label is inert where it looked decisive, 2026-08-18
+
+Four runs through `separate_audios`, `n_sources=2`, seed 17, CPU, **60 diffusion steps**, on one 4 s
+window 9.5-13.5 s holding cough 2 and the whole speech span. Upstream's 200 steps was attempted twice
+and lost both times. Timings deliberately not reported — the machine was under heavy contention.
+
+## The control kills the naming claim
+
+| run | mode | cough 2 share into the sound slot |
+| --- | --- | --- |
+| C1 | `speech_sound`, conditioned `Cough` | **0.971** |
+| C2 | `speech_sound`, conditioned **`Computer_keyboard`** | **0.967** |
+
+A class with no relation to a cough performs the same. In `speech_sound` the separation is produced by
+the **speech-prior versus sound-prior asymmetry**, not by the conditioning label — which is inert. The
+wrong label was in one respect cleaner: 0.01% speech leakage into the sound slot against `Cough`'s 6.8%.
+
+**This refutes the earlier reading** that unasdiff could "name a cough". It routes non-speech into the
+sound slot. It does not identify what it routed.
+
+## Where the label does act — `sound_sound`, unconfirmed
+
+Both slots use the same sound prior, so only the conditioning differs. Cough 2: `Cough` slot −0.11 dB,
+`Electric_piano` slot −53.39 dB, share **1.0000 / 0.0000**. Speech window: 0.0001 / 0.9999 into the
+instrument slot. The music followed the instrument slot on four of five partials (0.95-0.9998), the
+exception being 1757.8 Hz at 0.78 into the `Cough` slot.
+
+A 53 dB separation from nothing but an integer index. **Caveat, from the agent and not closed:** the
+slot-swapped pair (`[Electric_piano, Cough]`) was not run, so label-driven and slot-order-driven remain
+formally unseparated. That single control decides whether this capability is real.
+
+`speech_speech` is not a decomposition: slot 0 takes 98.4% of the cough, and the speech span splits
+37/63 with no interpretable structure — as upstream's README warns.
+
+## No configuration preserves intelligible speech
+
+The unseparated 4 s window transcribes the sentence. **None of the eight separated streams does.**
+C1 speech slot → `Oh.` + `[laughter]`; C2 speech slot → `Yeah.` + `Sentence of the light.` Meanwhile
+every configuration preserved the cough well enough for CrisperWhisper to name it — including B1's
+instrument slot, which holds 99.99% of the speech-window *energy* and transcribes as `[breath]`: the
+energy is there and the words are not.
+
+Confounded with the 60-step reduction; upstream's 200 was not reached.
+
+## Two defects in shipped senselab code
+
+**`unasdiff.py:726` discards an entire run on timeout.** `subprocess.run(..., timeout=3600)` is
+hard-coded, and `TimeoutExpired` loses everything — no partial output survives. This killed a 200-step
+attempt outright.
+
+**The worker writes intermediate per-window files at soundfile's default PCM_16 subtype**, so any sample
+beyond ±1 is clipped before the host reads it back. Peaks were 0.053-0.958 here so nothing clipped, but
+this is the same exposure that invalidated an earlier measurement harness, now in library code rather
+than in a probe.
+
+Also undocumented: `diffusion_steps` has a usable range of roughly **52-200**. Below 52 the sampler
+fails inside `q_sample` (it calls `t=t_last-50`); `1` fails earlier in `GaussianDiffusion.__init__`.
+
+## A metric being asked the wrong question
+
+SQUIM objective (STOI, PESQ, SI-SDR) is reference-free; subjective MOS needs a non-matching reference.
+Applied to these streams the numbers are not interpretable: **MOS 4.259 on a stream containing one
+isolated cough**, against 3.058 for the input. They are speech-quality estimators, and most of these
+streams are not speech.
+
+Pins: upstream `RunwuShi/unasdiff` @ `5a5d70cd…`; weights `sensein/unasdiff-diffusion-priors` @
+`8d7c3220…`; torch 2.6.0 in the isolated venv.
