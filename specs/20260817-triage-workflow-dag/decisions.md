@@ -541,3 +541,36 @@ paragraphs describing a model the same docstring says is no longer loaded), and 
 `speaker-diarization-3.1` entry. `speaker_diarization/pyannote.py:140` and `scene_quality/brouhaha.py:34`
 mention `segmentation-3.0` descriptively — as community-1's internal segmentation model and Brouhaha's
 extractor respectively — which stays true and stays.
+
+## D19 — Enhancement is an operation a node may invoke, not a variant, pathway or dimension
+
+**Supersedes D2.** D2 framed enhancement as a perturbation and made `variant` a dimension the graph is
+mapped over, with each task declaring which variants it runs on and variants serving as invariance
+probes. That is `perturbations.py`'s model — correct for the existing refiner, and wrong here.
+
+In this design there is no enhanced variant. Nothing carries a `variant` label, no task declares a
+variant scope, and no product exists in two versions. Enhancement is an **operation** a specific node
+may apply for a specific purpose, whose output is consumed by that node and reaches the rest of the
+graph only through that node's declared output ports.
+
+Three consequences:
+
+**There is no prohibition to state.** Earlier notes recorded that enhanced audio "must not reach the
+airway branch" as a structural no-port rule. With no variant flowing anywhere the rule is vacuous —
+there is no pathway to close. The measured facts behind it remain useful as *tool* properties: an
+enhancer that takes breath to −26 or −40 dB is unusable by any node that needs breath, which is a
+statement about the tool, not about a route.
+
+**The model comparison is a capability table for tools, not an assignment of models to branches.** If a
+node needs a channel in which cough is the only surviving content, `MossFormer2_SS_16K` src1 supplies
+one. That is a choice inside a node.
+
+**Invariance stops being free.** D2 treated an answer flipping between raw and enhanced as evidence of
+instability the review flag should carry. Without a variant dimension that evidence does not arise as a
+by-product; a node that wants it must deliberately run the comparison and declare it as its own
+measurement.
+
+Recorded because the same error has now recurred three times — the first flowchart reproduced the
+existing call graph, then enhancement appeared as a route inside ADMIT, then as a mapped dimension. The
+existing implementation is evidence about failure modes and about what tools do. It is not a source of
+structure for this design.
