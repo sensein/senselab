@@ -75,3 +75,38 @@ Two rules follow, and they are sharper than D6's "families with uncorrelated fai
 1. **The fold must include at least one non-classifier member.** Classifier agreement was not what made
    the correct labels correct; the envelope was, both as corroboration and as tiebreaker.
 2. **A sub-threshold score from a single model must not become a label.** It may become a question.
+
+## Corrections to this file's own conclusions, 2026-08-18 (second pass)
+
+**HeAR was not the problem.** It scored 0.96-0.995 on the verified breaths and 0.995-0.9998 on the
+verified coughs. Only the handling of a 0.49 — below its own threshold — was wrong, and that was the
+caller's error, not the model's. The rule stands as "a sub-threshold single-model score is a question,
+not a label"; the earlier framing of HeAR as unreliable does not.
+
+**6.60-7.10 s is reopened as possibly an inhalation.** It was recorded above as "nothing". It may be an
+inhalation, which is quieter, spectrally different and shorter-tailed than the two verified
+exhalations. If so, HeAR's 0.49 was a weak true positive and the correct reading was neither "silence"
+nor "breath" but *inhalation, a class nothing in the fold distinguishes*. D11's vocabulary separates
+inhalation from exhalation as elements 1 and 2; none of the detectors used here does. **Status:
+unresolved**, and it is the more informative outcome of the two.
+
+**The stationary tones are probably music, not interference.** The tones at 85.0, 108.4, 164.1, 1564.5
+and 1757.8 Hz were described as "mild, persistent, non-acoustic-looking interference". There is music in
+the background of this recording, so those are more likely partials. Two consequences: the claim that
+this file has no background content is wrong, and the tonal-interference reading would have sent a
+downstream quality stage looking for an electrical fault.
+
+**The rise-time and level-step figures must not become thresholds.** They are n=2 per class from one
+healthy adult on a close mic: 9-17 ms rise with a 45-49 dB step for cough, 60-127 ms with 20-29 dB for
+breath. They describe a *healthy adult voluntary* cough. Across the lifespan and across disorder they
+are expected to fail, and to fail hardest where the signal matters most:
+
+- reduced peak cough flow in neuromuscular disease, post-stroke, and sarcopenia — smaller step, slower
+  rise, by the same mechanism that makes peak cough flow a clinical measure;
+- absent glottic closure (vocal fold paralysis, tracheostomy) — no explosive phase at all;
+- infant and child cough — shorter, higher, different spectral balance;
+- COPD and asthma — prolonged expiration and wheeze outside any breath bound fitted here.
+
+So the D6 rule holds in shape — the fold needs at least one non-classifier member — while these
+particular numbers are a single-subject observation. Any use as a threshold requires a derivation over
+a population spanning age and disorder, in `data/` per CLAUDE.md, and none exists.
