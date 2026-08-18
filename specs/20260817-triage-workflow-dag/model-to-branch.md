@@ -58,3 +58,33 @@ and largely did not on the other.
 
 **Energy figures for three models were affected by a PCM_16 write in an earlier harness** and are only
 now correct: `dns4` lost 8.71% of samples, `libri2mix` src0 2.16%, `wsj02mix` src1 1.06%.
+
+---
+
+## Correction: this table is about enhancement selection, not about the airway branch's plan
+
+The draft above conflated two questions. The airway branch's detection plan is already settled in
+`branch-1-airway.md` and it is **HeAR-first on raw audio**: `hear_scan` proposes, YAMNet and AST
+corroborate, DSP and CrisperWhisper refine the spans, `span_reconfirm` confirms, then grouping,
+attribution and per-source measurement. **No enhancer appears in it.** The rows above listing DriftSE v2
+and FRCRN as "airway candidates" wrongly imply the branch needs one.
+
+What the matrix actually contributes to that branch is three narrower things:
+
+**A prohibition with a number.** Enhanced audio must not reach the airway branch — the repo default
+takes breath 1 to −26.4 dB and `MossFormer2_SE_48K` takes the two breaths to −37 and −40 dB. The
+no-port rule was already the design; this is its measured justification.
+
+**One optional node candidate.** The accidental element filters can serve as an extra confirmation
+channel inside the existing DAG, not as a replacement for it: reconfirm a proposed cough span against
+`MossFormer2_SS_16K` src1, where cough is the only surviving content and CrisperWhisper reads `[cough]`
+alone; reconfirm a breath span against `sepformer-dns4-16k-enh`, where breath survives and cough does
+not. This would attach to `span_reconfirm` as a second, independent channel. It is a candidate, not a
+decision, and it rests on n=1.
+
+**A single safe enhancer, should one ever be wanted.** DriftSE v2 is the only model that preserves every
+element on both criteria, so it is the only admissible choice if enhancement were introduced for SNR
+reasons. The airway plan does not currently want it.
+
+The table's real subject is therefore the **speech** branch, where enhancement is genuinely a choice,
+and the element-filter rows, which are channel candidates rather than branch assignments.
