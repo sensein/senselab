@@ -197,3 +197,42 @@ separate products, each with its own confidence.
 on segments as short as a breath, which is unverified and is a measurement, not an assumption — HeAR
 is not currently in the repo; low-frequency periodic energy change; and HNR. Every one of these
 degrades under mixture, which is why the ordering above exists rather than a flat fold.
+
+## D9 — The branch vocabulary comes from production kind, not from speech/breath/cough
+
+The hint vocabulary is the b2ai task registry (not vendored into senselab; a hint arrives naming a
+task). Its 45 tasks elicit eight kinds of vocal production, and the workflow's existing three task
+types cover three of them:
+
+| production kind | examples from the registry | what makes it different |
+| --- | --- | --- |
+| sustained phonation | `adult.prolonged-vowel`, `adult.maximum-phonation-time.v2`, `pediatric.long-sounds` | voice with no words at all; duration is itself the measurement |
+| pitch glide | `adult.glides` | the F0 trajectory is the signal; steady-state assumptions are wrong |
+| read speech, scripted | `adult.harvard-sentences`, `adult.caterpillar-passage`, `adult.cape-v-sentences.v2` | the expected text is known in advance |
+| spontaneous speech | `adult.free-speech.v2`, `adult.story-recall.v2`, `pediatric.conversation-*` | no reference text; highest PII exposure |
+| elicited speech | `adult.picture-description`, `adult.loudness.v2`, `pediatric.generative-naming-task` | short, prompted, often single words |
+| diadochokinesis | `adult.diadochokinesis.v2` (`puhtuhkuh`), `pediatric.silly-sounds` | rate and rhythm are the measurement; words are meaningless |
+| non-speech vocal maneuver | `adult.respiration-and-cough.v2`, `adult.voluntary-cough`, `pediatric.noisy-sounds` | countable events, not turns |
+| singing | `pediatric.abcs-and-123s` | pitched and lexical, and it will read as music |
+
+**Four tasks break the current pipeline's assumptions outright, and they are not edge cases:**
+
+- **`pediatric.noisy-sounds`** asks a child to imitate animal and object sounds. AudioSet will label
+  these as the animal, confidently and correctly, and the source map then files them as background.
+  The child's own vocalization is discarded as environmental noise. This is F-168's mechanism with a
+  different population, and the classifier is not even wrong.
+- **`adult.loudness.v2`** asks for "hey" spoken normally and then loudly. Level, clipping and
+  over-loudness are the measurement; a quality stage treating them as defects reports the task being
+  performed correctly as a fault.
+- **`adult.diadochokinesis.v2`** is rapid nonsense-syllable repetition. Any ASR returns garbage, and
+  any word-conditioned gate reads it as absent speech.
+- **Sustained phonation and glides** carry no words at all, so every word-gated path nulls them —
+  the general form of the F-165 defect, arriving from four more directions.
+
+**Scripted versus unscripted is the sharpest split for downstream work**, and it cuts across the
+speech kinds: where the registry supplies the expected text, alignment has a reference, task match is
+a text comparison, and ASR can be constrained. Where it does not, all three become open problems.
+
+**Decisions taken here:** breath spans use temporal exclusion, not a signal-level residual. Per-class
+event detection is the mechanism for the countable classes. HeAR is `google/hear` on Hugging Face and
+would be new to the repo.
