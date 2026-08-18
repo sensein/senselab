@@ -79,7 +79,6 @@ REVIEWED_INPROCESS = {
     "audio/tasks/speech_to_text/huggingface.py",
     "audio/tasks/ssl_embeddings/self_supervised_features.py",
     "audio/tasks/text_to_speech/huggingface.py",
-    "audio/tasks/voice_activity_detection/pyannote_vad.py",
     "text/tasks/embeddings_extraction/huggingface.py",
     "text/tasks/embeddings_extraction/sentence_transformers.py",
     # scene-quality / adaptive workflow (branch-only, #536)
