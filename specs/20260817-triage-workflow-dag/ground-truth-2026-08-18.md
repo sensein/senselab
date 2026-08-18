@@ -239,3 +239,38 @@ This also settles a question raised earlier about whether the airway branch coul
 duration. On this evidence it cannot, from any instrument measured — and unlike the offset-threshold
 artifact that was corrected above, this is not a harness problem: five independent detectors agree in
 direction and all fall short.
+
+## The complete verified set, and the recall gap — 2026-08-18
+
+| # | event | window (s) | duration |
+| --- | --- | --- | --- |
+| 1 | mouth non-speech sound / click | 0.779 - 0.981 | **202 ms** |
+| 2 | breath 1 (exhalation) | 2.2995 - 3.5205 | 1221 ms |
+| 3 | breath 2 (exhalation) | 5.3285 - 6.3115 | 983 ms |
+| 4 | cough 1 | 7.926 - 8.494 | 568 ms |
+| 5 | cough 2 | 9.610 - 10.250 | 640 ms |
+| 6 | speech | 11.653 - 13.207 | 1554 ms |
+
+Nothing verified at 6.60-7.10, and nothing verified at 13.79-14.02 where Brouhaha's VAD fires alone.
+
+### Recall, per instrument, over all six
+
+| instrument | events found | missed | notes |
+| --- | --- | --- | --- |
+| DSP envelope + spectral flux | **6 of 6** | — | onset only; cannot identify, and labelled event 1 wrongly by default |
+| CrisperWhisper | 5 of 6 | **mouth sound** | best onsets and best cough extent; mislabels cough 2 |
+| HeAR event detector | 5 of 6 | **mouth sound** | labels 4 of 4 correct on what it finds; fragments 3 of 4 |
+| YAMNet / AST | 5 of 6 | **mouth sound** | window-level only, 480-960 ms smear |
+
+**Both model instruments miss the mouth sound entirely, and DSP is the only instrument with complete
+recall.** The reason is structural rather than incidental: at 202 ms the event is a tenth of HeAR's
+2 s input window, and a lip smack is not lexical, so a speech model has no token for it. It was
+detected by the envelope, and then mislabelled "handling click" precisely because no classifier had
+anything to say about it — the failure mode already recorded under label provenance, now with the
+window to prove the event was real.
+
+This sharpens the rule derived earlier. The fold needs a non-classifier member not merely as a
+tiebreaker or corroborator: **it is the only member with full recall.** A design that treats the
+acoustic evidence as one vote among four would drop this element entirely, and `mouth_noise` is a
+target event type for speech tasks in the existing pipeline
+(`mask.target_event_types_by_task` lists `["speech", "breath", "mouth_noise"]`).
