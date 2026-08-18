@@ -122,3 +122,44 @@ the background mask unusable as evidence for attribution.
 
 It also gives `AudioHints` its first reader. It has been declared in
 `audio/data_structures/audio_hints.py` with zero consumers anywhere in the workflow.
+
+## D6 — Four detection families, liberal thresholds, spans adjudicate
+
+**Families.** AST and YAMNet count as two. Acoustic evidence — periodicity, HNR, jitter and shimmer
+aggregated over the file — is the third. An **audio language model** is the fourth, run on Engaging
+because it needs a GPU; it assesses content and may report classes outside our vocabulary. Recognised
+words remain corroboration only and never gate.
+
+The correlation risk between AST and YAMNet is accepted rather than resolved: both are trained on
+AudioSet with the same label space, so they may be wrong together. Recorded because it bounds what
+their agreement means — it is not two independent opinions, and the audio LM is the family most
+likely to fail differently.
+
+**The audio LM is open-vocabulary, and its output is split.** Classes inside our vocabulary
+contribute presence evidence. Classes outside it are **proposals that reach the report and the flag,
+never the gate** — otherwise a model inventing a category silently changes what gets discarded. It
+also has no calibrated posterior, so it contributes an assertion, not a probability: one vote, with
+its text preserved for the reader.
+
+**Thresholds are liberal on content, deliberately.** No labelled verdicts exist, so no threshold can
+be derived, and synthesising a benchmark is a separate task. Until then the gate is biased toward
+keeping: it discards only a file where nothing fires in any family. The derivation slot stays in the
+config and stays empty rather than being filled with a literal nobody measured.
+
+**Span detection adjudicates.** File-level presence is a liberal pre-filter, not a verdict. Whether
+the content is really there is settled downstream by localisation, which can withdraw what this stage
+admitted. That is what makes liberal thresholds safe here.
+
+## D7 — The AudioSet source map is deleted, and the real categories are brought forward
+
+`data/audioset_source_map.json` collapses the classifiers' own labels into four source buckets, so
+`Whispering`, `Cough`, `Breathing`, `Crying, sobbing`, `Baby cry, infant cry`, `Laughter` and
+`Singing` all become `people`, a background category, while `Babbling` becomes `speech`. The models
+already emit the distinctions the workflow needs; the map throws them away and then the workflow
+tries to recover them with three other mechanisms.
+
+The map goes. Actual categories are carried forward as themselves. Pre-alpha policy is rename and
+replace outright, so nothing is kept for compatibility.
+
+This subsumes F-168, which was filed as a pediatric mislabelling. It is wider than that: whispered
+speech filed as background is a target-speech failure.
