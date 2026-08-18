@@ -1,79 +1,23 @@
-"""DriftSE one-step speech enhancement via isolated subprocess venv.
+"""DriftSE one-step speech enhancement via an isolated subprocess venv.
 
-DriftSE (Xu, Caviedes-Nozal, Kleijn, Yan & Olsson, *Speech Enhancement Based on
-Drifting Models*, Interspeech 2026 oral, arXiv 2604.24199) formulates enhancement
-as a distributional equilibrium problem and reaches the clean-speech distribution
-in a **single** network evaluation, against 30 for SGMSE+ and 8 for UNIVERSE++.
-On the DNS 2020 blind test set it reports WV-MOS 2.65 and SCOREQ 2.97.
+DriftSE (Xu, Caviedes-Nozal, Kleijn, Yan & Olsson, *Speech Enhancement Based on Drifting Models*,
+Interspeech 2026 oral, arXiv 2604.24199) reaches the clean-speech distribution in one network
+evaluation, which is what makes it the only generative enhancer in senselab that runs on CPU.
+Upstream code and weights are MIT (https://github.com/LiangXu123/DriftSE).
 
-Why inference is cheap
-----------------------
-The drifting field is computed in a frozen self-supervised latent space
-(HuBERT / WavLM / DistilHuBERT) — but that is the **training** signal. Inference
-is the backbone alone: one forward pass under ``no_grad``. Upstream's
-``enhancement.py`` reaches only ``backbones.ncsnpp_v2``,
-``backbones.ncsnpp_v2_drift`` and ``util.other`` — no Lightning, no ``wandb``, and
-no SSL encoder. The ``latent_ckpt/`` archive its README requires for training is
-therefore not needed here at all, and this is the first generative enhancer in
-senselab that is genuinely CPU-viable.
+Usage:
+    Pass an ``HFModel`` naming ``LIANGXU123/DriftSE`` to
+    :func:`senselab.audio.tasks.speech_enhancement.enhance_audios`, or call
+    :func:`enhance_audios_with_driftse` directly for control over ``sigma``, ``seed``, the
+    checkpoint ``variant`` and the chunking. Inputs are resampled to 16 kHz mono; outputs are
+    16 kHz with the input's sample count.
 
-One correction, measured rather than reasoned: ``util/other.py`` itself does
-``from pesq import pesq`` and ``from pystoi import stoi`` at module scope, so the
-venv installs both even though this backend computes no metric. An earlier revision
-blamed ``util/inference.py`` and omitted them; the H100 run failed with
-``No module named 'pesq'``. The distinction that matters is between what the model
-computes and what its import chain touches.
+The worker clones upstream at a pinned commit into its venv on first use and downloads one pinned
+checkpoint file from the Hub. ``SENSELAB_DRIFTSE_CHECKPOINT`` points it at a local directory holding
+``last.ckpt`` + ``config.json`` instead, and then no Hub access happens at all.
 
-Why a subprocess venv
----------------------
-Not for dependency conflict — the inference dependency set would satisfy senselab
-core. The upstream repository has no installable package and its top-level module
-names are ``backbones``, ``util``, ``config`` and ``data``. Injecting a generic
-``util`` onto the host interpreter's ``sys.path`` is the kind of hazard that
-surfaces months later as an unrelated import resolving to the wrong module.
-
-Licensing
----------
-The upstream repository reports no license (no ``LICENSE`` file, no statement in
-the README), and is itself built on SGMSE+ (MIT) without carrying that statement
-forward. senselab therefore vendors none of it: the worker clones the repository
-at a pinned commit into the user's own cache at first use.
-
-The checkpoint mirror under ``sensein`` is **public**, so the backend is usable
-during the alpha, while its licence remains **unknown**: no terms have been
-granted for these weights, and a request opened 2026-08-08 is unanswered
-(https://github.com/LiangXu123/DriftSE/issues/2). Publishing the mirror makes the
-weights reachable; it does not grant rights over them. Treat them as
-all-rights-reserved by default and consult upstream before any use that turns on
-licence terms. See this module's ``doc.md`` for the status of the request.
-
-The ``upfirdn2d`` path: no compilation, ever
--------------------------------------------
-The concern this spec recorded — a JIT-compiled CUDA extension whose fallback
-selection was unconfirmed — does not apply at the pinned commit. Upstream's
-``backbones/ncsnpp_utils/op/upfirdn2d.py`` imports
-``torch.utils.cpp_extension.load`` and **never calls it**, hardcoding
-
-    # Force PyTorch fallback to avoid CUDA_HOME dependency
-    upfirdn2d_op = None
-
-so the dispatch ``if input.device.type == "cpu" or upfirdn2d_op is None`` always
-takes ``upfirdn2d_native`` (plain ``F.conv2d``), on CPU and CUDA alike. Confirmed on
-an H100: no ``.so`` beside the source, empty ``~/.cache/torch_extensions``, and
-correct output on a 4.92 s clip.
-
-Two consequences. The venv needs **no build toolchain** — no ``nvcc``, no
-``CUDA_HOME`` — which is why installing it is fast and portable. And the CUDA kernel
-path is unreachable, so its performance is not available either: enhancement runs
-through the PyTorch implementation. An upstream commit that restores the ``load()``
-call would change both, which is one more reason the commit is pinned.
-
-Not wired into ``audio_analysis``
----------------------------------
-Reachable through :func:`enhance_audios` by passing the model explicitly. The
-workflow's default enhancer is unchanged. Deciding how a second enhancer's output
-participates in the perturbation sample is a measurement, and it comes after this
-backend exists.
+Design, upstream history, the pins and the measurements behind every choice here:
+``specs/20260818-083214-driftse-upstream-mit/design.md``.
 """
 
 from __future__ import annotations
@@ -83,7 +27,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel
@@ -98,16 +42,10 @@ from senselab.utils.subprocess_venv import (
 _DRIFTSE_VENV = "driftse"
 _DRIFTSE_PYTHON = "3.11"
 
-# Upstream's requirements.txt is a *training* dependency set. The inference path
-# (enhancement.py -> backbones.ncsnpp_v2{,_drift} + util.other) does not reach
-# pystoi / scoreq / torch-pesq / asteroid-filterbanks / wandb / pytorch-optimizer /
-# torchinfo, so those stay absent. pesq is the exception and is listed below: it is
-# imported at module scope on that path, which only a real run revealed.
-#
-# torch and torchaudio are named explicitly so ensure_venv's CUDA auto-detection
-# triggers and routes Stage 1 through the matching PyTorch wheel index. Left
-# transitive, the resolve skips that routing and can land a CPU-only wheel on a
-# GPU host.
+# Upstream's requirements.txt is a *training* set; only what the inference import chain touches is
+# installed. pesq/pystoi are on that chain (util/other.py imports both at module scope) even though
+# this backend computes no metric. torch and torchaudio are named explicitly so ensure_venv's
+# CUDA-aware wheel routing triggers. Both findings are recorded in the spec named above.
 _DRIFTSE_REQUIREMENTS = [
     "torch>=2.3",
     "torchaudio>=2.3",
@@ -116,34 +54,42 @@ _DRIFTSE_REQUIREMENTS = [
     "librosa>=0.10.2",
     "soundfile>=0.12.1",
     "tqdm>=4.66",
-    # Metrics packages, needed at *inference* even though this backend computes no metric:
-    # upstream's util/other.py -- the module the worker imports for pad_spec and
-    # set_torch_cuda_arch_list -- does `from pesq import pesq` and `from pystoi import stoi` at
-    # module scope (lines 7-8 at the pinned commit). An earlier revision blamed util/inference.py
-    # and omitted both; the H100 run failed with `No module named 'pesq'`, and omitting pystoi
-    # would simply have failed on the next line. The distinction that matters is between what the
-    # model computes and what its import chain touches.
     "pesq>=0.0.4",
     "pystoi>=0.3.3",
 ]
 
 _DRIFTSE_REPO_URL = "https://github.com/LiangXu123/DriftSE.git"
-# Pinned, not a branch: the repository is unlicensed and unpackaged, so this SHA
-# is the only version contract available. An upstream force-push must not change
-# what this backend runs.
-_DRIFTSE_COMMIT = "695a64db187500fa0d7bae23912680bd5d4df613"
+# Pinned, not a branch: the repository is unpackaged, so this SHA is the version contract. It is at
+# upstream HEAD, which is after both 70bb6ded (the paper-aligned sigma) and 60333a68 (the ema state
+# dict); the previous pin, 695a64db, predates both and ran inference the author calls wrong.
+_DRIFTSE_COMMIT = "0a489dadfa2778e86e4b4b0af03f6255d2de8c69"
 
-_DRIFTSE_HF_REPO = "sensein/driftse-distilhubert-three-layers"
-# Pinned so a re-upload cannot change what this backend runs. The repo is public so the backend
-# is usable during the alpha, but its licence is still unknown (see the module docstring); the
-# env override below remains for callers supplying their own checkpoint.
-_DRIFTSE_HF_REVISION = "76a9448aae12e4c232b1d52c24899d0835db5782"
+# Upstream's own weights mirror, MIT-licensed and public, pinned so a re-upload cannot change what
+# runs. It supersedes senselab's sensein/driftse-* mirror, whose files were byte-identical.
+_DRIFTSE_HF_REPO = "LIANGXU123/DriftSE"
+_DRIFTSE_HF_REVISION = "b99a25a637a9963d5c7557f0b70597fc54c7a0bb"
 _DRIFTSE_CHECKPOINT_ENV = "SENSELAB_DRIFTSE_CHECKPOINT"
 
-# Worker script — runs inside the isolated venv. Clones the (non-packaged)
-# upstream repo at a pinned commit on first use and adds it to sys.path, then
-# reuses upstream's own backbone construction and spectral transforms rather
-# than reimplementing them here.
+# variant -> (checkpoint file in the weights mirror, architecture config in the pinned clone). The
+# mirror's own top-level config.json is HF download-tracking metadata, not an NCSN++ config.
+_DRIFTSE_VARIANTS: Dict[str, Tuple[str, str]] = {
+    "distillhubert_three_layers_with_z": (
+        "logs/distillhubert_three_layers_with_z/last.ckpt",
+        "config/with_z/v2_drift2_distillhubert_three_layers_adam.json",
+    ),
+    "distillhubert_three_layers_pesq_sisdr_ccmse_with_z": (
+        "logs/distillhubert_three_layers_pesq_sisdr_ccmse_with_z/last.ckpt",
+        "config/with_z/v2_drift2_distillhubert_three_layers_pesq_sisdr_ccmse.json",
+    ),
+}
+_DRIFTSE_DEFAULT_VARIANT = "distillhubert_three_layers_with_z"
+
+# Upstream enhancement.py's own constant for the Gaussian it adds to the model input.
+_DRIFTSE_DEFAULT_SIGMA = 0.01
+
+# Worker script — runs inside the isolated venv. Clones the (non-packaged) upstream repo at a pinned
+# commit on first use and adds it to sys.path, then reuses upstream's own backbone construction and
+# spectral transforms rather than reimplementing them here.
 _WORKER_SCRIPT = r"""
 import json
 import subprocess as sp
@@ -154,17 +100,18 @@ try:
     args = json.loads(sys.stdin.read())
     repo_dir = Path(args["repo_dir"])
     repo_url, commit = args["repo_url"], args["commit"]
-    ckpt_path, config_path = args["ckpt_path"], args["config_path"]
+    ckpt_path = args["ckpt_path"]
+    config_path, config_rel = args["config_path"], args["config_rel"]
     in_paths, out_paths = args["in_paths"], args["out_paths"]
     seed = int(args["seed"])
+    sigma = float(args["sigma"])
     chunk_s, overlap_s = float(args["chunk_s"]), float(args["overlap_s"])
 
     import fcntl, os, shutil, tempfile as _tempfile
 
-    # Clone under an exclusive flock, to a sibling temp dir + atomic os.replace,
-    # so an interrupted clone never leaves repo_dir present but incomplete
-    # (which would wedge the guard below permanently) and concurrent jobs
-    # sharing $HOME cannot race into the same directory.
+    # Clone under an exclusive flock, to a sibling temp dir + atomic os.replace, so an interrupted
+    # clone never leaves repo_dir present but incomplete (which would wedge the guard below
+    # permanently) and concurrent jobs sharing $HOME cannot race into the same directory.
     marker = repo_dir / "enhancement.py"
     if not marker.is_file():
         repo_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -192,8 +139,7 @@ try:
     import soundfile as sf
     import torch
 
-    # NOTE: only util/other.py is imported. util's inference module pulls in
-    # pesq/pystoi, which are deliberately absent from this venv.
+    # NOTE: only util/other.py is imported; upstream's util/inference.py is never reached.
     from backbones.ncsnpp_v2 import NCSNpp_v2
     from backbones.ncsnpp_v2_drift import ncsnpp_v2_drift
     from util.other import pad_spec, set_torch_cuda_arch_list
@@ -202,7 +148,10 @@ try:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(seed)
 
-    with open(config_path) as f:
+    # A local override supplies its own config.json; otherwise the architecture config comes from
+    # the pinned clone, so weights and config are both commit-addressed.
+    config_file = Path(config_path) if config_path else repo_dir / config_rel
+    with open(config_file) as f:
         config = json.load(f)
 
     builder = ncsnpp_v2_drift if config["model"].lower() == "ncsnpp_v2_drift" else NCSNpp_v2
@@ -217,11 +166,16 @@ try:
         dropout=config["dropout"],
     ).to(device)
 
-    # DEVIATION 1: weights_only=True. Upstream omits it. The checkpoint is a
-    # foreign pickle from an unlicensed research repository; the unrestricted
-    # unpickler is arbitrary code execution at enhancement time.
+    # DEVIATION 1: weights_only=True. Upstream omits it; the checkpoint is a foreign pickle.
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=True)
-    model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt)
+    # ema first, then model, matching upstream's own priority at the pinned commit.
+    if "ema" in ckpt:
+        state_dict = ckpt["ema"]
+    elif "model" in ckpt:
+        state_dict = ckpt["model"]
+    else:
+        state_dict = ckpt
+    model.load_state_dict(state_dict)
     model.eval()
 
     n_fft, hop = config["n_fft"], config["hop_length"]
@@ -244,11 +198,9 @@ try:
         Y = pad_spec(Y.unsqueeze(0).unsqueeze(0), mode="zero_pad")
         with torch.no_grad():
             t = torch.ones(Y.shape[0], device=device)
-            # DEVIATION 3: recorded RNG seed (torch.manual_seed(seed) above). The
-            # released checkpoint sets train_add_gaussian, so this Gaussian sample
-            # makes the forward pass stochastic; an unseeded rerun would make any
-            # cached artifact keyed on this output non-reproducible.
-            out = model(Y + 0.05 * torch.randn_like(Y), t) if add_gaussian else model(Y, t)
+            # DEVIATION 3: recorded RNG seed. With train_add_gaussian set -- which both released
+            # checkpoints do -- this Gaussian sample makes the forward pass stochastic.
+            out = model(Y + sigma * torch.randn_like(Y), t) if add_gaussian else model(Y, t)
         X = out.squeeze(0).squeeze(0) / f
         X = (X.abs() ** (1.0 / e)) * torch.exp(1j * X.angle())
         x = torch.istft(X, n_fft=n_fft, hop_length=hop, window=window,
@@ -261,11 +213,8 @@ try:
         y = torch.as_tensor(y_np[:, 0]).to(device)
         assert sr == 16000, "worker expects 16 kHz; the host resamples"
 
-        # DEVIATION 2: overlap-add chunking. Upstream runs one STFT over an
-        # entire file; the NCSN++ backbone carries attention layers, so memory
-        # grows superlinearly in duration. Enhancement is per-segment consistent
-        # (there is no cross-segment identity to preserve), so overlap-add is
-        # safe here in a way it is not for separation.
+        # DEVIATION 2: overlap-add chunking. Upstream runs one STFT over an entire file, and the
+        # NCSN++ backbone's attention makes memory grow superlinearly in duration.
         chunk = int(chunk_s * sr)
         hop_samples = int((chunk_s - overlap_s) * sr)
         if y.shape[-1] <= chunk:
@@ -286,7 +235,7 @@ try:
         sf.write(out_path, x_hat.detach().cpu().numpy(), sr)
         results.append(out_path)
 
-    print(json.dumps({"output_paths": results, "seed": seed}))
+    print(json.dumps({"output_paths": results, "seed": seed, "sigma": sigma}))
 except Exception as exc:
     import traceback
     err = {
@@ -304,30 +253,29 @@ def enhance_audios_with_driftse(
     model: HFModel,
     device: Optional[DeviceType] = None,
     seed: int = 0,
+    sigma: float = _DRIFTSE_DEFAULT_SIGMA,
+    variant: str = _DRIFTSE_DEFAULT_VARIANT,
     chunk_s: float = 20.0,
     overlap_s: float = 2.0,
 ) -> List[Audio]:
     """Enhance each audio with DriftSE, one network evaluation per window.
 
-    Resamples to 16 kHz mono on the way in — the checkpoint is trained at that
-    rate and ``n_fft=510`` gives exactly the 256 frequency bins its ``image_size``
-    expects. Output is 16 kHz and the same number of samples as the (resampled)
-    input.
-
-    With ``train_add_gaussian`` true — which the released checkpoint sets — the
-    forward pass consumes a Gaussian sample, so output is stochastic. ``seed``
-    makes a run reproducible and is recorded in the log line. A caller wanting
-    the deterministic formulation needs the ``no_z`` checkpoint, which is a
-    different set of weights, not a flag.
+    Resamples to 16 kHz mono on the way in — the checkpoints are trained at that rate and
+    ``n_fft=510`` gives exactly the 256 frequency bins their ``image_size`` expects. Output is
+    16 kHz with the same number of samples as the (resampled) input.
 
     Args:
         audios: Inputs. Resampled and downmixed to 16 kHz mono if needed.
-        model: ``HFModel`` naming the mirrored checkpoint repo and revision.
-        device: Accepted for signature parity with the other enhancers. The
-            worker selects CUDA when available and CPU otherwise; DriftSE is 1
-            NFE, so CPU is practical here unlike every other generative enhancer
-            in this package.
-        seed: RNG seed for the Gaussian perturbation.
+        model: ``HFModel`` naming the weights repo and revision (``LIANGXU123/DriftSE``).
+        device: Accepted for signature parity with the other enhancers. The worker selects CUDA
+            when available and CPU otherwise; at 1 NFE, CPU is practical here.
+        seed: RNG seed for the Gaussian perturbation, which the released checkpoints make part of
+            the forward pass. Output is stochastic without it, so it is recorded in the log line.
+        sigma: Scale of that Gaussian. Upstream's own default is 0.01; 0 is equivalent within
+            noise and 0.05 measurably degrades output (see the spec named in the module docstring).
+        variant: Checkpoint to use, a key of ``_DRIFTSE_VARIANTS``. The default is the paper's
+            headline model; ``distillhubert_three_layers_pesq_sisdr_ccmse_with_z`` scores higher
+            on PESQ/SI-SDR and was trained with those metrics in its loss.
         chunk_s: Window length for long inputs.
         overlap_s: Overlap between windows, Hann-tapered and overlap-added.
 
@@ -335,8 +283,12 @@ def enhance_audios_with_driftse(
         One enhanced ``Audio`` per input, in order.
 
     Raises:
+        ValueError: if ``variant`` is not a known checkpoint.
         RuntimeError: if the worker fails; the upstream traceback is included.
     """
+    if variant not in _DRIFTSE_VARIANTS:
+        raise ValueError(f"unknown DriftSE variant {variant!r}; known: {sorted(_DRIFTSE_VARIANTS)}")
+
     if not audios:
         return []
 
@@ -345,34 +297,39 @@ def enhance_audios_with_driftse(
 
     _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
 
+    checkpoint_file, config_rel = _DRIFTSE_VARIANTS[variant]
+
     checkpoint_override = os.environ.get(_DRIFTSE_CHECKPOINT_ENV)
     if checkpoint_override:
         override_dir = Path(checkpoint_override)
         ckpt_path = str(override_dir / "last.ckpt")
         config_path = str(override_dir / "config.json")
+        config_rel = ""
     else:
-        from senselab.utils.dependencies import resolve_model
+        from huggingface_hub import hf_hub_download
 
-        # resolve_model pins (repo_id, revision) to an immutable commit SHA and
-        # downloads the snapshot once, behind a cross-process lock, then returns
-        # the local snapshot directory. A raw hf_hub_download(..., revision=
-        # model.revision) would instead perform a Hub HEAD/revision check on
-        # every call in every parallel process -- the source of the 429 storms
-        # this helper exists to eliminate. The mirror repo carries only these
-        # two files, so the resolved snapshot directory already has both.
-        _, snapshot_dir = resolve_model(str(model.path_or_uri), model.revision)
-        ckpt_path = str(snapshot_dir / "last.ckpt")
-        config_path = str(snapshot_dir / "config.json")
+        from senselab.utils.model_revision import resolve_revision
+
+        # One file, not the snapshot: the mirror is 2.4 GB, of which one 1.14 GB checkpoint is
+        # read. resolve_model would download all of it. Resolving the ref to a commit SHA first
+        # keeps the pinning guarantee -- a full SHA takes huggingface_hub's commit-hash shortcut,
+        # so a cached file resolves with no network.
+        sha = model.commit_sha or resolve_revision(str(model.path_or_uri), model.revision)
+        ckpt_path = hf_hub_download(str(model.path_or_uri), checkpoint_file, revision=sha)
+        config_path = ""
 
     venv_dir = ensure_venv(_DRIFTSE_VENV, _DRIFTSE_REQUIREMENTS, python_version=_DRIFTSE_PYTHON)
     python = venv_python(venv_dir)
-    # Cached alongside the venv rather than per-tempdir, so the pinned-commit
-    # clone in the worker script happens once per host, not once per call.
+    # Cached alongside the venv rather than per-tempdir, so the pinned-commit clone in the worker
+    # script happens once per host, not once per call.
     repo_dir = Path(venv_dir) / "driftse-src"
 
     mono_16k = downmix_audios_to_mono(resample_audios(audios, resample_rate=16000))
 
-    logger.info(f"DriftSE: enhancing {len(mono_16k)} audio(s), seed={seed}, chunk_s={chunk_s}, overlap_s={overlap_s}")
+    logger.info(
+        f"DriftSE: enhancing {len(mono_16k)} audio(s), variant={variant}, seed={seed}, "
+        f"sigma={sigma}, chunk_s={chunk_s}, overlap_s={overlap_s}"
+    )
 
     with tempfile.TemporaryDirectory(prefix="senselab-driftse-") as tmpdir:
         tmp = Path(tmpdir)
@@ -391,9 +348,11 @@ def enhance_audios_with_driftse(
                 "commit": _DRIFTSE_COMMIT,
                 "ckpt_path": ckpt_path,
                 "config_path": config_path,
+                "config_rel": config_rel,
                 "in_paths": in_paths,
                 "out_paths": out_paths,
                 "seed": seed,
+                "sigma": sigma,
                 "chunk_s": chunk_s,
                 "overlap_s": overlap_s,
             }
@@ -409,9 +368,9 @@ def enhance_audios_with_driftse(
         )
         output = parse_subprocess_result(result, venv_label="DriftSE")
 
-        # Read outputs back while the temp dir is still alive: Audio(filepath=...)
-        # lazy-loads on first .waveform access, and that access must happen
-        # before this context manager deletes the files it points at.
+        # Read outputs back while the temp dir is still alive: Audio(filepath=...) lazy-loads on
+        # first .waveform access, and that access must happen before this context manager deletes
+        # the files it points at.
         enhanced_audios = []
         for out_path, original in zip(output["output_paths"], mono_16k):
             enhanced = Audio(filepath=out_path)
