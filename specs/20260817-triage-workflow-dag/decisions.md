@@ -236,3 +236,33 @@ a text comparison, and ASR can be constrained. Where it does not, all three beco
 **Decisions taken here:** breath spans use temporal exclusion, not a signal-level residual. Per-class
 event detection is the mechanism for the countable classes. HeAR is `google/hear` on Hugging Face and
 would be new to the repo.
+
+## D10 — Branch on physiological mechanism: four measurement stacks, not 45 tasks
+
+The eight production kinds in D9 are protocol categories. Combining them by the mechanism each
+probes collapses them to four stacks, and the stack — not the task — is what selects the measurement
+machinery.
+
+| stack | mechanism | primary tasks | what it measures |
+| --- | --- | --- | --- |
+| A respiratory / airway | subglottal drive, airflow, glottic closure | `respiration-and-cough`, `breath-sounds`, `voluntary-cough` | countable events, onset and offset, noise-band energy, cycle rate; no F0 |
+| B laryngeal source | vocal-fold vibration rate, regularity, adduction | `prolonged-vowel`, `maximum-phonation-time`, `pediatric.long-sounds`, `glides`, `loudness` | F0 and its trajectory, HNR, jitter, shimmer, intensity, duration; no words |
+| C vocal tract / articulation | tongue, lips, jaw, velum sequencing and precision | `diadochokinesis`, `pediatric.silly-sounds`, `repeating-words`, read passages segmentally | syllable onsets, rate, formant transitions, phone alignment; syllables required, words optional |
+| D higher-order control | prosody, lexical retrieval, discourse, executive | `free-speech`, `story-recall`, `picture-description`, naming and fluency, `word-color-stroop`, `abcs-and-123s` | transcript, discourse timing, pauses, semantic content |
+
+**A task is a loading vector over the four, not a member of one.** Maximum phonation time loads A and
+B together, which is what makes it diagnostic. Singing loads B, C and D. Read speech loads C
+segmentally and D prosodically. A task added to the registry tomorrow needs a loading vector, not a
+new branch.
+
+**Only stack D needs ASR.** A, B and C are word-free, which retires the word gate structurally rather
+than patching it: F-165 was a D-stack assumption applied to A/B/C material.
+
+**Resonance has no instrumentation.** Nasality and velopharyngeal function are a real mechanism,
+probed implicitly by the CAPE-V sentences, and nothing in the pipeline measures it — no nasalance, no
+nasal-formant analysis. It is either a fifth stack that is admittedly uninstrumented or it is out of
+scope. It must not sit inside C implying coverage that does not exist.
+
+**`pediatric.noisy-sounds` stops being anomalous.** Under mechanism it is B plus C material whose
+acoustic target happens to be non-vocal. That framing is what stops a source classifier from
+discarding the child for correctly identifying the animal being imitated.
