@@ -123,6 +123,12 @@ RAW_LOAD_EXCEPTIONS = {
     # the *entire* multi-GB checkpoint snapshot, which would defeat the point of this
     # function (enumerate named speakers without paying for the weights).
     "audio/tasks/text_to_speech/qwen_tts.py",
+    # DriftSE resolves the ref to a commit SHA via resolve_revision and then calls
+    # hf_hub_download(..., revision=<sha>) for the single checkpoint file it reads. Upstream's
+    # mirror is 2.4 GB -- two 1.14 GB checkpoint variants plus 1648 demo wavs -- so resolve_model
+    # would download 1.3 GB no run reads. Same pinning guarantee as above: a full commit hash takes
+    # huggingface_hub's commit-hash shortcut, so a cached file resolves with no network.
+    "audio/tasks/speech_enhancement/driftse.py",
 }
 
 
