@@ -148,3 +148,67 @@ elements do separate cleanly at 2 s — within-class +0.653, between-class −0.
 everything as similar to everything.
 
 HeAR's own detector found a quiet breath at 6.60-7.10 s that had been hand-labelled silence.
+
+---
+
+# The configured enhancement model, tested across 17 recordings — 2026-08-18
+
+## Two corrections to the earlier finding first
+
+**The "10-27 dB more energy than the input" figure was inflated by the harness.** Both the earlier
+scripts and the first pass of this test wrote streams with soundfile's default WAV subtype, PCM_16,
+while SepFormer output routinely peaks at 2-30 — so up to 26% of samples were clipped at write time.
+Re-run with `subtype="FLOAT"`. On the original quiet recording the distortion was small (residual
+−0.83 → −1.22 dB) so that observation survives, but the numbers on louder recordings were wrong.
+
+**The energy inflation is real, universal and harmless in the shipped pipeline.** SepFormer is exactly
+scale-equivariant — a 50 dB input gain sweep reproduces the output waveform to corr 1.0000 and the
+energy ratio to 0.05 dB — and SpeechBrain's own `separate_file()` peak-normalises. `speechbrain.py`'s
+attenuate-only normalisation brings the repo's output to a median −1.7 dB against the input. Running
+the shipped `enhance_audios()` reproduces a direct call exactly. **The workflow does not propagate a
+blow-up**, and the earlier suggestion that it might was wrong.
+
+## The real defect: an output-fidelity ceiling that makes the default net-harmful
+
+Against 13 synthetic mixtures with kept clean references, output SI-SDR in dB:
+
+| input | input SI-SDR | wham16k-enh (repo default) | whamr16k | dns4-16k-enh | MossFormer2 | FRCRN |
+| --- | --- | --- | --- | --- | --- | --- |
+| clean speech | ∞ | **4.79** | 3.03 | 13.34 | 11.39 | 11.83 |
+| +20 dB SNR | 18.4 | **4.69** | 3.27 | 13.12 | 11.29 | 11.54 |
+| +10 dB SNR | 8.5 | **4.17** | 2.43 | 10.40 | 9.86 | 9.85 |
+| +5 dB SNR | 3.5 | **3.50** | 1.94 | 8.27 | 8.01 | 7.92 |
+| 0 dB SNR | −1.5 | **2.43** | 0.44 | 5.75 | 5.88 | 5.87 |
+| −5 dB SNR | −6.5 | **−1.00** | −0.65 | 3.36 | 3.48 | 3.71 |
+
+`sepformer-wham16k-enhancement`'s output is pinned near 4.8 dB SI-SDR **however clean the input is**.
+As improvement, it is **net-harmful at every input SNR above ≈5 dB**: −13.8 dB at 20 dB SNR, −4.3 dB
+at 10 dB, break-even at 5 dB, +3.9 dB at 0 dB. The model is not broken — it denoises correctly inside
+its WHAM training distribution — it simply cannot pass clean speech through.
+
+**Stated testably:** the configured default degrades any recording whose speech is already cleaner
+than roughly 5 dB SNR. On the assembled corpus SepFormer explained ≥3 dB less of the input than the
+best control on **13 of 17 recordings**; the four exceptions are the ones with the most background
+energy, including SepFormer's own WHAM demo file, where it matches the controls to 0.2 dB. **All four
+quiet `streaming-audio-*` captures — the workflow's actual input class — meet the harmful condition.**
+
+Audible consequence, Whisper on level-normalised output: the repo default turns "There's something
+going on." into "Something going on", and substitutes "Ranger" for "And Josh" in the tutorial clip.
+`whamr16k` duplicates the same sentence into both streams on non-overlapping input. FRCRN reproduces
+both verbatim.
+
+**Not the cause, all tested:** input level (0.000 dB effect over 50 dB of gain), sample rate and
+resampling path (within 0.5 dB), duration (flat 1-20 s; only <0.5 s collapses), speech-to-silence
+ratio. Digital silence yields exact zeros, but a −70 dBFS dither floor is amplified by +26.8 dB.
+
+**The ceiling is checkpoint-specific, not architectural**: `sepformer-dns4-16k-enhancement` reaches
+13.3 dB with the same architecture and harness — though it carries the largest scale inflation of all,
++48 dB, which the pipeline's normalisation would absorb.
+
+Controls `MossFormer2_SE_48K` and `FRCRN_SE_16K` conserve energy on every recording, stay in phase at
+zero lag, and leave clean speech essentially untouched (−46 and −62 dB residual on a clean two-talker
+conversation).
+
+**Untested and would change the conclusion:** a normalisation the SpeechBrain recipe applies at
+inference that neither `separate_batch` nor `separate_file` applies. Also untested: reverberant
+mixtures (no RIR applied), the 8 kHz variants, MossFormerGAN, and DriftSE.
