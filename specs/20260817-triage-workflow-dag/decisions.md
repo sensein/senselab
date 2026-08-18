@@ -163,3 +163,37 @@ replace outright, so nothing is kept for compatibility.
 
 This subsumes F-168, which was filed as a pediatric mislabelling. It is wider than that: whispered
 speech filed as background is a target-speech failure.
+
+## D8 — Spans are a mixture problem, so detection is ordered and its confidence is conditional
+
+Sounds mix: environmental with vocal, speaker with speaker, and breath with the speech it precedes or
+rides inside. Classes are therefore not separable at the span level by running independent per-class
+detectors over the same waveform — the mixture makes their errors correlate, and each one's
+confidence depends on what else is sounding at that moment.
+
+Three consequences the design has to carry.
+
+**Local mixture complexity is a first-class output.** How many distinguishable sources are active in
+a region conditions every other confidence in it. It is reported, not hidden inside another number,
+because a low-confidence span in a busy region and a low-confidence span in quiet mean different
+things and warrant different follow-ups.
+
+**Detection is ordered, not parallel.** Speech is localised first, from speech extraction plus
+SQUIM's intelligibility estimate (`features_extraction/torchaudio_squim.py` already wires STOI, PESQ,
+SI-SDR and subjective MOS): an intelligibility estimate that holds up is direct evidence that what is
+there is speech, not merely voice-like energy. Breath is then localised in what speech did not
+explain, where the confounds are fewer — which is what makes a liberal downstream gate on breath
+defensible in the absence of speech.
+
+**Breath in quiet and breath against speech are two populations, kept apart.** A pre-speech intake
+breath and a breathy phonation are the cases that matter and the cases where every acoustic variable
+degrades: HNR is low for breath and also low for breathy voice, periodic energy change is swamped by
+syllabic modulation, and a fixed-window embedding of a 0.5-1.5 s breath adjacent to speech captures
+both. Merging the two populations into one breath rate or one span set averages a reliable
+measurement together with an unreliable one and reports the mean as if it were either. They stay
+separate products, each with its own confidence.
+
+**Breath evidence families:** YAMNet's own breathing labels; HeAR embeddings if they can be extracted
+on segments as short as a breath, which is unverified and is a measurement, not an assumption — HeAR
+is not currently in the repo; low-frequency periodic energy change; and HNR. Every one of these
+degrades under mixture, which is why the ordering above exists rather than a flat fold.
