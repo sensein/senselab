@@ -382,3 +382,43 @@ the examiner; dominance alone would invert the answer precisely where the branch
 possibly one examiner. When the channel evidence shows a single source, attribution and selection
 collapse to a confirmation, and the expensive clustering runs only where the evidence says more than
 one source is present. That gating is a measurement, not a configuration flag.
+
+## D14 — Measure per source; assign the target later, or not at all
+
+Amends D13, whose ordering was wrong. The four steps become:
+
+1. **Detect element spans** — branch-specific.
+2. **Attribute spans to sources** — shared. Sources are unnamed clusters, not roles.
+3. **Measure per source** — the branch's quantities computed independently for every source.
+4. **Assign the target** — a separate, later decision that *selects among* results already computed,
+   and is allowed to return "unresolved".
+
+**Why this ordering and not D13's.** Target selection without an anchor is a prior that is sometimes
+exactly wrong, and it is most wrong on the airway and phonation branches where the participant speaks
+little and the examiner talks throughout. Under D13 that error is unrecoverable: maximum phonation
+time gets computed for the examiner and the participant's is never calculated. Measuring per source
+first makes the target decision non-destructive — a wrong assignment can be corrected by re-selecting,
+because every source's numbers already exist. It is also the repo's own L1-measures / L2-decides rule:
+target assignment is a decision and must not sit upstream of the measurements it conditions.
+
+**Unresolved is a valid outcome.** With no anchor, no hint and two plausible sources, the honest
+output is per-source measurements plus the statement that the target could not be determined and why.
+That reaches the review flag as a reason, rather than being resolved by a prior nobody can audit.
+
+**It also makes the unaccounted-voice question answerable.** With per-source measurements in hand, a
+voice this protocol does not account for is a source that no expected role explains — which is a
+comparison over results, not a detection problem, and it needs no target to have been chosen.
+
+**Cost.** Work multiplies by the number of sources, which is one or two in nearly every protocol
+recording, and the single-source path is a confirmation rather than a clustering. The multiplication
+falls exactly where the ambiguity is, which is where the compute belongs.
+
+## D15 — This is a new graph; the current pipeline is evidence, not a template
+
+Nothing in `audio_analysis` constrains this design. Where the existing code is cited in these
+decisions it is as measured evidence of a failure mode — the word gate nulling non-lexical
+vocalization, the source map discarding the classifier's own labels, an axis reading zero doubt from
+diarizers that were never compared — not as a structure to be preserved or refactored into.
+
+Pieces are built for the triage graph as it is designed here. Whether any current module is reused is
+decided per node, on merit, after the node's ports are declared.
