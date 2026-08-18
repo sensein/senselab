@@ -88,3 +88,21 @@ reasons. The airway plan does not currently want it.
 
 The table's real subject is therefore the **speech** branch, where enhancement is genuinely a choice,
 and the element-filter rows, which are channel candidates rather than branch assignments.
+
+---
+
+## Second correction: this is a tool capability table, not a routing decision
+
+Per D19, enhancement is not a variant, pathway or dimension in this design — it is an operation a node
+may invoke, whose output that node alone consumes. So:
+
+- The "prohibition" above is **vacuous**. Nothing routes enhanced audio anywhere, so there is no port to
+  withhold. What survives is a property of the tools: an enhancer that takes breath to −26 dB (the repo
+  default) or −40 dB (`MossFormer2_SE_48K`) cannot be used by any node that needs breath.
+- The branch column should be read as **"which node could use this, for what"**, not as an assignment.
+- The two element filters are the only entries with a concrete use so far: a cough-only channel
+  (`MossFormer2_SS_16K` src1) and a breath-dominant channel (`sepformer-dns4-16k-enh`), either of which
+  could serve as a second confirmation channel inside `span_reconfirm`.
+
+The speech branch's enhancement question is a genuine choice and stays open. Everything else here is
+tool characterisation.
