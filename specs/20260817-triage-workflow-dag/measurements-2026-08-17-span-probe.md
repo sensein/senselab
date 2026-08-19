@@ -551,3 +551,14 @@ Worth recording for its own sake: the comment at `:323-324` states that this wor
 three `test_*.py` scripts because they call `torch.cuda.set_device(0)` at import, and a module-level
 test checks this file for those substrings. The hazard class was understood and guarded against by one
 mechanism, while a library module the worker does import carried the same pin by another.
+
+**And senselab does not select a device for unasdiff either.** `separate_with_unasdiff` accepts
+`device`, passes it to `_select_device_and_dtype` for validation, and **discards the return value** — it
+never reaches the worker payload. The docstring states this ("accepted for signature parity ... the
+worker selects CUDA when available and CPU otherwise"), so it is a documented limitation, not a silent
+bug. The worker then requests `torch.device("cuda")` with no index.
+
+So two independent things block GPU selection, and both must be fixed for multi-GPU fan-out: our API
+drops the caller's device, and upstream's import-time pin overwrites whatever the launcher set. Fixing
+either alone changes nothing. The cluster run is the case that wants it — four workers on a four-GPU
+node all ran on GPU 0.
