@@ -187,3 +187,46 @@ reached through a stale cached ref.
 
 Either way the node must **pin a revision explicitly** rather than resolve `main`, and record which,
 because the choice determines whether one of its two consumers has any input.
+
+---
+
+## Revision: the proposer and the labeller swap, on measurement
+
+The node table above has `hear_scan` proposing and YAMNet/AST corroborating. Measurement reverses that,
+and the reasoning that put HeAR first — that its labels were 4 of 4 correct — was about labelling, not
+about proposing.
+
+**HeAR cannot propose, because it cannot resolve.** Its detector window is hard-fixed at 32000 samples:
+0.5 s, 1.0 s, 1.5 s, 3.0 s and 4.0 s all raise `InvalidArgumentError`, so resolution cannot be bought by
+shrinking it. An event of duration D elevates every window centre within D + 2 s, which merges any two
+events closer than 2 s — both verified pairs here (breaths 1.81 s apart, coughs 1.12 s). Worse for this
+branch, inter-cough intervals within a bout run 0.3-0.5 s, so it can report that coughs are present and
+can never count them.
+
+**And it is a gate, not a locator.** Sliding the window in at 20 ms steps, the posterior crosses 0.5 at
+**0.04 s of cough** inside the 2 s window — 2% of the window — and 0.16 s of breath. Minimal overlap
+saturates it, which is why the response is a box-car with sharp edges rather than a ramp. A firing
+window carries one bit: something of this class lies somewhere in these two seconds.
+
+**YAMNet resolves both pairs and carries what HeAR lacks.** At 0.96 s its smear intervals separate the
+breaths by 0.85 s and the coughs by 0.16 s, and the measured posteriors show two distinct `Cough` blocks
+where HeAR shows one plateau. It also has an explicit **`Silence`** class that fires in the
+verified-empty gaps — HeAR has no way to say "nothing here" — plus `Gasp`, `Sigh`, `Throat clearing`,
+`Sneeze` and `Snoring`. And its speech detection is strong where HeAR's top-1 collapses to 0.1-0.35.
+
+The trade is confidence: HeAR saturates near 1.0 on cough and breath where YAMNet sits at 0.4-0.7.
+
+### The revised assignment
+
+| role | instrument | why, measured |
+| --- | --- | --- |
+| propose | **YAMNet** (0.96 s) | resolves both pairs; explicit `Silence`; richer vocal vocabulary |
+| confirm | **HeAR** (2 s) | 40 ms suffices to fire it, so very few false negatives; saturated posteriors are the confident label |
+| bound | **DSP envelope** | ±5 ms on a cough onset; neither model approaches it |
+
+`transient_propose` is unaffected: both models miss the 202 ms mouth sound entirely, and HeAR's miss is
+not geometry — its elevated interval covers the event — but that a 202 ms event is a tenth of the window.
+
+This also removes an option I had assumed was available: **`group_events` cannot be solved by better
+thresholding of HeAR's posterior**, because events closer than 2 s are merged before any threshold sees
+them. The information is not in the track.
