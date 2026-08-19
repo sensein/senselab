@@ -128,7 +128,6 @@ class SpeechBrainEnhancer:
 
         return cls._models[key], device, dtype
 
-
     @staticmethod
     def _single_source(waveform: "torch.Tensor", model: SpeechBrainModel) -> "torch.Tensor":
         """Return the one enhanced source, refusing a multi-source separation output.
