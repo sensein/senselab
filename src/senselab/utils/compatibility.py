@@ -18,6 +18,8 @@ from typing import Optional
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from senselab.utils.clearvoice import CLEARVOICE_PYTHON, CLEARVOICE_REQUIREMENTS, CLEARVOICE_VENV
+
 
 @dataclass
 class VersionRange:
@@ -90,6 +92,9 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         install_hint="pip install senselab",
     ),
     # ── Audio: Speech Enhancement ──
+    # NOTE: documents the default in-process backend (SpeechBrain) only. enhance_audios also
+    # dispatches by model id to DriftSE and to ClearVoice, both ISOLATED subprocess venvs
+    # (venv_name="driftse" / "clearvoice"). Same flat-schema limitation as the diarization entry.
     "audio.tasks.speech_enhancement.enhance_audios": CompatibilityEntry(
         required_deps=["speechbrain", "torchaudio"],
         dep_versions={"speechbrain": ">=1.0", "torchaudio": ">=2.8"},
@@ -201,6 +206,24 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         required_deps=["torchaudio"],
         dep_versions={"torchaudio": ">=2.8"},
         install_hint="pip install senselab",
+    ),
+    # ── Audio: Speech Super-Resolution (ISOLATED — clearvoice in a subprocess venv) ──
+    "audio.tasks.speech_super_resolution.super_resolve_audios": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name=CLEARVOICE_VENV,
+        venv_requirements=CLEARVOICE_REQUIREMENTS,
+        venv_python=CLEARVOICE_PYTHON,
+        install_hint="Automatically provisioned in isolated environment",
+    ),
+    # ── Audio: Target Speaker Extraction (ISOLATED — clearvoice; needs ffmpeg on PATH) ──
+    "audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name=CLEARVOICE_VENV,
+        venv_requirements=CLEARVOICE_REQUIREMENTS,
+        venv_python=CLEARVOICE_PYTHON,
+        install_hint="Automatically provisioned in isolated environment; ffmpeg must be on PATH",
     ),
     # ── Video: Pose Estimation ──
     "video.tasks.pose_estimation.estimate_pose": CompatibilityEntry(
