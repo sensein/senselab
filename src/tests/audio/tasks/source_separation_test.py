@@ -1,6 +1,12 @@
 """unasdiff source separation — API contract and class-space handling."""
 
+import ast
+import json
+import types
+from pathlib import Path
+
 import pytest
+import soundfile
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -18,6 +24,40 @@ def _cuda_available() -> bool:
         return torch.cuda.is_available()
     except Exception:
         return False
+
+
+def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: dict) -> types.ModuleType:
+    """Replace the venv and the worker subprocess with a fake that records what the host sent.
+
+    Args:
+        monkeypatch: The test's monkeypatch fixture.
+        captured: Filled in with ``payload``, ``timeout``, ``in_subtypes`` and ``in_peak``.
+
+    Returns:
+        The ``unasdiff`` module, with ``ensure_venv``, ``venv_python`` and ``subprocess.run``
+        stubbed for the duration of the test.
+    """
+    from senselab.audio.tasks.source_separation import unasdiff as u
+
+    monkeypatch.setattr(u, "ensure_venv", lambda *a, **k: Path("/tmp/fake-unasdiff-venv"))
+    monkeypatch.setattr(u, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(
+        cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict
+    ) -> types.SimpleNamespace:
+        payload = json.loads(input)
+        captured["payload"] = payload
+        captured["timeout"] = timeout
+        captured["in_subtypes"] = [soundfile.info(p).subtype for p in payload["in_paths"]]
+        captured["in_peak"] = max(abs(soundfile.read(p, dtype="float32")[0]).max() for p in payload["in_paths"])
+        for paths in payload["out_paths"]:
+            for p in paths:
+                segment = torch.randn(int(u._WINDOW_S * u._TARGET_SR))
+                soundfile.write(p, segment.numpy(), u._TARGET_SR, subtype="FLOAT")
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"output_paths": payload["out_paths"]}), stderr="")
+
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+    return u
 
 
 def test_class_map_has_41_classes_in_50_slots() -> None:
@@ -497,3 +537,48 @@ def test_unasdiff_separates_a_mixture_into_n_sources(mono_audio_sample: Audio) -
 
     a, b = result[0][0].waveform, result[0][1].waveform
     assert (a - b).abs().mean() > 1e-4, "both slots returned the same signal"
+
+
+# ── WAV intermediates ─────────────────────────────────────────────────
+
+
+def test_input_windows_are_written_as_float_not_pcm16(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The window files the host hands the worker are FLOAT, and samples past +-1 survive.
+
+    soundfile's WAV default is PCM_16, which clips every such sample before the worker reads it.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    window_samples = int(u._WINDOW_S * u._TARGET_SR)
+    waveform = torch.zeros(1, window_samples)
+    waveform[0, 100] = 1.75
+    u.separate_with_unasdiff(
+        [Audio(waveform=waveform, sampling_rate=u._TARGET_SR)],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+    )
+
+    assert captured["in_subtypes"] == ["FLOAT"]
+    # PCM_16 caps at 1.0; the exact peak is not asserted because resample_audios filters even at
+    # an unchanged rate, which rounds the impulse off.
+    assert captured["in_peak"] > 1.5, "an out-of-range sample was clipped on write"
+
+
+def test_every_worker_wav_write_names_an_explicit_subtype() -> None:
+    """No ``sf.write`` in the worker relies on soundfile's PCM_16 default.
+
+    That default has silently corrupted a measurement three times in this repository.
+    """
+    tree = ast.parse(unasdiff._WORKER_SCRIPT)
+    writes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "write"
+    ]
+    assert writes, "test premise: the worker writes WAV files"
+    for node in writes:
+        keywords = {kw.arg for kw in node.keywords}
+        assert "subtype" in keywords, f"sf.write at worker line {node.lineno} relies on the PCM_16 default"
