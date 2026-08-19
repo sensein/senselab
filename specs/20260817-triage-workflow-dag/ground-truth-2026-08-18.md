@@ -274,3 +274,58 @@ tiebreaker or corroborator: **it is the only member with full recall.** A design
 acoustic evidence as one vote among four would drop this element entirely, and `mouth_noise` is a
 target event type for speech tasks in the existing pipeline
 (`mask.target_event_types_by_task` lists `["speech", "breath", "mouth_noise"]`).
+
+## The CrisperWhisper discrepancy resolved: an upstream retrain, reached through a stale ref — 2026-08-18
+
+Two runs of "the same model" on the same audio produced different non-speech annotations. The cause is
+neither preprocessing nor the machine.
+
+**Input route is not the cause.** Four routes on one machine — the original 48 kHz file untouched,
+senselab's `resample_audios` to 16 kHz, `scipy.signal.resample_poly` to 16 kHz, and a PCM_16 write of
+the same — give the **identical** five-token sequence. The earlier hypothesis that the resample path
+explained it was wrong.
+
+**The cause is the model revision.** `nyralabs/CrisperWhisper2.0_turbo` was retrained upstream:
+
+| revision | date | title |
+| --- | --- | --- |
+| `de0369c8a680` | **2026-08-17 09:58** | 2.1-generation update: two-stage retrain (verbatimize/continue) |
+| `831f87e1d69c` | 2026-08-03 12:01 | update |
+
+Pinned explicitly, same machine, same file:
+
+| revision | non-speech tokens | transcript |
+| --- | --- | --- |
+| `831f87e1` (2026-08-03) | **5** — `[breath] [breath] [cough] [UH] [breath]` | `… There's something going on.` |
+| `de0369c8` (2026-08-17 retrain) | **1** — `[cough]` | `[cough] There's something going on.` |
+
+**The 2.1 retrain emits far fewer non-speech annotations.** Both revisions recover the speech identically;
+they differ only in whether breath and filler events are annotated at all.
+
+**And this run reached the old weights through a stale ref.** The call was
+`HFModel(path_or_uri="nyralabs/CrisperWhisper2.0_turbo")` with no revision, which resolved to a locally
+cached `refs/main` still pointing at the 2026-08-03 commit, one day after upstream pushed the retrain.
+This is exactly the hazard CLAUDE.md records — *"an upstream push to a tracked ref loaded new weights
+under an unchanged key and served a result computed by the old commit as current"* — occurring in our own
+measurements, in the window between an upstream push and a cache refresh.
+
+## What this changes
+
+**Every CrisperWhisper result recorded earlier in these notes was produced by `831f87e1`**, the
+pre-retrain model, and must be read as such: the token timings scored against the verified windows, the
+26.2% / 10.2% breath coverage figures, and the claim that CrisperWhisper annotates breath.
+
+**The earlier conclusion that "my five-token reference is the outlier" is withdrawn.** Neither sequence
+is anomalous; they are two different models. The cluster's three byte-identical input routes were all
+running `de0369c8`.
+
+**For the design this is a choice, not a defect.** If `[breath]` annotation is wanted — and
+`span_refine` in `branch-1-airway.md` was to consume exactly those token edges — then the branch must
+pin `831f87e1`, because tracking `main` now yields a model that does not emit them. Any such pin needs
+its own justification recorded, since it means deliberately running a superseded model, and the retrain
+may well be better at what it was retrained for.
+
+**Unresolved:** which revision is more accurate. The five-token sequence aligns with human-verified
+events at 2.32, 5.36, 7.92 and 9.60 s, so its extra tokens are not spurious on this file — but one file
+cannot establish that the newer model is worse, only that it is different, and the `[UH]` in the older
+model's output is a mislabelled cough.
