@@ -74,6 +74,41 @@ CLEARVOICE_REQUIREMENTS = [
     "numpy<2.0,>=1.24.3",
 ]
 
+# ── SpeechScore ───────────────────────────────────────────────────────
+# Upstream's fifth component has no pip distribution (the `speechscore` project on PyPI is an
+# unrelated package by another author), so it arrives as a sparse clone of the repository at a pinned
+# commit -- which also pins the metric weights, committed alongside the code. Its dependency set is
+# disjoint from the inference platform's, hence a second venv. design.md §9.
+SPEECHSCORE_VENV = "clearvoice-speechscore"
+SPEECHSCORE_PYTHON = "3.11"
+SPEECHSCORE_REPO_URL = "https://github.com/modelscope/ClearerVoice-Studio.git"
+SPEECHSCORE_COMMIT = "6b3774dc79c46ae8bed2a4fa5f706f0ac8c75c61"
+
+# What the scores' own import chain touches, not upstream's whole-studio requirements.txt. pandas,
+# matplotlib and tqdm are here because NISQA_lib imports them at module scope.
+SPEECHSCORE_REQUIREMENTS = [
+    "torch>=2.0.1",
+    "torchaudio>=2.0.2",
+    "numpy<2.0,>=1.24.3",
+    "scipy>=1.10.1",
+    "librosa==0.10.2.post1",
+    "soundfile==0.12.1",
+    "resampy",
+    "museval",
+    "mir_eval==0.7",
+    "pesq==0.0.4",
+    "pystoi==0.3.3",
+    "onnxruntime",
+    "gammatone",
+    "pysptk",
+    "pyworld",
+    "fastdtw",
+    "xls_r_sqa",
+    "pandas",
+    "matplotlib",
+    "tqdm",
+]
+
 # ── Timeout terms ─────────────────────────────────────────────────────
 # Derivation, and the one measurement they rest on: design.md §5.
 _SECONDS_PER_AUDIO_SECOND = 8.0

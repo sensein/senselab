@@ -18,7 +18,14 @@ from typing import Optional
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
-from senselab.utils.clearvoice import CLEARVOICE_PYTHON, CLEARVOICE_REQUIREMENTS, CLEARVOICE_VENV
+from senselab.utils.clearvoice import (
+    CLEARVOICE_PYTHON,
+    CLEARVOICE_REQUIREMENTS,
+    CLEARVOICE_VENV,
+    SPEECHSCORE_PYTHON,
+    SPEECHSCORE_REQUIREMENTS,
+    SPEECHSCORE_VENV,
+)
 
 
 @dataclass
@@ -206,6 +213,15 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         required_deps=["torchaudio"],
         dep_versions={"torchaudio": ">=2.8"},
         install_hint="pip install senselab",
+    ),
+    # ── Audio: Features Extraction (SpeechScore — ISOLATED, pinned sparse clone) ──
+    "audio.tasks.features_extraction.extract_speechscore_metrics_from_audios": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name=SPEECHSCORE_VENV,
+        venv_requirements=SPEECHSCORE_REQUIREMENTS,
+        venv_python=SPEECHSCORE_PYTHON,
+        install_hint="Automatically provisioned in isolated environment; git must be on PATH",
     ),
     # ── Audio: Speech Super-Resolution (ISOLATED — clearvoice in a subprocess venv) ──
     "audio.tasks.speech_super_resolution.super_resolve_audios": CompatibilityEntry(
