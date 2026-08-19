@@ -42,11 +42,22 @@ except ModuleNotFoundError:
     SOUNDFILE_AVAILABLE = False
 
 
-# What the non-libsndfile backends actually write. torchcodec's AudioEncoder exposes no encoding
-# control, and torchaudio 2.9 forwards save() to it while warning that ``encoding`` and
-# ``bits_per_sample`` are unsupported, so 16-bit fixed point is the conservative assumption the
-# range policy is applied against for those containers.
+# What the non-libsndfile backends write; neither exposes encoding control.
 _TORCH_BACKEND_SUBTYPE = "PCM_16"
+
+
+def _decoded_samples_start_the_stream_timeline(decoder: "AudioDecoder") -> bool:
+    """Reports whether a stream's decoded samples and its timestamps share an origin.
+
+    Args:
+        decoder: An open torchcodec AudioDecoder.
+
+    Returns:
+        True when the stream's first timestamp is zero, so a time range requested of the decoder
+        and the sequence of decoded samples are measured from the same point. False when the
+        stream begins at a non-zero timestamp, and False when the decoder does not report one.
+    """
+    return getattr(decoder.metadata, "begin_stream_seconds", None) == 0
 
 
 class Audio(BaseModel):
@@ -219,14 +230,19 @@ class Audio(BaseModel):
             decoder = AudioDecoder(str(filepath))
             self._sampling_rate = decoder.metadata.sample_rate
 
-            if stop_seconds is not None:
-                samples = decoder.get_samples_played_in_range(start_seconds=start_seconds, stop_seconds=stop_seconds)
-            elif start_seconds > 0:
-                samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
-            else:
-                samples = decoder.get_all_samples()
+            if stop_seconds is None and start_seconds == 0.0:
+                return decoder.get_all_samples().data  # shape: (num_channels, num_samples)
 
-            return samples.data  # shape: (num_channels, num_samples)
+            if _decoded_samples_start_the_stream_timeline(decoder):
+                if stop_seconds is not None:
+                    samples = decoder.get_samples_played_in_range(
+                        start_seconds=start_seconds, stop_seconds=stop_seconds
+                    )
+                else:
+                    samples = decoder.get_samples_played_in_range(start_seconds=start_seconds)
+                return samples.data  # shape: (num_channels, num_samples)
+
+            return self._window_of_all_samples(decoder, start_seconds, stop_seconds)
 
         if TORCHAUDIO_AVAILABLE:
             # Fallback: torchaudio for loading, soundfile for metadata
@@ -261,6 +277,36 @@ class Audio(BaseModel):
             "Neither torchcodec nor torchaudio is available for audio loading. "
             "Ensure FFmpeg is installed system-wide and torchcodec/torchaudio matches your torch version."
         )
+
+    def _window_of_all_samples(
+        self, decoder: "AudioDecoder", start_seconds: float, stop_seconds: Optional[float]
+    ) -> torch.Tensor:
+        """Decodes the whole stream and returns the requested window as a slice of it.
+
+        Args:
+            decoder: An open torchcodec AudioDecoder.
+            start_seconds: Start of the window, measured from the first decoded sample.
+            stop_seconds: End of the window, measured from the first decoded sample.
+                None reads to the end of the stream.
+
+        Returns:
+            A torch.Tensor of shape (num_channels, num_samples).
+
+        Raises:
+            ValueError: If the start lies beyond the end of the stream.
+        """
+        all_samples = decoder.get_all_samples().data
+        total_samples = all_samples.shape[-1]
+        first_sample = round(start_seconds * self.sampling_rate)
+        if first_sample >= total_samples:
+            raise ValueError(
+                f"Offset ({start_seconds} s) exceeds the audio file duration "
+                f"({total_samples / self.sampling_rate:.2f} s)."
+            )
+        last_sample = total_samples
+        if stop_seconds is not None:
+            last_sample = min(round(stop_seconds * self.sampling_rate), total_samples)
+        return all_samples[:, first_sample:last_sample]
 
     def filepath(self) -> Union[str, None]:
         """Returns the file path of the audio if available."""
