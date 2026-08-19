@@ -438,18 +438,22 @@ number. `resolve_speechscore_metrics` refuses instead.
 scope — a `NameError` on any windowed call. Windowing is therefore not a capability this can expose,
 and the worker passes `window=None` unconditionally rather than offering a parameter that cannot work.
 
-## 10. One thing noticed and deliberately not fixed
+## 10. One thing noticed, and since fixed under its own PR
 
-`docs/compatibility-matrix.md` and `scripts/generate-compat-matrix.py` have diverged. The script writes
+`docs/compatibility-matrix.md` and `scripts/generate-compat-matrix.py` had diverged. The script wrote
 that exact path from `generate_matrix_markdown()`, which emits a per-function table and a "Test Matrix"
-section; the committed file contains neither, and is instead a hand-written document with sections the
-generator does not produce ("Python Support", "Core Dependencies", "Isolated Backends", "System
-Dependencies"). It also predates PR #568, since it has no `health_acoustics` row.
+section; the committed file contained neither, and was instead a hand-written document with sections
+the generator does not produce ("Python Support", "Core Dependencies", "Isolated Backends", "System
+Dependencies"). So running the generator would replace a maintained hand-written document with a
+different one.
 
-So running the generator would replace a maintained hand-written document with a different one. The two
-new venvs were therefore added to its "Isolated Backends" table by hand, which is the only way that
-section can be maintained today, and `model_registry.md` — which *is* genuinely generated — was
-regenerated with its script rather than edited.
+The two new venvs were therefore added to its "Isolated Backends" table by hand, which was the only
+way that section could be maintained at the time, and `model_registry.md` — which *is* genuinely
+generated — was regenerated with its script rather than edited.
 
-Resolving the divergence (make the file generated, or delete the script) is a separate change with its
-own decision to make.
+**PR #572 resolves it**, and found a second half worth knowing about: `docs/` is gitignored as pdoc's
+output directory, so the hand-written file was tracked only via a force-add — invisible to
+`git status`, which is why an overwrite would have shown up as nothing at all. That document now lives
+at `COMPATIBILITY.md` in the repo root, and the generated table stays in `docs/` uncommitted, produced
+by both docs workflows. **The hand-edit described above therefore belongs in `COMPATIBILITY.md`**, and
+moves there when the two branches meet.
