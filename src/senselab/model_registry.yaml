@@ -372,6 +372,58 @@
     b99a25a637a9963d5c7557f0b70597fc54c7a0bb). See
     specs/20260818-083214-driftse-upstream-mit/design.md.
 
+- name: ClearVoice FRCRN (16kHz)
+  task: speech_enhancement
+  source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
+  model_id: alibabasglab/FRCRN_SE_16K
+  parameters: ~40M (161 MB checkpoint)
+  training_data: >-
+    DNS-Challenge and VoiceBank-DEMAND scale corpora per upstream; this backend is inference-only
+    and verifies no training config.
+  license: >-
+    Apache-2.0, on both the upstream repository and each weights repository's model card. senselab
+    pins by pre-staging the checkpoint at a resolved commit and pointing the loader at that local
+    path, because clearvoice's own SpeechModel.download_model calls snapshot_download with no
+    revision argument; see specs/20260819-clearvoice-integration/design.md D-6.
+  recommended_for: >-
+    Enhancement at 16kHz that keeps non-speech events. Measured against six human-verified events:
+    breaths survive at -2.0 and -5.5 dB and coughs at -1.0 and +0.1 dB, so it is the checkpoint to
+    choose when breaths or coughs are signal rather than noise. Energy-conserving.
+
+- name: ClearVoice MossFormerGAN (16kHz)
+  task: speech_enhancement
+  source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
+  model_id: alibabasglab/MossFormerGAN_SE_16K
+  parameters: ~10M generator + ~24M discriminator (39 MB + 98 MB checkpoints)
+  training_data: >-
+    As above; upstream reports the best PESQ of the three on VoiceBank-DEMAND and DNS-2020.
+  license: >-
+    Apache-2.0, on both the upstream repository and each weights repository's model card. senselab
+    pins by pre-staging the checkpoint at a resolved commit and pointing the loader at that local
+    path, because clearvoice's own SpeechModel.download_model calls snapshot_download with no
+    revision argument; see specs/20260819-clearvoice-integration/design.md D-6.
+  recommended_for: >-
+    Speech alone, aggressively. Highest PESQ of the three upstream, but measured to discard about
+    92% of input energy: breaths at -51 dB and two of four verified coughs removed entirely.
+    Destructive for any analysis that treats non-speech sound as signal.
+
+- name: ClearVoice MossFormer2 (48kHz)
+  task: speech_enhancement
+  source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
+  model_id: alibabasglab/MossFormer2_SE_48K
+  parameters: ~55M (222 MB checkpoint)
+  training_data: >-
+    As above, at 48 kHz; upstream compares it against Resemble-Enhance and DeepFilterNet.
+  license: >-
+    Apache-2.0, on both the upstream repository and each weights repository's model card. senselab
+    pins by pre-staging the checkpoint at a resolved commit and pointing the loader at that local
+    path, because clearvoice's own SpeechModel.download_model calls snapshot_download with no
+    revision argument; see specs/20260819-clearvoice-integration/design.md D-6.
+  recommended_for: >-
+    Fullband (48kHz) enhancement. Measured to destroy breaths (-37 and -40 dB on two verified
+    exhalations) while keeping coughs (-0.6, +0.2 dB), so the choice between this and FRCRN decides
+    which non-speech element survives. Energy-conserving.
+
 # Health Acoustics
 - name: HeAR (encoder)
   task: health_acoustics
@@ -445,6 +497,63 @@
     model list and not wired into audio_analysis (via subprocess venv,
     pinned upstream commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa)
 
+- name: ClearVoice MossFormer2 (separation, 16kHz)
+  task: separation
+  source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
+  model_id: alibabasglab/MossFormer2_SS_16K
+  parameters: ~170M (670 MB checkpoint)
+  training_data: >-
+    LRS2-2Mix, WSJ0-2Mix, Libri2Mix and WHAM! per upstream's unified model; inference-only here.
+  license: >-
+    Apache-2.0, on both the upstream repository and each weights repository's model card. senselab
+    pins by pre-staging the checkpoint at a resolved commit and pointing the loader at that local
+    path, because clearvoice's own SpeechModel.download_model calls snapshot_download with no
+    revision argument; see specs/20260819-clearvoice-integration/design.md D-6.
+  recommended_for: >-
+    Two-speaker separation at 16kHz; upstream's SI-SNRi leads SepFormer on LRS2-2Mix (15.5 vs 13.5).
+    Not a class decomposer: measured to assign each cough burst to whichever of its two slots is
+    free rather than isolating cough as a class. Its two sources come back RMS-matched to a
+    -25 dBFS normalised input rather than to the caller's level, which each returned Audio reports.
+
+# Speech Super-Resolution
+- name: ClearVoice MossFormer2 (super-resolution, 48kHz)
+  task: super_resolution
+  source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
+  model_id: alibabasglab/MossFormer2_SR_48K
+  parameters: ~55M MossFormer + ~55M HiFi-GAN vocoder (218 MB + 221 MB checkpoints)
+  training_data: >-
+    Upstream reports LSD and PESQ on VoiceBank-DEMAND downsampled to 16/24/32 kHz; inference-only
+    here.
+  license: >-
+    Apache-2.0, on both the upstream repository and each weights repository's model card. senselab
+    pins by pre-staging the checkpoint at a resolved commit and pointing the loader at that local
+    path, because clearvoice's own SpeechModel.download_model calls snapshot_download with no
+    revision argument; see specs/20260819-clearvoice-integration/design.md D-6.
+  recommended_for: >-
+    Bandwidth extension to 48kHz from an effective input rate of 16kHz or above. Output is always
+    48kHz, which is why this is a separate task from enhancement. Upstream pairs it with
+    MossFormer2_SE_48K when the input is also noisy.
+
+# Audio-Visual Target Speaker Extraction
+- name: ClearVoice AV-MossFormer2 (TSE, 16kHz)
+  task: target_speaker_extraction
+  source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11; needs ffmpeg)
+  model_id: alibabasglab/AV_MossFormer2_TSE_16K
+  parameters: ~180M (735 MB checkpoint) plus an 86 MB S3FD face detector
+  training_data: >-
+    LRS2/VoxCeleb2 lip-conditioned recipes per upstream's train/target_speaker_extraction;
+    inference-only here.
+  license: >-
+    Apache-2.0, as above. Two weights, pinned two different ways: the checkpoint by resolved commit
+    (design.md D-6), and the S3FD face detector by sha256
+    d54a87c2b7543b64729c9a25eafd188da15fd3f6e02f0ecec76ae1b30d86c491 at commit
+    6b3774dc79c46ae8bed2a4fa5f706f0ac8c75c61, because it ships in no wheel and upstream fetches it
+    from an unversioned Google Drive id (design.md D-7).
+  recommended_for: >-
+    Extracting each visible speaker's voice from a video using their lip motion, one output per
+    detected face track. Requires a video file, not decoded frames, and ffmpeg on PATH. Not
+    verified numerically in this repository -- see design.md D-3 and the task's doc.md.
+
 # Feature Extraction
 - name: SPARC (Articulatory)
   task: features_extraction
@@ -489,3 +598,21 @@
     explicit HFModel id starting with Qwen/Qwen3-TTS, not in any default model
     list (via subprocess venv, pinned commit
     0c0e3051f131929182e2c023b9537f8b1c68adfe, licence apache-2.0)
+
+- name: SpeechScore
+  task: features_extraction
+  source: modelscope/ClearerVoice-Studio (pinned sparse git clone, via subprocess venv, Python 3.11)
+  model_id: ClearerVoice-Studio/speechscore
+  parameters: N/A (18 metric families; NISQA, DNSMOS and DISTILL_MOS carry their own small models)
+  training_data: >-
+    N/A for the signal metrics. The three MOS predictors are upstream's published weights, committed
+    in the repository beside the code and therefore pinned by the same commit.
+  license: >-
+    Apache-2.0 for the toolkit. NISQA's weights carry their own LICENSE_model_weights file in the
+    tree; check it before any use that turns on licence terms. Pinned at commit
+    6b3774dc79c46ae8bed2a4fa5f706f0ac8c75c61.
+  recommended_for: >-
+    Speech-quality assessment. Fourteen metrics need a clean reference (PESQ, STOI, SI-SDR,
+    BSSEval, ...); four do not (DNSMOS, NISQA, DISTILL_MOS, SRMR), which is what makes it usable on
+    a real recording. senselab classifies that requirement itself and refuses a reference-requiring
+    metric with no reference, because upstream would score it against a copy of the test signal.
