@@ -437,3 +437,19 @@ number. `resolve_speechscore_metrics` refuses instead.
 `Framing(window * score_rate, window * score_rate, maxlen)` where `maxlen` is never assigned in that
 scope — a `NameError` on any windowed call. Windowing is therefore not a capability this can expose,
 and the worker passes `window=None` unconditionally rather than offering a parameter that cannot work.
+
+## 10. One thing noticed and deliberately not fixed
+
+`docs/compatibility-matrix.md` and `scripts/generate-compat-matrix.py` have diverged. The script writes
+that exact path from `generate_matrix_markdown()`, which emits a per-function table and a "Test Matrix"
+section; the committed file contains neither, and is instead a hand-written document with sections the
+generator does not produce ("Python Support", "Core Dependencies", "Isolated Backends", "System
+Dependencies"). It also predates PR #568, since it has no `health_acoustics` row.
+
+So running the generator would replace a maintained hand-written document with a different one. The two
+new venvs were therefore added to its "Isolated Backends" table by hand, which is the only way that
+section can be maintained today, and `model_registry.md` — which *is* genuinely generated — was
+regenerated with its script rather than edited.
+
+Resolving the divergence (make the file generated, or delete the script) is a separate change with its
+own decision to make.
