@@ -290,3 +290,60 @@ def test_the_subtype_constant_has_one_home() -> None:
         + "\n".join(f"  {d}" for d in duplicates)
         + f"\n\nImport it from senselab.{_CONSTANT_HOME[:-3].replace('/', '.')} instead."
     )
+
+
+# Formats that carry a float sample beyond +/-1 without clipping it. A subprocess hand-off is an
+# internal intermediate, so it must be one of these; ``resolve_subtype`` gives them FLOAT.
+_FLOAT_CAPABLE_FORMATS = {"wav", "aiff", "aifc", "w64", "caf", "rf64", "au", "nist", "sd2"}
+
+# Hand-off sites admitted with a reason. Ships empty: a range-limited intermediate has no reason.
+RANGE_LIMITED_HANDOFF: dict[str, str] = {}
+
+
+def _handoff_formats(source: str, origin: str) -> List[str]:
+    """Return ``save_to_file`` sites whose literal ``format=`` cannot carry the full range."""
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "save_to_file"):
+            continue
+        for kw in node.keywords:
+            if kw.arg != "format" or not isinstance(kw.value, ast.Constant):
+                continue
+            fmt = str(kw.value.value).lower()
+            if fmt not in _FLOAT_CAPABLE_FORMATS:
+                offenders.append(f"{origin}:{node.lineno} (format={fmt!r})")
+    return offenders
+
+
+def test_no_internal_handoff_writes_a_format_that_cannot_carry_the_range() -> None:
+    """A hand-off to a subprocess worker must not clip the signal the model then sees.
+
+    FLAC tops out at PCM_24, so a waveform peaking above +/-1 -- which resampling routinely
+    produces -- reached eight workers clipped, with the loss invisible to both sides.
+    """
+    offenders: List[str] = []
+    for path in sorted(_src_root().rglob("*.py")):
+        origin = path.relative_to(_src_root()).as_posix()
+        if origin in RANGE_LIMITED_HANDOFF:
+            continue
+        offenders.extend(_handoff_formats(path.read_text(), origin))
+
+    assert not offenders, (
+        "save_to_file called with a format that clips samples beyond +/-1:\n    "
+        + "\n    ".join(offenders)
+        + "\nAn internal hand-off should omit ``format`` (or use one of "
+        + f"{sorted(_FLOAT_CAPABLE_FORMATS)}) so the worker reads what the caller held."
+    )
+
+
+def test_the_handoff_detector_reads_the_format_argument() -> None:
+    """The guard must key on the format, not on the presence of a call."""
+    assert _handoff_formats('a.save_to_file(p, format="flac")', "x.py")
+    assert _handoff_formats("a.save_to_file(p, format='mp3')", "x.py")
+    assert not _handoff_formats('a.save_to_file(p, format="wav")', "x.py")
+    assert not _handoff_formats("a.save_to_file(p)", "x.py")
+    # A computed format is out of scope: only a literal choice is a decision made here.
+    assert not _handoff_formats("a.save_to_file(p, format=fmt)", "x.py")

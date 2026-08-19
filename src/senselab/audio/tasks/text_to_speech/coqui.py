@@ -141,8 +141,8 @@ class CoquiTTS:
             target_paths: List[str] = []
             if targets:
                 for i, audio in enumerate(targets):
-                    path = str(tmp / f"target_{i}.flac")
-                    audio.save_to_file(path, format="flac")
+                    path = str(tmp / f"target_{i}.wav")
+                    audio.save_to_file(path)
                     target_paths.append(path)
 
             input_json = json.dumps(

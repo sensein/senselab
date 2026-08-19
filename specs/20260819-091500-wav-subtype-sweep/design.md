@@ -276,3 +276,49 @@ recording peaking above full scale is clipped before the worker sees it. Fixing 
 subtype parameter on `save_to_file` or replacing those three calls, and it needs its own decision
 about the public API; it is not folded in here. The guard does not see it, because the guard
 watches `sf.write`.
+
+## The hand-off format: eight workers were reading a clipped signal
+
+The range policy's first act, once merged, was to fail CI on
+`test_extract_sparc_features_resample`:
+
+```
+ValueError: 0.03125% of samples exceed ±1 (peak 1.07517) and FLAC/PCM_24 cannot
+represent them writing /tmp/senselab-sparc-.../audio_0.flac
+```
+
+That is not the policy being too strict. It is the policy reporting a defect that predates it.
+
+**Mechanism.** Eight call sites handed audio to a subprocess worker by writing
+`format="flac"` to a temp file. FLAC has no float subtype at any bit depth — libsndfile
+offers `PCM_16`, `PCM_24`, `PCM_S8`, and nothing else — so the container's ceiling is ±1
+regardless of depth. Resampling overshoots that ceiling routinely: sinc interpolation rings
+around a transient, and a signal already near full scale comes out above it. Every such
+sample arrived at the model hard-clipped, and neither side could tell, because the write
+returned success and the read returned a plausible waveform.
+
+The eight: `classification/speech_emotion_recognition/api.py`, `ssl_embeddings/s3prl.py`,
+`features_extraction/sparc.py`, `features_extraction/ppg.py`, `voice_cloning/sparc.py` (×2),
+`voice_cloning/coqui.py` (×2), `text_to_speech/coqui.py`. Only SPARC's resample test
+happened to feed a waveform that crossed the line, which is why one test failed rather
+than eight.
+
+**Why FLAC was there.** Compression, on a file that exists for the duration of one
+subprocess call. Weighed against silently altering the signal a model then measures, that
+is not a trade worth making.
+
+**Fix.** Omit `format` and let the path extension decide: `.wav` resolves to `FLOAT`, which
+is bit-exact and has no range ceiling. Every read side was already format-agnostic
+(`sf.read(path, dtype="float32")`, the portable shim's `read_audio`, or Coqui's own
+`speaker_wav` loader), so the switch needed no worker changes. Rejected alternatives:
+`out_of_range="normalize"` would have rescaled the signal the model sees, and
+`out_of_range="warn"` would have kept the clipping with a log line nobody reads.
+
+**Guard.** `test_no_internal_handoff_writes_a_format_that_cannot_carry_the_range` fails on
+any `save_to_file` whose literal `format=` is outside the float-capable set. It fails on
+eight sites before the fix and none after; `RANGE_LIMITED_HANDOFF` ships empty, because an
+internal intermediate has no reason to be range-limited. A computed `format=` is out of
+scope — only a literal is a decision made at that site.
+
+The generic marshaller in `utils/subprocess_venv.py` had already been moved to `.wav` in
+the same change; two docstrings still advertised `.flac` and now do not.

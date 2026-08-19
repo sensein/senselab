@@ -5,7 +5,7 @@ that conflict with the core senselab installation. IPC uses a temp
 directory with:
 - manifest.json: call spec + JSON-serializable args + file metadata
 - *.safetensors: tensor data (via safetensors, already a dep)
-- *.flac: audio data (lossless compressed via torchaudio)
+- *.wav: audio data (float, written through the range policy)
 - *.npy: numpy arrays
 
 File references include optional integrity metadata:
@@ -708,7 +708,7 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
     - FileRef → path reference with integrity metadata
     - torch.Tensor → safetensors (fast, safe, HF standard)
     - numpy.ndarray → .npy (native numpy)
-    - senselab Audio → .flac (lossless compressed audio)
+    - senselab Audio → .wav (float, via its own writer)
     - senselab Video / Path to video → path reference (no copy)
     - PIL.Image → .png (lossless)
     - bytes/bytearray → .bin (raw binary)
@@ -737,8 +737,7 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
         np.save(str(path), value)
         return {"type": "ndarray", "file": f"{key}.npy"}
 
-    # senselab Audio (has waveform + sampling_rate) → WAV/FLOAT via its own writer, which applies
-    # the range policy. FLAC would clip anything past ±1 (it has no float subtype at any depth).
+    # senselab Audio (has waveform + sampling_rate) → WAV/FLOAT via its own writer.
     if hasattr(value, "waveform") and hasattr(value, "sampling_rate") and hasattr(value, "save_to_file"):
         path = data_dir / f"{key}.wav"
         value.save_to_file(str(path))

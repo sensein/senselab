@@ -607,8 +607,8 @@ def _classify_continuous_ser_venv(
 
         audio_paths = []
         for i, audio in enumerate(audios):
-            path = str(tmp / f"audio_{i}.flac")
-            audio.save_to_file(path, format="flac")
+            path = str(tmp / f"audio_{i}.wav")
+            audio.save_to_file(path)
             audio_paths.append(path)
 
         # Forward the resolved commit SHA to the worker, never the ref -- it has no senselab
