@@ -385,3 +385,60 @@ detector.
 The `Snore` activation around 6.5-7.0 s also explains the phantom "quiet breath at 0.49": that region
 sits on a Snore/Breathe boundary in HeAR's label space, so the 0.49 was genuine uncertainty between two
 classes at a transition rather than a weak detection of breath.
+
+## How much of an event HeAR needs, and what YAMNet's shorter window buys — 2026-08-19
+
+### HeAR fires on 40 ms of cough inside a 2 s window
+
+A 2 s window was slid in from the left at 20 ms steps and the class posterior recorded against the
+overlap with the verified event:
+
+| event | overlap at p > 0.5 | as % of the event |
+| --- | --- | --- |
+| cough 1 (0.568 s) | **0.04 s** | 7% |
+| breath 1 (1.221 s) | 0.16 s | 13% |
+| cough 2 | 0.00 s | contaminated — see below |
+| breath 2 | 0.00 s | contaminated |
+
+The two zeros are artefacts, not results: a window approaching cough 2 from 7.61 s already contains
+cough 1, and one approaching breath 2 contains breath 1's tail, so the posterior is firing on the
+*previous* event. The merge limit showing up inside the sensitivity measurement.
+
+**So the detector is a near-ideal presence indicator with a box-car response.** Forty milliseconds of
+cough — 2% of the window — saturates it. That is why the posterior plateau has sharp edges and width
+exactly D + 2 s rather than a gradual ramp, and it means a firing window carries one bit: *something of
+this class is somewhere in these two seconds*. It cannot locate, cannot bound, and cannot count.
+
+### YAMNet's 0.96 s window resolves both pairs
+
+| pair | gap | HeAR (W = 2.00 s) | YAMNet (W = 0.96 s) |
+| --- | --- | --- | --- |
+| breaths | 1.81 s | **merge** (+0.19 s) | separable (−0.85 s) |
+| coughs | 1.12 s | **merge** (+0.88 s) | separable (−0.16 s) |
+
+Measured, not just predicted: YAMNet's `Cough` row shows two distinct blocks with a clear gap at
+~8.5-9.4 s where HeAR's is one continuous plateau, and its `Breathing` row likewise separates the two
+breaths.
+
+YAMNet also carries what HeAR lacks:
+
+- an explicit **`Silence`** class, which fires brightly in exactly the verified-empty gaps — HeAR has no
+  way to say "nothing here";
+- a richer vocal vocabulary for this task: `Gasp`, `Sigh`, `Throat clearing`, `Sneeze`, `Snoring`
+  alongside `Breathing` and `Cough`;
+- far better speech detection — bright through 10.7-13.2 s where HeAR's top-1 posterior collapsed to
+  0.1-0.35.
+
+The trade is confidence: HeAR's cough and breath posteriors saturate near 1.0 where YAMNet's sit at
+0.4-0.7.
+
+### This reverses the proposer/labeller assignment in `branch-1-airway.md`
+
+That draft had `hear_scan` proposing and YAMNet/AST corroborating. The evidence says the opposite:
+
+- **YAMNet proposes** — it has the temporal resolution, an explicit silence class, and the vocabulary.
+- **HeAR confirms** — 40 ms suffices to fire it, so it is a sensitive gate with very few false negatives,
+  and its saturated posteriors are the confident label.
+- **DSP bounds** — ±5 ms on a cough onset, which neither model approaches.
+
+Both models still miss the 202 ms mouth sound entirely, so `transient_propose` is unaffected.
