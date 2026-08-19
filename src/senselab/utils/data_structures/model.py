@@ -371,7 +371,7 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
     Args:
         model_id: HuggingFace-style model identifier.
         task: One of ``"diarization"``, ``"asr"``, ``"embeddings"``, ``"enhancement"``,
-            ``"separation"``.
+            ``"separation"``, ``"super_resolution"``, ``"target_speaker_extraction"``.
 
     Returns:
         The provider-specific `SenselabModel` subclass instance.
@@ -414,10 +414,10 @@ def model_for_task(model_id: str, *, task: str) -> SenselabModel:
     if task == "embeddings":
         return SpeechBrainModel(path_or_uri=model_id)
     if task == "enhancement":
-        if model_id.startswith("LIANGXU123/DriftSE"):
+        if model_id.startswith("LIANGXU123/DriftSE") or model_id.startswith("alibabasglab/"):
             return HFModel(path_or_uri=model_id)
         return SpeechBrainModel(path_or_uri=model_id)
-    if task == "separation":
+    if task in ("separation", "super_resolution", "target_speaker_extraction"):
         return HFModel(path_or_uri=model_id)
     raise ValueError(f"unknown task: {task}")
 
