@@ -557,7 +557,7 @@
 </span><span id="L-387"><a href="#L-387"><span class="linenos">387</span></a><span class="sd">        ``speaker_diarization/api.py``&#39;s ``elif`` chain. That duplication is</span>
 </span><span id="L-388"><a href="#L-388"><span class="linenos">388</span></a><span class="sd">        pre-existing and worth collapsing into one source of truth eventually;</span>
 </span><span id="L-389"><a href="#L-389"><span class="linenos">389</span></a><span class="sd">        the two tables must be kept in sync by hand until then. The enhancement</span>
-</span><span id="L-390"><a href="#L-390"><span class="linenos">390</span></a><span class="sd">        branch below duplicates ``enhance_audios``&#39;s ``sensein/driftse`` prefix</span>
+</span><span id="L-390"><a href="#L-390"><span class="linenos">390</span></a><span class="sd">        branch below duplicates ``enhance_audios``&#39;s ``LIANGXU123/DriftSE`` prefix</span>
 </span><span id="L-391"><a href="#L-391"><span class="linenos">391</span></a><span class="sd">        check the same way, for the same reason: importing the literal from</span>
 </span><span id="L-392"><a href="#L-392"><span class="linenos">392</span></a><span class="sd">        ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend</span>
 </span><span id="L-393"><a href="#L-393"><span class="linenos">393</span></a><span class="sd">        on ``audio``, inverting the package layering. The separation branch has</span>
@@ -584,7 +584,7 @@
 </span><span id="L-414"><a href="#L-414"><span class="linenos">414</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">:</span>
 </span><span id="L-415"><a href="#L-415"><span class="linenos">415</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
 </span><span id="L-416"><a href="#L-416"><span class="linenos">416</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;enhancement&quot;</span><span class="p">:</span>
-</span><span id="L-417"><a href="#L-417"><span class="linenos">417</span></a>        <span class="k">if</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;sensein/driftse&quot;</span><span class="p">):</span>
+</span><span id="L-417"><a href="#L-417"><span class="linenos">417</span></a>        <span class="k">if</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;LIANGXU123/DriftSE&quot;</span><span class="p">):</span>
 </span><span id="L-418"><a href="#L-418"><span class="linenos">418</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
 </span><span id="L-419"><a href="#L-419"><span class="linenos">419</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
 </span><span id="L-420"><a href="#L-420"><span class="linenos">420</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;separation&quot;</span><span class="p">:</span>
@@ -1672,7 +1672,7 @@ processes via file locking and caches results on the shared filesystem.</p>
 </span><span id="model_for_task-388"><a href="#model_for_task-388"><span class="linenos">388</span></a><span class="sd">        ``speaker_diarization/api.py``&#39;s ``elif`` chain. That duplication is</span>
 </span><span id="model_for_task-389"><a href="#model_for_task-389"><span class="linenos">389</span></a><span class="sd">        pre-existing and worth collapsing into one source of truth eventually;</span>
 </span><span id="model_for_task-390"><a href="#model_for_task-390"><span class="linenos">390</span></a><span class="sd">        the two tables must be kept in sync by hand until then. The enhancement</span>
-</span><span id="model_for_task-391"><a href="#model_for_task-391"><span class="linenos">391</span></a><span class="sd">        branch below duplicates ``enhance_audios``&#39;s ``sensein/driftse`` prefix</span>
+</span><span id="model_for_task-391"><a href="#model_for_task-391"><span class="linenos">391</span></a><span class="sd">        branch below duplicates ``enhance_audios``&#39;s ``LIANGXU123/DriftSE`` prefix</span>
 </span><span id="model_for_task-392"><a href="#model_for_task-392"><span class="linenos">392</span></a><span class="sd">        check the same way, for the same reason: importing the literal from</span>
 </span><span id="model_for_task-393"><a href="#model_for_task-393"><span class="linenos">393</span></a><span class="sd">        ``audio.tasks.speech_enhancement.api`` here would make ``utils`` depend</span>
 </span><span id="model_for_task-394"><a href="#model_for_task-394"><span class="linenos">394</span></a><span class="sd">        on ``audio``, inverting the package layering. The separation branch has</span>
@@ -1699,7 +1699,7 @@ processes via file locking and caches results on the shared filesystem.</p>
 </span><span id="model_for_task-415"><a href="#model_for_task-415"><span class="linenos">415</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;embeddings&quot;</span><span class="p">:</span>
 </span><span id="model_for_task-416"><a href="#model_for_task-416"><span class="linenos">416</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
 </span><span id="model_for_task-417"><a href="#model_for_task-417"><span class="linenos">417</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;enhancement&quot;</span><span class="p">:</span>
-</span><span id="model_for_task-418"><a href="#model_for_task-418"><span class="linenos">418</span></a>        <span class="k">if</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;sensein/driftse&quot;</span><span class="p">):</span>
+</span><span id="model_for_task-418"><a href="#model_for_task-418"><span class="linenos">418</span></a>        <span class="k">if</span> <span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;LIANGXU123/DriftSE&quot;</span><span class="p">):</span>
 </span><span id="model_for_task-419"><a href="#model_for_task-419"><span class="linenos">419</span></a>            <span class="k">return</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
 </span><span id="model_for_task-420"><a href="#model_for_task-420"><span class="linenos">420</span></a>        <span class="k">return</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">model_id</span><span class="p">)</span>
 </span><span id="model_for_task-421"><a href="#model_for_task-421"><span class="linenos">421</span></a>    <span class="k">if</span> <span class="n">task</span> <span class="o">==</span> <span class="s2">&quot;separation&quot;</span><span class="p">:</span>
@@ -1744,7 +1744,7 @@ script, and the enhancement path.</p>
   <code>speaker_diarization/api.py</code>'s <code>elif</code> chain. That duplication is
   pre-existing and worth collapsing into one source of truth eventually;
   the two tables must be kept in sync by hand until then. The enhancement
-  branch below duplicates <code>enhance_audios</code>'s <code>sensein/driftse</code> prefix
+  branch below duplicates <code>enhance_audios</code>'s <code>LIANGXU123/DriftSE</code> prefix
   check the same way, for the same reason: importing the literal from
   <code>audio.tasks.speech_enhancement.api</code> here would make <code>utils</code> depend
   on <code>audio</code>, inverting the package layering. The separation branch has
