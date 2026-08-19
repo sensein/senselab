@@ -131,7 +131,13 @@ from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.dependencies import hf_subprocess_env
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 _QWEN_TTS_VENV = "qwen-tts"
 _QWEN_TTS_PYTHON = "3.12"
@@ -178,6 +184,9 @@ try:
     device = args["device"]
     out_paths = args["out_paths"]
 
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import write_audio
+
     # dtype matches the model card verbatim. device_map is set only for CUDA --
     # from_pretrained's own default (no device_map) places the model on CPU, and
     # invoking accelerate's dispatch machinery for a CPU-only run buys nothing.
@@ -209,7 +218,7 @@ try:
     )
 
     for wav, out_path in zip(wavs, out_paths):
-        sf.write(out_path, np.asarray(wav, dtype="float32"), sr)
+        write_audio(out_path, np.asarray(wav, dtype="float32"), int(sr))
 
     print(json.dumps({"output_paths": out_paths, "sample_rate": int(sr)}))
 except Exception as exc:
@@ -324,6 +333,7 @@ def synthesize_texts_with_qwen(
                 "instruct": instruct,
                 "device": device_type.value,
                 "out_paths": out_paths,
+                "io_dir": stage_portable_audio_io(tmp),
             }
         )
 

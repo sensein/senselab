@@ -137,7 +137,7 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
     """Extracts phonetic posteriorgrams (PPGs) from every audio.
 
     The ppgs model runs in an isolated subprocess venv with its own
-    Python and dependencies. Audio is transferred via FLAC files.
+    Python and dependencies. Audio is transferred via WAV files.
 
     Args:
         audios: The audios to extract PPGs from.
@@ -157,11 +157,11 @@ def extract_ppgs_from_audios(audios: List[Audio], device: Optional[DeviceType] =
     with tempfile.TemporaryDirectory(prefix="senselab-ppgs-") as tmpdir:
         tmp = Path(tmpdir)
 
-        # Serialize audios to FLAC
+        # Serialize audios for the worker
         audio_paths = []
         for i, audio in enumerate(audios):
-            path = str(tmp / f"audio_{i}.flac")
-            audio.save_to_file(path, format="flac")
+            path = str(tmp / f"audio_{i}.wav")
+            audio.save_to_file(path)
             audio_paths.append(path)
 
         # Run worker in isolated venv

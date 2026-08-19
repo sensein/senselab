@@ -192,7 +192,7 @@ def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) 
         temp_file_path = Path(temp_dir) / "test_audio.wav"
 
         # Call save_to_file to save the audio
-        audio_sample.save_to_file(file_path=temp_file_path, format="wav", bits_per_sample=16)
+        audio_sample.save_to_file(file_path=temp_file_path, format="wav", subtype="PCM_16")
 
         # Check if the file was created
         assert temp_file_path.exists(), "The audio file was not saved."
