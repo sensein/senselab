@@ -80,7 +80,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # for each isolated backend's actual pinned versions.
     "audio.tasks.speaker_diarization.diarize_audios": CompatibilityEntry(
         required_deps=["pyannote-audio", "torchaudio"],
-        dep_versions={"pyannote-audio": ">=3.0", "torchaudio": ">=2.8"},
+        dep_versions={"pyannote-audio": ">=4.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speaker Embeddings ──
@@ -167,7 +167,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     # ── Audio: Voice Activity Detection ──
     "audio.tasks.voice_activity_detection.detect_human_voice_activity_in_audios": CompatibilityEntry(
         required_deps=["pyannote-audio", "torchaudio"],
-        dep_versions={"pyannote-audio": ">=3.0", "torchaudio": ">=2.8"},
+        dep_versions={"pyannote-audio": ">=4.0", "torchaudio": ">=2.8"},
         install_hint="pip install senselab",
     ),
     # ── Audio: Speech Emotion Recognition ──
