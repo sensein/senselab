@@ -128,6 +128,36 @@ class SpeechBrainEnhancer:
 
         return cls._models[key], device, dtype
 
+
+    @staticmethod
+    def _single_source(waveform: "torch.Tensor", model: SpeechBrainModel) -> "torch.Tensor":
+        """Return the one enhanced source, refusing a multi-source separation output.
+
+        ``SepformerSeparation.separate_batch`` returns ``(batch, samples, sources)``. An
+        enhancement checkpoint yields one source; a separation checkpoint yields two or three.
+
+        Args:
+            waveform: The tensor returned by ``separate_batch``.
+            model: The model that produced it, named in the error.
+
+        Returns:
+            The waveform with the source axis dropped.
+
+        Raises:
+            ValueError: If more than one source is present.
+        """
+        if waveform.ndim < 3:
+            return waveform
+        n_sources = waveform.shape[-1]
+        if n_sources > 1:
+            raise ValueError(
+                f"{model.path_or_uri} returned {n_sources} separated sources. "
+                "enhance_audios yields one Audio per input and cannot represent a multi-source "
+                "separation; flattening them here would interleave the sources sample-by-sample. "
+                "Use senselab.audio.tasks.source_separation for separation checkpoints."
+            )
+        return waveform[..., 0]
+
     @classmethod
     def enhance_audios_with_speechbrain(
         cls, audios: List[Audio], model: Optional[SpeechBrainModel] = None, device: Optional[DeviceType] = None
@@ -195,6 +225,7 @@ class SpeechBrainEnhancer:
                         enhanced_waveform = enhancer.enhance_batch(segment.waveform, lengths=torch.tensor([1.0]))
                     else:
                         enhanced_waveform = enhancer.separate_batch(segment.waveform)
+                        enhanced_waveform = cls._single_source(enhanced_waveform, model)
 
                     enhanced_segments.append(
                         Audio(waveform=enhanced_waveform.reshape(1, -1), sampling_rate=segment.sampling_rate)
