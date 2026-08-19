@@ -29,9 +29,8 @@ linearly with duration rather than staying bounded, and the authors' own ``slide
 never executing. It also did not achieve its stated purpose — brouhaha's VAD head is
 high-recall and reads near 1.0 through short pauses regardless of windowing.
 
-Frames arrive as one continuous timelineand stitched back into one continuous per-frame timeline via
-``stitch_frames`` — flat memory, native ~17 ms resolution (shared with the
-segmentation-3.0 extractor).
+Long recordings are chunked in the worker and stitched back into one continuous per-frame timeline
+via ``stitch_frames`` — flat memory, native ~17 ms resolution.
 """
 
 from __future__ import annotations
