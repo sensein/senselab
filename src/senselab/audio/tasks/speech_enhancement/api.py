@@ -1,10 +1,16 @@
 """This module provides the API for the senselab speech enhancement task."""
 
-from typing import List, Optional
+from typing import Any, Callable, List, Mapping, Optional
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.speech_enhancement.clearvoice import (
+    CLEARVOICE_ENHANCEMENT_TASK,
+    enhance_audios_with_clearvoice,
+)
 from senselab.audio.tasks.speech_enhancement.driftse import enhance_audios_with_driftse
 from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhancer
+from senselab.utils.backend_parameters import record_parameters_on, resolve_backend_parameters
+from senselab.utils.clearvoice import clearvoice_model_spec, is_clearvoice_model_id
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, SpeechBrainModel
 
@@ -20,34 +26,56 @@ def enhance_audios(
     audios: List[Audio],
     model: Optional[SenselabModel] = None,
     device: Optional[DeviceType] = None,
+    parameters: Optional[Mapping[str, Any]] = None,
 ) -> List[Audio]:
-    """Enhances all audios using the given model.
+    """Enhance every audio with the given model, returning one signal per input.
 
-    Supports **SpeechBrain** (default) and **DriftSE** (HF-identified) backends:
-    - If `model` is a `SpeechBrainModel` (or `None`), uses SpeechBrain.
-    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"LIANGXU123/DriftSE"`,
-      uses DriftSE (one-step diffusion enhancement) via an isolated subprocess venv.
+    Three backends, selected by the model:
+
+    - a ``SpeechBrainModel`` (or ``None``) uses SpeechBrain, in process;
+    - an ``HFModel`` under ``LIANGXU123/DriftSE`` uses DriftSE, one-step diffusion in an isolated venv;
+    - an ``HFModel`` naming a ClearVoice enhancement checkpoint uses ClearVoice, in an isolated venv.
 
     Args:
-        audios (List[Audio]): The list of audio objects to be enhanced.
-        model (SenselabModel): The model used for enhancement.
-            If None, the default model "speechbrain/sepformer-wham16k-enhancement" is used.
-        device (Optional[DeviceType]): The device to run the model on (default is None).
+        audios: The audios to enhance.
+        model: The enhancement model. ``None`` uses ``speechbrain/sepformer-wham16k-enhancement``.
+        device: The device to run on. ``None`` lets the backend choose.
+        parameters: Backend-specific parameters, validated against the **selected** backend's own
+            signature: an unknown or misspelled key raises rather than being ignored, and the
+            effective set is recorded on each result's ``metadata["backend_parameters"]``. DriftSE
+            declares ``variant``, ``seed``, ``sigma``, ``chunk_s``, ``overlap_s`` and ``timeout_s``;
+            ClearVoice declares ``timeout_s``; SpeechBrain declares none.
 
     Returns:
-        List[Audio]: The list of enhanced audio objects.
+        One enhanced ``Audio`` per input, in order.
 
     Raises:
-        NotImplementedError: If an unsupported model type is passed.
+        NotImplementedError: If ``model`` names no known enhancement backend.
+        ValueError: If a parameter key is not one the selected backend declares.
     """
     if model is None:
         model = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
 
+    backend: Optional[Callable[..., List[Audio]]] = None
+    backend_name = ""
     if isinstance(model, SpeechBrainModel):
-        return SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=audios, model=model, device=device)
-    if isinstance(model, HFModel) and str(model.path_or_uri).startswith(_DRIFTSE_MODEL_PREFIX):
-        return enhance_audios_with_driftse(audios=audios, model=model, device=device)
-    raise NotImplementedError(
-        f"No enhancement backend for {model.path_or_uri!r}. Supported: SpeechBrain models, "
-        f"and HFModel ids starting with {_DRIFTSE_MODEL_PREFIX!r}."
-    )
+        backend, backend_name = SpeechBrainEnhancer.enhance_audios_with_speechbrain, "speechbrain"
+    elif isinstance(model, HFModel) and str(model.path_or_uri).startswith(_DRIFTSE_MODEL_PREFIX):
+        backend, backend_name = enhance_audios_with_driftse, "driftse"
+    elif isinstance(model, HFModel) and is_clearvoice_model_id(str(model.path_or_uri)):
+        # Rejects a separation or super-resolution checkpoint before any work happens, rather than
+        # letting the backend discover it after staging 670 MB of weights.
+        clearvoice_model_spec(str(model.path_or_uri), expected_task=CLEARVOICE_ENHANCEMENT_TASK)
+        backend, backend_name = enhance_audios_with_clearvoice, "clearvoice"
+
+    if backend is None:
+        raise NotImplementedError(
+            f"No enhancement backend for {model.path_or_uri!r}. Supported: SpeechBrain models, HFModel "
+            f"ids starting with {_DRIFTSE_MODEL_PREFIX!r}, and ClearVoice enhancement checkpoints "
+            "under 'alibabasglab/'."
+        )
+
+    kwargs, record = resolve_backend_parameters(backend, parameters, backend_name=backend_name)
+    enhanced = backend(audios=audios, model=model, device=device, **kwargs)
+    record_parameters_on(enhanced, record)
+    return enhanced
