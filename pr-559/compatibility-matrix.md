@@ -61,6 +61,7 @@ They are not installed in the main senselab environment.
 | diarizen | 3.12 | >=2.1,<2.9 | forked pyannote-audio (git), lightning, speechbrain | Diarization only, no transcription (weights CC BY-NC 4.0 — non-commercial only) |
 | driftse | 3.11 | >=2.3 | torchaudio>=2.3, librosa>=0.10.2 | One-step (1 NFE) speech enhancement, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08) |
 | unasdiff | 3.10 | ==2.6.0 | torchaudio==2.6.0, numpy==1.23.5, librosa==0.10.2.post1 | Unsupervised speech/sound source separation via two diffusion priors, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08, mirror private) |
+| hear | 3.11 | none | tensorflow>=2.16,<3, soundfile | Google HeAR health-acoustic embeddings (512-d, fixed 2 s window) + its bundled 8-label health sound event detector; TensorFlow SavedModels, so no torch in this venv (weights gated: Health AI Developer Foundations terms) |
 
 ## System Dependencies
 
