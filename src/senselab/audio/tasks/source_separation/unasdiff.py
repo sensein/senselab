@@ -236,7 +236,27 @@ _DIFFUSION_STEPS = 200
 # PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
 _WAV_SUBTYPE = "FLOAT"
 
+# Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
+# Derivation and the measurement behind both numbers:
+# specs/20260818-071500-unasdiff-device-timeout-pcm16.
+_SECONDS_PER_WINDOW_STEP = 0.4
+_TIMEOUT_HEADROOM = 4.0
+_TIMEOUT_FLOOR_S = 1800.0
+
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
+
+
+def _default_timeout_s(n_windows: int, diffusion_steps: int) -> float:
+    """Return the default worker ceiling for ``n_windows`` windows at ``diffusion_steps`` steps.
+
+    Args:
+        n_windows: Total number of 4 s windows the worker will separate, across every input.
+        diffusion_steps: Reverse-diffusion steps per window.
+
+    Returns:
+        Seconds, never below ``_TIMEOUT_FLOOR_S``.
+    """
+    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _SECONDS_PER_WINDOW_STEP * n_windows * diffusion_steps)
 
 
 @functools.lru_cache(maxsize=1)
@@ -617,6 +637,7 @@ def separate_with_unasdiff(
     device: Optional[DeviceType] = None,
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
+    timeout_s: Optional[float] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -661,6 +682,11 @@ def separate_with_unasdiff(
             is no fitted threshold or "recommended" lower setting to fall back on (see this
             module's ``CLAUDE.md``-derived convention against unfitted thresholds), so any value
             below 200 is the caller's own unmeasured quality/speed trade.
+        timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
+            work -- total windows across every input, times ``diffusion_steps``, times a
+            per-window-step factor, with a floor covering the first-use clone and the checkpoint
+            load (:func:`_default_timeout_s`). Exceeding it raises ``RuntimeError`` and discards
+            every window, completed or not.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
@@ -672,9 +698,11 @@ def separate_with_unasdiff(
 
     Raises:
         ValueError: if ``len(source_class_indices) != n_sources``, if ``diffusion_steps`` is
-            not positive, or if ``device`` is neither CUDA nor CPU (or names a device this host
-            does not have).
-        RuntimeError: if the worker fails; the upstream traceback is included.
+            not positive, if ``timeout_s`` is not positive, or if ``device`` is neither CUDA
+            nor CPU (or names a device this host does not have).
+        RuntimeError: if the worker fails; the upstream traceback is included. Also if the
+            worker exceeds ``timeout_s`` -- that message names the ceiling, the inputs, and how
+            many windows had been written when it fired.
     """
     if not audios:
         return []
@@ -684,6 +712,8 @@ def separate_with_unasdiff(
         )
     if diffusion_steps <= 0:
         raise ValueError(f"diffusion_steps must be a positive integer, got {diffusion_steps}")
+    if timeout_s is not None and timeout_s <= 0:
+        raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s}")
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
     from senselab.utils.data_structures.device import _select_device_and_dtype, device_run_opt
@@ -708,6 +738,9 @@ def separate_with_unasdiff(
         _window_starts(int(audio.waveform.shape[-1]), window_samples, hop_samples) for audio in mono_16k
     ]
 
+    total_windows = sum(len(w) for w in windows_per_audio)
+    effective_timeout_s = _default_timeout_s(total_windows, diffusion_steps) if timeout_s is None else timeout_s
+
     speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
 
     venv_dir = ensure_venv(
@@ -723,14 +756,15 @@ def separate_with_unasdiff(
 
     logger.info(
         "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d, "
-        "diffusion_steps=%d, device=%s",
+        "diffusion_steps=%d, device=%s, timeout=%.0fs",
         len(mono_16k),
-        sum(len(w) for w in windows_per_audio),
+        total_windows,
         mode,
         n_sources,
         seed,
         diffusion_steps,
         worker_device or "worker's choice",
+        effective_timeout_s,
     )
 
     with tempfile.TemporaryDirectory(prefix="senselab-unasdiff-") as tmpdir:
@@ -775,14 +809,26 @@ def separate_with_unasdiff(
             }
         )
 
-        result = subprocess.run(
-            [python, "-c", _WORKER_SCRIPT],
-            input=input_json,
-            capture_output=True,
-            text=True,
-            timeout=3600,
-            env=_clean_subprocess_env(),
-        )
+        try:
+            result = subprocess.run(
+                [python, "-c", _WORKER_SCRIPT],
+                input=input_json,
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout_s,
+                env=_clean_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            completed = sum(1 for paths in out_paths if all(Path(p).is_file() for p in paths))
+            total_input_s = sum(int(a.waveform.shape[-1]) for a in mono_16k) / _TARGET_SR
+            raise RuntimeError(
+                f"unasdiff worker exceeded its {effective_timeout_s:.0f}s ceiling with "
+                f"{completed}/{len(out_paths)} window(s) written, separating {len(mono_16k)} input(s) "
+                f"({total_input_s:.1f}s of audio at {_TARGET_SR} Hz) with mode={mode!r}, "
+                f"n_sources={n_sources}, diffusion_steps={diffusion_steps}, "
+                f"device={worker_device or 'worker-selected'}. The written windows are discarded "
+                f"with the worker's temporary directory; pass timeout_s to raise the ceiling."
+            ) from exc
         output = parse_subprocess_result(result, venv_label="unasdiff")
         all_output_paths: List[List[str]] = output["output_paths"]
 

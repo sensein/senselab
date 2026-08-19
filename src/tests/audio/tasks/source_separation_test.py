@@ -2,6 +2,7 @@
 
 import ast
 import json
+import subprocess
 import types
 from pathlib import Path
 
@@ -681,6 +682,133 @@ def test_an_incompatible_device_is_rejected_before_the_venv() -> None:
             mode="speech_speech",
             device=DeviceType.MPS,
         )
+
+
+# ── Worker timeout ────────────────────────────────────────────────────
+
+
+def test_the_default_timeout_scales_with_windows_and_steps() -> None:
+    """The ceiling is derived from the work, not a constant.
+
+    A fixed 3600 s ceiling failed every input past roughly 90 s on an A100 — the run that
+    exceeded it lost every window.
+    """
+    floor = unasdiff._default_timeout_s(1, 1)
+    assert floor == unasdiff._TIMEOUT_FLOOR_S
+
+    big = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS)
+    bigger_input = unasdiff._default_timeout_s(400, unasdiff._DIFFUSION_STEPS)
+    more_steps = unasdiff._default_timeout_s(200, 2 * unasdiff._DIFFUSION_STEPS)
+    assert big > floor
+    assert bigger_input == pytest.approx(2 * big)
+    assert more_steps == pytest.approx(2 * big)
+
+
+def test_the_derived_ceiling_reaches_subprocess_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The timeout ``subprocess.run`` receives is the derived one, not a hardcoded constant."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        diffusion_steps=9000,
+    )
+    expected = u._default_timeout_s(2, 9000)
+    assert captured["timeout"] == expected
+    assert captured["timeout"] != 3600
+
+
+def test_an_explicit_timeout_overrides_the_derived_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``timeout_s`` is honoured verbatim."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        timeout_s=42.0,
+    )
+    assert captured["timeout"] == 42.0
+
+
+def test_a_non_positive_timeout_raises() -> None:
+    """A zero or negative ceiling would abort the worker instantly; reject it up front."""
+    audio = Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)
+    for bad in (0, -1.0):
+        with pytest.raises(ValueError, match="timeout_s"):
+            unasdiff.separate_with_unasdiff(
+                [audio],
+                n_sources=2,
+                source_class_indices=[0, 0],
+                mode="speech_speech",
+                timeout_s=bad,
+            )
+
+
+def test_a_timeout_names_the_ceiling_the_input_and_the_windows_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``TimeoutExpired`` becomes an actionable ``RuntimeError``, not a bare stack trace.
+
+    The unhandled exception said only that a subprocess ran too long: not which ceiling it hit,
+    how much audio it was given, or how far it had got.
+    """
+    import types
+
+    from senselab.audio.tasks.source_separation import unasdiff as u
+
+    monkeypatch.setattr(u, "ensure_venv", lambda *a, **k: Path("/tmp/fake-unasdiff-venv"))
+    monkeypatch.setattr(u, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict) -> None:
+        payload = json.loads(input)
+        # One window completes before the ceiling fires, so the error can report progress.
+        for p in payload["out_paths"][0]:
+            segment = torch.randn(int(u._WINDOW_S * u._TARGET_SR))
+            soundfile.write(p, segment.numpy(), u._TARGET_SR, subtype="FLOAT")
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    with pytest.raises(RuntimeError) as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 0],
+            mode="speech_speech",
+            checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+            timeout_s=123.0,
+        )
+
+    message = str(exc.value)
+    assert "123s" in message, "the ceiling that fired must be named"
+    assert "1/2 window(s) written" in message, "progress at the point of failure must be reported"
+    assert "6.0s of audio" in message, "the input being processed must be named"
+    assert "speech_speech" in message and "diffusion_steps=200" in message
+    assert "timeout_s" in message, "the message must name the knob that raises the ceiling"
+
+
+def test_separate_audios_forwards_timeout_s(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """api.separate_audios threads timeout_s through to separate_with_unasdiff unchanged."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["timeout_s"] = kwargs["timeout_s"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, timeout_s=99.0)
+    assert captured["timeout_s"] == 99.0
 
 
 def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:

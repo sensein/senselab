@@ -40,6 +40,7 @@ def separate_audios(
     device: Optional[DeviceType] = None,
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
+    timeout_s: Optional[float] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -86,6 +87,9 @@ def separate_audios(
             published basis; lower values trade quality for speed roughly proportionally but are
             entirely unmeasured in this repository, so there is no recommended lower setting --
             see that function's docstring for the full derivation.
+        timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the
+            number of windows and ``diffusion_steps``. Forwarded unchanged to
+            :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order.
@@ -94,7 +98,8 @@ def separate_audios(
         ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is
             not one of the three supported modes; if a mode using the sound prior is missing
             ``source_classes``; if ``source_classes`` does not have exactly the number of
-            entries that mode's sound slots require; or if ``diffusion_steps`` is not positive.
+            entries that mode's sound slots require; or if ``diffusion_steps`` or ``timeout_s``
+            is not positive.
     """
     if model is not None and not (
         isinstance(model, HFModel) and str(model.path_or_uri).startswith(_UNASDIFF_MODEL_PREFIX)
@@ -133,6 +138,7 @@ def separate_audios(
         device=device,
         seed=seed,
         diffusion_steps=diffusion_steps,
+        timeout_s=timeout_s,
     )
 
 
