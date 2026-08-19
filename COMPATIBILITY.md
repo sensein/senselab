@@ -1,5 +1,8 @@
 # Senselab Compatibility Matrix
 
+Hand-maintained. The per-function dependency table is generated from `COMPATIBILITY_MATRIX`
+into `docs/function-dependencies.md` by the docs build (`scripts/generate-compat-matrix.py`).
+
 Minimum and maximum tested versions of senselab dependencies across Python versions.
 Lower bounds verified by pinning each package to its minimum in an isolated venv.
 Upper bounds verified by running the full test suite (490+ tests passing).
