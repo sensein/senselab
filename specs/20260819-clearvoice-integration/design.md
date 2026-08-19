@@ -373,3 +373,51 @@ coughs as signal, the enhancer is not a neutral preprocessing step.
   payload and timeout are covered by tests that stub the worker.
 - SpeechScore's NISQA/DNSMOS/DISTILL_MOS weights are committed in the upstream tree and arrive with
   the pinned sparse clone; they were not exercised here.
+
+## 9. SpeechScore: pinning a component with no distribution, and two upstream traps
+
+### D-13: a pinned sparse clone is the pin
+
+SpeechScore has no pip distribution, and its metric weights are committed in the repository next to
+the code (`scores/nisqa/weights/nisqa.tar`, four DNSMOS ONNX graphs, `scores/distill_mos/weights/
+distill_mos_v7.pt`). So one pin covers both: a blobless, sparse clone of `/speechscore/` at
+`6b3774dc79c46ae8bed2a4fa5f706f0ac8c75c61`, fetched with `--depth 1` under an exclusive lock into a
+sibling temp dir and moved into place with `os.replace`, on `driftse.py`'s pattern. Sparse because the
+rest of the studio carries checkpoints this never reads.
+
+A separate venv from `clearvoice`'s: the dependency sets are disjoint (`museval`, `pysptk`, `pyworld`,
+`gammatone`, `onnxruntime`, `xls_r_sqa`, `fastdtw`, `mir_eval`, plus pandas/matplotlib/tqdm, which
+`NISQA_lib` imports at module scope). The requirements list is what the scores' own import chain
+touches, not upstream's whole-studio `requirements.txt`. `gammatone` on PyPI (1.0.3) was checked to be
+Jason Heeris' package and to contain the `fftweight` and `filters` modules SRMR imports.
+
+### D-14: two things about running it that are not optional
+
+1. **The working directory must be the `speechscore/` directory.** DNSMOS, NISQA and DISTILL_MOS
+   address their weights relative to the cwd — `os.path.join('scores/dnsmos/DNSMOS', 'model_v8.onnx')`,
+   `"scores/nisqa/weights/nisqa.tar"`, `os.path.join("scores/distill_mos/weights", "distill_mos_v7.pt")`.
+2. **That directory, not its parent, must be on `sys.path`.** `speechscore/__init__.py` does
+   `import absolute` and `import relative`, modules that do not exist in the tree, so importing
+   `speechscore` *as a package* fails outright. With the directory itself on the path, `import
+   speechscore` resolves to `speechscore.py` and the scores' `from scores.x import Y` imports resolve
+   too — which is also how upstream's own `demo.py` works, since it sits inside that directory.
+
+### D-15: the reference classification is senselab's, because upstream's is wrong
+
+`ScoreBasis.intrusive` is never read by `basis.py` or anything else, and it disagrees with upstream's
+own README and `demo.py`: `DNSMOS` and `SRMR` are marked `intrusive = True` and `MCD` is marked
+`False`, all three the opposite of the truth. `SPEECHSCORE_METRICS` therefore carries senselab's own
+`needs_reference`, taken from `demo.py`'s documented split (non-intrusive: NISQA, DNSMOS, DISTILL_MOS,
+SRMR).
+
+This matters because of what upstream does with a missing reference rather than what it says:
+`ScoresList.audio_reader` zero-pads a single signal into the `audios` list, so a reference-requiring
+metric called without one is computed against a copy of the test signal and returns a plausible
+number. `resolve_speechscore_metrics` refuses instead.
+
+### D-16: `window=None`, always
+
+`basis.py`'s `scoring()` takes a `window` argument, and its windowed branch calls
+`Framing(window * score_rate, window * score_rate, maxlen)` where `maxlen` is never assigned in that
+scope — a `NameError` on any windowed call. Windowing is therefore not a capability this can expose,
+and the worker passes `window=None` unconditionally rather than offering a parameter that cannot work.
