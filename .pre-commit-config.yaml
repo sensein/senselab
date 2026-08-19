@@ -70,8 +70,8 @@ repos:
     # Encoder, a model name. preemptable: Slurm's own spelling (PreemptMode, the
     # mit_preemptable partition) -- codespell wants "preemptible", but that is not the
     # partition's actual name. All four are terms codespell reads as misspellings of other
-    # words.
-    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable']
+    # words. caf: Apple's Core Audio Format, a libsndfile format name.
+    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf']
     additional_dependencies:
     - tomli
 - repo: local

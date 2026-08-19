@@ -39,15 +39,12 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    stage_portable_audio_io,
     venv_python,
 )
 
 _DRIFTSE_VENV = "driftse"
 _DRIFTSE_PYTHON = "3.11"
-
-# Every WAV this backend hands to or takes back from the worker. soundfile's WAV default is
-# PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
-_WAV_SUBTYPE = "FLOAT"
 
 # Upstream's requirements.txt is a *training* set; only what the inference import chain touches is
 # installed. pesq/pystoi are on that chain (util/other.py imports both at module scope) even though
@@ -156,7 +153,8 @@ try:
     seed = int(args["seed"])
     sigma = float(args["sigma"])
     chunk_s, overlap_s = float(args["chunk_s"]), float(args["overlap_s"])
-    wav_subtype = args["wav_subtype"]
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import read_audio, write_audio
     requested_device = args.get("device")
 
     import fcntl, os, shutil, tempfile as _tempfile
@@ -282,7 +280,7 @@ try:
 
     results = []
     for in_path, out_path in zip(in_paths, out_paths):
-        y_np, sr = sf.read(in_path, dtype="float32", always_2d=True)
+        y_np, sr = read_audio(in_path, always_2d=True, channels_first=False)
         y = torch.as_tensor(y_np[:, 0]).to(device)
         assert sr == 16000, "worker expects 16 kHz; the host resamples"
 
@@ -314,9 +312,7 @@ try:
                 wsum[start : start + chunk] += taper
             x_hat = acc / wsum.clamp(min=1e-8)
 
-        # Explicit subtype: soundfile's WAV default is PCM_16, which clips every sample
-        # beyond +-1 on the way back to the host.
-        sf.write(out_path, x_hat.detach().cpu().numpy(), sr, subtype=wav_subtype)
+        write_audio(out_path, x_hat.detach().cpu().numpy(), sr)
         results.append(out_path)
 
     print(json.dumps({"output_paths": results, "seed": seed, "sigma": sigma}))
@@ -451,14 +447,7 @@ def enhance_audios_with_driftse(
         for i, audio in enumerate(mono_16k):
             in_path = str(tmp / f"in_{i}.wav")
             out_path = str(tmp / f"out_{i}.wav")
-            # Not Audio.save_to_file: that writes PCM_16 for a .wav, which clips the input
-            # before the worker ever reads it.
-            sf.write(
-                in_path,
-                audio.waveform.squeeze(0).detach().cpu().numpy(),
-                audio.sampling_rate,
-                subtype=_WAV_SUBTYPE,
-            )
+            audio.save_to_file(in_path)
             in_paths.append(in_path)
             out_paths.append(out_path)
 
@@ -476,7 +465,7 @@ def enhance_audios_with_driftse(
                 "sigma": sigma,
                 "chunk_s": chunk_s,
                 "overlap_s": overlap_s,
-                "wav_subtype": _WAV_SUBTYPE,
+                "io_dir": stage_portable_audio_io(tmp),
                 "device": worker_device,
             }
         )

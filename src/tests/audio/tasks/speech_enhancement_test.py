@@ -310,24 +310,25 @@ def test_checkpoint_override_skips_the_hub_entirely(
         driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
 
 
-def test_every_driftse_worker_wav_write_names_an_explicit_subtype() -> None:
-    """No ``sf.write`` in the DriftSE worker relies on soundfile's PCM_16 default.
-
-    That default clips every sample past +-1, and it has silently corrupted a measurement three
-    times in this repository -- once costing three SepFormer streams up to 8.9% of their samples
-    and 9.5 dB of agreement with the CPU run.
-    """
+def test_the_driftse_worker_writes_through_the_staged_policy() -> None:
+    """The worker must not write audio itself, and its parent must stage what it imports."""
+    assert "from portable_audio_io import" in driftse._WORKER_SCRIPT, (
+        "the worker must import the staged range policy rather than calling soundfile itself"
+    )
     tree = ast.parse(driftse._WORKER_SCRIPT)
-    writes = [
-        node
+    raw_writes = [
+        node.lineno
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "write"
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"write", "save"}
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in {"sf", "soundfile", "torchaudio"}
     ]
-    assert writes, "test premise: the worker writes WAV files"
-    for node in writes:
-        assert "subtype" in {kw.arg for kw in node.keywords}, (
-            f"sf.write at worker line {node.lineno} relies on the PCM_16 default"
-        )
+    assert not raw_writes, f"worker line(s) {raw_writes} write audio directly, bypassing the range policy"
+    assert "stage_portable_audio_io(" in Path(driftse.__file__).read_text(), (
+        "the parent must stage portable_audio_io.py into the worker's temp dir"
+    )
 
 
 def test_driftse_input_wavs_are_written_as_float_not_pcm16(
@@ -335,8 +336,9 @@ def test_driftse_input_wavs_are_written_as_float_not_pcm16(
 ) -> None:
     """The WAV the host hands the DriftSE worker is FLOAT, and samples past +-1 survive it.
 
-    ``Audio.save_to_file`` writes PCM_16 for a ``.wav``, so an input peaking above full scale
-    was clipped before the enhancer ever saw it.
+    ``Audio.save_to_file`` used to write PCM_16 for a ``.wav`` -- torchcodec's AudioEncoder has
+    no encoding control -- so an input peaking above full scale was clipped before the enhancer
+    ever saw it.
     """
     monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
     monkeypatch.setattr(driftse, "ensure_venv", lambda *a, **k: Path("/tmp/fake-driftse-venv"))
