@@ -381,10 +381,15 @@ def get_matrix() -> dict[str, CompatibilityEntry]:
     return COMPATIBILITY_MATRIX
 
 
+# Repo-relative path of the document ``generate_matrix_markdown`` produces. The hand-maintained
+# ``docs/compatibility-matrix.md`` is a different document and is not written by any generator.
+GENERATED_DOC = "docs/function-dependencies.md"
+
+
 def generate_matrix_markdown() -> str:
-    """Generate a markdown table from the compatibility matrix."""
+    """Return the per-function dependency table as markdown, for ``GENERATED_DOC``."""
     lines = [
-        "# Senselab Compatibility Matrix",
+        "# Senselab Function Dependencies",
         "",
         "| Function | Required Deps | Dep Versions | GPU | Isolated | Python | Torch |",
         "|----------|--------------|-------------|-----|----------|--------|-------|",
