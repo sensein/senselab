@@ -329,3 +329,59 @@ may well be better at what it was retrained for.
 events at 2.32, 5.36, 7.92 and 9.60 s, so its extra tokens are not spurious on this file — but one file
 cannot establish that the newer model is worse, only that it is different, and the `[UH]` in the older
 model's output is a mislabelled cough.
+
+## HeAR's window geometry, and the resolution limit it imposes — 2026-08-18
+
+Two different windows, and only one is fixed.
+
+**The encoder declares 2 s and does not enforce it.** The SavedModel signature is `x: (None, 32000)` —
+2 s at 16 kHz, trained on 313 M two-second clips — but it silently accepts 0.01 s to 4 s with no
+exception, no padding and no NaN. Length changes the representation materially: centred class margin
++0.91 at 2 s, +0.46 at 1 s, +0.29 at 0.3 s, and 3 s is *worse* than 2 s.
+
+**The bundled event detector's window is genuinely fixed** at 2 s with a 0.25 s hop
+(`audio_wav: (1, 32000)`, batch dimension pinned at 1). That is what produced the posterior track, and
+it explains the track completely.
+
+An event of duration D elevates every window whose centre lies within **D + W** (W = 2 s):
+
+| event | duration | elevated window centres | span |
+| --- | --- | --- | --- |
+| breath 1 | 1.221 s | 1.30 - 4.52 | 3.22 s |
+| breath 2 | 0.983 s | 4.33 - 7.31 | 2.98 s |
+| cough 1 | 0.568 s | 6.93 - 9.49 | 2.57 s |
+| cough 2 | 0.640 s | 8.61 - 11.25 | 2.64 s |
+
+The two breaths' intervals overlap by **+0.19 s** and the two coughs' by **+0.88 s**, so each pair merges
+into a single plateau — 1.30-7.31 s and 6.93-11.25 s. The measured posterior shows exactly that: a
+continuous `Breathe` plateau from ~1.4 to ~6.5 s spanning both breaths *and* the verified-empty gap
+between them, and a `Cough` plateau ~7.0-10.5 s doing the same.
+
+### Three consequences
+
+**1. Two events closer than 2 s cannot be resolved.** Ours are 1.81 s apart (breaths) and 1.12 s
+(coughs). Clinically this is worse than it sounds: inter-cough intervals within a bout run 0.3-0.5 s,
+so this detector can report that coughs are present and can never count them. That is D12's bout /
+cough / phase problem with a number on it, and it means `group_events` cannot be solved by better
+thresholding — the information is not in the posterior.
+
+**2. The earlier coverage figures measured the wrong thing.** HeAR was recorded as fragmenting 3 of 4
+events with 24-52% coverage. Those numbers describe the **event-extraction step**, not the model: the
+posterior over-covers continuously while the derived event list under-covers and fragments. The failure
+modes are opposite, so the true extent is *bracketed* by them rather than unmeasured — a better position
+than previously recorded, though neither bound is usable as it stands.
+
+**3. The mouth sound's miss is not geometry.** Its elevated interval, −0.22 to 1.98 s, is covered by
+windows. The detector simply does not fire: a 202 ms event is a tenth of a 2 s window. Top-1 posterior
+there is ~0.05, the lowest point in the recording.
+
+### And HeAR is weakest on speech
+
+Through the verified speech the top-1 posterior collapses to 0.1-0.35, after sitting near 1.0 across
+breath and cough; the `Speech` row never rises above moderate. Consistent with what the model is — health
+acoustics, trained on cough and breath — but it settles that HeAR cannot be the taxonomy's speech
+detector.
+
+The `Snore` activation around 6.5-7.0 s also explains the phantom "quiet breath at 0.49": that region
+sits on a Snore/Breathe boundary in HeAR's label space, so the 0.49 was genuine uncertainty between two
+classes at a transition rather than a weak detection of breath.
