@@ -1,0 +1,273 @@
+
+======================================================================================================================
+## A1. Amplitude convention: full-scale integer sources. Is int16 -32768 -> -1.0 and 32767 -> 32767/32768?
+======================================================================================================================
+reader                         -32768       -32767       -16384            0        16384        32766        32767
+/32768 reference          -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+torchcodec.AudioDecoder   -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+torchaudio.load           -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+soundfile.read(f32)       -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+soundfile.read(f64)       -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+librosa.load              -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+ffmpeg-cli(f64)           -1.00000000  -0.99996948  -0.50000000   0.00000000   0.50000000   0.99993896   0.99996948
+dtype returned           torchcodec.AudioDecoder=float32, torchaudio.load=float32, soundfile.read(f32)=float32, soundfile.read(f64)=float64, librosa.load=float32
+
+======================================================================================================================
+## A2. THE KEY TEST: float32 WAV with samples beyond +/-1 -- does decode clamp?
+======================================================================================================================
+
+  source: WAV/FLOAT written by soundfile, true peak = 4.0000
+    torchcodec.AudioDecoder  peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    torchaudio.load          peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    soundfile.read(f32)      peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    soundfile.read(f64)      peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    librosa.load             peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    ffmpeg-cli(f64)          peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    (same source written by ffmpeg) torchcodec peak=4.00000
+
+  source: WAV/DOUBLE written by soundfile, true peak = 4.0000
+    torchcodec.AudioDecoder  peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    torchaudio.load          peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    soundfile.read(f32)      peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    soundfile.read(f64)      peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    librosa.load             peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    ffmpeg-cli(f64)          peak=4.00000    min=-4.00000   max=4.00000    clamped=no   exact_vs_source=YES
+    (same source written by ffmpeg) torchcodec peak=4.00000
+
+======================================================================================================================
+## A3. Does any decode path normalise? Two files differing only by a known gain of 0.1
+======================================================================================================================
+
+  WAV/FLOAT: expected peak ratio quiet/loud = 0.1 exactly (no normalisation)
+    torchcodec.AudioDecoder  peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    torchaudio.load          peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    soundfile.read(f32)      peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    soundfile.read(f64)      peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    librosa.load             peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    ffmpeg-cli(f64)          peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+
+  WAV/PCM_16: expected peak ratio quiet/loud = 0.1 exactly (no normalisation)
+    torchcodec.AudioDecoder  peak 0.899872/0.089996 ratio=0.100010   rms ratio=0.100000
+    torchaudio.load          peak 0.899872/0.089996 ratio=0.100010   rms ratio=0.100000
+    soundfile.read(f32)      peak 0.899872/0.089996 ratio=0.100010   rms ratio=0.100000
+    soundfile.read(f64)      peak 0.899872/0.089996 ratio=0.100010   rms ratio=0.100000
+    librosa.load             peak 0.899872/0.089996 ratio=0.100010   rms ratio=0.100000
+    ffmpeg-cli(f64)          peak 0.899872/0.089996 ratio=0.100010   rms ratio=0.100000
+
+  FLAC/PCM_24: expected peak ratio quiet/loud = 0.1 exactly (no normalisation)
+    torchcodec.AudioDecoder  peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    torchaudio.load          peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    soundfile.read(f32)      peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    soundfile.read(f64)      peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    librosa.load             peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+    ffmpeg-cli(f64)          peak 0.899845/0.089985 ratio=0.100000   rms ratio=0.100000
+
+======================================================================================================================
+## A4. Source-independence: identical audio in 8 containers, decoded by torchcodec. dtype / peak / RMS / length
+======================================================================================================================
+  reference: dtype=float32 n=44100 peak=0.799973 rms=0.461799
+
+  source             dtype     n        sr      peak       rms        peak/ref  exact 
+  wav PCM_16         float32   44100    22050   0.799988   0.461799   1.00002   False 
+  wav PCM_24         float32   44100    22050   0.799973   0.461799   1.00000   False 
+  wav PCM_32         float32   44100    22050   0.799973   0.461799   1.00000   False 
+  wav FLOAT32        float32   44100    22050   0.799973   0.461799   1.00000   True  
+  wav FLOAT64        float32   44100    22050   0.799973   0.461799   1.00000   True  
+  flac 16            float32   44100    22050   0.799988   0.461799   1.00002   False 
+  flac 24            float32   44100    22050   0.799973   0.461799   1.00000   False 
+  mp3 192k           float32   44100    22050   1.060308   0.418184   1.32543   False 
+  opus (48k src)     float32   44100    48000   1.632722   0.423055   2.04097   False 
+  m4a aac            float32   45056    22050   1.521272   0.450459   1.90165   False 
+  mp4 (video+aac)    float32   45056    22050   1.521272   0.450459   1.90165   False 
+
+======================================================================================================================
+## B. CHUNK == SLICE.  full = decode whole file; chunk = decode [t0, t1). Compare bit-for-bit.
+======================================================================================================================
+
+  --- wav PCM_16   (file sr=22050, full decode n=132300, input n=132300)
+      chunker                request      got_n   nominal_off_delta  max|diff|    bitexact
+      torchcodec range       aligned 0    2048    0                  0.000e+00    True
+      torchaudio.load(off)   aligned 0    2048    0                  0.000e+00    True
+      soundfile.read(start)  aligned 0    2048    0                  0.000e+00    True
+      librosa(offset)        aligned 0    2048    0                  0.000e+00    True
+      ffmpeg -ss/-t          aligned 0    2048    0                  0.000e+00    True
+      senselab Audio(off)    aligned 0    2048    0                  0.000e+00    True
+      torchcodec range       odd offset   2048    0                  0.000e+00    True
+      torchaudio.load(off)   odd offset   2048    0                  0.000e+00    True
+      soundfile.read(start)  odd offset   2048    0                  0.000e+00    True
+      librosa(offset)        odd offset   2048    0                  0.000e+00    True
+      ffmpeg -ss/-t          odd offset   2048    0                  0.000e+00    True
+      senselab Audio(off)    odd offset   2048    0                  0.000e+00    True
+      torchcodec range       mid-file     4096    0                  0.000e+00    True
+      torchaudio.load(off)   mid-file     4096    0                  0.000e+00    True
+      soundfile.read(start)  mid-file     4096    0                  0.000e+00    True
+      librosa(offset)        mid-file     4096    0                  0.000e+00    True
+      ffmpeg -ss/-t          mid-file     4096    0                  0.000e+00    True
+      senselab Audio(off)    mid-file     4096    0                  0.000e+00    True
+      torchcodec range       late         8192    0                  0.000e+00    True
+      torchaudio.load(off)   late         8192    0                  0.000e+00    True
+      soundfile.read(start)  late         8192    0                  0.000e+00    True
+      librosa(offset)        late         8192    0                  0.000e+00    True
+      ffmpeg -ss/-t          late         8192    0                  0.000e+00    True
+      senselab Audio(off)    late         8192    0                  0.000e+00    True
+
+  --- wav FLOAT32   (file sr=22050, full decode n=132300, input n=132300)
+      chunker                request      got_n   nominal_off_delta  max|diff|    bitexact
+      torchcodec range       aligned 0    2048    0                  0.000e+00    True
+      torchaudio.load(off)   aligned 0    2048    0                  0.000e+00    True
+      soundfile.read(start)  aligned 0    2048    0                  0.000e+00    True
+      librosa(offset)        aligned 0    2048    0                  0.000e+00    True
+      ffmpeg -ss/-t          aligned 0    2048    0                  0.000e+00    True
+      senselab Audio(off)    aligned 0    2048    0                  0.000e+00    True
+      torchcodec range       odd offset   2048    0                  0.000e+00    True
+      torchaudio.load(off)   odd offset   2048    0                  0.000e+00    True
+      soundfile.read(start)  odd offset   2048    0                  0.000e+00    True
+      librosa(offset)        odd offset   2048    0                  0.000e+00    True
+      ffmpeg -ss/-t          odd offset   2048    0                  0.000e+00    True
+      senselab Audio(off)    odd offset   2048    0                  0.000e+00    True
+      torchcodec range       mid-file     4096    0                  0.000e+00    True
+      torchaudio.load(off)   mid-file     4096    0                  0.000e+00    True
+      soundfile.read(start)  mid-file     4096    0                  0.000e+00    True
+      librosa(offset)        mid-file     4096    0                  0.000e+00    True
+      ffmpeg -ss/-t          mid-file     4096    0                  0.000e+00    True
+      senselab Audio(off)    mid-file     4096    0                  0.000e+00    True
+      torchcodec range       late         8192    0                  0.000e+00    True
+      torchaudio.load(off)   late         8192    0                  0.000e+00    True
+      soundfile.read(start)  late         8192    0                  0.000e+00    True
+      librosa(offset)        late         8192    0                  0.000e+00    True
+      ffmpeg -ss/-t          late         8192    0                  0.000e+00    True
+      senselab Audio(off)    late         8192    0                  0.000e+00    True
+
+  --- flac PCM_24   (file sr=22050, full decode n=132300, input n=132300)
+      chunker                request      got_n   nominal_off_delta  max|diff|    bitexact
+      torchcodec range       aligned 0    2048    0                  0.000e+00    True
+      torchaudio.load(off)   aligned 0    2048    0                  0.000e+00    True
+      soundfile.read(start)  aligned 0    2048    0                  0.000e+00    True
+      librosa(offset)        aligned 0    2048    0                  0.000e+00    True
+      ffmpeg -ss/-t          aligned 0    2048    0                  0.000e+00    True
+      senselab Audio(off)    aligned 0    2048    0                  0.000e+00    True
+      torchcodec range       odd offset   2048    0                  0.000e+00    True
+      torchaudio.load(off)   odd offset   2048    0                  0.000e+00    True
+      soundfile.read(start)  odd offset   2048    0                  0.000e+00    True
+      librosa(offset)        odd offset   2048    0                  0.000e+00    True
+      ffmpeg -ss/-t          odd offset   2048    0                  0.000e+00    True
+      senselab Audio(off)    odd offset   2048    0                  0.000e+00    True
+      torchcodec range       mid-file     4096    0                  0.000e+00    True
+      torchaudio.load(off)   mid-file     4096    0                  0.000e+00    True
+      soundfile.read(start)  mid-file     4096    0                  0.000e+00    True
+      librosa(offset)        mid-file     4096    0                  0.000e+00    True
+      ffmpeg -ss/-t          mid-file     4096    0                  0.000e+00    True
+      senselab Audio(off)    mid-file     4096    0                  0.000e+00    True
+      torchcodec range       late         8192    0                  0.000e+00    True
+      torchaudio.load(off)   late         8192    0                  0.000e+00    True
+      soundfile.read(start)  late         8192    0                  0.000e+00    True
+      librosa(offset)        late         8192    0                  0.000e+00    True
+      ffmpeg -ss/-t          late         8192    0                  0.000e+00    True
+      senselab Audio(off)    late         8192    0                  0.000e+00    True
+
+  --- mp3 192k   (file sr=22050, full decode n=132300, input n=132300)
+      chunker                request      got_n   nominal_off_delta  max|diff|    bitexact
+      torchcodec range       aligned 0    943     0                  0.000e+00    True
+      torchaudio.load(off)   aligned 0    2048    0                  0.000e+00    True
+      soundfile.read(start)  aligned 0    2048    0                  1.669e-06    False
+      librosa(offset)        aligned 0    2048    0                  1.669e-06    False
+      ffmpeg -ss/-t          aligned 0    2048    0                  1.206e+00    False
+      senselab Audio(off)    aligned 0    943     0                  0.000e+00    True
+      torchcodec range       odd offset   2048    -193               1.835e+00    False
+      torchaudio.load(off)   odd offset   2048    0                  0.000e+00    True
+      soundfile.read(start)  odd offset   2048    0                  1.729e-06    False
+      librosa(offset)        odd offset   2048    0                  1.729e-06    False
+      ffmpeg -ss/-t          odd offset   2048    0                  1.217e+00    False
+      senselab Audio(off)    odd offset   2048    -193               1.835e+00    False
+      torchcodec range       mid-file     4096    63                 1.931e+00    False
+      torchaudio.load(off)   mid-file     4096    0                  0.000e+00    True
+      soundfile.read(start)  mid-file     4096    0                  1.550e-06    False
+      librosa(offset)        mid-file     4096    0                  1.550e-06    False
+      ffmpeg -ss/-t          mid-file     4096    0                  1.233e+00    False
+      senselab Audio(off)    mid-file     4096    63                 1.931e+00    False
+      torchcodec range       late         8192    140                2.001e+00    False
+      torchaudio.load(off)   late         8192    0                  0.000e+00    True
+      soundfile.read(start)  late         8192    0                  1.788e-06    False
+      librosa(offset)        late         8192    0                  1.788e-06    False
+      ffmpeg -ss/-t          late         8192    0                  1.164e+00    False
+      senselab Audio(off)    late         8192    140                2.001e+00    False
+
+  --- m4a aac   (file sr=22050, full decode n=133120, input n=132300)
+      chunker                request      got_n   nominal_off_delta  max|diff|    bitexact
+      torchcodec range       aligned 0    2048    0                  0.000e+00    True
+      torchaudio.load(off)   aligned 0    2048    0                  0.000e+00    True
+      soundfile.read(start)  aligned 0    LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-aud
+      librosa(offset)        aligned 0    2048    0                  1.118e+00    False
+      ffmpeg -ss/-t          aligned 0    2048    0                  1.113e+00    False
+      senselab Audio(off)    aligned 0    2048    0                  0.000e+00    True
+      torchcodec range       odd offset   2048    0                  0.000e+00    True
+      torchaudio.load(off)   odd offset   2048    0                  0.000e+00    True
+      soundfile.read(start)  odd offset   LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-aud
+      librosa(offset)        odd offset   2048    0                  3.482e-02    False
+      ffmpeg -ss/-t          odd offset   2048    0                  4.060e-02    False
+      senselab Audio(off)    odd offset   2048    0                  0.000e+00    True
+      torchcodec range       mid-file     4096    0                  0.000e+00    True
+      torchaudio.load(off)   mid-file     4096    0                  0.000e+00    True
+      soundfile.read(start)  mid-file     LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-aud
+      librosa(offset)        mid-file     4096    0                  1.467e-02    False
+      ffmpeg -ss/-t          mid-file     4096    0                  9.308e-02    False
+      senselab Audio(off)    mid-file     4096    0                  0.000e+00    True
+      torchcodec range       late         8192    0                  0.000e+00    True
+      torchaudio.load(off)   late         8192    0                  0.000e+00    True
+      soundfile.read(start)  late         LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-aud
+      librosa(offset)        late         8192    0                  2.479e-02    False
+      ffmpeg -ss/-t          late         8192    0                  1.131e+00    False
+      senselab Audio(off)    late         8192    0                  0.000e+00    True
+
+  --- opus 48k   (file sr=48000, full decode n=132300, input n=132300)
+      chunker                request      got_n   nominal_off_delta  max|diff|    bitexact
+      torchcodec range       aligned 0    4458    0                  0.000e+00    True
+      torchaudio.load(off)   aligned 0    4458    0                  0.000e+00    True
+      soundfile.read(start)  aligned 0    4458    0                  7.898e-07    False
+      librosa(offset)        aligned 0    4458    0                  7.898e-07    False
+      ffmpeg -ss/-t          aligned 0    4458    0                  0.000e+00    True
+      senselab Audio(off)    aligned 0    4458    0                  0.000e+00    True
+      torchcodec range       odd offset   4458    0                  0.000e+00    True
+      torchaudio.load(off)   odd offset   4458    0                  0.000e+00    True
+      soundfile.read(start)  odd offset   4458    0                  8.643e-07    False
+      librosa(offset)        odd offset   4458    0                  8.643e-07    False
+      ffmpeg -ss/-t          odd offset   4458    0                  0.000e+00    True
+      senselab Audio(off)    odd offset   4458    0                  0.000e+00    True
+      torchcodec range       mid-file     8916    0                  0.000e+00    True
+      torchaudio.load(off)   mid-file     8916    0                  0.000e+00    True
+      soundfile.read(start)  mid-file     8916    0                  8.345e-07    False
+      librosa(offset)        mid-file     8916    0                  8.345e-07    False
+      ffmpeg -ss/-t          mid-file     8916    0                  0.000e+00    True
+      senselab Audio(off)    mid-file     8916    0                  0.000e+00    True
+      torchcodec range       late         RuntimeError: getFramesPlayedInRangeAudio, /Users/runner/work/torchcodec/t
+      torchaudio.load(off)   late         0       None               inf          False
+      soundfile.read(start)  late         0       None               inf          False
+      librosa(offset)        late         0       None               inf          False
+      ffmpeg -ss/-t          late         0       None               inf          False
+      senselab Audio(off)    late         RuntimeError: getFramesPlayedInRangeAudio, /Users/runner/work/torchcodec/t
+
+======================================================================================================================
+## B2. Contiguity: do consecutive chunks concatenate back to the full decode exactly?
+======================================================================================================================
+  wav PCM_16     torchcodec range       concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  wav PCM_16     soundfile.read(start)  concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  wav PCM_16     torchaudio.load(off)   concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  wav FLOAT32    torchcodec range       concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  wav FLOAT32    soundfile.read(start)  concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  wav FLOAT32    torchaudio.load(off)   concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  flac PCM_24    torchcodec range       concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  flac PCM_24    soundfile.read(start)  concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  flac PCM_24    torchaudio.load(off)   concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  mp3 192k       torchcodec range       concat_n=131195   full_n=132300   bitexact=False  max|diff|=0.000e+00 mismatched_samples=0
+  mp3 192k       soundfile.read(start)  concat_n=132300   full_n=132300   bitexact=False  max|diff|=2.446e-06 mismatched_samples=122651
+  mp3 192k       torchaudio.load(off)   concat_n=132300   full_n=132300   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  m4a aac        torchcodec range       concat_n=133120   full_n=133120   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+  m4a aac        soundfile.read(start)  LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work3/c
+  m4a aac        torchaudio.load(off)   concat_n=133120   full_n=133120   bitexact=True   max|diff|=0.000e+00 mismatched_samples=0
+
+======================================================================================================================
+## B3. senselab Audio.from_stream (soundfile blocks) vs full decode
+======================================================================================================================
+  wav PCM_16     stream_n=132300   full_n=132300   bitexact=True max|diff|=0.000e+00
+  wav FLOAT32    stream_n=132300   full_n=132300   bitexact=True max|diff|=0.000e+00
+  flac PCM_24    stream_n=132300   full_n=132300   bitexact=True max|diff|=0.000e+00
