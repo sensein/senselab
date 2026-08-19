@@ -27,13 +27,19 @@ Two released checkpoints, both mirrored by upstream at
 
 | Variant | Reported PESQ / SI-SDR | Notes |
 |---|---|---|
-| `distillhubert_three_layers_with_z` (default) | 3.00 / 15.8 | the paper's headline model |
-| `distillhubert_three_layers_pesq_sisdr_ccmse_with_z` | 3.50 / 20.2 | trained with PESQ/SI-SDR/CCMSE in the loss |
+| `distillhubert_three_layers_with_z` (default) | 3.00 / 15.6 | latent-drift loss only |
+| `distillhubert_three_layers_pesq_sisdr_ccmse_with_z` | 3.45 / 20.6 | trained with PESQ/SI-SDR/CCMSE in the loss |
 
-Those numbers are upstream's, measured against a copy of the VoiceBank-DEMAND test set that an
-independent reproducer could not reproduce; the same enhanced audio scores about 0.4 PESQ lower
-against a standard copy ([issue #1](https://github.com/LiangXu123/DriftSE/issues/1), open). Read them
-as advertised rather than confirmed.
+Both are `with_z` — `train_add_gaussian` true — and both are *ablation* rows in upstream's own
+VB-DMD table, which marks them as such; neither is the paper's headline configuration, and the
+`no_z` variant the README describes has no released checkpoint. `variant` selects between the two;
+there is nothing else to select.
+
+Those numbers are upstream's README at the pinned commit, measured against a copy of the
+VoiceBank-DEMAND test set that an independent reproducer could not reproduce; the same enhanced
+audio scores about 0.4 PESQ lower against a standard copy
+([issue #1](https://github.com/LiangXu123/DriftSE/issues/1), open). Read them as advertised rather
+than confirmed.
 
 ### Calling it
 
@@ -55,6 +61,10 @@ It is a normal selectable backend, nameable from a workflow config like any othe
 **not** the default enhancer: whether a one-step generative enhancer should displace SepFormer, and
 how a second enhancer's output participates in the perturbation sample, are measurements that have
 not been made.
+
+Levels: upstream peak-normalises its input, runs the network, and rescales the output by its own
+peak back to that input peak. senselab does the same per window, because the arbitrary gain being
+removed is a property of one network evaluation. The output therefore carries the input's peak.
 
 The worker deviates from upstream's `enhancement.py` in three ways — `torch.load(weights_only=True)`,
 Hann-tapered overlap-add for long inputs, and a recorded RNG seed. Those deviations, the pinned
