@@ -105,6 +105,7 @@ from senselab.utils.data_structures import DeviceType, _select_device_and_dtype
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.data_structures.model import get_huggingface_token
 from senselab.utils.dependencies import resolve_model
+from senselab.utils.portable_audio_io import write_audio
 from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
@@ -417,7 +418,7 @@ def write_hear_wav(path: "Path | str", audio: Audio) -> None:
     """
     waveform = audio.waveform.detach().cpu().numpy()
     mono = waveform.mean(axis=0) if waveform.ndim > 1 else waveform
-    sf.write(str(path), mono.astype(np.float32), audio.sampling_rate, subtype="FLOAT")
+    write_audio(path, mono.astype(np.float32), audio.sampling_rate, channels_first=False)
 
 
 def build_worker_payload(
