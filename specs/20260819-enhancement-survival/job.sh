@@ -17,9 +17,14 @@ export LD_LIBRARY_PATH="$(readlink -f ~/orcd/scratch)/miniforge/lib:${LD_LIBRARY
 export HF_HOME=/orcd/data/satra/002/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
 export HF_TOKEN="$(cat ~/.cache/huggingface/token)"                       # gated repos 401 without this
+# Venvs and the uv cache go on POOL, not SCRATCH. Unpacking one torch wheel creates tens of
+# thousands of header files, and SCRATCH's 1M inode cap binds long before its space does -- it was
+# at 98.4% inodes with half the space free, which surfaces as "Disk quota exceeded" mid-extract.
+POOL="$(readlink -f ~/orcd/pool)"
+mkdir -p "$POOL/senselab-venvs" "$POOL/uv-cache"
 export SENSELAB_CACHE="$SCRATCH/senselab-cache"
-export SENSELAB_VENV_CACHE="$SCRATCH/senselab-venvs"
-export UV_CACHE_DIR="$SCRATCH/uv-cache"
+export SENSELAB_VENV_CACHE="$POOL/senselab-venvs"
+export UV_CACHE_DIR="$POOL/uv-cache"
 export SENSELAB_RUN_ID="slurm-$SLURM_JOB_ID"                              # one commit per repo, whole sweep
 
 REPO="$HOME/orcd/scratch/senselab-bench"
