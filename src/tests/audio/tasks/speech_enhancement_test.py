@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 import soundfile
 import torch
+from speechbrain.inference.enhancement import SpectralMaskEnhancement as enhance_model
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
@@ -366,6 +367,20 @@ def test_driftse_input_wavs_are_written_as_float_not_pcm16(
 
     assert captured["subtypes"] == ["FLOAT"]
     assert captured["peak"] > 1.5, "an out-of-range sample was clipped on write"
+
+
+@pytest.mark.parametrize(
+    ("model_uri", "expected"),
+    [
+        ("speechbrain/sepformer-wham16k-enhancement", separator),
+        ("speechbrain/sepformer-wsj02mix", separator),
+        ("speechbrain/metricgan-plus-voicebank", enhance_model),
+        ("speechbrain/mtl-mimic-voicebank", enhance_model),
+    ],
+)
+def test_loader_for_selects_class_by_name(model_uri: str, expected: type) -> None:
+    """The interface class is chosen directly from the model name, no load needed."""
+    assert SpeechBrainEnhancer._loader_for(model_uri) is expected
 
 
 @pytest.fixture
@@ -803,3 +818,80 @@ def test_a_driftse_timeout_names_the_ceiling_the_input_and_the_progress(
     assert driftse._DRIFTSE_DEFAULT_VARIANT in message
     assert "device=cpu" in message
     assert "timeout_s" in message, "the message must name the knob that raises the ceiling"
+
+
+class TestSpeechBrainSourceGuard:
+    """A separation checkpoint must be refused, not flattened into interleaved samples.
+
+    Measured through ``enhance_audios`` before this guard: seven reachable SepFormer separation
+    checkpoints returned output of exactly 2.000x the input length (3.000x for ``wsj03mix``), with
+    cross-correlation peak |r| <= 0.08 against the input and an empty ASR transcript. The sources
+    were all present, merely interleaved sample-by-sample by ``reshape(1, -1)`` over
+    ``(batch, samples, sources)``. See specs/20260819-speechbrain-separation-guard/design.md.
+    """
+
+    @staticmethod
+    def _model() -> SpeechBrainModel:
+        return SpeechBrainModel(path_or_uri="speechbrain/sepformer-wsj02mix", revision="main")
+
+    def test_two_sources_are_refused_rather_than_interleaved(self) -> None:
+        """The defect: (1, T, 2) must raise, not become a 2T-long waveform."""
+        two_sources = torch.stack([torch.zeros(16000), torch.ones(16000)], dim=-1).unsqueeze(0)
+        assert two_sources.shape == (1, 16000, 2)
+        with pytest.raises(ValueError, match="2 separated sources"):
+            SpeechBrainEnhancer._single_source(two_sources, self._model())
+
+    def test_three_sources_are_refused(self) -> None:
+        """``wsj03mix`` returned 3.000x the input length."""
+        three = torch.zeros(1, 16000, 3)
+        with pytest.raises(ValueError, match="3 separated sources"):
+            SpeechBrainEnhancer._single_source(three, self._model())
+
+    def test_the_error_points_at_source_separation(self) -> None:
+        """A caller must be told where the capability actually lives."""
+        with pytest.raises(ValueError, match="source_separation"):
+            SpeechBrainEnhancer._single_source(torch.zeros(1, 100, 2), self._model())
+
+    def test_one_source_drops_the_source_axis(self) -> None:
+        """An enhancement checkpoint yields (1, T, 1); the samples must survive unchanged."""
+        ramp = torch.linspace(-1.0, 1.0, 16000)
+        one_source = ramp.reshape(1, 16000, 1)
+        out = SpeechBrainEnhancer._single_source(one_source, self._model())
+        assert out.shape == (1, 16000)
+        assert torch.equal(out.reshape(-1), ramp)
+
+    def test_a_two_dimensional_output_is_passed_through(self) -> None:
+        """``enhance_batch`` returns (batch, samples) with no source axis to drop."""
+        already_flat = torch.zeros(1, 16000)
+        out = SpeechBrainEnhancer._single_source(already_flat, self._model())
+        assert out.shape == (1, 16000)
+
+    def test_the_public_path_refuses_instead_of_doubling_the_length(self) -> None:
+        """The behavioural test: pre-fix this produced audio of exactly 2x the input length.
+
+        Fails before the guard with a length assertion rather than an AttributeError, so it pins
+        the defect and not merely the presence of a helper.
+        """
+        samples = 16000
+        audio = Audio(waveform=torch.zeros(1, samples), sampling_rate=8000)
+
+        class _TwoSourceSeparator:
+            hparams = types.SimpleNamespace(sample_rate=8000)
+
+            def separate_batch(self, waveform: torch.Tensor) -> torch.Tensor:
+                n = waveform.shape[-1]
+                return torch.stack([torch.zeros(n), torch.ones(n)], dim=-1).unsqueeze(0)
+
+        with patch.object(
+            SpeechBrainEnhancer,
+            "_get_speechbrain_model",
+            return_value=(_TwoSourceSeparator(), DeviceType.CPU, torch.float32),
+        ):
+            with pytest.raises(ValueError, match="2 separated sources"):
+                out = SpeechBrainEnhancer.enhance_audios_with_speechbrain(audios=[audio], model=self._model())
+                # Unreachable once the guard exists. Pre-fix, execution arrives here and the
+                # assertion below is what fails, naming the actual defect.
+                assert out[0].waveform.shape[-1] == samples, (
+                    f"interleaved: {out[0].waveform.shape[-1]} samples from {samples} in "
+                    f"({out[0].waveform.shape[-1] / samples:.3f}x)"
+                )
