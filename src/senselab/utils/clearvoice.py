@@ -159,7 +159,9 @@ CLEARVOICE_MODELS: Dict[str, ClearVoiceModelSpec] = {
         ClearVoiceModelSpec("MossFormerGAN_SE_16K", "speech_enhancement", 16000, 1, False, "speech enhancement"),
         ClearVoiceModelSpec("MossFormer2_SE_48K", "speech_enhancement", 48000, 1, False, "speech enhancement"),
         ClearVoiceModelSpec("MossFormer2_SS_16K", "speech_separation", 16000, 2, True, "speech separation"),
-        ClearVoiceModelSpec("MossFormer2_SR_48K", "speech_super_resolution", 48000, 1, False, "speech super-resolution"),
+        ClearVoiceModelSpec(
+            "MossFormer2_SR_48K", "speech_super_resolution", 48000, 1, False, "speech super-resolution"
+        ),
         ClearVoiceModelSpec(
             "AV_MossFormer2_TSE_16K",
             "target_speaker_extraction",
@@ -175,9 +177,7 @@ _TASK_OWNERS = {
     "speech_enhancement": "senselab.audio.tasks.speech_enhancement.enhance_audios",
     "speech_separation": "senselab.audio.tasks.source_separation.separate_audios",
     "speech_super_resolution": "senselab.audio.tasks.speech_super_resolution.super_resolve_audios",
-    "target_speaker_extraction": (
-        "senselab.audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos"
-    ),
+    "target_speaker_extraction": ("senselab.audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos"),
 }
 
 
@@ -533,9 +533,7 @@ def resolve_worker_device(device: Optional[DeviceType]) -> Optional[str]:
     """
     if device is None:
         return None
-    selected, _ = _select_device_and_dtype(
-        user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
-    )
+    selected, _ = _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
     return device_run_opt(selected)
 
 

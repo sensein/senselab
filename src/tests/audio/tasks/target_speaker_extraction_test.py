@@ -61,8 +61,8 @@ def worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, Any]:
     )
     monkeypatch.setattr(cv, "stage_s3fd_weights", lambda: tmp_path / "sfd_face.pth")
 
-    def fake_run(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
-        payload = json.loads(kwargs["input"])
+    def fake_run(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        payload = json.loads(str(kwargs["input"]))
         captured["payload"] = payload
         captured["timeout"] = kwargs["timeout"]
         outputs = []
@@ -196,9 +196,7 @@ def test_an_explicit_ceiling_is_forwarded(offline_hub: None, worker: Dict[str, A
     assert worker["timeout"] == 77.0
 
 
-def test_parameters_are_validated_and_recorded(
-    offline_hub: None, worker: Dict[str, Any], video_file: Path
-) -> None:
+def test_parameters_are_validated_and_recorded(offline_hub: None, worker: Dict[str, Any], video_file: Path) -> None:
     """Same pathway as the audio tasks: unknown keys raise, chosen ones are recorded."""
     extracted = extract_target_speakers_from_videos([video_file], parameters={"timeout_s": 77.0})
     assert extracted[0][0].metadata[PARAMETER_RECORD_KEY]["explicit"] == ["timeout_s"]
@@ -215,7 +213,5 @@ def test_no_video_means_no_worker(offline_hub: None, worker: Dict[str, Any]) -> 
 def test_a_checkpoint_for_another_capability_is_refused(offline_hub: None) -> None:
     """The table decides which entry point owns which checkpoint."""
     with pytest.raises(ValueError) as exc:
-        extract_target_speakers_with_clearvoice(
-            [], HFModel(path_or_uri="alibabasglab/FRCRN_SE_16K", revision="main")
-        )
+        extract_target_speakers_with_clearvoice([], HFModel(path_or_uri="alibabasglab/FRCRN_SE_16K", revision="main"))
     assert "speech_enhancement.enhance_audios" in str(exc.value)

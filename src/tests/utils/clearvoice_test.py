@@ -143,7 +143,9 @@ def test_staging_downloads_only_the_files_the_commit_manifest_names(
     assert not any("do_" in entry["file"] for entry in requested)
 
 
-def test_staging_resolves_the_ref_to_a_commit_before_downloading(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_staging_resolves_the_ref_to_a_commit_before_downloading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """The loader takes no revision, so the parent's resolution is the only pin there is."""
     sha = "b" * 40
     snapshot = tmp_path / "snapshots" / sha
@@ -305,10 +307,11 @@ def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: dict, tmp_path: Path
     monkeypatch.setattr(cv, "stage_clearvoice_checkpoints", lambda spec, revision="main": (tmp_path / "ckpt", sha))
     monkeypatch.setattr(cv, "stage_s3fd_weights", lambda: tmp_path / "sfd_face.pth")
 
-    def fake_run(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
-        captured["payload"] = json.loads(kwargs["input"])
+    def fake_run(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        captured["payload"] = json.loads(str(kwargs["input"]))
         captured["timeout"] = kwargs["timeout"]
         payload = captured["payload"]
+        body: Dict[str, Any]
         if payload["mode"] == "tse":
             body = {"output_paths": [[] for _ in payload["video_paths"]], "device": "cpu"}
         else:
@@ -349,9 +352,7 @@ def test_the_payload_carries_the_staged_io_policy_directory(monkeypatch: pytest.
     """The worker imports the range policy from a file the parent copies next to the payload."""
     captured: dict = {}
     _stub_worker(monkeypatch, captured, tmp_path)
-    cv.run_clearvoice_audio(
-        cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0
-    )
+    cv.run_clearvoice_audio(cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0)
     io_dir = Path(captured["payload"]["io_dir"])
     assert (io_dir / "portable_audio_io.py").is_file() or io_dir.name.startswith("senselab-clearvoice")
 
@@ -387,8 +388,8 @@ def test_a_timeout_names_the_ceiling_the_work_and_the_way_out(monkeypatch: pytes
     captured: dict = {}
     _stub_worker(monkeypatch, captured, tmp_path)
 
-    def timing_out(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
-        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    def timing_out(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        raise subprocess.TimeoutExpired(cmd, float(kwargs["timeout"]))  # type: ignore[arg-type]
 
     monkeypatch.setattr(cv.subprocess, "run", timing_out)
     with pytest.raises(RuntimeError) as exc:
@@ -408,15 +409,13 @@ def test_a_worker_failure_preserves_the_upstream_error(monkeypatch: pytest.Monke
     _stub_worker(monkeypatch, captured, tmp_path)
     blocked = "clearvoice reached SpeechModel.download_model for FRCRN_SE_16K"
 
-    def failing(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
+    def failing(cmd: list, **kwargs: object) -> types.SimpleNamespace:
         body = {"error": {"type": "RuntimeError", "message": blocked, "traceback": "..."}}
         return types.SimpleNamespace(returncode=1, stdout=json.dumps(body), stderr="")
 
     monkeypatch.setattr(cv.subprocess, "run", failing)
     with pytest.raises(RuntimeError, match="download_model"):
-        cv.run_clearvoice_audio(
-            cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0
-        )
+        cv.run_clearvoice_audio(cv.CLEARVOICE_MODELS["FRCRN_SE_16K"], ["/tmp/in.wav"], str(tmp_path), total_audio_s=1.0)
 
 
 def test_the_tse_payload_carries_the_verified_detector_and_the_video_paths(

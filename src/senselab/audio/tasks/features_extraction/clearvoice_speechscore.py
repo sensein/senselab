@@ -97,7 +97,9 @@ SPEECHSCORE_METRICS: Dict[str, SpeechScoreMetric] = {
 NO_REFERENCE_METRICS: Tuple[str, ...] = tuple(
     name for name, metric in SPEECHSCORE_METRICS.items() if not metric.needs_reference
 )
-REFERENCE_METRICS: Tuple[str, ...] = tuple(name for name, metric in SPEECHSCORE_METRICS.items() if metric.needs_reference)
+REFERENCE_METRICS: Tuple[str, ...] = tuple(
+    name for name, metric in SPEECHSCORE_METRICS.items() if metric.needs_reference
+)
 
 
 _WORKER_SCRIPT = r"""
@@ -312,7 +314,8 @@ def extract_speechscore_metrics_from_audios(
 
     with tempfile.TemporaryDirectory(prefix="senselab-speechscore-") as tmpdir:
         tmp = Path(tmpdir)
-        test_paths, reference_paths = [], []
+        test_paths: List[str] = []
+        reference_paths: List[Optional[str]] = []
         for index, audio in enumerate(audios):
             test_path = str(tmp / f"test_{index}.wav")
             audio.save_to_file(test_path)
