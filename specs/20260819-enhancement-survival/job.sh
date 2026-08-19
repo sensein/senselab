@@ -10,6 +10,8 @@ set -euo pipefail
 # which is the slowest tier.
 
 # Each export below has failed silently at least once while the job still reported COMPLETED.
+SCRATCH="$(readlink -f ~/orcd/scratch)"
+export SCRATCH
 export PATH="$HOME/.local/bin:$PATH"                                      # uv lives here
 export LD_LIBRARY_PATH="$(readlink -f ~/orcd/scratch)/miniforge/lib:${LD_LIBRARY_PATH:-}"  # libavutil.so.56
 export HF_HOME=/orcd/data/satra/002/huggingface
