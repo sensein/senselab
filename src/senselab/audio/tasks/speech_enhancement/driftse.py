@@ -29,6 +29,8 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import soundfile as sf
+
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel
 from senselab.utils.data_structures.logging import logger
@@ -41,6 +43,10 @@ from senselab.utils.subprocess_venv import (
 
 _DRIFTSE_VENV = "driftse"
 _DRIFTSE_PYTHON = "3.11"
+
+# Every WAV this backend hands to or takes back from the worker. soundfile's WAV default is
+# PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
+_WAV_SUBTYPE = "FLOAT"
 
 # Upstream's requirements.txt is a *training* set; only what the inference import chain touches is
 # installed. pesq/pystoi are on that chain (util/other.py imports both at module scope) even though
@@ -106,6 +112,7 @@ try:
     seed = int(args["seed"])
     sigma = float(args["sigma"])
     chunk_s, overlap_s = float(args["chunk_s"]), float(args["overlap_s"])
+    wav_subtype = args["wav_subtype"]
 
     import fcntl, os, shutil, tempfile as _tempfile
 
@@ -244,7 +251,9 @@ try:
                 wsum[start : start + chunk] += taper
             x_hat = acc / wsum.clamp(min=1e-8)
 
-        sf.write(out_path, x_hat.detach().cpu().numpy(), sr)
+        # Explicit subtype: soundfile's WAV default is PCM_16, which clips every sample
+        # beyond +-1 on the way back to the host.
+        sf.write(out_path, x_hat.detach().cpu().numpy(), sr, subtype=wav_subtype)
         results.append(out_path)
 
     print(json.dumps({"output_paths": results, "seed": seed, "sigma": sigma}))
@@ -350,7 +359,14 @@ def enhance_audios_with_driftse(
         for i, audio in enumerate(mono_16k):
             in_path = str(tmp / f"in_{i}.wav")
             out_path = str(tmp / f"out_{i}.wav")
-            audio.save_to_file(in_path)
+            # Not Audio.save_to_file: that writes PCM_16 for a .wav, which clips the input
+            # before the worker ever reads it.
+            sf.write(
+                in_path,
+                audio.waveform.squeeze(0).detach().cpu().numpy(),
+                audio.sampling_rate,
+                subtype=_WAV_SUBTYPE,
+            )
             in_paths.append(in_path)
             out_paths.append(out_path)
 
@@ -368,6 +384,7 @@ def enhance_audios_with_driftse(
                 "sigma": sigma,
                 "chunk_s": chunk_s,
                 "overlap_s": overlap_s,
+                "wav_subtype": _WAV_SUBTYPE,
             }
         )
 

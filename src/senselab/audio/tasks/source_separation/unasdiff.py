@@ -101,6 +101,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, Union
 
+import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -231,6 +232,10 @@ _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
 # why no lower value is recommended here.
 _DIFFUSION_STEPS = 200
 
+# Every WAV this backend hands to or takes back from the worker. soundfile's WAV default is
+# PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
+_WAV_SUBTYPE = "FLOAT"
+
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
 
 
@@ -284,6 +289,7 @@ try:
     labels = args["labels"]
     in_paths, out_paths = args["in_paths"], args["out_paths"]
     seed = int(args["seed"])
+    wav_subtype = args["wav_subtype"]
 
     import fcntl, os, shutil, tempfile as _tempfile
 
@@ -433,7 +439,9 @@ try:
 
         for src_wave, out_path in zip(sources, out_path_list):
             src_wave = src_wave / 0.95 * peak
-            sf.write(out_path, src_wave.detach().cpu().numpy(), sr)
+            # Explicit subtype: soundfile's WAV default is PCM_16, which clips every sample
+            # beyond +-1 on the way back to the host.
+            sf.write(out_path, src_wave.detach().cpu().numpy(), sr, subtype=wav_subtype)
         results.append(out_path_list)
 
     print(json.dumps({"output_paths": results, "seed": seed}))
@@ -697,9 +705,10 @@ def separate_with_unasdiff(
             waveform = audio.waveform.squeeze(0)
             for w, start in enumerate(starts):
                 segment = waveform[start : start + window_samples]
-                segment_audio = Audio(waveform=segment.unsqueeze(0), sampling_rate=_TARGET_SR)
                 in_path = str(tmp / f"in_{i}_{w}.wav")
-                segment_audio.save_to_file(in_path)
+                # Not Audio.save_to_file: that writes PCM_16 for a .wav, which clips the input
+                # window before the worker ever reads it.
+                sf.write(in_path, segment.detach().cpu().numpy(), _TARGET_SR, subtype=_WAV_SUBTYPE)
                 in_paths.append(in_path)
                 out_paths.append([str(tmp / f"out_{i}_{w}_{s}.wav") for s in range(n_sources)])
             window_ranges.append((flat_start, len(in_paths)))
@@ -720,6 +729,7 @@ def separate_with_unasdiff(
                 "out_paths": out_paths,
                 "seed": seed,
                 "diffusion_steps": diffusion_steps,
+                "wav_subtype": _WAV_SUBTYPE,
             }
         )
 
