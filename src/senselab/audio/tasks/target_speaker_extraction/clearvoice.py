@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Sequence, Union
+from typing import Any, List, Optional, Sequence, Union
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.clearvoice import clearvoice_model_spec, run_clearvoice_tse
@@ -29,7 +29,9 @@ CLEARVOICE_TSE_TASK = "target_speaker_extraction"
 # while reading it as text.
 SUPPORTED_VIDEO_SUFFIXES = (".mp4", ".avi", ".mov", ".webm")
 
-VideoInput = Union[str, Path, "object"]
+# ``Video`` is not named in the annotation: importing senselab.video at module scope would make
+# this task package depend on the video stack even for a caller passing a path.
+VideoInput = Union[str, Path, Any]
 
 
 def _video_path(video: VideoInput) -> Path:
@@ -48,7 +50,7 @@ def _video_path(video: VideoInput) -> Path:
     from senselab.video.data_structures import Video
 
     if isinstance(video, Video):
-        path = getattr(video, "_file_path", None)
+        path: Optional[Union[str, Path]] = getattr(video, "_file_path", None)
         if not path:
             raise ValueError(
                 "audio-visual target speaker extraction needs the video file, not decoded frames: "

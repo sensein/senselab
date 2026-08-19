@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 import pytest
 
@@ -31,7 +31,7 @@ def _no_tunables(audios: list, model: object = None, device: object = None) -> l
     return audios
 
 
-def _kwargs_backend(audios: list, **kwargs: Any) -> list:
+def _kwargs_backend(audios: list, **kwargs: object) -> list:
     return audios
 
 
@@ -63,9 +63,9 @@ def test_a_declared_key_is_forwarded_and_only_that_key() -> None:
 def test_an_unknown_key_raises_and_names_the_near_miss() -> None:
     """The failure mode is a typo, so the message must name the parameter the caller meant."""
     with pytest.raises(ValueError) as exc:
-        resolve_backend_parameters(_backend, {"varient": "other"}, backend_name="stub")
+        resolve_backend_parameters(_backend, {"variantt": "other"}, backend_name="stub")
     message = str(exc.value)
-    assert "'varient'" in message
+    assert "'variantt'" in message
     assert "did you mean 'variant'" in message
     assert "seed" in message, "the message must enumerate the declared parameters"
 
@@ -91,7 +91,7 @@ def test_a_non_mapping_or_non_string_key_is_a_type_error() -> None:
 
 
 def test_the_record_carries_defaults_as_well_as_explicit_values() -> None:
-    """"What ran" is unanswerable from the explicit values alone."""
+    """Recording only the explicit values cannot answer what actually ran."""
     _, record = resolve_backend_parameters(_backend, {"seed": 7}, backend_name="stub")
     assert record.effective == {"variant": "default", "seed": 7, "timeout_s": None}
     assert record.explicit == ("seed",)

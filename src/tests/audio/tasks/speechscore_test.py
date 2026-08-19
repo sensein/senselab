@@ -26,8 +26,8 @@ def worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, Any]:
     monkeypatch.setattr(ss, "ensure_venv", lambda *a, **k: tmp_path / "venv")
     monkeypatch.setattr(ss, "venv_python", lambda venv_dir: "python3")
 
-    def fake_run(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
-        payload = json.loads(kwargs["input"])
+    def fake_run(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        payload = json.loads(str(kwargs["input"]))
         captured["payload"] = payload
         captured["timeout"] = kwargs["timeout"]
         # Inspected here rather than after the call: the parent's TemporaryDirectory is gone by then.
@@ -78,6 +78,7 @@ def test_without_a_reference_only_the_no_reference_metrics_are_selected() -> Non
 
 
 def test_with_a_reference_every_metric_is_selected() -> None:
+    """With a reference, nothing has to be withheld."""
     assert len(ss.resolve_speechscore_metrics(None, has_references=True)) == 18
 
 
@@ -92,6 +93,7 @@ def test_asking_for_an_intrusive_metric_without_a_reference_is_refused() -> None
 
 
 def test_an_unknown_metric_name_enumerates_the_real_ones() -> None:
+    """A typo must name the metric the caller meant, not merely fail."""
     with pytest.raises(ValueError) as exc:
         ss.resolve_speechscore_metrics(["PSEQ"], has_references=True)
     assert "'PSEQ'" in str(exc.value) and "PESQ" in str(exc.value)
@@ -106,9 +108,8 @@ def test_metric_names_are_case_insensitive_and_returned_in_table_order() -> None
 # ── Scoring ───────────────────────────────────────────────────────────
 
 
-def test_scoring_returns_one_dict_per_audio_keyed_by_metric(
-    worker: Dict[str, Any], mono_audio_sample: Audio
-) -> None:
+def test_scoring_returns_one_dict_per_audio_keyed_by_metric(worker: Dict[str, Any], mono_audio_sample: Audio) -> None:
+    """One row per audio, with each metric under its own name."""
     scores = ss.extract_speechscore_metrics_from_audios([mono_audio_sample], metrics=["DNSMOS", "SRMR"])
     assert len(scores) == 1
     assert list(scores[0]) == ["DNSMOS", "SRMR"]
@@ -122,9 +123,7 @@ def test_the_test_audio_is_handed_over_as_float(worker: Dict[str, Any], mono_aud
     assert worker["test_subtypes"] == ["FLOAT"]
 
 
-def test_a_reference_is_written_alongside_each_test_signal(
-    worker: Dict[str, Any], mono_audio_sample: Audio
-) -> None:
+def test_a_reference_is_written_alongside_each_test_signal(worker: Dict[str, Any], mono_audio_sample: Audio) -> None:
     """The intrusive metrics need both, paired by position."""
     ss.extract_speechscore_metrics_from_audios(
         [mono_audio_sample], reference_audios=[mono_audio_sample], metrics=["PESQ"]
@@ -168,17 +167,20 @@ def test_the_ceiling_has_a_floor(worker: Dict[str, Any]) -> None:
 
 
 def test_a_non_positive_ceiling_is_refused(mono_audio_sample: Audio) -> None:
+    """A zero ceiling would kill the worker instantly and blame a timeout."""
     with pytest.raises(ValueError, match="positive number of seconds"):
         ss.extract_speechscore_metrics_from_audios([mono_audio_sample], metrics=["SRMR"], timeout_s=0)
 
 
-def test_a_timeout_says_which_metrics_dominate(monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio, tmp_path: Path) -> None:
+def test_a_timeout_says_which_metrics_dominate(
+    monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio, tmp_path: Path
+) -> None:
     """An actionable failure names the way out, and here that includes dropping the neural metrics."""
     monkeypatch.setattr(ss, "ensure_venv", lambda *a, **k: tmp_path / "venv")
     monkeypatch.setattr(ss, "venv_python", lambda venv_dir: "python3")
 
-    def timing_out(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
-        raise ss.subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+    def timing_out(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        raise ss.subprocess.TimeoutExpired(cmd, float(kwargs["timeout"]))  # type: ignore[arg-type]
 
     monkeypatch.setattr(ss.subprocess, "run", timing_out)
     with pytest.raises(RuntimeError) as exc:
@@ -189,6 +191,7 @@ def test_a_timeout_says_which_metrics_dominate(monkeypatch: pytest.MonkeyPatch, 
 
 
 def test_no_audio_means_no_worker(worker: Dict[str, Any]) -> None:
+    """An empty list must not clone upstream or build a venv."""
     assert ss.extract_speechscore_metrics_from_audios([]) == []
     assert "payload" not in worker
 
@@ -220,6 +223,6 @@ def test_the_worker_never_offers_windowing() -> None:
 
 
 def test_the_metric_requirements_name_what_the_scores_import() -> None:
-    """gammatone is SRMR's, and pandas/matplotlib/tqdm are NISQA_lib's module-scope imports."""
+    """SRMR needs gammatone; NISQA_lib imports pandas, matplotlib and tqdm at module scope."""
     named = {req.split("=")[0].split(">")[0].split("<")[0].strip().lower() for req in ss.SPEECHSCORE_REQUIREMENTS}
     assert {"gammatone", "museval", "onnxruntime", "xls_r_sqa", "pandas", "matplotlib", "tqdm"} <= named

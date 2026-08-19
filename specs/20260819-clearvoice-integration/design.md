@@ -332,7 +332,7 @@ result, which this repository already judges worse than no result (`RevisionReso
 - Validated against the **selected** backend, so a DriftSE key passed with a SpeechBrain model raises
   rather than being accepted before the dispatcher has decided where it is going.
 - Unknown keys raise, with `difflib` near misses named — the failure mode is a typo, and a caller who
-  wrote `varient` should be told `variant`.
+  wrote `variantt` should be told `variant`.
 - A `**kwargs` backend declares nothing checkable and is treated as declaring nothing, rather than as
   "anything goes".
 - The **effective** set — explicit values merged over declared defaults — is recorded on every
@@ -364,13 +364,29 @@ The operational consequence, and the reason this is in `doc.md` rather than only
 you choose determines which non-speech element survives**, so for any analysis that treats breaths or
 coughs as signal, the enhancer is not a neutral preprocessing step.
 
-## 8. Not done
+## 8. What was and was not run
 
-- The audio-visual extractor is not verified numerically (D-3).
-- Per-model timeout costs for the four heavier checkpoints are extrapolated, not measured (§5).
-- `MossFormer2_SS_16K`, `MossFormer2_SR_48K` and `AV_MossFormer2_TSE_16K` were not run end to end on
-  this host; their checkpoints total 1.6 GB and the host is shared. Dispatch, staging, validation,
-  payload and timeout are covered by tests that stub the worker.
+**Verified end to end on this host**, against the real `clearvoice==0.1.2` install and the real
+checkpoint at commit `3766e6a64b0d8cb58f08d913d617bf129f11ed53`:
+
+- `enhance_audios(..., model=HFModel("alibabasglab/FRCRN_SE_16K"), device=DeviceType.CPU,
+  parameters={"timeout_s": 600})` over 21.48 s of 16 kHz speech. Output: 343,680 samples at 16 kHz
+  (input's count preserved), FLOAT in and out, −0.01 dB RMS at r = 1.0000, peak 0.63, and
+  `metadata["clearvoice"]` carrying the resolved commit plus `metadata["backend_parameters"]`
+  carrying `{"timeout_s": 600.0}`.
+- The blocked-downloader guard: pointing `checkpoint_dir` at an empty directory raised
+  `RuntimeError: clearvoice reached SpeechModel.download_model for FRCRN_SE_16K …` rather than
+  downloading.
+
+**Not run.**
+
+- The audio-visual extractor is not verified numerically (D-3): no talking-face recording with known
+  ground truth was available, and fabricating one would have tested nothing.
+- `MossFormer2_SS_16K`, `MossFormer2_SR_48K` and `AV_MossFormer2_TSE_16K` were not run end to end;
+  their checkpoints total 1.6 GB and the host is shared. Dispatch, staging, validation, payload,
+  device and ceiling are covered by tests that stub the worker.
+- Per-model timeout costs for the four heavier checkpoints are extrapolated from FRCRN's measurement,
+  not measured (§5).
 - SpeechScore's NISQA/DNSMOS/DISTILL_MOS weights are committed in the upstream tree and arrive with
   the pinned sparse clone; they were not exercised here.
 

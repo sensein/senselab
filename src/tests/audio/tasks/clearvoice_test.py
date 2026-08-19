@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import types
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 import pytest
@@ -57,8 +57,8 @@ def worker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Dict[str, Any]:
     )
     monkeypatch.setattr(cv, "stage_s3fd_weights", lambda: tmp_path / "sfd_face.pth")
 
-    def fake_run(cmd: list, **kwargs: Any) -> types.SimpleNamespace:
-        payload = json.loads(kwargs["input"])
+    def fake_run(cmd: list, **kwargs: object) -> types.SimpleNamespace:
+        payload = json.loads(str(kwargs["input"]))
         captured["payload"] = payload
         captured["timeout"] = kwargs["timeout"]
         captured["in_subtypes"] = [soundfile.info(p).subtype for p in payload["in_paths"]]
@@ -240,7 +240,7 @@ def test_driftse_variant_now_reaches_its_backend(
         return list(audios)
 
     monkeypatch.setattr("senselab.audio.tasks.speech_enhancement.api.enhance_audios_with_driftse", fake_driftse)
-    model = HFModel(path_or_uri="LIANGXU123/DriftSE", revision="main")
+    model: HFModel = HFModel(path_or_uri="LIANGXU123/DriftSE", revision="main")
     variant = "distillhubert_three_layers_pesq_sisdr_ccmse_with_z"
     enhance_audios([mono_audio_sample], model=model, parameters={"variant": variant})
     assert seen == {"variant": variant}
@@ -259,9 +259,11 @@ def test_speechbrain_declares_no_parameters_and_says_so(offline_hub: None, mono_
     """A caller aiming a DriftSE knob at SpeechBrain must be told, not ignored."""
     from senselab.utils.data_structures import SpeechBrainModel
 
-    monkeypatched = SpeechBrainModel(path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main")
+    speechbrain_model: SpeechBrainModel = SpeechBrainModel(
+        path_or_uri="speechbrain/sepformer-wham16k-enhancement", revision="main"
+    )
     with pytest.raises(ValueError, match="no tunable parameters"):
-        enhance_audios([mono_audio_sample], model=monkeypatched, parameters={"variant": "x"})
+        enhance_audios([mono_audio_sample], model=speechbrain_model, parameters={"variant": "x"})
 
 
 def test_an_unknown_model_still_reports_every_supported_backend(offline_hub: None, mono_audio_sample: Audio) -> None:
@@ -311,7 +313,7 @@ def test_the_unapplied_rms_scalar_is_reported_on_each_source(
 def test_unasdiff_only_arguments_are_refused_for_the_clearvoice_separator(
     offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
 ) -> None:
-    """mode and source_classes describe unasdiff's priors; ignoring them would be silent."""
+    """Mode and source_classes describe unasdiff's priors; ignoring them would be silent."""
     worker["n_sources"] = 2
     with pytest.raises(ValueError) as exc:
         separate_audios(
@@ -339,9 +341,7 @@ def test_unasdiff_still_rejects_the_parameters_mapping(offline_hub: None, mono_a
 # ── Super-resolution ──────────────────────────────────────────────────
 
 
-def test_super_resolve_audios_returns_48k(
-    offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio
-) -> None:
+def test_super_resolve_audios_returns_48k(offline_hub: None, worker: Dict[str, Any], mono_audio_sample: Audio) -> None:
     """The output rate is the model's, not the input's — which is why this is not enhancement."""
     resolved = super_resolve_audios([mono_audio_sample])
     assert len(resolved) == 1
@@ -380,7 +380,7 @@ def test_super_resolution_records_its_parameters(
     [(enhance_audios, "FRCRN_SE_16K"), (super_resolve_audios, "MossFormer2_SR_48K")],
 )
 def test_no_audio_means_no_worker(
-    offline_hub: None, worker: Dict[str, Any], entry: Any, model_name: str
+    offline_hub: None, worker: Dict[str, Any], entry: Callable[..., list], model_name: str
 ) -> None:
     """An empty list must not provision a venv or stage 670 MB of weights."""
     assert entry([], model=_model(model_name)) == []
