@@ -1,10 +1,15 @@
 """Tests for the speech enhancement task."""
 
+import ast
+import json
+import types
 from pathlib import Path
 from typing import List
 from unittest.mock import patch
 
 import pytest
+import soundfile
+import torch
 from speechbrain.inference.separation import SepformerSeparation as separator
 
 from senselab.audio.data_structures import Audio
@@ -302,6 +307,65 @@ def test_checkpoint_override_skips_the_hub_entirely(
     model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
     with pytest.raises(RuntimeError, match="stop-before-venv"):
         driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
+
+
+def test_every_driftse_worker_wav_write_names_an_explicit_subtype() -> None:
+    """No ``sf.write`` in the DriftSE worker relies on soundfile's PCM_16 default.
+
+    That default clips every sample past +-1, and it has silently corrupted a measurement three
+    times in this repository -- once costing three SepFormer streams up to 8.9% of their samples
+    and 9.5 dB of agreement with the CPU run.
+    """
+    tree = ast.parse(driftse._WORKER_SCRIPT)
+    writes = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "write"
+    ]
+    assert writes, "test premise: the worker writes WAV files"
+    for node in writes:
+        assert "subtype" in {kw.arg for kw in node.keywords}, (
+            f"sf.write at worker line {node.lineno} relies on the PCM_16 default"
+        )
+
+
+def test_driftse_input_wavs_are_written_as_float_not_pcm16(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _offline_hfmodel_construction: None
+) -> None:
+    """The WAV the host hands the DriftSE worker is FLOAT, and samples past +-1 survive it.
+
+    ``Audio.save_to_file`` writes PCM_16 for a ``.wav``, so an input peaking above full scale
+    was clipped before the enhancer ever saw it.
+    """
+    monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
+    monkeypatch.setattr(driftse, "ensure_venv", lambda *a, **k: Path("/tmp/fake-driftse-venv"))
+    monkeypatch.setattr(driftse, "venv_python", lambda venv_dir: "python3")
+
+    captured: dict = {}
+
+    def fake_run(
+        cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict
+    ) -> types.SimpleNamespace:
+        payload = json.loads(input)
+        captured["subtypes"] = [soundfile.info(p).subtype for p in payload["in_paths"]]
+        captured["peak"] = max(abs(soundfile.read(p, dtype="float32")[0]).max() for p in payload["in_paths"])
+        for in_path, out_path in zip(payload["in_paths"], payload["out_paths"]):
+            data, sr = soundfile.read(in_path, dtype="float32")
+            soundfile.write(out_path, data, sr, subtype="FLOAT")
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"output_paths": payload["out_paths"]}), stderr="")
+
+    monkeypatch.setattr(driftse.subprocess, "run", fake_run)
+
+    waveform = torch.zeros(1, 16000)
+    waveform[0, 100:200] = 1.75
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO, revision=driftse._DRIFTSE_HF_REVISION)
+    driftse.enhance_audios_with_driftse(
+        [Audio(waveform=waveform, sampling_rate=16000)],
+        model=model,
+    )
+
+    assert captured["subtypes"] == ["FLOAT"]
+    assert captured["peak"] > 1.5, "an out-of-range sample was clipped on write"
 
 
 @pytest.fixture

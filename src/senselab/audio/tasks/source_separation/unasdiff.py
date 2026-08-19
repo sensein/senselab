@@ -101,6 +101,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Any, List, Optional, Tuple, Union
 
+import soundfile as sf
 import torch
 
 from senselab.audio.data_structures import Audio
@@ -231,7 +232,31 @@ _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
 # why no lower value is recommended here.
 _DIFFUSION_STEPS = 200
 
+# Every WAV this backend hands to or takes back from the worker. soundfile's WAV default is
+# PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
+_WAV_SUBTYPE = "FLOAT"
+
+# Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
+# Derivation and the measurement behind both numbers:
+# specs/20260818-071500-unasdiff-device-timeout-pcm16.
+_SECONDS_PER_WINDOW_STEP = 0.4
+_TIMEOUT_HEADROOM = 4.0
+_TIMEOUT_FLOOR_S = 1800.0
+
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
+
+
+def _default_timeout_s(n_windows: int, diffusion_steps: int) -> float:
+    """Return the default worker ceiling for ``n_windows`` windows at ``diffusion_steps`` steps.
+
+    Args:
+        n_windows: Total number of 4 s windows the worker will separate, across every input.
+        diffusion_steps: Reverse-diffusion steps per window.
+
+    Returns:
+        Seconds, never below ``_TIMEOUT_FLOOR_S``.
+    """
+    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _SECONDS_PER_WINDOW_STEP * n_windows * diffusion_steps)
 
 
 @functools.lru_cache(maxsize=1)
@@ -284,6 +309,8 @@ try:
     labels = args["labels"]
     in_paths, out_paths = args["in_paths"], args["out_paths"]
     seed = int(args["seed"])
+    requested_device = args.get("device")
+    wav_subtype = args["wav_subtype"]
 
     import fcntl, os, shutil, tempfile as _tempfile
 
@@ -322,10 +349,35 @@ try:
 
     # Library modules only. The three test_*.py scripts call torch.cuda.set_device(0) at
     # import and abort on a CPU host.
+    #
+    # models/atten_unet.py assigns CUDA_VISIBLE_DEVICES="0" at module scope, before its own
+    # `import torch`. The launcher's value is saved here and put back immediately after, ahead of
+    # the first CUDA API call below -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
+    saved_visible_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
     import models
     import diffusion
+    if saved_visible_devices is None:
+        os.environ.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = saved_visible_devices
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    def resolve_device(requested):
+        # Bare "cuda" would take whatever index torch defaults to; an index is always chosen.
+        if requested is None:
+            return torch.device("cuda:%d" % torch.cuda.current_device() if torch.cuda.is_available() else "cpu")
+        if not str(requested).startswith("cuda"):
+            return torch.device(requested)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "unasdiff worker: device %r was requested but torch.cuda.is_available() is False "
+                "inside the unasdiff venv (CUDA_VISIBLE_DEVICES=%r)"
+                % (requested, os.environ.get("CUDA_VISIBLE_DEVICES"))
+            )
+        if ":" in str(requested):
+            return torch.device(requested)
+        return torch.device("cuda:%d" % torch.cuda.current_device())
+
+    device = resolve_device(requested_device)
     torch.manual_seed(seed)
 
     def load_prior(config_path, ckpt_path):
@@ -433,7 +485,9 @@ try:
 
         for src_wave, out_path in zip(sources, out_path_list):
             src_wave = src_wave / 0.95 * peak
-            sf.write(out_path, src_wave.detach().cpu().numpy(), sr)
+            # Explicit subtype: soundfile's WAV default is PCM_16, which clips every sample
+            # beyond +-1 on the way back to the host.
+            sf.write(out_path, src_wave.detach().cpu().numpy(), sr, subtype=wav_subtype)
         results.append(out_path_list)
 
     print(json.dumps({"output_paths": results, "seed": seed}))
@@ -583,6 +637,7 @@ def separate_with_unasdiff(
     device: Optional[DeviceType] = None,
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
+    timeout_s: Optional[float] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -610,8 +665,12 @@ def separate_with_unasdiff(
         mode: One of ``"speech_sound"``, ``"sound_sound"``, ``"speech_speech"``.
         checkpoint_dir: Directory containing the four mirror files. If ``None``, resolved from
             ``SENSELAB_UNASDIFF_CHECKPOINTS`` or the pinned HF mirror.
-        device: Accepted for signature parity with other separation/enhancement entry points.
-            The worker selects CUDA when available and CPU otherwise.
+        device: Device the worker runs on. ``DeviceType.CUDA`` is resolved to an explicit
+            ``"cuda:<index>"`` (the index ``torch.cuda.current_device()`` reports in this
+            process, so under a ``CUDA_VISIBLE_DEVICES`` mask it is the allocated card) and sent
+            to the worker; ``DeviceType.CPU`` is sent as ``"cpu"``. ``None`` leaves the choice to
+            the worker, which takes ``cuda:<current index>`` when CUDA is available and CPU
+            otherwise. Only CUDA and CPU are accepted.
         seed: RNG seed, recorded in the log line.
         diffusion_steps: Number of reverse-diffusion steps the sampler runs per window. Each
             step is a network evaluation, so this is the backend's dominant cost -- 200 steps
@@ -623,6 +682,11 @@ def separate_with_unasdiff(
             is no fitted threshold or "recommended" lower setting to fall back on (see this
             module's ``CLAUDE.md``-derived convention against unfitted thresholds), so any value
             below 200 is the caller's own unmeasured quality/speed trade.
+        timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
+            work -- total windows across every input, times ``diffusion_steps``, times a
+            per-window-step factor, with a floor covering the first-use clone and the checkpoint
+            load (:func:`_default_timeout_s`). Exceeding it raises ``RuntimeError`` and discards
+            every window, completed or not.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
@@ -633,9 +697,12 @@ def separate_with_unasdiff(
         threshold).
 
     Raises:
-        ValueError: if ``len(source_class_indices) != n_sources``, or if ``diffusion_steps`` is
-            not positive.
-        RuntimeError: if the worker fails; the upstream traceback is included.
+        ValueError: if ``len(source_class_indices) != n_sources``, if ``diffusion_steps`` is
+            not positive, if ``timeout_s`` is not positive, or if ``device`` is neither CUDA
+            nor CPU (or names a device this host does not have).
+        RuntimeError: if the worker fails; the upstream traceback is included. Also if the
+            worker exceeds ``timeout_s`` -- that message names the ceiling, the inputs, and how
+            many windows had been written when it fired.
     """
     if not audios:
         return []
@@ -645,11 +712,21 @@ def separate_with_unasdiff(
         )
     if diffusion_steps <= 0:
         raise ValueError(f"diffusion_steps must be a positive integer, got {diffusion_steps}")
+    if timeout_s is not None and timeout_s <= 0:
+        raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s}")
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
-    from senselab.utils.data_structures.device import _select_device_and_dtype
+    from senselab.utils.data_structures.device import _select_device_and_dtype, device_run_opt
 
-    _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+    # None is forwarded as None rather than resolved here: the host interpreter and the venv's
+    # own torch are separate builds, and only the venv's answer to torch.cuda.is_available()
+    # governs where the worker can actually run.
+    worker_device: Optional[str] = None
+    if device is not None:
+        selected_device, _ = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
+        worker_device = device_run_opt(selected_device)
 
     mono_16k = downmix_audios_to_mono(resample_audios(audios, resample_rate=_TARGET_SR))
 
@@ -660,6 +737,9 @@ def separate_with_unasdiff(
     windows_per_audio: List[List[int]] = [
         _window_starts(int(audio.waveform.shape[-1]), window_samples, hop_samples) for audio in mono_16k
     ]
+
+    total_windows = sum(len(w) for w in windows_per_audio)
+    effective_timeout_s = _default_timeout_s(total_windows, diffusion_steps) if timeout_s is None else timeout_s
 
     speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
 
@@ -675,13 +755,16 @@ def separate_with_unasdiff(
     repo_dir = Path(venv_dir) / "unasdiff-src"
 
     logger.info(
-        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d, diffusion_steps=%d",
+        "unasdiff: separating %d audio(s) (%d window(s) total), mode=%s, n_sources=%d, seed=%d, "
+        "diffusion_steps=%d, device=%s, timeout=%.0fs",
         len(mono_16k),
-        sum(len(w) for w in windows_per_audio),
+        total_windows,
         mode,
         n_sources,
         seed,
         diffusion_steps,
+        worker_device or "worker's choice",
+        effective_timeout_s,
     )
 
     with tempfile.TemporaryDirectory(prefix="senselab-unasdiff-") as tmpdir:
@@ -697,9 +780,10 @@ def separate_with_unasdiff(
             waveform = audio.waveform.squeeze(0)
             for w, start in enumerate(starts):
                 segment = waveform[start : start + window_samples]
-                segment_audio = Audio(waveform=segment.unsqueeze(0), sampling_rate=_TARGET_SR)
                 in_path = str(tmp / f"in_{i}_{w}.wav")
-                segment_audio.save_to_file(in_path)
+                # Not Audio.save_to_file: that writes PCM_16 for a .wav, which clips the input
+                # window before the worker ever reads it.
+                sf.write(in_path, segment.detach().cpu().numpy(), _TARGET_SR, subtype=_WAV_SUBTYPE)
                 in_paths.append(in_path)
                 out_paths.append([str(tmp / f"out_{i}_{w}_{s}.wav") for s in range(n_sources)])
             window_ranges.append((flat_start, len(in_paths)))
@@ -720,17 +804,31 @@ def separate_with_unasdiff(
                 "out_paths": out_paths,
                 "seed": seed,
                 "diffusion_steps": diffusion_steps,
+                "device": worker_device,
+                "wav_subtype": _WAV_SUBTYPE,
             }
         )
 
-        result = subprocess.run(
-            [python, "-c", _WORKER_SCRIPT],
-            input=input_json,
-            capture_output=True,
-            text=True,
-            timeout=3600,
-            env=_clean_subprocess_env(),
-        )
+        try:
+            result = subprocess.run(
+                [python, "-c", _WORKER_SCRIPT],
+                input=input_json,
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout_s,
+                env=_clean_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            completed = sum(1 for paths in out_paths if all(Path(p).is_file() for p in paths))
+            total_input_s = sum(int(a.waveform.shape[-1]) for a in mono_16k) / _TARGET_SR
+            raise RuntimeError(
+                f"unasdiff worker exceeded its {effective_timeout_s:.0f}s ceiling with "
+                f"{completed}/{len(out_paths)} window(s) written, separating {len(mono_16k)} input(s) "
+                f"({total_input_s:.1f}s of audio at {_TARGET_SR} Hz) with mode={mode!r}, "
+                f"n_sources={n_sources}, diffusion_steps={diffusion_steps}, "
+                f"device={worker_device or 'worker-selected'}. The written windows are discarded "
+                f"with the worker's temporary directory; pass timeout_s to raise the ceiling."
+            ) from exc
         output = parse_subprocess_result(result, venv_label="unasdiff")
         all_output_paths: List[List[str]] = output["output_paths"]
 
