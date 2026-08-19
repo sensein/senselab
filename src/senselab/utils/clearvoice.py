@@ -1,19 +1,11 @@
-"""ClearerVoice-Studio (ClearVoice) plumbing shared by the four task packages that expose it.
+"""Machinery shared by every senselab task that exposes ClearerVoice-Studio (ClearVoice).
 
-`ClearVoice <https://github.com/modelscope/ClearerVoice-Studio>`_ (Alibaba Speech Lab, Apache-2.0)
-is one inference platform over four capabilities and six checkpoints. senselab exposes each
-capability from the task package that owns it — enhancement beside SpeechBrain's and DriftSE's
-enhancers, separation beside unasdiff's, and two new task packages for the two capabilities that had
-no home — exactly as SpeechBrain is exposed across several tasks rather than one.
+One pip distribution, one isolated venv, one checkpoint-pinning rule, one device contract, one
+timeout derivation, one worker. No capability lives here, and nothing here imports
+``senselab.audio``: this module speaks in file paths, and each task package owns its own
+``Audio``/``Video`` conversion.
 
-**This module holds no capability.** There is no enhancer, no separator and no scorer here: what is
-here is the machinery all of them share, which is one pip distribution, one isolated venv, one
-checkpoint-pinning rule, one device contract, one timeout derivation and one worker. It imports
-nothing from ``senselab.audio`` or ``senselab.video`` and speaks only in file paths, so each task
-module owns its own ``Audio``/``Video`` conversion and the layering stays one-way.
-
-Capability set (read off ``clearvoice==0.1.2``'s own dispatch table in
-``clearvoice/network_wrapper.py``, not off upstream's prose):
+The six checkpoints and the task package that owns each:
 
 ===============================  ==========================  =======  ===========================================
 Upstream task                    Model                       Rate     senselab home
@@ -26,38 +18,13 @@ Upstream task                    Model                       Rate     senselab h
 ``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``audio/tasks/target_speaker_extraction``
 ===============================  ==========================  =======  ===========================================
 
-SpeechScore — upstream's fifth component — is not reachable through this module. It is a separate
-directory of the git repository with no pip distribution of its own and a disjoint dependency set, so
-it gets its own venv and its own worker; see
+SpeechScore, upstream's fifth component, is not reachable from here: it has no pip distribution and a
+disjoint dependency set, so it gets its own venv and worker in
 ``senselab.audio.tasks.features_extraction.clearvoice_speechscore``.
 
-The unpinnable loader
----------------------
-``clearvoice/networks.py``'s ``SpeechModel.download_model`` calls
-``snapshot_download(repo_id=..., local_dir=...)`` with **no revision argument at all**, so the loader
-cannot be pinned through its own interface, and senselab's rule is a commit SHA or nothing
-(``CLAUDE.md``; ``src/tests/utils/revision_pinning_guard_test.py``). Verifying the downloaded blobs
-after the fact — which an earlier investigation did, matching four sha256 digests against the
-``lfs.oid`` at a pinned commit — establishes what ran, but only after an unpinned network read has
-already chosen it.
-
-So the loader's download path is never reached. :func:`stage_clearvoice_checkpoints` resolves the ref
-to a 40-hex commit through senselab's run-scoped resolver, downloads exactly the files that commit's
-``last_best_checkpoint`` manifest names, and the worker points ``args.checkpoint_dir`` at the
-resulting commit-addressed snapshot. ``load_model`` then finds ``last_best_checkpoint`` present and
-never calls ``download_model`` — and the worker replaces ``download_model`` with a raiser, so a
-staging bug surfaces as an error naming the model instead of as a silent unpinned download. The
-commit is returned to every caller and recorded in each output's metadata, so a run always records
-which weights produced its result.
-
-One file has no revision-addressable home at all: the S3FD face detector the audio-visual pipeline
-loads. It is absent from the wheel, and upstream fetches it from Google Drive by file id
-(``gdown --id 1KafnHz7ccT-3IyddBsL5yi2xGtxAKypt``) — unversioned, unverified, straight into
-site-packages. :func:`stage_s3fd_weights` takes it from a pinned *commit* of the GitHub tree and
-verifies its sha256 against a recorded digest, which is stronger than a revision: the bytes are
-checked, not the pointer to them.
-
-Design, the measurement behind the timeout term, and the capability→package argument:
+Upstream's loader takes no revision, so senselab pins by pre-staging at a resolved commit and pointing
+the loader at a local path; :func:`stage_clearvoice_checkpoints` and :func:`stage_s3fd_weights` are
+that mechanism. Every design decision, deviation and measurement behind this module:
 ``specs/20260819-clearvoice-integration/design.md``.
 """
 
@@ -90,23 +57,16 @@ CLEARVOICE_HF_ORG = "alibabasglab"
 
 CLEARVOICE_VENV = "clearvoice"
 CLEARVOICE_PYTHON = "3.11"
-"""3.11, not 3.12: clearvoice pins ``opencv-python==4.10.0.84`` and ``librosa==0.10.2.post1``, and
-3.11 is the interpreter the working reference install for this integration was built on."""
 
 CLEARVOICE_VERSION = "0.1.2"
-"""The distribution version this module's monkeypatches are written against.
+"""Distribution version the worker's monkeypatches are written against, asserted inside the worker.
 
-Asserted inside the worker, because those patches reconstruct ``SpeechModel.__init__``'s
-post-conditions field by field: a silent upstream change to that constructor must fail loudly rather
-than run against a half-initialised object. ``clearvoice.__version__`` cannot be used for this — 0.1.2
-still reports ``"0.1.0"`` — so the check goes through ``importlib.metadata``.
+Read through ``importlib.metadata``, never ``clearvoice.__version__``, which reports ``"0.1.0"`` in
+0.1.2. See design.md D-10.
 """
 
-# torch and torchaudio are named explicitly even though clearvoice depends on both, because
-# ensure_venv decides whether to route Stage 1 through the CUDA-aware PyTorch wheel index by
-# reading *this list*. Omit them and the pair can be resolved against plain PyPI and split across
-# mismatched local-version tags. numpy<2 is clearvoice's own pin, repeated for the same reason: it
-# constrains which torch wheel can be chosen.
+# torch, torchaudio and numpy are named explicitly so ensure_venv routes Stage 1 through the
+# CUDA-aware PyTorch wheel index; see design.md §3.
 CLEARVOICE_REQUIREMENTS = [
     f"clearvoice=={CLEARVOICE_VERSION}",
     "torch>=2.0.1",
@@ -115,26 +75,12 @@ CLEARVOICE_REQUIREMENTS = [
 ]
 
 # ── Timeout terms ─────────────────────────────────────────────────────
-#
-# Measured once, on the shared development host: FRCRN_SE_16K on CPU decoded 21.48 s of 16 kHz
-# speech in 18.6 s inside ``decode()`` (0.87 s per audio-second) after a 2.2 s checkpoint load. That
-# is the *cheapest* of the five audio models — a convolutional recurrent net at 16 kHz — and the
-# other four are a GAN generator, two 24-layer MossFormer2 stacks, and a MossFormer2 plus a HiFi-GAN
-# vocoder at 48 kHz. Rather than invent four more per-model constants that would read as measured,
-# one shared term sits an order of magnitude above the single measurement, and every entry point
-# takes ``timeout_s`` to override it. This is a ceiling, not a budget: the failure it exists to
-# prevent is a fixed 1800 s killing a legitimate long recording (see
-# specs/20260818-071500-unasdiff-device-timeout-pcm16), so generosity is the correct bias.
+# Derivation, and the one measurement they rest on: design.md §5.
 _SECONDS_PER_AUDIO_SECOND = 8.0
 _TIMEOUT_HEADROOM = 2.0
-# Absorbs the fixed costs a per-second term cannot see: first import of torch inside the venv, and
-# up to 734 MB of checkpoint read from a cold cache.
 _TIMEOUT_FLOOR_S = 900.0
 
-# The audio-visual pipeline's cost is dominated by per-frame S3FD face detection at 25 fps, plus
-# three full ffmpeg passes over the video and one scene-detection pass. Unmeasured on this branch (no
-# verified talking-face recording was available here), so the term is deliberately coarse and the
-# floor generous; a CUDA host should be roughly an order of magnitude faster.
+# Unmeasured, deliberately coarse: design.md §5.
 _TSE_SECONDS_PER_VIDEO_SECOND = 60.0
 _TSE_TIMEOUT_FLOOR_S = 1800.0
 
@@ -149,16 +95,12 @@ class ClearVoiceModelSpec:
         upstream_task: The ``task`` string ``clearvoice.ClearVoice`` takes.
         sampling_rate: Rate the checkpoint was trained at. Inputs are resampled to it on the host,
             and outputs come back at it.
-        expected_outputs: How many signals per input this checkpoint is *expected* to produce — 2 for
-            the separator, 0 for the audio-visual extractor, whose count is the number of face tracks
-            it finds. Used only to check what actually came back: the real count is read from the
-            worker's output, never assumed from the model name. Seven SpeechBrain checkpoints
-            returned interleaved sources as one signal and were believed on their name for months
-            (PR #569), which is why this field is an expectation and not a contract.
-        rms_normalises_input: Whether upstream's own reader RMS-normalises the input to -25 dBFS
-            before decoding. Set for exactly the two models ``DataReader.extract_feature`` names
-            (``FRCRN_SE_16K``, ``MossFormer2_SS_16K``); reproduced rather than corrected, so
-            senselab's numbers agree with upstream's own tool for the same checkpoint.
+        expected_outputs: Signals per input this checkpoint is *expected* to produce — 2 for the
+            separator, 0 for the audio-visual extractor, whose count is its number of face tracks.
+            An expectation to check against, never a source count to assume: design.md D-5.
+        rms_normalises_input: Whether upstream's reader RMS-normalises the input to -25 dBFS before
+            decoding, which it does for ``FRCRN_SE_16K`` and ``MossFormer2_SS_16K`` only. Reproduced
+            including its asymmetry on the multi-source branch: design.md D-11.
         capability: Human-readable capability name, for log lines and error messages.
     """
 
@@ -211,11 +153,8 @@ def is_clearvoice_model_id(model_id: str) -> bool:
         model_id: A HuggingFace-style model id.
 
     Returns:
-        True for any id under :data:`CLEARVOICE_HF_ORG`. Deliberately org-wide rather than a
-        membership test against :data:`CLEARVOICE_MODELS`: a caller naming
-        ``alibabasglab/<something else>`` has asked for ClearVoice and should get
-        :func:`clearvoice_model_spec`'s message enumerating the six checkpoints, not a bare "no
-        backend for this model" from a dispatcher that declined to recognise it.
+        True for any id under :data:`CLEARVOICE_HF_ORG` — org-wide, so an unknown model under that
+        org reaches :func:`clearvoice_model_spec`'s message rather than a dispatcher's "no backend".
     """
     return model_id.startswith(f"{CLEARVOICE_HF_ORG}/")
 
@@ -225,9 +164,8 @@ def clearvoice_model_spec(model_id: str, *, expected_task: Optional[str] = None)
 
     Args:
         model_id: ``"alibabasglab/FRCRN_SE_16K"`` or ``"FRCRN_SE_16K"``.
-        expected_task: If given, the upstream task the calling task package owns. A checkpoint for a
-            different capability is rejected here rather than run by the wrong entry point — which
-            would otherwise hand two separated sources to a caller who asked to enhance one signal.
+        expected_task: If given, the upstream task the calling task package owns; a checkpoint for a
+            different capability is rejected rather than run by the wrong entry point.
 
     Returns:
         The matching :class:`ClearVoiceModelSpec`.
@@ -270,16 +208,13 @@ def clearvoice_models_for_task(upstream_task: str) -> List[ClearVoiceModelSpec]:
 def stage_clearvoice_checkpoints(spec: ClearVoiceModelSpec, revision: str = "main") -> Tuple[Path, str]:
     """Download one checkpoint set at a resolved commit, returning its directory and that commit.
 
-    File by file rather than a whole-repository snapshot, because ``MossFormer2_SR_48K`` carries a
-    1.74 GB optimizer state (``do_03925000``) that no inference run reads. Which files to take is not
-    guessed: the commit's own ``last_best_checkpoint`` manifest names them, and ``hf_hub_download``
-    places every file of one repo/commit as siblings inside a single ``snapshots/<sha>/`` directory —
-    which is therefore exactly the ``checkpoint_dir`` upstream's loader wants.
+    Downloads the files the commit's own ``last_best_checkpoint`` manifest names, which land as
+    siblings in one ``snapshots/<sha>/`` directory — exactly the ``checkpoint_dir`` upstream's loader
+    wants. This is senselab's pin for a loader that accepts no revision: design.md D-6.
 
     Args:
         spec: The checkpoint to stage.
-        revision: Ref or commit to resolve. Resolution goes through senselab's run-scoped resolver,
-            so every task of one sweep binds to the same commit.
+        revision: Ref or commit to resolve, through the run-scoped resolver.
 
     Returns:
         ``(checkpoint_dir, commit_sha)`` — a directory holding ``last_best_checkpoint`` and the
@@ -291,22 +226,19 @@ def stage_clearvoice_checkpoints(spec: ClearVoiceModelSpec, revision: str = "mai
 
     sha = resolve_revision(spec.model_id, revision)
     manifest = Path(hf_hub_download(spec.model_id, "last_best_checkpoint", revision=sha))
-    # One name per line: MossFormer2_SR_48K's manifest names two files (the MossFormer stage and the
-    # vocoder), which is why this reads every non-empty line rather than only the first.
+    # One name per line; MossFormer2_SR_48K's manifest names two (MossFormer stage, then vocoder).
     for filename in (line.strip() for line in manifest.read_text().splitlines()):
         if filename:
             hf_hub_download(spec.model_id, filename, revision=sha)
     return manifest.parent, sha
 
 
-# The S3FD face detector the audio-visual pipeline loads: absent from the clearvoice wheel, with
-# upstream falling back to an unversioned Google Drive id. Pinned to a commit of the GitHub tree
-# *and* verified by digest, because a raw-URL fetch carries no revision guarantee once followed.
+# The S3FD face detector: absent from the wheel, fetched by upstream from an unversioned Google
+# Drive id. Pinned by commit and verified by digest instead; design.md D-7.
 _S3FD_COMMIT = "6b3774dc79c46ae8bed2a4fa5f706f0ac8c75c61"
 _S3FD_PATH_IN_REPO = "clearvoice/clearvoice/models/av_mossformer2_tse/faceDetector/s3fd/sfd_face.pth"
 _S3FD_URL = f"https://raw.githubusercontent.com/modelscope/ClearerVoice-Studio/{_S3FD_COMMIT}/{_S3FD_PATH_IN_REPO}"
-# Verified against the bytes at _S3FD_COMMIT (89,844,381 bytes). A mismatch is fatal: this is the one
-# weight in the stack with no revision-addressable home, so its digest is its identity.
+# Measured against the bytes at _S3FD_COMMIT (89,844,381 bytes); a mismatch is fatal.
 _S3FD_SHA256 = "d54a87c2b7543b64729c9a25eafd188da15fd3f6e02f0ecec76ae1b30d86c491"
 _S3FD_SIZE_BYTES = 89844381
 
@@ -314,19 +246,14 @@ _S3FD_SIZE_BYTES = 89844381
 def stage_s3fd_weights() -> Path:
     """Fetch and verify the S3FD face-detector weights, returning the local path.
 
-    Cached under ``~/.cache/senselab/clearvoice/s3fd/<sha256>/`` — content-addressed, so changing the
-    digest constant is a cache miss rather than a stale hit. The download happens under a lock so
-    concurrent jobs sharing one cache cannot race, and lands via a temporary file plus ``os.replace``
-    so an interrupted fetch never leaves a short file that looks staged.
+    Cached content-addressed under ``~/.cache/senselab/clearvoice/s3fd/<sha256>/``, downloaded under
+    a lock, and moved into place atomically so an interrupted fetch cannot look staged.
 
     Returns:
         Path to ``sfd_face.pth``.
 
     Raises:
-        RuntimeError: If the downloaded bytes do not match :data:`_S3FD_SHA256`. Upstream's own path
-            here is an unversioned Drive id with no digest at all, which is exactly why a mismatch is
-            refused: a face detector that silently changed would move every face track, and the
-            extraction would report success.
+        RuntimeError: If the downloaded bytes do not match :data:`_S3FD_SHA256`. See design.md D-7.
     """
     root = _cache_dir_path() / "clearvoice" / "s3fd" / _S3FD_SHA256
     weights = root / "sfd_face.pth"
@@ -359,26 +286,12 @@ def stage_s3fd_weights() -> Path:
 
 # ── Worker ────────────────────────────────────────────────────────────
 
-# Runs inside the isolated venv. Two modes: "audio" for the five audio-only checkpoints, "tse" for
-# the audio-visual one, which has no tensor-in/tensor-out path of its own.
+# Runs inside the isolated venv. Mode "audio" for the five audio-only checkpoints, "tse" for the
+# audio-visual one, which has no tensor-in/tensor-out path of its own.
 #
-# It reuses upstream's own model construction (``ClearVoice``), its own reader normalisation
-# (``audio_norm``) and its own segmented decoders (``SpeechModel.decode`` -> ``decode_one_audio``),
-# and replaces exactly three things:
-#
-#   1. ``SpeechModel.download_model`` -> a raiser. The unpinned ``snapshot_download`` must be
-#      unreachable, not merely unused.
-#   2. ``SpeechModel.__init__``'s device auto-detection -> the caller's device. Upstream selects MPS
-#      whenever it is present, and otherwise polls ``nvidia-smi`` for the freest card — so it
-#      discards the caller's choice on a multi-GPU host and silently picks an untested backend on
-#      macOS.
-#   3. File I/O. Upstream reads inputs through pydub, whose integer sample array it rescales by a
-#      heuristic (``if max(samples) > 32768: /2**31 else: /2**15``) that mis-scales a quiet 32-bit
-#      file by 65536x, and it writes outputs through pydub as 16-bit by default. senselab's staged
-#      ``portable_audio_io`` is used on both sides instead, so the range policy and the subtype
-#      decision are the same ones the in-process writer applies.
-#
-# For "tse" only, ``video_process.visualization`` is replaced too — see the comment at that patch.
+# Reuses upstream's model construction, reader normalisation and segmented decoders, and replaces
+# four things: the unpinned downloader, the device auto-detection, the pydub file I/O, and (for
+# "tse") the visualisation step. Each replacement and the defect behind it: design.md D-8..D-12.
 _WORKER_SCRIPT = r"""
 import json
 import os
@@ -393,9 +306,8 @@ try:
     staging = Path(args["staging_dir"])
     model_name = args["model_name"]
 
-    # Upstream's inference configs give checkpoint_dir as the *relative* path "checkpoints/<MODEL>",
-    # so a staging root with that layout is what points the loader at the commit-addressed snapshot.
-    # A symlink, not a copy: the snapshot is up to 734 MB.
+    # Upstream's configs give checkpoint_dir as the relative path "checkpoints/<MODEL>", so this
+    # layout plus the chdir below is what points the loader at the commit-addressed snapshot.
     (staging / "checkpoints").mkdir(parents=True, exist_ok=True)
     link = staging / "checkpoints" / model_name
     if not link.exists():
@@ -418,9 +330,9 @@ try:
 
     def _blocked_download(self, name):
         raise RuntimeError(
-            "clearvoice tried to fetch %s through its own unpinned snapshot_download, which means "
-            "the staged checkpoint directory %s has no 'last_best_checkpoint'. Refusing: a download "
-            "with no revision cannot be attributed to a commit."
+            "clearvoice reached SpeechModel.download_model for %s, which means the staged checkpoint "
+            "directory %s has no 'last_best_checkpoint'. Refusing: that method downloads with no "
+            "revision, and a result no commit can be attributed to is worse than no result."
             % (name, args["checkpoint_dir"])
         )
 
@@ -437,8 +349,8 @@ try:
         )
     device = torch.device(requested)
 
-    # Reconstructs SpeechModel.__init__'s post-conditions field for field, minus the device
-    # auto-detection. The field list is pinned by the version assertion above.
+    # Reproduces SpeechModel.__init__'s post-conditions field for field, minus its device
+    # auto-detection; the field list is pinned by the version assertion above.
     def _patched_init(self, a):
         a.use_cuda = 0 if device.type == "cpu" else 1
         self.args = a
@@ -455,11 +367,8 @@ try:
     if args["mode"] == "tse":
         import clearvoice.utils.video_process as vp
 
-        # Upstream's visualization() does two things: it writes the extracted audio for each face
-        # track, and it re-renders the entire source video once per track with a bounding box drawn
-        # on every frame. senselab returns Audio, so the render is pure cost — and the write is
-        # `sf.write(path, audio, 16000)` with no subtype, i.e. PCM_16, quantising the one output this
-        # capability exists to produce. Replaced with the write alone, through the staged policy.
+        # Upstream's visualization() writes each track's audio at PCM_16 and re-renders the whole
+        # video per track. Replaced with the write alone, through the staged policy: design.md D-12.
         def _write_only(tracks, est_sources, video_args):
             for idx, audio in enumerate(est_sources):
                 write_audio(
@@ -471,8 +380,8 @@ try:
 
         vp.visualization = _write_only
 
-        # The face detector loads from inside its own package directory and, when the file is absent,
-        # shells out to gdown. Linking the verified copy into place makes that branch unreachable.
+        # The detector shells out to gdown when this file is absent; linking the verified copy in
+        # makes that branch unreachable.
         s3fd_dir = Path(cvnet.__file__).parent / "models" / "av_mossformer2_tse" / "faceDetector" / "s3fd"
         s3fd_weights = s3fd_dir / "sfd_face.pth"
         if not s3fd_weights.exists():
@@ -502,8 +411,7 @@ try:
             waveform = waveform[0]
             scalar = 1.0
             if args["rms_normalise"]:
-                # Upstream applies this for FRCRN_SE_16K and MossFormer2_SS_16K only, and returns the
-                # inverse so a single-output task can restore the input's level.
+                # Returns the inverse, so a single-output task can restore the input's level.
                 waveform, scalar = audio_norm(waveform)
 
             net.data = {
@@ -513,16 +421,13 @@ try:
             decoded = net.decode()
 
             if isinstance(decoded, list):
-                # Multi-source. Upstream's own process() does NOT apply the inverse scalar on this
-                # branch, so each source comes back RMS-matched to the -25 dBFS normalised input
-                # rather than to the caller's input level. Reproduced, not corrected: the scalar is
-                # reported back instead, so a caller can restore the level and can see that it had to.
+                # Upstream's process() does not apply the inverse scalar on this branch, so each
+                # source is RMS-matched to the normalised input. Reproduced: design.md D-11.
                 signals = [source[0, :] for source in decoded]
             else:
                 signals = [decoded[0, :] * scalar]
 
-            # The worker names the outputs from what the model actually produced, and the host counts
-            # them. Nothing here presumes a source count from the model's name.
+            # Named from what the model actually produced; no count is presumed from its name.
             paths = []
             for source_index, signal in enumerate(signals):
                 out_path = os.path.join(args["out_dir"], "out_%d_s%d.wav" % (index, source_index))
@@ -557,8 +462,7 @@ def default_audio_timeout_s(total_audio_s: float) -> float:
         total_audio_s: Total duration the worker will decode, summed over every input.
 
     Returns:
-        Seconds, never below :data:`_TIMEOUT_FLOOR_S`. Derivation: the comment block above these
-        constants.
+        Seconds, never below :data:`_TIMEOUT_FLOOR_S`.
     """
     return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _SECONDS_PER_AUDIO_SECOND * total_audio_s)
 
@@ -578,17 +482,10 @@ def default_tse_timeout_s(total_video_s: float) -> float:
 def resolve_worker_device(device: Optional[DeviceType]) -> Optional[str]:
     """Validate a caller's device and turn it into an explicit device string for the worker.
 
-    ``DeviceType.CUDA`` becomes ``"cuda:<index>"`` — the index ``torch.cuda.current_device()`` reports
-    in *this* process, which under a ``CUDA_VISIBLE_DEVICES`` mask is the allocated card rather than
-    merely the first one on the host. A bare ``"cuda"`` would let the worker's torch pick its own
-    default, which is how a caller's choice gets silently discarded.
-
-    ``None`` stays ``None`` and the worker decides, because only the venv's torch can answer whether
-    CUDA is usable there.
-
-    MPS is not offered. Upstream selects it unconditionally whenever it is present, and none of the
-    six checkpoints has been verified on it in this repository, so a caller passing
-    ``DeviceType.MPS`` gets ``_select_device_and_dtype``'s error rather than an untested backend.
+    ``DeviceType.CUDA`` becomes ``"cuda:<index>"`` from ``torch.cuda.current_device()``, so a
+    ``CUDA_VISIBLE_DEVICES`` mask selects the allocated card. ``None`` stays ``None`` and the worker
+    decides, since only the venv's torch can say whether CUDA works there. MPS is not offered:
+    design.md D-10.
 
     Args:
         device: The caller's request, or ``None``.
@@ -655,8 +552,8 @@ def run_clearvoice_audio(
 ) -> Tuple[List[List[str]], List[float], str]:
     """Run one of the five audio-only checkpoints over already-prepared WAV files.
 
-    The caller owns resampling, downmixing and writing the inputs (through ``Audio.save_to_file``);
-    this function owns the pin, the venv, the device, the ceiling and the output naming.
+    The caller owns resampling, downmixing and writing the inputs; this function owns the pin, the
+    venv, the device, the ceiling and the output naming.
 
     Args:
         spec: Checkpoint to run.
@@ -670,10 +567,9 @@ def run_clearvoice_audio(
 
     Returns:
         ``(output_paths, input_norm_scalars, commit_sha)``. ``output_paths`` has one list per input,
-        holding as many files as the checkpoint actually produced. ``input_norm_scalars`` has one
-        entry per input: the inverse of upstream's RMS normalisation, ``1.0`` for the four checkpoints
-        that do not normalise. It is already applied for single-output models and deliberately *not*
-        applied for multi-source ones — see the worker's comment on that branch.
+        holding as many files as the checkpoint actually produced. ``input_norm_scalars`` is the
+        inverse of upstream's RMS normalisation per input (``1.0`` where it does not apply), already
+        applied for single-output models and not for multi-source ones: design.md D-11.
 
     Raises:
         ValueError: If ``timeout_s`` is not positive.

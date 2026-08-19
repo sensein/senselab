@@ -1,35 +1,17 @@
-"""The one way a dispatcher forwards backend-specific parameters, and records what it forwarded.
+"""Validated forwarding of backend-specific parameters, with a record of what was forwarded.
 
-A task-level entry point takes ``audios``, a ``model``, and a ``device``, and dispatches to one of
-several backends. Anything a backend alone understands — DriftSE's ``variant``, unasdiff's
-``diffusion_steps``, a worker's ``timeout_s`` — has nowhere to travel through that signature, and
-the measured consequence is that it does not travel: ``enhance_audios`` never forwarded ``variant``,
-so only one of DriftSE's two released checkpoints was reachable through the public API, and it is
-the one that suppresses a verified breath by 14.2 dB. The other checkpoint existed, was documented,
-and could not be selected.
+A task entry point takes ``audios``, a ``model`` and a ``device``; anything only one backend
+understands — DriftSE's ``variant``, unasdiff's ``diffusion_steps``, a worker's ``timeout_s`` — has no
+channel through that signature. :func:`resolve_backend_parameters` is that channel:
 
-The obvious fix — a ``**kwargs`` or a free-form ``dict`` handed to the backend — is worse than the
-defect. A misspelled key would be dropped by ``**kwargs`` or ignored by a permissive backend, the
-default would run, and the run would report the parameter the caller thought they set. That is a
-confidently wrong result, which this repository treats as worse than no result (see
-``utils/model_revision.py``'s ``RevisionResolutionError`` for the same judgement about provenance).
+* keys are validated against the **selected** backend's own signature, so a typo raises instead of
+  silently running the default (:func:`declared_parameters`);
+* only the caller's explicit keys are forwarded, so a backend default stays the backend's to change;
+* the effective set, defaults included, comes back as a :class:`ParameterRecord` for
+  :func:`record_parameters_on` to stamp onto each result's metadata.
 
-So a parameter mapping is validated against the selected backend's *own signature* before anything
-runs, and the effective set is returned for recording:
-
-* **Declared, not documented.** :func:`declared_parameters` reads the backend callable's signature.
-  A hand-maintained table of allowed keys is a second source of truth that goes stale the first
-  time a backend gains a parameter; a signature cannot.
-* **Validated against the selected backend.** A DriftSE key passed with a SpeechBrain model raises,
-  rather than being accepted by a dispatcher that has not yet decided where it is going.
-* **Unknown keys raise, with the near misses named.** ``difflib`` supplies the suggestion, because
-  the failure this exists to prevent is a typo, and a caller who typed ``varient`` needs to be told
-  ``variant``, not handed the whole declared set to search.
-* **The effective set is recorded, defaults included.** A record of only the explicit values cannot
-  answer "what ran"; a record of the defaults too can. :func:`ParameterRecord.explicit` keeps the
-  distinction available for a reader who needs it.
-
-Reasoning: ``specs/20260819-clearvoice-integration/design.md``.
+The defect this fixes, and why a permissive dictionary would be worse than no pathway:
+``specs/20260819-clearvoice-integration/design.md`` §6.
 """
 
 from __future__ import annotations
@@ -39,10 +21,8 @@ import inspect
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 
-# Parameters a task-level dispatcher owns and passes itself. A caller who tries to route one of
-# these through the parameter mapping is not tuning a backend, they are trying to override the
-# dispatcher's own argument from inside its payload -- two sources for one value, which is how a
-# device gets selected twice and the loser silently wins.
+# Parameters a dispatcher passes itself; routing one of these through the mapping would give one
+# value two sources.
 DISPATCHER_OWNED = ("audios", "audio", "videos", "model", "device", "self", "cls")
 
 
@@ -52,10 +32,9 @@ class ParameterRecord:
 
     Attributes:
         backend: Name of the backend the parameters were validated against.
-        effective: Every declared parameter and the value that ran, explicit or default. Values are
-            rendered JSON-friendly, so this can go straight into ``Audio.metadata``.
-        explicit: The subset the caller named, so a reader can tell a deliberate choice from a
-            default that happened to be recorded.
+        effective: Every declared parameter and the value that ran, explicit or default, rendered
+            JSON-friendly so it can go straight into ``Audio.metadata``.
+        explicit: The subset the caller named, distinguishing a deliberate choice from a default.
     """
 
     backend: str
@@ -86,17 +65,15 @@ def declared_parameters(backend: Callable[..., Any], owned: Sequence[str] = DISP
         owned: Parameter names the dispatcher passes itself and a caller may not override.
 
     Returns:
-        ``{name: default}`` for every keyword-accepting parameter that is not dispatcher-owned.
-        A parameter with no default maps to :data:`inspect.Parameter.empty`, which
-        :func:`resolve_backend_parameters` reports as required rather than inventing a value for.
+        ``{name: default}`` for every keyword-accepting parameter that is not dispatcher-owned. A
+        parameter with no default maps to :data:`inspect.Parameter.empty`.
     """
     declared: Dict[str, Any] = {}
     for name, parameter in inspect.signature(backend).parameters.items():
         if name in owned:
             continue
         if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
-            # A **kwargs backend declares nothing checkable, and treating it as "anything goes"
-            # would reintroduce exactly the silent-typo failure this module exists to prevent.
+            # A **kwargs backend declares nothing checkable, and is treated as declaring nothing.
             continue
         declared[name] = parameter.default
     return declared
@@ -118,17 +95,13 @@ def resolve_backend_parameters(
         owned: Parameter names the dispatcher passes itself.
 
     Returns:
-        ``(kwargs, record)`` — the keyword arguments to forward (only the caller's explicit keys, so
-        a backend default stays the backend's to change), and the :class:`ParameterRecord` naming
-        every effective value.
+        ``(kwargs, record)`` — the keyword arguments to forward, and the :class:`ParameterRecord`
+        naming every effective value.
 
     Raises:
-        TypeError: If ``parameters`` is not a mapping, or has a non-string key. A list of pairs or a
-            stray positional would otherwise be silently unpackable into something plausible.
-        ValueError: If any key is not declared by ``backend``, or names a dispatcher-owned
-            parameter. The message names the offending key, the closest declared names, and — when
-            the backend declares none — says so, which is the answer for a caller who passed a
-            DriftSE parameter to the SpeechBrain enhancer.
+        TypeError: If ``parameters`` is not a mapping, or has a non-string key.
+        ValueError: If any key is not declared by ``backend``, or names a dispatcher-owned parameter.
+            The message names the offending key and the closest declared names.
     """
     declared = declared_parameters(backend, owned)
 
@@ -180,3 +153,28 @@ def resolve_backend_parameters(
         if default is not inspect.Parameter.empty or name in given
     }
     return given, ParameterRecord(backend=backend_name, effective=effective, explicit=tuple(sorted(given)))
+
+
+# The metadata key a parameter record lands under, following this repository's flat convention for
+# provenance on a data object (``metadata["vad"]``, ``metadata["unasdiff_alignment_margins"]``).
+PARAMETER_RECORD_KEY = "backend_parameters"
+
+
+def record_parameters_on(items: Any, record: ParameterRecord, key: str = PARAMETER_RECORD_KEY) -> None:  # noqa: ANN401
+    """Stamp a parameter record onto the ``metadata`` of every returned object.
+
+    Duck-typed on ``.metadata`` rather than typed against ``Audio``, so this module imports nothing
+    from ``senselab.audio``. Nested lists — a separator's sources per input — are walked.
+
+    Args:
+        items: An object with ``.metadata``, or an arbitrarily nested sequence of them.
+        record: The record to stamp.
+        key: Metadata key to write under.
+    """
+    if isinstance(items, (list, tuple)):
+        for item in items:
+            record_parameters_on(item, record, key)
+        return
+    metadata = getattr(items, "metadata", None)
+    if isinstance(metadata, dict):
+        metadata[key] = record.as_metadata()
