@@ -8,11 +8,11 @@ from senselab.audio.tasks.speech_enhancement.speechbrain import SpeechBrainEnhan
 from senselab.utils.compatibility import requires_compatibility
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, SpeechBrainModel
 
-# DriftSE's weights are on a private mirror pending an upstream licence answer (see
-# driftse.py's module docstring), so this backend must stay unreachable except by a caller
-# naming it explicitly -- no default here and no entry in the audio_analysis workflow's
-# model list may reference this prefix.
-_DRIFTSE_MODEL_PREFIX = "sensein/driftse"
+# Upstream's own MIT-licensed weights mirror. DriftSE is a normal selectable backend: an earlier
+# restriction keeping it unreachable except by explicit naming rested on an unanswered licence
+# request, which upstream has since answered. It is not the default enhancer, and making it one is a
+# separate measured decision -- see specs/20260818-083214-driftse-upstream-mit/design.md.
+_DRIFTSE_MODEL_PREFIX = "LIANGXU123/DriftSE"
 
 
 @requires_compatibility("audio.tasks.speech_enhancement.enhance_audios")
@@ -25,7 +25,7 @@ def enhance_audios(
 
     Supports **SpeechBrain** (default) and **DriftSE** (HF-identified) backends:
     - If `model` is a `SpeechBrainModel` (or `None`), uses SpeechBrain.
-    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"sensein/driftse"`,
+    - If `model` is an `HFModel` and `model.path_or_uri` starts with `"LIANGXU123/DriftSE"`,
       uses DriftSE (one-step diffusion enhancement) via an isolated subprocess venv.
 
     Args:

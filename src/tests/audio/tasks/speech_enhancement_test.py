@@ -53,14 +53,14 @@ def test_default_model_is_unchanged(mono_audio_sample: Audio) -> None:
 def test_hfmodel_with_the_driftse_prefix_dispatches_to_driftse(
     mono_audio_sample: Audio, _offline_hfmodel_construction: None
 ) -> None:
-    """An ``HFModel`` whose id starts with ``sensein/driftse`` reaches DriftSE."""
+    """An ``HFModel`` whose id starts with ``LIANGXU123/DriftSE`` reaches DriftSE."""
     with patch(
         "senselab.audio.tasks.speech_enhancement.api.enhance_audios_with_driftse",
         return_value=[mono_audio_sample],
     ) as ds:
         enhance_audios(
             [mono_audio_sample],
-            model=HFModel(path_or_uri="sensein/driftse-distilhubert-three-layers"),
+            model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO),
         )
     ds.assert_called_once()
 
@@ -74,29 +74,25 @@ def test_an_unrecognised_model_still_raises_not_implemented(
 
 
 def test_upstream_is_pinned_to_a_full_commit_sha() -> None:
-    """Assert the DriftSE upstream pin is a full 40-char commit SHA.
+    """Assert both DriftSE pins are full 40-char commit SHAs.
 
-    A branch name or short SHA would let an upstream force-push change what
-    this backend runs without any change here. The repository is unlicensed and
-    unpackaged, so the pin is the only version contract available.
+    A branch name or short SHA would let an upstream force-push or re-upload change what this
+    backend runs without any change here. The repository is unpackaged, so the code pin is the only
+    version contract available.
     """
-    assert len(driftse._DRIFTSE_COMMIT) == 40
-    assert all(c in "0123456789abcdef" for c in driftse._DRIFTSE_COMMIT)
+    for pin in (driftse._DRIFTSE_COMMIT, driftse._DRIFTSE_HF_REVISION):
+        assert len(pin) == 40
+        assert all(c in "0123456789abcdef" for c in pin)
 
 
 def test_training_and_metric_dependencies_are_not_installed() -> None:
     """Assert the DriftSE venv requirements omit training-only packages.
 
-    Upstream's requirements.txt lists these for training and scoring, and the inference path
-    does not reach them, so a build that installs one means the worker started importing
-    something it should not.
-
-    ``pesq`` and ``pystoi`` are deliberately NOT in this set, and that is a correction rather
-    than an exemption: an earlier revision excluded both on the belief that only
-    ``util/inference.py`` imports them. In fact ``util/other.py`` -- which the worker must
-    import for ``pad_spec`` -- does ``from pesq import pesq`` and ``from pystoi import stoi``
-    at module scope, so they are genuine inference dependencies. Asserting their absence made
-    this test pass while the real run failed with ``No module named 'pesq'``.
+    Upstream's requirements.txt lists these for training and scoring and the inference path does
+    not reach them, so a build that installs one means the worker started importing something it
+    should not. ``pesq`` and ``pystoi`` are deliberately absent from this exclusion set: they *are*
+    on the inference import chain, which only a real run revealed (see
+    specs/20260818-083214-driftse-upstream-mit/design.md).
     """
     excluded = {
         "scoreq",
@@ -145,9 +141,9 @@ def test_worker_never_imports_util_inference() -> None:
 def test_worker_loads_the_checkpoint_with_weights_only() -> None:
     """Assert the worker loads the checkpoint with weights_only=True.
 
-    Upstream omits weights_only. The checkpoint is a foreign pickle from an
-    unlicensed research repository; loading it with the unrestricted unpickler is
-    arbitrary code execution at enhancement time.
+    Upstream omits weights_only. The checkpoint is a foreign pickle, and an MIT licence on the
+    repository does not make the unrestricted unpickler any less arbitrary code execution at
+    enhancement time.
     """
     assert "weights_only=True" in driftse._WORKER_SCRIPT
 
@@ -155,44 +151,41 @@ def test_worker_loads_the_checkpoint_with_weights_only() -> None:
 def test_empty_input_returns_empty_without_spawning(monkeypatch: pytest.MonkeyPatch) -> None:
     """Assert an empty audio list returns [] without touching the Hub or a venv.
 
-    Constructing the HFModel below would otherwise perform a real Hub
-    existence check against a private repo; that check is mocked here per
-    this project's rule against unmocked HFModel construction in tests.
+    Constructing the HFModel below would otherwise perform a real Hub existence check; that check
+    is mocked here per this project's rule against unmocked HFModel construction in tests.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
     assert driftse.enhance_audios_with_driftse([], model=HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)) == []
 
 
-def test_checkpoint_download_routes_through_resolve_model(
+def test_checkpoint_download_is_one_pinned_file_not_the_whole_snapshot(
     monkeypatch: pytest.MonkeyPatch, mono_audio_sample: Audio
 ) -> None:
-    """Assert checkpoint/config resolution goes through resolve_model, not a raw download.
+    """Assert the checkpoint arrives as a single ``hf_hub_download`` at a resolved commit SHA.
 
-    A raw ``hf_hub_download(..., revision=model.revision)`` call performs a Hub
-    HEAD/revision check on every invocation, in every parallel process, when
-    ``revision`` is an unresolved ref like "main" -- the 429-rate-limit hazard
-    ``resolve_model`` exists to remove by pinning to an immutable commit SHA
-    and downloading once. ``ensure_venv`` is mocked to raise right after the
-    resolution call, which lets this test observe that call without spawning a
-    real subprocess venv or touching the network. A raw ``hf_hub_download`` is
-    also mocked to fail the test if it is reached at all.
+    Upstream's mirror is 2.4 GB (two 1.14 GB checkpoints plus 1648 demo wavs) and a run reads one
+    checkpoint, so ``resolve_model``'s whole-snapshot download is the wrong primitive here. What must
+    not regress is the pinning: the file is requested at a 40-hex commit, which is what makes
+    ``huggingface_hub`` take its commit-hash shortcut and skip the per-call Hub check that
+    rate-limits under parallelism. ``ensure_venv`` is mocked to raise right afterwards, so the
+    resolution is observable without spawning a venv.
     """
     monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
     monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
 
     calls = []
 
-    def fake_resolve_model(repo_id: str, revision: str, **kwargs: object) -> tuple:
-        calls.append((repo_id, revision))
-        return "0" * 40, Path("/tmp/fake-driftse-snapshot")
+    def fake_hf_hub_download(repo_id: str, filename: str, *, revision: str = "main", **kwargs: object) -> str:
+        calls.append((repo_id, filename, revision))
+        return "/tmp/fake-driftse/last.ckpt"
 
-    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", fake_resolve_model)
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", fake_hf_hub_download)
 
-    def fail_hf_hub_download(*args: object, **kwargs: object) -> None:
-        raise AssertionError("hf_hub_download must not be called directly; route through resolve_model")
+    def fail_resolve_model(*args: object, **kwargs: object) -> None:
+        raise AssertionError("resolve_model downloads the entire 2.4 GB mirror; one file is needed")
 
-    monkeypatch.setattr("huggingface_hub.hf_hub_download", fail_hf_hub_download)
+    monkeypatch.setattr("senselab.utils.dependencies.resolve_model", fail_resolve_model)
 
     def fail_ensure_venv(*args: object, **kwargs: object) -> None:
         raise RuntimeError("stop-before-venv")
@@ -203,7 +196,77 @@ def test_checkpoint_download_routes_through_resolve_model(
     with pytest.raises(RuntimeError, match="stop-before-venv"):
         driftse.enhance_audios_with_driftse([mono_audio_sample], model=model)
 
-    assert calls == [(driftse._DRIFTSE_HF_REPO, driftse._DRIFTSE_HF_REVISION)]
+    assert len(calls) == 1, f"expected exactly one file download, got {calls}"
+    repo_id, filename, revision = calls[0]
+    assert repo_id == driftse._DRIFTSE_HF_REPO
+    assert filename == driftse._DRIFTSE_VARIANTS[driftse._DRIFTSE_DEFAULT_VARIANT][0]
+    assert len(revision) == 40 and all(c in "0123456789abcdef" for c in revision), (
+        f"the checkpoint was requested at a ref, not a commit: {revision!r}"
+    )
+
+
+def test_worker_prefers_the_ema_state_dict() -> None:
+    """Assert the worker loads ``ema`` before ``model``, as upstream does at the pinned commit.
+
+    Upstream switched priority in commit 60333a68 and measures ema slightly ahead (PESQ 3.00 against
+    2.98 over 824 files). The ``model`` fallback stays so a checkpoint without an ema still loads.
+    """
+    script = driftse._WORKER_SCRIPT
+    assert 'if "ema" in ckpt' in script
+    assert 'elif "model" in ckpt' in script
+    assert script.index('"ema"') < script.index('elif "model" in ckpt')
+
+
+def test_sigma_defaults_to_upstreams_own_constant_and_reaches_the_worker() -> None:
+    """Assert sigma is a parameter defaulting to 0.05's replacement, not a hardcoded literal.
+
+    Upstream called the old 0.05 misaligned with the paper and changed it to 0.01 in commit
+    70bb6ded; an independent reproduction measures 0.05 costing ~0.11 PESQ and ~0.9 dB SI-SDR. A
+    hardcoded literal here would silently keep running whichever value was written first.
+    """
+    import inspect
+
+    assert driftse._DRIFTSE_DEFAULT_SIGMA == 0.01
+    signature = inspect.signature(driftse.enhance_audios_with_driftse)
+    assert signature.parameters["sigma"].default == driftse._DRIFTSE_DEFAULT_SIGMA
+    assert "sigma * torch.randn_like(Y)" in driftse._WORKER_SCRIPT
+    assert "0.05" not in driftse._WORKER_SCRIPT
+
+
+def test_the_worker_rescales_its_output_and_drops_no_tail() -> None:
+    """Assert the two level-critical lines of the worker are present, without a checkpoint.
+
+    Upstream ``enhancement.py`` divides the enhanced waveform by its own peak before multiplying by
+    the input's; omitting that half is the defect this guard exists for. The second assertion pins
+    the chunking: fixed-length windows anchored at the end of the file, never a short remainder that
+    the loop skips. See ``specs/20260818-083214-driftse-upstream-mit/design.md``.
+    """
+    script = driftse._WORKER_SCRIPT
+    assert "out_peak = x.abs().max()" in script
+    assert "return x / out_peak * norm if out_peak > 1e-8 else x * norm" in script
+    assert "starts.append(total - chunk)" in script
+    assert "< n_fft" not in script, "a window shorter than the transform means a dropped tail"
+
+
+def test_every_variant_names_a_checkpoint_and_a_config() -> None:
+    """Assert the variant table is complete and its default is one of its own keys.
+
+    The weights mirror holds checkpoints under ``logs/<variant>/`` while the architecture configs
+    live in the pinned code clone under ``config/``, so a variant needs both paths to be loadable.
+    """
+    assert driftse._DRIFTSE_DEFAULT_VARIANT in driftse._DRIFTSE_VARIANTS
+    for variant, (checkpoint, config) in driftse._DRIFTSE_VARIANTS.items():
+        assert checkpoint.startswith("logs/") and checkpoint.endswith(".ckpt"), variant
+        assert config.startswith("config/") and config.endswith(".json"), variant
+
+
+def test_an_unknown_variant_fails_before_any_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo'd variant must fail loudly, not fall back to the default checkpoint."""
+    monkeypatch.setattr("senselab.utils.data_structures.model.check_hf_repo_exists", lambda *a, **k: True)
+    monkeypatch.setattr("senselab.utils.model_revision.resolve_revision", lambda *a, **k: "f" * 40)
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    with pytest.raises(ValueError, match="unknown DriftSE variant"):
+        driftse.enhance_audios_with_driftse([], model=model, variant="distilhubert_typo")
 
 
 def test_checkpoint_override_skips_the_hub_entirely(
@@ -211,8 +274,8 @@ def test_checkpoint_override_skips_the_hub_entirely(
 ) -> None:
     """Assert a local ``SENSELAB_DRIFTSE_CHECKPOINT`` override never calls the Hub.
 
-    An operator pointing at local checkpoint files must not need Hub access at
-    all -- neither ``resolve_model`` nor a raw ``hf_hub_download`` may run.
+    An operator pointing at local checkpoint files must not need Hub access at all -- neither
+    ``hf_hub_download`` nor ``resolve_model`` may run.
     ``ensure_venv`` is mocked to raise right after the override branch, which
     lets this test observe that neither Hub path was taken without spawning a
     real subprocess venv or touching the network.
@@ -428,3 +491,30 @@ def test_driftse_is_reproducible_under_a_fixed_seed(mono_audio_sample: Audio) ->
     b = enhance_audios_with_driftse([audio], model=model, seed=17)[0]
 
     assert (a.waveform - b.waveform).abs().max() < 1e-5
+
+
+@pytest.mark.skipif(
+    not driftse_venv_present,
+    reason=f"driftse venv not provisioned at {_DRIFTSE_VENV_ROOT}; run manually to build it (first run takes minutes)",
+)
+@pytest.mark.parametrize("variant", sorted(driftse._DRIFTSE_VARIANTS))
+def test_driftse_output_keeps_the_input_level_for_both_variants(mono_audio_sample: Audio, variant: str) -> None:
+    """Assert the enhanced waveform comes back at the input's level, for either checkpoint.
+
+    The bound is loose on both sides -- enhancement may take a peak away, but it may not move the
+    level by an order of magnitude and it may not clip. Why an unrescaled output does exactly that,
+    and why only one of the two checkpoints shows it: ``specs/20260818-083214-driftse-upstream-mit``.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    out = enhance_audios_with_driftse([audio], model=model, variant=variant)[0]
+
+    in_peak = float(audio.waveform.abs().max())
+    out_peak = float(out.waveform.abs().max())
+    assert 0.5 * in_peak <= out_peak <= 1.05 * in_peak, (
+        f"{variant}: output peak {out_peak} against input peak {in_peak}"
+    )
+    clipped = float((out.waveform.abs() >= 0.999).double().mean())
+    assert clipped < 0.01, f"{variant}: {clipped:.1%} of samples at full scale"
