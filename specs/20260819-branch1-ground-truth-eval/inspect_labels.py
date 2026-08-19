@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 import io_util
+import numpy as np
 
 RAW = Path(__file__).parent / "raw"
 

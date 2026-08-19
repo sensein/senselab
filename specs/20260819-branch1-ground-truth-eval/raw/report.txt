@@ -1,0 +1,502 @@
+==============================================================================
+PROBE 0 - denominators, and the smallest effect each probe can show
+==============================================================================
+events                    : 6  (recall resolution 1/6 = 0.167)
+scorable-empty            : 8.420 s = 0.1403 min
+one false-positive detection is worth 7.13 FP/min
+YAMNet windows            : 29 at 0.96s / 0.48s hop
+windows wholly inside empty: 4  -> 8,9,14,22
+windows with zero event overlap: 5 -> 8,9,14,18,22
+HeAR windows              : 50 at 2.0s / 0.250s hop
+
+Effect visible if: the proposer's FP count over the empty stretches is >=1, since 1 is
+the resolution. A true FP rate below 1/5 = 0.20 of empty windows cannot be
+distinguished from zero on this file. fa_duty is reported alongside because it is
+continuous in time and does not quantise at 1.
+
+==============================================================================
+PROBE 1 - the proposer, swept
+==============================================================================
+
+--- proposer = vocab (max over the draft vocabulary)
+  tau   fired  det   recall  events      FPwin/N  FP/min_win  FPdet  FP/min_det  duty_all
+  0.02     19    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.752
+  0.04     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.06     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.08     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.10     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.12     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.14     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.16     18    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.711
+  0.18     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.20     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.22     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.24     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.26     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.28     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.30     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.35     17    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.654
+  0.40     16    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.597
+  0.45     16    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.597
+  0.50     16    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.597
+  0.55     15    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.556
+  0.60     15    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.556
+  0.65     14    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.499
+  0.70     14    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.499
+  0.75     12    4  0.667  3,4,5,6     0/5          0.00     0      0.00    0.457
+  0.80     11    4  0.667  3,4,5,6     0/5          0.00     0      0.00    0.455
+  0.85     11    4  0.667  3,4,5,6     0/5          0.00     0      0.00    0.455
+  0.90      7    2  0.333  5,6         0/5          0.00     0      0.00    0.248
+  0.95      5    2  0.333  5,6         0/5          0.00     0      0.00    0.154
+  best recall at zero FP: 0.833 at tau=0.02
+  full recall (6/6) is not reached at any threshold
+  at tau=0.50: FP window rate 1/5 = 0.200, exact 95% CI [0.005, 0.716] -> FP/min in [0.6, 89.6] if one fired window per hop were one alarm
+
+--- proposer = nonsilence (1 - P(Silence))
+  tau   fired  det   recall  events      FPwin/N  FP/min_win  FPdet  FP/min_det  duty_all
+  0.02     23    4  1.000  1,2,3,4,5,6 2/5         14.25     0      0.00    0.829
+  0.04     23    4  1.000  1,2,3,4,5,6 2/5         14.25     0      0.00    0.829
+  0.06     23    4  1.000  1,2,3,4,5,6 2/5         14.25     0      0.00    0.829
+  0.08     23    4  1.000  1,2,3,4,5,6 2/5         14.25     0      0.00    0.829
+  0.10     22    5  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.12     22    5  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.14     21    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.16     21    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.18     21    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.20     21    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.22     21    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.24     21    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.26     20    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.28     20    6  1.000  1,2,3,4,5,6 1/5          7.13     0      0.00    0.829
+  0.30     19    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.752
+  0.35     19    5  0.833  2,3,4,5,6   1/5          7.13     0      0.00    0.752
+  0.40     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.45     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.50     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.55     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.60     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.65     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.70     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.75     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.80     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.85     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.90     17    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.654
+  0.95     16    5  0.833  2,3,4,5,6   0/5          0.00     0      0.00    0.604
+  best recall at zero FP: 1.000 at tau=0.02
+  cheapest full recall  : tau=0.28 at 1/5 FP windows (7.13/min), duty_all=0.829
+  at tau=0.50: FP window rate 0/5 = 0.000, exact 95% CI [0.000, 0.522] -> FP/min in [0.0, 65.2] if one fired window per hop were one alarm
+
+Per-window trace on the clean run. 'ev' names the events the window overlaps.
+   i  window          ev     vocab  1-P(Sil)  top-1 class            score  argmax_in_vocab
+   0   0.00- 0.96  1      0.003  0.007     Silence                0.993  Speech
+   1   0.48- 1.44  1      0.018  0.285     Silence                0.715  Speech
+   2   0.96- 1.92  1      0.000  0.000     Silence                1.000  Speech
+   3   1.44- 2.40  2      0.174  0.993     Cough                  0.174  Cough
+   4   1.92- 2.88  2      0.726  1.000     Breathing              0.726  Breathing
+   5   2.40- 3.36  2      0.705  0.998     Sigh                   0.705  Sigh
+   6   2.88- 3.84  2      0.548  0.971     Breathing              0.548  Breathing
+   7   3.36- 4.32  2      0.014  0.008     Silence                0.992  Speech
+   8   3.84- 4.80  -      0.000  0.000     Silence                1.000  Speech
+   9   4.32- 5.28  -      0.000  0.000     Silence                1.000  Speech
+  10   4.80- 5.76  3      0.354  0.999     Breathing              0.354  Breathing
+  11   5.28- 6.24  3      0.765  0.998     Sigh                   0.765  Sigh
+  12   5.76- 6.72  3      0.893  0.947     Breathing              0.893  Breathing
+  13   6.24- 7.20  3      0.008  0.134     Silence                0.866  Breathing
+  14   6.72- 7.68  -      0.645  0.353     Silence                0.647  Snoring
+  15   7.20- 8.16  4      0.869  1.000     Cough                  0.869  Cough
+  16   7.68- 8.64  4      0.866  1.000     Cough                  0.866  Cough
+  17   8.16- 9.12  4      0.866  1.000     Cough                  0.866  Cough
+  18   8.64- 9.60  -      0.000  0.001     Silence                0.999  Speech
+  19   9.12-10.08  5      1.000  1.000     Cough                  1.000  Cough
+  20   9.60-10.56  5      0.949  1.000     Cough                  0.949  Cough
+  21  10.08-11.04  5      0.926  1.000     Speech                 0.926  Speech
+  22  10.56-11.52  -      0.001  0.099     Silence                0.901  Speech
+  23  11.04-12.00  6      0.994  1.000     Speech                 0.994  Speech
+  24  11.52-12.48  6      0.969  1.000     Speech                 0.969  Speech
+  25  12.00-12.96  6      0.979  1.000     Speech                 0.979  Speech
+  26  12.48-13.44  6      0.987  1.000     Speech                 0.987  Speech
+  27  12.96-13.92  6      0.035  0.387     Silence                0.613  Speech
+  28  13.44-14.03  -      0.003  0.258     Silence                0.742  Speech
+
+==============================================================================
+PROBE 2 - robustness: the same proposer on nine variants
+==============================================================================
+
+--- proposer = vocab
+  tau=0.10
+    variant            recall  events      FPwin/N  FP/min_win  duty_all
+    clean              0.833  2,3,4,5,6   1/5          7.13    0.711
+    white_snr20        1.000  1,2,3,4,5,6 1/5          7.13    0.803
+    white_snr10        0.833  2,3,4,5,6   0/5          0.00    0.564
+    white_snr5         0.833  2,3,4,5,6   0/5          0.00    0.507
+    white_snr0         0.833  2,3,4,5,6   0/5          0.00    0.350
+    pink_snr10         0.833  2,3,4,5,6   0/5          0.00    0.695
+    pink_snr0          0.833  2,3,4,5,6   0/5          0.00    0.421
+    reverb_t60_0.3     0.833  2,3,4,5,6   0/5          0.00    0.554
+    reverb_t60_0.7     0.833  2,3,4,5,6   1/5          7.13    0.604
+  tau=0.30
+    variant            recall  events      FPwin/N  FP/min_win  duty_all
+    clean              0.833  2,3,4,5,6   1/5          7.13    0.654
+    white_snr20        0.833  2,3,4,5,6   1/5          7.13    0.613
+    white_snr10        0.833  2,3,4,5,6   0/5          0.00    0.490
+    white_snr5         0.667  2,4,5,6     0/5          0.00    0.390
+    white_snr0         0.667  3,4,5,6     0/5          0.00    0.324
+    pink_snr10         0.833  2,3,4,5,6   0/5          0.00    0.450
+    pink_snr0          0.667  2,4,5,6     0/5          0.00    0.319
+    reverb_t60_0.3     0.667  2,4,5,6     0/5          0.00    0.353
+    reverb_t60_0.7     0.833  2,3,4,5,6   1/5          7.13    0.507
+  tau=0.50
+    variant            recall  events      FPwin/N  FP/min_win  duty_all
+    clean              0.833  2,3,4,5,6   1/5          7.13    0.597
+    white_snr20        0.833  2,3,4,5,6   0/5          0.00    0.499
+    white_snr10        0.833  2,3,4,5,6   0/5          0.00    0.433
+    white_snr5         0.667  2,4,5,6     0/5          0.00    0.364
+    white_snr0         0.500  4,5,6       0/5          0.00    0.208
+    pink_snr10         0.833  2,3,4,5,6   0/5          0.00    0.393
+    pink_snr0          0.500  4,5,6       0/5          0.00    0.319
+    reverb_t60_0.3     0.667  2,4,5,6     0/5          0.00    0.296
+    reverb_t60_0.7     0.667  2,3,4,6     0/5          0.00    0.282
+
+--- proposer = nonsilence
+  tau=0.10
+    variant            recall  events      FPwin/N  FP/min_win  duty_all
+    clean              1.000  1,2,3,4,5,6 1/5          7.13    0.829
+    white_snr20        1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr10        1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr5         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr0         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    pink_snr10         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    pink_snr0          1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    reverb_t60_0.3     0.833  2,3,4,5,6   2/5         14.25    0.752
+    reverb_t60_0.7     0.833  2,3,4,5,6   1/5          7.13    0.752
+  tau=0.30
+    variant            recall  events      FPwin/N  FP/min_win  duty_all
+    clean              0.833  2,3,4,5,6   1/5          7.13    0.752
+    white_snr20        1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr10        1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr5         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr0         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    pink_snr10         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    pink_snr0          1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    reverb_t60_0.3     0.833  2,3,4,5,6   0/5          0.00    0.654
+    reverb_t60_0.7     0.833  2,3,4,5,6   0/5          0.00    0.695
+  tau=0.50
+    variant            recall  events      FPwin/N  FP/min_win  duty_all
+    clean              0.833  2,3,4,5,6   0/5          0.00    0.654
+    white_snr20        1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr10        1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr5         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    white_snr0         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    pink_snr10         1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    pink_snr0          1.000  1,2,3,4,5,6 5/5         35.63    1.000
+    reverb_t60_0.3     0.833  2,3,4,5,6   0/5          0.00    0.654
+    reverb_t60_0.7     0.833  2,3,4,5,6   0/5          0.00    0.654
+
+==============================================================================
+PROBE 3 - the confirmer
+==============================================================================
+
+Sanity check first: HeAR at 6.60-7.10 s, which the human verified as containing nothing
+and where an earlier run read Breathe 0.49.
+  centred window 5.75-7.75: top Snore 0.747
+  Breathe centred=0.721  best-overlapping=0.995
+
+PROBE 3a - can the confirmer produce a negative at all on this file?
+Effect visible if some 2 s window overlaps no verified event. If none does, HeAR has no
+negative available and its corroboration carries no information about the proposal.
+  HeAR windows overlapping no event: 0 of 50
+  head gap (0 -> first onset)   : 0.893 s
+  tail gap (last offset -> end) : 0.827 s
+  gap  1.095 ->  2.275 : 1.180 s   < 2 s
+  gap  3.496 ->  5.308 : 1.812 s   < 2 s
+  gap  6.291 ->  7.926 : 1.635 s   < 2 s
+  gap  8.494 ->  9.610 : 1.116 s   < 2 s
+  gap 10.250 -> 11.620 : 1.370 s   < 2 s
+  widest event-free stretch: 1.812 s
+
+PROBE 3b - the confirmer's specificity, on proposals planted in verified-empty audio
+Effect visible if HeAR scores these below the threshold that keeps the true events.
+  region                 planted proposal      centred_top      score   best_overlapping_top  score
+   0.000- 0.780         0.150- 0.630       Breathe      0.036   Breathe      0.612
+   1.095- 2.275         1.445- 1.925       Breathe      0.951   Breathe      0.989
+   3.500- 5.300         4.160- 4.640       Breathe      0.896   Breathe      0.998
+   6.300- 7.900         6.860- 7.340       Cough        1.000   Cough        1.000
+   8.500- 9.600         8.810- 9.290       Cough        0.994   Cough        1.000
+  10.250-11.620        10.695-11.175       Speech       0.336   Cough        0.999
+  13.200-13.790        13.255-13.735       Snore        0.087   Speech       0.339
+  theta=0.1: corroborates 5/7 centred, 7/7 best-overlapping
+  theta=0.2: corroborates 5/7 centred, 7/7 best-overlapping
+  theta=0.3: corroborates 5/7 centred, 7/7 best-overlapping
+  theta=0.4: corroborates 4/7 centred, 6/7 best-overlapping
+  theta=0.5: corroborates 4/7 centred, 6/7 best-overlapping
+  theta=0.6: corroborates 4/7 centred, 6/7 best-overlapping
+  theta=0.7: corroborates 4/7 centred, 5/7 best-overlapping
+  theta=0.8: corroborates 4/7 centred, 5/7 best-overlapping
+  theta=0.9: corroborates 3/7 centred, 5/7 best-overlapping
+
+Per-event HeAR response, window centred on the verified extent:
+  ev  element                 centred_top          score   Cough  Breathe  Speech
+  1   mouth non-speech sound Breathe            0.036   0.001  0.036   0.015
+  2   exhalation (breath)    Breathe            0.986   0.001  0.986   0.059
+  3   exhalation (breath)    Breathe            0.991   0.000  0.991   0.104
+  4   cough                  Cough              1.000   1.000  0.011   0.007
+  5   cough                  Cough              0.999   0.999  0.010   0.007
+  6   speech                 Speech             0.339   0.016  0.062   0.339
+
+Confirmation over the proposer's detections. mode=centred is the design's confirmer;
+mode=any_overlapping is the generous variant (best of every overlapping window).
+
+--- vocab, tau=0.10, mode=centred
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.30     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.40     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.50     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.60     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.70     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.80     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.90     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+
+--- vocab, tau=0.10, mode=any_overlapping
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.30     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.40     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.50     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.60     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.70     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.80     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.90     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+
+--- vocab, tau=0.30, mode=centred
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.30     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.40     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.50     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.60     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.70     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.80     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.90     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+
+--- vocab, tau=0.30, mode=any_overlapping
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.30     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.40     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.50     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.60     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.70     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.80     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.90     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+
+--- vocab, tau=0.50, mode=centred
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.30     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.40     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.50     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.60     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.70     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.80     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.90     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+
+--- vocab, tau=0.50, mode=any_overlapping
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.30     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.40     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.50     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.60     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.70     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.80     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.90     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+
+--- nonsilence, tau=0.10, mode=centred
+    YAMNet alone: recall 1.000 (1,2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     4  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Speech
+    0.20     4  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Speech
+    0.30     4  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Speech
+    0.40     3  0.667  2,3,4,5         1.000     0    0.00  Breathe,Cough,Cough
+    0.50     3  0.667  2,3,4,5         1.000     0    0.00  Breathe,Cough,Cough
+    0.60     3  0.667  2,3,4,5         1.000     0    0.00  Breathe,Cough,Cough
+    0.70     3  0.667  2,3,4,5         1.000     0    0.00  Breathe,Cough,Cough
+    0.80     3  0.667  2,3,4,5         1.000     0    0.00  Breathe,Cough,Cough
+    0.90     3  0.667  2,3,4,5         1.000     0    0.00  Breathe,Cough,Cough
+
+--- nonsilence, tau=0.10, mode=any_overlapping
+    YAMNet alone: recall 1.000 (1,2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.20     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.30     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.40     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.50     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.60     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.70     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.80     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+    0.90     5  1.000  1,2,3,4,5,6     1.000     0    0.00  Breathe,Breathe,Cough,Cough,Cough
+
+--- nonsilence, tau=0.30, mode=centred
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.30     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.40     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.50     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.60     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.70     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.80     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.90     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+
+--- nonsilence, tau=0.30, mode=any_overlapping
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.30     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.40     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.50     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.60     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.70     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.80     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.90     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+
+--- nonsilence, tau=0.50, mode=centred
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Breathe,Cough,Cough,Speech
+    0.30     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.40     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.50     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.60     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.70     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.80     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+    0.90     4  0.667  2,3,4,5         1.000     0    0.00  Breathe,Breathe,Cough,Cough
+
+--- nonsilence, tau=0.50, mode=any_overlapping
+    YAMNet alone: recall 0.833 (2,3,4,5,6), precision 1.000, 5 detections, 0 FP
+    theta  kept  recall  events      precision  FPdet  FP/min  labels
+    0.10     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.20     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.30     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.40     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.50     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.60     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.70     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.80     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+    0.90     5  0.833  2,3,4,5,6       1.000     0    0.00  Breathe,Cough,Cough,Cough,Cough
+
+==============================================================================
+PROBE 4 - the bounder, against the two verified cough spans
+==============================================================================
+envelope: 14023 frames, 1.000 ms hop, grid quantisation 1.000 ms
+Effect visible if: |onset error| <= 5 ms is reachable at some delta. The 1 ms grid is a
+fifth of the claimed tolerance, so an error of tens of ms is the bounder's, not the grid's.
+
+--- seed = oracle
+  ev  element   delta   onset    off     onset_err_ms  offset_err_ms  floor_dB  peak_dB
+  4   cough      3.0   7.924   8.514          -2.0          +20.0     -67.1    -15.1
+  4   cough      6.0   7.926   8.510          +0.0          +16.0     -67.1    -15.1
+  4   cough     10.0   7.927   8.337          +1.0         -157.0     -67.1    -15.1
+  4   cough     12.0   7.927   8.330          +1.0         -164.0     -67.1    -15.1
+  4   cough     15.0   7.928   8.313          +2.0         -181.0     -67.1    -15.1
+  4   cough     20.0   7.928   8.311          +2.0         -183.0     -67.1    -15.1
+  5   cough      3.0   9.605   9.983          -5.0         -267.0     -66.1     -9.7
+  5   cough      6.0   9.610   9.953          +0.0         -297.0     -66.1     -9.7
+  5   cough     10.0   9.612   9.912          +2.0         -338.0     -66.1     -9.7
+  5   cough     12.0   9.613   9.890          +3.0         -360.0     -66.1     -9.7
+  5   cough     15.0   9.613   9.878          +3.0         -372.0     -66.1     -9.7
+  5   cough     20.0   9.613   9.801          +3.0         -449.0     -66.1     -9.7
+  6   speech     3.0  11.666  12.136         +46.0        -1064.0     -67.4    -29.9
+  6   speech     6.0  11.672  12.120         +52.0        -1080.0     -67.4    -29.9
+  6   speech    10.0  11.923  12.108        +303.0        -1092.0     -67.4    -29.9
+  6   speech    12.0  11.923  12.028        +303.0        -1172.0     -67.4    -29.9
+  6   speech    15.0  11.924  12.013        +304.0        -1187.0     -67.4    -29.9
+  6   speech    20.0  11.930  12.012        +310.0        -1188.0     -67.4    -29.9
+
+--- seed = chain
+  ev  element   delta   onset    off     onset_err_ms  offset_err_ms  floor_dB  peak_dB
+  4   cough      3.0   7.924   8.514          -2.0          +20.0     -67.1    -15.1
+  4   cough      6.0   7.926   8.510          +0.0          +16.0     -67.1    -15.1
+  4   cough     10.0   7.927   8.337          +1.0         -157.0     -67.1    -15.1
+  4   cough     12.0   7.927   8.330          +1.0         -164.0     -67.1    -15.1
+  4   cough     15.0   7.928   8.313          +2.0         -181.0     -67.1    -15.1
+  4   cough     20.0   7.928   8.311          +2.0         -183.0     -67.1    -15.1
+  5   cough      3.0   9.605   9.983          -5.0         -267.0     -66.1     -9.7
+  5   cough      6.0   9.610   9.953          +0.0         -297.0     -66.1     -9.7
+  5   cough     10.0   9.612   9.912          +2.0         -338.0     -66.1     -9.7
+  5   cough     12.0   9.613   9.890          +3.0         -360.0     -66.1     -9.7
+  5   cough     15.0   9.613   9.878          +3.0         -372.0     -66.1     -9.7
+  5   cough     20.0   9.613   9.801          +3.0         -449.0     -66.1     -9.7
+  6   speech     3.0  11.666  12.136         +46.0        -1064.0     -67.4    -29.9
+  6   speech     6.0  11.672  12.120         +52.0        -1080.0     -67.4    -29.9
+  6   speech    10.0  11.923  12.108        +303.0        -1092.0     -67.4    -29.9
+  6   speech    12.0  11.923  12.028        +303.0        -1172.0     -67.4    -29.9
+  6   speech    15.0  11.924  12.013        +304.0        -1187.0     -67.4    -29.9
+  6   speech    20.0  11.930  12.012        +310.0        -1188.0     -67.4    -29.9
+
+==============================================================================
+PROBE 5 - the chain, end to end
+==============================================================================
+
+--- proposer=nonsilence tau=0.10 | confirmer theta=0.5 mode=centred | bounder delta=12 dB
+  ev  element                 proposed  confirmed  label        onset_err_ms  offset_err_ms
+  1   mouth non-speech sound yes       no         Breathe      (0.036)  -
+  2   exhalation (breath)    yes       yes        Breathe             +46.0          n/a
+  3   exhalation (breath)    yes       yes        Cough             +2619.0          n/a
+  4   cough                  yes       yes        Cough                +1.0         -164.0
+  5   cough                  yes       yes        Cough                +3.0         -360.0
+  6   speech                 yes       no         Speech       (0.339)  -
+  recovered: proposed 6/6, confirmed 4/6, correct label 3/6
+  event-free detections: 0, of which the confirmer keeps 0
+
+--- proposer=nonsilence tau=0.30 | confirmer theta=0.5 mode=centred | bounder delta=12 dB
+  ev  element                 proposed  confirmed  label        onset_err_ms  offset_err_ms
+  1   mouth non-speech sound no        -          -            -             -
+  2   exhalation (breath)    yes       yes        Breathe             +46.0          n/a
+  3   exhalation (breath)    yes       yes        Breathe             +47.0          n/a
+  4   cough                  yes       yes        Cough                +1.0         -164.0
+  5   cough                  yes       yes        Cough                +3.0         -360.0
+  6   speech                 yes       no         Speech       (0.339)  -
+  recovered: proposed 5/6, confirmed 4/6, correct label 4/6
+  event-free detections: 0, of which the confirmer keeps 0
+
+--- proposer=vocab tau=0.30 | confirmer theta=0.5 mode=centred | bounder delta=12 dB
+  ev  element                 proposed  confirmed  label        onset_err_ms  offset_err_ms
+  1   mouth non-speech sound no        -          -            -             -
+  2   exhalation (breath)    yes       yes        Breathe             +46.0          n/a
+  3   exhalation (breath)    yes       yes        Breathe             +47.0          n/a
+  4   cough                  yes       yes        Cough                +1.0         -164.0
+  5   cough                  yes       yes        Cough                +3.0         -360.0
+  6   speech                 yes       no         Speech       (0.268)  -
+  recovered: proposed 5/6, confirmed 4/6, correct label 4/6
+  event-free detections: 0, of which the confirmer keeps 0
+
+--- proposer=vocab tau=0.50 | confirmer theta=0.5 mode=centred | bounder delta=12 dB
+  ev  element                 proposed  confirmed  label        onset_err_ms  offset_err_ms
+  1   mouth non-speech sound no        -          -            -             -
+  2   exhalation (breath)    yes       yes        Breathe             +46.0          n/a
+  3   exhalation (breath)    yes       yes        Breathe             +47.0          n/a
+  4   cough                  yes       yes        Cough                +1.0         -164.0
+  5   cough                  yes       yes        Cough                +3.0         -360.0
+  6   speech                 yes       no         Speech       (0.268)  -
+  recovered: proposed 5/6, confirmed 4/6, correct label 4/6
+  event-free detections: 0, of which the confirmer keeps 0
+
+wrote /Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/results.json

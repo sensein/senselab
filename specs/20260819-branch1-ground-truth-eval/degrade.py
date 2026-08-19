@@ -11,7 +11,6 @@ from typing import Dict, List
 
 import numpy as np
 import soundfile as sf
-
 from ground_truth import WAV
 
 OUT = Path(__file__).parent / "raw" / "audio"

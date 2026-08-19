@@ -12,9 +12,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import io_util
 import numpy as np
 
-import io_util
 from senselab.audio.data_structures import Audio
 
 RAW = Path(__file__).parent / "raw"
