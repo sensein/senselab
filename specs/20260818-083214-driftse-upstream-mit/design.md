@@ -16,7 +16,7 @@ issues on that date, not carried over from an earlier note.
 | 3 | `enhancement.py` now prioritises `ema` over `model` | **holds** | Commit `60333a68`: `if "ema" in checkpoint: load(checkpoint["ema"]) elif "model" in checkpoint: ...`. Maintainer's measured gap, 824 files: ema PESQ 3.00 / STOI 0.9333 / SI-SDR 15.8 against model PESQ 2.98 / STOI 0.9305 / SI-SDR 15.8. The presence of an `ema` key in the released checkpoint is the maintainer's statement, not something verified here — no local copy of the 1.14 GB file exists on this host. The worker therefore prefers `ema` and falls back to `model`, so an `ema`-less checkpoint still loads. |
 | 4 | The inference code was misaligned with the paper and was fixed at `70bb6ded` | **holds, and it is behavioural** | The whole diff of `enhancement.py` from the previously pinned `695a64db` to upstream HEAD is two hunks: the `ema` branch above, and `model(Y_input + 0.05*z, t)` → `model(Y_input + 0.01*z, t)  # maximize test performance`, with the 0.05 line left commented as "better generalization". senselab's worker hardcoded `0.05`, so at the old pin it ran exactly the formulation the author now calls wrong. |
 | 5 | `sigma` is an inference parameter with a measured effect | **holds, with one correction** | It is a *literal* upstream, not a flag: `enhancement.py` has no `--sigma` argument, so "the script default" means the constant on that line, 0.01. Independent reproduction by @julius-richter in issue #1, DistilHuBERT variant: σ=0 → PESQ 2.81 / SI-SDR 16.1, σ=0.01 → 2.80 / 16.1, σ=0.05 → 2.69 / 15.2. σ=0 and σ=0.01 are equivalent within noise; σ=0.05 costs about 0.11 PESQ and 0.9 dB SI-SDR. |
-| 6 | Two checkpoint variants exist | **holds** | `distillhubert_three_layers_with_z` (PESQ 3.00 / SI-SDR 15.8) and `distillhubert_three_layers_pesq_sisdr_ccmse_with_z` (PESQ 3.50 / SI-SDR 20.2), both in the mirror, the second trained with PESQ/SI-SDR/CCMSE auxiliary losses (`pesq_weight` 1e-4, `sisdr_weight` 1e-4, `ccmse_weight` 1e-3 in its config against 0/0/0 in the first). Its advantage is therefore partly an optimisation of the metrics it is scored on, which is a reason to keep the first as the default rather than the higher number. |
+| 6 | Two checkpoint variants exist | **holds, with two corrections** | A `find` over the mirror returns exactly two `.ckpt` files: `logs/distillhubert_three_layers_with_z/last.ckpt` (1 137 859 237 B) and `logs/distillhubert_three_layers_pesq_sisdr_ccmse_with_z/last.ckpt` (1 137 859 301 B). The second is trained with PESQ/SI-SDR/CCMSE auxiliary losses (`pesq_weight` 1e-4, `sisdr_weight` 1e-4, `ccmse_weight` 1e-3 in its config against 0/0/0 in the first), so its advantage is partly an optimisation of the metrics it is scored on. **Correction 1**: the figures are upstream's README at the pinned commit, PESQ/SI-SDR **3.00 / 15.60** and **3.45 / 20.60** — an earlier revision of this document and of `doc.md` quoted 15.8 and 3.50 / 20.2, which appear nowhere in that README. **Correction 2**: neither is a headline row. Upstream's VB-DMD table marks its DriftSE rows *italic* under the legend "*Italic rows*: DriftSE ablation and unpaired variants", and its bolded DistilHuBERT row is the † one. See §8 for what is and is not released. |
 | 7 | An unresolved integrity question, issue #1, still open | **holds** | @julius-richter evaluated the maintainer's own enhanced audio against a standard VoiceBank-DEMAND copy and got PESQ 2.99, against 3.50 with the maintainer's uploaded clean/noisy directories; a file-by-file comparison found **all 824 files differ** in both `clean` and `noisy`, some by one sample of length, others by max-abs 0.03–0.28 and not by a gain factor. Evaluating the maintainer's `noisy` against his `clean` gives PESQ 1.99 where VB-DMD noisy is normally 1.97. The maintainer explained the cause (he downsampled a 48 kHz copy with his own filter), re-scored against `JacobLinCool/VoiceBank-DEMAND-16k` — PESQ 2.59 for the plain variant, 2.98 for the † variant, both below the paper — and committed to retraining on that copy. So the published numbers rest on a test-set copy nobody else has reproduced, and the honest reading is that they are optimistic by roughly 0.4 PESQ. Nothing in this backend depends on them, but nothing here should quote them as settled either. |
 
 Issue #3 (`torchaudio.load` fails with `ModuleNotFoundError: torchcodec`, CLOSED) touches upstream's
@@ -162,7 +162,8 @@ hazard that surfaces months later as an unrelated import resolving to the wrong 
    backbone carries attention layers, so memory grows superlinearly in duration. Enhancement is
    per-segment consistent — there is no cross-segment identity to preserve, unlike separation, where
    which-speaker-is-which must stay fixed across a boundary — so Hann-tapered overlap-add is safe
-   here in a way it would not be for a separation backend.
+   here in a way it would not be for a separation backend. Windows are fixed-length and the last is
+   anchored at the end of the file; the level policy across a boundary is §8.
 3. **A recorded RNG seed.** `train_add_gaussian` is set in both released checkpoints' configs, so the
    forward pass consumes a Gaussian sample and is stochastic. An unseeded rerun would produce
    different audio and make any cached artifact keyed on that output non-reproducible.
@@ -196,3 +197,127 @@ which three pass the ref to a loader directly — `forced_alignment.py:660,664` 
 `audio_analysis/adaptive/backends.py:123`, all `load_hf_resilient(..., revision="main")` — and the
 rest are default-model constructions of the kind analysed above. Widening the guard means classifying
 all sixteen first; it is its own task, not a rider on this one.
+
+## 8. The output rescale that was missing, and the level policy across chunk boundaries
+
+Written 2026-08-18, second pass. Measured on this host (Apple silicon, CPU), seed 0, σ 0.01, on a
+14.03 s recording (`streaming-audio-2026-07-30T04-21-56-487Z.wav`, 48 kHz → 16 kHz mono, peak
+0.9587, RMS 0.0173) — one window, so the chunking path is not involved.
+
+### 8.1 The defect
+
+`enhance_window` ended `return x * norm`: it undid the input peak normalisation and stopped there.
+Upstream's `enhancement.py:224-229`, present since its first commit, is
+
+```python
+max_val = x_hat.abs().max()
+if max_val > 1e-8:
+    x_hat = x_hat / max_val * norm_factor
+else:
+    x_hat = x_hat * norm_factor
+```
+
+— divide by the output's *own* peak first, then go back to the input's. The missing division is
+not cosmetic, because the model's absolute output gain is not determined by anything:
+
+| checkpoint | active losses | raw ISTFT peak for a peak-1 input |
+|---|---|---|
+| `distillhubert_three_layers_with_z` | `latent_drift_weight` 1.0 only | **53 160** |
+| `…_pesq_sisdr_ccmse_with_z` (†) | + PESQ 1e-4, SI-SDR 1e-4, CCMSE 1e-3 | **1.030** |
+
+The latent-drift term is computed on waveforms that `train.py:297-304` standardises to zero mean and
+unit variance, so it is exactly scale-invariant and the plain checkpoint's output gain is free.
+The † checkpoint's CCMSE and PESQ terms are computed on absolute amplitudes, which pins its gain at
+approximately unity. That is why the same bug is catastrophic for one checkpoint and invisible for
+the other, and why upstream's own released output WAVs for both variants share a peak of 0.513519
+despite internal scales differing by ~50 000×.
+
+### 8.2 Measured, before and after
+
+Correlation is between the enhancer's own 16 kHz input and its output, over the whole file. It is a
+sanity check on level and alignment, **not** a quality metric — an identity enhancer would score 1.
+
+| variant | | output peak | clipped samples | corr(in, out) |
+|---|---|---|---|---|
+| plain | before | 1.000000 | **98.5 %** | **0.2041** |
+| plain | after | 0.958740 | 0 % | **0.9439** |
+| † | before | 0.995667 | 0 % | 0.9756 |
+| † | after | 0.958740 | 0 % | 0.9756 |
+
+Before the fix the plain checkpoint's output overshot by ~5×10⁴ and was hard-clipped by the PCM_16
+write, which is where the 98.5 % and the 0.20 come from. The † row barely moves, as §8.1 predicts.
+(A separate report of this defect measured 0.6284 → 0.9950 with 91.8 % clipped on the same file;
+the direction and the mechanism agree, the exact figures do not, and only the ones in this table
+were produced by the code in this repository.)
+
+### 8.3 Per window, not per file: the level policy
+
+Once the rescale is restored there are two coherent policies for a chunked run, and they are not
+equivalent because the gain being removed is a property of *one network evaluation*, not of a file:
+
+- **per file** — normalise the whole file once, enhance each window, overlap-add, then match the
+  overlap-added result's peak to the file's;
+- **per window** — do to each window exactly what upstream does to a file: peak-normalise in, one
+  evaluation, divide by the output's peak, multiply by the window's input peak.
+
+Both were implemented and measured on a 56.1 s construction (three copies of the clip with the
+middle stretch attenuated 6×, so window 2 lies wholly inside a 15.6 dB quieter passage), same seed,
+same windows (starts 0.00 s, 18.00 s, 36.00 s, 36.11 s):
+
+| policy | corr(in, out) | local-gain step at the boundaries (100 ms frames, ±1 s) |
+|---|---|---|
+| per file | 0.9160 | +1.28, −2.59, −3.43 dB |
+| per window | 0.9435 | −0.36, −0.74, −1.20 dB |
+
+Per file loses because the model is strongly non-equivariant in level. Feeding the same content at
+1.0, 0.5, 1/6 and 0.05 of full scale *without* renormalising gives output RMS 927.9, 842.8, 638.2 and
+349.0 — a 20× input reduction becomes a 2.7× output reduction, roughly a square-root law. A per-file
+match therefore preserves that compression *between* windows, leaving a quiet window several dB too
+loud relative to its neighbours; a per-window match removes each evaluation's own gain and cannot.
+
+Per window is also the policy that degenerates to upstream exactly: for a file no longer than
+`chunk_s` the code path is upstream's, line for line.
+
+The residual worry about per-window matching is that it is a block AGC on a peak statistic, so it
+could track the input's peak envelope at window granularity. Measured against a single-window
+reference (`chunk_s=120`) it does not:
+
+| file | corr(chunked, single-window) | median \|Δ local gain\| | boundary step in excess of the single-window reference |
+|---|---|---|---|
+| 56.1 s, constant level | 0.9969 | 0.43 dB | +0.31, −0.23, −0.04 dB |
+| 56.1 s, 15.6 dB level jump | 0.9937 | 0.89 dB | −0.24, +1.30, +0.94 dB |
+
+Every boundary excess is at or below the median frame-by-frame difference between two segmentations
+of the same audio, i.e. below the noise floor of the comparison and well under a 1 dB JND.
+
+Rejected: RMS matching instead of peak matching. It is plausibly a steadier statistic, but upstream
+matches peaks, and swapping the statistic is a second unmeasured deviation riding on this one.
+
+### 8.4 The dropped tail
+
+The old loop stepped `range(0, total, hop)` and did `if seg.shape[-1] < n_fft: break`, silently
+skipping a final window shorter than 510 samples. Windows are now built as
+`range(0, total - chunk + 1, hop)` with a final window anchored at `total - chunk` when one is
+needed, so every window is exactly `chunk_s` long, no window is too short to transform, and the end
+of the file is always inside a full window. The Hann taper additionally has its outer half flattened
+to 1 on the first and last windows: without that, `wsum` falls below the `1e-8` clamp within about
+ten samples of each end of the file and those samples are attenuated to nothing.
+
+### 8.5 Which variant should be the default: unchanged, `distillhubert_three_layers_with_z`
+
+The † checkpoint is ahead on every published number (3.45 / 20.60 against 3.00 / 15.60 in upstream's
+README; 2.98 against 2.59 in the maintainer's re-scoring against a standard VoiceBank-DEMAND copy),
+and its absolute output level is pinned by its loss rather than reconstructed by our peak match.
+The default nonetheless stays where it is:
+
+- PESQ and SI-SDR are in †'s training loss. Its lead is measured on the metrics it optimises, and no
+  metric outside that loss separates the two. DNSMOS and SCOREQ, which neither optimises, are
+  reported for only one of the two rows.
+- senselab does not consume PESQ. What matters here is what an enhanced signal does to ASR, speaker
+  and quality-control stages downstream, and that has not been measured for either checkpoint.
+- The rescale fix already changes DriftSE's output materially. Changing the default in the same
+  breath would make the next comparison unattributable.
+
+What would settle it: WER or DNSMOS/SCOREQ over the same audio for both checkpoints. Until then
+`variant="distillhubert_three_layers_pesq_sisdr_ccmse_with_z"` is one keyword away for a caller who
+wants it, and the level guarantee is now identical for both.

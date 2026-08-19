@@ -233,6 +233,21 @@ def test_sigma_defaults_to_upstreams_own_constant_and_reaches_the_worker() -> No
     assert "0.05" not in driftse._WORKER_SCRIPT
 
 
+def test_the_worker_rescales_its_output_and_drops_no_tail() -> None:
+    """Assert the two level-critical lines of the worker are present, without a checkpoint.
+
+    Upstream ``enhancement.py`` divides the enhanced waveform by its own peak before multiplying by
+    the input's; omitting that half is the defect this guard exists for. The second assertion pins
+    the chunking: fixed-length windows anchored at the end of the file, never a short remainder that
+    the loop skips. See ``specs/20260818-083214-driftse-upstream-mit/design.md``.
+    """
+    script = driftse._WORKER_SCRIPT
+    assert "out_peak = x.abs().max()" in script
+    assert "return x / out_peak * norm if out_peak > 1e-8 else x * norm" in script
+    assert "starts.append(total - chunk)" in script
+    assert "< n_fft" not in script, "a window shorter than the transform means a dropped tail"
+
+
 def test_every_variant_names_a_checkpoint_and_a_config() -> None:
     """Assert the variant table is complete and its default is one of its own keys.
 
@@ -476,3 +491,30 @@ def test_driftse_is_reproducible_under_a_fixed_seed(mono_audio_sample: Audio) ->
     b = enhance_audios_with_driftse([audio], model=model, seed=17)[0]
 
     assert (a.waveform - b.waveform).abs().max() < 1e-5
+
+
+@pytest.mark.skipif(
+    not driftse_venv_present,
+    reason=f"driftse venv not provisioned at {_DRIFTSE_VENV_ROOT}; run manually to build it (first run takes minutes)",
+)
+@pytest.mark.parametrize("variant", sorted(driftse._DRIFTSE_VARIANTS))
+def test_driftse_output_keeps_the_input_level_for_both_variants(mono_audio_sample: Audio, variant: str) -> None:
+    """Assert the enhanced waveform comes back at the input's level, for either checkpoint.
+
+    The bound is loose on both sides -- enhancement may take a peak away, but it may not move the
+    level by an order of magnitude and it may not clip. Why an unrescaled output does exactly that,
+    and why only one of the two checkpoints shows it: ``specs/20260818-083214-driftse-upstream-mit``.
+    """
+    from senselab.audio.tasks.preprocessing import resample_audios
+
+    audio = resample_audios([mono_audio_sample], resample_rate=16000)[0]
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    out = enhance_audios_with_driftse([audio], model=model, variant=variant)[0]
+
+    in_peak = float(audio.waveform.abs().max())
+    out_peak = float(out.waveform.abs().max())
+    assert 0.5 * in_peak <= out_peak <= 1.05 * in_peak, (
+        f"{variant}: output peak {out_peak} against input peak {in_peak}"
+    )
+    clipped = float((out.waveform.abs() >= 0.999).double().mean())
+    assert clipped < 0.01, f"{variant}: {clipped:.1%} of samples at full scale"

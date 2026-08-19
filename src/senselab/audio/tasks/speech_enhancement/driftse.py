@@ -189,10 +189,12 @@ try:
     e, f = config["spec_abs_exponent"], config["spec_factor"]
     add_gaussian = str(config.get("train_add_gaussian", True)).lower() == "true"
 
-    def enhance_window(y):
-        T_orig = y.shape[-1]
-        norm = y.abs().max() + 1e-8
-        Y = torch.stft(y / norm, n_fft=n_fft, hop_length=hop, window=window,
+    def enhance_window(y_win):
+        # Upstream's whole-file procedure applied to one window: peak-normalise in, one network
+        # evaluation, then rescale the output by its own peak back to the window's input peak.
+        T_orig = y_win.shape[-1]
+        norm = y_win.abs().max() + 1e-8
+        Y = torch.stft(y_win / norm, n_fft=n_fft, hop_length=hop, window=window,
                        center=config["center"], return_complex=True)
         Y = (Y.abs() ** e * torch.exp(1j * Y.angle())) * f
         Y = pad_spec(Y.unsqueeze(0).unsqueeze(0), mode="zero_pad")
@@ -205,7 +207,8 @@ try:
         X = (X.abs() ** (1.0 / e)) * torch.exp(1j * X.angle())
         x = torch.istft(X, n_fft=n_fft, hop_length=hop, window=window,
                         center=config["center"], length=T_orig)
-        return x * norm
+        out_peak = x.abs().max()
+        return x / out_peak * norm if out_peak > 1e-8 else x * norm
 
     results = []
     for in_path, out_path in zip(in_paths, out_paths):
@@ -215,21 +218,30 @@ try:
 
         # DEVIATION 2: overlap-add chunking. Upstream runs one STFT over an entire file, and the
         # NCSN++ backbone's attention makes memory grow superlinearly in duration.
+        total = y.shape[-1]
         chunk = int(chunk_s * sr)
         hop_samples = int((chunk_s - overlap_s) * sr)
-        if y.shape[-1] <= chunk:
+        if total <= chunk:
             x_hat = enhance_window(y)
         else:
+            # Every window is exactly `chunk` long; the last one is anchored at the end of the file
+            # rather than being a short remainder, so no tail is dropped and no window is too short
+            # to transform.
+            starts = list(range(0, total - chunk + 1, hop_samples))
+            if starts[-1] + chunk < total:
+                starts.append(total - chunk)
+            base_taper = torch.hann_window(chunk, periodic=False, device=device)
             acc = torch.zeros_like(y)
             wsum = torch.zeros_like(y)
-            for start in range(0, y.shape[-1], hop_samples):
-                seg = y[start : start + chunk]
-                if seg.shape[-1] < n_fft:
-                    break
-                enhanced = enhance_window(seg)
-                taper = torch.hann_window(seg.shape[-1], periodic=False, device=device)
-                acc[start : start + seg.shape[-1]] += enhanced * taper
-                wsum[start : start + seg.shape[-1]] += taper
+            for i, start in enumerate(starts):
+                enhanced = enhance_window(y[start : start + chunk])
+                taper = base_taper.clone()
+                if i == 0:
+                    taper[: chunk // 2] = 1.0  # no fade-in at the start of the file
+                if i == len(starts) - 1:
+                    taper[chunk // 2 :] = 1.0  # nor a fade-out at its end
+                acc[start : start + chunk] += enhanced * taper
+                wsum[start : start + chunk] += taper
             x_hat = acc / wsum.clamp(min=1e-8)
 
         sf.write(out_path, x_hat.detach().cpu().numpy(), sr)
@@ -273,10 +285,11 @@ def enhance_audios_with_driftse(
             the forward pass. Output is stochastic without it, so it is recorded in the log line.
         sigma: Scale of that Gaussian. Upstream's own default is 0.01; 0 is equivalent within
             noise and 0.05 measurably degrades output (see the spec named in the module docstring).
-        variant: Checkpoint to use, a key of ``_DRIFTSE_VARIANTS``. The default is the paper's
-            headline model; ``distillhubert_three_layers_pesq_sisdr_ccmse_with_z`` scores higher
-            on PESQ/SI-SDR and was trained with those metrics in its loss.
-        chunk_s: Window length for long inputs.
+        variant: Checkpoint to use, a key of ``_DRIFTSE_VARIANTS``. Both released checkpoints set
+            ``train_add_gaussian``; ``distillhubert_three_layers_pesq_sisdr_ccmse_with_z`` scores
+            higher on PESQ/SI-SDR and was trained with those metrics in its loss.
+        chunk_s: Window length for long inputs. Each window is peak-normalised in and peak-matched
+            out on its own, exactly as upstream treats a whole file.
         overlap_s: Overlap between windows, Hann-tapered and overlap-added.
 
     Returns:
