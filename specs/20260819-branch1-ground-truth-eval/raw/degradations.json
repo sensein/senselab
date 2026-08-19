@@ -1,0 +1,103 @@
+{
+  "seed": 20260819,
+  "source": "/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",
+  "white_snrs_db": [
+    20.0,
+    10.0,
+    5.0,
+    0.0
+  ],
+  "pink_snrs_db": [
+    10.0,
+    0.0
+  ],
+  "reverb_t60_s": [
+    0.3,
+    0.7
+  ],
+  "reverb_drr_db": 0.0,
+  "snr_definition": "full-file RMS of signal over full-file RMS of noise",
+  "variants": [
+    {
+      "name": "clean",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/clean.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.96478271484375,
+      "headroom_gain": 1.0,
+      "rms_db": -35.179994912903084
+    },
+    {
+      "name": "white_snr20",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/white_snr20.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.9657143157531848,
+      "headroom_gain": 1.0,
+      "rms_db": -35.13759216039893
+    },
+    {
+      "name": "white_snr10",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/white_snr10.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.9717233293001561,
+      "headroom_gain": 1.0,
+      "rms_db": -34.76596557449304
+    },
+    {
+      "name": "white_snr5",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/white_snr5.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.958922991493875,
+      "headroom_gain": 1.0,
+      "rms_db": -33.99129915164514
+    },
+    {
+      "name": "white_snr0",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/white_snr0.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.9857884528382064,
+      "headroom_gain": 1.0,
+      "rms_db": -32.15706450693256
+    },
+    {
+      "name": "pink_snr10",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/pink_snr10.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.9636503517029219,
+      "headroom_gain": 1.0,
+      "rms_db": -34.759988482974876
+    },
+    {
+      "name": "pink_snr0",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/pink_snr0.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.9577985262854379,
+      "headroom_gain": 1.0,
+      "rms_db": -32.13654149413388
+    },
+    {
+      "name": "reverb_t60_0.3",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/reverb_t60_0.3.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.7985922195909323,
+      "headroom_gain": 1.0,
+      "rms_db": -35.179994912903084
+    },
+    {
+      "name": "reverb_t60_0.7",
+      "path": "/Users/satra/software/sensein/senselab/.claude/worktrees/agent-a7a44ca94f6f33056/specs/20260819-branch1-ground-truth-eval/raw/audio/reverb_t60_0.7.wav",
+      "sampling_rate": 48000,
+      "n_samples": 673280,
+      "peak_before_gain": 0.6081737768571713,
+      "headroom_gain": 1.0,
+      "rms_db": -35.179994912903084
+    }
+  ]
+}

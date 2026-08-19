@@ -1,0 +1,3 @@
+# The degraded WAVs are 24 MB and exactly regenerable: degrade.py fixes the seed and
+# degradations.json records every parameter and the resulting peak of each variant.
+raw/audio/
