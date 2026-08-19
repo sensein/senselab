@@ -18,6 +18,7 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
+from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.audio.tasks.speech_enhancement.api import enhance_audios
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, SpeechBrainModel
 
@@ -52,16 +53,27 @@ EMPTY: List[Tuple[float, float]] = [
     (13.2, 13.79),
 ]
 
-ENHANCERS: List[Tuple[str, Optional[Tuple[str, str]]]] = [
-    ("input", None),
-    ("sepformer-wham16k-enh", ("speechbrain", "speechbrain/sepformer-wham16k-enhancement")),
-    ("sepformer-whamr16k", ("speechbrain", "speechbrain/sepformer-whamr16k")),
-    ("sepformer-dns4-16k-enh", ("speechbrain", "speechbrain/sepformer-dns4-16k-enhancement")),
-    ("metricgan-plus-voicebank", ("speechbrain", "speechbrain/metricgan-plus-voicebank")),
-    ("FRCRN_SE_16K", ("clearvoice", "FRCRN_SE_16K")),
-    ("MossFormerGAN_SE_16K", ("clearvoice", "MossFormerGAN_SE_16K")),
-    ("MossFormer2_SE_48K", ("clearvoice", "MossFormer2_SE_48K")),
-    ("DriftSE_v2", ("driftse", "LIANGXU123/DriftSE_pesq_sisdr_ccmse_with_z")),
+# (row, backend, checkpoint, required input rate, backend parameters). Every enhancer refuses audio
+# at another rate, so the input is resampled per row -- and a rate-matched unenhanced baseline is
+# emitted for each rate present, so no enhanced row is compared against a reference at another rate.
+# DriftSE's checkpoint is selected by a ``variant`` parameter, not by the repo id.
+ENHANCERS: List[Tuple[str, Optional[Tuple[str, str]], int, Dict[str, Any]]] = [
+    ("input@16k", None, 16000, {}),
+    ("input@48k", None, 48000, {}),
+    ("sepformer-wham16k-enh", ("speechbrain", "speechbrain/sepformer-wham16k-enhancement"), 16000, {}),
+    ("sepformer-whamr16k", ("speechbrain", "speechbrain/sepformer-whamr16k"), 16000, {}),
+    ("sepformer-dns4-16k-enh", ("speechbrain", "speechbrain/sepformer-dns4-16k-enhancement"), 16000, {}),
+    ("metricgan-plus-voicebank", ("speechbrain", "speechbrain/metricgan-plus-voicebank"), 16000, {}),
+    ("FRCRN_SE_16K", ("clearvoice", "alibabasglab/FRCRN_SE_16K"), 16000, {}),
+    ("MossFormerGAN_SE_16K", ("clearvoice", "alibabasglab/MossFormerGAN_SE_16K"), 16000, {}),
+    ("MossFormer2_SE_48K", ("clearvoice", "alibabasglab/MossFormer2_SE_48K"), 48000, {}),
+    ("DriftSE_v1", ("driftse", "LIANGXU123/DriftSE"), 16000, {"variant": "distillhubert_three_layers_with_z"}),
+    (
+        "DriftSE_v2",
+        ("driftse", "LIANGXU123/DriftSE"),
+        16000,
+        {"variant": "distillhubert_three_layers_pesq_sisdr_ccmse_with_z"},
+    ),
 ]
 
 SNRS: List[Optional[float]] = [None, 20.0, 10.0, 5.0, 0.0, -5.0]  # None = the recording as captured
@@ -188,10 +200,15 @@ def main() -> int:
             if snr is None
             else Audio(waveform=add_noise(base.waveform, snr, args.seed), sampling_rate=base.sampling_rate)
         )
-        for name, spec in ENHANCERS:
-            print(f"[snr={snr} enhancer={name}]", flush=True)
+        for name, spec, rate, params in ENHANCERS:
+            print(f"[snr={snr} enhancer={name} rate={rate}]", flush=True)
             try:
-                out = noisy if spec is None else enhance_audios([noisy], model=build_model(*spec), device=device)[0]
+                fed = noisy if noisy.sampling_rate == rate else resample_audios([noisy], rate)[0]
+                out = (
+                    fed
+                    if spec is None
+                    else enhance_audios([fed], model=build_model(*spec), device=device, parameters=params or None)[0]
+                )
             except Exception as exc:
                 rows.append(
                     {
