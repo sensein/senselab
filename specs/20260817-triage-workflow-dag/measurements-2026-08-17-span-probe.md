@@ -518,3 +518,36 @@ harness or the cluster. Two consequences. The earlier scoring of CrisperWhisper'
 (26.2% and 10.2%) rests on tokens that other runs do not produce. And `span_refine` in
 `branch-1-airway.md`, which consumes CrisperWhisper token edges as span candidates, has a much weaker
 input than assumed — reliably `[cough]` and little else.
+
+### Correction: the CUDA pin is one site, not two, and the fix is ours
+
+Read directly rather than taken from the report above.
+
+**`models/atten_unet.py:6` is the defect** — unconditional, module level, and placed **before that
+file's own `import torch` on line 7**, so it executes at import and overwrites whatever the launcher
+set.
+
+**`diffusion/gaussian_diffusion.py:34` is not at module import.** It sits inside
+`load_spk_model(config_path, model_filename, device=None)` guarded by `if device is None:` — a
+default-gathering branch that an explicit device bypasses. Our worker never calls `load_spk_model`, so
+it does not apply to us at all. The earlier claim that both fire at import was wrong.
+
+**Why it bites us specifically**, from `source_separation/unasdiff.py:320-328`:
+
+```python
+import torch                          # :320  — imported first, but CUDA is not initialised yet
+import models                         # :325  — triggers atten_unet.py:6
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")   # :328 — first CUDA call
+```
+
+CUDA initialises lazily at line 328, by which time the variable has been overwritten, so it enumerates
+physical GPU 0 only — and line 328 requests `"cuda"` with no index, taking visible device 0 regardless.
+
+**The fix is two lines on our side**: capture `CUDA_VISIBLE_DEVICES` before line 325 and restore it
+after line 326. No CUDA API has been touched at that point, so restoring before line 328 defeats the
+pin entirely. Selecting an explicit `cuda:N` would additionally make the intent visible.
+
+Worth recording for its own sake: the comment at `:323-324` states that this worker avoids upstream's
+three `test_*.py` scripts because they call `torch.cuda.set_device(0)` at import, and a module-level
+test checks this file for those substrings. The hazard class was understood and guarded against by one
+mechanism, while a library module the worker does import carried the same pin by another.
