@@ -830,7 +830,8 @@ def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: 
 def test_input_windows_are_written_as_float_not_pcm16(monkeypatch: pytest.MonkeyPatch) -> None:
     """The window files the host hands the worker are FLOAT, and samples past +-1 survive.
 
-    soundfile's WAV default is PCM_16, which clips every such sample before the worker reads it.
+    Both defaults used to clip here: ``sf.write`` picks PCM_16 for a ``.wav``, and
+    ``Audio.save_to_file`` wrote PCM_16 through torchcodec, which offers no encoding control.
     """
     captured: dict = {}
     u = _stub_worker(monkeypatch, captured)
@@ -852,18 +853,26 @@ def test_input_windows_are_written_as_float_not_pcm16(monkeypatch: pytest.Monkey
     assert captured["in_peak"] > 1.5, "an out-of-range sample was clipped on write"
 
 
-def test_every_worker_wav_write_names_an_explicit_subtype() -> None:
-    """No ``sf.write`` in the worker relies on soundfile's PCM_16 default.
+def test_the_worker_writes_through_the_staged_policy() -> None:
+    """The worker must not write audio itself, and its parent must stage what it imports.
 
-    That default has silently corrupted a measurement three times in this repository.
+    The repo-wide boundary is ``src/tests/utils/audio_write_boundary_test.py``; this keeps the
+    check local to the backend that has to carry the two halves in one file.
     """
+    assert "from portable_audio_io import" in unasdiff._WORKER_SCRIPT, (
+        "the worker must import the staged range policy rather than calling soundfile itself"
+    )
     tree = ast.parse(unasdiff._WORKER_SCRIPT)
-    writes = [
-        node
+    raw_writes = [
+        node.lineno
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "write"
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"write", "save"}
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id in {"sf", "soundfile", "torchaudio"}
     ]
-    assert writes, "test premise: the worker writes WAV files"
-    for node in writes:
-        keywords = {kw.arg for kw in node.keywords}
-        assert "subtype" in keywords, f"sf.write at worker line {node.lineno} relies on the PCM_16 default"
+    assert not raw_writes, f"worker line(s) {raw_writes} write audio directly, bypassing the range policy"
+    assert "stage_portable_audio_io(" in Path(unasdiff.__file__).read_text(), (
+        "the parent must stage portable_audio_io.py into the worker's temp dir"
+    )

@@ -2,7 +2,8 @@
 
 Coqui TTS has conflicting dependencies (pins old torch versions, requires
 Python <=3.11). It runs in an isolated subprocess venv managed by uv.
-Audio data is serialized as FLAC for efficient lossless transfer.
+Inputs are serialized as FLAC; results come back as WAV/FLOAT. Why, and the measured
+range of each supported model's output: ``specs/20260819-091500-wav-subtype-sweep/design.md``.
 """
 
 import json
@@ -13,7 +14,13 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 # Coqui venv specification
 _COQUI_VENV = "coqui"
@@ -45,6 +52,9 @@ try:
     device = args["device"]
     output_dir = args["output_dir"]
 
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import read_audio, write_audio
+
     tts = TTS(model_id).to(device=device)
     audio_config = tts.voice_converter.vc_config.audio
 
@@ -61,8 +71,8 @@ try:
 
     output_paths = []
     for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
-        src_data, src_sr = sf.read(src_path, dtype="float32")
-        tgt_data, tgt_sr = sf.read(tgt_path, dtype="float32")
+        src_data, src_sr = read_audio(src_path)
+        tgt_data, tgt_sr = read_audio(tgt_path)
         src_wav = torch.from_numpy(src_data).unsqueeze(0) if src_data.ndim == 1 else torch.from_numpy(src_data.T)
         tgt_wav = torch.from_numpy(tgt_data).unsqueeze(0) if tgt_data.ndim == 1 else torch.from_numpy(tgt_data.T)
 
@@ -87,8 +97,8 @@ try:
             converted = converted.unsqueeze(0)
 
         sr = output_sample_rate or src_sr
-        out_path = str(Path(output_dir) / f"cloned_{i}.flac")
-        sf.write(out_path, converted.squeeze().cpu().numpy(), sr, format="FLAC")
+        out_path = str(Path(output_dir) / f"cloned_{i}.wav")
+        write_audio(out_path, converted.squeeze().cpu().numpy(), sr)
         output_paths.append(out_path)
 
     print(json.dumps({"output_paths": output_paths}))
@@ -129,8 +139,8 @@ class CoquiVoiceCloner:
         """Clone voices from source audios to target audios using Coqui TTS.
 
         The actual Coqui TTS operations run in an isolated subprocess venv
-        with its own Python and torch version. Audio is transferred via
-        lossless FLAC files.
+        with its own Python and torch version. Inputs go over as FLAC, results
+        come back as WAV/FLOAT.
 
         Args:
             source_audios: List of source audio objects.
@@ -172,6 +182,7 @@ class CoquiVoiceCloner:
                     "model_id": str(model.path_or_uri),
                     "device": device.value if device else "cpu",
                     "output_dir": str(tmp),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

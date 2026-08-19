@@ -592,6 +592,31 @@ def venv_python(venv_dir: Path) -> str:
     return str(venv_dir / "bin" / "python")
 
 
+def stage_portable_audio_io(directory: "str | Path") -> str:
+    """Copy the portable audio I/O module into ``directory`` and return that directory.
+
+    A worker runs in a venv where senselab is absent, so it cannot import the range policy --
+    it gets the file handed to it instead. The worker adds the returned directory to
+    ``sys.path`` and does ``from portable_audio_io import read_audio, write_audio``.
+
+    Copying the file rather than inlining its source into the worker string keeps the worker
+    readable and keeps one copy of the policy on disk: an inlined prelude would be a second
+    rendering of the same module, and a reader of the worker could not tell which one ran.
+
+    Args:
+        directory: A directory the worker can read, normally the parent's ``TemporaryDirectory``.
+
+    Returns:
+        ``directory`` as a string, for the worker payload.
+    """
+    from senselab.utils import portable_audio_io
+
+    source = Path(portable_audio_io.__file__)
+    destination = Path(directory) / source.name
+    shutil.copyfile(source, destination)
+    return str(directory)
+
+
 def _clean_subprocess_env() -> dict:
     """Return a copy of os.environ fit for a subprocess venv.
 
@@ -712,13 +737,12 @@ def _pack_value(key: str, value: object, data_dir: Path) -> dict:
         np.save(str(path), value)
         return {"type": "ndarray", "file": f"{key}.npy"}
 
-    # senselab Audio (has waveform + sampling_rate) → FLAC
-    if hasattr(value, "waveform") and hasattr(value, "sampling_rate"):
-        import torchaudio
-
-        path = data_dir / f"{key}.flac"
-        torchaudio.save(str(path), value.waveform.cpu(), value.sampling_rate, format="flac")
-        return {"type": "audio", "file": f"{key}.flac", "sr": value.sampling_rate}
+    # senselab Audio (has waveform + sampling_rate) → WAV/FLOAT via its own writer, which applies
+    # the range policy. FLAC would clip anything past ±1 (it has no float subtype at any depth).
+    if hasattr(value, "waveform") and hasattr(value, "sampling_rate") and hasattr(value, "save_to_file"):
+        path = data_dir / f"{key}.wav"
+        value.save_to_file(str(path))
+        return {"type": "audio", "file": f"{key}.wav", "sr": value.sampling_rate}
 
     # senselab Video or file path → pass path reference (no copy)
     if hasattr(value, "_file_path") and getattr(value, "_file_path", None) is not None:
@@ -799,6 +823,11 @@ container = Path(sys.stdin.read().strip())
 manifest = json.loads((container / "manifest.json").read_text())
 data_dir = container / "data"
 
+# senselab is not installed in this venv; the parent stages the audio I/O policy alongside the
+# payload so a result audio is written under the same range policy the host applies.
+sys.path.insert(0, str(container))
+from portable_audio_io import write_audio
+
 try:
     from safetensors.torch import load_file as _st_load, save_file as _st_save
 except ImportError:
@@ -855,9 +884,10 @@ def pack(name, obj):
         np.save(str(rd / f"{name}.npy"), obj)
         return {"type": "ndarray", "file": f"{name}.npy"}
     if hasattr(obj, "waveform") and hasattr(obj, "sampling_rate"):
-        import torchaudio
-        torchaudio.save(str(rd / f"{name}.flac"), obj.waveform.cpu(), obj.sampling_rate, format="flac")
-        return {"type": "audio", "file": f"{name}.flac"}
+        samples = obj.waveform
+        samples = samples.detach().cpu().numpy() if hasattr(samples, "detach") else np.asarray(samples)
+        write_audio(str(rd / f"{name}.wav"), samples, int(obj.sampling_rate))
+        return {"type": "audio", "file": f"{name}.wav"}
     if isinstance(obj, Path):
         return {"type": "path", "value": str(obj)}
     if isinstance(obj, (bytes, bytearray)):
@@ -903,7 +933,7 @@ def call_in_venv(
     Data is serialized using efficient codecs:
     - torch.Tensor → safetensors (fast, safe, HF standard)
     - numpy.ndarray → .npy
-    - senselab Audio → .flac (lossless compressed)
+    - senselab Audio → .wav (FLOAT, exactly preserving values beyond ±1)
     - FileRef → path with checksum/lock metadata
     - PIL Image → .png, bytes → .bin, Pydantic → JSON
     - everything else → JSON
@@ -960,6 +990,8 @@ def call_in_venv(
             container = Path(tmpdir)
             data_dir = container / "data"
             data_dir.mkdir()
+            # The worker writes audio results, so it needs the range policy staged next to them.
+            stage_portable_audio_io(container)
 
             # Pack args
             entries: dict[str, object] = {}
