@@ -115,6 +115,26 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
     ),
+    # ── Audio: Health Acoustics (ISOLATED — google/hear's TF SavedModels in the "hear" venv) ──
+    # Both entries describe the same venv because both capabilities are one repository staged once:
+    # the encoder is its root SavedModel and the event detector a subdirectory of it. No torch or
+    # torchaudio spec, so ensure_venv skips the CUDA probe and the PyTorch wheel index for this venv.
+    "audio.tasks.health_acoustics.extract_hear_embeddings_from_audios": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name="hear",
+        venv_python="3.11",
+        venv_requirements=["tensorflow>=2.16,<3", "numpy", "soundfile"],
+        install_hint="Automatically provisioned in isolated environment; needs HF access to the gated google/hear",
+    ),
+    "audio.tasks.health_acoustics.detect_health_acoustic_events": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name="hear",
+        venv_python="3.11",
+        venv_requirements=["tensorflow>=2.16,<3", "numpy", "soundfile"],
+        install_hint="Automatically provisioned in isolated environment; needs HF access to the gated google/hear",
+    ),
     # ── Audio: Forced Alignment ──
     "audio.tasks.forced_alignment.align_transcriptions": CompatibilityEntry(
         required_deps=["transformers", "torchaudio"],

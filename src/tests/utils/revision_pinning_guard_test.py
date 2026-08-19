@@ -75,6 +75,13 @@ LOADER_CANNOT_PIN_SUBPROCESS_FILES = {
     "audio/tasks/speaker_diarization/diarizen.py",
     # CrisperWhisperModel takes a local directory, so it is pinned by the staged snapshot path.
     "audio/tasks/speech_to_text/crisperwhisper.py",
+    # tf.saved_model.load takes a local directory and has no revision parameter at all, so HeAR is
+    # pinned the same way crisperwhisper.py is: the parent resolves google/hear at the literal SHA
+    # in HEAR_REVISION via resolve_model and hands the worker the returned snapshots/<sha> path.
+    # The worker makes no Hub call of any kind -- it never imports huggingface_hub -- so its
+    # payload carries no repo id and no revision-shaped key, which is what keeps it invisible to
+    # _revision_payload_files()' sweep and why it is enumerated here rather than left out.
+    "audio/tasks/health_acoustics/hear.py",
 }
 
 

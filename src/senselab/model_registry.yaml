@@ -372,6 +372,50 @@
     b99a25a637a9963d5c7557f0b70597fc54c7a0bb). See
     specs/20260818-083214-driftse-upstream-mit/design.md.
 
+# Health Acoustics
+- name: HeAR (encoder)
+  task: health_acoustics
+  source: google (TensorFlow SavedModel, via subprocess venv)
+  model_id: google/hear
+  embedding_dim: 512
+  parameters: ~300M (ViT-L MAE)
+  training_data: 313M two-second clips of non-semantic human sounds (YouTube-scale, unlabelled)
+  license: >-
+    Other -- Health AI Developer Foundations terms of use
+    (https://developers.google.com/health-ai-developer-foundations/terms). Gated on Hugging Face;
+    access is granted immediately on acknowledging the terms while logged in. Pinned at commit
+    9b2eb2853c426676255cc6ac5804b7f1fe8e563f.
+  recommended_for: >-
+    Health-acoustic representations of coughs, breaths, throat clears and similar non-semantic
+    sounds, on a fixed 2s window. Not speaker identity. Similarity between embeddings must be
+    mean-centred (raw cosine measures 0.977 within-class against 0.918 between; centred, +0.653
+    against -0.256). See src/senselab/audio/tasks/health_acoustics/doc.md.
+- name: HeAR event detector (large)
+  task: health_acoustics
+  source: google (TensorFlow SavedModel, via subprocess venv)
+  model_id: google/hear (event_detector/event_detector_large)
+  parameters: ~3M (MobileNetV3-Large)
+  training_data: Health sound events; 8 labels (Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear, Laugh, Speech)
+  license: >-
+    Same repository, same gated Health AI Developer Foundations terms and same pinned commit as
+    the HeAR encoder above.
+  recommended_for: >-
+    Presence gating and dataset filtering for health sounds on a fixed 2s window. A presence gate,
+    not a locator: 40ms of cough crosses p > 0.5, so the response is a box-car of width (event +
+    2s) and events closer than 2s merge.
+- name: HeAR event detector (small)
+  task: health_acoustics
+  source: google (TensorFlow SavedModel, via subprocess venv)
+  model_id: google/hear (event_detector/event_detector_small)
+  parameters: ~1M (MobileNetV3-Small)
+  training_data: Same 8 labels and the same shared spectrogram frontend as the large detector
+  license: >-
+    Same repository, same gated Health AI Developer Foundations terms and same pinned commit as
+    the HeAR encoder above.
+  recommended_for: >-
+    The same presence gating on resource-constrained hosts; upstream reports it as the compact
+    alternative, at ~1M parameters against ~3M.
+
 # Source Separation
 - name: unasdiff
   task: separation
