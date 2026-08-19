@@ -538,21 +538,28 @@ reported `Silence` at 0.674 withdraws trust from the signals that claimed a spea
 says the region table never reaches the code that reads it; that is true of the pass-summary path and
 false of this one. This should be filed.
 
-> **Filed, and the contents are now measured.** PR #574 measured all 33 `nontarget_active` buckets in
-> that run against the run's own YAMNet windows, per-bucket so a 0.96 s window straddling a region edge
-> cannot import content from outside it: **32 of 33 carry a non-vocal dominant label** — 26 `Music` at a
-> median 0.86-0.90, 6 `Silence` — and 16 have vocal mass below 0.01.
+> **The contents are now measured, and only the measurement carries forward.** PR #574 measured all 33
+> `nontarget_active` buckets in that run against the run's own YAMNet windows, per-bucket so a 0.96 s
+> window straddling a region edge cannot import content from outside it: **32 of 33 carry a non-vocal
+> dominant label** — 26 `Music` at a median 0.86-0.90, 6 `Silence` — and 16 have vocal mass below 0.01.
 >
-> That cuts two ways for this path, and both matter. Withdrawing trust from a signal claiming a speaker
-> inside music or silence is the *right* action, so `rounds.regional_weights` is doing something
-> defensible where the pass-summary path does nothing at all. But region `0.0-2.0` ends on a speech
-> onset — its last buckets read `Speech` 0.466 then 0.878 — so the same rule withdraws trust from a
-> real speaker at the region boundary. The boundary, not the state, is what needs the attention.
+> What that says about `rounds.regional_weights`, `_VOCAL_ACTIVITY` and the pass-summary path is
+> **historical**. Those are the round-based pipeline this design replaces; a fix to how they read the
+> mask is not work this branch wants, and #574's recommendation to gate `_VOCAL_ACTIVITY` on
+> `contains_nontarget_speech` should be read as a note on superseded code rather than a task.
 >
-> The same measurement also settles the reviewer's question that F-187 recorded and left open:
-> `nontarget_active` must **not** enter `speaker._VOCAL_ACTIVITY` on the reading that a vocalization was
-> measured there, because for 32 of 33 buckets none was. `contains_nontarget_speech` already
-> discriminates the case the exemption wants, and is `False` on all three regions.
+> Two things do carry forward, because they are properties of the mask and the audio rather than of any
+> consumer:
+>
+> 1. **`nontarget_active` is not a vocal-activity signal.** It is reachable with the target confidently
+>    absent and nothing but environmental mass present — 292 of 527 labels in the source map go to
+>    `environment`, which is also its default and where `Silence` lands. Any node in *this* design that
+>    wants "a vocalization happened here" must not read that state, and `contains_nontarget_speech`
+>    already exists to say the narrower thing.
+> 2. **The mask's region boundaries land inside events.** Region `0.0-2.0` ends on a speech onset — its
+>    last buckets read `Speech` 0.466 then 0.878. That is a span-boundary defect, and span boundaries are
+>    exactly what branch 1 asks DSP to fix. It belongs to `span_reconfirm`'s problem statement, not to a
+>    voting-weight rule.
 
 ### 7.3 The refiner-only machinery: what survives as a node, what was scaffolding
 
