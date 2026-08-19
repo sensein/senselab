@@ -437,3 +437,84 @@ chunk boundaries will track the local peak envelope rather than upstream's per-f
 Everything else in the worker is faithful line for line: input normalisation, STFT geometry,
 `spec_fwd`/`spec_bwd`, `pad_spec`, `t = ones(B)`, σ=0.01, the ema→model→raw priority, ISTFT
 `length=T_orig`, and the 16 kHz target.
+
+---
+
+# unasdiff at full steps on Engaging — the naming capability is closed, 2026-08-18
+
+Exclusive A100 node, 200 diffusion steps, full 14.027 s file, all modes.
+
+## The slot-swap control refutes the label effect
+
+`sound_sound [Electric_piano, Cough]` against `sound_sound [Cough, Electric_piano]`, identical
+otherwise. Measured on **raw per-window sampler outputs** rather than stitched streams, because
+`align_permutations` margins were 0.03-0.25 — inside the band `data/permutation_alignment.json` itself
+calls ambiguous, so a stitched answer would have been confounded by the chunker.
+
+| event | `[E.piano, Cough]` slot0 / slot1 | `[Cough, E.piano]` slot0 / slot1 |
+| --- | --- | --- |
+| cough 1 | **−0.31** / −36.68 | **−0.32** / −37.20 |
+| cough 2 | **−0.07** / −52.23 | **−0.06** / −33.37 |
+
+Both coughs land in slot 0 whatever slot 0 is labelled. Across 53 comparable cells: 24 label-consistent,
+29 slot-consistent, organised by **window** rather than by content — w5 is 7/0 label-consistent, w2 7/1,
+while w3, w4 and w6 are entirely slot-consistent. The fitting picture is two near-identical
+decompositions with a per-window binary indeterminacy about which slot a component emerges in.
+
+**So unasdiff cannot name a source.** `speech_sound` was already shown inert by a matched control
+(`Computer_keyboard` 96.7% vs `Cough` 97.1%); `sound_sound` is ordering. The capability that made this
+backend interesting for the taxonomy does not exist.
+
+## Retraction: the 60-step "no configuration preserves speech" finding
+
+At 200 steps CrisperWhisper recovers "There's something going on." with correct word timings from five
+streams. The earlier result was a step-count artefact, not a property of the method. Speech-window
+energy sits at −0.36 dB and −0.01 dB in the speech-prior slot.
+
+Label behaviour at 200 steps is not inert but does not act in its own direction either: `Cough`
+conditioning put cough 1 at −16.99 dB in the **speech** slot against −40.14 in the Cough slot, while
+`Computer_keyboard` put it at −1.34 dB in the sound slot. Caveat carried from the report: in two runs
+both slots sit 17-18 dB below the input for cough 1, so a high share there is a share of very little.
+
+Instrument conditioning does **not** extract the music: the 164.1, 1564.5 and 1757.8 Hz partials sit at
+0.990, 0.967 and 0.991 share in the **speech-prior** slot.
+
+## A third defect, upstream and verified
+
+`models/atten_unet.py:6` and `diffusion/gaussian_diffusion.py:34` both execute
+`os.environ["CUDA_VISIBLE_DEVICES"] = "0"` **at module import**. Four workers launched with distinct
+device assignments — verified in `/proc/<pid>/environ` — all ran on physical GPU 0. **unasdiff cannot be
+fanned out across GPUs on a node.** senselab's worker already avoids upstream's benchmark scripts
+because of `torch.cuda.set_device(0)`; the library modules it does import carry the same pin.
+
+## GPU reproduces CPU, and PCM_16 bit a third time
+
+91 paired window cells, median |Δ| **0.09 dB**, max 2.21 dB on a −37 dB cell; no preserve/destroy
+verdict changes. Outputs are **byte-identical** across A100 80GB PCIe and A100-SXM4-80GB.
+
+The first GPU pass reused a script writing at soundfile's default PCM_16, clipped up to 8.9% of samples
+on three SepFormer streams, and disagreed with CPU by as much as 9.5 dB. Third occurrence of that
+default silently corrupting a measurement in this session.
+
+In unasdiff's own worker, all 84 per-window files are PCM_16 (the defect stands) but the largest sample
+across 126 files is 0.9949 with zero at full scale — the worker's per-window peak normalisation keeps it
+in range for this recording, so the exposure did not fire.
+
+## The first valid timing of the session
+
+Exclusive node, 128/128 CPUs, 4/4 A100-SXM4-80GB, `OverSubscribe=NO`, no other job present, runs serial:
+G1 560.71 s, G2 559.38 s, G3 576.67 s — RTF ≈ **40×** on 14.027 s, ≈0.40 s per window-step. The job was
+preempted during G4, so G4-G6 carry no valid timing and none is claimed.
+
+## My CrisperWhisper reference is the outlier
+
+Three independent input routes on the cluster — scipy, senselab decode, senselab from samples — produce
+**byte-identical** token sequences: `[cough] 7.92-8.08` plus the four speech tokens with timings matching
+mine exactly. **No `[breath]` tokens, no `[UH]`, and the cough ends at 8.08 rather than 8.48.**
+
+So the discrepancy is not a resampling artefact and not a harness difference between two machines: the
+five-token sequence recorded earlier in this file is the one that does not reproduce, on either the CPU
+harness or the cluster. Two consequences. The earlier scoring of CrisperWhisper's breath coverage
+(26.2% and 10.2%) rests on tokens that other runs do not produce. And `span_refine` in
+`branch-1-airway.md`, which consumes CrisperWhisper token edges as span candidates, has a much weaker
+input than assumed — reliably `[cough]` and little else.
