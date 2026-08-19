@@ -3,6 +3,8 @@
 speech-articulatory-coding (SPARC) has dependencies that may conflict
 with the main environment. It runs in an isolated subprocess venv
 managed by uv, shared with ppgs where possible.
+
+Resynthesized and voice-converted audio comes back as WAV/FLOAT: ``specs/20260819-091500-wav-subtype-sweep/design.md``.
 """
 
 import json
@@ -17,7 +19,13 @@ import torch
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures import DeviceType, Language, _select_device_and_dtype, logger
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 # SPARC venv specification
 _SPARC_VENV = "sparc"
@@ -106,6 +114,9 @@ device = args["device"]
 output_dir = args["output_dir"]
 feature_dir = args["feature_dir"]
 
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import write_audio
+
 coder = load_model(language, device=device)
 
 try:
@@ -117,13 +128,12 @@ try:
 
     waveform = coder.decode(ema, pitch, loudness, spk_emb)
 
-    # Save output as FLAC
-    out_path = str(Path(output_dir) / "decoded.flac")
+    out_path = str(Path(output_dir) / "decoded.wav")
     if isinstance(waveform, torch.Tensor):
         wav_np = waveform.detach().cpu().numpy().squeeze()
     else:
         wav_np = np.asarray(waveform).squeeze()
-    sf.write(out_path, wav_np, coder.output_sr)
+    write_audio(out_path, wav_np, coder.output_sr)
 
     print(json.dumps({"output_path": out_path, "sample_rate": coder.output_sr}))
 except Exception as e:
@@ -151,18 +161,20 @@ output_dir = args["output_dir"]
 source_path = args["source_path"]
 target_path = args["target_path"]
 
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import write_audio
+
 coder = load_model(language, device=device)
 
 try:
     waveform = coder.convert(src_wav=source_path, trg_wav=target_path)
 
-    # Save output as FLAC
-    out_path = str(Path(output_dir) / "converted.flac")
+    out_path = str(Path(output_dir) / "converted.wav")
     if isinstance(waveform, torch.Tensor):
         wav_np = waveform.detach().cpu().numpy().squeeze()
     else:
         wav_np = np.asarray(waveform).squeeze()
-    sf.write(out_path, wav_np, coder.output_sr)
+    write_audio(out_path, wav_np, coder.output_sr)
 
     print(json.dumps({"output_path": out_path, "sample_rate": coder.output_sr}))
 except Exception as e:
@@ -358,6 +370,7 @@ class SparcFeatureExtractor:
                     "device": device.value,
                     "output_dir": str(tmp),
                     "feature_dir": str(feature_dir),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 
@@ -437,6 +450,7 @@ class SparcFeatureExtractor:
                     "output_dir": str(tmp),
                     "source_path": src_path,
                     "target_path": trg_path,
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

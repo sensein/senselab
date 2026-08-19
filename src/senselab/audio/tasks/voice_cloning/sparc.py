@@ -2,6 +2,9 @@
 
 speech-articulatory-coding (SPARC) has dependencies that may conflict
 with the main environment. It runs in an isolated subprocess venv.
+
+Results come back as WAV/FLOAT; why, and the measured range of this vocoder's output:
+``specs/20260819-091500-wav-subtype-sweep/design.md``.
 """
 
 import json
@@ -16,6 +19,7 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -52,12 +56,15 @@ language = args["language"]
 device = args["device"]
 output_dir = args["output_dir"]
 
+sys.path.insert(0, args["io_dir"])
+from portable_audio_io import read_audio, write_audio
+
 coder = load_model(language, device=device)
 
 output_paths = []
 for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
-    src_data, src_sr = sf.read(src_path, dtype="float32")
-    tgt_data, tgt_sr = sf.read(tgt_path, dtype="float32")
+    src_data, src_sr = read_audio(src_path)
+    tgt_data, tgt_sr = read_audio(tgt_path)
 
     src_wav = src_data.squeeze().astype(np.float32)
     tgt_wav = tgt_data.squeeze().astype(np.float32)
@@ -71,8 +78,8 @@ for i, (src_path, tgt_path) in enumerate(zip(source_paths, target_paths)):
         converted = converted.squeeze()
 
     sr = coder.sr
-    out_path = str(Path(output_dir) / f"cloned_{i}.flac")
-    sf.write(out_path, converted, sr, format="FLAC")
+    out_path = str(Path(output_dir) / f"cloned_{i}.wav")
+    write_audio(out_path, converted, sr)
     output_paths.append(out_path)
 
 print(json.dumps({"output_paths": output_paths, "expected_sr": coder.sr}))
@@ -93,7 +100,7 @@ class SparcVoiceCloner:
         """Clone voices from source audios to target audios using SPARC.
 
         The SPARC model runs in an isolated subprocess venv with its own
-        Python and dependencies. Audio is transferred via FLAC files.
+        Python and dependencies. Inputs go over as FLAC, results come back as WAV/FLOAT.
 
         Args:
             source_audios: List of source audio objects.
@@ -146,6 +153,7 @@ class SparcVoiceCloner:
                     "language": used_language,
                     "device": device.value,
                     "output_dir": str(tmp),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

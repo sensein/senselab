@@ -11,6 +11,14 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from senselab.audio.data_structures.audio_hints import AudioHints
 from senselab.utils.constants import SENSELAB_NAMESPACE
+from senselab.utils.portable_audio_io import (
+    RAISE,
+    AudioWriteReport,
+    apply_range_policy,
+    format_for,
+    libsndfile_can_write,
+    write_audio,
+)
 
 try:
     from torchcodec.decoders import AudioDecoder
@@ -32,6 +40,13 @@ try:
     SOUNDFILE_AVAILABLE = True
 except ModuleNotFoundError:
     SOUNDFILE_AVAILABLE = False
+
+
+# What the non-libsndfile backends actually write. torchcodec's AudioEncoder exposes no encoding
+# control, and torchaudio 2.9 forwards save() to it while warning that ``encoding`` and
+# ``bits_per_sample`` are unsupported, so 16-bit fixed point is the conservative assumption the
+# range policy is applied against for those containers.
+_TORCH_BACKEND_SUBTYPE = "PCM_16"
 
 
 class Audio(BaseModel):
@@ -311,64 +326,132 @@ class Audio(BaseModel):
         self,
         file_path: Union[str, os.PathLike],
         format: Optional[str] = None,
-        encoding: Optional[str] = None,
-        bits_per_sample: Optional[int] = None,
-        buffer_size: int = 4096,
-        backend: Optional[str] = None,
-        compression: Optional[Union[float, int]] = None,
-    ) -> None:
-        """Saves the Audio object to a file using torchcodec AudioEncoder.
+        subtype: Optional[str] = None,
+        out_of_range: str = RAISE,
+    ) -> AudioWriteReport:
+        """Write this Audio to a file, preserving the samples exactly where the format allows.
+
+        The subtype is resolved rather than left to the container's default: a plain ``.wav``
+        write gets ``FLOAT`` and round-trips float samples bit-exactly, including values beyond
+        ±1. Where the destination cannot represent the samples -- FLAC has no float subtype at
+        any depth, and an explicitly requested ``PCM_16`` has a ±1 ceiling -- the write refuses
+        rather than clipping, unless the caller asks for another outcome.
 
         Args:
             file_path: Destination file path.
-            format: Audio format (e.g. "wav", "ogg", "flac", "mp3"). Inferred from the file extension if None.
-            encoding: Encoding hint (used by soundfile fallback).
-            bits_per_sample: Bit depth hint (used by soundfile fallback).
-            buffer_size: Buffer size (unused with torchcodec).
-            backend: I/O backend hint (unused with torchcodec).
-            compression: Compression level hint (unused with torchcodec).
+            format: Audio format (e.g. "wav", "ogg", "flac", "mp3"). Inferred from the file
+                extension if None.
+            subtype: libsndfile subtype (e.g. ``"FLOAT"``, ``"PCM_16"``, ``"PCM_24"``). None
+                preserves as much as the format allows. On the non-libsndfile fallback path it is
+                translated to ``torchaudio.save``'s encoding and bit depth.
+            out_of_range: What to do when the resolved subtype cannot represent the samples:
+                ``"raise"`` (default), ``"warn"`` (clip, loudly) or ``"normalize"`` (rescale,
+                with the applied gain in the returned report).
+
+        Returns:
+            An :class:`~senselab.utils.portable_audio_io.AudioWriteReport` naming the format,
+            subtype, peak and any gain applied.
 
         Raises:
-            ModuleNotFoundError: If torchcodec encoder is not available.
-            ValueError: If the waveform dimensions or sampling rate are invalid.
-            RuntimeError: If saving fails.
+            ValueError: If the waveform dimensions or sampling rate are invalid, the subtype does
+                not fit the format, or the samples do not fit the subtype under ``"raise"``.
+            RuntimeError: If the output directory is not writable, no backend can write the
+                requested format, or the write itself fails.
         """
-        if not TORCHCODEC_AVAILABLE and not TORCHAUDIO_AVAILABLE:
-            raise RuntimeError("Neither torchcodec nor torchaudio is available for saving audio.")
-
         if self.waveform.ndim != 2:
             raise ValueError("Waveform must be a 2D tensor with shape (num_channels, num_samples).")
         if self.sampling_rate <= 0:
             raise ValueError("Sampling rate must be a positive integer.")
 
         output_dir = os.path.dirname(file_path)
-        if not os.access(output_dir, os.W_OK):
+        if output_dir and not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+        if output_dir and not os.access(output_dir, os.W_OK):
             raise RuntimeError(f"Output directory '{output_dir}' is not writable.")
 
-        try:
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir)
-            if TORCHCODEC_AVAILABLE:
-                encoder = AudioEncoder(
-                    samples=self.waveform,
-                    sample_rate=self.sampling_rate,
+        samples = self.waveform.detach().cpu().numpy()
+        fmt = format_for(file_path, format)
+
+        if libsndfile_can_write(fmt):
+            try:
+                return write_audio(
+                    file_path,
+                    samples,
+                    self.sampling_rate,
+                    format=fmt,
+                    subtype=subtype,
+                    out_of_range=out_of_range,
+                    channels_first=True,
                 )
-                encoder.to_file(file_path)
+            except ValueError:
+                raise
+            except Exception as e:
+                raise RuntimeError(f"Error saving audio to file: {e}") from e
+
+        return self._save_via_torch_backend(file_path, fmt, subtype, out_of_range, samples)
+
+    def _save_via_torch_backend(
+        self,
+        file_path: Union[str, os.PathLike],
+        fmt: str,
+        subtype: Optional[str],
+        out_of_range: str,
+        samples: "np.ndarray",
+    ) -> AudioWriteReport:
+        """Write a container libsndfile cannot, under the same range policy.
+
+        Reached only for formats outside ``soundfile.available_formats()`` -- AAC in an ``.m4a``,
+        for instance. None of those carries float samples, so the policy is applied against
+        ``PCM_16`` before either backend is called, and an explicit ``subtype`` is refused because
+        neither backend can honour one (see the spec named in the class docstring).
+
+        Args:
+            file_path: Destination file path.
+            fmt: Resolved format name.
+            subtype: The caller's subtype request, or None.
+            out_of_range: The range policy.
+            samples: Channels-first samples.
+
+        Returns:
+            An :class:`~senselab.utils.portable_audio_io.AudioWriteReport`.
+
+        Raises:
+            RuntimeError: If a subtype was requested, no backend is available, or the write fails.
+        """
+        if subtype is not None:
+            raise RuntimeError(
+                f"subtype={subtype!r} cannot be honoured for a {fmt} file: soundfile cannot write "
+                "this container, and neither torchcodec's AudioEncoder nor torchaudio's "
+                "torchcodec-backed save exposes encoding control."
+            )
+        if not TORCHCODEC_AVAILABLE and not TORCHAUDIO_AVAILABLE:
+            raise RuntimeError(f"No backend available to write a {fmt} file.")
+
+        samples, peak, fraction, gain = apply_range_policy(
+            samples, fmt, _TORCH_BACKEND_SUBTYPE, out_of_range, os.fspath(file_path)
+        )
+        waveform = torch.from_numpy(samples)
+        try:
+            if TORCHCODEC_AVAILABLE:
+                AudioEncoder(samples=waveform, sample_rate=self.sampling_rate).to_file(os.fspath(file_path))
             else:
                 torchaudio.save(
-                    uri=file_path,
-                    src=self.waveform,
+                    uri=os.fspath(file_path),
+                    src=waveform,
                     sample_rate=self.sampling_rate,
                     channels_first=True,
-                    format=format,
-                    encoding=encoding,
-                    bits_per_sample=bits_per_sample,
-                    buffer_size=buffer_size,
-                    backend=backend,
-                    compression=compression,
                 )
         except Exception as e:
             raise RuntimeError(f"Error saving audio to file: {e}") from e
+
+        return AudioWriteReport(
+            path=os.fspath(file_path),
+            format=fmt,
+            subtype=_TORCH_BACKEND_SUBTYPE,
+            peak=peak,
+            out_of_range_fraction=fraction,
+            gain=gain,
+        )
 
     @classmethod
     def from_stream(
