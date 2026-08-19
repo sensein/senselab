@@ -146,3 +146,44 @@ unknown quality exactly where grouping is hardest.
 `group_events` therefore remains unsolved, and the earlier suggestion that it was "not a modelling
 problem" was wrong — it needs either a cue detector that works on non-speech, or a different
 formulation.
+
+---
+
+## `span_refine`'s CrisperWhisper input, after the revision finding
+
+`span_refine` was specified to take `crisper_tokens` as span-edge candidates, on the strength of
+timings that matched the verified windows closely — cough 1 bounded to within 26 ms at onset and 14 ms
+at offset. Two things now qualify that.
+
+**The producer does not exist in this table.** `crisper_tokens` is consumed by `span_refine` and
+`group_events` and produced by nothing, along with `c50_db`, `rms_db` and `community1_seg`. Whatever is
+decided below, a producing node has to be declared.
+
+**Which model produces it is now a deliberate choice, not a default.**
+`nyralabs/CrisperWhisper2.0_turbo` was retrained upstream on 2026-08-17, and the two revisions differ in
+exactly the output this node depends on:
+
+| revision | non-speech tokens on the probe recording |
+| --- | --- |
+| `831f87e1` (2026-08-03) | `[breath] [breath] [cough] [UH] [breath]` |
+| `de0369c8` (2026-08-17, "2.1-generation two-stage retrain") | `[cough]` |
+
+Both recover the speech identically. So tracking `main` gives a model that does not annotate breath at
+all, and every earlier measurement of this node's usefulness was made against the pre-retrain weights,
+reached through a stale cached ref.
+
+**Consequences for the node as designed:**
+
+- For **cough**, the node stands on either revision — `[cough]` is the one token both emit, and it was
+  the best-bounded span of anything measured.
+- For **breath**, the node has an input only if the branch pins `831f87e1`. That means deliberately
+  running a superseded model, which needs its own justification: the newer weights may well be better at
+  what they were retrained for, and the older model's `[UH]` is a mislabelled cough, so its extra tokens
+  are not uniformly more correct.
+- If the branch tracks the current model instead, **breath has no span source at all** — not the
+  envelope (10-52% coverage of the verified windows), not HeAR (fragments, 24-52%), and not
+  CrisperWhisper. That is not a gap awaiting a better tool; it is unmeasured by everything tried, and it
+  is what makes the "no breath duration" restriction structural rather than provisional.
+
+Either way the node must **pin a revision explicitly** rather than resolve `main`, and record which,
+because the choice determines whether one of its two consumers has any input.
