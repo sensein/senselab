@@ -76,7 +76,9 @@ def separate_audios(
             ``"speech_sound"``, ``n_sources`` for ``"sound_sound"``, unused for
             ``"speech_speech"``). Resolved to conditioning indices via
             :func:`resolve_source_classes`.
-        device: Accepted for signature parity with other separation/enhancement entry points.
+        device: Device the worker runs on -- CUDA or CPU. ``None`` leaves the choice to the
+            worker. Forwarded unchanged to
+            :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
         seed: RNG seed, recorded in the worker's log line.
         diffusion_steps: Number of reverse-diffusion steps the sampler runs per window --
             forwarded unchanged to :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.

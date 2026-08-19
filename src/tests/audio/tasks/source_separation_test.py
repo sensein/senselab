@@ -13,7 +13,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.source_separation import separate_audios, unasdiff
 from senselab.audio.tasks.source_separation.api import resolve_source_classes
 from senselab.audio.tasks.source_separation.unasdiff import align_permutations
-from senselab.utils.data_structures import HFModel
+from senselab.utils.data_structures import DeviceType, HFModel
 from senselab.utils.subprocess_venv import _cache_dir_path
 
 
@@ -537,6 +537,163 @@ def test_unasdiff_separates_a_mixture_into_n_sources(mono_audio_sample: Audio) -
 
     a, b = result[0][0].waveform, result[0][1].waveform
     assert (a - b).abs().mean() > 1e-4, "both slots returned the same signal"
+
+
+# ── Worker device selection ───────────────────────────────────────────
+
+_CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES"
+
+
+def _reads_os_environ(node: ast.AST) -> bool:
+    """True if ``node`` is the expression ``os.environ``."""
+    return isinstance(node, ast.Attribute) and node.attr == "environ" and isinstance(node.value, ast.Name)
+
+
+def _cuda_visible_devices_landmarks(script: str) -> dict:
+    """Line numbers of the four events the worker's device handling must order correctly.
+
+    Args:
+        script: The worker script source.
+
+    Returns:
+        ``{"saves": [...], "restores": [...], "upstream_imports": [...], "cuda_api": [...]}``,
+        each a list of line numbers in the order ``ast.walk`` yields them.
+    """
+    tree = ast.parse(script)
+    landmarks: dict = {"saves": [], "restores": [], "upstream_imports": [], "cuda_api": []}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and _reads_os_environ(node.func.value):
+            named = node.args and isinstance(node.args[0], ast.Constant) and node.args[0].value == _CUDA_VISIBLE_DEVICES
+            if named and node.func.attr == "get":
+                landmarks["saves"].append(node.lineno)
+            elif named and node.func.attr == "pop":
+                landmarks["restores"].append(node.lineno)
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and _reads_os_environ(target.value)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == _CUDA_VISIBLE_DEVICES
+                ):
+                    landmarks["restores"].append(node.lineno)
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("models", "diffusion"):
+                    landmarks["upstream_imports"].append(node.lineno)
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr == "cuda"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "torch"
+        ):
+            landmarks["cuda_api"].append(node.lineno)
+    return landmarks
+
+
+def test_the_worker_restores_cuda_visible_devices_before_it_touches_cuda() -> None:
+    """The upstream module-scope GPU pin is saved before the import and put back before any CUDA call.
+
+    ``models/atten_unet.py`` assigns ``CUDA_VISIBLE_DEVICES = "0"`` at module scope, ahead of its
+    own ``import torch``. CUDA initialises lazily, so restoring the launcher's value after the
+    import but before the first CUDA API call is what makes the pin have no effect. This is a
+    static ordering check because the pin's effect is only observable on a multi-GPU host.
+    """
+    marks = _cuda_visible_devices_landmarks(unasdiff._WORKER_SCRIPT)
+    assert marks["saves"], "the worker never reads CUDA_VISIBLE_DEVICES before the upstream import"
+    assert marks["restores"], "the worker never restores CUDA_VISIBLE_DEVICES after the upstream import"
+    assert marks["upstream_imports"], "test premise: the worker imports the upstream modules"
+    assert marks["cuda_api"], "test premise: the worker calls into torch.cuda"
+
+    assert min(marks["saves"]) < min(marks["upstream_imports"]), "the save must precede the pinning import"
+    assert max(marks["restores"]) > max(marks["upstream_imports"]), "the restore must follow every upstream import"
+    assert max(marks["restores"]) < min(marks["cuda_api"]), "the restore must precede the first CUDA API call"
+
+
+def test_the_worker_never_requests_a_bare_cuda_device() -> None:
+    """Every ``torch.device`` the worker builds for CUDA carries an explicit index.
+
+    A bare ``"cuda"`` takes whatever index torch defaults to, which is the outcome the upstream
+    pin produced on a four-GPU node.
+    """
+    tree = ast.parse(unasdiff._WORKER_SCRIPT)
+    bare = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "device"):
+            continue
+        # Every string constant reachable from the argument, so a ternary picking between
+        # "cuda" and "cpu" is caught as readily as a plain literal.
+        for inner in ast.walk(node.args[0]) if node.args else []:
+            if isinstance(inner, ast.Constant) and inner.value == "cuda":
+                bare.append(node.lineno)
+    assert not bare, f"bare torch.device('cuda') at worker line(s) {sorted(set(bare))}"
+
+
+def test_the_callers_device_reaches_the_worker_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A caller-selected device is sent to the worker instead of being validated and dropped.
+
+    ``device`` used to be handed to ``_select_device_and_dtype`` purely for validation and its
+    result discarded, so the worker chose for itself and no caller could select a card.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        device=DeviceType.CPU,
+    )
+    assert captured["payload"]["device"] == "cpu"
+
+
+def test_no_device_leaves_the_choice_to_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``device=None`` sends ``None``, not a device the host's own torch build happened to see.
+
+    The host interpreter and the venv have separate torch builds; only the venv's answer to
+    ``torch.cuda.is_available()`` governs where the worker can run.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+    )
+    assert captured["payload"]["device"] is None
+
+
+def test_an_incompatible_device_is_rejected_before_the_venv() -> None:
+    """MPS is not one of this backend's compatible devices and must raise rather than fall back."""
+    audio = Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)
+    with pytest.raises(ValueError):
+        unasdiff.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 0],
+            mode="speech_speech",
+            device=DeviceType.MPS,
+        )
+
+
+def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """api.separate_audios threads device through to separate_with_unasdiff unchanged."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["device"] = kwargs["device"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, device=DeviceType.CPU)
+    assert captured["device"] is DeviceType.CPU
 
 
 # ── WAV intermediates ─────────────────────────────────────────────────
