@@ -100,3 +100,49 @@ Six verified windows and roughly 8.5 s of verified-empty audio in the same file 
 3.5-5.3, 6.3-7.9, 8.5-9.6, 10.25-11.65, 13.2-14.03). So a proposer can be scored on recall over the six
 and **false positives per minute** over the empty stretches, on the original and on degraded copies with
 added noise and reverberation. That answers the robustness question the current draft can only assert.
+
+---
+
+## Correction: four dangling input ports, and what Brouhaha is actually doing
+
+The table above consumes four products that **no node in it produces**:
+
+| product | consumed by | producer |
+| --- | --- | --- |
+| `crisper_tokens` | `span_refine`, `group_events` | **none** |
+| `c50_db` | `attribute_sources` | **none** |
+| `rms_db` | `attribute_sources` | **none** |
+| `community1_seg` | `attribute_sources` | **none** |
+
+They had producers in the first draft — a `crisper_tokens` node and a `vad_pair` node — and both were
+dropped when the ordering was restructured to propose / corroborate / refine / reconfirm. This is the
+F-187 failure exactly: a consumer reading a product nothing writes. It was caught here by the port
+declaration itself, in a table, before any code existed, which is the reason for declaring ports.
+
+**Brouhaha's role in this branch is one derived quantity, not its VAD.** Only `c50_db` — reverberation,
+as proximity evidence for attribution — and even that had no producer. The vocal-versus-lexical
+discriminator (Brouhaha's VAD against community-1's segmentation) answers *which branch a file belongs
+to*, which is a TAXONOMY question upstream of here. It does not belong in the airway branch, and its
+appearance in this table was a leftover.
+
+## Correction: the grouping rule has no detector behind it
+
+`group_events` was described as solvable by a physiological rule — a voiced phase within ~400 ms of a
+broadband burst belongs to that burst. **There is no instrument here for "voiced phase".** Measured on
+this recording, praat HNR returns `nan` almost everywhere, valid only at the two cough onsets, and pyin
+rails at its 60 Hz floor through every quiet stretch, locking onto low-frequency rumble. So the cue the
+rule depends on is not detectable by anything currently in the graph.
+
+Two candidates exist in senselab and neither has been tested for this: `features_extraction/ppg.py`
+(phonetic posteriorgrams — frame-level phone posteriors, where a voiced cough phase might read as a
+vowel with characteristic entropy) and `features_extraction/sparc.py` (articulatory inversion). Both are
+speech-trained, so their behaviour on non-speech events is unknown.
+
+A second problem the rule ignores: **grouping consumes sub-event labels, and those degrade in noise**.
+Every label measured in this project comes from one quiet close-miked recording. How `hear_classify` and
+`span_reconfirm` behave on noisy or reverberant input is unmeasured, so the inputs to grouping are of
+unknown quality exactly where grouping is hardest.
+
+`group_events` therefore remains unsolved, and the earlier suggestion that it was "not a modelling
+problem" was wrong — it needs either a cue detector that works on non-speech, or a different
+formulation.
