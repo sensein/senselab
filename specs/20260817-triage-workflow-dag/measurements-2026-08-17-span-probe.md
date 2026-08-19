@@ -381,3 +381,59 @@ streams are not speech.
 
 Pins: upstream `RunwuShi/unasdiff` @ `5a5d70cd…`; weights `sensein/unasdiff-diffusion-priors` @
 `8d7c3220…`; torch 2.6.0 in the isolated venv.
+
+---
+
+# Retraction: DriftSE's plain checkpoint is not a hallucinating model — 2026-08-18
+
+Established from the paper (arXiv 2604.24199), upstream's code at the pinned commit, and both issues.
+
+**Our worker omits upstream's output rescale.** `driftse.py:208` returns `x * norm`. Upstream's
+`enhancement.py:224-229` computes `x_hat / x_hat.abs().max() * norm_factor` — rescale by the output's
+own peak, then back to the input's. Those lines have been present since upstream's first commit; our
+worker never had them, so this is not drift we failed to track.
+
+**The plain checkpoint's gain is undefined by its training, and that is expected.** Its config sets
+`pesq_weight`, `sisdr_weight` and `ccmse_weight` to 0 with `latent_drift_weight: 1.0`, and
+`train.py:297-304` standardises the generated waveform to zero mean and unit variance before the only
+active loss term. The objective is exactly scale-invariant. Measured raw ISTFT peaks: **4 400 and
+4 896** on two clips — content-dependent, so an earlier observation of 51 741 is the same phenomenon,
+not a different one.
+
+**The † checkpoint masks the bug.** Its CCMSE and PESQ terms are computed on absolute amplitudes
+(`train.py:292-294`), pinning its raw peak at 0.997. Hence:
+
+| checkpoint | raw ISTFT peak | upstream rescale | our `x * norm` | ours after the PCM_16 write |
+| --- | --- | --- | --- | --- |
+| plain `..._with_z` | **4 399.99** | peak 0.572, corr **0.9950** | peak 2 517.8, corr 0.9950 | peak 1.0, corr **0.6284**, 91.8% of samples clipped |
+| † `..._pesq_sisdr_ccmse_with_z` | 0.9968 | peak 0.572, corr 0.9997 | peak 0.570, corr 0.9997 | corr 0.9997, 0% clipped |
+
+The missing rescale is a scalar gain and cannot by itself change correlation. What destroys the signal
+is the scalar gain **followed by a PCM_16 write**, which hard-clips a ~2 500× overshoot into a square
+wave. That is what an ASR read as fabricated text.
+
+**Corroboration from upstream's own release:** the published output WAVs for *both* variants have peak
+**0.513519** — bit-identical peaks from models whose internal scales differ by ~4 000×. That is the
+signature of the rescale we drop.
+
+**So "the hallucinating variant" is withdrawn.** With upstream's line restored the plain checkpoint
+gives correlation 0.9950, and at 1 NFE it scores PESQ 3.00 / SI-SDR 15.8 — beating a 30-step SGMSE+
+baseline on PESQ. It is a working enhancer that our integration was breaking.
+
+## Two further corrections
+
+**`driftse.py:276-277` calls the default variant "the paper's headline model". It is not.** The
+headline PESQ 3.15 / SI-SDR 16.1 figure is the σ=0 `no_z` checkpoint, **which was never released**.
+Relatedly, `with_z`/`no_z` is not the paper's conditional-generator versus direct-mapping split — it is
+only `train_add_gaussian` true/false. The conditional generator (`backbones/ncsnpp_v2.py`) is unreleased
+and nothing shipped uses it.
+
+**Per-chunk normalisation is a second defect behind the first.** Our 20 s overlap-add chunking
+normalises each chunk by its own peak (`driftse.py:216-233`), so even once the rescale is restored,
+chunk boundaries will track the local peak envelope rather than upstream's per-file peak matching. And
+`if seg.shape[-1] < n_fft: break` (`:222`) silently drops a trailing remainder shorter than 510 samples
+(~32 ms), leaving that tail at zero.
+
+Everything else in the worker is faithful line for line: input normalisation, STFT geometry,
+`spec_fwd`/`spec_bwd`, `pad_spec`, `t = ones(B)`, σ=0.01, the ema→model→raw priority, ISTFT
+`length=T_orig`, and the 16 kHz target.
