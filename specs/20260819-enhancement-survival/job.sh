@@ -1,13 +1,13 @@
 #!/bin/bash
 #SBATCH --job-name=enh-survival
 #SBATCH --partition=pi_satra
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #SBATCH --time=8:00:00
-#SBATCH --output=%x-%j.out
-#SBATCH --error=%x-%j.err
 set -euo pipefail
+# --output is set at submit time to flash scratch; the sbatch default lands in $HOME,
+# which is the slowest tier.
 
 # Each export below has failed silently at least once while the job still reported COMPLETED.
 export PATH="$HOME/.local/bin:$PATH"                                      # uv lives here
