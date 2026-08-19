@@ -199,7 +199,7 @@ class SparcFeatureExtractor:
         """Extract SPARC articulatory features from audios.
 
         The SPARC model runs in an isolated subprocess venv with its own
-        Python and dependencies. Audio is transferred via FLAC files.
+        Python and dependencies. Audio is transferred via WAV files.
 
         Args:
             audios: List of audio objects.
@@ -230,13 +230,13 @@ class SparcFeatureExtractor:
         with tempfile.TemporaryDirectory(prefix="senselab-sparc-") as tmpdir:
             tmp = Path(tmpdir)
 
-            # Serialize audios to FLAC
+            # Serialize audios for the worker
             audio_paths = []
             for i, audio in enumerate(audios):
                 if audio.waveform.squeeze().dim() != 1:
                     raise ValueError(f"Only mono audio files are supported. Audio index: {i}")
-                path = str(tmp / f"audio_{i}.flac")
-                audio.save_to_file(path, format="flac")
+                path = str(tmp / f"audio_{i}.wav")
+                audio.save_to_file(path)
                 audio_paths.append(path)
 
             # Run worker in isolated venv

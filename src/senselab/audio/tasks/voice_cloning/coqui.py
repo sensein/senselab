@@ -167,10 +167,10 @@ class CoquiVoiceCloner:
                 if src.waveform.squeeze().dim() != 1 or tgt.waveform.squeeze().dim() != 1:
                     raise ValueError(f"[Pair {i}] Only mono audio is supported.")
 
-                src_path = str(tmp / f"source_{i}.flac")
-                tgt_path = str(tmp / f"target_{i}.flac")
-                src.save_to_file(src_path, format="flac")
-                tgt.save_to_file(tgt_path, format="flac")
+                src_path = str(tmp / f"source_{i}.wav")
+                tgt_path = str(tmp / f"target_{i}.wav")
+                src.save_to_file(src_path)
+                tgt.save_to_file(tgt_path)
                 source_paths.append(src_path)
                 target_paths.append(tgt_path)
 
