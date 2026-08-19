@@ -312,6 +312,13 @@ its samples with clipping error only 3.18 dB below the signal; `libri2mix` src0 
 input's peak, above a silence threshold, recording the applied gain so the operation is reversible and
 auditable. It belongs in `driftse.py` before the branch is merged.
 
+> **Landed.** `e8f4a6bc` (PR #563) rescales by the output peak rather than multiplying by the input
+> norm. The PCM_16 harness bug this section also names is fixed in `49197e31` (PR #564), and the write
+> path it belonged to is now one policy with an AST guard — PR #570. The v1/v2 rows above stand: they
+> were taken through `enhance_audios_with_driftse` directly, and they report *different* peaks, which
+> is only possible if `variant` reached the backend. What did not reach it was `variant` passed through
+> the generic `enhance_audios()`; that is fixed by the parameter pathway in PR #575.
+
 ---
 
 # unasdiff, run — the label is inert where it looked decisive, 2026-08-18
@@ -547,6 +554,10 @@ physical GPU 0 only — and line 328 requests `"cuda"` with no index, taking vis
 after line 326. No CUDA API has been touched at that point, so restoring before line 328 defeats the
 pin entirely. Selecting an explicit `cuda:N` would additionally make the intent visible.
 
+> **Landed** in `9d365fd4` (PR #564), as proposed: `unasdiff.py:356-362` saves the variable, pops it,
+> and restores it — with the comment at `:353` naming the upstream module-scope assignment it works
+> around.
+
 Worth recording for its own sake: the comment at `:323-324` states that this worker avoids upstream's
 three `test_*.py` scripts because they call `torch.cuda.set_device(0)` at import, and a module-level
 test checks this file for those substrings. The hazard class was understood and guarded against by one
@@ -562,3 +573,10 @@ So two independent things block GPU selection, and both must be fixed for multi-
 drops the caller's device, and upstream's import-time pin overwrites whatever the launcher set. Fixing
 either alone changes nothing. The cluster run is the case that wants it — four workers on a four-GPU
 node all ran on GPU 0.
+
+> **Both landed** in PR #564, which is why they are named together here: `9d365fd4` for the
+> import-time pin, and the same PR for the dropped device — `unasdiff.py:726` now keeps
+> `_select_device_and_dtype`'s return value and sends it to the worker, where it had previously been
+> computed for validation and thrown away. DriftSE carried the identical defect and is fixed in
+> `952fa9cc` (PR #566). Multi-GPU fan-out is therefore unblocked but **still unmeasured** — nobody has
+> run four workers on four cards since.
