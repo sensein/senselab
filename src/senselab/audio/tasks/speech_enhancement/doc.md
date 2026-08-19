@@ -17,88 +17,59 @@ In the future, more models will be integrated.
 ## DriftSE (one-step diffusion enhancement)
 
 [DriftSE](https://github.com/LiangXu123/DriftSE) (Xu, Caviedes-Nozal, Kleijn, Yan & Olsson,
-*Speech Enhancement Based on Drifting Models*, Interspeech 2026 oral, arXiv 2604.24199) formulates
-enhancement as a distributional equilibrium problem and reaches the clean-speech distribution in a
-**single** network evaluation (1 NFE), against 30 for SGMSE+ and 8 for UNIVERSE++. On the DNS 2020
-blind test set it reports WV-MOS 2.65 and SCOREQ 2.97.
+*Speech Enhancement Based on Drifting Models*, Interspeech 2026 oral, arXiv 2604.24199) reaches the
+clean-speech distribution in a **single** network evaluation (1 NFE), against 30 for SGMSE+ and 8 for
+UNIVERSE++, and is the one generative enhancer here that runs on CPU. Upstream code and weights are
+MIT-licensed.
 
-The drifting field is computed in a frozen self-supervised latent space (HuBERT / WavLM /
-DistilHuBERT) during **training** only. Inference is the backbone alone: one forward pass under
-`no_grad`, so no SSL encoder is loaded at enhancement time. This is the first generative enhancer in
-senselab that is genuinely CPU-viable.
+Two released checkpoints, both mirrored by upstream at
+[`LIANGXU123/DriftSE`](https://huggingface.co/LIANGXU123/DriftSE):
 
-### Why a subprocess venv
+| Variant | Reported PESQ / SI-SDR | Notes |
+|---|---|---|
+| `distillhubert_three_layers_with_z` (default) | 3.00 / 15.6 | latent-drift loss only |
+| `distillhubert_three_layers_pesq_sisdr_ccmse_with_z` | 3.45 / 20.6 | trained with PESQ/SI-SDR/CCMSE in the loss |
 
-Not for dependency conflict — the inference dependency set would satisfy senselab core. The upstream
-repository has no installable package and its top-level module names are `backbones`, `util`,
-`config` and `data`; injecting a generic `util` onto the host interpreter's `sys.path` is the kind of
-hazard that surfaces months later as an unrelated import resolving to the wrong module. The venv
-installs only the inference dependency set. Upstream's `requirements.txt` is a *training* dependency
-set — the inference path (`enhancement.py` -> `backbones.ncsnpp_v2{,_drift}` + `util.other`) does not
-reach `scoreq`, `torch-pesq`, `asteroid-filterbanks`, `wandb`, `pytorch-optimizer`, or `torchinfo`, so
-those stay out. The `latent_ckpt/` archive upstream's README requires for training is not needed at
-all either.
+Both are `with_z` — `train_add_gaussian` true — and both are *ablation* rows in upstream's own
+VB-DMD table, which marks them as such; neither is the paper's headline configuration, and the
+`no_z` variant the README describes has no released checkpoint. `variant` selects between the two;
+there is nothing else to select.
 
-`pesq` and `pystoi` *are* installed, and an earlier revision of this page claimed they were not.
-`util/other.py` — the module the worker must import for `pad_spec` and `set_torch_cuda_arch_list` —
-does `from pesq import pesq` and `from pystoi import stoi` at module scope (lines 7-8 at the pinned
-commit), so they are genuine inference dependencies even though this backend computes no metric. The
-H100 run failed with `No module named 'pesq'` until they were added; the distinction that matters is
-between what the model computes and what its import chain touches.
+Those numbers are upstream's README at the pinned commit, measured against a copy of the
+VoiceBank-DEMAND test set that an independent reproducer could not reproduce; the same enhanced
+audio scores about 0.4 PESQ lower against a standard copy
+([issue #1](https://github.com/LiangXu123/DriftSE/issues/1), open). Read them as advertised rather
+than confirmed.
 
-### Deviations from upstream's script
+### Calling it
 
-The worker script reuses upstream's own backbone construction and spectral transforms, but departs
-from `enhancement.py` in three ways:
+```python
+from senselab.audio.tasks.speech_enhancement import enhance_audios
+from senselab.utils.data_structures import HFModel
 
-1. **`torch.load(..., weights_only=True)`.** Upstream omits it. The checkpoint is a foreign pickle
-   from an unlicensed research repository, so loading it with the unrestricted unpickler is arbitrary
-   code execution at enhancement time.
-2. **Overlap-add chunking for long inputs.** Upstream runs one STFT over an entire file. The NCSN++
-   backbone carries attention layers, so memory grows superlinearly in duration. Enhancement is
-   per-segment consistent — there is no cross-segment identity to preserve, unlike separation, where
-   which-speaker-is-which must stay fixed across a chunk boundary — so overlap-add (Hann-tapered) is
-   safe here in a way it would not be for a separation backend.
-3. **A recorded RNG seed.** The released checkpoint sets `train_add_gaussian`, so the forward pass
-   consumes a Gaussian sample and is stochastic. An unseeded rerun would produce different audio,
-   which would make any cached artifact keyed on this output non-reproducible; `enhance_audios_with_driftse`'s
-   `seed` argument makes a run reproducible and is recorded in the log line.
+enhanced = enhance_audios(audios, model=HFModel(path_or_uri="LIANGXU123/DriftSE"))
+```
 
-### Licensing
+`enhance_audios_with_driftse` takes the parameters the dispatcher cannot: `sigma` (the scale of the
+Gaussian added to the model input, default 0.01, upstream's own value — 0.05 measurably degrades
+output), `seed` (the released checkpoints make that Gaussian part of the forward pass, so output is
+stochastic without one), `variant`, and the chunking. DriftSE runs in an isolated subprocess venv
+that clones upstream at a pinned commit on first use; `SENSELAB_DRIFTSE_CHECKPOINT` points it at a
+local directory holding `last.ckpt` + `config.json` instead of the Hub.
 
-The upstream repository reports no license (no `LICENSE` file, no statement in the README), and is
-itself built on SGMSE+ (MIT) without carrying that statement forward. senselab therefore vendors none
-of it: the worker clones the repository at a pinned commit into the user's own cache at first use. A
-license request was opened upstream on 2026-08-08 and remains unanswered:
-<https://github.com/LiangXu123/DriftSE/issues/2>.
+It is a normal selectable backend, nameable from a workflow config like any other model id, but it is
+**not** the default enhancer: whether a one-step generative enhancer should displace SepFormer, and
+how a second enhancer's output participates in the perturbation sample, are measurements that have
+not been made.
 
-The checkpoint mirror under `sensein` is **public**, so the backend is usable during the alpha, and its
-licence is **unknown** — those are two separate facts and both matter. Publishing the mirror makes the
-weights reachable; it grants no rights over them. No terms have been offered upstream, so treat the
-weights as all-rights-reserved by default and consult
-<https://github.com/LiangXu123/DriftSE> before any use that turns on licence terms. See the model
-registry entry for the pinned revision and file digests.
+Levels: upstream peak-normalises its input, runs the network, and rescales the output by its own
+peak back to that input peak. senselab does the same per window, because the arbitrary gain being
+removed is a property of one network evaluation. The output therefore carries the input's peak.
 
-### The `upfirdn2d` path: no compilation, ever
-
-**It does not need compiling, and cannot be compiled at the pinned commit.** Upstream's
-`backbones/ncsnpp_utils/op/upfirdn2d.py` imports `torch.utils.cpp_extension.load` and never calls it,
-hardcoding `upfirdn2d_op = None` under the comment *"Force PyTorch fallback to avoid CUDA_HOME
-dependency"*. The dispatch `if input.device.type == "cpu" or upfirdn2d_op is None` therefore always
-selects `upfirdn2d_native` (plain `F.conv2d`) — on CPU and CUDA alike. Confirmed on an H100: no `.so`
-beside the source, empty `~/.cache/torch_extensions`, correct output on a 4.92 s clip.
-
-So the venv needs no build toolchain (`nvcc`/`CUDA_HOME` are irrelevant), which is why it installs
-quickly and portably; and the CUDA kernel's speed is simply not on the table, since that path is
-unreachable. An upstream change restoring the `load()` call would alter both — one more reason the
-commit is pinned.
-
-### Not wired into `audio_analysis`
-
-DriftSE is reachable only by passing an `HFModel` whose id starts with `sensein/driftse` explicitly to
-`enhance_audios`. It is not in any default model list and the `audio_analysis` workflow's default
-enhancer is unchanged. Deciding how a second enhancer's output participates in the perturbation sample
-is a measurement, and it comes after this backend exists.
+The worker deviates from upstream's `enhancement.py` in three ways — `torch.load(weights_only=True)`,
+Hann-tapered overlap-add for long inputs, and a recorded RNG seed. Those deviations, the pinned
+commits, the licence history, the venv's dependency set and every measurement behind the choices are
+in `specs/20260818-083214-driftse-upstream-mit/design.md`.
 
 
 ## Evaluation
