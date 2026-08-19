@@ -1,0 +1,55 @@
+
+================================================================================================================
+## C. Per-segment normalisation test: loud half (peak 0.9) then quiet half (peak 0.0009, -60 dB)
+================================================================================================================
+  file: loud-half peak=0.899982  quiet-half peak=0.000900000  ratio=1.000e-03
+
+  format        reader               quiet-chunk peak   slice peak     chunk/slice   bitexact
+  wav FLOAT32   torchcodec           0.000899961        0.000899961    1.000000      True
+  wav FLOAT32   torchaudio           0.000899961        0.000899961    1.000000      True
+  wav FLOAT32   soundfile            0.000899961        0.000899961    1.000000      True
+  wav FLOAT32   ffmpeg -ss after -i  0.000899961        0.000899961    1.000000      True
+  wav PCM_16    torchcodec           0.000915527        0.000915527    1.000000      True
+  wav PCM_16    torchaudio           0.000915527        0.000915527    1.000000      True
+  wav PCM_16    soundfile            0.000915527        0.000915527    1.000000      True
+  wav PCM_16    ffmpeg -ss after -i  0.000915527        0.000915527    1.000000      True
+  flac PCM_24   torchcodec           0.000899911        0.000899911    1.000000      True
+  flac PCM_24   torchaudio           0.000899911        0.000899911    1.000000      True
+  flac PCM_24   soundfile            0.000899911        0.000899911    1.000000      True
+  flac PCM_24   ffmpeg -ss after -i  0.000899911        0.000899911    1.000000      True
+  mp3 192k      torchcodec           1.163850546        0.117209934    9.929624      False
+  mp3 192k      torchaudio           0.117209934        0.117209934    1.000000      True
+  mp3 192k      soundfile            0.117209956        0.117209956    1.000000      True
+  mp3 192k      ffmpeg -ss after -i  0.117209934        0.117209934    1.000000      True
+  m4a aac       torchcodec           0.150671810        0.150671810    1.000000      True
+  m4a aac       torchaudio           0.150671810        0.150671810    1.000000      True
+  m4a aac       soundfile            LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/
+  m4a aac       ffmpeg -ss after -i  0.150671810        0.150671810    1.000000      True
+  opus 48k      torchcodec           RuntimeError: getFramesPlayedInRangeAudio, /Users/runner/work/to
+  opus 48k      torchaudio           ValueError: zero-size array to reduction operation maximum whi
+  opus 48k      soundfile            ValueError: zero-size array to reduction operation maximum whi
+  opus 48k      ffmpeg -ss after -i  ValueError: zero-size array to reduction operation maximum whi
+
+================================================================================================================
+## D. Frame-boundary dependence: sweep seek offset over one codec frame, chunk vs own-full-decode slice
+================================================================================================================
+
+  --- mp3 192k (frame=1152 samples).  base offset = 1.0 s, then +0..frame in steps
+      torchcodec           +0:n=2048,off=-1105,d=0.0e+00  +1:n=2048,off=-1105,d=0.0e+00  +288:n=2048,off=-1105,d=0.0e+00  +576:n=2048,off=-1105,d=0.0e+00  +1151:n=2048,off=-1105,d=0.0e+00  +1152:n=2048,off=-1105,d=0.0e+00  +1153:n=2048,off=-1105,d=0.0e+00  +2304:n=2048,off=-1105,d=0.0e+00
+      torchaudio           +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +288:n=2048,off=0,d=0.0e+00  +576:n=2048,off=0,d=0.0e+00  +1151:n=2048,off=0,d=0.0e+00  +1152:n=2048,off=0,d=0.0e+00  +1153:n=2048,off=0,d=0.0e+00  +2304:n=2048,off=0,d=0.0e+00
+      soundfile            +0:n=2048,off=0,d=1.8e-07!  +1:n=2048,off=0,d=1.8e-07!  +288:n=2048,off=0,d=1.8e-07!  +576:n=2048,off=0,d=1.2e-07!  +1151:n=2048,off=0,d=1.2e-07!  +1152:n=2048,off=0,d=1.2e-07!  +1153:n=2048,off=0,d=1.2e-07!  +2304:n=2048,off=0,d=0.0e+00
+      ffmpeg -ss after -i  +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +288:n=2048,off=0,d=0.0e+00  +576:n=2048,off=0,d=0.0e+00  +1151:n=2048,off=0,d=0.0e+00  +1152:n=2048,off=0,d=0.0e+00  +1153:n=2048,off=0,d=0.0e+00  +2304:n=2048,off=0,d=0.0e+00
+
+  --- m4a aac (frame=1024 samples).  base offset = 1.0 s, then +0..frame in steps
+      torchcodec           +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +256:n=2048,off=0,d=0.0e+00  +512:n=2048,off=0,d=0.0e+00  +1023:n=2048,off=0,d=0.0e+00  +1024:n=2048,off=0,d=0.0e+00  +1025:n=2048,off=0,d=0.0e+00  +2048:n=2048,off=0,d=0.0e+00
+      torchaudio           +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +256:n=2048,off=0,d=0.0e+00  +512:n=2048,off=0,d=0.0e+00  +1023:n=2048,off=0,d=0.0e+00  +1024:n=2048,off=0,d=0.0e+00  +1025:n=2048,off=0,d=0.0e+00  +2048:n=2048,off=0,d=0.0e+00
+      soundfile            full decode LibsndfileError
+      ffmpeg -ss after -i  +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +256:n=2048,off=0,d=0.0e+00  +512:n=2048,off=0,d=0.0e+00  +1023:n=2048,off=0,d=0.0e+00  +1024:n=2048,off=0,d=0.0e+00  +1025:n=2048,off=0,d=0.0e+00  +2048:n=2048,off=0,d=0.0e+00
+
+  --- opus 48k (frame=960 samples).  base offset = 1.0 s, then +0..frame in steps
+      torchcodec           +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +240:n=2048,off=0,d=0.0e+00  +480:n=2048,off=0,d=0.0e+00  +959:n=2048,off=0,d=0.0e+00  +960:n=2048,off=0,d=0.0e+00  +961:n=2048,off=0,d=0.0e+00  +1920:n=2048,off=0,d=0.0e+00
+      torchaudio           +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +240:n=2048,off=0,d=0.0e+00  +480:n=2048,off=0,d=0.0e+00  +959:n=2048,off=0,d=0.0e+00  +960:n=2048,off=0,d=0.0e+00  +961:n=2048,off=0,d=0.0e+00  +1920:n=2048,off=0,d=0.0e+00
+      soundfile            +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +240:n=2048,off=0,d=0.0e+00  +480:n=2048,off=0,d=0.0e+00  +959:n=2048,off=0,d=0.0e+00  +960:n=2048,off=0,d=0.0e+00  +961:n=2048,off=0,d=0.0e+00  +1920:n=2048,off=0,d=0.0e+00
+      ffmpeg -ss after -i  +0:n=2048,off=0,d=0.0e+00  +1:n=2048,off=0,d=0.0e+00  +240:n=2048,off=0,d=0.0e+00  +480:n=2048,off=0,d=0.0e+00  +959:n=2048,off=0,d=0.0e+00  +960:n=2048,off=0,d=0.0e+00  +961:n=2048,off=0,d=0.0e+00  +1920:n=2048,off=0,d=0.0e+00
+
+  ('!' marks a chunk that is NOT bit-identical to the slice of that same library's full decode)
