@@ -19,6 +19,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
 from senselab.audio.tasks.preprocessing import resample_audios
+from senselab.audio.tasks.source_separation import separate_audios
 from senselab.audio.tasks.speech_enhancement.api import enhance_audios
 from senselab.utils.data_structures import DeviceType, HFModel, SenselabModel, SpeechBrainModel
 
@@ -74,6 +75,21 @@ ENHANCERS: List[Tuple[str, Optional[Tuple[str, str]], int, Dict[str, Any]]] = [
         16000,
         {"variant": "distillhubert_three_layers_pesq_sisdr_ccmse_with_z"},
     ),
+]
+
+# Separation is a form of enhancement for this question: each output channel is a candidate, and
+# the old matrix's most interesting finding was a separator acting as an element filter. Scored per
+# channel, so "cough survives in src1" is visible rather than averaged away.
+#
+# SpeechBrain separators (sepformer-whamr16k, sepformer-wsj02mix) are NOT here because senselab has
+# no SpeechBrain separation backend -- separate_audios dispatches only to ClearVoice and unasdiff.
+# The #569 guard tells a caller to use source_separation for those checkpoints, and that module
+# cannot load them. Recorded so the absence is not read as a choice.
+SEPARATORS: List[Tuple[str, str, int, Dict[str, Any]]] = [
+    ("MossFormer2_SS_16K", "alibabasglab/MossFormer2_SS_16K", 16000, {}),
+    ("unasdiff_speech_sound_Cough", "", 16000, {"mode": "speech_sound", "source_classes": ["Cough"]}),
+    # The label-inert control: an unrelated class matched Cough to 0.4% at 60 steps, pre-#564.
+    ("unasdiff_speech_sound_Keyboard", "", 16000, {"mode": "speech_sound", "source_classes": ["Computer_keyboard"]}),
 ]
 
 SNRS: List[Optional[float]] = [None, 20.0, 10.0, 5.0, 0.0, -5.0]  # None = the recording as captured
@@ -275,6 +291,79 @@ def main() -> int:
                         }
                     )
             args.out.write_text(json.dumps(rows, indent=2))  # checkpoint after every cell
+
+        for name, ident, rate, params in SEPARATORS:
+            print(f"[snr={snr} separator={name} rate={rate}]", flush=True)
+            try:
+                fed = noisy if noisy.sampling_rate == rate else resample_audios([noisy], rate)[0]
+                model = HFModel(path_or_uri=ident, revision="main") if ident else None
+                sources = separate_audios([fed], model=model, n_sources=2, device=device, **params)[0]
+            except Exception as exc:
+                rows.append(
+                    {
+                        "snr": snr,
+                        "enhancer": name,
+                        "scope": "*",
+                        "reader": "*",
+                        "label": "*",
+                        "score": None,
+                        "status": f"separate failed: {exc}",
+                    }
+                )
+                print(f"    separate failed: {exc}", flush=True)
+                args.out.write_text(json.dumps(rows, indent=2))
+                continue
+
+            for idx, src in enumerate(sources):
+                row_name = f"{name}#src{idx}"
+                yam, hear, status = read(src)
+                for reader, windows in (("yamnet", yam), ("hear", hear)):
+                    if reader in status:
+                        rows.append(
+                            {
+                                "snr": snr,
+                                "enhancer": row_name,
+                                "scope": "*",
+                                "reader": reader,
+                                "label": "*",
+                                "score": None,
+                                "status": status[reader],
+                            }
+                        )
+                        continue
+                    for ev in EVENTS:
+                        if not ev[reader]:
+                            continue
+                        for label, score in peak_over(windows, ev[reader], ev["start"], ev["end"]).items():
+                            rows.append(
+                                {
+                                    "snr": snr,
+                                    "enhancer": row_name,
+                                    "scope": ev["name"],
+                                    "reader": reader,
+                                    "label": label,
+                                    "score": score,
+                                    "status": "ok",
+                                }
+                            )
+                    empty_labels = sorted({lab for ev in EVENTS for lab in ev[reader]})
+                    worst = {lab: 0.0 for lab in empty_labels}
+                    for a, b in EMPTY:
+                        for lab, sc in peak_over(windows, empty_labels, a, b).items():
+                            worst[lab] = max(worst[lab], sc)
+                    for label, score in worst.items():
+                        rows.append(
+                            {
+                                "snr": snr,
+                                "enhancer": row_name,
+                                "scope": "verified_empty",
+                                "reader": reader,
+                                "label": label,
+                                "score": score,
+                                "status": "ok",
+                            }
+                        )
+                args.out.write_text(json.dumps(rows, indent=2))
     print(f"wrote {len(rows)} rows to {args.out}", flush=True)
     return 0
 
