@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="generator" content="pdoc 16.0.0"/>
+    <title>senselab.audio.tasks.speaker_diarization API documentation</title>
+            <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
+
+    <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
+    <style>/*! syntax-highlighting.css */@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');body{font-family:'Roboto', sans-serif;}pre{line-height:1.5;font-family:'Roboto', sans-serif;}span.linenos{color:inherit;background-color:transparent;padding-left:5px;padding-right:20px;}.pdoc-code .hll{background-color:#ffffcc;}.pdoc-code{background:#f5f5f5;font-family:'Roboto Mono', monospace;}.pdoc-code .c{color:#6a737d;font-style:italic;}.pdoc-code .err{border:1px solid #ff0000;}.pdoc-code .k{color:#d73a49;font-weight:bold;}.pdoc-code .o{color:#6a737d;}.pdoc-code .ch{color:#6a737d;font-style:italic;}.pdoc-code .cm{color:#6a737d;font-style:italic;}.pdoc-code .cp{color:#999988;}.pdoc-code .cpf{color:#6a737d;font-style:italic;}.pdoc-code .c1{color:#6a737d;font-style:italic;}.pdoc-code .cs{color:#6a737d;font-style:italic;}.pdoc-code .gd{color:#a00000;}.pdoc-code .ge{font-style:italic;}.pdoc-code .gr{color:#e40000;}.pdoc-code .gh{color:#005cc5;font-weight:bold;}.pdoc-code .gi{color:#22863a;}.pdoc-code .go{color:#6a737d;}.pdoc-code .gp{color:#005cc5;font-weight:bold;}.pdoc-code .gs{font-weight:bold;}.pdoc-code .gu{color:#005cc5;font-weight:bold;}.pdoc-code .gt{color:#d73a49;}.pdoc-code .kc{color:#d73a49;font-weight:bold;}.pdoc-code .kd{color:#d73a49;font-weight:bold;}.pdoc-code .kn{color:#d73a49;font-weight:bold;}.pdoc-code .kp{color:#d73a49;}.pdoc-code .kr{color:#d73a49;font-weight:bold;}.pdoc-code .kt{color:#b31d28;}.pdoc-code .m{color:#005cc5;}.pdoc-code .s{color:#032f62;}.pdoc-code .na{color:#6f42c1;}.pdoc-code .nb{color:#d73a49;}.pdoc-code .nc{color:#005cc5;font-weight:bold;}.pdoc-code .no{color:#d73a49;}.pdoc-code .nd{color:#6f42c1;}.pdoc-code .ni{color:#6a737d;font-weight:bold;}.pdoc-code .ne{color:#e36209;font-weight:bold;}.pdoc-code .nf{color:#005cc5;}.pdoc-code .nl{color:#6a737d;}.pdoc-code .nn{color:#005cc5;font-weight:bold;}.pdoc-code .nt{color:#22863a;font-weight:bold;}.pdoc-code .nv{color:#e36209;}.pdoc-code .ow{color:#d73a49;font-weight:bold;}.pdoc-code .w{color:#bbbbbb;}.pdoc-code .mb{color:#005cc5;}.pdoc-code .mf{color:#005cc5;}.pdoc-code .mh{color:#005cc5;}.pdoc-code .mi{color:#005cc5;}.pdoc-code .mo{color:#005cc5;}.pdoc-code .sa{color:#032f62;}.pdoc-code .sb{color:#032f62;}.pdoc-code .sc{color:#032f62;}.pdoc-code .dl{color:#032f62;}.pdoc-code .sd{color:#032f62;font-style:italic;}.pdoc-code .s2{color:#032f62;}.pdoc-code .se{color:#005cc5;font-weight:bold;}.pdoc-code .sh{color:#032f62;}.pdoc-code .si{color:#6a737d;font-weight:bold;}.pdoc-code .sx{color:#22863a;}.pdoc-code .sr{color:#6a737d;}.pdoc-code .s1{color:#032f62;}.pdoc-code .ss{color:#22863a;}.pdoc-code .bp{color:#d73a49;}.pdoc-code .fm{color:#005cc5;}.pdoc-code .vc{color:#e36209;}.pdoc-code .vg{color:#e36209;}.pdoc-code .vi{color:#e36209;}.pdoc-code .vm{color:#e36209;}.pdoc-code .il{color:#005cc5;}.tutorial-button{background-color:#3660a5;border:1px solid #3660a5;color:white;padding:5px 10px;text-align:center;text-decoration:none;display:inline-block;font-size:16px;margin:4px 2px;cursor:pointer;border-radius:12px;transition-duration:0.4s;}.tutorial-button:hover{background-color:white;color:black;border:1px solid #3660a5;}@media (prefers-color-scheme:dark){pre{line-height:1.5;font-family:'Roboto', sans-serif;}span.linenos{color:inherit;background-color:transparent;padding-left:5px;padding-right:20px;}.pdoc-code .hll{background-color:#49483e;}.pdoc-code{background:#272822;color:#f8f8f2;font-family:'Roboto Mono', monospace;}.pdoc-code .c{color:#75715e;}.pdoc-code .err{color:#960050;background-color:#1e0010;}.pdoc-code .esc{color:#f8f8f2;}.pdoc-code .g{color:#f8f8f2;}.pdoc-code .k{color:#66d9ef;}.pdoc-code .l{color:#ae81ff;}.pdoc-code .n{color:#f8f8f2;}.pdoc-code .o{color:#f92672;}.pdoc-code .x{color:#f8f8f2;}.pdoc-code .p{color:#f8f8f2;}.pdoc-code .ch{color:#75715e;}.pdoc-code .cm{color:#75715e;}.pdoc-code .cp{color:#75715e;}.pdoc-code .cpf{color:#75715e;}.pdoc-code .c1{color:#75715e;}.pdoc-code .cs{color:#75715e;}.pdoc-code .gd{color:#f92672;}.pdoc-code .ge{color:#f8f8f2;font-style:italic;}.pdoc-code .gr{color:#f8f8f2;}.pdoc-code .gh{color:#f8f8f2;}.pdoc-code .gi{color:#a6e22e;}.pdoc-code .go{color:#66d9ef;}.pdoc-code .gp{color:#f92672;font-weight:bold;}.pdoc-code .gs{color:#f8f8f2;font-weight:bold;}.pdoc-code .gu{color:#75715e;}.pdoc-code .gt{color:#f8f8f2;}.pdoc-code .kc{color:#66d9ef;}.pdoc-code .kd{color:#66d9ef;}.pdoc-code .kn{color:#f92672;}.pdoc-code .kp{color:#66d9ef;}.pdoc-code .kr{color:#66d9ef;}.pdoc-code .kt{color:#66d9ef;}.pdoc-code .ld{color:#e6db74;}.pdoc-code .m{color:#ae81ff;}.pdoc-code .s{color:#e6db74;}.pdoc-code .na{color:#a6e22e;}.pdoc-code .nb{color:#f8f8f2;}.pdoc-code .nc{color:#a6e22e;}.pdoc-code .no{color:#66d9ef;}.pdoc-code .nd{color:#a6e22e;}.pdoc-code .ni{color:#f8f8f2;}.pdoc-code .ne{color:#a6e22e;}.pdoc-code .nf{color:#a6e22e;}.pdoc-code .nl{color:#f8f8f2;}.pdoc-code .nn{color:#f8f8f2;}.pdoc-code .nx{color:#a6e22e;}.pdoc-code .py{color:#f8f8f2;}.pdoc-code .nt{color:#f92672;}.pdoc-code .nv{color:#f8f8f2;}.pdoc-code .ow{color:#f92672;}.pdoc-code .w{color:#f8f8f2;}.pdoc-code .mb{color:#ae81ff;}.pdoc-code .mf{color:#ae81ff;}.pdoc-code .mh{color:#ae81ff;}.pdoc-code .mi{color:#ae81ff;}.pdoc-code .mo{color:#ae81ff;}.pdoc-code .sa{color:#e6db74;}.pdoc-code .sb{color:#e6db74;}.pdoc-code .sc{color:#e6db74;}.pdoc-code .dl{color:#e6db74;}.pdoc-code .sd{color:#e6db74;font-style:italic;}.pdoc-code .s2{color:#e6db74;}.pdoc-code .se{color:#ae81ff;}.pdoc-code .sh{color:#e6db74;}.pdoc-code .si{color:#e6db74;}.pdoc-code .sx{color:#e6db74;}.pdoc-code .sr{color:#e6db74;}.pdoc-code .s1{color:#e6db74;}.pdoc-code .ss{color:#e6db74;}.pdoc-code .bp{color:#f8f8f2;}.pdoc-code .fm{color:#a6e22e;}.pdoc-code .vc{color:#f8f8f2;}.pdoc-code .vg{color:#f8f8f2;}.pdoc-code .vi{color:#f8f8f2;}.pdoc-code .vm{color:#f8f8f2;}}.pdoc-button.module-list-button{background-color:#0072b2;color:#ffffff !important;border:2px solid #0072b2;padding:10px 20px;font-size:16px;font-weight:500;text-align:center;cursor:pointer;transition:background-color 0.3s ease, border-color 0.3s ease;border-radius:20px; box-shadow:none; }.pdoc-button.module-list-button:hover{background-color:#005ea6;border-color:#005ea6;}</style>
+    <style>/*! theme.css */:root{--pdoc-background:#ffffff;}.pdoc{--text:#000000; --muted:#6d6d6d; --link:#0072b2; --link-hover:#004d80; --code:#f5f5f5; --active:#ffd700; --accent:#3989b529; --accent2:#b3b3b3; --nav-hover:rgba(245, 245, 245, 0.5); --name:#d55e00; --def:#009e73; --annotation:#cc79a7; }@media (prefers-color-scheme:dark){:root{--pdoc-background:#202020; }.pdoc{--text:#e0e0e0; --muted:#a0a0a0; --link:#56b4e9; --link-hover:#1f78b4; --code:#2a2a2a; --active:#ffd700; --accent:#3a3a3a; --accent2:#555555; --nav-hover:rgba(50, 50, 50, 0.5); --name:#e69f00; --def:#009e73; --annotation:#f0e442; }}</style>
+    <style>/*! layout.css */html, body{width:100%;height:100%;}html, main{scroll-behavior:smooth;}body{background-color:var(--pdoc-background);}@media (max-width:769px){#navtoggle{cursor:pointer;position:absolute;width:50px;height:40px;top:1rem;right:1rem;border-color:var(--text);color:var(--text);display:flex;opacity:0.8;z-index:999;}#navtoggle:hover{opacity:1;}#togglestate + div{display:none;}#togglestate:checked + div{display:inherit;}main, header{padding:2rem 3vw;}header + main{margin-top:-3rem;}.git-button{display:none !important;}nav input[type="search"]{max-width:77%;}nav input[type="search"]:first-child{margin-top:-6px;}nav input[type="search"]:valid ~ *{display:none !important;}}@media (min-width:770px){:root{--sidebar-width:clamp(12.5rem, 28vw, 22rem);}nav{position:fixed;overflow:auto;height:100vh;width:var(--sidebar-width);}main, header{padding:3rem 2rem 3rem calc(var(--sidebar-width) + 3rem);width:calc(54rem + var(--sidebar-width));max-width:100%;}header + main{margin-top:-4rem;}#navtoggle{display:none;}}#togglestate{position:absolute;height:0;opacity:0;}nav.pdoc{--pad:clamp(0.5rem, 2vw, 1.75rem);--indent:1.5rem;background-color:var(--accent);border-right:1px solid var(--accent2);box-shadow:0 0 20px rgba(50, 50, 50, .2) inset;padding:0 0 0 var(--pad);overflow-wrap:anywhere;scrollbar-width:thin; scrollbar-color:var(--accent2) transparent; z-index:1}nav.pdoc::-webkit-scrollbar{width:.4rem; }nav.pdoc::-webkit-scrollbar-thumb{background-color:var(--accent2); }nav.pdoc > div{padding:var(--pad) 0;}nav.pdoc .module-list-button{display:inline-flex;align-items:center;color:var(--text);border-color:var(--muted);margin-bottom:1rem;}nav.pdoc .module-list-button:hover{border-color:var(--text);}nav.pdoc input[type=search]{display:block;outline-offset:0;width:calc(100% - var(--pad));}nav.pdoc .logo{max-width:calc(100% - var(--pad));max-height:35vh;display:block;margin:0 auto 1rem;transform:translate(calc(-.5 * var(--pad)), 0);}nav.pdoc ul{list-style:none;padding-left:0;}nav.pdoc > div > ul{margin-left:calc(0px - var(--pad));}nav.pdoc li a{padding:.2rem 0 .2rem calc(var(--pad) + var(--indent));}nav.pdoc > div > ul > li > a{padding-left:var(--pad);}nav.pdoc li{transition:all 100ms;}nav.pdoc li:hover{background-color:var(--nav-hover);}nav.pdoc a, nav.pdoc a:hover{color:var(--text);}nav.pdoc a{display:block;}nav.pdoc > h2:first-of-type{margin-top:1.5rem;}nav.pdoc .class:before{content:"class ";color:var(--muted);}nav.pdoc .function:after{content:"()";color:var(--muted);}nav.pdoc footer:before{content:"";display:block;width:calc(100% - var(--pad));border-top:solid var(--accent2) 1px;margin-top:1.5rem;padding-top:.5rem;}nav.pdoc footer{font-size:small;}</style>
+    <style>/*! content.css */.pdoc{color:var(--text);box-sizing:border-box;line-height:1.5;background:none;}.pdoc .pdoc-button{cursor:pointer;display:inline-block;border:solid black 1px;border-radius:2px;font-size:.75rem;padding:calc(0.5em - 1px) 1em;transition:100ms all;}.pdoc .alert{padding:1rem 1rem 1rem calc(1.5rem + 24px);border:1px solid transparent;border-radius:.25rem;background-repeat:no-repeat;background-position:.75rem center;margin-bottom:1rem;}.pdoc .alert > em{display:none;}.pdoc .alert > *:last-child{margin-bottom:0;}.pdoc .alert.note{color:#084298;background-color:#cfe2ff;border-color:#b6d4fe;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23084298%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8%2016A8%208%200%201%200%208%200a8%208%200%200%200%200%2016zm.93-9.412-1%204.705c-.07.34.029.533.304.533.194%200%20.487-.07.686-.246l-.088.416c-.287.346-.92.598-1.465.598-.703%200-1.002-.422-.808-1.319l.738-3.468c.064-.293.006-.399-.287-.47l-.451-.081.082-.381%202.29-.287zM8%205.5a1%201%200%201%201%200-2%201%201%200%200%201%200%202z%22/%3E%3C/svg%3E");}.pdoc .alert.tip{color:#0a3622;background-color:#d1e7dd;border-color:#a3cfbb;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%230a3622%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M2%206a6%206%200%201%201%2010.174%204.31c-.203.196-.359.4-.453.619l-.762%201.769A.5.5%200%200%201%2010.5%2013a.5.5%200%200%201%200%201%20.5.5%200%200%201%200%201l-.224.447a1%201%200%200%201-.894.553H6.618a1%201%200%200%201-.894-.553L5.5%2015a.5.5%200%200%201%200-1%20.5.5%200%200%201%200-1%20.5.5%200%200%201-.46-.302l-.761-1.77a2%202%200%200%200-.453-.618A5.98%205.98%200%200%201%202%206m6-5a5%205%200%200%200-3.479%208.592c.263.254.514.564.676.941L5.83%2012h4.342l.632-1.467c.162-.377.413-.687.676-.941A5%205%200%200%200%208%201%22/%3E%3C/svg%3E");}.pdoc .alert.important{color:#055160;background-color:#cff4fc;border-color:#9eeaf9;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23055160%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M2%200a2%202%200%200%200-2%202v12a2%202%200%200%200%202%202h12a2%202%200%200%200%202-2V2a2%202%200%200%200-2-2zm6%204c.535%200%20.954.462.9.995l-.35%203.507a.552.552%200%200%201-1.1%200L7.1%204.995A.905.905%200%200%201%208%204m.002%206a1%201%200%201%201%200%202%201%201%200%200%201%200-2%22/%3E%3C/svg%3E");}.pdoc .alert.warning{color:#664d03;background-color:#fff3cd;border-color:#ffecb5;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23664d03%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M8.982%201.566a1.13%201.13%200%200%200-1.96%200L.165%2013.233c-.457.778.091%201.767.98%201.767h13.713c.889%200%201.438-.99.98-1.767L8.982%201.566zM8%205c.535%200%20.954.462.9.995l-.35%203.507a.552.552%200%200%201-1.1%200L7.1%205.995A.905.905%200%200%201%208%205zm.002%206a1%201%200%201%201%200%202%201%201%200%200%201%200-2z%22/%3E%3C/svg%3E");}.pdoc .alert.caution{color:#842029;background-color:#f8d7da;border-color:#f5c2c7;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23842029%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M11.46.146A.5.5%200%200%200%2011.107%200H4.893a.5.5%200%200%200-.353.146L.146%204.54A.5.5%200%200%200%200%204.893v6.214a.5.5%200%200%200%20.146.353l4.394%204.394a.5.5%200%200%200%20.353.146h6.214a.5.5%200%200%200%20.353-.146l4.394-4.394a.5.5%200%200%200%20.146-.353V4.893a.5.5%200%200%200-.146-.353zM8%204c.535%200%20.954.462.9.995l-.35%203.507a.552.552%200%200%201-1.1%200L7.1%204.995A.905.905%200%200%201%208%204m.002%206a1%201%200%201%201%200%202%201%201%200%200%201%200-2%22/%3E%3C/svg%3E");}.pdoc .alert.danger{color:#842029;background-color:#f8d7da;border-color:#f5c2c7;background-image:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20fill%3D%22%23842029%22%20viewBox%3D%220%200%2016%2016%22%3E%3Cpath%20d%3D%22M5.52.359A.5.5%200%200%201%206%200h4a.5.5%200%200%201%20.474.658L8.694%206H12.5a.5.5%200%200%201%20.395.807l-7%209a.5.5%200%200%201-.873-.454L6.823%209.5H3.5a.5.5%200%200%201-.48-.641l2.5-8.5z%22/%3E%3C/svg%3E");}.pdoc .visually-hidden{position:absolute !important;width:1px !important;height:1px !important;padding:0 !important;margin:-1px !important;overflow:hidden !important;clip:rect(0, 0, 0, 0) !important;white-space:nowrap !important;border:0 !important;}.pdoc h1, .pdoc h2, .pdoc h3{font-weight:300;margin:.3em 0;padding:.2em 0;}.pdoc > section:not(.module-info) h1{font-size:1.5rem;font-weight:500;}.pdoc > section:not(.module-info) h2{font-size:1.4rem;font-weight:500;}.pdoc > section:not(.module-info) h3{font-size:1.3rem;font-weight:500;}.pdoc > section:not(.module-info) h4{font-size:1.2rem;}.pdoc > section:not(.module-info) h5{font-size:1.1rem;}.pdoc a{text-decoration:none;color:var(--link);}.pdoc a:hover{color:var(--link-hover);}.pdoc blockquote{margin-left:2rem;}.pdoc pre{border-top:1px solid var(--accent2);border-bottom:1px solid var(--accent2);margin-top:0;margin-bottom:1em;padding:.5rem 0 .5rem .5rem;overflow-x:auto;background-color:var(--code);}.pdoc code{color:var(--text);padding:.2em .4em;margin:0;font-size:85%;background-color:var(--accent);border-radius:6px;}.pdoc a > code{color:inherit;}.pdoc pre > code{display:inline-block;font-size:inherit;background:none;border:none;padding:0;}.pdoc > section:not(.module-info){margin-bottom:1.5rem;}.pdoc .modulename{margin-top:0;font-weight:bold;}.pdoc .modulename a{color:var(--link);transition:100ms all;}.pdoc .git-button{float:right;border:solid var(--link) 1px;}.pdoc .git-button:hover{background-color:var(--link);color:var(--pdoc-background);}.view-source-toggle-state,.view-source-toggle-state ~ .pdoc-code{display:none;}.view-source-toggle-state:checked ~ .pdoc-code{display:block;}.view-source-button{display:inline-block;float:right;font-size:.75rem;line-height:1.5rem;color:var(--muted);padding:0 .4rem 0 1.3rem;cursor:pointer;text-indent:-2px;}.view-source-button > span{visibility:hidden;}.module-info .view-source-button{float:none;display:flex;justify-content:flex-end;margin:-1.2rem .4rem -.2rem 0;}.view-source-button::before{position:absolute;content:"View Source";display:list-item;list-style-type:disclosure-closed;}.view-source-toggle-state:checked ~ .attr .view-source-button::before,.view-source-toggle-state:checked ~ .view-source-button::before{list-style-type:disclosure-open;}.pdoc .docstring{margin-bottom:1.5rem;}.pdoc section:not(.module-info) .docstring{margin-left:clamp(0rem, 5vw - 2rem, 1rem);}.pdoc .docstring .pdoc-code{margin-left:1em;margin-right:1em;}.pdoc h1:target,.pdoc h2:target,.pdoc h3:target,.pdoc h4:target,.pdoc h5:target,.pdoc h6:target,.pdoc .pdoc-code > pre > span:target{background-color:var(--active);box-shadow:-1rem 0 0 0 var(--active);}.pdoc .pdoc-code > pre > span:target{display:block;}.pdoc div:target > .attr,.pdoc section:target > .attr,.pdoc dd:target > a{background-color:var(--active);}.pdoc *{scroll-margin:2rem;}.pdoc .pdoc-code .linenos{user-select:none;}.pdoc .attr:hover{filter:contrast(0.95);}.pdoc section, .pdoc .classattr{position:relative;}.pdoc .headerlink{--width:clamp(1rem, 3vw, 2rem);position:absolute;top:0;left:calc(0rem - var(--width));transition:all 100ms ease-in-out;opacity:0;}.pdoc .headerlink::before{content:"#";display:block;text-align:center;width:var(--width);height:2.3rem;line-height:2.3rem;font-size:1.5rem;}.pdoc .attr:hover ~ .headerlink,.pdoc *:target > .headerlink,.pdoc .headerlink:hover{opacity:1;}.pdoc .attr{display:block;margin:.5rem 0 .5rem;padding:.4rem .4rem .4rem 1rem;background-color:var(--accent);overflow-x:auto;}.pdoc .classattr{margin-left:2rem;}.pdoc .decorator-deprecated{color:#842029;}.pdoc .decorator-deprecated ~ span{filter:grayscale(1) opacity(0.8);}.pdoc .name{color:var(--name);font-weight:bold;}.pdoc .def{color:var(--def);font-weight:bold;}.pdoc .signature{background-color:transparent;}.pdoc .param, .pdoc .return-annotation{white-space:pre;}.pdoc .signature.multiline .param{display:block;}.pdoc .signature.condensed .param{display:inline-block;}.pdoc .annotation{color:var(--annotation);}.pdoc .view-value-toggle-state,.pdoc .view-value-toggle-state ~ .default_value{display:none;}.pdoc .view-value-toggle-state:checked ~ .default_value{display:inherit;}.pdoc .view-value-button{font-size:.5rem;vertical-align:middle;border-style:dashed;margin-top:-0.1rem;}.pdoc .view-value-button:hover{background:white;}.pdoc .view-value-button::before{content:"show";text-align:center;width:2.2em;display:inline-block;}.pdoc .view-value-toggle-state:checked ~ .view-value-button::before{content:"hide";}.pdoc .inherited{margin-left:2rem;}.pdoc .inherited dt{font-weight:700;}.pdoc .inherited dt, .pdoc .inherited dd{display:inline;margin-left:0;margin-bottom:.5rem;}.pdoc .inherited dd:not(:last-child):after{content:", ";}.pdoc .inherited .class:before{content:"class ";}.pdoc .inherited .function a:after{content:"()";}.pdoc .search-result .docstring{overflow:auto;max-height:25vh;}.pdoc .search-result.focused > .attr{background-color:var(--active);}.pdoc .attribution{margin-top:2rem;display:block;opacity:0.5;transition:all 200ms;filter:grayscale(100%);}.pdoc .attribution:hover{opacity:1;filter:grayscale(0%);}.pdoc .attribution img{margin-left:5px;height:27px;vertical-align:bottom;width:50px;transition:all 200ms;}.pdoc table{display:block;width:max-content;max-width:100%;overflow:auto;margin-bottom:1rem;}.pdoc table th{font-weight:600;}.pdoc table th, .pdoc table td{padding:6px 13px;border:1px solid var(--accent2);}</style>
+    <style>/*! custom.css */</style></head>
+<body>
+    <nav class="pdoc">
+        <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
+        <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
+        <div>            <a class="pdoc-button module-list-button" href="../tasks.html">
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
+  <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
+  <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
+</svg>                &nbsp;senselab.audio.tasks</a>
+
+
+            <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
+                   pattern=".+" required>
+
+            <h2>Contents</h2>
+            <ul>
+  <li><a href="#speaker-diarization">Speaker diarization</a>
+  <ul>
+    <li><a href="#task-overview">Task Overview</a></li>
+    <li><a href="#models">Models</a></li>
+    <li><a href="#evaluation">Evaluation</a></li>
+  </ul></li>
+</ul>
+
+
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#diarize_audios">diarize_audios</a>
+            </li>
+            <li>
+                    <a class="function" href="#capabilities_for">capabilities_for</a>
+            </li>
+            <li>
+                    <a class="class" href="#DiarizationCapabilities">DiarizationCapabilities</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#DiarizationCapabilities.__init__">DiarizationCapabilities</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#DiarizationCapabilities.populates_text">populates_text</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#DiarizationCapabilities.speaker_label_kind">speaker_label_kind</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#DiarizationCapabilities.labels_stable_across_files">labels_stable_across_files</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#DiarizationCapabilities.max_speakers">max_speakers</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#DiarizationCapabilities.max_speakers_evidence">max_speakers_evidence</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#DiarizationCapabilities.honors_speaker_hints">honors_speaker_hints</a>
+                        </li>
+                </ul>
+
+            </li>
+    </ul>
+
+
+
+        <a class="attribution" title="pdoc: Python API documentation generator" href="https://pdoc.dev" target="_blank">
+            built with <span class="visually-hidden">pdoc</span><img
+                alt="pdoc logo"
+                src="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20role%3D%22img%22%20aria-label%3D%22pdoc%20logo%22%20width%3D%22300%22%20height%3D%22160%22%20viewBox%3D%220%200%20150%2080%22%3E%3Ctitle%3Epdoc%3C/title%3E%3Cpath%20d%3D%22M132.316%2048.886c.276-4.679%202.342-6.698%204.409-7.982s4.27-1.165%206.751-1.055c1.586.07%203.044.156%204.222-.482%201.142-.619%202.026-1.932%202.162-3.739.268-3.576-1.929-5.368-5.006-5.551s-7.599.524-10.517%201.606c-4.455%201.652-8.588%206.606-9.552%208.992s-2.342%206.193-1.745%2010.873%202.664%209.221%205.878%2011.79%205.878%203.808%2010.103%204.312%203.444.229%206.062.229%205.006-2.202%204.914-4.909-2.296-5.001-4.501-4.863-3.077.505-5.281.229-7.715-2.064-7.899-9.451z%22%20fill%3D%22%23198754%22/%3E%3Ccircle%20cx%3D%22101.504%22%20cy%3D%2248.943%22%20r%3D%2214.208%22%20fill%3D%22none%22%20stroke%3D%22%23198754%22%20stroke-width%3D%229.354%22/%3E%3Cpath%20d%3D%22M87.81.002c-3.637.065-5.001.454-7.014%201.232s-3.443%201.363-6.3%204.282c-1.723%201.76-3.148%205.019-3.776%207.329-.413%201.521-.316%202.63-.316%202.63l-.195%2034.612c.065%205.774-6.755%208.305-9.612%208.37s-9.678-1.038-9.743-9.408%207.128-9.521%208.362-9.521c1.413-.13%202.526-.021%203.718-.016%202.071.009%204.157-.778%204.092-4.671s-4.157-4.736-4.157-4.736c-6.3-.843-11.43%202.206-11.43%202.206S40.917%2038.15%2041.372%2049.634%2051.568%2068.19%2061.311%2068.125s18.316-7.007%2018.445-17.193l.13-22.772c.046-2.291%202.683-3.644%204.476-4.203.745-.232%201.694-.274%201.694-.274l10.457-.13s4.871-.324%207.729-3.114%204.352-6.294%204.352-6.294.974-3.049.13-4.606-.195-1.233-2.792-3.309-8.573-4.477-8.573-4.477S91.447-.063%2087.81.002zM0%2047.169l.065%2028.417S0%2080.127%204.481%2079.997s5.072-3.866%205.049-4.152l-.113-28.482s1.624-7.656%209.937-7.721%2010.002%206.942%2010.002%208.499-.909%2010.51-9.093%2010.51c-.948%200-2.99-.567-4.145-.272-3.919%201-3.194%204.554-3.194%204.554s.065%205.061%207.404%204.996%2018.575-6.034%2018.575-19.074S26.953%2030.04%2019.549%2029.91%201.234%2035.296%200%2047.169z%22%20fill%3D%22%23198754%22/%3E%3Cg%20transform%3D%22matrix%28.325601%200%200%20.325256%20-10.32669%20-45.802786%29%22%3E%3Ccircle%20cx%3D%22297.554%22%20cy%3D%22172.286%22%20r%3D%2216.5%22%20fill%3D%22%23fff%22/%3E%3Cellipse%20cx%3D%22297.709%22%20cy%3D%22172.642%22%20rx%3D%2211.071%22%20ry%3D%2210.871%22%20fill%3D%22%23105a48%22/%3E%3Ccircle%20cx%3D%22304.104%22%20cy%3D%22167.667%22%20r%3D%224.5%22%20fill%3D%22%23fff%22/%3E%3C/g%3E%3Cpath%20d%3D%22M94.661%2017.032l.893-1.476s.99.714%201.916.925%201.575.114%202.955.114l14.565-.162c1.283-.032%203.085-.762%203.02-3.293s-.373-3.503-.373-3.503l1.283-.487s.52.503.877%201.573.309%201.995.292%202.66-.227%201.541-.227%201.541%201.564-.308%202.359-1.038.823-.779%201.489-1.508.812-.86.812-.86.552-.13.877.26.341.957.065%201.46-1.672%202.206-3.247%203.066-2.76%201.427-3.929%201.768-3.848.73-7.063.714l-10.944-.114s-2.143-.081-3.02-.373-2.241-.973-2.598-1.265z%22%20fill%3D%22%23d36d49%22/%3E%3Cg%20fill%3D%22%23105a48%22%3E%3Cellipse%20cx%3D%2293.052%22%20cy%3D%2243.567%22%20rx%3D%22.869%22%20ry%3D%221.014%22%20transform%3D%22rotate%28341.022%29%22/%3E%3Cellipse%20cx%3D%22104.3%22%20cy%3D%22-16.184%22%20rx%3D%22.865%22%20ry%3D%221.009%22%20transform%3D%22rotate%2814.786%29%22/%3E%3C/g%3E%3C/svg%3E"/>
+        </a>
+</div>
+    </nav>
+    <main class="pdoc">
+            <section class="module-info">
+                    <h1 class="modulename">
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.speaker_diarization    </h1>
+
+                        <div class="docstring"><h1 id="speaker-diarization">Speaker diarization</h1>
+
+<p><a href="https://github.com/sensein/senselab/blob/main/tutorials/audio/speaker_diarization.ipynb"><img src="https://img.shields.io/badge/Tutorial-Click%20Here-blue?style=for-the-badge" alt="Tutorial" /></a></p>
+
+<h2 id="task-overview">Task Overview</h2>
+
+<p>Speaker diarization is the process of segmenting audio recordings by speaker labels, aiming to answer the question: <strong>"Who spoke when?"</strong></p>
+
+<h2 id="models">Models</h2>
+
+<p>All supported models (<a href="https://github.com/pyannote/pyannote-audio">pyannote.audio</a> models from <a href="https://huggingface.co/pyannote">Hugging Face Hub</a> and the <a href="https://huggingface.co/nvidia/diar_sortformer_4spk-v1">NVIDIA nemo softformer</a>) provide state-of-the-art diarization and can be used as follows:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../data_structures.html">senselab.audio.data_structures</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">Audio</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../../utils/data_structures/model.html">senselab.utils.data_structures.model</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">HFModel</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.speaker_diarization.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">diarize_audios</span>
+
+<span class="n">audio</span> <span class="o">=</span> <span class="n">Audio</span><span class="p">(</span><span class="n">filepath</span><span class="o">=</span><span class="s2">&quot;path/to/audio_48khz_mono_16bits.wav&quot;</span><span class="p">)</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;nvidia/diar_sortformer_4spk-v1&quot;</span><span class="p">)</span>
+<span class="n">results</span> <span class="o">=</span> <span class="n">diarize_audios</span><span class="p">([</span><span class="n">audio</span><span class="p">],</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">)</span>
+<span class="c1"># results is a list of lists of ScriptLine objects, e.g.:</span>
+<span class="c1"># [[ScriptLine(speaker=&quot;speaker_0&quot;, start=0.08, end=4.95), ...]]</span>
+</code></pre>
+</div>
+
+<p>We may integrate additional approaches for speaker diarization into the package in the future.</p>
+
+<h2 id="evaluation">Evaluation</h2>
+
+<h3 id="metrics">Metrics</h3>
+
+<p>The <strong>Diarization Error Rate (DER)</strong> is the standard metric for evaluating and comparing speaker diarization systems. It is defined as:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>DER= (false alarm + missed detection + confusion) / total
+</code></pre>
+</div>
+
+<p>where</p>
+
+<ul>
+<li><code>false alarm</code> is the duration of non-speech incorrectly classified as speech, missed detection</li>
+<li><code>missed detection</code> is the duration of speech incorrectly classified as non-speech, confusion</li>
+<li><code>confusion</code> is the duration of speaker confusion, and total</li>
+<li><code>total</code> is the sum over all speakers of their reference speech duration.</li>
+</ul>
+
+<p><strong>Note:</strong> DER takes overlapping speech into account. This can lead to increased missed detection rates if the speaker diarization system does not include an overlapping speech detection module.</p>
+
+<h3 id="benchmark">Benchmark</h3>
+
+<p>You can find a benchmark of the latest pyannote.audio model's performance on various time-stamped speech datasets <a href="https://github.com/pyannote/pyannote-audio?tab=readme-ov-file#benchmark">here</a>.</p>
+</div>
+
+                        <input id="mod-speaker_diarization-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+
+                        <label class="view-source-button" for="mod-speaker_diarization-view-source"><span>View Source</span></label>
+
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">capabilities_for</span><span class="p">,</span> <span class="n">diarize_audios</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.capabilities</span><span class="w"> </span><span class="kn">import</span> <span class="n">DiarizationCapabilities</span>  <span class="c1"># noqa: F401</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">6</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;diarize_audios&quot;</span><span class="p">,</span> <span class="s2">&quot;capabilities_for&quot;</span><span class="p">,</span> <span class="s2">&quot;DiarizationCapabilities&quot;</span><span class="p">]</span>
+</span></pre></div>
+
+
+            </section>
+                <section id="diarize_audios">
+                            <input id="diarize_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.speaker_diarization.diarize_audios&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">diarize_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">num_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">min_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">exclusive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>,</span><span class="param">	<span class="n">max_new_tokens</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span><span class="p">]]</span>:</span></span>
+
+                <label class="view-source-button" for="diarize_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#diarize_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="diarize_audios-65"><a href="#diarize_audios-65"><span class="linenos"> 65</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.speaker_diarization.diarize_audios&quot;</span><span class="p">)</span>
+</span><span id="diarize_audios-66"><a href="#diarize_audios-66"><span class="linenos"> 66</span></a><span class="k">def</span><span class="w"> </span><span class="nf">diarize_audios</span><span class="p">(</span>
+</span><span id="diarize_audios-67"><a href="#diarize_audios-67"><span class="linenos"> 67</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="diarize_audios-68"><a href="#diarize_audios-68"><span class="linenos"> 68</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="diarize_audios-69"><a href="#diarize_audios-69"><span class="linenos"> 69</span></a>    <span class="n">num_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="diarize_audios-70"><a href="#diarize_audios-70"><span class="linenos"> 70</span></a>    <span class="n">min_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="diarize_audios-71"><a href="#diarize_audios-71"><span class="linenos"> 71</span></a>    <span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="diarize_audios-72"><a href="#diarize_audios-72"><span class="linenos"> 72</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="diarize_audios-73"><a href="#diarize_audios-73"><span class="linenos"> 73</span></a>    <span class="n">exclusive</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="diarize_audios-74"><a href="#diarize_audios-74"><span class="linenos"> 74</span></a>    <span class="n">max_new_tokens</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="diarize_audios-75"><a href="#diarize_audios-75"><span class="linenos"> 75</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">List</span><span class="p">[</span><span class="n">ScriptLine</span><span class="p">]]:</span>
+</span><span id="diarize_audios-76"><a href="#diarize_audios-76"><span class="linenos"> 76</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Diarize a batch of `Audio` objects, returning per-speaker time segments.</span>
+</span><span id="diarize_audios-77"><a href="#diarize_audios-77"><span class="linenos"> 77</span></a>
+</span><span id="diarize_audios-78"><a href="#diarize_audios-78"><span class="linenos"> 78</span></a><span class="sd">    Supports **Pyannote** (default), **NVIDIA Sortformer**, **VibeVoice-ASR-HF**,</span>
+</span><span id="diarize_audios-79"><a href="#diarize_audios-79"><span class="linenos"> 79</span></a><span class="sd">    **USC-SAIL child-adult**, **MOSS-Transcribe-Diarize**, and **DiariZen**</span>
+</span><span id="diarize_audios-80"><a href="#diarize_audios-80"><span class="linenos"> 80</span></a><span class="sd">    (HF-identified) backends:</span>
+</span><span id="diarize_audios-81"><a href="#diarize_audios-81"><span class="linenos"> 81</span></a><span class="sd">    - If `model` is a `PyannoteAudioModel`, uses Pyannote (typically expects **mono, 16 kHz**).</span>
+</span><span id="diarize_audios-82"><a href="#diarize_audios-82"><span class="linenos"> 82</span></a><span class="sd">      Optional `num_speakers` or (`min_speakers`, `max_speakers`) are honored.</span>
+</span><span id="diarize_audios-83"><a href="#diarize_audios-83"><span class="linenos"> 83</span></a><span class="sd">    - If `model` is an `HFModel` and `model.path_or_uri` starts with `&quot;nvidia/diar_sortformer&quot;`,</span>
+</span><span id="diarize_audios-84"><a href="#diarize_audios-84"><span class="linenos"> 84</span></a><span class="sd">      uses NVIDIA Sortformer via an isolated subprocess venv (nvidia/diar_sortformer_4spk-v1</span>
+</span><span id="diarize_audios-85"><a href="#diarize_audios-85"><span class="linenos"> 85</span></a><span class="sd">      detects max **4 speakers**).</span>
+</span><span id="diarize_audios-86"><a href="#diarize_audios-86"><span class="linenos"> 86</span></a><span class="sd">    - If `model` is an `HFModel` and `model.path_or_uri` starts with `&quot;microsoft/VibeVoice-ASR&quot;`,</span>
+</span><span id="diarize_audios-87"><a href="#diarize_audios-87"><span class="linenos"> 87</span></a><span class="sd">      uses VibeVoice-ASR-HF in-process (``transformers&gt;=5.3``&#39;s</span>
+</span><span id="diarize_audios-88"><a href="#diarize_audios-88"><span class="linenos"> 88</span></a><span class="sd">      ``VibeVoiceAsrForConditionalGeneration``). Narrower than the bare `&quot;microsoft/VibeVoice&quot;`</span>
+</span><span id="diarize_audios-89"><a href="#diarize_audios-89"><span class="linenos"> 89</span></a><span class="sd">      prefix on purpose — `microsoft/VibeVoice-1.5B`/`-Large` are TTS checkpoints, not ASR.</span>
+</span><span id="diarize_audios-90"><a href="#diarize_audios-90"><span class="linenos"> 90</span></a><span class="sd">    - If `model` is an `HFModel` and `model.path_or_uri` starts with</span>
+</span><span id="diarize_audios-91"><a href="#diarize_audios-91"><span class="linenos"> 91</span></a><span class="sd">      `&quot;AlexXu811/whisper-child-adult&quot;`, uses the USC-SAIL child-adult classifier via an</span>
+</span><span id="diarize_audios-92"><a href="#diarize_audios-92"><span class="linenos"> 92</span></a><span class="sd">      isolated subprocess venv (speaker labels are `&quot;CHILD&quot;`/`&quot;ADULT&quot;`/`&quot;OVERLAP&quot;` — frames</span>
+</span><span id="diarize_audios-93"><a href="#diarize_audios-93"><span class="linenos"> 93</span></a><span class="sd">      classified as silence produce no segment — rather than speaker identities;</span>
+</span><span id="diarize_audios-94"><a href="#diarize_audios-94"><span class="linenos"> 94</span></a><span class="sd">      **CUDA only**, see ``child_adult.py``).</span>
+</span><span id="diarize_audios-95"><a href="#diarize_audios-95"><span class="linenos"> 95</span></a><span class="sd">    - If `model` is an `HFModel` and `model.path_or_uri` starts with</span>
+</span><span id="diarize_audios-96"><a href="#diarize_audios-96"><span class="linenos"> 96</span></a><span class="sd">      `&quot;OpenMOSS-Team/MOSS-Transcribe-Diarize&quot;`, uses MOSS-Transcribe-Diarize (0.9B, Apache 2.0)</span>
+</span><span id="diarize_audios-97"><a href="#diarize_audios-97"><span class="linenos"> 97</span></a><span class="sd">      via an isolated subprocess venv (needs ``transformers&gt;=5.6``, kept out of the core</span>
+</span><span id="diarize_audios-98"><a href="#diarize_audios-98"><span class="linenos"> 98</span></a><span class="sd">      environment — see ``moss.py``).</span>
+</span><span id="diarize_audios-99"><a href="#diarize_audios-99"><span class="linenos"> 99</span></a><span class="sd">    - If `model` is an `HFModel` and `model.path_or_uri` starts with `&quot;BUT-FIT/diarizen&quot;`,</span>
+</span><span id="diarize_audios-100"><a href="#diarize_audios-100"><span class="linenos">100</span></a><span class="sd">      uses DiariZen (WavLM-Conformer EEND + VBx clustering; diarization only, no</span>
+</span><span id="diarize_audios-101"><a href="#diarize_audios-101"><span class="linenos">101</span></a><span class="sd">      transcription) via an isolated subprocess venv that installs DiariZen&#39;s own</span>
+</span><span id="diarize_audios-102"><a href="#diarize_audios-102"><span class="linenos">102</span></a><span class="sd">      forked pyannote-audio — code MIT, but **model weights are CC BY-NC 4.0</span>
+</span><span id="diarize_audios-103"><a href="#diarize_audios-103"><span class="linenos">103</span></a><span class="sd">      (non-commercial only)**; see ``diarizen.py``.</span>
+</span><span id="diarize_audios-104"><a href="#diarize_audios-104"><span class="linenos">104</span></a>
+</span><span id="diarize_audios-105"><a href="#diarize_audios-105"><span class="linenos">105</span></a><span class="sd">    Args:</span>
+</span><span id="diarize_audios-106"><a href="#diarize_audios-106"><span class="linenos">106</span></a><span class="sd">        audios (list[Audio]):</span>
+</span><span id="diarize_audios-107"><a href="#diarize_audios-107"><span class="linenos">107</span></a><span class="sd">            Audio objects to diarize.</span>
+</span><span id="diarize_audios-108"><a href="#diarize_audios-108"><span class="linenos">108</span></a><span class="sd">        model (SenselabModel | None):</span>
+</span><span id="diarize_audios-109"><a href="#diarize_audios-109"><span class="linenos">109</span></a><span class="sd">            Diarization backend:</span>
+</span><span id="diarize_audios-110"><a href="#diarize_audios-110"><span class="linenos">110</span></a><span class="sd">              * ``PyannoteAudioModel(...)`` → Pyannote (default if ``None``).</span>
+</span><span id="diarize_audios-111"><a href="#diarize_audios-111"><span class="linenos">111</span></a><span class="sd">              * ``HFModel(path_or_uri=&quot;nvidia/diar_sortformer...&quot;)`` → NVIDIA Sortformer.</span>
+</span><span id="diarize_audios-112"><a href="#diarize_audios-112"><span class="linenos">112</span></a><span class="sd">              * ``HFModel(path_or_uri=&quot;microsoft/VibeVoice-ASR...&quot;)`` → VibeVoice-ASR-HF.</span>
+</span><span id="diarize_audios-113"><a href="#diarize_audios-113"><span class="linenos">113</span></a><span class="sd">              * ``HFModel(path_or_uri=&quot;AlexXu811/whisper-child-adult&quot;)`` → USC-SAIL child-adult.</span>
+</span><span id="diarize_audios-114"><a href="#diarize_audios-114"><span class="linenos">114</span></a><span class="sd">              * ``HFModel(path_or_uri=&quot;OpenMOSS-Team/MOSS-Transcribe-Diarize&quot;)`` → MOSS-Transcribe-Diarize.</span>
+</span><span id="diarize_audios-115"><a href="#diarize_audios-115"><span class="linenos">115</span></a><span class="sd">              * ``HFModel(path_or_uri=&quot;BUT-FIT/diarizen-wavlm-large-s80-md&quot;)`` → DiariZen.</span>
+</span><span id="diarize_audios-116"><a href="#diarize_audios-116"><span class="linenos">116</span></a><span class="sd">        num_speakers (int | None):</span>
+</span><span id="diarize_audios-117"><a href="#diarize_audios-117"><span class="linenos">117</span></a><span class="sd">            If known, fix the number of speakers (Pyannote only).</span>
+</span><span id="diarize_audios-118"><a href="#diarize_audios-118"><span class="linenos">118</span></a><span class="sd">        min_speakers (int | None):</span>
+</span><span id="diarize_audios-119"><a href="#diarize_audios-119"><span class="linenos">119</span></a><span class="sd">            Lower bound when estimating number of speakers (Pyannote only).</span>
+</span><span id="diarize_audios-120"><a href="#diarize_audios-120"><span class="linenos">120</span></a><span class="sd">        max_speakers (int | None):</span>
+</span><span id="diarize_audios-121"><a href="#diarize_audios-121"><span class="linenos">121</span></a><span class="sd">            Upper bound when estimating number of speakers (Pyannote only; ignored,</span>
+</span><span id="diarize_audios-122"><a href="#diarize_audios-122"><span class="linenos">122</span></a><span class="sd">            with a warning, by every other backend). NVIDIA Sortformer detects at</span>
+</span><span id="diarize_audios-123"><a href="#diarize_audios-123"><span class="linenos">123</span></a><span class="sd">            most 4 speakers regardless of this argument — that&#39;s a fixed model</span>
+</span><span id="diarize_audios-124"><a href="#diarize_audios-124"><span class="linenos">124</span></a><span class="sd">            limit, not something `max_speakers` raises or lowers.</span>
+</span><span id="diarize_audios-125"><a href="#diarize_audios-125"><span class="linenos">125</span></a><span class="sd">        device (DeviceType | None):</span>
+</span><span id="diarize_audios-126"><a href="#diarize_audios-126"><span class="linenos">126</span></a><span class="sd">            Preferred device (e.g., ``DeviceType.CPU``, ``DeviceType.CUDA``).</span>
+</span><span id="diarize_audios-127"><a href="#diarize_audios-127"><span class="linenos">127</span></a><span class="sd">        exclusive (bool):</span>
+</span><span id="diarize_audios-128"><a href="#diarize_audios-128"><span class="linenos">128</span></a><span class="sd">            Pyannote only. ``True`` (default) returns a partition, where concurrent speech has been</span>
+</span><span id="diarize_audios-129"><a href="#diarize_audios-129"><span class="linenos">129</span></a><span class="sd">            resolved away and no consumer can detect overlap. ``False`` returns the overlapping</span>
+</span><span id="diarize_audios-130"><a href="#diarize_audios-130"><span class="linenos">130</span></a><span class="sd">            view. Ignored by every other backend, none of which return an exclusive partition</span>
+</span><span id="diarize_audios-131"><a href="#diarize_audios-131"><span class="linenos">131</span></a><span class="sd">            regardless of this argument: NVIDIA Sortformer emits per-speaker activity and always</span>
+</span><span id="diarize_audios-132"><a href="#diarize_audios-132"><span class="linenos">132</span></a><span class="sd">            preserves concurrency; VibeVoice-ASR-HF and MOSS-Transcribe-Diarize emit whatever</span>
+</span><span id="diarize_audios-133"><a href="#diarize_audios-133"><span class="linenos">133</span></a><span class="sd">            segments their own transcript-parsing produces, with no partition step; DiariZen&#39;s</span>
+</span><span id="diarize_audios-134"><a href="#diarize_audios-134"><span class="linenos">134</span></a><span class="sd">            EEND + VBx pipeline emits genuinely overlapping turns by design; and the USC-SAIL</span>
+</span><span id="diarize_audios-135"><a href="#diarize_audios-135"><span class="linenos">135</span></a><span class="sd">            child-adult classifier emits an explicit ``OVERLAP`` label for frames it can&#39;t assign</span>
+</span><span id="diarize_audios-136"><a href="#diarize_audios-136"><span class="linenos">136</span></a><span class="sd">            to a single role. Unlike the speaker-count hints above, no warning is raised when</span>
+</span><span id="diarize_audios-137"><a href="#diarize_audios-137"><span class="linenos">137</span></a><span class="sd">            ``exclusive`` is passed to one of these — it defaults to ``True``, so there is no way</span>
+</span><span id="diarize_audios-138"><a href="#diarize_audios-138"><span class="linenos">138</span></a><span class="sd">            to tell an explicit pass from the default.</span>
+</span><span id="diarize_audios-139"><a href="#diarize_audios-139"><span class="linenos">139</span></a><span class="sd">        max_new_tokens (int | None):</span>
+</span><span id="diarize_audios-140"><a href="#diarize_audios-140"><span class="linenos">140</span></a><span class="sd">            Generation budget for the joint ASR+diarization backends</span>
+</span><span id="diarize_audios-141"><a href="#diarize_audios-141"><span class="linenos">141</span></a><span class="sd">            (VibeVoice-ASR-HF, MOSS-Transcribe-Diarize only — ignored otherwise).</span>
+</span><span id="diarize_audios-142"><a href="#diarize_audios-142"><span class="linenos">142</span></a><span class="sd">            ``None`` uses each backend&#39;s own default (4096). Raise this for</span>
+</span><span id="diarize_audios-143"><a href="#diarize_audios-143"><span class="linenos">143</span></a><span class="sd">            recordings long enough to risk truncated generation.</span>
+</span><span id="diarize_audios-144"><a href="#diarize_audios-144"><span class="linenos">144</span></a>
+</span><span id="diarize_audios-145"><a href="#diarize_audios-145"><span class="linenos">145</span></a><span class="sd">    Returns:</span>
+</span><span id="diarize_audios-146"><a href="#diarize_audios-146"><span class="linenos">146</span></a><span class="sd">        list[list[ScriptLine]]: One list per input audio; each `ScriptLine` carries</span>
+</span><span id="diarize_audios-147"><a href="#diarize_audios-147"><span class="linenos">147</span></a><span class="sd">        `speaker`, `start`, and `end`.</span>
+</span><span id="diarize_audios-148"><a href="#diarize_audios-148"><span class="linenos">148</span></a>
+</span><span id="diarize_audios-149"><a href="#diarize_audios-149"><span class="linenos">149</span></a><span class="sd">    Raises:</span>
+</span><span id="diarize_audios-150"><a href="#diarize_audios-150"><span class="linenos">150</span></a><span class="sd">        NotImplementedError: If an unsupported model type is passed.</span>
+</span><span id="diarize_audios-151"><a href="#diarize_audios-151"><span class="linenos">151</span></a>
+</span><span id="diarize_audios-152"><a href="#diarize_audios-152"><span class="linenos">152</span></a><span class="sd">    Example (Pyannote, default model, CPU):</span>
+</span><span id="diarize_audios-153"><a href="#diarize_audios-153"><span class="linenos">153</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="diarize_audios-154"><a href="#diarize_audios-154"><span class="linenos">154</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="diarize_audios-155"><a href="#diarize_audios-155"><span class="linenos">155</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType, PyannoteAudioModel</span>
+</span><span id="diarize_audios-156"><a href="#diarize_audios-156"><span class="linenos">156</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="diarize_audios-157"><a href="#diarize_audios-157"><span class="linenos">157</span></a><span class="sd">        &gt;&gt;&gt; a2 = Audio(filepath=Path(&quot;sample2.wav&quot;).resolve())</span>
+</span><span id="diarize_audios-158"><a href="#diarize_audios-158"><span class="linenos">158</span></a><span class="sd">        &gt;&gt;&gt; lines = diarize_audios([a1, a2], device=DeviceType.CPU)</span>
+</span><span id="diarize_audios-159"><a href="#diarize_audios-159"><span class="linenos">159</span></a><span class="sd">        &gt;&gt;&gt; len(lines) == 2</span>
+</span><span id="diarize_audios-160"><a href="#diarize_audios-160"><span class="linenos">160</span></a><span class="sd">        True</span>
+</span><span id="diarize_audios-161"><a href="#diarize_audios-161"><span class="linenos">161</span></a>
+</span><span id="diarize_audios-162"><a href="#diarize_audios-162"><span class="linenos">162</span></a><span class="sd">    Example (NVIDIA Sortformer via HF, CUDA):</span>
+</span><span id="diarize_audios-163"><a href="#diarize_audios-163"><span class="linenos">163</span></a><span class="sd">        &gt;&gt;&gt; from pathlib import Path</span>
+</span><span id="diarize_audios-164"><a href="#diarize_audios-164"><span class="linenos">164</span></a><span class="sd">        &gt;&gt;&gt; from senselab.audio.data_structures import Audio</span>
+</span><span id="diarize_audios-165"><a href="#diarize_audios-165"><span class="linenos">165</span></a><span class="sd">        &gt;&gt;&gt; from senselab.utils.data_structures import DeviceType, HFModel</span>
+</span><span id="diarize_audios-166"><a href="#diarize_audios-166"><span class="linenos">166</span></a><span class="sd">        &gt;&gt;&gt; a1 = Audio(filepath=Path(&quot;sample1.wav&quot;).resolve())</span>
+</span><span id="diarize_audios-167"><a href="#diarize_audios-167"><span class="linenos">167</span></a><span class="sd">        &gt;&gt;&gt; hf = HFModel(path_or_uri=&quot;nvidia/diar_sortformer_4spk-v1&quot;)</span>
+</span><span id="diarize_audios-168"><a href="#diarize_audios-168"><span class="linenos">168</span></a><span class="sd">        &gt;&gt;&gt; lines = diarize_audios([a1], model=hf, device=DeviceType.CUDA)</span>
+</span><span id="diarize_audios-169"><a href="#diarize_audios-169"><span class="linenos">169</span></a><span class="sd">        &gt;&gt;&gt; isinstance(lines[0], list)</span>
+</span><span id="diarize_audios-170"><a href="#diarize_audios-170"><span class="linenos">170</span></a><span class="sd">        True</span>
+</span><span id="diarize_audios-171"><a href="#diarize_audios-171"><span class="linenos">171</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="diarize_audios-172"><a href="#diarize_audios-172"><span class="linenos">172</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="diarize_audios-173"><a href="#diarize_audios-173"><span class="linenos">173</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">PyannoteAudioModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;pyannote/speaker-diarization-community-1&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="diarize_audios-174"><a href="#diarize_audios-174"><span class="linenos">174</span></a>
+</span><span id="diarize_audios-175"><a href="#diarize_audios-175"><span class="linenos">175</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">PyannoteAudioModel</span><span class="p">):</span>
+</span><span id="diarize_audios-176"><a href="#diarize_audios-176"><span class="linenos">176</span></a>        <span class="k">return</span> <span class="n">diarize_audios_with_pyannote</span><span class="p">(</span>
+</span><span id="diarize_audios-177"><a href="#diarize_audios-177"><span class="linenos">177</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="diarize_audios-178"><a href="#diarize_audios-178"><span class="linenos">178</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="diarize_audios-179"><a href="#diarize_audios-179"><span class="linenos">179</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="diarize_audios-180"><a href="#diarize_audios-180"><span class="linenos">180</span></a>            <span class="n">num_speakers</span><span class="o">=</span><span class="n">num_speakers</span><span class="p">,</span>
+</span><span id="diarize_audios-181"><a href="#diarize_audios-181"><span class="linenos">181</span></a>            <span class="n">min_speakers</span><span class="o">=</span><span class="n">min_speakers</span><span class="p">,</span>
+</span><span id="diarize_audios-182"><a href="#diarize_audios-182"><span class="linenos">182</span></a>            <span class="n">max_speakers</span><span class="o">=</span><span class="n">max_speakers</span><span class="p">,</span>
+</span><span id="diarize_audios-183"><a href="#diarize_audios-183"><span class="linenos">183</span></a>            <span class="n">exclusive</span><span class="o">=</span><span class="n">exclusive</span><span class="p">,</span>
+</span><span id="diarize_audios-184"><a href="#diarize_audios-184"><span class="linenos">184</span></a>        <span class="p">)</span>
+</span><span id="diarize_audios-185"><a href="#diarize_audios-185"><span class="linenos">185</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_SORTFORMER_PREFIXES</span><span class="p">):</span>
+</span><span id="diarize_audios-186"><a href="#diarize_audios-186"><span class="linenos">186</span></a>        <span class="n">_warn_if_speaker_hints_ignored</span><span class="p">(</span><span class="s2">&quot;NVIDIA Sortformer&quot;</span><span class="p">,</span> <span class="n">num_speakers</span><span class="p">,</span> <span class="n">min_speakers</span><span class="p">,</span> <span class="n">max_speakers</span><span class="p">)</span>
+</span><span id="diarize_audios-187"><a href="#diarize_audios-187"><span class="linenos">187</span></a>        <span class="k">return</span> <span class="n">diarize_audios_with_nvidia_sortformer</span><span class="p">(</span>
+</span><span id="diarize_audios-188"><a href="#diarize_audios-188"><span class="linenos">188</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="diarize_audios-189"><a href="#diarize_audios-189"><span class="linenos">189</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="diarize_audios-190"><a href="#diarize_audios-190"><span class="linenos">190</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="diarize_audios-191"><a href="#diarize_audios-191"><span class="linenos">191</span></a>        <span class="p">)</span>
+</span><span id="diarize_audios-192"><a href="#diarize_audios-192"><span class="linenos">192</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_VIBEVOICE_PREFIXES</span><span class="p">):</span>
+</span><span id="diarize_audios-193"><a href="#diarize_audios-193"><span class="linenos">193</span></a>        <span class="n">_warn_if_speaker_hints_ignored</span><span class="p">(</span><span class="s2">&quot;VibeVoice-ASR-HF&quot;</span><span class="p">,</span> <span class="n">num_speakers</span><span class="p">,</span> <span class="n">min_speakers</span><span class="p">,</span> <span class="n">max_speakers</span><span class="p">)</span>
+</span><span id="diarize_audios-194"><a href="#diarize_audios-194"><span class="linenos">194</span></a>        <span class="n">vibevoice_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">max_new_tokens</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">{</span><span class="s2">&quot;max_new_tokens&quot;</span><span class="p">:</span> <span class="n">max_new_tokens</span><span class="p">}</span>
+</span><span id="diarize_audios-195"><a href="#diarize_audios-195"><span class="linenos">195</span></a>        <span class="k">return</span> <span class="n">diarize_audios_with_vibevoice</span><span class="p">(</span>
+</span><span id="diarize_audios-196"><a href="#diarize_audios-196"><span class="linenos">196</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="diarize_audios-197"><a href="#diarize_audios-197"><span class="linenos">197</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="diarize_audios-198"><a href="#diarize_audios-198"><span class="linenos">198</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="diarize_audios-199"><a href="#diarize_audios-199"><span class="linenos">199</span></a>            <span class="o">**</span><span class="n">vibevoice_kwargs</span><span class="p">,</span>
+</span><span id="diarize_audios-200"><a href="#diarize_audios-200"><span class="linenos">200</span></a>        <span class="p">)</span>
+</span><span id="diarize_audios-201"><a href="#diarize_audios-201"><span class="linenos">201</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_CHILD_ADULT_PREFIXES</span><span class="p">):</span>
+</span><span id="diarize_audios-202"><a href="#diarize_audios-202"><span class="linenos">202</span></a>        <span class="n">_warn_if_speaker_hints_ignored</span><span class="p">(</span><span class="s2">&quot;the USC-SAIL child-adult classifier&quot;</span><span class="p">,</span> <span class="n">num_speakers</span><span class="p">,</span> <span class="n">min_speakers</span><span class="p">,</span> <span class="n">max_speakers</span><span class="p">)</span>
+</span><span id="diarize_audios-203"><a href="#diarize_audios-203"><span class="linenos">203</span></a>        <span class="k">return</span> <span class="n">diarize_audios_with_child_adult</span><span class="p">(</span>
+</span><span id="diarize_audios-204"><a href="#diarize_audios-204"><span class="linenos">204</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="diarize_audios-205"><a href="#diarize_audios-205"><span class="linenos">205</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="diarize_audios-206"><a href="#diarize_audios-206"><span class="linenos">206</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="diarize_audios-207"><a href="#diarize_audios-207"><span class="linenos">207</span></a>        <span class="p">)</span>
+</span><span id="diarize_audios-208"><a href="#diarize_audios-208"><span class="linenos">208</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_MOSS_PREFIXES</span><span class="p">):</span>
+</span><span id="diarize_audios-209"><a href="#diarize_audios-209"><span class="linenos">209</span></a>        <span class="n">_warn_if_speaker_hints_ignored</span><span class="p">(</span><span class="s2">&quot;MOSS-Transcribe-Diarize&quot;</span><span class="p">,</span> <span class="n">num_speakers</span><span class="p">,</span> <span class="n">min_speakers</span><span class="p">,</span> <span class="n">max_speakers</span><span class="p">)</span>
+</span><span id="diarize_audios-210"><a href="#diarize_audios-210"><span class="linenos">210</span></a>        <span class="n">moss_kwargs</span> <span class="o">=</span> <span class="p">{}</span> <span class="k">if</span> <span class="n">max_new_tokens</span> <span class="ow">is</span> <span class="kc">None</span> <span class="k">else</span> <span class="p">{</span><span class="s2">&quot;max_new_tokens&quot;</span><span class="p">:</span> <span class="n">max_new_tokens</span><span class="p">}</span>
+</span><span id="diarize_audios-211"><a href="#diarize_audios-211"><span class="linenos">211</span></a>        <span class="k">return</span> <span class="n">diarize_audios_with_moss</span><span class="p">(</span>
+</span><span id="diarize_audios-212"><a href="#diarize_audios-212"><span class="linenos">212</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="diarize_audios-213"><a href="#diarize_audios-213"><span class="linenos">213</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="diarize_audios-214"><a href="#diarize_audios-214"><span class="linenos">214</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="diarize_audios-215"><a href="#diarize_audios-215"><span class="linenos">215</span></a>            <span class="o">**</span><span class="n">moss_kwargs</span><span class="p">,</span>
+</span><span id="diarize_audios-216"><a href="#diarize_audios-216"><span class="linenos">216</span></a>        <span class="p">)</span>
+</span><span id="diarize_audios-217"><a href="#diarize_audios-217"><span class="linenos">217</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_DIARIZEN_PREFIXES</span><span class="p">):</span>
+</span><span id="diarize_audios-218"><a href="#diarize_audios-218"><span class="linenos">218</span></a>        <span class="n">_warn_if_speaker_hints_ignored</span><span class="p">(</span><span class="s2">&quot;DiariZen&quot;</span><span class="p">,</span> <span class="n">num_speakers</span><span class="p">,</span> <span class="n">min_speakers</span><span class="p">,</span> <span class="n">max_speakers</span><span class="p">)</span>
+</span><span id="diarize_audios-219"><a href="#diarize_audios-219"><span class="linenos">219</span></a>        <span class="k">return</span> <span class="n">diarize_audios_with_diarizen</span><span class="p">(</span>
+</span><span id="diarize_audios-220"><a href="#diarize_audios-220"><span class="linenos">220</span></a>            <span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span>
+</span><span id="diarize_audios-221"><a href="#diarize_audios-221"><span class="linenos">221</span></a>            <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span>
+</span><span id="diarize_audios-222"><a href="#diarize_audios-222"><span class="linenos">222</span></a>            <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="diarize_audios-223"><a href="#diarize_audios-223"><span class="linenos">223</span></a>        <span class="p">)</span>
+</span><span id="diarize_audios-224"><a href="#diarize_audios-224"><span class="linenos">224</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="diarize_audios-225"><a href="#diarize_audios-225"><span class="linenos">225</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="diarize_audios-226"><a href="#diarize_audios-226"><span class="linenos">226</span></a>            <span class="s2">&quot;Only Pyannote, NVIDIA Sortformer, VibeVoice-ASR-HF, the USC-SAIL child-adult &quot;</span>
+</span><span id="diarize_audios-227"><a href="#diarize_audios-227"><span class="linenos">227</span></a>            <span class="s2">&quot;classifier, MOSS-Transcribe-Diarize, and DiariZen (from HuggingFace) models are &quot;</span>
+</span><span id="diarize_audios-228"><a href="#diarize_audios-228"><span class="linenos">228</span></a>            <span class="s2">&quot;supported for now.&quot;</span>
+</span><span id="diarize_audios-229"><a href="#diarize_audios-229"><span class="linenos">229</span></a>        <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Diarize a batch of <code>Audio</code> objects, returning per-speaker time segments.</p>
+
+<p>Supports <strong>Pyannote</strong> (default), <strong>NVIDIA Sortformer</strong>, <strong>VibeVoice-ASR-HF</strong>,
+<strong>USC-SAIL child-adult</strong>, <strong>MOSS-Transcribe-Diarize</strong>, and <strong>DiariZen</strong>
+(HF-identified) backends:</p>
+
+<ul>
+<li>If <code>model</code> is a <code>PyannoteAudioModel</code>, uses Pyannote (typically expects <strong>mono, 16 kHz</strong>).
+Optional <code>num_speakers</code> or (<code>min_speakers</code>, <code>max_speakers</code>) are honored.</li>
+<li>If <code>model</code> is an <code>HFModel</code> and <code>model.path_or_uri</code> starts with <code>"nvidia/diar_sortformer"</code>,
+uses NVIDIA Sortformer via an isolated subprocess venv (nvidia/diar_sortformer_4spk-v1
+detects max <strong>4 speakers</strong>).</li>
+<li>If <code>model</code> is an <code>HFModel</code> and <code>model.path_or_uri</code> starts with <code>"microsoft/VibeVoice-ASR"</code>,
+uses VibeVoice-ASR-HF in-process (<code>transformers&gt;=5.3</code>'s
+<code>VibeVoiceAsrForConditionalGeneration</code>). Narrower than the bare <code>"microsoft/VibeVoice"</code>
+prefix on purpose — <code>microsoft/VibeVoice-1.5B</code>/<code>-Large</code> are TTS checkpoints, not ASR.</li>
+<li>If <code>model</code> is an <code>HFModel</code> and <code>model.path_or_uri</code> starts with
+<code>"AlexXu811/whisper-child-adult"</code>, uses the USC-SAIL child-adult classifier via an
+isolated subprocess venv (speaker labels are <code>"CHILD"</code>/<code>"ADULT"</code>/<code>"OVERLAP"</code> — frames
+classified as silence produce no segment — rather than speaker identities;
+<strong>CUDA only</strong>, see <code>child_adult.py</code>).</li>
+<li>If <code>model</code> is an <code>HFModel</code> and <code>model.path_or_uri</code> starts with
+<code>"OpenMOSS-Team/MOSS-Transcribe-Diarize"</code>, uses MOSS-Transcribe-Diarize (0.9B, Apache 2.0)
+via an isolated subprocess venv (needs <code>transformers&gt;=5.6</code>, kept out of the core
+environment — see <code>moss.py</code>).</li>
+<li>If <code>model</code> is an <code>HFModel</code> and <code>model.path_or_uri</code> starts with <code>"BUT-FIT/diarizen"</code>,
+uses DiariZen (WavLM-Conformer EEND + VBx clustering; diarization only, no
+transcription) via an isolated subprocess venv that installs DiariZen's own
+forked pyannote-audio — code MIT, but <strong>model weights are CC BY-NC 4.0
+(non-commercial only)</strong>; see <code>diarizen.py</code>.</li>
+</ul>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios (list[Audio]):</strong>  Audio objects to diarize.</li>
+<li><strong>model (SenselabModel | None):</strong>  Diarization backend:
+<ul>
+<li><code>PyannoteAudioModel(...)</code> → Pyannote (default if <code>None</code>).</li>
+<li><code>HFModel(path_or_uri="nvidia/diar_sortformer...")</code> → NVIDIA Sortformer.</li>
+<li><code>HFModel(path_or_uri="microsoft/VibeVoice-ASR...")</code> → VibeVoice-ASR-HF.</li>
+<li><code>HFModel(path_or_uri="AlexXu811/whisper-child-adult")</code> → USC-SAIL child-adult.</li>
+<li><code>HFModel(path_or_uri="OpenMOSS-Team/MOSS-Transcribe-Diarize")</code> → MOSS-Transcribe-Diarize.</li>
+<li><code>HFModel(path_or_uri="BUT-FIT/diarizen-wavlm-large-s80-md")</code> → DiariZen.</li>
+</ul></li>
+<li><strong>num_speakers (int | None):</strong>  If known, fix the number of speakers (Pyannote only).</li>
+<li><strong>min_speakers (int | None):</strong>  Lower bound when estimating number of speakers (Pyannote only).</li>
+<li><strong>max_speakers (int | None):</strong>  Upper bound when estimating number of speakers (Pyannote only; ignored,
+with a warning, by every other backend). NVIDIA Sortformer detects at
+most 4 speakers regardless of this argument — that's a fixed model
+limit, not something <code>max_speakers</code> raises or lowers.</li>
+<li><strong>device (DeviceType | None):</strong>  Preferred device (e.g., <code>DeviceType.CPU</code>, <code>DeviceType.CUDA</code>).</li>
+<li><strong>exclusive (bool):</strong>  Pyannote only. <code>True</code> (default) returns a partition, where concurrent speech has been
+resolved away and no consumer can detect overlap. <code>False</code> returns the overlapping
+view. Ignored by every other backend, none of which return an exclusive partition
+regardless of this argument: NVIDIA Sortformer emits per-speaker activity and always
+preserves concurrency; VibeVoice-ASR-HF and MOSS-Transcribe-Diarize emit whatever
+segments their own transcript-parsing produces, with no partition step; DiariZen's
+EEND + VBx pipeline emits genuinely overlapping turns by design; and the USC-SAIL
+child-adult classifier emits an explicit <code>OVERLAP</code> label for frames it can't assign
+to a single role. Unlike the speaker-count hints above, no warning is raised when
+<code>exclusive</code> is passed to one of these — it defaults to <code>True</code>, so there is no way
+to tell an explicit pass from the default.</li>
+<li><strong>max_new_tokens (int | None):</strong>  Generation budget for the joint ASR+diarization backends
+(VibeVoice-ASR-HF, MOSS-Transcribe-Diarize only — ignored otherwise).
+<code>None</code> uses each backend's own default (4096). Raise this for
+recordings long enough to risk truncated generation.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>list[list[ScriptLine]]: One list per input audio; each <code>ScriptLine</code> carries
+  <code>speaker</code>, <code>start</code>, and <code>end</code>.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>NotImplementedError:</strong>  If an unsupported model type is passed.</li>
+</ul>
+
+<p>Example (Pyannote, default model, CPU):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType, PyannoteAudioModel
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      a2 = Audio(filepath=Path("sample2.wav").resolve())
+      lines = diarize_audios([a1, a2], device=DeviceType.CPU)
+      len(lines) == 2
+          True</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+
+<p>Example (NVIDIA Sortformer via HF, CUDA):</p>
+
+<blockquote>
+  <blockquote>
+    <blockquote>
+      <p>from pathlib import Path
+      from <a href="../data_structures.html">senselab.audio.data_structures</a> import Audio
+      from <a href="../../utils/data_structures.html">senselab.utils.data_structures</a> import DeviceType, HFModel
+      a1 = Audio(filepath=Path("sample1.wav").resolve())
+      hf = HFModel(path_or_uri="nvidia/diar_sortformer_4spk-v1")
+      lines = diarize_audios([a1], model=hf, device=DeviceType.CUDA)
+      isinstance(lines[0], list)
+          True</p>
+    </blockquote>
+  </blockquote>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="capabilities_for">
+                            <input id="capabilities_for-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">capabilities_for</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span></span><span class="return-annotation">) -> <span class="n"><a href="#DiarizationCapabilities">DiarizationCapabilities</a></span>:</span></span>
+
+                <label class="view-source-button" for="capabilities_for-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#capabilities_for"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="capabilities_for-241"><a href="#capabilities_for-241"><span class="linenos">241</span></a><span class="k">def</span><span class="w"> </span><span class="nf">capabilities_for</span><span class="p">(</span><span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DiarizationCapabilities</span><span class="p">:</span>
+</span><span id="capabilities_for-242"><a href="#capabilities_for-242"><span class="linenos">242</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Return what the backend handling ``model_id`` provides.</span>
+</span><span id="capabilities_for-243"><a href="#capabilities_for-243"><span class="linenos">243</span></a>
+</span><span id="capabilities_for-244"><a href="#capabilities_for-244"><span class="linenos">244</span></a><span class="sd">    Mirrors :func:`~senselab.utils.data_structures.model.model_for_task`&#39;s dispatch</span>
+</span><span id="capabilities_for-245"><a href="#capabilities_for-245"><span class="linenos">245</span></a><span class="sd">    (task=&quot;diarization&quot;), including its fallback: an id matching no prefix resolves</span>
+</span><span id="capabilities_for-246"><a href="#capabilities_for-246"><span class="linenos">246</span></a><span class="sd">    to Pyannote, because that is the backend ``model_for_task`` would wrap it for.</span>
+</span><span id="capabilities_for-247"><a href="#capabilities_for-247"><span class="linenos">247</span></a><span class="sd">    Returning ``None`` instead would make every caller write the same check for a</span>
+</span><span id="capabilities_for-248"><a href="#capabilities_for-248"><span class="linenos">248</span></a><span class="sd">    case that router treats as ordinary.</span>
+</span><span id="capabilities_for-249"><a href="#capabilities_for-249"><span class="linenos">249</span></a>
+</span><span id="capabilities_for-250"><a href="#capabilities_for-250"><span class="linenos">250</span></a><span class="sd">    This function answers by **id string**, not by the backend :func:`diarize_audios`</span>
+</span><span id="capabilities_for-251"><a href="#capabilities_for-251"><span class="linenos">251</span></a><span class="sd">    would actually dispatch to for a given call. `diarize_audios` itself does not</span>
+</span><span id="capabilities_for-252"><a href="#capabilities_for-252"><span class="linenos">252</span></a><span class="sd">    fall back to Pyannote for an unmatched `HFModel` — it raises `NotImplementedError`</span>
+</span><span id="capabilities_for-253"><a href="#capabilities_for-253"><span class="linenos">253</span></a><span class="sd">    — Pyannote is only reached there via an `isinstance(model, PyannoteAudioModel)`</span>
+</span><span id="capabilities_for-254"><a href="#capabilities_for-254"><span class="linenos">254</span></a><span class="sd">    check that this string-taking function cannot perform. So this reports DiariZen</span>
+</span><span id="capabilities_for-255"><a href="#capabilities_for-255"><span class="linenos">255</span></a><span class="sd">    for a DiariZen id even if a caller hands `diarize_audios` a `PyannoteAudioModel`</span>
+</span><span id="capabilities_for-256"><a href="#capabilities_for-256"><span class="linenos">256</span></a><span class="sd">    wrapping that same id — that call would run Pyannote, not DiariZen.</span>
+</span><span id="capabilities_for-257"><a href="#capabilities_for-257"><span class="linenos">257</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="capabilities_for-258"><a href="#capabilities_for-258"><span class="linenos">258</span></a>    <span class="k">for</span> <span class="n">prefixes</span><span class="p">,</span> <span class="n">caps</span> <span class="ow">in</span> <span class="n">_CAPABILITIES_BY_PREFIX</span><span class="p">:</span>
+</span><span id="capabilities_for-259"><a href="#capabilities_for-259"><span class="linenos">259</span></a>        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">model_id</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">p</span><span class="p">)</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">prefixes</span><span class="p">):</span>
+</span><span id="capabilities_for-260"><a href="#capabilities_for-260"><span class="linenos">260</span></a>            <span class="k">return</span> <span class="n">caps</span>
+</span><span id="capabilities_for-261"><a href="#capabilities_for-261"><span class="linenos">261</span></a>    <span class="k">return</span> <span class="n">_PYANNOTE_CAPS</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Return what the backend handling <code>model_id</code> provides.</p>
+
+<p>Mirrors <code>~<a href="../../utils/data_structures/model.html#model_for_task">senselab.utils.data_structures.model.model_for_task()</a></code>'s dispatch
+(task="diarization"), including its fallback: an id matching no prefix resolves
+to Pyannote, because that is the backend <code>model_for_task</code> would wrap it for.
+Returning <code>None</code> instead would make every caller write the same check for a
+case that router treats as ordinary.</p>
+
+<p>This function answers by <strong>id string</strong>, not by the backend <code><a href="#diarize_audios">diarize_audios()</a></code>
+would actually dispatch to for a given call. <code><a href="#diarize_audios">diarize_audios</a></code> itself does not
+fall back to Pyannote for an unmatched <code>HFModel</code> — it raises <code>NotImplementedError</code>
+— Pyannote is only reached there via an <code>isinstance(model, PyannoteAudioModel)</code>
+check that this string-taking function cannot perform. So this reports DiariZen
+for a DiariZen id even if a caller hands <code><a href="#diarize_audios">diarize_audios</a></code> a <code>PyannoteAudioModel</code>
+wrapping that same id — that call would run Pyannote, not DiariZen.</p>
+</div>
+
+
+                </section>
+                <section id="DiarizationCapabilities">
+                            <input id="DiarizationCapabilities-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+                    <div class="decorator decorator-dataclass">@dataclass(frozen=True)</div>
+
+    <span class="def">class</span>
+    <span class="name">DiarizationCapabilities</span>:
+
+                <label class="view-source-button" for="DiarizationCapabilities-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="DiarizationCapabilities-43"><a href="#DiarizationCapabilities-43"><span class="linenos"> 43</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="DiarizationCapabilities-44"><a href="#DiarizationCapabilities-44"><span class="linenos"> 44</span></a><span class="k">class</span><span class="w"> </span><span class="nc">DiarizationCapabilities</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-45"><a href="#DiarizationCapabilities-45"><span class="linenos"> 45</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What one diarization backend populates, and what its labels mean.</span>
+</span><span id="DiarizationCapabilities-46"><a href="#DiarizationCapabilities-46"><span class="linenos"> 46</span></a>
+</span><span id="DiarizationCapabilities-47"><a href="#DiarizationCapabilities-47"><span class="linenos"> 47</span></a><span class="sd">    Attributes:</span>
+</span><span id="DiarizationCapabilities-48"><a href="#DiarizationCapabilities-48"><span class="linenos"> 48</span></a><span class="sd">        populates_text: Whether the backend fills ``ScriptLine.text``. Without this a</span>
+</span><span id="DiarizationCapabilities-49"><a href="#DiarizationCapabilities-49"><span class="linenos"> 49</span></a><span class="sd">            consumer cannot tell &quot;this backend does not transcribe&quot; from &quot;this segment</span>
+</span><span id="DiarizationCapabilities-50"><a href="#DiarizationCapabilities-50"><span class="linenos"> 50</span></a><span class="sd">            had no words&quot; — both look like ``text=None``.</span>
+</span><span id="DiarizationCapabilities-51"><a href="#DiarizationCapabilities-51"><span class="linenos"> 51</span></a><span class="sd">        speaker_label_kind: What vocabulary the ``speaker`` field draws from.</span>
+</span><span id="DiarizationCapabilities-52"><a href="#DiarizationCapabilities-52"><span class="linenos"> 52</span></a><span class="sd">            ``&quot;index&quot;`` for an anonymous per-file counter (``SPEAKER_00``, ``S01``),</span>
+</span><span id="DiarizationCapabilities-53"><a href="#DiarizationCapabilities-53"><span class="linenos"> 53</span></a><span class="sd">            ``&quot;role&quot;`` for a fixed semantic vocabulary (child-adult emits</span>
+</span><span id="DiarizationCapabilities-54"><a href="#DiarizationCapabilities-54"><span class="linenos"> 54</span></a><span class="sd">            CHILD/ADULT/OVERLAP). Neither is a speaker *identity* — no diarizer here</span>
+</span><span id="DiarizationCapabilities-55"><a href="#DiarizationCapabilities-55"><span class="linenos"> 55</span></a><span class="sd">            claims to know who is talking, only that it grouped some frames together —</span>
+</span><span id="DiarizationCapabilities-56"><a href="#DiarizationCapabilities-56"><span class="linenos"> 56</span></a><span class="sd">            so this field describes the labels, and any decision about how to treat</span>
+</span><span id="DiarizationCapabilities-57"><a href="#DiarizationCapabilities-57"><span class="linenos"> 57</span></a><span class="sd">            them belongs to whoever is making it.</span>
+</span><span id="DiarizationCapabilities-58"><a href="#DiarizationCapabilities-58"><span class="linenos"> 58</span></a><span class="sd">        labels_stable_across_files: Whether label ``&quot;1&quot;`` in one file denotes the same</span>
+</span><span id="DiarizationCapabilities-59"><a href="#DiarizationCapabilities-59"><span class="linenos"> 59</span></a><span class="sd">            speaker as ``&quot;1&quot;`` in another. False for any backend that numbers per audio.</span>
+</span><span id="DiarizationCapabilities-60"><a href="#DiarizationCapabilities-60"><span class="linenos"> 60</span></a><span class="sd">        max_speakers: The largest speaker count the backend has been observed to *emit*</span>
+</span><span id="DiarizationCapabilities-61"><a href="#DiarizationCapabilities-61"><span class="linenos"> 61</span></a><span class="sd">            — a structural ceiling, not a performance one. This is deliberately narrower</span>
+</span><span id="DiarizationCapabilities-62"><a href="#DiarizationCapabilities-62"><span class="linenos"> 62</span></a><span class="sd">            than an earlier reading of this field: a backend&#39;s counting *accuracy*</span>
+</span><span id="DiarizationCapabilities-63"><a href="#DiarizationCapabilities-63"><span class="linenos"> 63</span></a><span class="sd">            (does it report the right count?) degrades independently of whether it can</span>
+</span><span id="DiarizationCapabilities-64"><a href="#DiarizationCapabilities-64"><span class="linenos"> 64</span></a><span class="sd">            structurally emit a large count at all, and folding both into one integer</span>
+</span><span id="DiarizationCapabilities-65"><a href="#DiarizationCapabilities-65"><span class="linenos"> 65</span></a><span class="sd">            hid that distinction. See ``max_speakers_evidence`` for how a given value</span>
+</span><span id="DiarizationCapabilities-66"><a href="#DiarizationCapabilities-66"><span class="linenos"> 66</span></a><span class="sd">            was established.</span>
+</span><span id="DiarizationCapabilities-67"><a href="#DiarizationCapabilities-67"><span class="linenos"> 67</span></a>
+</span><span id="DiarizationCapabilities-68"><a href="#DiarizationCapabilities-68"><span class="linenos"> 68</span></a><span class="sd">            ``None`` means *no structural ceiling was found* within whatever was tested</span>
+</span><span id="DiarizationCapabilities-69"><a href="#DiarizationCapabilities-69"><span class="linenos"> 69</span></a><span class="sd">            — it does **not** mean unlimited, and it does **not** by itself distinguish</span>
+</span><span id="DiarizationCapabilities-70"><a href="#DiarizationCapabilities-70"><span class="linenos"> 70</span></a><span class="sd">            &quot;nobody has looked&quot; from &quot;we looked and found no cap&quot; (``max_speakers_evidence``</span>
+</span><span id="DiarizationCapabilities-71"><a href="#DiarizationCapabilities-71"><span class="linenos"> 71</span></a><span class="sd">            carries that distinction; see its docstring). Counts distinguishable</span>
+</span><span id="DiarizationCapabilities-72"><a href="#DiarizationCapabilities-72"><span class="linenos"> 72</span></a><span class="sd">            *speakers*, not distinct ``speaker`` label values: the child-adult classifier</span>
+</span><span id="DiarizationCapabilities-73"><a href="#DiarizationCapabilities-73"><span class="linenos"> 73</span></a><span class="sd">            emits three label values (``CHILD``, ``ADULT``, ``OVERLAP``) but declares</span>
+</span><span id="DiarizationCapabilities-74"><a href="#DiarizationCapabilities-74"><span class="linenos"> 74</span></a><span class="sd">            ``max_speakers=2``, because ``OVERLAP`` marks two of the two known talkers</span>
+</span><span id="DiarizationCapabilities-75"><a href="#DiarizationCapabilities-75"><span class="linenos"> 75</span></a><span class="sd">            speaking at once, not a third talker.</span>
+</span><span id="DiarizationCapabilities-76"><a href="#DiarizationCapabilities-76"><span class="linenos"> 76</span></a>
+</span><span id="DiarizationCapabilities-77"><a href="#DiarizationCapabilities-77"><span class="linenos"> 77</span></a><span class="sd">            The seed-17 speaker-ceiling probe (a 160-session, TTS-composed corpus swept</span>
+</span><span id="DiarizationCapabilities-78"><a href="#DiarizationCapabilities-78"><span class="linenos"> 78</span></a><span class="sd">            over true speaker counts 1..8; see</span>
+</span><span id="DiarizationCapabilities-79"><a href="#DiarizationCapabilities-79"><span class="linenos"> 79</span></a><span class="sd">            ``specs/20260809-112417-speaker-ceiling-probe/``) measured all six backends:</span>
+</span><span id="DiarizationCapabilities-80"><a href="#DiarizationCapabilities-80"><span class="linenos"> 80</span></a><span class="sd">            Sortformer and child-adult both plateau at a fixed count (4 and 2) regardless</span>
+</span><span id="DiarizationCapabilities-81"><a href="#DiarizationCapabilities-81"><span class="linenos"> 81</span></a><span class="sd">            of how many speakers are actually present — a real structural cap, confirming</span>
+</span><span id="DiarizationCapabilities-82"><a href="#DiarizationCapabilities-82"><span class="linenos"> 82</span></a><span class="sd">            what their names/architecture already implied. Pyannote, VibeVoice, MOSS and</span>
+</span><span id="DiarizationCapabilities-83"><a href="#DiarizationCapabilities-83"><span class="linenos"> 83</span></a><span class="sd">            DiariZen never plateaued across k=1..8 on that corpus; their predictions kept</span>
+</span><span id="DiarizationCapabilities-84"><a href="#DiarizationCapabilities-84"><span class="linenos"> 84</span></a><span class="sd">            tracking (or overshooting) the true count instead of collapsing to one value,</span>
+</span><span id="DiarizationCapabilities-85"><a href="#DiarizationCapabilities-85"><span class="linenos"> 85</span></a><span class="sd">            so they declare ``None`` here — &quot;no structural ceiling observed&quot;, a measured</span>
+</span><span id="DiarizationCapabilities-86"><a href="#DiarizationCapabilities-86"><span class="linenos"> 86</span></a><span class="sd">            claim, not a guess. Every number traces to one corpus and one seed, TTS-composed</span>
+</span><span id="DiarizationCapabilities-87"><a href="#DiarizationCapabilities-87"><span class="linenos"> 87</span></a><span class="sd">            with no room acoustics or channel variation — the probe&#39;s own profile carries</span>
+</span><span id="DiarizationCapabilities-88"><a href="#DiarizationCapabilities-88"><span class="linenos"> 88</span></a><span class="sd">            that caveat and this field points at it rather than restating it loosely; do not</span>
+</span><span id="DiarizationCapabilities-89"><a href="#DiarizationCapabilities-89"><span class="linenos"> 89</span></a><span class="sd">            read a probe result as a guarantee about real recordings.</span>
+</span><span id="DiarizationCapabilities-90"><a href="#DiarizationCapabilities-90"><span class="linenos"> 90</span></a><span class="sd">        max_speakers_evidence: How ``max_speakers`` was established, machine-readable</span>
+</span><span id="DiarizationCapabilities-91"><a href="#DiarizationCapabilities-91"><span class="linenos"> 91</span></a><span class="sd">            rather than only prose in a comment. Exactly :data:`UNMEASURED` when nobody</span>
+</span><span id="DiarizationCapabilities-92"><a href="#DiarizationCapabilities-92"><span class="linenos"> 92</span></a><span class="sd">            has run a probe against this backend — the same fact ``max_speakers=None``</span>
+</span><span id="DiarizationCapabilities-93"><a href="#DiarizationCapabilities-93"><span class="linenos"> 93</span></a><span class="sd">            alone used to carry before this field existed. Otherwise a string starting</span>
+</span><span id="DiarizationCapabilities-94"><a href="#DiarizationCapabilities-94"><span class="linenos"> 94</span></a><span class="sd">            ``&quot;measured:&quot;``, e.g. ``&quot;measured: saturates at 4 on 20/20 k=8 sessions</span>
+</span><span id="DiarizationCapabilities-95"><a href="#DiarizationCapabilities-95"><span class="linenos"> 95</span></a><span class="sd">            (probe seed-17)&quot;`` when a real ceiling was found, or ``&quot;measured: no</span>
+</span><span id="DiarizationCapabilities-96"><a href="#DiarizationCapabilities-96"><span class="linenos"> 96</span></a><span class="sd">            saturation, emits up to 8 (probe seed-17)&quot;`` when it was not. Checking</span>
+</span><span id="DiarizationCapabilities-97"><a href="#DiarizationCapabilities-97"><span class="linenos"> 97</span></a><span class="sd">            ``evidence == UNMEASURED`` vs. ``evidence.startswith(&quot;measured:&quot;)`` is enough</span>
+</span><span id="DiarizationCapabilities-98"><a href="#DiarizationCapabilities-98"><span class="linenos"> 98</span></a><span class="sd">            to recover which case applies without parsing the rest of the string — that</span>
+</span><span id="DiarizationCapabilities-99"><a href="#DiarizationCapabilities-99"><span class="linenos"> 99</span></a><span class="sd">            two-state check is what makes this field machine-readable rather than a</span>
+</span><span id="DiarizationCapabilities-100"><a href="#DiarizationCapabilities-100"><span class="linenos">100</span></a><span class="sd">            comment a reader has to trust. Rejected at construction (see</span>
+</span><span id="DiarizationCapabilities-101"><a href="#DiarizationCapabilities-101"><span class="linenos">101</span></a><span class="sd">            ``__post_init__``) if it claims :data:`UNMEASURED` while ``max_speakers``</span>
+</span><span id="DiarizationCapabilities-102"><a href="#DiarizationCapabilities-102"><span class="linenos">102</span></a><span class="sd">            holds a number: a number with no measurement behind it is exactly the</span>
+</span><span id="DiarizationCapabilities-103"><a href="#DiarizationCapabilities-103"><span class="linenos">103</span></a><span class="sd">            unfitted literal this repo&#39;s conventions warn against.</span>
+</span><span id="DiarizationCapabilities-104"><a href="#DiarizationCapabilities-104"><span class="linenos">104</span></a>
+</span><span id="DiarizationCapabilities-105"><a href="#DiarizationCapabilities-105"><span class="linenos">105</span></a><span class="sd">            Counting *accuracy* — a related but separate fact from the structural bound</span>
+</span><span id="DiarizationCapabilities-106"><a href="#DiarizationCapabilities-106"><span class="linenos">106</span></a><span class="sd">            this field is evidence for — is not carried here. It lives with the probe</span>
+</span><span id="DiarizationCapabilities-107"><a href="#DiarizationCapabilities-107"><span class="linenos">107</span></a><span class="sd">            (``specs/20260809-112417-speaker-ceiling-probe/``) and, summarized, in</span>
+</span><span id="DiarizationCapabilities-108"><a href="#DiarizationCapabilities-108"><span class="linenos">108</span></a><span class="sd">            ``model_registry.yaml``&#39;s ``recommended_for`` for each backend.</span>
+</span><span id="DiarizationCapabilities-109"><a href="#DiarizationCapabilities-109"><span class="linenos">109</span></a><span class="sd">        honors_speaker_hints: Whether ``num_speakers``/``min_speakers``/``max_speakers``</span>
+</span><span id="DiarizationCapabilities-110"><a href="#DiarizationCapabilities-110"><span class="linenos">110</span></a><span class="sd">            passed to :func:`diarize_audios` do anything. Five of six ignore them.</span>
+</span><span id="DiarizationCapabilities-111"><a href="#DiarizationCapabilities-111"><span class="linenos">111</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="DiarizationCapabilities-112"><a href="#DiarizationCapabilities-112"><span class="linenos">112</span></a>
+</span><span id="DiarizationCapabilities-113"><a href="#DiarizationCapabilities-113"><span class="linenos">113</span></a>    <span class="n">populates_text</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="DiarizationCapabilities-114"><a href="#DiarizationCapabilities-114"><span class="linenos">114</span></a>    <span class="n">speaker_label_kind</span><span class="p">:</span> <span class="n">SpeakerLabelKind</span>
+</span><span id="DiarizationCapabilities-115"><a href="#DiarizationCapabilities-115"><span class="linenos">115</span></a>    <span class="n">labels_stable_across_files</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="DiarizationCapabilities-116"><a href="#DiarizationCapabilities-116"><span class="linenos">116</span></a>    <span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+</span><span id="DiarizationCapabilities-117"><a href="#DiarizationCapabilities-117"><span class="linenos">117</span></a>    <span class="n">max_speakers_evidence</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="DiarizationCapabilities-118"><a href="#DiarizationCapabilities-118"><span class="linenos">118</span></a>    <span class="n">honors_speaker_hints</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="DiarizationCapabilities-119"><a href="#DiarizationCapabilities-119"><span class="linenos">119</span></a>
+</span><span id="DiarizationCapabilities-120"><a href="#DiarizationCapabilities-120"><span class="linenos">120</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-121"><a href="#DiarizationCapabilities-121"><span class="linenos">121</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;Reject declarations that cannot describe a real backend.&quot;&quot;&quot;</span>
+</span><span id="DiarizationCapabilities-122"><a href="#DiarizationCapabilities-122"><span class="linenos">122</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">speaker_label_kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_VALID_LABEL_KINDS</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-123"><a href="#DiarizationCapabilities-123"><span class="linenos">123</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-124"><a href="#DiarizationCapabilities-124"><span class="linenos">124</span></a>                <span class="sa">f</span><span class="s2">&quot;speaker_label_kind must be one of </span><span class="si">{</span><span class="n">_VALID_LABEL_KINDS</span><span class="si">}</span><span class="s2">, got </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">speaker_label_kind</span><span class="si">!r}</span><span class="s2">. &quot;</span>
+</span><span id="DiarizationCapabilities-125"><a href="#DiarizationCapabilities-125"><span class="linenos">125</span></a>                <span class="s2">&quot;It records what vocabulary the labels come from; what to do about that is the caller&#39;s.&quot;</span>
+</span><span id="DiarizationCapabilities-126"><a href="#DiarizationCapabilities-126"><span class="linenos">126</span></a>            <span class="p">)</span>
+</span><span id="DiarizationCapabilities-127"><a href="#DiarizationCapabilities-127"><span class="linenos">127</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-128"><a href="#DiarizationCapabilities-128"><span class="linenos">128</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-129"><a href="#DiarizationCapabilities-129"><span class="linenos">129</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers must be &gt;= 1 or None (no structural ceiling observed), got &quot;</span>
+</span><span id="DiarizationCapabilities-130"><a href="#DiarizationCapabilities-130"><span class="linenos">130</span></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span><span class="si">!r}</span><span class="s2">. None does not mean unlimited.&quot;</span>
+</span><span id="DiarizationCapabilities-131"><a href="#DiarizationCapabilities-131"><span class="linenos">131</span></a>            <span class="p">)</span>
+</span><span id="DiarizationCapabilities-132"><a href="#DiarizationCapabilities-132"><span class="linenos">132</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span> <span class="o">!=</span> <span class="n">UNMEASURED</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_MEASURED_PREFIX</span><span class="p">):</span>
+</span><span id="DiarizationCapabilities-133"><a href="#DiarizationCapabilities-133"><span class="linenos">133</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-134"><a href="#DiarizationCapabilities-134"><span class="linenos">134</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers_evidence must be </span><span class="si">{</span><span class="n">UNMEASURED</span><span class="si">!r}</span><span class="s2"> or start with </span><span class="si">{</span><span class="n">_MEASURED_PREFIX</span><span class="si">!r}</span><span class="s2">, got &quot;</span>
+</span><span id="DiarizationCapabilities-135"><a href="#DiarizationCapabilities-135"><span class="linenos">135</span></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span><span class="si">!r}</span><span class="s2">. That two-state convention is what makes the field &quot;</span>
+</span><span id="DiarizationCapabilities-136"><a href="#DiarizationCapabilities-136"><span class="linenos">136</span></a>                <span class="s2">&quot;machine-readable instead of prose a reader has to trust.&quot;</span>
+</span><span id="DiarizationCapabilities-137"><a href="#DiarizationCapabilities-137"><span class="linenos">137</span></a>            <span class="p">)</span>
+</span><span id="DiarizationCapabilities-138"><a href="#DiarizationCapabilities-138"><span class="linenos">138</span></a>        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers_evidence</span> <span class="o">==</span> <span class="n">UNMEASURED</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="DiarizationCapabilities-139"><a href="#DiarizationCapabilities-139"><span class="linenos">139</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="DiarizationCapabilities-140"><a href="#DiarizationCapabilities-140"><span class="linenos">140</span></a>                <span class="sa">f</span><span class="s2">&quot;max_speakers=</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">max_speakers</span><span class="si">!r}</span><span class="s2"> but max_speakers_evidence is </span><span class="si">{</span><span class="n">UNMEASURED</span><span class="si">!r}</span><span class="s2"> — a &quot;</span>
+</span><span id="DiarizationCapabilities-141"><a href="#DiarizationCapabilities-141"><span class="linenos">141</span></a>                <span class="s2">&quot;number with no measurement behind it is exactly the unfitted literal this repo&#39;s &quot;</span>
+</span><span id="DiarizationCapabilities-142"><a href="#DiarizationCapabilities-142"><span class="linenos">142</span></a>                <span class="s2">&quot;conventions warn against. Either supply the evidence that produced it or set &quot;</span>
+</span><span id="DiarizationCapabilities-143"><a href="#DiarizationCapabilities-143"><span class="linenos">143</span></a>                <span class="s2">&quot;max_speakers back to None.&quot;</span>
+</span><span id="DiarizationCapabilities-144"><a href="#DiarizationCapabilities-144"><span class="linenos">144</span></a>            <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>What one diarization backend populates, and what its labels mean.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>populates_text:</strong>  Whether the backend fills <code>ScriptLine.text</code>. Without this a
+consumer cannot tell "this backend does not transcribe" from "this segment
+had no words" — both look like <code>text=None</code>.</li>
+<li><strong>speaker_label_kind:</strong>  What vocabulary the <code>speaker</code> field draws from.
+<code>"index"</code> for an anonymous per-file counter (<code>SPEAKER_00</code>, <code>S01</code>),
+<code>"role"</code> for a fixed semantic vocabulary (child-adult emits
+CHILD/ADULT/OVERLAP). Neither is a speaker <em>identity</em> — no diarizer here
+claims to know who is talking, only that it grouped some frames together —
+so this field describes the labels, and any decision about how to treat
+them belongs to whoever is making it.</li>
+<li><strong>labels_stable_across_files:</strong>  Whether label <code>"1"</code> in one file denotes the same
+speaker as <code>"1"</code> in another. False for any backend that numbers per audio.</li>
+<li><p><strong>max_speakers:</strong>  The largest speaker count the backend has been observed to <em>emit</em>
+— a structural ceiling, not a performance one. This is deliberately narrower
+than an earlier reading of this field: a backend's counting <em>accuracy</em>
+(does it report the right count?) degrades independently of whether it can
+structurally emit a large count at all, and folding both into one integer
+hid that distinction. See <code><a href="#DiarizationCapabilities.max_speakers_evidence">max_speakers_evidence</a></code> for how a given value
+was established.</p>
+
+<p><code>None</code> means <em>no structural ceiling was found</em> within whatever was tested
+— it does <strong>not</strong> mean unlimited, and it does <strong>not</strong> by itself distinguish
+"nobody has looked" from "we looked and found no cap" (<code><a href="#DiarizationCapabilities.max_speakers_evidence">max_speakers_evidence</a></code>
+carries that distinction; see its docstring). Counts distinguishable
+<em>speakers</em>, not distinct <code>speaker</code> label values: the child-adult classifier
+emits three label values (<code>CHILD</code>, <code>ADULT</code>, <code>OVERLAP</code>) but declares
+<code>max_speakers=2</code>, because <code>OVERLAP</code> marks two of the two known talkers
+speaking at once, not a third talker.</p>
+
+<p>The seed-17 speaker-ceiling probe (a 160-session, TTS-composed corpus swept
+over true speaker counts 1..8; see
+<code>specs/20260809-112417-speaker-ceiling-probe/</code>) measured all six backends:
+Sortformer and child-adult both plateau at a fixed count (4 and 2) regardless
+of how many speakers are actually present — a real structural cap, confirming
+what their names/architecture already implied. Pyannote, VibeVoice, MOSS and
+DiariZen never plateaued across k=1..8 on that corpus; their predictions kept
+tracking (or overshooting) the true count instead of collapsing to one value,
+so they declare <code>None</code> here — "no structural ceiling observed", a measured
+claim, not a guess. Every number traces to one corpus and one seed, TTS-composed
+with no room acoustics or channel variation — the probe's own profile carries
+that caveat and this field points at it rather than restating it loosely; do not
+read a probe result as a guarantee about real recordings.</p></li>
+<li><p><strong>max_speakers_evidence:</strong>  How <code><a href="#DiarizationCapabilities.max_speakers">max_speakers</a></code> was established, machine-readable
+rather than only prose in a comment. Exactly <code>UNMEASURED</code> when nobody
+has run a probe against this backend — the same fact <code>max_speakers=None</code>
+alone used to carry before this field existed. Otherwise a string starting
+<code>"measured:"</code>, e.g. <code>"measured: saturates at 4 on 20/20 k=8 sessions
+(probe seed-17)"</code> when a real ceiling was found, or <code>"measured: no
+saturation, emits up to 8 (probe seed-17)"</code> when it was not. Checking
+<code>evidence == UNMEASURED</code> vs. <code>evidence.startswith("measured:")</code> is enough
+to recover which case applies without parsing the rest of the string — that
+two-state check is what makes this field machine-readable rather than a
+comment a reader has to trust. Rejected at construction (see
+<code>__post_init__</code>) if it claims <code>UNMEASURED</code> while <code><a href="#DiarizationCapabilities.max_speakers">max_speakers</a></code>
+holds a number: a number with no measurement behind it is exactly the
+unfitted literal this repo's conventions warn against.</p>
+
+<p>Counting <em>accuracy</em> — a related but separate fact from the structural bound
+this field is evidence for — is not carried here. It lives with the probe
+(<code>specs/20260809-112417-speaker-ceiling-probe/</code>) and, summarized, in
+<code>model_registry.yaml</code>'s <code>recommended_for</code> for each backend.</p></li>
+<li><strong>honors_speaker_hints:</strong>  Whether <code>num_speakers</code>/<code>min_speakers</code>/<code><a href="#DiarizationCapabilities.max_speakers">max_speakers</a></code>
+passed to <code><a href="#diarize_audios">diarize_audios()</a></code> do anything. Five of six ignore them.</li>
+</ul>
+</div>
+
+
+                            <div id="DiarizationCapabilities.__init__" class="classattr">
+                                <div class="attr function">
+            
+        <span class="name">DiarizationCapabilities</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">populates_text</span><span class="p">:</span> <span class="nb">bool</span>,</span><span class="param">	<span class="n">speaker_label_kind</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s1">&#39;index&#39;</span><span class="p">,</span> <span class="s1">&#39;role&#39;</span><span class="p">]</span>,</span><span class="param">	<span class="n">labels_stable_across_files</span><span class="p">:</span> <span class="nb">bool</span>,</span><span class="param">	<span class="n">max_speakers</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>,</span><span class="param">	<span class="n">max_speakers_evidence</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">honors_speaker_hints</span><span class="p">:</span> <span class="nb">bool</span></span>)</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.__init__"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.populates_text" class="classattr">
+                                <div class="attr variable">
+            <span class="name">populates_text</span><span class="annotation">: bool</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.populates_text"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.speaker_label_kind" class="classattr">
+                                <div class="attr variable">
+            <span class="name">speaker_label_kind</span><span class="annotation">: Literal[&#39;index&#39;, &#39;role&#39;]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.speaker_label_kind"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.labels_stable_across_files" class="classattr">
+                                <div class="attr variable">
+            <span class="name">labels_stable_across_files</span><span class="annotation">: bool</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.labels_stable_across_files"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.max_speakers" class="classattr">
+                                <div class="attr variable">
+            <span class="name">max_speakers</span><span class="annotation">: Optional[int]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.max_speakers"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.max_speakers_evidence" class="classattr">
+                                <div class="attr variable">
+            <span class="name">max_speakers_evidence</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.max_speakers_evidence"></a>
+    
+    
+
+                            </div>
+                            <div id="DiarizationCapabilities.honors_speaker_hints" class="classattr">
+                                <div class="attr variable">
+            <span class="name">honors_speaker_hints</span><span class="annotation">: bool</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DiarizationCapabilities.honors_speaker_hints"></a>
+    
+    
+
+                            </div>
+                </section>
+    </main>
+<script>
+    function escapeHTML(html) {
+        return document.createElement('div').appendChild(document.createTextNode(html)).parentNode.innerHTML;
+    }
+
+    const originalContent = document.querySelector("main.pdoc");
+    let currentContent = originalContent;
+
+    function setContent(innerHTML) {
+        let elem;
+        if (innerHTML) {
+            elem = document.createElement("main");
+            elem.classList.add("pdoc");
+            elem.innerHTML = innerHTML;
+        } else {
+            elem = originalContent;
+        }
+        if (currentContent !== elem) {
+            currentContent.replaceWith(elem);
+            currentContent = elem;
+        }
+    }
+
+    function getSearchTerm() {
+        return (new URL(window.location)).searchParams.get("search");
+    }
+
+    const searchBox = document.querySelector(".pdoc input[type=search]");
+    searchBox.addEventListener("input", function () {
+        let url = new URL(window.location);
+        if (searchBox.value.trim()) {
+            url.hash = "";
+            url.searchParams.set("search", searchBox.value);
+        } else {
+            url.searchParams.delete("search");
+        }
+        history.replaceState("", "", url.toString());
+        onInput();
+    });
+    window.addEventListener("popstate", onInput);
+
+
+    let search, searchErr;
+
+    async function initialize() {
+        try {
+            search = await new Promise((resolve, reject) => {
+                const script = document.createElement("script");
+                script.type = "text/javascript";
+                script.async = true;
+                script.onload = () => resolve(window.pdocSearch);
+                script.onerror = (e) => reject(e);
+                script.src = "../../../search.js";
+                document.getElementsByTagName("head")[0].appendChild(script);
+            });
+        } catch (e) {
+            console.error("Cannot fetch pdoc search index");
+            searchErr = "Cannot fetch search index.";
+        }
+        onInput();
+
+        document.querySelector("nav.pdoc").addEventListener("click", e => {
+            if (e.target.hash) {
+                searchBox.value = "";
+                searchBox.dispatchEvent(new Event("input"));
+            }
+        });
+    }
+
+    function onInput() {
+        setContent((() => {
+            const term = getSearchTerm();
+            if (!term) {
+                return null
+            }
+            if (searchErr) {
+                return `<h3>Error: ${searchErr}</h3>`
+            }
+            if (!search) {
+                return "<h3>Searching...</h3>"
+            }
+
+            window.scrollTo({top: 0, left: 0, behavior: 'auto'});
+
+            const results = search(term);
+
+            let html;
+            if (results.length === 0) {
+                html = `No search results for '${escapeHTML(term)}'.`
+            } else {
+                html = `<h4>${results.length} search result${results.length > 1 ? "s" : ""} for '${escapeHTML(term)}'.</h4>`;
+            }
+            for (let result of results.slice(0, 10)) {
+                let doc = result.doc;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
+                if (doc.qualname) {
+                    url += `#${doc.qualname}`;
+                }
+
+                let heading;
+                switch (result.doc.kind) {
+                    case "function":
+                        if (doc.fullname.endsWith(".__init__")) {
+                            heading = `<span class="name">${doc.fullname.replace(/\.__init__$/, "")}</span>${doc.signature}`;
+                        } else {
+                            heading = `<span class="def">${doc.funcdef}</span> <span class="name">${doc.fullname}</span>${doc.signature}`;
+                        }
+                        break;
+                    case "class":
+                        heading = `<span class="def">class</span> <span class="name">${doc.fullname}</span>`;
+                        if (doc.bases)
+                            heading += `<wbr>(<span class="base">${doc.bases}</span>)`;
+                        heading += `:`;
+                        break;
+                    case "variable":
+                        heading = `<span class="name">${doc.fullname}</span>`;
+                        if (doc.annotation)
+                            heading += `<span class="annotation">${doc.annotation}</span>`;
+                        if (doc.default_value)
+                            heading += `<span class="default_value"> = ${doc.default_value}</span>`;
+                        break;
+                    default:
+                        heading = `<span class="name">${doc.fullname}</span>`;
+                        break;
+                }
+                html += `
+                        <section class="search-result">
+                        <a href="${url}" class="attr ${doc.kind}">${heading}</a>
+                        <div class="docstring">${doc.doc}</div>
+                        </section>
+                    `;
+
+            }
+            return html;
+        })());
+    }
+
+    if (getSearchTerm()) {
+        initialize();
+        searchBox.value = getSearchTerm();
+        onInput();
+    } else {
+        searchBox.addEventListener("focus", initialize, {once: true});
+    }
+
+    searchBox.addEventListener("keydown", e => {
+        if (["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) {
+            let focused = currentContent.querySelector(".search-result.focused");
+            if (!focused) {
+                currentContent.querySelector(".search-result").classList.add("focused");
+            } else if (
+                e.key === "ArrowDown"
+                && focused.nextElementSibling
+                && focused.nextElementSibling.classList.contains("search-result")
+            ) {
+                focused.classList.remove("focused");
+                focused.nextElementSibling.classList.add("focused");
+                focused.nextElementSibling.scrollIntoView({
+                    behavior: "smooth",
+                    block: "nearest",
+                    inline: "nearest"
+                });
+            } else if (
+                e.key === "ArrowUp"
+                && focused.previousElementSibling
+                && focused.previousElementSibling.classList.contains("search-result")
+            ) {
+                focused.classList.remove("focused");
+                focused.previousElementSibling.classList.add("focused");
+                focused.previousElementSibling.scrollIntoView({
+                    behavior: "smooth",
+                    block: "nearest",
+                    inline: "nearest"
+                });
+            } else if (
+                e.key === "Enter"
+            ) {
+                focused.querySelector("a").click();
+            }
+        }
+    });
+</script></body>
+</html>
