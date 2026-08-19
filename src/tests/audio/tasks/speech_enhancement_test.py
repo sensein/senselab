@@ -582,3 +582,224 @@ def test_driftse_output_keeps_the_input_level_for_both_variants(mono_audio_sampl
     )
     clipped = float((out.waveform.abs() >= 0.999).double().mean())
     assert clipped < 0.01, f"{variant}: {clipped:.1%} of samples at full scale"
+
+
+# ── DriftSE worker device selection ───────────────────────────────────
+
+
+def _stub_driftse_worker(monkeypatch: pytest.MonkeyPatch, captured: dict, tmp_path: Path) -> None:
+    """Replace the checkpoint, the venv and the worker subprocess with fakes that record the payload.
+
+    Args:
+        monkeypatch: The test's monkeypatch fixture.
+        captured: Filled in with ``payload`` and ``timeout``.
+        tmp_path: Directory used as the local checkpoint override, so the Hub is never reached.
+    """
+    import json
+    import types
+
+    import soundfile
+
+    monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
+    monkeypatch.setattr(driftse, "ensure_venv", lambda *a, **k: Path("/tmp/fake-driftse-venv"))
+    monkeypatch.setattr(driftse, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(
+        cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict
+    ) -> types.SimpleNamespace:
+        payload = json.loads(input)
+        captured["payload"] = payload
+        captured["timeout"] = timeout
+        for in_path, out_path in zip(payload["in_paths"], payload["out_paths"]):
+            samples, sr = soundfile.read(in_path, dtype="float32", always_2d=True)
+            soundfile.write(out_path, samples[:, 0], sr, subtype="FLOAT")
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps({"output_paths": payload["out_paths"]}), stderr="")
+
+    monkeypatch.setattr(driftse.subprocess, "run", fake_run)
+
+
+def _synthetic_audio(seconds: float) -> Audio:
+    """Return ``seconds`` of 16 kHz mono noise, well inside full scale.
+
+    Args:
+        seconds: Duration to generate.
+
+    Returns:
+        An ``Audio`` at 16 kHz.
+    """
+    import torch
+
+    return Audio(waveform=0.1 * torch.randn(1, int(seconds * 16000)), sampling_rate=16000)
+
+
+def test_the_callers_device_reaches_the_driftse_worker_payload(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _offline_hfmodel_construction: None
+) -> None:
+    """A caller-selected device is sent to the worker instead of being validated and dropped.
+
+    ``device`` was handed to ``_select_device_and_dtype`` purely for validation and its result
+    thrown away, so the worker chose for itself and no caller could select a card.
+    """
+    captured: dict = {}
+    _stub_driftse_worker(monkeypatch, captured, tmp_path)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    enhance_audios_with_driftse([_synthetic_audio(1.0)], model=model, device=DeviceType.CPU)
+
+    assert captured["payload"]["device"] == "cpu"
+
+
+def test_no_device_leaves_the_choice_to_the_driftse_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _offline_hfmodel_construction: None
+) -> None:
+    """``device=None`` sends ``None``, not a device the host's own torch build happened to see.
+
+    The host interpreter and the venv have separate torch builds; only the venv's answer to
+    ``torch.cuda.is_available()`` governs where the worker can run.
+    """
+    captured: dict = {}
+    _stub_driftse_worker(monkeypatch, captured, tmp_path)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    enhance_audios_with_driftse([_synthetic_audio(1.0)], model=model)
+
+    assert captured["payload"]["device"] is None
+
+
+def test_the_driftse_worker_never_requests_a_bare_cuda_device() -> None:
+    """A bare ``torch.device("cuda")`` takes whatever index torch defaults to.
+
+    On a multi-GPU host that is card 0 regardless of the caller's choice or of a
+    ``CUDA_VISIBLE_DEVICES`` mask, so the worker always names an index.
+    """
+    script = driftse._WORKER_SCRIPT
+    assert 'torch.device("cuda" if torch.cuda.is_available() else "cpu")' not in script
+    assert "cuda:%d" in script, "the worker must name an explicit CUDA index"
+    assert 'args.get("device")' in script, "the worker must read the device the host sent"
+
+
+def test_an_incompatible_device_is_rejected_before_the_venv(_offline_hfmodel_construction: None) -> None:
+    """MPS is not one of this backend's compatible devices and must raise rather than fall back.
+
+    Held before this change too; kept as a guard on the validation the device plumbing reuses.
+    """
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    with pytest.raises(ValueError):
+        enhance_audios_with_driftse([_synthetic_audio(1.0)], model=model, device=DeviceType.MPS)
+
+
+# ── DriftSE worker timeout ────────────────────────────────────────────
+
+
+def test_the_driftse_default_timeout_scales_with_windows_and_window_length() -> None:
+    """The ceiling is derived from the work, not a constant.
+
+    A fixed 1800 s ceiling covers about 25 minutes of audio at the per-window cost measured on
+    this host, and the run that exceeded it lost everything the worker had written.
+    """
+    assert driftse._default_timeout_s(1, 20.0) == driftse._TIMEOUT_FLOOR_S
+
+    big = driftse._default_timeout_s(200, 20.0)
+    more_windows = driftse._default_timeout_s(400, 20.0)
+    longer_windows = driftse._default_timeout_s(200, 40.0)
+    assert big > driftse._TIMEOUT_FLOOR_S
+    assert more_windows == pytest.approx(2 * big)
+    assert longer_windows == pytest.approx(2 * big)
+
+
+def test_the_window_count_mirrors_the_workers_own_chunking() -> None:
+    """The host counts the windows the worker will actually run, including the flush-to-end one.
+
+    The count only feeds the ceiling, but a count that drifts from the worker's chunking would
+    set the ceiling for a different amount of work than the worker performs.
+    """
+    chunk, hop = 20 * 16000, 18 * 16000
+    assert driftse._window_count(16000, chunk, hop) == 1, "shorter than one window"
+    assert driftse._window_count(chunk, chunk, hop) == 1, "exactly one window"
+    assert driftse._window_count(chunk + 1, chunk, hop) == 2, "one sample over -- a flush-to-end window"
+    assert driftse._window_count(38 * 16000, chunk, hop) == 2, "two regular windows, nothing left over"
+    assert driftse._window_count(58 * 16000, chunk, hop) == 4, "three regular windows plus a flush-to-end one"
+
+    # If the worker's own windowing moves, this count has to move with it.
+    assert "starts = list(range(0, total - chunk + 1, hop_samples))" in driftse._WORKER_SCRIPT
+    assert "starts.append(total - chunk)" in driftse._WORKER_SCRIPT
+
+
+def test_the_derived_driftse_ceiling_reaches_subprocess_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _offline_hfmodel_construction: None
+) -> None:
+    """The timeout ``subprocess.run`` receives is the derived one, not a hardcoded 1800."""
+    captured: dict = {}
+    _stub_driftse_worker(monkeypatch, captured, tmp_path)
+    # The floor covers the first-use venv build and would otherwise swallow the work term for any
+    # input short enough to keep this test cheap.
+    monkeypatch.setattr(driftse, "_TIMEOUT_FLOOR_S", 1.0)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    enhance_audios_with_driftse([_synthetic_audio(58.0)], model=model)
+
+    assert captured["timeout"] == driftse._default_timeout_s(4, 20.0)
+    assert captured["timeout"] != 1800
+
+
+def test_an_explicit_driftse_timeout_overrides_the_derived_one(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _offline_hfmodel_construction: None
+) -> None:
+    """``timeout_s`` is honoured verbatim."""
+    captured: dict = {}
+    _stub_driftse_worker(monkeypatch, captured, tmp_path)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    enhance_audios_with_driftse([_synthetic_audio(1.0)], model=model, timeout_s=42.0)
+
+    assert captured["timeout"] == 42.0
+
+
+def test_a_non_positive_driftse_timeout_raises(_offline_hfmodel_construction: None) -> None:
+    """A zero or negative ceiling would abort the worker instantly; reject it up front."""
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    for bad in (0, -1.0):
+        with pytest.raises(ValueError, match="timeout_s"):
+            enhance_audios_with_driftse([_synthetic_audio(1.0)], model=model, timeout_s=bad)
+
+
+def test_a_driftse_timeout_names_the_ceiling_the_input_and_the_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _offline_hfmodel_construction: None
+) -> None:
+    """A ``TimeoutExpired`` becomes an actionable ``RuntimeError``, not a bare stack trace.
+
+    The unhandled exception said only that a subprocess had run too long: not which ceiling it
+    hit, how much audio it was given, how far it had got, or which knob raises the ceiling.
+    """
+    import json
+    import subprocess
+
+    import soundfile
+
+    monkeypatch.setenv(driftse._DRIFTSE_CHECKPOINT_ENV, str(tmp_path))
+    monkeypatch.setattr(driftse, "ensure_venv", lambda *a, **k: Path("/tmp/fake-driftse-venv"))
+    monkeypatch.setattr(driftse, "venv_python", lambda venv_dir: "python3")
+
+    def fake_run(cmd: list, *, input: str, capture_output: bool, text: bool, timeout: float, env: dict) -> None:
+        payload = json.loads(input)
+        # The first input finishes before the ceiling fires, so the error can report progress.
+        samples, sr = soundfile.read(payload["in_paths"][0], dtype="float32", always_2d=True)
+        soundfile.write(payload["out_paths"][0], samples[:, 0], sr, subtype="FLOAT")
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(driftse.subprocess, "run", fake_run)
+
+    model: HFModel = HFModel(path_or_uri=driftse._DRIFTSE_HF_REPO)
+    with pytest.raises(RuntimeError) as exc:
+        enhance_audios_with_driftse(
+            [_synthetic_audio(58.0), _synthetic_audio(20.0)], model=model, timeout_s=123.0, device=DeviceType.CPU
+        )
+
+    message = str(exc.value)
+    assert "123s" in message, "the ceiling that fired must be named"
+    assert "1/2 output(s) written" in message, "progress at the point of failure must be reported"
+    assert "78.0s of audio" in message, "the input being processed must be named"
+    assert "5 window(s) of 20s" in message, "the work the ceiling was set for must be named"
+    assert driftse._DRIFTSE_DEFAULT_VARIANT in message
+    assert "device=cpu" in message
+    assert "timeout_s" in message, "the message must name the knob that raises the ceiling"
