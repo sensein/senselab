@@ -28,7 +28,7 @@ REPO="$SCRATCH/senselab-audiolm"
 BRANCH="triage"
 AUDIO="${AUDIO:?set AUDIO}"
 
-[ -d "$REPO/.git" ] || git clone -q --filter=blob:none git@github.com:sensein/senselab.git "$REPO"
+[ -d "$REPO/.git" ] || git clone -q --filter=blob:none https://github.com/sensein/senselab.git "$REPO"
 cd "$REPO"
 git fetch -q origin "$BRANCH"
 git reset -q --hard "origin/$BRANCH"
