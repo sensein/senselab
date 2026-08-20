@@ -1,6 +1,6 @@
 # Design decisions, in the order they were taken
 
-The first draft of `flowchart.md` was written by reading the existing implementation, so it
+The first draft of the graph was written by reading the existing implementation, so it
 reproduced the current call graph with better labels instead of designing from the questions the
 workflow owes a caller. These decisions correct that, one at a time. The diagrams and `ports.md`
 are redrawn once the set is closed, not per decision.

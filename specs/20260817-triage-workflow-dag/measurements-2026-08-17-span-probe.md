@@ -523,7 +523,7 @@ So the discrepancy is not a resampling artefact and not a harness difference bet
 five-token sequence recorded earlier in this file is the one that does not reproduce, on either the CPU
 harness or the cluster. Two consequences. The earlier scoring of CrisperWhisper's breath coverage
 (26.2% and 10.2%) rests on tokens that other runs do not produce. And `span_refine` in
-`branch-1-airway.md`, which consumes CrisperWhisper token edges as span candidates, has a much weaker
+The earlier airway draft, which consumed CrisperWhisper token edges as span candidates, had a much weaker
 input than assumed — reliably `[cough]` and little else.
 
 ### Correction: the CUDA pin is one site, not two, and the fix is ours

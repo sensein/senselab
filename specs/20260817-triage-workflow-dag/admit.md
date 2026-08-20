@@ -1,7 +1,6 @@
 # ADMIT — the node, and why it holds no thresholds
 
-Decided 2026-08-19. This file governs; where `flowchart.md` or `workflow.nf` disagree they are
-stale, and neither is a source of structure.
+Decided 2026-08-19. This file governs.
 
 ## What it decides
 

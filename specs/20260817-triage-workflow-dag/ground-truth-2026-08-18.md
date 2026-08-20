@@ -320,7 +320,7 @@ is anomalous; they are two different models. The cluster's three byte-identical 
 running `de0369c8`.
 
 **For the design this is a choice, not a defect.** If `[breath]` annotation is wanted — and
-`span_refine` in `branch-1-airway.md` was to consume exactly those token edges — then the branch must
+an earlier airway draft's `span_refine` was to consume exactly those token edges — then the branch must
 pin `831f87e1`, because tracking `main` now yields a model that does not emit them. Any such pin needs
 its own justification recorded, since it means deliberately running a superseded model, and the retrain
 may well be better at what it was retrained for.
@@ -432,7 +432,7 @@ YAMNet also carries what HeAR lacks:
 The trade is confidence: HeAR's cough and breath posteriors saturate near 1.0 where YAMNet's sit at
 0.4-0.7.
 
-### This reverses the proposer/labeller assignment in `branch-1-airway.md`
+### This reverses the proposer/labeller assignment in the earlier airway draft
 
 That draft had `hear_scan` proposing and YAMNet/AST corroborating. The evidence says the opposite:
 

@@ -1,7 +1,7 @@
 # Branch — speech. What, whose, and how well
 
-Draft, 2026-08-19. This file governs the speech branch; where `flowchart.md`, `design.md` or
-`workflow.nf` disagree they are stale and are not a source of structure. Sibling branches own their
+Draft, 2026-08-19. This file governs the speech branch; where `design.md` disagrees it is stale and is not a source
+of structure. Sibling branches own their
 own files.
 
 ## What it decides
@@ -71,7 +71,7 @@ carries no target. Their outputs are then **absent from the product**, which is 
 present-and-empty and is what §"The product" turns into a type.
 
 Every consumed product in that table is produced by a node in it or is a declared branch input. That
-check is the point of writing the table — `branch-1-airway.md` found four dangling ports in its own
+check is the point of writing the table — an earlier airway draft found four dangling ports in its own
 first draft this way, which is F-187 caught before any code existed.
 
 ## 0-1. What the branch does to the audio, and why ADMIT did not

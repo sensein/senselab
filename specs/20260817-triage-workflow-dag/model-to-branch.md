@@ -64,7 +64,7 @@ now correct: `dns4` lost 8.71% of samples, `libri2mix` src0 2.16%, `wsj02mix` sr
 ## Correction: this table is about enhancement selection, not about the airway branch's plan
 
 The draft above conflated two questions. The airway branch's detection plan is already settled in
-`branch-1-airway.md` and it is **HeAR-first on raw audio**: `hear_scan` proposes, YAMNet and AST
+`branch-airway.md`, and it is **not** HeAR-first: measurement since reversed that, with YAMNet and AST
 corroborate, DSP and CrisperWhisper refine the spans, `span_reconfirm` confirms, then grouping,
 attribution and per-source measurement. **No enhancer appears in it.** The rows above listing DriftSE v2
 and FRCRN as "airway candidates" wrongly imply the branch needs one.

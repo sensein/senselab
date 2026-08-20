@@ -2,7 +2,7 @@
 
 Drafted 2026-08-19. Branch node for the third kind in [`taxonomy.md`](taxonomy.md), reached when the
 residual's acoustic gate admits voicing that neither airway nor speech claimed. `admit.md` and
-`taxonomy.md` govern upstream of here; `flowchart.md`, `workflow.nf` and `design.md` are stale and are
+`taxonomy.md` govern upstream of here; `design.md` are stale and are
 not a source of structure for this file.
 
 Members: sustained vowel, pitch glide, loud phonation, maximum phonation time, laughter, crying, vocal
@@ -57,7 +57,7 @@ what is analysed.
 section also says the residual "is the one place grids must be compared" — the gate's voiced windows
 checked for time overlap against the airway and speech detectors' confident windows. That comparison is
 computed there and appears on no declared port, so the input this branch needs is produced by nothing.
-`branch-1-airway.md` caught four dangling ports of exactly this shape in its own table
+an earlier airway draft caught four dangling ports of exactly this shape in its own table
 (`crisper_tokens`, `c50_db`, `rms_db`, `community1_seg`), and it is the reason ports are declared before
 code exists.
 
