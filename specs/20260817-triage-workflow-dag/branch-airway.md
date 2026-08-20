@@ -49,26 +49,32 @@ file. The interval spans the gaps between airway events. Unlabelled spans do not
 | --- | --- |
 | `fail` | no span proposed, or PREPROCESS reported `no_contrast`, and no hint declares airway content |
 | `flag` | no span carries a label of interest; or YAMNet contests a label; or a word falls inside the interval; or a hint declares airway content not found |
-| `pass` | at least one span carries a label of interest, and none of the above |
+| `pass` | at least one span carries a label of interest, and none of the above. The labels are in the store; the verdict says what the branch concluded |
 
 A hint changes only what an absence means. It never creates a span, relabels one, alters a threshold,
 or promotes a `fail` to a `pass`.
 
 ## Product
 
+**The store holds the content; the product is the verdict and a named view over it.**
+
 ```
-airway_spans:     [ { start, end, label, coverage, yamnet: confirm|contest|abstain,
-                      inside_silence, peak_over_floor_db } ]
-unlabelled_spans: [ { start, end, peak_over_floor_db } ]
-figure:           one aligned figure per recording
+outcome:  fail(reason) | flag(reason, spans) | pass
+verdict:  { labelled_n, by_label{}, contested_n, flags[] }
+view:     the span element ids this branch labelled, confirmed or contested
+figure:   one aligned figure per recording          # an artifact, not in the store
 ```
 
-`airway_spans` is the product. Unlabelled spans need no separate field in the store — they are the
-`span` elements this branch attached no `label` to, and any node may read them.
+Each span read through the view carries its `label`, the coverage behind it, YAMNet's
+`confirm`/`contest`/abstain, whether it lies inside certified silence, and its `peak_over_floor_db` —
+the last two being what a reader needs to discount it.
 
-The figure carries the waveform, the envelope with its floor and both span sets, YAMNet `Silence`, the
-wideband spectrogram, the gammatone view and the HeAR channels in use, on one time axis.
+Spans this branch attached no label to are simply spans without a `label` assertion. They need no
+separate field and no separate list.
 
+The figure carries the waveform, the envelope with its floor and every span, YAMNet `Silence`, the
+wideband spectrogram, the gammatone view and the HeAR channels in use, on one time axis, with labelled
+and unlabelled spans distinguishable.
 ## Out of scope
 
 Counts and bouts (no measured merge criterion), severity, any type beyond `labels_of_interest`, and

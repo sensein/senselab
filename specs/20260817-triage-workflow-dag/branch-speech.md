@@ -130,21 +130,42 @@ step is a parallel branch of the graph and blocks nothing. It becomes a gate whe
 | --- | --- |
 | `fail` | no words from either recognizer |
 | `flag` | step 3's instruments disagreed; the count is ≥3 so separation cannot isolate a speaker; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given without model provenance, or with provenance and no speaker matches; a hint asserts speech not found |
-| `pass` | a transcript with per-word confidence, spans attributed to speakers, quality reported |
+| `pass` | words, spans, speakers and quality are in the store, and the verdict below says what the branch concluded |
 
 ## Product
 
+**The store holds the content; the product is the verdict and a named view over it.** Everything below
+is authored into the store as it is produced, so returning a copy would create a second version of the
+same facts that can drift from the first.
+
 ```
-transcript:    [ { word, start, end, confidence, speaker } ]
-speech_spans:  [ { start, end, corroborated, yamnet_coverage, refines? } ]
-streams:       [ { id, speaker, source: "recording" | "separated" } ]
-speaker_spans: [ { start, end, speaker, withdrawn, withdrawn_because } ]
-speaker_count: 1 | 2 | ">=3"
-quality:       { per_span: [ {start, end, stoi, pesq, si_sdr, stream} ], scope: "target" | "all" }
-target_match:  { speaker, similarity, model, revision } | absent
-figure:        one aligned figure per recording
+outcome:  fail(reason) | flag(reason, partial) | pass
+verdict:  { speaker_count, target_speaker?, words_n, speech_s, flags[] }
+view:     the element ids this branch authored or asserted over
+figure:   one aligned figure per recording          # an artifact, not in the store
 ```
 
+`verdict` is the only new information: it is this branch's summary judgement, which is not derivable from
+the elements without knowing which fold this branch intends. Everything else is a pointer.
+
+What a consumer reads through the view, by element kind:
+
+| kind | what it carries | authored in |
+| --- | --- | --- |
+| `word` | text, extent, confidence from agreement, speaker, stream | 1, 6 |
+| `span` (speech) | extent, corroboration, YAMNet coverage, `refines` a PREPROCESS span where one overlapped | 2, 3 |
+| `interval` | the diarizer's window, `[first word start, last word end]` | 4 |
+| `speaker` | diarizer segments, `withdraw`n ones retained with their reason | 4, 6 |
+| `stream` | one per separated source, or the recording itself | 5 |
+| `measurement` | SQUIM per span, tagged with the stream it was taken on | 7 |
+| `target_match` | speaker, similarity, and the model + revision of both embeddings | 6 |
+
+**`partial` on a `flag` is a view, not a payload** — the same element ids, with the contested assertions
+included so a reader sees both sides rather than the branch's preferred side.
+
+**The figure is the one thing that is not an element.** It is a rendering, so it is an artifact beside
+the store rather than in it, and it carries the run's element ids so a reader can trace any mark on it
+back to the assertion that produced it.
 ## Out of scope
 
 ASR (PREPROCESS runs it), airway detection (reads `airway_spans`), speaker identity without a target,
