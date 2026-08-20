@@ -14,7 +14,7 @@ sounds` are all absent from YAMNet's 521 labels — so this branch owns no label
 
 | element read | author | used for |
 | --- | --- | --- |
-| `energy_envelope` | PREPROCESS | the energy half of the gate |
+| `energy_envelope` | PREPROCESS | the energy half of the gate. VOICE reads the envelope directly and derives no spans, so AIRWAY's `K` does not apply to it |
 | `span` elements and their labels | PREPROCESS, AIRWAY | what the residual excludes |
 | speech spans | SPEECH | what the residual excludes |
 | `silence` | PREPROCESS | the floor |

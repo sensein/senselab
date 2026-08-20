@@ -20,7 +20,8 @@ process ADMIT {
     tag   "${meta.id}"
     label 'triage_cpu'
 
-    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*'
+    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*',
+               saveAs: { fn -> fn.substring(fn.lastIndexOf('/') + 1) }
 
     input:
     tuple val(meta), path(recording)

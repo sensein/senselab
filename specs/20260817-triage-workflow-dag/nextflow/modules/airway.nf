@@ -23,7 +23,8 @@ process AIRWAY {
     tag   "${meta.id}"
     label 'triage_model'
 
-    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*'
+    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*',
+               saveAs: { fn -> fn.substring(fn.lastIndexOf('/') + 1) }
 
     input:
     tuple val(meta), path(audio), path(derivatives, stageAs: 'derivatives'), path(store_in, stageAs: 'store_in/*')

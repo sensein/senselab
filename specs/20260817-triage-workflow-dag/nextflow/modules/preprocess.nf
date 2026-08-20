@@ -29,7 +29,8 @@ process PREPROCESS {
     tag   "${meta.id}"
     label 'triage_asr'
 
-    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*'
+    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*',
+               saveAs: { fn -> fn.substring(fn.lastIndexOf('/') + 1) }
     publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'derivatives/**',
                enabled: params.publish_derivatives
 

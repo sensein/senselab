@@ -64,7 +64,8 @@ process REDACT {
     label 'triage_asr'
 
     // SENSITIVE root: the new segment and the verdict.
-    publishDir path: { "${params.store_dir}/${meta.id}" },   mode: 'copy', pattern: 'store/*'
+    publishDir path: { "${params.store_dir}/${meta.id}" },   mode: 'copy', pattern: 'store/*',
+               saveAs: { fn -> fn.substring(fn.lastIndexOf('/') + 1) }
 
     // RELEASABLE root: REDACT's artifacts only. `saveAs` strips the `release/` prefix so the
     // published tree carries no hint of the two-root split, and `failOnError` makes a publish

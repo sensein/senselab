@@ -55,16 +55,25 @@ include { VERDICT    } from './modules/verdict.nf'
 
 // ============================================================================================
 // Entry workflow
+//
+// `--node <NAME>` runs one node standalone; omitted, it runs the whole graph. Nextflow 26's strict
+// parser dropped `-entry`, so the dispatch is a parameter rather than a set of named entry
+// workflows — the capability is the same, the flag is different.
 // ============================================================================================
 
 workflow {
+
+    if( params.node ) {
+        singleNode()
+        return
+    }
 
     if( params.validate_params && !workflow.stubRun )
         validateParams()
     else
         validateLayout()          // the publish-root separation is checked even in stub mode
 
-    ch_audio = Channel
+    ch_audio = channel
         .fromPath(params.input, checkIfExists: true)
         .map { f -> [ [ id: safeId(f.baseName) ], f ] }
 
@@ -85,7 +94,7 @@ workflow TRIAGE {
 
     main:
 
-    ch_versions = Channel.empty()
+    ch_versions = channel.empty()
 
     // ---- ADMIT -----------------------------------------------------------------------------
     // ADMIT writes NO elements: its product is a decoded signal, and `store.md`'s element kinds
@@ -138,10 +147,19 @@ workflow TRIAGE {
     VOICE( ch_after_speech, hints, nodeConfig('voice') )
     ch_versions = ch_versions.mix(VOICE.out.versions)
 
-    ch_redact_segment = Channel.empty()
-    ch_redact_verdict = Channel.empty()
+    // REDACT is joined on SPEECH's transcript marker, which is a PRODUCT rather than an outcome:
+    // it exists iff at least one recognizer returned a word. A recording with no speech therefore
+    // never reaches REDACT, and `verdict.md` gives release = `not_assessed` — which it is careful
+    // to say is NOT `releasable`, because the audio was never examined for content the transcript
+    // could not carry. Reading SPEECH's `outcome` to decide this instead would put a verdict in
+    // the control flow, which is the thing that breaks resumability.
+    ch_redact_in = ch_after_speech.join(SPEECH.out.marker)
+        .map { meta, audio, derivs, segs, _marker -> [ meta, audio, derivs, segs ] }
+
+    ch_redact_segment = channel.empty()
+    ch_redact_verdict = channel.empty()
     if( params.redact.enabled ) {
-        REDACT( ch_after_speech, nodeConfig('redact') )
+        REDACT( ch_redact_in, nodeConfig('redact') )
         ch_redact_segment = REDACT.out.segment
         ch_redact_verdict = REDACT.out.verdict
         ch_versions       = ch_versions.mix(REDACT.out.versions)
@@ -179,46 +197,60 @@ workflow TRIAGE {
 }
 
 // ============================================================================================
-// Single-node entry workflows.
+// Single-node execution.
 //
-// Every process is independently runnable: hand it a recording, a directory of segments its
-// visibility set would have contained, and the derivatives directory. Nothing about a node's
-// behaviour depends on having been reached through the graph, because its whole input is files.
+// Every process is independently runnable. Hand it a recording, a directory of the segments its
+// visibility set would have contained, and (where it needs them) PREPROCESS's derivatives. Nothing
+// about a node's behaviour depends on having been reached through the graph, because its whole
+// input is files — which is the practical payoff of the store being a set of segments on disk
+// rather than an object threaded through channels.
 //
-//   nextflow run . -entry RUN_AIRWAY --input rec.wav --store_in path/to/segments --derivatives path/to/derivatives
+//   nextflow run . --node AIRWAY \
+//       --input rec.wav \
+//       --store_in results/store/rec/ \
+//       --derivatives path/to/derivatives
+//
+// The one thing that does NOT survive standalone execution is the visibility discipline: you are
+// handing the node a directory and it will read whatever is in it. Give it the segments the graph
+// would have given it, not the whole store, or you are testing a different node.
 // ============================================================================================
 
-workflow RUN_ADMIT {
-    validateLayout()
-    ch = Channel.fromPath(params.input, checkIfExists: true).map { f -> [ [id: safeId(f.baseName)], f ] }
-    ADMIT( ch, nodeConfig('admit') )
-}
+workflow singleNode {
 
-workflow RUN_PREPROCESS {
+    main:
     validateLayout()
-    ch = Channel.fromPath(params.input, checkIfExists: true).map { f -> [ [id: safeId(f.baseName)], f ] }
-    PREPROCESS( ch, nodeConfig('preprocess') )
-}
+    def node = params.node.toUpperCase()
 
-workflow RUN_TAXONOMY { TAXONOMY( standaloneInput('TAXONOMY'), standaloneHints(), nodeConfig('taxonomy') ) }
-workflow RUN_AIRWAY   { AIRWAY(   standaloneInput('AIRWAY'),   standaloneHints(), nodeConfig('airway')   ) }
-workflow RUN_SPEECH   { SPEECH(   standaloneInput('SPEECH'),   standaloneHints(), nodeConfig('speech')   ) }
-workflow RUN_VOICE    { VOICE(    standaloneInput('VOICE'),    standaloneHints(), nodeConfig('voice')    ) }
-workflow RUN_REDACT   { REDACT(   standaloneInput('REDACT'),                      nodeConfig('redact')   ) }
-workflow RUN_STORE_VIEW {
-    validateLayout()
-    STORE_VIEW( standaloneSegments('STORE_VIEW'), nodeConfig('store_view') )
-}
-
-workflow RUN_VERDICT {
-    validateLayout()
-    if( !params.store_in )
-        error "-entry RUN_VERDICT needs --store_in <dir holding verdict.*.json and segment.*.jsonl>"
-    ch = Channel.fromPath(params.input, checkIfExists: true)
-        .map { f -> [ [ id: safeId(f.baseName) ],
-                      filesIn(params.store_in, 'verdict.*.json'),
-                      filesIn(params.store_in, 'segment.*.jsonl') ] }
-    VERDICT( ch, nodeConfig('verdict') )
+    if( node == 'ADMIT' ) {
+        ADMIT( soloAudio(), nodeConfig('admit') )
+    }
+    else if( node == 'PREPROCESS' ) {
+        PREPROCESS( soloAudio(), nodeConfig('preprocess') )
+    }
+    else if( node == 'TAXONOMY' ) {
+        TAXONOMY( soloStore(node), soloHints(), nodeConfig('taxonomy') )
+    }
+    else if( node == 'AIRWAY' ) {
+        AIRWAY( soloStore(node), soloHints(), nodeConfig('airway') )
+    }
+    else if( node == 'SPEECH' ) {
+        SPEECH( soloStore(node), soloHints(), nodeConfig('speech') )
+    }
+    else if( node == 'VOICE' ) {
+        VOICE( soloStore(node), soloHints(), nodeConfig('voice') )
+    }
+    else if( node == 'REDACT' ) {
+        REDACT( soloStore(node), nodeConfig('redact') )
+    }
+    else if( node == 'STORE_VIEW' ) {
+        STORE_VIEW( soloSegments(node), nodeConfig('store_view') )
+    }
+    else if( node == 'VERDICT' ) {
+        VERDICT( soloVerdicts(), nodeConfig('verdict') )
+    }
+    else {
+        error "--node ${params.node} is not a node. One of: ADMIT PREPROCESS TAXONOMY AIRWAY SPEECH VOICE REDACT STORE_VIEW VERDICT"
+    }
 }
 
 // ============================================================================================
@@ -240,53 +272,51 @@ def nodeConfig(String node) {
     def undecided = params.undecided
     def models    = params.models
     def common    = [ node: node, device: params.device, pipeline_version: workflow.manifest.version ]
+    def empty     = [ decided: [:], undecided: [:], models: [:] ]
 
-    switch( node ) {
-        case 'admit':
-            return common + [ decided: [:], undecided: [:], models: [:] ]
-        case 'preprocess':
-            return common + [
-                decided  : params.preprocess,
-                undecided: [:],
-                models   : models.subMap(['crisperwhisper', 'asr_second', 'alignment', 'squim', 'yamnet'])
-            ]
-        case 'taxonomy':
-            return common + [
-                decided  : params.taxonomy,
-                undecided: [ min_families: undecided.taxonomy_min_families ],
-                models   : models.subMap(['yamnet', 'ast', 'crisperwhisper', 'hear'])
-            ]
-        case 'airway':
-            return common + [
-                decided  : params.airway,
-                undecided: [:],
-                models   : models.subMap(['hear', 'yamnet'])
-            ]
-        case 'speech':
-            return common + [
-                decided  : params.speech,
-                undecided: [ word_gap_ms: undecided.speech_word_gap_ms, squim: undecided.speech_squim_thresholds ],
-                models   : models.subMap(['diarizer', 'diarizer_second', 'separation', 'squim', 'yamnet', 'pii'])
-            ]
-        case 'voice':
-            return common + [
-                decided  : params.voice,
-                undecided: [ gate: undecided.voice_gate ],
-                models   : [:]                                  // branch-voice.md: it measures, it does not classify
-            ]
-        case 'redact':
-            return common + [
-                decided  : params.redact,
-                undecided: [ padding_ms: undecided.redact_padding_ms ],
-                models   : models.subMap(['crisperwhisper', 'alignment', 'pii'])
-            ]
-        case 'store_view':
-            return common + [ decided: [:], undecided: [:], models: [:] ]
-        case 'verdict':
-            return common + [ decided: [:], undecided: [:], models: [:] ]
-        default:
-            error "nodeConfig: unknown node '${node}'"
-    }
+    if( node == 'admit' )
+        return common + empty
+    if( node == 'store_view' )
+        return common + empty
+    if( node == 'verdict' )
+        return common + empty
+    if( node == 'preprocess' )
+        return common + [
+            decided  : params.preprocess,
+            undecided: [:],
+            models   : models.subMap(['crisperwhisper', 'asr_second', 'alignment', 'squim', 'yamnet'])
+        ]
+    if( node == 'taxonomy' )
+        return common + [
+            decided  : params.taxonomy,
+            undecided: [ min_families: undecided.taxonomy_min_families ],
+            models   : models.subMap(['yamnet', 'ast', 'crisperwhisper', 'hear'])
+        ]
+    if( node == 'airway' )
+        return common + [
+            decided  : params.airway,
+            undecided: [:],
+            models   : models.subMap(['hear', 'yamnet'])
+        ]
+    if( node == 'speech' )
+        return common + [
+            decided  : params.speech,
+            undecided: [ word_gap_ms: undecided.speech_word_gap_ms, squim: undecided.speech_squim_thresholds ],
+            models   : models.subMap(['diarizer', 'diarizer_second', 'separation', 'squim', 'yamnet', 'pii'])
+        ]
+    if( node == 'voice' )
+        return common + [
+            decided  : params.voice,
+            undecided: [ gate: undecided.voice_gate ],
+            models   : [:]                              // branch-voice.md: it measures, it does not classify
+        ]
+    if( node == 'redact' )
+        return common + [
+            decided  : params.redact,
+            undecided: [ padding_ms: undecided.redact_padding_ms ],
+            models   : models.subMap(['crisperwhisper', 'alignment', 'pii'])
+        ]
+    error "nodeConfig: unknown node '${node}'"
 }
 
 /*
@@ -366,31 +396,46 @@ def requiredModels() {
     return needed
 }
 
-/* [ meta, recording, derivatives, [segments...] ] for a single-node entry point. */
-def standaloneInput(String node) {
-    validateLayout()
+/* --- helpers for single-node execution --- */
+
+def soloAudio() {
+    return channel.fromPath(params.input, checkIfExists: true)
+        .map { f -> [ [ id: safeId(f.baseName) ], f ] }
+}
+
+/* [ meta, recording, derivatives, [segments...] ] */
+def soloStore(String node) {
     if( !params.store_in )
-        error "-entry RUN_${node} needs --store_in <dir of segment.*.jsonl>. A node reads the store; it is not handed products."
+        error "--node ${node} needs --store_in <dir of segment.*.jsonl>. A node reads the store; it is not handed products."
     def derivs = file(params.derivatives ?: "${projectDir}/assets/empty-derivatives")
-    return Channel.fromPath(params.input, checkIfExists: true)
+    return channel.fromPath(params.input, checkIfExists: true)
         .map { f -> [ [ id: safeId(f.baseName) ], f, derivs, filesIn(params.store_in, 'segment.*.jsonl') ] }
 }
 
-def standaloneSegments(String node) {
+def soloSegments(String node) {
     if( !params.store_in )
-        error "-entry RUN_${node} needs --store_in <dir of segment.*.jsonl>"
-    return Channel.fromPath(params.input, checkIfExists: true)
+        error "--node ${node} needs --store_in <dir of segment.*.jsonl>"
+    return channel.fromPath(params.input, checkIfExists: true)
         .map { f -> [ [ id: safeId(f.baseName) ], filesIn(params.store_in, 'segment.*.jsonl') ] }
 }
 
-def standaloneHints() {
+def soloVerdicts() {
+    if( !params.store_in )
+        error "--node VERDICT needs --store_in <dir holding verdict.*.json and segment.*.jsonl>"
+    return channel.fromPath(params.input, checkIfExists: true)
+        .map { f -> [ [ id: safeId(f.baseName) ],
+                      filesIn(params.store_in, 'verdict.*.json'),
+                      filesIn(params.store_in, 'segment.*.jsonl') ] }
+}
+
+def soloHints() {
     return params.hints ? file(params.hints, checkIfExists: true) : file("${projectDir}/assets/no-hints.json")
 }
 
 def filesIn(dir, String pattern) {
     if( !dir ) return []
-    def found = file(dir).list().findAll { it ==~ globToRegex(pattern) }.collect { file("${dir}/${it}") }
-    return found
+    def rx = globToRegex(pattern)
+    return file(dir).list().findAll { name -> name ==~ rx }.collect { name -> file("${dir}/${name}") }
 }
 
 def globToRegex(String glob) {

@@ -29,7 +29,9 @@ independent and stay so.
 cough recording has no speech, so SPEECH failing is the expected outcome, not an error. Treating branch
 fails as file fails would fail almost every recording.
 
-So a branch's outcome is read **against what TAXONOMY said about its kind**:
+So a branch's outcome is read **against what TAXONOMY predicted for its kind**. TAXONOMY is advisory and
+every branch runs, so both contradiction rows below are reachable — under a gated run they are not, and a
+gated run is marked so a reader knows the check did not happen:
 
 | TAXONOMY said | branch outcome | reading |
 | --- | --- | --- |

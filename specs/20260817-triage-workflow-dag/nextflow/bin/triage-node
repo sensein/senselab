@@ -1,0 +1,1566 @@
+#!/usr/bin/env python3
+"""One executable per graph node, dispatched by --node.
+
+Nextflow puts `bin/` on PATH, so every process calls this. It is a single self-contained file on
+purpose: a task's PATH entry is a directory of scripts, not a package, and an `import triagelib`
+that works locally and not in a container is a bad trade for one file's worth of tidiness.
+
+WHAT IS REAL HERE AND WHAT IS A SEAM
+------------------------------------
+Real, and the parts most worth having executable:
+
+  * the store — ids, segments, provenance enforcement, the append-only merge, the integrity sweep
+  * the parameter discipline — interval-valued resolution, and refusal where there is no interval
+  * VERDICT's fold — every row of `verdict.md`'s two tables
+  * RELEASE_GUARD — the check that stands between `release_dir` and a disclosure
+  * ADMIT — threshold-free and needs no model, so it is implemented rather than seamed
+  * every stub
+
+A seam, and clearly marked: every measurement that needs a model. `Seam.need()` returns a value from
+`--replay <json>` when one is supplied and otherwise exits 4 naming exactly what was missing. It
+never returns a plausible number. Exit 4 is a NODE error, not a branch `fail`: "could not measure"
+is not a verdict, and `branch-speech.md` makes the same point about a PII detector that did not run.
+
+EXIT CODES
+----------
+  0  the node ran. Its outcome — `fail`, `flag` or `pass` — is in the verdict file. A branch `fail`
+     is normal and lands here.
+  2  usage error
+  3  RELEASE_GUARD refused: an id or a store shape reached the release tree
+  4  a measurement this node needs has no source (no model backend, no replay entry)
+  5  a parameter this node needs has no measured value and no admissible interval
+  6  provenance missing or unresolved: a model without a 40-hex revision
+  7  store integrity: one element id claimed by two authors
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from typing import Any
+
+VERSION = "0.1.0"
+
+# `store.md` names five kinds. The node documents then use five more, and nothing reconciles them.
+# Both sets are accepted and the extras are reported by STORE_VIEW's integrity sweep rather than
+# silently normalised away. See the README's ambiguity list, item A-1.
+KINDS_IN_STORE_MD = {"span", "word", "speaker", "interval", "measurement"}
+KINDS_IN_NODE_DOCS = {"kind", "stream", "pii", "target_match", "redaction"}
+KNOWN_KINDS = KINDS_IN_STORE_MD | KINDS_IN_NODE_DOCS
+
+VERBS = {"label", "confirm", "contest", "refine", "withdraw", "measure"}
+OUTCOMES = ("fail", "flag", "pass")
+SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+
+# =====================================================================================
+# errors
+# =====================================================================================
+
+
+class NodeError(Exception):
+    """A failure of the node itself, never a branch outcome."""
+
+    code = 1
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class Unmeasured(NodeError):
+    code = 4
+
+
+class Underived(NodeError):
+    code = 5
+
+
+class Unprovenanced(NodeError):
+    code = 6
+
+
+class Integrity(NodeError):
+    code = 7
+
+
+class Refused(NodeError):
+    code = 3
+
+
+# =====================================================================================
+# ids
+# =====================================================================================
+
+
+def _digest(*parts: Any) -> str:
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(canonical(p).encode() if not isinstance(p, (bytes, bytearray)) else p)
+        h.update(b"\x1f")
+    return h.hexdigest()
+
+
+def canonical(obj: Any) -> str:
+    """One serialisation, so a hash of the same content is the same hash on every host."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
+
+
+def element_id(node: str, recording: str, *parts: Any) -> str:
+    """Content-addressed, and therefore stable across a re-run.
+
+    `store.md` requires an id assigned once by the first proposer. Deriving it from the content
+    rather than a counter is what makes `-resume` and a re-run from scratch agree: a counter would
+    renumber every element whenever an earlier one changed, and every assertion in every other
+    segment would then point at nothing.
+    """
+    return "e-" + _digest(node, recording, *parts)[:16]
+
+
+def assertion_id(node: str, element: str, verb: str, *parts: Any) -> str:
+    return "a-" + _digest(node, element, verb, *parts)[:16]
+
+
+# =====================================================================================
+# provenance
+# =====================================================================================
+
+
+class Author:
+    """`store.md`: provenance is not optional.
+
+    An element or assertion authored by a model carries the model id and the resolved revision. A
+    ref is refused rather than recorded, because recording a SHA while loading through a ref is the
+    one outcome worse than recording nothing: the provenance is then confidently wrong.
+    """
+
+    def __init__(self, node: str, models: dict[str, dict[str, str]], config_hash: str, stub: bool):
+        self.node = node
+        self.models = models
+        self.config_hash = config_hash
+        self.stub = stub
+
+    def of(self, *roles: str, target_model: str | None = None) -> dict[str, Any]:
+        used = []
+        for role in roles:
+            m = self.models.get(role)
+            if m is None:
+                raise Unprovenanced(
+                    f"{self.node} needs model role '{role}' and none was passed. "
+                    f"Pass --models '{role}=<id>@<40-hex-revision>'."
+                )
+            if not self.stub and not SHA40.match(m.get("revision", "")):
+                raise Unprovenanced(
+                    f"{self.node}: model role '{role}' has revision {m.get('revision')!r}, which is "
+                    "not a resolved 40-hex commit. A ref binds nothing; it may have moved."
+                )
+            used.append({"role": role, "id": m["id"], "revision": m["revision"]})
+        rec: dict[str, Any] = {"node": self.node, "config_hash": self.config_hash, "models": used}
+        if self.stub:
+            rec["stub"] = True
+        if target_model is not None:
+            # `store.md`: an embedding comparison additionally carries the model that produced the
+            # target, because embeddings from different models are not comparable.
+            rec["target_model"] = target_model
+        return rec
+
+
+# =====================================================================================
+# the store
+# =====================================================================================
+
+
+class Segment:
+    """One node's append-only contribution. Written once, never revisited."""
+
+    def __init__(self, node: str, recording: str, author: Author):
+        self.node = node
+        self.recording = recording
+        self.author = author
+        self.records: list[dict[str, Any]] = []
+        self.reads_elements: set[str] = set()
+        self.reads_segments: list[str] = []
+        self.view: list[str] = []
+
+    # ---- writing ------------------------------------------------------------------
+    def element(self, kind: str, evidence: dict, extent=None, roles=(), key=None, **extra) -> str:
+        if kind not in KNOWN_KINDS:
+            raise NodeError(f"unknown element kind {kind!r}")
+        eid = element_id(self.node, self.recording, kind, key if key is not None else evidence, extent)
+        rec = {
+            "record": "element",
+            "id": eid,
+            "kind": kind,
+            "extent": list(extent) if extent else None,
+            "author": self.author.of(*roles),
+            "evidence": evidence,
+        }
+        rec.update(extra)
+        self.records.append(rec)
+        self.view.append(eid)
+        return eid
+
+    def assertion(self, element: str, verb: str, value=None, evidence=None, roles=(), target=None, **extra) -> str:
+        if verb not in VERBS:
+            raise NodeError(f"unknown verb {verb!r}; store.md defines {sorted(VERBS)}")
+        aid = assertion_id(self.node, element, verb, value, evidence)
+        rec = {
+            "record": "assertion",
+            "id": aid,
+            "element_id": element,
+            "verb": verb,
+            "value": value,
+            # `store.md` says `confirm` and `contest` name a prior assertion, and the assertion
+            # record it sketches has no id field to name. Both are added here. Ambiguity A-2.
+            "target_assertion_id": target,
+            "author": self.author.of(*roles),
+            "evidence": evidence or {},
+        }
+        rec.update(extra)
+        self.records.append(rec)
+        self.view.append(aid)
+        return aid
+
+    def read(self, *element_ids: str) -> None:
+        """`store.md`: a node is not restricted to a declared input list, but must record what it read."""
+        self.reads_elements.update(i for i in element_ids if i)
+
+    # ---- emitting -----------------------------------------------------------------
+    def write(self, outdir: str) -> str:
+        header = {
+            "record": "header",
+            "node": self.node,
+            "recording": self.recording,
+            "pipeline_version": VERSION,
+            "author": self.author.of(),
+            "reads": {"segments": sorted(self.reads_segments), "elements": sorted(self.reads_elements)},
+            "n_records": len(self.records),
+        }
+        body = "\n".join(canonical(r) for r in [header] + self.records) + "\n"
+        digest = hashlib.sha256(body.encode()).hexdigest()[:16]
+        path = os.path.join(outdir, f"segment.{self.node.lower()}.{digest}.jsonl")
+        os.makedirs(outdir, exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write(body)
+        return path
+
+
+def read_store(store_in: str | None) -> tuple[list[dict], list[str]]:
+    """Merge every segment. Order-independent: segments are disjoint by author and append-only."""
+    if not store_in or not os.path.isdir(store_in):
+        return [], []
+    names = sorted(n for n in os.listdir(store_in) if n.startswith("segment.") and n.endswith(".jsonl"))
+    records: list[dict] = []
+    for name in names:
+        with open(os.path.join(store_in, name)) as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    records.append(json.loads(line))
+    return records, names
+
+
+def elements_of(records: list[dict], kind: str | None = None, node: str | None = None) -> list[dict]:
+    out = [r for r in records if r.get("record") == "element"]
+    if kind:
+        out = [r for r in out if r["kind"] == kind]
+    if node:
+        out = [r for r in out if r["author"]["node"] == node]
+    return out
+
+
+def assertions_on(records: list[dict], element_id_: str) -> list[dict]:
+    return [r for r in records if r.get("record") == "assertion" and r["element_id"] == element_id_]
+
+
+def header_of(records: list[dict], node: str) -> dict | None:
+    for r in records:
+        if r.get("record") == "header" and r["node"] == node:
+            return r
+    return None
+
+
+# =====================================================================================
+# products
+# =====================================================================================
+
+
+def write_verdict(outdir: str, node: str, outcome: str, verdict: dict, view: list[str], reasons: list[dict],
+                  author: Author, filename: str | None = None, **extra) -> str:
+    """`store.md`: a node's product is an outcome, a verdict and a view — never a copy of the store."""
+    if outcome not in OUTCOMES:
+        raise NodeError(f"outcome {outcome!r} is not one of {OUTCOMES}")
+    doc = {
+        "node": node,
+        "outcome": outcome,
+        "verdict": verdict,
+        "view": view,
+        "reasons": reasons,
+        "author": author.of(),
+    }
+    doc.update(extra)
+    os.makedirs(outdir, exist_ok=True)
+    path = os.path.join(outdir, filename or f"verdict.{node.lower()}.json")
+    with open(path, "w") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    return path
+
+
+# =====================================================================================
+# parameters
+# =====================================================================================
+
+
+def resolve_interval(spec: dict, name: str) -> list[float]:
+    """An interval-valued parameter becomes a list of candidates to evaluate the rule at.
+
+    A single value if one was derived. Otherwise the interval's endpoints, or the admissible set.
+    Never a midpoint: `benchmarks/open.md` records a factor of 2.1 and a factor of 23 on ONE
+    recording, and a midpoint of an unlocated range is a decision the measurement does not contain.
+    """
+    if spec is None:
+        raise Underived(f"{name}: no parameter block at all")
+    if spec.get("value") is not None:
+        return [spec["value"]]
+    if spec.get("admissible"):
+        return list(spec["admissible"])
+    if spec.get("interval"):
+        lo, hi = spec["interval"]
+        return [lo, hi]
+    raise Underived(
+        f"{name} has no value and no admissible interval, so there is nothing to evaluate over and "
+        "nothing that could be defaulted honestly. See benchmarks/open.md."
+    )
+
+
+def interval_verdict(results: list[Any]) -> tuple[Any, bool]:
+    """Unanimous across the candidates -> that answer, decided. Divergent -> undecided."""
+    uniq = {canonical(r) for r in results}
+    return (results[0], True) if len(uniq) == 1 else (None, False)
+
+
+# =====================================================================================
+# the measurement seam
+# =====================================================================================
+
+
+class Seam:
+    """Every model-bearing measurement passes through here.
+
+    There is no fallback that returns a number. A node that cannot measure exits 4 naming the key,
+    because a plausible default is indistinguishable from a measurement once it is in the store, and
+    the store is append-only.
+    """
+
+    def __init__(self, replay: str | None, stub: bool):
+        self.stub = stub
+        self.data: dict[str, Any] = {}
+        if replay:
+            try:
+                with open(replay) as fh:
+                    self.data = json.load(fh)
+            except (OSError, ValueError) as exc:
+                raise NodeError(f"--replay {replay}: not readable as JSON ({exc})") from exc
+            if not isinstance(self.data, dict):
+                raise NodeError(f"--replay {replay}: expected a JSON object of measurement keys")
+
+    def need(self, key: str, hint: str = "") -> Any:
+        if key in self.data:
+            return self.data[key]
+        raise Unmeasured(
+            f"no source for measurement '{key}'.\n"
+            f"  {hint}\n"
+            "  Supply --replay <json> carrying that key, or wire the senselab backend into this\n"
+            "  seam. Nothing is defaulted: a guessed measurement in an append-only store cannot be\n"
+            "  withdrawn, only contested."
+        )
+
+    def opt(self, key: str, default=None) -> Any:
+        return self.data.get(key, default)
+
+
+# =====================================================================================
+# nodes
+# =====================================================================================
+
+
+def node_admit(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`admit.md`: pass or fail, degenerate conditions only, no models, no thresholds, no flag."""
+    reasons: list[dict] = []
+    if a.stub:
+        fail = a.stub_scenario == "admit_fail"
+        reason = "stub: decode failure" if fail else None
+        n_frames, rate, channels = (0, 0, 0) if fail else (224480, 16000, 1)
+    else:
+        try:
+            samples, rate, channels, n_frames = _decode(a.audio)
+        except Exception as exc:  # decode failure is one of the three degenerate conditions
+            fail, reason, rate, channels, n_frames = True, f"decode failure: {exc}", 0, 0, 0
+            samples = []
+        else:
+            fail, reason = False, None
+            if n_frames == 0:
+                fail, reason = True, "decoder returned zero frames"
+            elif all(s == 0 for s in samples):
+                fail, reason = True, "every sample is zero"
+            elif len(set(samples)) == 1:
+                fail, reason = True, "constant value: DC with no variance"
+
+    verdict = {"decoded": not fail, "sample_rate": rate, "channels": channels, "frames": n_frames}
+    if fail:
+        reasons.append({"node": "ADMIT", "outcome": "fail", "why": reason})
+        write_verdict(a.out, "ADMIT", "fail", verdict, [], reasons, author)
+        # No decoded file is written. That is the mechanism, not an oversight: the `audio` output is
+        # `optional: true`, so the graph stops with nothing downstream having run — and the exit
+        # status stays 0, because a fail is a value.
+        return 0
+
+    if a.decoded:
+        os.makedirs(os.path.dirname(a.decoded) or ".", exist_ok=True)
+        if a.stub:
+            with open(a.decoded, "wb") as fh:
+                fh.write(b"RIFF----WAVEstub")  # topology only; no node reads samples in stub mode
+        else:
+            # `admit.md`: no resampling or channel reduction as a decision. The admitted audio stays
+            # the recording as supplied, so this is a copy and not a conversion.
+            with open(a.audio, "rb") as src, open(a.decoded, "wb") as dst:
+                dst.write(src.read())
+
+    reasons.append({"node": "ADMIT", "outcome": "pass", "why": "no degenerate condition met"})
+    write_verdict(a.out, "ADMIT", "pass", verdict, [], reasons, author)
+    return 0
+
+
+def _decode(path: str):
+    try:
+        import soundfile as sf  # type: ignore
+
+        data, rate = sf.read(path, always_2d=True)
+        flat = [float(x) for row in data[: 48000 * 60] for x in row]
+        return flat, int(rate), int(data.shape[1]), int(data.shape[0])
+    except ImportError:
+        pass
+    import wave
+
+    with wave.open(path, "rb") as wf:
+        n = wf.getnframes()
+        raw = wf.readframes(min(n, 48000 * 60))
+        width, channels, rate = wf.getsampwidth(), wf.getnchannels(), wf.getframerate()
+    if width != 2:
+        raise RuntimeError(f"no soundfile and sample width {width} is not 16-bit PCM")
+    import array
+
+    arr = array.array("h")
+    arr.frombytes(raw[: len(raw) - len(raw) % 2])
+    return list(arr), rate, channels, n
+
+
+def node_preprocess(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`preprocess.md`: no fail, no flag. An uncomputable derivative is simply absent."""
+    seg = Segment("PREPROCESS", a.recording_id, author)
+    dec = cfg["decided"]
+    written: list[str] = []
+    os.makedirs(a.derivatives, exist_ok=True)
+
+    if a.stub:
+        span_count = {"admit_fail": 0, "empty": 0}.get(a.stub_scenario, 3)
+        spans = [(0.40 + i * 1.5, 0.72 + i * 1.5) for i in range(span_count)]
+        peaks = [24.1, 19.8, 18.4][:span_count]
+        words = [] if a.stub_scenario in ("cough", "empty") else [
+            {"text": "hello", "start": 4.10, "end": 4.44, "conf": 0.98},
+            {"text": "there", "start": 4.46, "end": 4.81, "conf": 0.95},
+        ]
+        utterances = [] if not words else [{"start": 4.10, "end": 4.81}]
+        for name in ("energy_envelope", "silence", "level", "squim", "asr_crisperwhisper",
+                     "asr_qwen", "alignment", "spectrogram_wb", "spectrogram_nb", "gammatone"):
+            with open(os.path.join(a.derivatives, f"{name}.stub.json"), "w") as fh:
+                json.dump({"stub": True, "derivative": name}, fh)
+            written.append(name)
+    else:
+        env = seam.need("energy_envelope", "dBFS envelope of |x + jH{x}| after a 40 Hz zero-phase lowpass")
+        spans_raw = seam.need("spans", f"span rules at K={dec['spans']['k_db']} dB over the local floor")
+        spans = [(s["start"], s["end"]) for s in spans_raw]
+        peaks = [s["peak_over_floor_db"] for s in spans_raw]
+        words = seam.need("asr_crisperwhisper.words", "CrisperWhisper words with edges")
+        utterances = seam.opt("asr_crisperwhisper.utterances", [])
+        written = list(seam.opt("derivatives_written", []))
+        with open(os.path.join(a.derivatives, "envelope.json"), "w") as fh:
+            json.dump(env, fh)
+
+    # Derivatives that carry a grid but no extent are `measurement` elements at file level.
+    for name in written:
+        seg.element(
+            "measurement",
+            {"derivative": name, "signal": _signal_of(name), "params": dec.get(name, {})},
+            key=("derivative", name),
+            roles=_roles_of(name),
+        )
+
+    # `spans`: elements of kind `span`, carrying `peak_over_floor_db` and NO label. AIRWAY labels
+    # them later; PREPROCESS attaching a label would be the L1/L2 violation the repo keeps finding.
+    span_ids = []
+    for (start, end), peak in zip(spans, peaks):
+        span_ids.append(
+            seg.element("span", {"peak_over_floor_db": peak, "k_db": dec["spans"]["k_db"]},
+                        extent=(start, end), key=("span", start, end))
+        )
+
+    for w in words:
+        seg.element("word", {"text": w["text"], "recognizer_confidence": w.get("conf")},
+                    extent=(w["start"], w["end"]), key=("word", w["start"], w["end"]),
+                    roles=("crisperwhisper",))
+
+    no_contrast = len(spans) == 0
+    verdict = {
+        "derivatives_written": sorted(written),
+        "spans_n": len(spans),
+        # `preprocess.md`: if no peak anywhere reaches K above the local floor, the node reports
+        # `no_contrast` rather than an empty list. AIRWAY reads this as a fail condition.
+        "spans": "no_contrast" if no_contrast else "proposed",
+        "words_n": len(words),
+        "utterance_boundaries_n": len(utterances),
+        "sample_rate": dec["sample_rate"],
+        "preemphasis": dec["preemphasis_a"] if dec["preemphasis_enabled"] else None,
+    }
+    seg.write(a.out)
+    # `preprocess.md`: no fail, no flag. `pass` is the only outcome this node can report, which is
+    # why its informative content is in the verdict body rather than in the outcome.
+    write_verdict(a.out, "PREPROCESS", "pass", verdict, seg.view,
+                  [{"node": "PREPROCESS", "outcome": "pass", "why": "derivatives written to the store"}], author)
+    return 0
+
+
+def _signal_of(name: str) -> str:
+    """`preprocess.md`: every derivative names which signal it reads."""
+    preemph = {"energy_envelope", "spans", "spectrogram_wb", "spectrogram_nb", "gammatone"}
+    return "pre-emphasised" if name in preemph else "plain"
+
+
+def _roles_of(name: str) -> tuple[str, ...]:
+    return {
+        "silence": ("yamnet",),
+        "squim": ("squim",),
+        "asr_crisperwhisper": ("crisperwhisper",),
+        "asr_qwen": ("asr_second",),
+        "alignment": ("alignment",),
+    }.get(name, ())
+
+
+def node_taxonomy(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`taxonomy.md`: presence needs agreement, absence needs unanimity, everything else undecided."""
+    records, names = read_store(a.store_in)
+    seg = Segment("TAXONOMY", a.recording_id, author)
+    seg.reads_segments = names
+    dec, und = cfg["decided"], cfg["undecided"]
+
+    # Eligibility comes before any threshold. An ineligible family does not vote, and is NOT
+    # counted as a vote for absence.
+    families: dict[str, list[str]] = dict(dec["families"])
+    barred: dict[str, list[str]] = dict(dec.get("barred") or {})
+
+    if a.stub:
+        votes = _stub_family_votes(a.stub_scenario)
+    else:
+        votes = {}
+        for kind in ("airway", "speech"):
+            votes[kind] = {}
+            for fam, members in families.items():
+                eligible = [m for m in members if kind not in (barred.get(m) or [])]
+                if not eligible:
+                    continue
+                votes[kind][fam] = seam.need(
+                    f"taxonomy.{kind}.{fam}",
+                    f"presence verdict for kind '{kind}' from family '{fam}' ({eligible}), on that "
+                    "family's own window grid",
+                )
+
+    kind_ids: dict[str, str] = {}
+    states: dict[str, str] = {}
+    for kind in ("airway", "speech"):
+        fam_votes = votes[kind]
+        spec = (und.get("min_families") or {}).get(kind)
+        candidates = resolve_interval(spec, f"undecided.taxonomy_min_families.{kind}")
+
+        n_present = sum(1 for v in fam_votes.values() if v == "present")
+        n_unsure = sum(1 for v in fam_votes.values() if v not in ("present", "absent"))
+        n_eligible = len(fam_votes)
+
+        # Absence needs unanimity, and that rule carries no threshold, so it is evaluated once.
+        if n_eligible and n_present == 0 and n_unsure == 0:
+            state, decided = "absent", True
+        elif n_unsure:
+            state, decided = "undecided", True
+        else:
+            per_candidate = ["present" if n_present >= m else "undecided" for m in candidates]
+            state, decided = interval_verdict(per_candidate)
+            if not decided:
+                state = "undecided"
+        states[kind] = state
+
+        eid = seg.element(
+            "kind",
+            {
+                "kind": kind,
+                "state": state,
+                "families": fam_votes,
+                "eligible_families": n_eligible,
+                "min_families_candidates": candidates,
+                "min_families_derived": spec.get("value") is not None,
+                "undecided_because": None if decided else "min_families_underived",
+            },
+            key=("kind", kind),
+            roles=(),
+        )
+        kind_ids[kind] = eid
+
+    # The third kind is not screened. `taxonomy.md`: it has no roll-up label in any detector's
+    # vocabulary and its determination needs VOICE's phonation gate.
+    kind_ids["voice_no_words"] = seg.element(
+        "kind",
+        {"kind": "voice_no_words", "state": "not_screened",
+         "why": "no detector's label space can express it; VOICE step 2 determines it"},
+        key=("kind", "voice_no_words"),
+    )
+    states["voice_no_words"] = "not_screened"
+
+    screened = [states["airway"], states["speech"]]
+    if all(s == "absent" for s in screened):
+        outcome, why = "fail", "every screened kind is absent — no branch would have a subject"
+    elif any(s == "undecided" for s in screened):
+        outcome, why = "flag", "a kind is undecided: " + ", ".join(
+            k for k in ("airway", "speech") if states[k] == "undecided")
+    else:
+        outcome, why = "pass", "every screened kind is present or absent, and at least one is present"
+
+    seg.write(a.out)
+    write_verdict(a.out, "TAXONOMY", outcome, {"kinds": states, "kind_element_ids": kind_ids},
+                 seg.view, [{"node": "TAXONOMY", "outcome": outcome, "why": why}], author)
+    return 0
+
+
+def _stub_family_votes(scenario: str) -> dict:
+    absent = {"audioset": "absent", "lexical": "absent", "health_acoustic": "absent"}
+    present = {"audioset": "present", "lexical": "present", "health_acoustic": "present"}
+    table = {
+        # airway present, speech absent — the cough recording that must not file-fail
+        "cough": {"airway": present, "speech": {"audioset": "absent", "lexical": "absent"}},
+        # speech present, airway absent
+        "pass_speech": {"airway": absent, "speech": {"audioset": "present", "lexical": "present"}},
+        "pii_survives": {"airway": absent, "speech": {"audioset": "present", "lexical": "present"}},
+        # TAXONOMY says both absent, and the branches will disagree -> two contradiction rows
+        "contradiction": {"airway": absent, "speech": {"audioset": "absent", "lexical": "absent"}},
+        # nothing anywhere -> TAXONOMY fail, triage row 3
+        "empty": {"airway": absent, "speech": {"audioset": "absent", "lexical": "absent"}},
+        # the rule's own threshold decides the answer -> undecided
+        "undecided_min_families": {
+            "airway": {"audioset": "present", "lexical": "absent", "health_acoustic": "absent"},
+            "speech": {"audioset": "present", "lexical": "absent"},
+        },
+    }
+    return table.get(scenario, table["pass_speech"])
+
+
+def node_airway(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`branch-airway.md`: it proposes nothing. It labels, confirms and contests PREPROCESS's spans."""
+    records, names = read_store(a.store_in)
+    seg = Segment("AIRWAY", a.recording_id, author)
+    seg.reads_segments = names
+    dec = cfg["decided"]
+    labels_of_interest = list(dec["labels_of_interest"])
+    yamnet_map = {k: list(v) for k, v in (dec.get("yamnet_label_map") or {}).items()}
+
+    spans = sorted(elements_of(records, "span", node="PREPROCESS"), key=lambda e: (e["extent"] or [0])[0])
+    seg.read(*[s["id"] for s in spans])
+    words = elements_of(records, "word")
+    hint = _load_hints(a.hints, a.recording_id)
+
+    no_contrast = not spans
+    labelled: dict[str, str] = {}
+    contested: list[str] = []
+    single_source: list[str] = []
+
+    for span in spans:
+        start, end = span["extent"]
+        if a.stub:
+            hear = _stub_airway_hear(a.stub_scenario, start)
+            yam = _stub_airway_yamnet(a.stub_scenario, start)
+        else:
+            hear = seam.need(
+                f"airway.hear.{start:.3f}",
+                f"HeAR scores for the span [{start:.3f}, {end:.3f}] placed in a "
+                f"{dec['hear_buffer_s']} s buffer containing nothing else",
+            )
+            yam = seam.need(
+                f"airway.yamnet_coverage.{start:.3f}",
+                "YAMNet coverage over its own native 0.96 s windows overlapping the span — never "
+                "the span as an input",
+            )
+
+        best = max(((lbl, hear.get(lbl, 0.0)) for lbl in labels_of_interest), key=lambda kv: kv[1])
+        if best[1] < dec["hear_threshold"]:
+            # A span whose best label of interest fails to clear the threshold carries no label.
+            # `branch-airway.md`: that needs no separate list and no separate field.
+            continue
+
+        label, score = best
+        label_aid = seg.assertion(span["id"], "label", label,
+                                  {"hear_score": score, "threshold": dec["hear_threshold"],
+                                   "input": f"whole span in a {dec['hear_buffer_s']} s buffer"},
+                                  roles=("hear",))
+        labelled[span["id"]] = label
+
+        winner = max(yam.items(), key=lambda kv: kv[1]) if yam else (None, 0.0)
+        if not yam or winner[1] < dec["yamnet_threshold"]:
+            # Abstain: HeAR's label stands, marked single-source.
+            seg.assertion(span["id"], "measure", None,
+                          {"yamnet": "abstain", "why": "nothing reached threshold anywhere in the span",
+                           "single_source": True}, roles=("yamnet",), target=label_aid)
+            single_source.append(span["id"])
+        elif winner[0] in yamnet_map.get(label, []):
+            seg.assertion(span["id"], "confirm", label,
+                          {"yamnet_label": winner[0], "coverage": winner[1], "aggregation": "coverage"},
+                          roles=("yamnet",), target=label_aid)
+        else:
+            # `store.md`: a contest does not resolve. Both survive and the outcome is a flag. The
+            # span is NOT relabelled — `branch-airway.md` says so explicitly.
+            seg.assertion(span["id"], "contest", winner[0],
+                          {"yamnet_label": winner[0], "coverage": winner[1],
+                           "contests": label, "resolved": False},
+                          roles=("yamnet",), target=label_aid)
+            contested.append(span["id"])
+
+    # Step 3. The interval spans the gaps between airway events; unlabelled spans do not extend it.
+    lexical_flag = None
+    if labelled:
+        marked = [s for s in spans if s["id"] in labelled]
+        lo = min(s["extent"][0] for s in marked)
+        hi = max(s["extent"][1] for s in marked)
+        inside = [w for w in words if w["extent"] and w["extent"][0] < hi and w["extent"][1] > lo]
+        seg.read(*[w["id"] for w in inside])
+        if inside:
+            lexical_flag = {"interval": [lo, hi], "words_inside": len(inside)}
+
+    hint_airway = (hint or {}).get("airway_content")
+
+    if no_contrast and not hint_airway:
+        # `branch-airway.md`: fail when no span was proposed, or PREPROCESS reported `no_contrast`,
+        # and no hint declares airway content. Both reduce to the same observation from the store:
+        # PREPROCESS wrote no `span` element.
+        outcome = "fail"
+        why = "no span proposed (PREPROCESS: no_contrast), and no hint declares airway content"
+    elif not labelled:
+        outcome, why = "flag", "no span carries a label of interest"
+    elif contested:
+        outcome, why = "flag", f"YAMNet contests {len(contested)} label(s); both assertions stand"
+    elif lexical_flag:
+        outcome, why = "flag", "an ASR word falls inside the airway interval"
+    elif hint_airway and not labelled:
+        outcome, why = "flag", "a hint declares airway content that was not found"
+    else:
+        outcome, why = "pass", f"{len(labelled)} span(s) carry a label of interest"
+
+    by_label: dict[str, int] = {}
+    for lbl in labelled.values():
+        by_label[lbl] = by_label.get(lbl, 0) + 1
+
+    if a.figure:
+        _write_figure(a.figure, "AIRWAY", seg.view)
+
+    seg.write(a.out)
+    write_verdict(a.out, "AIRWAY", outcome,
+                  {"labelled_n": len(labelled), "by_label": by_label, "contested_n": len(contested),
+                   "single_source_n": len(single_source), "spans_read_n": len(spans),
+                   "lexical_contamination": lexical_flag,
+                   "flags": [] if outcome == "pass" else [why]},
+                  seg.view, [{"node": "AIRWAY", "outcome": outcome, "kind": "airway", "why": why}], author)
+    return 0
+
+
+def _stub_airway_hear(scenario: str, start: float) -> dict:
+    if scenario in ("cough", "contradiction"):
+        return {"Cough": 0.81, "Breathe": 0.12} if start < 1.0 else {"Cough": 0.22, "Breathe": 0.61}
+    return {"Cough": 0.11, "Breathe": 0.09}
+
+
+def _stub_airway_yamnet(scenario: str, start: float) -> dict:
+    if scenario == "contradiction" and start < 1.0:
+        return {"Speech": 0.74}          # a confident label outside the mapping -> contest
+    if scenario == "cough":
+        return {"Cough": 0.66} if start < 1.0 else {"Breathing": 0.58}
+    return {}
+
+
+def node_speech(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`branch-speech.md`. The node after which the store holds PII, permanently."""
+    records, names = read_store(a.store_in)
+    seg = Segment("SPEECH", a.recording_id, author)
+    seg.reads_segments = names
+    dec, und = cfg["decided"], cfg["undecided"]
+    hint = _load_hints(a.hints, a.recording_id)
+    flags: list[str] = []
+
+    pp_words = elements_of(records, "word", node="PREPROCESS")
+    seg.read(*[w["id"] for w in pp_words])
+    pp_spans = elements_of(records, "span", node="PREPROCESS")
+    airway_labelled = [
+        s["id"] for s in pp_spans
+        if any(x["verb"] == "label" and x["author"]["node"] == "AIRWAY" for x in assertions_on(records, s["id"]))
+    ]
+    seg.read(*airway_labelled)
+
+    if a.stub:
+        words = [] if a.stub_scenario in ("cough", "empty") else [
+            {"text": "hello", "start": 4.10, "end": 4.44, "agreement": 1.0},
+            {"text": "there", "start": 4.46, "end": 4.81, "agreement": 0.5},
+        ]
+        utterances = [{"start": 4.10, "end": 4.81}] if words else []
+        speaker_count = 1
+        pii_findings = [{"category": "PERSON", "extent": [4.46, 4.81], "asr_model": "crisperwhisper"}] \
+            if a.stub_scenario == "pii_survives" else []
+        pii_failures: list[str] = []
+        corroboration = {"yamnet_speech_coverage": 0.91, "squim_says_speech": True}
+    else:
+        words = seam.need("speech.words_agreed",
+                          "per-word agreement between the two recognizers — bounds confidence from "
+                          "above, and is reported as agreement, never as correctness")
+        utterances = seam.opt("speech.utterance_boundaries", [])
+        speaker_count = seam.need("speech.speaker_count",
+                                  "pyannote over [first word start, last word end] only, codomain {1,2,>=3}")
+        pii = seam.need("speech.pii", "scan_for_pii over BOTH recognizers' transcripts, with failures")
+        pii_findings, pii_failures = pii.get("spans", []), pii.get("failures", [])
+        corroboration = seam.need("speech.corroboration", "YAMNet Speech coverage and SQUIM per span")
+
+    # `branch-speech.md`: fail when neither recognizer returns a word. No speech was detected, so
+    # this branch has no subject. That is EXPECTED on a cough recording and must not fail the file.
+    if not words:
+        write_verdict(a.out, "SPEECH", "fail",
+                      {"speaker_count": None, "words_n": 0, "speech_s": 0.0,
+                       "pii": {"categories": [], "n": 0, "scanned_by": [], "failed": []}, "flags": []},
+                      [], [{"node": "SPEECH", "outcome": "fail", "kind": "speech",
+                            "why": "neither recognizer returned a word: this branch has no subject"}],
+                      author)
+        Segment("SPEECH", a.recording_id, author).write(a.out)
+        # No transcript marker, so REDACT does not run and `verdict.md` gives release =
+        # not_assessed — which is explicitly NOT releasable.
+        return 0
+
+    # ---- step 2: speech spans from word timings ---------------------------------------
+    gap_spec = und.get("word_gap_ms") or {}
+    if gap_spec.get("value") is not None:
+        grouping, gap = f"word_gap_ms={gap_spec['value']}", gap_spec["value"] / 1000.0
+        runs: list[list[dict]] = [[words[0]]]
+        for w in words[1:]:
+            if w["start"] - runs[-1][-1]["end"] <= gap:
+                runs[-1].append(w)
+            else:
+                runs.append([w])
+        spans = [(r[0]["start"], r[-1]["end"]) for r in runs]
+    elif utterances:
+        # No invented gap. The recognizer's own utterance segmentation is a measurement carrying
+        # provenance; a threshold we chose would be a claim about what makes one utterance.
+        grouping, spans = "recognizer_native", [(u["start"], u["end"]) for u in utterances]
+    else:
+        raise Underived(
+            "SPEECH step 2 needs a word-gap threshold to group words into spans, and\n"
+            "  undecided.speech_word_gap_ms.value is null (benchmarks/open.md: 'unspecified. Any\n"
+            "  value is a claim about what makes one utterance'). The fallback is the recognizer's\n"
+            "  own utterance boundaries, and this recording has none."
+        )
+
+    span_ids = []
+    for start, end in spans:
+        overlapping = [s for s in pp_spans if s["extent"] and s["extent"][0] < end and s["extent"][1] > start]
+        sid = seg.element("span", {"source": "word_timings", "span_grouping": grouping,
+                                   "corroboration": corroboration},
+                          extent=(start, end), key=("speech_span", start, end))
+        span_ids.append(sid)
+        for pp_span in overlapping:
+            # `store.md`: refine keeps the coarse extent, so a later reader can tell a locator from
+            # an edge. The PREPROCESS extent is retained in the assertion's evidence.
+            seg.assertion(pp_span["id"], "refine", [start, end],
+                          {"prior_extent": pp_span["extent"], "refined_by": "word timings",
+                           "speech_span": sid})
+
+    # ---- step 3: corroboration -------------------------------------------------------
+    if not corroboration.get("squim_says_speech", True) or \
+            corroboration.get("yamnet_speech_coverage", 1.0) < dec["yamnet_speech_threshold"]:
+        flags.append("step 3 instruments disagreed: " + canonical(corroboration))
+
+    # ---- step 4/5/6 ------------------------------------------------------------------
+    interval_id = seg.element("interval", {"window": "[first word start, last word end]",
+                                           "purpose": "keeps non-speech events out of the speaker count"},
+                              extent=(words[0]["start"], words[-1]["end"]), key=("diar_interval",))
+    speaker_id = seg.element("speaker", {"diarizer_count": speaker_count,
+                                         "codomain": dec["diarizer_codomain"]},
+                             key=("speaker_count",), roles=("diarizer",))
+    if speaker_count != dec["separate_when_count_ne"]:
+        flags.append(f"speaker count is {speaker_count}, not 1")
+        if speaker_count >= 3:
+            # n_sources is fixed at 2 by the checkpoint, so >=3 cannot be served and the branch
+            # reports that rather than separating into the wrong number.
+            flags.append("count >= 3: MossFormer2_SS_16K is fixed at 2 sources and cannot isolate a speaker")
+
+    for sid in airway_labelled:
+        seg.assertion(sid, "measure", None,
+                      {"read_by": "SPEECH step 4",
+                       "effect": "a diarizer segment overlapping this span is withdrawn, not relabelled"})
+
+    target = (hint or {}).get("target_embedding")
+    target_speaker = None
+    if target:
+        if not target.get("model") or not SHA40.match(target.get("revision", "")):
+            # `branch-speech.md`: a target without provenance is REFUSED rather than compared.
+            flags.append("a target embedding was supplied without model provenance: refused, not compared")
+        else:
+            match = seam.opt("speech.target_match") if not a.stub else {"speaker": "SPEAKER_00", "similarity": 0.71}
+            if not match:
+                flags.append("a target was given with provenance and no speaker matches")
+            else:
+                target_speaker = match["speaker"]
+                seg.element("target_match", {"speaker": match["speaker"], "similarity": match["similarity"]},
+                            key=("target_match",), roles=("diarizer",),
+                            target_model=f"{target['model']}@{target['revision']}")
+
+    # ---- step 7: PII -----------------------------------------------------------------
+    categories = sorted({f["category"] for f in pii_findings})
+    for f in pii_findings:
+        # Category and extent. NEVER the matched text: a verdict that quotes the PII it found has
+        # published it into whatever reads the verdict.
+        seg.element("pii", {"category": f["category"], "asr_model": f.get("asr_model"),
+                            "corroborated": f.get("corroborated", False)},
+                    extent=tuple(f["extent"]), key=("pii", f["category"], f["extent"][0]))
+
+    if pii_failures:
+        # `PiiScan.failures` must be honoured: "could not check" is not "clean".
+        flags.append(f"a PII detector failed to run: {sorted(pii_failures)}")
+    if pii_findings and target_speaker is None:
+        flags.append("PII found and no target speaker is known: there is no speaker to exempt")
+    elif pii_findings and target_speaker is not None:
+        flags.append("PII overlapping the target speaker's spans")
+
+    outcome = "flag" if flags else "pass"
+    verdict = {
+        "speaker_count": speaker_count,
+        "target_speaker": target_speaker,
+        "words_n": len(words),
+        "speech_s": round(sum(e - s for s, e in spans), 3),
+        "span_grouping": grouping,
+        "pii": {"categories": categories, "n": len(pii_findings),
+                "scanned_by": sorted({f.get("asr_model") for f in pii_findings if f.get("asr_model")}),
+                "failed": sorted(pii_failures)},
+        "flags": flags,
+    }
+
+    if a.streams:
+        os.makedirs(a.streams, exist_ok=True)
+    if a.figure:
+        _write_figure(a.figure, "SPEECH", seg.view)
+
+    # The marker is a PRODUCT, not an outcome: it says a transcript exists to redact. REDACT joins
+    # on it, so REDACT does not run on a recording with no speech and `verdict.md` gives
+    # release = not_assessed rather than a `releasable` that examined nothing.
+    with open(os.path.join(a.out, "marker.transcript.json"), "w") as fh:
+        json.dump({"transcript_present": True, "scanned_by": verdict["pii"]["scanned_by"],
+                   "note": "no ids, no text; presence only"}, fh, indent=2)
+
+    seg.write(a.out)
+    write_verdict(a.out, "SPEECH", outcome, verdict, seg.view,
+                  [{"node": "SPEECH", "outcome": outcome, "kind": "speech",
+                    "why": flags[0] if flags else "words, spans, speakers and quality are in the store"}],
+                  author)
+    return 0
+
+
+def node_voice(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`branch-voice.md`: it measures, it does not classify. The gate is interval-valued."""
+    records, names = read_store(a.store_in)
+    seg = Segment("VOICE", a.recording_id, author)
+    seg.reads_segments = names
+    und = cfg["undecided"]
+    hint = _load_hints(a.hints, a.recording_id)
+
+    # Step 1. The residual is a fold over what the other branches asserted — which is the whole
+    # reason it has a producer at all. The earlier design named `residual_windows` with none.
+    pp_spans = elements_of(records, "span", node="PREPROCESS")
+    speech_spans = elements_of(records, "span", node="SPEECH")
+    claimed = []
+    for s in pp_spans:
+        acts = assertions_on(records, s["id"])
+        if any(x["verb"] == "label" and x["author"]["node"] == "AIRWAY" for x in acts):
+            claimed.append(s["extent"])
+    claimed += [s["extent"] for s in speech_spans if s["extent"]]
+    seg.read(*[s["id"] for s in pp_spans + speech_spans])
+
+    # An unlabelled span is NOT excluded: it is exactly where unclaimed vocalic activity would sit.
+    unclaimed = [s["extent"] for s in pp_spans
+                 if s["extent"] and not any(c and c[0] < s["extent"][1] and c[1] > s["extent"][0] for c in claimed)]
+
+    if not unclaimed:
+        Segment("VOICE", a.recording_id, author).write(a.out)
+        write_verdict(a.out, "VOICE", "fail",
+                      {"runs_n": 0, "voiced_s": 0.0, "ambiguous_runs_n": 0, "flags": []}, [],
+                      [{"node": "VOICE", "outcome": "fail", "kind": "voice_no_words",
+                        "why": "the residual is empty: every energetic interval belongs to another branch"}],
+                      author)
+        return 0
+
+    per_cand = resolve_interval((und.get("gate") or {}).get("periodicity"),
+                                "undecided.voice_gate.periodicity")
+    rms_cand = resolve_interval((und.get("gate") or {}).get("rms"), "undecided.voice_gate.rms")
+    derived = ((und.get("gate") or {}).get("periodicity") or {}).get("value") is not None
+
+    runs, ambiguous, flags = [], 0, []
+    for extent in unclaimed:
+        if a.stub:
+            measured = {"periodicity": 0.62, "rms": 0.004} if a.stub_scenario != "cough" \
+                else {"periodicity": 0.50, "rms": 0.0009}
+        else:
+            measured = seam.need(
+                f"voice.gate.{extent[0]:.3f}",
+                "normalised autocorrelation peak and RMS over the residual interval; both "
+                "conditions must hold, so a periodic room tone cannot pass on energy alone",
+            )
+        # Evaluate the gate at EVERY admissible value. No midpoint.
+        outcomes = [bool(measured["periodicity"] >= p and measured["rms"] >= r)
+                    for p in per_cand for r in rms_cand]
+        answer, decided = interval_verdict(outcomes)
+        if decided and answer:
+            runs.append((extent, measured, "decided"))
+        elif not decided:
+            runs.append((extent, measured, "gate_undetermined"))
+            ambiguous += 1
+
+    for extent, measured, status in runs:
+        rid = seg.element(
+            "span",
+            {"gate_at_onset": measured, "offset_criterion": "the gate stops holding",
+             "onset_kind": "observed period mark", "offset_kind": "criterion",
+             "gate_status": status, "periodicity_candidates": per_cand, "rms_candidates": rms_cand,
+             "gate_derived": derived, "merged": False},
+            extent=tuple(extent), key=("voiced_run", extent[0]),
+        )
+        # Step 3: a point process, not an F0 contour. Absent outside voiced runs — not zero and not
+        # interpolated, because jitter and shimmer are defined between consecutive periods.
+        marks = seam.opt(f"voice.period_marks.{extent[0]:.3f}", []) if not a.stub else [
+            {"t": extent[0], "duration_s": 0.01144, "amplitude": 0.31, "placing_peak": 0.68}]
+        seg.element("measurement", {"period_marks": marks, "grid": None, "run": rid},
+                    extent=tuple(extent), key=("period_marks", extent[0]))
+
+    if not runs:
+        outcome, why = "fail", "no run passes the gate"
+    elif ambiguous:
+        outcome, why = "flag", (f"{ambiguous} run(s) sit inside the un-derived gate interval "
+                               f"(periodicity {per_cand}, rms {rms_cand}); no midpoint was invented")
+        flags.append(why)
+    elif (hint or {}).get("phonation") and not runs:
+        outcome, why = "flag", "a hint asserts phonation the branch did not find"
+    else:
+        outcome, why = "pass", "period marks, amplitudes and runs are in the store"
+
+    seg.write(a.out)
+    write_verdict(a.out, "VOICE", outcome,
+                  {"runs_n": len(runs), "voiced_s": round(sum(e - s for (s, e), _, _ in runs), 3),
+                   "ambiguous_runs_n": ambiguous, "gate_derived": derived, "flags": flags},
+                  seg.view, [{"node": "VOICE", "outcome": outcome, "kind": "voice_no_words", "why": why}],
+                  author)
+    return 0
+
+
+def node_redact(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`redact.md`: a releasable derivative, and it cannot make the store releasable."""
+    records, names = read_store(a.store_in)
+    seg = Segment("REDACT", a.recording_id, author)
+    seg.reads_segments = names
+    dec, und = cfg["decided"], cfg["undecided"]
+
+    padding = (und.get("padding_ms") or {}).get("value")
+    if padding is None and not a.stub:
+        raise Underived(
+            "REDACT pads every redacted extent outward by a margin that must exceed the WORST\n"
+            "  measured alignment edge error. That distribution is unquantified\n"
+            "  (benchmarks/open.md), and unlike the phonation gate there is no admissible interval\n"
+            "  to evaluate over — only an unquantified bound. A median would leave a fragment of a\n"
+            "  name audible, and that failure is the unrecoverable one.\n"
+            "  Set redact.enabled = false (release becomes not_assessed) or supply\n"
+            "  --undecided.redact_padding_ms.value with your own derivation."
+        )
+
+    findings = elements_of(records, "pii")
+    seg.read(*[f["id"] for f in findings])
+
+    # Scope: EVERY finding, regardless of speaker. SPEECH flags only target-speaker PII because
+    # flagging asks "does this need a human"; redaction asks "is this releasable", and a non-target
+    # speaker naming the participant is exactly as unsafe.
+    extents = []
+    for f in findings:
+        if not f["extent"]:
+            continue
+        pad = (padding or 0) / 1000.0
+        extents.append([f["extent"][0] - pad, f["extent"][1] + pad])
+    extents.sort()
+    merged: list[list[float]] = []
+    for e in extents:
+        # Two words whose padded extents overlap become one redaction: redacting them separately
+        # leaves an audible sliver between them.
+        if merged and e[0] <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e[1])
+        else:
+            merged.append(list(e))
+
+    by_category: dict[str, int] = {}
+    for f in findings:
+        by_category[f["evidence"]["category"]] = by_category.get(f["evidence"]["category"], 0) + 1
+
+    if a.stub:
+        survived = ["PERSON"] if a.stub_scenario == "pii_survives" else []
+    else:
+        survived = seam.need("redact.reverify",
+                             "re-run ASR and the PII scan on REDACT's OWN output; a surviving "
+                             "finding is a fail. The audio check is the weaker one: ASR may simply "
+                             "fail to transcribe a region that still contains intelligible speech")
+
+    for e in merged:
+        seg.element("redaction", {"padding_ms": padding, "merged_from_overlap": True},
+                    extent=tuple(e), key=("redaction", e[0]))
+
+    verdict = {"redactions_n": len(merged), "by_category": by_category, "padding_ms": padding,
+               "verified": dec.get("verify", True) and not survived, "survived": sorted(set(survived)),
+               "verification_note": "a clean re-scan bounds the failure; it does not prove the negative"}
+
+    if survived:
+        # fail: the artifact is not released, and the surviving CATEGORY is reported. Nothing is
+        # written under release/ at all, and the exit status stays 0.
+        seg.write(a.out)
+        write_verdict(a.out, "REDACT", "fail", verdict, seg.view,
+                      [{"node": "REDACT", "outcome": "fail",
+                        "why": f"a finding survived verification: {sorted(set(survived))}"}], author)
+        return 0
+
+    # ---- the releasable derivative -------------------------------------------------
+    os.makedirs(a.release, exist_ok=True)
+    _write_release(a.release, a.recording_id, len(merged), padding, verdict["verified"], a.stub)
+
+    seg.write(a.out)
+    write_verdict(a.out, "REDACT", "pass", verdict, seg.view,
+                  [{"node": "REDACT", "outcome": "pass",
+                    "why": f"{len(merged)} redaction(s), none surviving verification"}], author)
+    return 0
+
+
+def _write_release(release: str, recording: str, n: int, padding, verified: bool, stub: bool) -> None:
+    """Everything written here is subject to RELEASE_GUARD. Nothing here may carry an id.
+
+    The manifest deliberately omits extents and categories as well as ids: a category plus a
+    position is most of a finding, and the store's `pii` elements are indexed by exactly that pair.
+    It also omits the recording's content hash and any store-side run id — a shared key is a join
+    key whatever it is called.
+    """
+    release_id = "rel-" + hashlib.sha256(f"{recording}:{n}:{padding}".encode()).hexdigest()[:12]
+    with open(os.path.join(release, "manifest.json"), "w") as fh:
+        json.dump({"release_id": release_id, "produced_by": "REDACT", "redactions_n": n,
+                   "padding_ms": padding, "verified": verified,
+                   "verification_note": "bounds the failure; does not prove the negative",
+                   "contains_element_ids": False}, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    with open(os.path.join(release, "transcript.redacted.txt"), "w") as fh:
+        fh.write("[REDACTED]\n" * n if n else "")
+    with open(os.path.join(release, "audio.redacted.wav"), "wb") as fh:
+        fh.write(b"RIFF----WAVEstub" if stub else b"RIFF----WAVE")
+    with open(os.path.join(release, "figure.redacted.txt"), "w") as fh:
+        fh.write("redacted figure: no element ids, no word text\n")
+
+
+def node_verdict(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """`verdict.md`: the last fold. Two axes, and it never chooses between contradicting nodes."""
+    verdicts = _read_verdicts(a.verdicts_in)
+    records, names = read_store(a.store_in)
+    seg = Segment("VERDICT", a.recording_id, author)
+    seg.reads_segments = names
+
+    reasons: list[dict] = []
+    for node in ("ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "VOICE", "REDACT"):
+        v = verdicts.get(node)
+        if v:
+            reasons.extend(v.get("reasons") or [{"node": node, "outcome": v["outcome"], "why": None}])
+
+    admit = verdicts.get("ADMIT")
+    tax = verdicts.get("TAXONOMY")
+    screened = (tax or {}).get("verdict", {}).get("kinds", {}) if tax else {}
+    admit_failed = admit is None or admit.get("outcome") == "fail"
+
+    # ---- the contradiction table ----------------------------------------------------
+    branch_of_kind = {"airway": "AIRWAY", "speech": "SPEECH", "voice_no_words": "VOICE"}
+    resolved: dict[str, str] = {}
+    contradictions: list[dict] = []
+
+    # `verdict.md` row 1: ADMIT failed means nothing ran, and NOTHING IS CLAIMED about the
+    # recording. So `kinds` is empty rather than carrying an invented state name for each kind.
+    # A state word that means "we never looked" would be read as a measurement.
+    for kind, node in ({} if admit_failed else branch_of_kind).items():
+        said = screened.get(kind, "not_screened" if kind == "voice_no_words" else None)
+        bv = verdicts.get(node)
+        outcome = bv["outcome"] if bv else None
+        state, note = said, None
+
+        if outcome is None:
+            state = said
+        elif outcome == "flag":
+            # `verdict.md`: a branch flag flags, whatever the screen said.
+            state = said if said in ("present", "absent") else "undecided"
+            note = f"{node} returned flag"
+        elif said == "absent" and outcome == "pass":
+            state, note = "present", f"{node} passed on a kind the screen called absent"
+            contradictions.append({"kind": kind, "screen": said, "branch": outcome, "why": note})
+        elif said == "present" and outcome == "fail":
+            state, note = "present", f"the screen found {kind} and {node} found no subject"
+            contradictions.append({"kind": kind, "screen": said, "branch": outcome, "why": note})
+        elif said == "present" and outcome == "pass":
+            state, note = "present", "confirmed"
+        elif said == "absent" and outcome == "fail":
+            state, note = "absent", "expected: the branch had no subject"
+        elif said in ("undecided", "not_screened", None):
+            state = "present" if outcome == "pass" else "absent"
+            note = f"resolved to {state} by {node}"
+        resolved[kind] = state or "unknown"
+
+        # Both TAXONOMY's assertion and this resolution stay in the store, so the change is visible
+        # rather than silent.
+        kind_ids = (tax or {}).get("verdict", {}).get("kind_element_ids", {})
+        if kind_ids.get(kind):
+            seg.read(kind_ids[kind])
+            seg.assertion(kind_ids[kind], "refine", state,
+                          {"screen_said": said, "branch": node, "branch_outcome": outcome, "note": note})
+
+    for c in contradictions:
+        reasons.append({"node": "VERDICT", "outcome": "flag", "kind": c["kind"], "why": c["why"]})
+
+    # ---- the triage fold, in order. The first that applies wins. ---------------------
+    flagging = [n for n, v in verdicts.items() if v.get("outcome") == "flag"]
+    if admit_failed:
+        triage, why = "fail", "ADMIT failed: nothing ran, and nothing is claimed about the recording"
+    elif flagging or contradictions:
+        triage, why = "flag", ("nodes flagged: " + ", ".join(sorted(flagging)) if flagging else "") + \
+                              ("; contradictions: " + ", ".join(c["kind"] for c in contradictions)
+                               if contradictions else "")
+    elif resolved and all(s == "absent" for s in resolved.values()):
+        # A different finding from row 1, and it carries a different reason: "measured, and there is
+        # nothing of interest in it" is not "could not measure".
+        triage, why = "fail", "every kind is absent: measured, and there is nothing of interest in it"
+    else:
+        triage, why = "pass", "no node flagged and no contradiction fired"
+
+    # ---- the release fold -----------------------------------------------------------
+    red = verdicts.get("REDACT")
+    if red is None:
+        release, release_why = "not_assessed", (
+            "REDACT did not run. NOT releasable: with no transcript there was no PII scan, and the "
+            "audio was never examined for content a transcript could not carry")
+    elif red["outcome"] == "fail":
+        release, release_why = "withheld", "a finding survived REDACT's verification"
+    else:
+        release, release_why = "releasable", "for REDACT's artifacts only; never for the store"
+
+    doc = {
+        "triage": triage,
+        "release": release,
+        "reasons": reasons + [{"node": "VERDICT", "outcome": triage, "why": why},
+                              {"node": "VERDICT", "outcome": release, "why": release_why}],
+        "kinds": resolved,
+        "kinds_as_screened": screened,
+        "contradictions": contradictions,
+        "release_scope": "REDACT artifacts only. `releasable` never applies to the store, which "
+                         "holds the unredacted transcript by design and is append-only.",
+        "view": seg.view,
+        "folded": sorted(verdicts.keys()),
+        "author": author.of(),
+    }
+    os.makedirs(a.out, exist_ok=True)
+    with open(os.path.join(a.out, "verdict.file.json"), "w") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    seg.element("measurement", {"file_verdict": {"triage": triage, "release": release}},
+                key=("file_verdict",))
+    seg.write(a.out)
+    return 0
+
+
+def _read_verdicts(d: str | None) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    if not d or not os.path.isdir(d):
+        return out
+    for name in sorted(os.listdir(d)):
+        if not (name.startswith("verdict.") and name.endswith(".json")):
+            continue
+        if name == "verdict.file.json":
+            continue
+        with open(os.path.join(d, name)) as fh:
+            doc = json.load(fh)
+        out[doc["node"]] = doc
+    return out
+
+
+def node_store_view(a: argparse.Namespace, cfg: dict, author: Author, seam: Seam) -> int:
+    """Materialise the store the design describes from the segments that actually exist."""
+    records, names = read_store(a.store_in)
+    os.makedirs(a.out, exist_ok=True)
+
+    with open(os.path.join(a.out, "store.jsonl"), "w") as fh:
+        fh.write(canonical({"record": "view_header", "recording": a.recording_id,
+                            "segments": names, "fold": "all_claims",
+                            "note": "the current view of an element is a fold over its assertions, "
+                                    "and the fold is a reader's choice (store.md). This file names "
+                                    "the fold it applied and is not canonical."}) + "\n")
+        for r in records:
+            fh.write(canonical(r) + "\n")
+
+    by_id: dict[str, dict] = {}
+    owners: dict[str, set[str]] = {}
+    unknown_kinds: list[str] = []
+    missing_provenance: list[str] = []
+    for r in records:
+        if r.get("record") != "element":
+            continue
+        by_id[r["id"]] = {"element": r, "assertions": []}
+        owners.setdefault(r["id"], set()).add(r["author"]["node"])
+        if r["kind"] not in KINDS_IN_STORE_MD:
+            unknown_kinds.append(r["kind"])
+        if r["author"]["models"] and any(not SHA40.match(m["revision"] or "") for m in r["author"]["models"]):
+            if not r["author"].get("stub"):
+                missing_provenance.append(r["id"])
+
+    dangling = []
+    for r in records:
+        if r.get("record") != "assertion":
+            continue
+        if r["element_id"] in by_id:
+            by_id[r["element_id"]]["assertions"].append(r)
+        else:
+            dangling.append(r["id"])
+
+    contested = [eid for eid, e in by_id.items() if any(x["verb"] == "contest" for x in e["assertions"])]
+    withdrawn = [eid for eid, e in by_id.items() if any(x["verb"] == "withdraw" for x in e["assertions"])]
+    duplicated = {eid: sorted(n) for eid, n in owners.items() if len(n) > 1}
+
+    with open(os.path.join(a.out, "elements.json"), "w") as fh:
+        json.dump({"fold": "all_claims", "n_elements": len(by_id), "elements": by_id},
+                  fh, indent=2, sort_keys=True, default=str)
+        fh.write("\n")
+
+    integrity = {
+        "segments": names,
+        "duplicate_element_ids": duplicated,
+        "dangling_assertions": dangling,
+        "contested_elements": sorted(contested),
+        "withdrawn_elements": sorted(withdrawn),
+        "kinds_outside_store_md": sorted(set(unknown_kinds)),
+        "elements_with_unresolved_model_revision": sorted(missing_provenance),
+        "enforced": ["duplicate_element_ids"],
+        "note": "A `contest` is not an integrity problem: store.md says both survive and the "
+                "outcome is a flag. Only a duplicate element id is enforced, because it breaks the "
+                "single-author property the order-independent merge rests on.",
+    }
+    with open(os.path.join(a.out, "integrity.json"), "w") as fh:
+        json.dump(integrity, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+
+    if duplicated:
+        raise Integrity(
+            f"element id(s) claimed by more than one author: {duplicated}. `store.md` assigns an id "
+            "once, by the node that first proposed the element. Two authors on one id means the "
+            "merge is no longer order-independent, which is the property the whole reconciliation "
+            "with Nextflow's dataflow model rests on."
+        )
+    return 0
+
+
+# =====================================================================================
+# guards
+# =====================================================================================
+
+
+def node_release_guard(a: argparse.Namespace) -> int:
+    """Stand between `release_dir` and a disclosure. Non-zero here aborts before publishDir runs."""
+    release = a.release
+    if not release or not os.path.isdir(release):
+        return 0
+    pattern = re.compile(a.id_pattern.encode())
+    banned_keys = {"element_id", "element_ids", "view", "assertion_id", "extent", "extents",
+                   "by_category", "survived", "categories", "sha256", "config_hash", "store_segment"}
+    problems: list[str] = []
+
+    for root, _dirs, files in os.walk(release):
+        for name in files:
+            path = os.path.join(root, name)
+            if pattern.search(name.encode()):
+                problems.append(f"{path}: the FILENAME carries an element/assertion id")
+            if name.startswith("segment.") or name.startswith("verdict."):
+                problems.append(f"{path}: a store segment or a node verdict is in the release tree")
+            with open(path, "rb") as fh:
+                blob = fh.read()
+            if pattern.search(blob):
+                problems.append(f"{path}: an element or assertion id appears in the CONTENT")
+            if name.endswith(".json"):
+                try:
+                    doc = json.loads(blob.decode())
+                except Exception:
+                    continue
+                for key in _all_keys(doc):
+                    if key in banned_keys:
+                        problems.append(f"{path}: key '{key}' indexes the store")
+
+    if problems:
+        raise Refused(
+            "RELEASE GUARD refused. `redact.md`: element ids are not shared between the store and a "
+            "released artifact, because an id that indexes both is a join key back to the PII.\n  - "
+            + "\n  - ".join(problems)
+        )
+    return 0
+
+
+def _all_keys(obj: Any):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _all_keys(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _all_keys(v)
+
+
+def node_check_verdict_no_pii_text(a: argparse.Namespace) -> int:
+    """`branch-speech.md`: the verdict carries category and extent, never the matched text."""
+    try:
+        with open(a.verdict) as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as exc:
+        raise NodeError(f"{a.verdict}: not readable as JSON ({exc})") from exc
+    pii = (doc.get("verdict") or {}).get("pii") or {}
+    for key in ("text", "matched", "matched_text", "value", "word", "words"):
+        if key in pii:
+            raise Refused(
+                f"{a.verdict}: the pii block carries '{key}'. A verdict that quotes the PII it found "
+                "has published it into whatever reads the verdict, which is the opposite of the point."
+            )
+    return 0
+
+
+# =====================================================================================
+# misc
+# =====================================================================================
+
+
+def _load_hints(path: str | None, recording: str) -> dict | None:
+    """A hint conditions an outcome. It never creates a span, relabels one, alters a threshold, or
+    promotes a `fail` to a `pass`."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        doc = json.load(fh)
+    return doc.get(recording) or doc.get("*")
+
+
+def _write_figure(path: str, node: str, view: list[str]) -> None:
+    """A figure is an artifact beside the store, not an element.
+
+    It carries the element ids it drew, so a mark on it traces back to the assertion behind it.
+    That is correct inside `store_dir` and DISQUALIFYING in a released artifact, which is why only
+    REDACT writes to `release_dir` and why RELEASE_GUARD sweeps for exactly this.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as fh:
+        fh.write(f"# {node} figure placeholder\n# SENSITIVE: carries element ids\n")
+        for eid in view:
+            fh.write(eid + "\n")
+
+
+NODES = {
+    "ADMIT": node_admit,
+    "PREPROCESS": node_preprocess,
+    "TAXONOMY": node_taxonomy,
+    "AIRWAY": node_airway,
+    "SPEECH": node_speech,
+    "VOICE": node_voice,
+    "REDACT": node_redact,
+    "STORE_VIEW": node_store_view,
+    "VERDICT": node_verdict,
+}
+
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=VERSION)
+    p.add_argument("--node", required=True)
+    p.add_argument("--recording-id", default="unknown")
+    p.add_argument("--audio")
+    p.add_argument("--decoded")
+    p.add_argument("--derivatives", default="derivatives")
+    p.add_argument("--store-in")
+    p.add_argument("--verdicts-in")
+    p.add_argument("--hints")
+    p.add_argument("--config")
+    p.add_argument("--models", default="")
+    p.add_argument("--out", default="store")
+    p.add_argument("--release")
+    p.add_argument("--streams")
+    p.add_argument("--figure")
+    p.add_argument("--replay")
+    p.add_argument("--stub", action="store_true")
+    p.add_argument("--stub-scenario", default="pass_speech")
+    p.add_argument("--id-pattern", default=r"[ea]-[0-9a-f]{16}")
+    p.add_argument("--verdict")
+    a = p.parse_args(argv)
+
+    try:
+        if a.node == "RELEASE_GUARD":
+            return node_release_guard(a)
+        if a.node == "CHECK_VERDICT_NO_PII_TEXT":
+            return node_check_verdict_no_pii_text(a)
+        if a.node not in NODES:
+            print(f"unknown --node {a.node!r}; have {sorted(NODES)}", file=sys.stderr)
+            return 2
+
+        cfg = {"decided": {}, "undecided": {}, "models": {}}
+        if a.config:
+            with open(a.config) as fh:
+                cfg = json.load(fh)
+        config_hash = hashlib.sha256(canonical(cfg).encode()).hexdigest()[:16]
+
+        models: dict[str, dict[str, str]] = {}
+        for spec in filter(None, a.models.split(",")):
+            role, _, rest = spec.partition("=")
+            mid, _, rev = rest.rpartition("@")
+            models[role] = {"id": mid, "revision": rev}
+        if a.stub:
+            for role in (cfg.get("models") or {}):
+                models.setdefault(role, {"id": "stub", "revision": "stub"})
+
+        # Provenance is checked EAGERLY, before any measurement is attempted. Discovering an
+        # unresolved revision only at the moment an element is authored would let a node do all its
+        # work and then refuse, and — worse — would let a node that happened to author nothing pass
+        # with a ref-addressed model in its config.
+        if not a.stub:
+            unresolved = {r: m.get("revision") for r, m in models.items() if not SHA40.match(m.get("revision") or "")}
+            if unresolved:
+                raise Unprovenanced(
+                    "model revision(s) are not resolved 40-hex commits: "
+                    + ", ".join(f"{r}={v!r}" for r, v in sorted(unresolved.items()))
+                    + ". A ref binds nothing: `snapshot_download(revision='main')` leaves the caller "
+                      "ref-addressed and the pointer may have moved. Resolve, then load by sha."
+                )
+
+        author = Author(a.node, models, config_hash, a.stub)
+        seam = Seam(a.replay, a.stub)
+        return NODES[a.node](a, cfg, author, seam)
+
+    except NodeError as exc:
+        print(f"{a.node}: {exc.message}", file=sys.stderr)
+        return exc.code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
