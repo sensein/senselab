@@ -91,3 +91,42 @@ Run on ORCD (`pi_satra`, 1× A100). Three environmental lessons, each of which c
 
 No timing or memory figures are reported: other work shared the host, and a contended resource number
 is worse than none.
+
+## Correction: HeAR needs ~160 ms of a cough, not 40 ms
+
+The branch-1 draft chose HeAR as *confirmer* on the premise that "40 ms suffices to fire it, so very
+few false negatives". Measured directly, that is wrong by about 4x.
+
+A 40 ms rectangular window swept across the recording at a 20 ms hop, each window embedded alone at
+the centre of an otherwise-silent 2 s buffer so the response is attributable to those 40 ms:
+**not one of the 700 positions exceeds 0.5.** Breathe peaks at 0.307 at the 2.275 s breath onset,
+Cough at 0.077, Speech at 0.023. See `hear_sweep_40ms.png`.
+
+The zero-padding is not what suppresses it. Holding the same construction and growing only the
+excerpt:
+
+| event | 40 ms | 80 ms | 160 ms | 320 ms | 640 ms | 1280 ms | 2000 ms |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| breath @2.275 | 0.026 | 0.138 | 0.462 | 0.859 | 0.922 | 0.957 | 0.997 |
+| breath @5.308 | 0.026 | 0.469 | 0.725 | 0.832 | 0.926 | 0.980 | 0.980 |
+| cough @7.926 | 0.063 | 0.220 | **0.999** | 0.995 | 0.994 | 0.994 | 0.992 |
+| cough @9.610 | 0.049 | 0.049 | **0.996** | 0.992 | 0.989 | 0.991 | 0.652 |
+| speech @11.62 | 0.009 | 0.004 | 0.002 | 0.009 | 0.234 | 0.433 | 0.200 |
+
+160 ms of cough in a silent buffer scores 0.999, so a burst surrounded by digital silence is well
+within what the model responds to. The threshold is a **cliff between 80 and 160 ms** for cough, and
+between 160 and 320 ms for breath. Below it the model is not merely uncertain, it is flat.
+
+Two consequences.
+
+**The original claim was measured on a different construction.** "40 ms anywhere inside the window"
+must have held the remaining ~1.96 s as real recording, in which case what fired the detector cannot
+be attributed to the 40 ms. Either reading damages the confirmer argument: if 40 ms of event plus
+1.96 s of context fires it, the response is a property of the context.
+
+**Speech never crosses 0.5 at any duration**, peaking at 0.433. That is consistent with the
+enhancement sweep, where HeAR scored the verified speech event 0.348 unenhanced while YAMNet gave
+0.994, and with enhancement *raising* HeAR's speech score above the unenhanced value.
+
+`cough @9.610` falling from 0.991 at 1280 ms to 0.652 at 2000 ms is the merging effect from the other
+direction: the last 720 ms admits the following quiet stretch and dilutes the response.
