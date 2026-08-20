@@ -24,128 +24,124 @@
 
 ---
 
-### Task 1: A PII finding carries a `ScriptLine`
+### Task 1: `PiiSpan` becomes a `ScriptLine`
 
-**Why first:** `capability-map.md` names this the highest-leverage change in the codebase. `PiiSpan` cannot say *where* a finding is, so SPEECH's speaker-scoped PII rule and all of REDACT are unimplementable.
+**Why first:** `capability-map.md` names this the highest-leverage change in the codebase. A finding can say what it is but not where, so SPEECH's speaker-scoped PII rule and all of REDACT are unimplementable.
 
-**Why `ScriptLine` and not new fields:** `senselab.utils.data_structures.ScriptLine` already carries `start`, `end`, `speaker`, `score`, `chunks`, and — load-bearing here — `timestamp_source` and `timestamp_model`. Those last two exist because two recognizers timed by the same aligner agree for reasons that have nothing to do with the audio, so a finding's extent must record which producer timed it. A bespoke `start_s: float` would discard that, and would be exactly the parallel field CLAUDE.md forbids pre-alpha.
+**Why subclass rather than compose:** a PII finding *is* a timed piece of text, which is what `ScriptLine` already is. Subclassing gives `text`, `start`, `end`, `speaker`, `score`, `chunks` and `timestamp_model` natively — no `.line` indirection and no `start_s` helper duplicating `start`. `timestamp_model` is the load-bearing one: it exists because two recognizers timed by the same aligner agree for reasons unrelated to the audio, so a finding must record which producer timed it.
+
+Verified before planning this: `PiiSpan` is a plain `@dataclass` (not frozen), every construction in the tree is keyword-only, its existing `text` and `score` fields already exist on `ScriptLine` with the same meaning, and `ScriptLine` requires `text` or `speaker` — which a finding always has. One incompatibility exists and is handled in Step 4.
 
 **Files:**
-- Modify: `src/senselab/text/tasks/pii_detection/api.py` (`PiiSpan`, `_materialize_spans`)
+- Modify: `src/senselab/text/tasks/pii_detection/api.py` (`PiiSpan`, `_materialize_spans`, `scan_for_pii`)
+- Modify: `src/senselab/audio/workflows/audio_analysis/pii.py:275` (one line — `asdict` no longer applies)
 - Test: `src/tests/text/tasks/pii_detection_test.py`
 
 **Interfaces:**
 - Consumes: `ScriptLine` from `senselab.utils.data_structures`.
-- Produces: `PiiSpan` with one added optional field, `line: ScriptLine | None = None`, plus read-only helpers `start_s`, `end_s`, `speaker`. Task 8 (redaction) consumes `start_s`/`end_s`; the node plan's SPEECH step 7 consumes `speaker`.
-- **Every existing `PiiSpan(...)` construction keeps working**: the new field is optional and no existing field changes name, type or order.
+- Produces: `class PiiSpan(ScriptLine)` adding `category: str`, `source: str`, `asr_model: str`. Location is `span.start` / `span.end`; attribution is `span.speaker`. Task 8 (redaction) and the node plan's SPEECH step 7 consume those directly.
+- **Every existing `PiiSpan(...)` construction keeps working** — all are keyword-only and pass only fields the subclass still has.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_a_finding_without_a_line_reports_no_location():
+def test_a_finding_is_a_script_line():
     from senselab.text.tasks.pii_detection.api import PiiSpan
+    from senselab.utils.data_structures import ScriptLine
 
     span = PiiSpan(text="Jane Doe", category="PERSON", source="presidio", asr_model="w", score=0.9)
-    assert span.line is None
-    assert span.start_s is None and span.end_s is None and span.speaker is None
+    assert isinstance(span, ScriptLine), "a finding is a timed piece of text, not a parallel type"
+    assert span.start is None and span.end is None, "unlocated until something locates it"
 
 
-def test_a_finding_with_a_line_reports_its_extent_and_speaker():
+def test_a_located_finding_reports_its_extent_and_speaker_natively():
     from senselab.text.tasks.pii_detection.api import PiiSpan
-    from senselab.utils.data_structures import ScriptLine
 
-    line = ScriptLine(text="Jane Doe", speaker="SPEAKER_00", start=11.9, end=12.4)
-    span = PiiSpan(text="Jane Doe", category="PERSON", source="presidio", line=line)
-    assert span.start_s == 11.9
-    assert span.end_s == 12.4
+    span = PiiSpan(
+        text="Jane Doe", category="PERSON", source="presidio", asr_model="w",
+        start=11.9, end=12.4, speaker="SPEAKER_00",
+    )
+    assert (span.start, span.end) == (11.9, 12.4)
     assert span.speaker == "SPEAKER_00"
+    assert not hasattr(span, "start_s"), "no parallel name for a field that already exists"
 
 
-def test_the_timing_provenance_survives_onto_the_finding():
+def test_the_timing_provenance_lives_on_the_finding():
     from senselab.text.tasks.pii_detection.api import PiiSpan
-    from senselab.utils.data_structures import ScriptLine
 
-    line = ScriptLine(text="Jane", start=1.0, end=1.3, timestamp_model="Qwen/Qwen3-ForcedAligner-0.6B")
-    span = PiiSpan(text="Jane", category="PERSON", source="presidio", line=line)
-    assert span.line.timestamp_model == "Qwen/Qwen3-ForcedAligner-0.6B", (
-        "two recognizers timed by one aligner are not independent witnesses; the finding must say who timed it"
+    span = PiiSpan(
+        text="Jane", category="PERSON", source="presidio", asr_model="w",
+        start=1.0, end=1.3, timestamp_model="Qwen/Qwen3-ForcedAligner-0.6B",
+    )
+    assert span.timestamp_model == "Qwen/Qwen3-ForcedAligner-0.6B", (
+        "two recognizers timed by one aligner are not independent witnesses"
     )
 
 
-def test_scanning_a_script_line_input_attaches_that_line_to_every_finding():
+def test_scanning_a_script_line_carries_its_timing_onto_every_finding():
     from senselab.text.tasks.pii_detection.api import scan_for_pii
     from senselab.utils.data_structures import ScriptLine
 
     line = ScriptLine(text="call alice@example.com", speaker="SPEAKER_01", start=3.0, end=4.5)
     scan = scan_for_pii(line, detectors=["rules"])
     assert scan.spans, "rules detector found nothing"
-    assert all(sp.line is line for sp in scan.spans)
+    assert all(sp.start == 3.0 and sp.end == 4.5 for sp in scan.spans)
     assert all(sp.speaker == "SPEAKER_01" for sp in scan.spans)
 
 
-def test_scanning_a_bare_string_leaves_the_line_unset():
+def test_scanning_a_bare_string_leaves_the_finding_unlocated():
     from senselab.text.tasks.pii_detection.api import scan_for_pii
 
     scan = scan_for_pii("call alice@example.com", detectors=["rules"])
     assert scan.spans
-    assert all(sp.line is None for sp in scan.spans), "a bare string has no timing to claim"
+    assert all(sp.start is None for sp in scan.spans), "a bare string has no timing to claim"
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `uv run pytest src/tests/text/tasks/pii_detection_test.py -k "line or extent or provenance" -v`
-Expected: FAIL — `TypeError: PiiSpan.__init__() got an unexpected keyword argument 'line'`
+Run: `uv run pytest src/tests/text/tasks/pii_detection_test.py -k "script_line or located or provenance or unlocated" -v`
+Expected: FAIL — `assert isinstance(span, ScriptLine)` fails; `PiiSpan` is a dataclass.
 
-- [ ] **Step 3: Add the field and the helpers**
+- [ ] **Step 3: Make `PiiSpan` a `ScriptLine`**
 
-In `api.py`, add the import and extend the dataclass. Do not reorder or rename any existing field:
+In `api.py`, add the import and replace the dataclass. Remove the `@dataclass` decorator:
 
 ```python
 from senselab.utils.data_structures import ScriptLine
 ```
 
 ```python
-@dataclass
-class PiiSpan:
-    """One PII detection in a transcript.
+class PiiSpan(ScriptLine):
+    """One PII detection, as the timed line it sits in.
+
+    A ``ScriptLine``, so ``text``, ``start``, ``end``, ``speaker``, ``score`` and ``timestamp_model``
+    are inherited and mean what they mean everywhere else. ``start`` and ``end`` are None until
+    something locates the finding — scanning a bare string cannot.
 
     Attributes:
-        text: The matched text.
         category: The entity type, e.g. ``"PERSON"``, ``"EMAIL_ADDRESS"``.
         source: The detector that found it, e.g. ``"presidio"`` or ``"gliner/<label>"``.
         asr_model: Identifier of the scanned input.
-        score: Detector confidence in [0, 1].
-        line: The transcript line the finding sits in, when one was scanned. Carries the extent, the
-            speaker, and which producer timed it. ``None`` when a bare string was scanned, which has no
-            timing to claim.
     """
 
-    text: str
     category: str
     source: str
     asr_model: str
-    score: float | None = None
-    line: ScriptLine | None = None
-
-    @property
-    def start_s(self) -> float | None:
-        """Start of the finding in the recording, or None when no line was scanned."""
-        return self.line.start if self.line else None
-
-    @property
-    def end_s(self) -> float | None:
-        """End of the finding in the recording, or None when no line was scanned."""
-        return self.line.end if self.line else None
-
-    @property
-    def speaker(self) -> str | None:
-        """Who spoke the line the finding sits in, or None when unattributed."""
-        return self.line.speaker if self.line else None
 ```
 
-- [ ] **Step 4: Attach the line in `_materialize_spans`**
+- [ ] **Step 4: Fix the one incompatibility**
 
-Give it the scanned input so it can attach a `ScriptLine` when there was one. Change its signature and the call site in `scan_for_pii`:
+`src/senselab/audio/workflows/audio_analysis/pii.py:275` calls `dataclasses.asdict(s)`, which only works on a dataclass. Replace it:
+
+```python
+        "spans": [{**s.model_dump(exclude_none=True), "perturbation": report.perturbation} for s in report.spans],
+```
+
+`exclude_none=True` keeps the serialised span close to what `asdict` produced — a `ScriptLine` has more fields than the old dataclass, and an unlocated finding leaves most of them None. Remove `asdict` from that file's imports if nothing else uses it.
+
+- [ ] **Step 5: Carry the line's timing through the scanner**
+
+In `_materialize_spans`, accept the scanned line and copy its timing onto every span:
 
 ```python
 def _materialize_spans(
@@ -156,14 +152,25 @@ def _materialize_spans(
     Args:
         raw_spans: Detector dicts carrying ``text``, ``category`` and ``source``.
         source_id: Identifier of the scanned input.
-        line: The ``ScriptLine`` scanned, when the input was one. Attached to every span so a finding
-            carries its extent, its speaker and its timing provenance.
+        line: The line scanned, when the input was one. Its extent, speaker and timing provenance are
+            copied onto every finding.
 
     Returns:
         One ``PiiSpan`` per distinct (category, text, source).
     """
     seen: set[tuple[str, str, str]] = set()
     out: list[PiiSpan] = []
+    timing = (
+        {
+            "start": line.start,
+            "end": line.end,
+            "speaker": line.speaker,
+            "timestamp_source": line.timestamp_source,
+            "timestamp_model": line.timestamp_model,
+        }
+        if line is not None
+        else {}
+    )
     for raw in raw_spans:
         key = (raw["category"], raw["text"], raw["source"])
         if key in seen:
@@ -176,7 +183,7 @@ def _materialize_spans(
                 source=raw["source"],
                 asr_model=source_id,
                 score=raw.get("score"),
-                line=line,
+                **timing,
             )
         )
     return out
@@ -185,30 +192,32 @@ def _materialize_spans(
 At the call site in `scan_for_pii`, pass the input through when it is a `ScriptLine`:
 
 ```python
-line = item if isinstance(item, ScriptLine) else None
-spans = _materialize_spans(raw, source_id=source_id, line=line)
+        line = item if isinstance(item, ScriptLine) else None
+        spans = _materialize_spans(raw, source_id=source_id, line=line)
 ```
 
-- [ ] **Step 5: Run the new tests and the whole PII surface**
+- [ ] **Step 6: Run the new tests and everything that touches PII**
 
 Run: `uv run pytest src/tests/text/tasks/ src/tests/audio/tasks/pii_detection_test.py src/tests/audio/workflows/pii_adapter_test.py -v`
-Expected: the five new tests PASS and **every existing test passes unchanged**. If an existing test fails, the field was not added optionally — fix the production code, not the test.
+Expected: the five new tests PASS and **every existing test passes unchanged**, except any that asserts the exact key set of a serialised span — `pii_adapter_test.py` is the one that might. If it does, the artifact genuinely gained keys and the assertion should be updated to match; if any *other* test fails, the change was not additive and the production code is wrong.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-uv run ruff format src/senselab/text/tasks/pii_detection/api.py src/tests/text/tasks/pii_detection_test.py
-git add src/senselab/text/tasks/pii_detection/api.py src/tests/text/tasks/pii_detection_test.py
-git commit -m "feat(pii): a finding carries the ScriptLine it sits in
+uv run ruff format src/senselab/text/tasks/pii_detection/api.py src/senselab/audio/workflows/audio_analysis/pii.py src/tests/text/tasks/pii_detection_test.py
+git add src/senselab/text/tasks/pii_detection/api.py src/senselab/audio/workflows/audio_analysis/pii.py src/tests/text/tasks/pii_detection_test.py
+git commit -m "feat(pii): a finding is a ScriptLine
 
 A detection could say what it was but not where, so neither a speaker-scoped rule nor
-redaction could act on one. It now carries the ScriptLine scanned, which already has the
-extent, the speaker, and -- load-bearing -- timestamp_model, so a finding records which
-producer timed it rather than presenting a shared aligner as an independent witness.
+redaction could act on one. PiiSpan now subclasses ScriptLine, which is what a timed piece
+of text already is here, so text, start, end, speaker, score and timestamp_model are
+inherited rather than reinvented. timestamp_model is the load-bearing inheritance: two
+recognizers timed by the same aligner agree for reasons unrelated to the audio, and a
+finding has to record which producer timed it.
 
-Composed rather than copied: adding start_s and end_s floats beside ScriptLine's existing
-start and end would be the parallel fields CLAUDE.md forbids. The field is optional, so
-every existing construction and every existing test is untouched."
+Subclassed rather than composed: a .line field with start_s and end_s helpers would still
+be parallel names for start and end. One incompatibility, handled -- audio_analysis called
+dataclasses.asdict on a span, which now uses model_dump."
 ```
 
 ---
