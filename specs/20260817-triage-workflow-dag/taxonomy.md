@@ -373,3 +373,60 @@ fit any of them, and the derivation slots stay empty rather than holding invente
 Three things keep that honest: the node can `flag`, so doubt is not forced into a guess; absence needs
 unanimity, so the destructive outcome is hardest to reach; and span detection downstream adjudicates
 and can withdraw what presence admitted.
+
+## Revision: three kinds, the third a residual
+
+**Supersedes the four-kind table and the `unobservable` state.** Two kinds are detected; the third
+takes what neither claimed, subject to a positive gate of its own.
+
+| kind | how it is reached |
+| --- | --- |
+| **airway** — non-voice, non-speech | detected: breath, cough, throat clear |
+| **speech** | detected: words |
+| **voice / no-words** | **residual** — voiced, and claimed by neither of the above |
+
+Order matters, because it is what makes the residual well-defined: airway and speech each claim what
+they detect, and whatever voicing remains is voice/no-words.
+
+**This removes `unobservable`.** Phonation and imitation had no eligible detector and so could never be
+decided; as members of the residual they need none. Sustained vowel, pitch glide and a child imitating
+a dog are all *voiced and wordless*, which is exactly what the residual is. The label space never had
+to contain the concept.
+
+### The residual needs a positive gate, or it collects everything
+
+A residual defined only by exclusion would absorb silence, room tone and environmental sound. The gate
+is acoustic rather than label-based: **is this vocal-tract produced.** Candidates are F0 presence, HNR,
+and F0 dispersion.
+
+Periodicity is measured, and this is the **only parameter in this node with any empirical basis**:
+
+| region | RMS | F0 | periodicity |
+| --- | --- | --- | --- |
+| sustained voicing, 3.20-3.40 s | 0.0188 | 87.4 Hz | **0.933** |
+| sustained voicing, 4.40-4.60 s | 0.0161 | 88.1 Hz | **0.934** |
+| quiet stretches | 0.0004-0.0007 | unstable | **0.22-0.44** |
+
+Normalised autocorrelation separates the two by a wide margin on this recording, with an RMS floor
+needed as well so that periodic room tone cannot pass. One recording is one recording — but every
+other threshold here has nothing behind it at all, so this is the one place a derivation can start.
+
+**F0 dispersion is the within-category discriminator, not the gate.** A sustained vowel holds F0
+roughly constant, a pitch glide sweeps it smoothly, and unvoiced noise produces F0 estimates that
+scatter incoherently. So dispersion separates the residual's own members once the gate has admitted
+them, which is a branch question rather than a screening one.
+
+### What this changes elsewhere
+
+**Laughter and crying move.** They were listed as measured-but-never-branch-selecting. They are voiced
+and wordless, so under a residual they now select voice/no-words. That may be right — a cry is a target
+in a pediatric protocol — but it is a change of behaviour and not a tidy-up.
+
+**Cough is voiced, so voicing alone cannot separate airway from the residual.** Measured, a diarizer's
+raw posterior responds to the verified coughs at 0.574 and 0.906. Detection order is what resolves it:
+airway claims the cough before the residual sees it. Breath is the opposite case — unvoiced, so the
+gate would never admit it, and it too must come from airway detection rather than from voicing.
+
+**The gate does not need a label space**, which is why it closes the hole that the label mapping could
+not. `Human voice`, `Human sounds` and `Respiratory sounds` are all absent from YAMNet's 521, so no
+union of labels can ask "did a vocal tract make this". An acoustic gate asks it directly.
