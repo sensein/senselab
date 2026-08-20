@@ -161,13 +161,12 @@ span.
 ### 3b. Proposed spans that carry no airway label
 
 The envelope proposes on energy, so it proposes spans that are not airway events — the 11.75–13.16 s
-speech span is one. Such a span is **recorded with a null label and excluded from everything that
-follows**: it does not extend the lexical interval, it is not put to YAMNet (there is no label to
-confirm or contest), and it does not contribute to the outcome.
+speech span is one. **Only spans carrying a label of interest go through.** An unlabelled span is inert
+here: it does not extend the lexical interval, is not put to YAMNet, and does not affect the outcome.
 
-It is recorded rather than discarded because it is a proposal the branch declined, and a reader checking
-the figure will see the span shaded and needs to know the branch considered and rejected it. Silently
-dropping it would make the figure disagree with the product.
+It is carried in the output as a separate field in case another node finds it useful — the envelope has
+already paid for it — but it is **not part of this branch's product and not part of its goal**. Nothing
+in this branch reads it, and no verdict here depends on it.
 
 ### 4. Outcome
 
@@ -197,17 +196,24 @@ branch could not find breath", never as "there is none."
 ## The product
 
 ```
-spans: [ { start, end, label, coverage, yamnet: confirm|contest|abstain,
-           inside_silence, peak_over_floor_db } ]
-figure: one aligned figure per recording
+airway_spans:     [ { start, end, label, coverage, yamnet: confirm|contest|abstain,
+                      inside_silence, peak_over_floor_db } ]     # the product
+unlabelled_spans: [ { start, end, peak_over_floor_db } ]         # carried, not claimed
+figure:           one aligned figure per recording
 ```
 
-`inside_silence` and `peak_over_floor_db` travel with each span because both are what a reader needs to
-discount it: the first says the classifier fired where nothing is, the second says how much dynamic
-range the span actually had, which is what governs whether its offset means anything.
+**`airway_spans` is the product.** Every entry carries a label of interest, and the two extra fields are
+what a reader needs to discount one: `inside_silence` says the classifier fired where PREPROCESS
+certifies nothing, and `peak_over_floor_db` says how much dynamic range the span had, which governs
+whether its offset means anything.
+
+`unlabelled_spans` is a by-product with no consumer in this branch. It is emitted because the envelope
+already computed it and a later node may want it; it carries no label, no YAMNet verdict, and no claim.
+A reader should treat an empty `unlabelled_spans` and a full one as equally uninformative about the
+recording's airway content.
 
 **The figure is a product, not a debugging aid.** It carries the waveform, the envelope with its floor
-and the proposed spans, YAMNet `Silence`, the wideband spectrogram, the gammatone view, and the HeAR
+and both span sets — labelled and unlabelled, distinguishable at a glance — YAMNet `Silence`, the wideband spectrogram, the gammatone view, and the HeAR
 channels in use — all on one aligned time axis, so a span can be checked against every derivative that
 produced it. The generating script is `plot3.py` beside this file.
 
