@@ -46,22 +46,38 @@ all. So both share a 5 ms hop and differ only in window.
 
 At a measured F0 of 88.1 Hz the glottal period is 11.4 ms, and the arithmetic decides:
 
-| window | frequency resolution, Hann | harmonics resolve | pulses resolve |
+| window | frequency resolution, Hann | harmonics resolve in *frequency* | pulses resolve in *time* |
 | --- | --- | --- | --- |
 | 5 ms | 300 Hz | no | yes, 0.44 of a period |
 | 10 ms | 150 Hz | no | marginally, 0.88 of a period |
 | 20 ms | 75 Hz | **yes** | no |
 
-Resolving harmonics needs the resolution finer than F0; resolving pulses needs the window shorter than
-the period. **A 10 ms window satisfies neither with any margin for a low male voice** — it cannot
-separate 88 Hz harmonics, and at 0.88 of a period its pulses smear. It is the one choice in that table
-that shows neither cue cleanly, which is why the node emits 5 ms and 20 ms instead of a compromise
-between them.
+**Harmonic structure lives on both axes, and F0 is recoverable from either.** In frequency it is the
+spacing of the harmonics, which needs resolution finer than F0. In time it is the spacing of the
+glottal pulses, which needs a window shorter than the period. Measured on the same 400 ms of sustained
+voicing, the two routes agree:
 
-Emitting both also removes a failure this project has already met: a model was handed one wideband view
-of a recording, reasoned correctly that it saw no harmonic stacks, and concluded there was no sustained
-vowel — on four seconds of 88 Hz voicing. The analysis window determined the conclusion. With both
-views computed, the choice of cue belongs to the consumer and is visible in what it asked for.
+| route | F0 |
+| --- | --- |
+| waveform autocorrelation | 87.75 Hz |
+| autocorrelation along the **time** axis of the 5 ms-window spectrogram | **86.96 Hz** |
+
+So the wideband view is **not** F0-blind — it carries F0 as pulse spacing, to within 1.3% of the
+waveform here. Each view gives F0 by an independent route, and their agreement is a check worth having
+rather than a redundancy to remove.
+
+A 10 ms window is still the least useful of the three, but for a narrower reason than "it shows
+neither": it cannot separate 88 Hz harmonics in frequency, and at 0.88 of a period its pulses are
+sampled with almost no margin, so the temporal route degrades too. Both routes are weakened at once,
+which is why the node emits 5 ms and 20 ms rather than a compromise between them.
+
+**And this corrects how an earlier failure here should be read.** A model was handed one wideband view
+of a recording, reasoned that it saw no harmonic stacks, and concluded there was no sustained vowel — on
+four seconds of 88 Hz voicing. It is tempting to say wideband hides F0. It does not: F0 was present in
+that view as striation spacing. What was missing was **pixels** — at ten seconds across the figure a
+11.4 ms period spans about two of them, so the information was in the signal and absent from the
+image. A rendering has two independent adequacy conditions, the analysis window and the pixel density
+of the span, and only the first is visible in the parameters.
 
 **The envelope is still not redundant with either spectrogram.** A 5 ms hop gives 5 ms of time
 resolution, which is at the edge of the ±5 ms an envelope achieves on a cough onset, and the envelope's
