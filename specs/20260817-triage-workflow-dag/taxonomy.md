@@ -256,3 +256,120 @@ and nothing more.
 more windows means more chances for a spurious confident one. `Snore` clearing 0.5 in 16 windows on a
 file containing no snoring is the measured case, and it is why the per-kind minimum count is a real
 parameter rather than a formality.
+
+## The kinds
+
+Four, and they are the branches. Elements are the branch's internal vocabulary and TAXONOMY does not
+separate them.
+
+| kind | elements |
+| --- | --- |
+| **airway** | inhalation, exhalation, cough, throat clear |
+| **phonation** | sustained vowel, pitch glide, loud phonation |
+| **speech** | syllable repetition, word production, connected speech, singing |
+| **imitation** | vocal imitation of a non-vocal target |
+
+Measured but never branch-selecting, because each changes a decision without being anyone's target:
+other-speaker speech, laughter, crying, environmental sound, device and handling noise, silence.
+
+## The aggregator in detail
+
+### 1. Who may vote on what
+
+Eligibility comes before any threshold. A detector is eligible for a kind only if it has labels that
+can express the kind and is not disqualified on measurement.
+
+| kind | YAMNet | AST | CrisperWhisper | HeAR | eligible |
+| --- | --- | --- | --- | --- | --- |
+| **airway** | 10 labels | same label space | `[breath]`, `[cough]` tokens | 6 of its 8 classes | 4 |
+| **speech** | `Speech` + 17 | same label space | words — the only source | **barred** | 3 |
+| **phonation** | no label | no label | absence of words is not evidence *for* it | no label | **0** |
+| **imitation** | fires the imitated class | same | no words | no label | **0** |
+
+HeAR is barred from speech, not merely weak on it: on the verified speech span it reports `Snore` 0.88
+and `Speech` 0.01 across six independent measurements. A detector that confidently assigns speech
+elsewhere casts a wrong vote, not a weak one.
+
+For phonation, only `loud phonation` has any labels at all (`Shout`, `Yell`, `Bellow`, `Screaming`,
+`Whoop`) and there are none for sustained vowel or pitch glide. Whether a prolonged vowel fires
+something anyway is unmeasured, so this is an open measurement rather than a settled zero.
+
+### 2. Each detector's own verdict
+
+**Series detectors — YAMNet, HeAR.** Fold the kind's family by max per window, threshold, count:
+
+```
+n = |{ w : max_{l in family(d,k)} score(w, l) >= tau[d][k] }|
+present  if n >= min_n[d][k]
+absent   if n == 0
+unsure   otherwise
+```
+
+**File-level detector — AST.** One 10.24 s window covers the recording, so there is nothing to count.
+It needs a band, or every score becomes a decision:
+
+```
+present  if s >= tau_hi[k]
+absent   if s <  tau_lo[k]
+unsure   otherwise
+```
+
+**Token detector — CrisperWhisper.** No grid, no score. For speech, `present` if it returned any words.
+For airway, `present` on a token of the kind's own type — but a token of the *wrong* type inside the
+family reads `unsure`, because it split one verified cough into `[UH]` and `[breath]`. Its timing is
+trustworthy where its label is not: onset −26 ms and offset −14 ms on the other cough.
+
+### 3. Independence: count families, not detectors
+
+YAMNet and AST share the AudioSet corpus and label space and can be wrong together.
+
+| family | members |
+| --- | --- |
+| A — AudioSet | YAMNet, AST |
+| B — lexical | CrisperWhisper |
+| C — health-acoustic | HeAR |
+
+**Airway has three families; speech has two.** So "two families must agree" is a modest bar for airway
+and near-unanimity for speech. `min_families` is per kind and cannot be one global number.
+
+### 4. What defines a kind as present
+
+| state | condition |
+| --- | --- |
+| **present** | at least `min_families[k]` eligible families say present |
+| **absent** | **every** eligible family says absent |
+| **undecided** | families disagree, or any is unsure |
+| **unobservable** | the eligible set is empty |
+
+Presence needs agreement; absence needs **unanimity**. A low score means either "not there" or "there
+but quiet or masked", and masked is the case this workflow exists to catch, so no single family may
+retire a kind alone.
+
+**`unobservable` is not a synonym for absent.** Phonation and imitation have no eligible detector.
+"Everything looked and found nothing" and "nothing here can see this" are different claims, and
+recording them identically is how a kind gets silently dropped.
+
+### 5. Pass, flag and fail
+
+Over the observable kinds:
+
+| outcome | condition |
+| --- | --- |
+| **fail** | every observable kind is `absent` |
+| **flag** | any observable kind is `undecided` |
+| **pass** | every observable kind is decided, and at least one is `present` |
+
+**Unobservable kinds are excluded from the gate.** Counted as undecided they would flag every file
+forever — phonation is unobservable on every recording, so the gate would be a constant and the flag
+would carry no information. Excluding them has a consequence that must be published rather than
+hidden: **an unobservable kind is never screened**, so its branch is hint-selected or never runs. The
+output names which kinds were never examined.
+
+### 6. The parameters, none of them fitted
+
+`tau[d][k]`, `min_n[d][k]`, `tau_hi[k]`, `tau_lo[k]`, `min_families[k]`. No labelled corpus exists to
+fit any of them, and the derivation slots stay empty rather than holding invented literals.
+
+Three things keep that honest: the node can `flag`, so doubt is not forced into a guess; absence needs
+unanimity, so the destructive outcome is hardest to reach; and span detection downstream adjudicates
+and can withdraw what presence admitted.
