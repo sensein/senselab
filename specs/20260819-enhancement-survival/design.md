@@ -217,3 +217,45 @@ of the right answer.
 
 Plots: `hear_raster_160ms.png`, `hear_raster_320ms.png`, `hear_raster_500ms.png`, with the
 spectrogram and raster sharing one time axis and the verified event bounds drawn across both.
+
+## YAMNet on its own window: Silence works, the coughs separate, and a breath fires a family
+
+YAMNet run as shipped — 0.96 s window, 0.48 s hop, 29 windows, all 521 labels, native 48 kHz.
+Classes ranked by peak over the recording. Plots: `yamnet_raster_top5.png`, `yamnet_raster_top10.png`.
+
+Top ten: Silence 1.000, Cough 1.000, Speech 0.994, Breathing 0.893, Snoring 0.819, Sigh 0.765,
+Gasp 0.716, Sneeze 0.699, Throat clearing 0.528, Snort 0.337. **Eight of the ten are respiratory
+classes**; only Silence and Speech are not.
+
+**Silence is the top class and it behaves.** 12 of 29 windows above 0.5, in the gaps. The explicit
+Silence class the design cites as a reason to prefer YAMNet is real.
+
+**YAMNet separates the two coughs; HeAR at 2 s cannot.** Windows above 0.5 at 7.20, 7.68, 8.16, then
+the 8.64 window dips below, then 9.12, 9.60. That dip is the 1.1 s gap between the coughs.
+
+**A breath elicits the whole respiratory family, not one label.** breath_1 gives Breathing 0.89 with
+Gasp 0.72, Sneeze 0.70 and Sigh 0.77 simultaneously; breath_2 gives Breathing with Sigh, Gasp and
+Snoring. The verified exhalation at 2.275 s scores `Sneeze` 0.699.
+
+Read as a decision that is a misclassification; read as family mass it is coherent. Either way the
+consequence is the same: **a confirm step keyed on a specific class name is brittle here**, because
+Breathing leads Sigh by 0.89 to 0.77 and Gasp by 0.89 to 0.72 — margins a different speaker or SNR
+would reorder. Aggregating over the family is the robust read.
+
+`cough_2` also draws `Throat clearing` 0.528 from YAMNet itself, alongside `Cough` 1.000. The
+ground-truth file records this as YAMNet's Cough 1.000 *against* AST's Throat clearing 0.96, resolved
+in YAMNet's favour; YAMNet carries both, so that disagreement was narrower than a two-model comparison
+implied.
+
+## Correction: the 3.9-4.25 s candidate event is more likely a HeAR false positive
+
+Recorded above as a candidate unlabelled event because HeAR's Breathe exceeded 0.5 there at 160, 320
+and 500 ms. YAMNet reads **Silence above 0.5 across 3.36-5.28 s**, agreeing with the human label that
+nothing is there.
+
+Four sweeps of one model are not four independent observations, which is how the earlier note
+over-weighted them. The independent check disagrees, so the likelier reading is a HeAR false positive.
+
+Both models do share one false positive: YAMNet's Breathing fires 6.72-7.68 s and HeAR scored Breathe
+0.49 there, on the stretch verified as "nothing -- no breath here". Agreeing models do not make that
+one safe.
