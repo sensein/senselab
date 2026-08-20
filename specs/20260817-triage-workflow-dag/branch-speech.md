@@ -151,9 +151,11 @@ is a known gap in the rule as specified, not an oversight in the implementation.
 **audio still contains it**. A clean scan is a statement about the text, never about the recording, and
 nothing downstream may treat it as clearance to release audio.
 
-**The store now holds PII.** Once a transcript is written, the store is sensitive. So a PII finding
-`label`s the offending `word` elements, and **every artifact must respect that marking** — in particular
-the figure, which renders words and would otherwise leak what the scan just found.
+**The store now holds PII.** Once a transcript is written, the store is sensitive, and being append-only
+it stays that way. So a PII finding `label`s the offending `word` elements and **every artifact must
+respect that marking** — in particular the figure, which renders words and would otherwise leak what the
+scan just found. Producing a releasable derivative is [`REDACT`](redact.md)'s job, and it cannot make the
+store itself releasable.
 
 ### What the product may carry
 
@@ -216,7 +218,7 @@ back to the assertion that produced it.
 
 ASR (PREPROCESS runs it), airway detection (reads `airway_spans`), speaker identity without a target,
 emotion, language identification, diarizer ranking, quality gating, and redaction — this branch
-*detects* PII and marks it; removing or bleeping it is a separate decision nobody has taken.
+*detects* PII and marks it; [`REDACT`](redact.md) acts on the marking.
 
 Every element and assertion above goes to the [element store](store.md) with its provenance.
 Derivations live in [`benchmarks/`](benchmarks/).
