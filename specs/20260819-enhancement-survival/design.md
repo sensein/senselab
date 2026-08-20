@@ -259,3 +259,33 @@ over-weighted them. The independent check disagrees, so the likelier reading is 
 Both models do share one false positive: YAMNet's Breathing fires 6.72-7.68 s and HeAR scored Breathe
 0.49 there, on the stretch verified as "nothing -- no breath here". Agreeing models do not make that
 one safe.
+
+## The criterion is a stable complementary partition, not preservation
+
+Earlier sections of this document score enhancers by how much they preserve, which is the wrong
+criterion and makes the least useful model look best. An element vanishing is not a loss: a model that
+destroys one element and keeps another **is** the selection tool. What matters is whether the partition
+is complementary and whether each channel can be named reliably.
+
+Re-read on that basis, clean condition:
+
+| model | destroys | keeps | reads as |
+| --- | --- | --- | --- |
+| `MossFormerGAN_SE_16K` | everything else, <=0.02 | speech 0.989 | speech filter |
+| `MossFormer2_SE_48K` | breath, 0.000 | cough 0.903 / 1.000 | cough filter |
+| `sepformer-dns4-16k-enh` | cough, 0.000 | breath_2 1.000 | breath filter |
+| `MossFormer2_SS_16K` src1 | speech, breath | cough 0.977-0.998 across conditions | cough channel |
+| `FRCRN_SE_16K` | nothing | everything at input level | passthrough, no selectivity |
+
+`MossFormer2_SE_48K` and `sepformer-dns4-16k-enh` are near-exact complements, which is the useful
+result. `FRCRN_SE_16K` preserving everything makes it the least selective of the set, not the best.
+
+**This is also what is actually wrong with unasdiff.** Its channels losing content is fine. The defect
+is that the channel an element lands in is not stable: identical `Cough` conditioning put cough_2 in
+src0 when clean and in src1 at +20 dB, and cough_1 the other way. A filter whose output channels cannot
+be named is unusable however cleanly it separates, whereas `MossFormer2_SS_16K` -- which has no
+conditioning mechanism at all -- holds src0=speech, src1=cough across clean, +20 and +10 dB.
+
+By the same correction, `MossFormer2_SS_16K` src1 dropping its speech leakage from 0.096 to 0.000 under
+noise is the partition getting sharper, and was recorded above as a cost. Its cough_1 floor and the
+loss of breath under noise are selectivity boundaries to know, not damage.
