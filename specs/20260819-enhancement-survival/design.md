@@ -130,3 +130,32 @@ enhancement sweep, where HeAR scored the verified speech event 0.348 unenhanced 
 
 `cough @9.610` falling from 0.991 at 1280 ms to 0.652 at 2000 ms is the merging effect from the other
 direction: the last 720 ms admits the following quiet stretch and dilutes the response.
+
+## At 160 ms, HeAR localises and stops merging — the draft's claim is wrong
+
+Repeating the sweep with a 160 ms window (the duration at which cough crosses to 0.999) at the same
+20 ms hop, same silent-buffer construction. See `hear_sweep_160ms.png`.
+
+`Cough` fires in two sharp plateaus, ~7.98-8.28 s and ~9.66-10.02 s, peaking at **0.998**, and stays
+below 0.09 everywhere else — 24 windows above 0.5, all inside the two verified coughs.
+
+**The two coughs are 1.1 s apart.** At the 2 s input they merge into one plateau, which is what the
+branch-1 draft concluded from:
+
+> `group_events` cannot be solved by better thresholding of HeAR's posterior, because events closer
+> than 2 s are merged before any threshold sees them. The information is not in the track.
+
+That is refuted. The information is in the model; it was absent from the track because of the input
+length. Merging is a property of feeding HeAR 2 s of continuous recording, not of HeAR. A short
+excerpt in a silent buffer both localises the event and separates neighbours the 2 s window cannot.
+
+Secondary observations from the same sweep:
+
+- **Breathe is weaker and raggeder than cough** — 0.845 at 2.36 s, 0.80 at 5.38 s, 15 windows above
+  0.5 — consistent with breath needing 160-320 ms where cough needs 160.
+- **Three consecutive windows above 0.5 at 3.94-4.02 s, peaking 0.63, inside verified-empty audio.**
+  Either a false positive or an unlabelled inhalation. The same ambiguity was resolved by ear at
+  6.60-7.10 s, where HeAR's Breathe 0.49 was wrong; this one is unresolved and wants a listen.
+- **Speech is flat at <=0.009 across all 694 windows.** With the 0.348 on the full verified event and
+  the duration table never crossing 0.5, that is three independent measurements agreeing that HeAR
+  does not report this speech.
