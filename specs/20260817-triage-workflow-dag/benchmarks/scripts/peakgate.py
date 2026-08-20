@@ -1,6 +1,6 @@
 import numpy as np, soundfile as sf, warnings, sys, torch, os
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"/Users/satra/software/sensein/senselab/.claude/worktrees/design/specs/20260817-triage-workflow-dag")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
 from labels import label
 from scipy.signal import resample_poly, hilbert, butter, filtfilt, find_peaks
 from senselab.audio.data_structures import Audio

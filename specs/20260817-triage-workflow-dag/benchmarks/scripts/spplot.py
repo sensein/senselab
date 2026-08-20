@@ -3,7 +3,7 @@ warnings.filterwarnings("ignore")
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]))
 from labels import LABELS
 from scipy.signal import resample_poly, hilbert, butter, filtfilt, stft
 T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
