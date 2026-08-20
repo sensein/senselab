@@ -85,6 +85,9 @@ def main() -> int:
     for k, v in variants.items():
         print(f"  variant {k}: {v['rate']} Hz, {v['samples']} samples", flush=True)
 
+    # qwen_omni_utils hardcodes SAMPLE_RATE=16000 and calls librosa.load(sr=SAMPLE_RATE), so both
+    # variants reach the encoder at 16 kHz. Kept as a pair so the identical fed sample counts
+    # demonstrate that rather than the run asserting it.
     processor = Qwen3OmniMoeProcessor.from_pretrained(MODEL)
     fe = getattr(processor, "feature_extractor", None)
     fe_rate = getattr(fe, "sampling_rate", None)
