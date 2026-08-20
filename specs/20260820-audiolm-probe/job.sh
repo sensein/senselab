@@ -22,10 +22,13 @@ VENV="$POOL/venvs/audiolm"
 OUT="$SCRATCH/audiolm-$SLURM_JOB_ID"
 mkdir -p "$OUT" "$(dirname "$VENV")"
 
-REPO="$HOME/orcd/scratch/senselab-bench"
-BRANCH="bench/enhancement-survival"
+# Its own checkout: the separation sweep is using senselab-bench, and resetting a
+# checkout under a running job is not worth the risk.
+REPO="$SCRATCH/senselab-audiolm"
+BRANCH="triage"
 AUDIO="${AUDIO:?set AUDIO}"
 
+[ -d "$REPO/.git" ] || git clone -q --filter=blob:none git@github.com:sensein/senselab.git "$REPO"
 cd "$REPO"
 git fetch -q origin "$BRANCH"
 git reset -q --hard "origin/$BRANCH"
