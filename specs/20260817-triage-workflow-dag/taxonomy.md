@@ -218,3 +218,44 @@ insensitive to which member of a family fired. That is the point: one verified e
 is reading noise. But the fold must be over the *kind's own* family only. `Snore` is in the airway
 family and fired 16 times on a file with no snoring, so a family drawn too wide imports its own false
 positives at full strength through the max.
+
+## Correction: AST's default is 10.24 s, and aggregate mode is why that is fine
+
+The grid table above put AST at 0.96 s. That is senselab's current config value, not AST's default.
+AST takes 1024 frames at a 10 ms hop, so its input is **10.24 s**, and its feature extractor pads or
+truncates every clip to that length. Measured directly:
+
+| audio fed | model input | real | padding |
+| --- | --- | --- | --- |
+| 0.96 s — `ast_win_length` today | 1024 × 128 | 9% | **91%** |
+| 2.00 s | 1024 × 128 | 20% | 80% |
+| **10.24 s — AST's default** | 1024 × 128 | **100%** | **0%** |
+
+So the existing pipeline scores AST on inputs that are 91% silence, via
+`classify_audios(win_length=0.96)` slicing to 0.96 s and the extractor padding each slice out. That is
+an unmeasured distortion applied to every AST score the workflow has ever produced. Running the model
+on its own default removes it.
+
+**Corrected grids, on defaults:**
+
+| detector | window | hop | windows over 14.03 s | role |
+| --- | --- | --- | --- | --- |
+| YAMNet | 0.96 s | 0.48 s | 29 | window series |
+| HeAR | 2 s fixed | 0.25 s | 50 | window series |
+| **AST** | **10.24 s** | — | **1** | file-level verdict |
+| CrisperWhisper | — | — | tokens | file-level verdict |
+
+**This is aggregate detection mode, and that resolves the grid mismatch rather than complicating it.**
+Nothing here is being localised, so the four grids do not need reconciling and never share a timeline.
+Each detector answers one question on its own terms — *is this kind present in this recording* — and
+the verdicts combine. A detector whose window covers the whole file is not handicapped for a presence
+question; it is simply answering directly what the others answer by counting.
+
+That also settles the hop-invariance worry recorded above: it would matter if a window count were being
+read as a count of events, which is a localisation claim. In aggregate mode the count is evidence for a
+presence verdict and nothing more.
+
+**What remains live is false-positive accumulation**, because that is a property of aggregate mode
+itself: more windows means more chances for a spurious confident one. `Snore` clearing 0.5 in 16
+windows on a file containing no snoring is the measured case, and it is the reason the per-kind minimum
+count is a real parameter rather than a formality.
