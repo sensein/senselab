@@ -42,7 +42,7 @@ uv sync --all-extras --group dev                                          # its 
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 uv run --no-sync python specs/20260819-enhancement-survival/bench.py \
-  "$AUDIO" --out "$OUT/results.json"
+  "$AUDIO" --out "$OUT/results.json" --arm "${ARM:-both}"
 
 echo "== rows: $(python3 -c "import json;print(len(json.load(open('$OUT/results.json'))))")"
 echo "== output: $OUT/results.json"

@@ -202,6 +202,7 @@ def main() -> int:
     ap.add_argument("audio", type=Path)
     ap.add_argument("--out", type=Path, default=Path("results.json"))
     ap.add_argument("--seed", type=int, default=20260819)
+    ap.add_argument("--arm", choices=("both", "enhance", "separate"), default="both")
     args = ap.parse_args()
 
     device = DeviceType.CUDA if torch.cuda.is_available() else DeviceType.CPU
@@ -216,7 +217,7 @@ def main() -> int:
             if snr is None
             else Audio(waveform=add_noise(base.waveform, snr, args.seed), sampling_rate=base.sampling_rate)
         )
-        for name, spec, rate, params in ENHANCERS:
+        for name, spec, rate, params in ENHANCERS if args.arm != "separate" else []:
             print(f"[snr={snr} enhancer={name} rate={rate}]", flush=True)
             try:
                 fed = noisy if noisy.sampling_rate == rate else resample_audios([noisy], rate)[0]
@@ -292,7 +293,7 @@ def main() -> int:
                     )
             args.out.write_text(json.dumps(rows, indent=2))  # checkpoint after every cell
 
-        for name, ident, rate, params in SEPARATORS:
+        for name, ident, rate, params in SEPARATORS if args.arm != "enhance" else []:
             print(f"[snr={snr} separator={name} rate={rate}]", flush=True)
             try:
                 fed = noisy if noisy.sampling_rate == rate else resample_audios([noisy], rate)[0]
