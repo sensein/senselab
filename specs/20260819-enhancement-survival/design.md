@@ -274,7 +274,8 @@ Re-read on that basis, clean condition:
 | `MossFormerGAN_SE_16K` | everything else, <=0.02 | speech 0.989 | speech filter |
 | `MossFormer2_SE_48K` | breath, 0.000 | cough 0.903 / 1.000 | cough filter |
 | `sepformer-dns4-16k-enh` | cough, 0.000 | breath_2 1.000 | breath filter |
-| `MossFormer2_SS_16K` src1 | speech, breath | cough 0.977-0.998 across conditions | cough channel |
+| `MossFormer2_SS_16K` src0 | cough, 0.000-0.006 | speech 0.996 across conditions | speech channel |
+| `MossFormer2_SS_16K` src1 | speech 0.096 -> 0.000, breath | cough 0.977-0.998 across conditions | cough channel |
 | `FRCRN_SE_16K` | nothing | everything at input level | passthrough, no selectivity |
 
 `MossFormer2_SE_48K` and `sepformer-dns4-16k-enh` are near-exact complements, which is the useful
@@ -289,3 +290,30 @@ conditioning mechanism at all -- holds src0=speech, src1=cough across clean, +20
 By the same correction, `MossFormer2_SS_16K` src1 dropping its speech leakage from 0.096 to 0.000 under
 noise is the partition getting sharper, and was recorded above as a cost. Its cough_1 floor and the
 loss of breath under noise are selectivity boundaries to know, not damage.
+
+
+## unasdiff's priors, and what a conditioning-free run would show
+
+unasdiff carries **two independently-trained diffusion priors**, speech and sound. Separation is
+generative -- each slot is sampled from one prior and they compete to explain the mixture -- so the
+prior is the model and there is no prior-free run. The three modes differ only in which prior occupies
+which slot:
+
+| mode | slot 0 | remaining slots | `source_classes` |
+| --- | --- | --- | --- |
+| `speech_sound` | speech prior, **unconditional** | sound prior, conditioned | required, n-1 entries |
+| `sound_sound` | sound prior, conditioned | sound prior, conditioned | required, n entries |
+| `speech_speech` | speech prior | speech prior | unused |
+
+Two consequences for the permutation finding above.
+
+**Slot 0 in `speech_sound` is already unconditional**, and slot 0 is src0 in every row reported here.
+So cough_2 landed at 0.989 in an *unconditioned* slot when clean and at 1.000 in the conditioned slot
+at +20 dB. The conditioning label did not place it either time.
+
+**`speech_speech` needs no conditioning at all**, which makes it the clean diagnostic: if it still
+splits cough from speech, conditioning was never doing the work. It is not a candidate for use --
+the module carries upstream's own caveat that the approach "is not well suited for same-class source
+separation ... it lacks speaker-conditioning", with the instruction that nothing downstream should
+treat its output as a reliable decomposition -- but as a control it isolates exactly the question the
+`Cough` / `Computer_keyboard` pair only circles.
