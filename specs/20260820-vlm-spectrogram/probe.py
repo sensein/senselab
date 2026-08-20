@@ -6,6 +6,14 @@ recording measuring 87-88 Hz at periodicity 0.93. Wideband suppresses harmonics 
 a full-file zoom glottal striations span about two pixels, so neither voicing cue was available. The
 model read the image correctly; the image could not carry the question. Narrowband is the default here
 because harmonics are the cue this model demonstrably reasons with.
+
+The colour scale is the second load-bearing render choice. ``specgram`` normalises over the full data
+range, which on this recording is 165 dB (-211 to -46 dB): a noise floor 45 dB below the signal lands
+at 61% of the palette and reads as structure. The run at that setting located both events correctly
+and then made three claims with no measurable support -- harmonics to 6 kHz where 4-8 kHz holds 0.003%
+of the energy, a "broadband sweep to 7.5 kHz" where the actual feature is a rising harmonic fan below
+2.5 kHz, and a "click" at 8.38 s where a z=2.0 column of noise floor sits. Clipping to ``dyn_range``
+dB below the loudest bin puts the floor at the bottom of the palette.
 """
 
 from __future__ import annotations
@@ -41,7 +49,7 @@ PROMPT = (
 MODES = {"narrowband": 25.0, "wideband": 4.0}
 
 
-def render(audio: Path, out: Path, mode: str, fmax: float) -> Dict[str, Any]:
+def render(audio: Path, out: Path, mode: str, fmax: float, dyn_range: float) -> Dict[str, Any]:
     """Write a spectrogram in the requested analysis mode.
 
     Args:
@@ -49,6 +57,8 @@ def render(audio: Path, out: Path, mode: str, fmax: float) -> Dict[str, Any]:
         out: Destination PNG.
         mode: ``"narrowband"`` or ``"wideband"``.
         fmax: Top of the frequency axis, Hz.
+        dyn_range: dB below the loudest bin to clip the colour scale at; ``<= 0`` leaves
+            matplotlib's default full-range normalisation in place.
 
     Returns:
         What was rendered, including the resolved window in samples and milliseconds.
@@ -57,7 +67,10 @@ def render(audio: Path, out: Path, mode: str, fmax: float) -> Dict[str, Any]:
     x = y.mean(axis=1)
     nfft = max(32, 2 ** round(np.log2(sr * MODES[mode] / 1000)))
     fig, ax = plt.subplots(figsize=(14, 5), constrained_layout=True)
-    ax.specgram(x, NFFT=nfft, Fs=sr, noverlap=int(nfft * 0.9), cmap="magma")
+    spec, _, _, im = ax.specgram(x, NFFT=nfft, Fs=sr, noverlap=int(nfft * 0.9), cmap="magma")
+    vmax = float(10 * np.log10(np.maximum(spec, 1e-30)).max())
+    if dyn_range > 0:
+        im.set_clim(vmax - dyn_range, vmax)
     ax.set_ylim(0, fmax)
     ax.set_xlim(0, x.size / sr)
     ax.set_xlabel("time (s)")
@@ -72,6 +85,8 @@ def render(audio: Path, out: Path, mode: str, fmax: float) -> Dict[str, Any]:
         "nfft": nfft,
         "window_ms": nfft / sr * 1000,
         "fmax": fmax,
+        "dyn_range": dyn_range,
+        "clim": [vmax - dyn_range, vmax] if dyn_range > 0 else list(im.get_clim()),
     }
 
 
@@ -87,6 +102,7 @@ def main() -> int:
     ap.add_argument("--png", type=Path, default=Path("spectrogram.png"))
     ap.add_argument("--mode", choices=sorted(MODES), default="narrowband")
     ap.add_argument("--fmax", type=float, default=8000.0)
+    ap.add_argument("--dyn-range", type=float, default=60.0)
     ap.add_argument("--max-new-tokens", type=int, default=16384)
     ap.add_argument("--no-thinking", action="store_true")
     args = ap.parse_args()
@@ -94,10 +110,11 @@ def main() -> int:
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
-    meta = render(args.audio, args.png, args.mode, args.fmax)
+    meta = render(args.audio, args.png, args.mode, args.fmax, args.dyn_range)
     print(
         f"rendered {meta['png']}: {meta['seconds']:.2f}s at {meta['sr']} Hz, {meta['mode']}, "
-        f"{meta['nfft']}-pt = {meta['window_ms']:.1f} ms, 0-{meta['fmax']:.0f} Hz",
+        f"{meta['nfft']}-pt = {meta['window_ms']:.1f} ms, 0-{meta['fmax']:.0f} Hz, "
+        f"colour scale {meta['clim'][0]:.1f} to {meta['clim'][1]:.1f} dB",
         flush=True,
     )
 
