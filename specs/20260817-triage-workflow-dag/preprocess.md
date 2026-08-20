@@ -21,7 +21,7 @@ preprocess(audio, preemphasis=True) -> derivatives
 Internally two conditioning steps run before any derivative is computed:
 
 ```
-                            +--> plain -------------> squim, level
+                            +--> plain -------------> squim, level, ASR x2, alignment
 audio --> resample to 16 kHz +
                             +--> pre-emphasis ------> envelope, spectrograms, gammatone
                                  (switchable)
@@ -41,6 +41,9 @@ missing derivative must not take the whole node down, because most consumers nee
 | `spectrogram_wb` | 5 ms window, 5 ms hop — wideband | onsets and transients; glottal pulses; anything reading voicing structure |
 | `spectrogram_nb` | 20 ms window, 5 ms hop — narrowband | harmonics and F0 read off their spacing; span refinement; rendering for a reader or a model |
 | `gammatone` | auditory filterbank output | short-transient detection, where a cochleagram resolves what a linear-frequency window smears |
+| `asr_crisperwhisper` | transcript with word and token edges — **plain signal** | speech branch transcript and speaker spans; airway branch's second onset estimate; voice branch's lexical exclusion |
+| `asr_qwen` | transcript with word timings — **plain signal** | speech branch agreement confidence; a second opinion the speech branch compares against CrisperWhisper |
+| `alignment` | forced alignment of the agreed transcript to the audio | word- and phone-level spans for every consumer that needs where a word was, not just that it was said |
 
 **Every row has a named consumer, and that is the admission rule.** A derivative with no consumer is a
 guess about a node that does not exist yet, and this project has already paid for that once: ADMIT
@@ -157,7 +160,8 @@ their energy in 4-8 kHz, which is exactly what the tilt boosts.
 Pre-emphasis does not consume its input. The node holds the resampled signal **and** its pre-emphasised
 form, and every row of the derivative table names which of the two it reads — so this is a property of
 the graph, not a special case bolted onto it. Most derivatives read the pre-emphasised signal.
-`squim` and `level` read the plain one, and that is not a preference.
+`squim`, `level`, both ASRs and `alignment` read the plain one, and for `squim` and `level` that is
+not a preference.
 
 **SQUIM goes off-distribution, and says so incoherently.** Pre-emphasised, it reports STOI rising
 0.8635 to 0.9683 while SI-SDR falls -12.917 to -20.676 dB. One signal cannot be materially more
@@ -175,6 +179,38 @@ So the switch governs the derivatives whose value pre-emphasis *changes*, and do
 whose **definition** it breaks. A consumer asking for a plain-signal derivative gets the same answer
 whether the switch is on or off, which is the point: the switch is a knob on the analysis, not on what
 the recording's level or its quality scores mean.
+
+## ASR runs here, not in the speech branch
+
+CrisperWhisper and Qwen3-ASR run in PREPROCESS, with forced alignment over the transcript they agree on.
+This is the admission rule applied honestly rather than a convenience: **all three branches read word
+timings**, so the alternative is either three copies of the same inference or a cross-branch dependency
+on whichever branch happened to own the model.
+
+| branch | what it reads the timings for |
+| --- | --- |
+| speech | the transcript itself, per-speaker spans, and the agreement between the two ASRs as a confidence |
+| airway | a second, independent onset estimate. The airway branch already specifies this — CrisperWhisper token edges land +20, +32, −26, −10 ms against four verified windows, and two instruments agreeing to ~30 ms is its strongest onset evidence |
+| voice | lexical exclusion. Voice-no-words is defined as vocalic activity that is *not* speech, so it needs to know where words are in order to subtract them |
+
+**The consequence for the speech branch is that it consumes transcripts instead of producing them.** Its
+multi-ASR node becomes a comparison over inputs it is given, not a stage that runs the models. That is a
+simplification of that branch and should be applied to it rather than left implied here.
+
+**Both ASRs and the aligner read the plain signal**, alongside `squim` and `level`. The reason is the same
+one the pre-emphasis section measures for SQUIM: an acoustic model trained on speech as recorded is
+off-distribution on a +6 dB/octave tilt, and a transcript is not a quantity that degrades gracefully — a
+word is either recognised or it is not. **This one is reasoned by analogy, not measured.** SQUIM's
+incoherent shift is direct evidence for SQUIM; the corresponding measurement here is word error rate and
+token-edge displacement for both ASRs on plain against pre-emphasised input, and it has not been run. It
+is cheap, and it is the thing to run before anything rests on this choice.
+
+Two constraints this places on the node. **ASR is by far the most expensive derivative here**, so the
+"missing derivative simply is not emitted" rule matters most for these rows — a branch that needs no
+transcript must not wait on two ASR models. And **`alignment` depends on the two ASR rows** rather than
+on the audio alone, which makes it the first derivative in this node with a derivative as an input; if
+the two transcripts disagree beyond the speech branch's threshold there is no agreed transcript to align,
+and the row is absent rather than guessed.
 
 ## Working sample rate: 16 kHz
 

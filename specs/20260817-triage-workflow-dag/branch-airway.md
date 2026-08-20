@@ -99,10 +99,38 @@ one that was never proposed.
 
 ### 2. Localise the onset — the envelope, inside proposed regions only
 
-Rise detection on a 1 ms envelope at Δ dB above a floor estimated over the region's leading context.
-Confined to proposed regions, which is what makes the 119–120-false-onset flood unreachable: that failure
-was global peak-picking with a slightly small delta, and inside a region proposed by an independent
-instrument the same delta has almost no unproposed audio to fire in.
+**Peak-anchored, not floor-referenced.** Inside a proposed region, take the envelope's maximum and walk
+*backwards* to the first point below `peak - 15 dB`. Confinement to proposed regions is still what makes
+the 119–120-false-onset flood unreachable, but the anchor is now the event's own peak rather than a floor
+estimated over leading context.
+
+The anchor is the whole difference, measured against the six labelled events' declared onset windows:
+
+| onset rule | inside the declared window |
+| --- | --- |
+| Δ above an estimated floor | **2 / 6** |
+| peak-anchored, `peak - 15 dB` | **5 / 6** |
+
+and the one miss is speech, which does not belong to this branch. **On the five airway events the
+peak-anchored rule is 5 / 5.** Both rules see the same envelope, so this is not a smoothing or bandwidth
+result: a floor-referenced threshold fires on whatever pre-event fluctuation happens to cross it, and
+every one of its errors was early. Widening the envelope's bandwidth makes that *worse*, not better —
+median error 144 ms at 320 Hz against 63 ms at 40 Hz — which is why PREPROCESS emits a 40 Hz modulation
+envelope and explicitly claims no onset accuracy: the accuracy is this rule's property, and therefore
+this branch's.
+
+**Pre-emphasis is what makes the hardest events reachable.** PREPROCESS's switchable +6 dB/octave tilt
+raises event-to-floor contrast on every labelled event, and most on the two that have most often been
+missed — cough 1 by +10.95 dB and the mouth non-speech sound by +7.36 dB, both of which carry 14–16% of
+their energy in 4–8 kHz. The mouth sound goes from 12.65 dB of contrast to 20.01 dB, which is the
+difference between an event a threshold can find and one it cannot.
+
+**Two limits on the 5 / 5, stated because they bound what it licenses.** The peak was located inside the
+*labelled* span; in deployment the region comes from YAMNet, which is coarser, and a region containing two
+events or a louder neighbour would anchor on the wrong peak. And n = 5 events, one recording, one healthy
+adult — the same generalisation limit this section already applies to the ±5 ms cough figure. **The
+measurement that would settle it is this rule scored inside YAMNet-proposed regions rather than labelled
+ones**, which needs no new instrument.
 
 The onset is a point with a tolerance, and **the tolerance is per type, because only cough's is
 measured**:
@@ -183,6 +211,29 @@ of that agreement.
 
 A one-directional error is not a measurement of the offset, but it is a valid **lower bound on the
 extent**. So the branch reports the offset as a bracket:
+
+**A rule that narrows the bracket, measured.** The reason a fixed Δ fails on offsets is that the events do
+not share a dynamic range: the mouth non-speech sound peaks 20.0 dB above the envelope floor while cough 1
+peaks 56.8 dB above it. So one fixed drop is simultaneously too shallow for a cough — stopping 521 ms
+early at −10 dB — and impossible for the mouth sound, where a −40 dB drop never arrives and the walk runs
+6.9 s to the end of the file. Scaling the drop to *each event's own* range removes that:
+
+| offset rule | median \|error\| | worst |
+| --- | --- | --- |
+| fixed `peak - 10 dB` | 573.9 ms | 1285.1 ms |
+| fixed `peak - 30 dB` | 206.5 ms | 1066.3 ms |
+| `peak - 0.7 × (peak - floor)`, 250 ms hangover | **84.3 ms** | 417.7 ms |
+
+The hangover — the boundary closes only after the envelope stays below threshold continuously — is what
+keeps an event with internal pauses from ending at its first dip.
+
+**It does not replace the bracket, and one number says why.** The worst case is the mouth non-speech
+sound at +418 ms, and that error is structural rather than a tuning failure: **a 250 ms hangover cannot
+bound a 202 ms event**, because the rule must observe more silence than the event lasts before it will
+close. So the hangover has to be shorter than the shortest event a type intends to bound, which makes it a
+**per-type** parameter and not a global one — and for the mouth non-speech sound no setting of it has been
+measured. The bracket therefore stays: this rule sharpens `t_last_witnessed_s` for the types with room for
+it, and the types where it cannot are exactly the ones the bracket exists to represent honestly.
 
 | side | source | what it means |
 | --- | --- | --- |
