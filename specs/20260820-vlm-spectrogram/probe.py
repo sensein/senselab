@@ -1,8 +1,11 @@
-"""Render a wideband spectrogram and ask a VLM to reason about it.
+"""Ask a VLM to detect spans in a spectrogram and say what they contain.
 
-The image is produced here rather than supplied, so the figure a claim rests on is reproducible from
-the recording. All energy in these recordings sits below 4 kHz, so the view is 0-8 kHz: showing the
-empty 8-24 kHz band would spend most of the image on noise floor.
+The render mode is the load-bearing choice, not a detail. A previous run gave the model a wideband
+image and it concluded there was no sustained vowel because it saw "no clear harmonic stacks" -- on a
+recording measuring 87-88 Hz at periodicity 0.93. Wideband suppresses harmonics by construction, and at
+a full-file zoom glottal striations span about two pixels, so neither voicing cue was available. The
+model read the image correctly; the image could not carry the question. Narrowband is the default here
+because harmonics are the cue this model demonstrably reasons with.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 import matplotlib
 
@@ -23,47 +26,36 @@ import torch
 
 MODEL = "Qwen/Qwen3.8-27B"
 
-PROMPTS = [
-    (
-        "describe",
-        "This is a wideband spectrogram of an audio recording: time in seconds on the x axis, "
-        "frequency in Hz on the y axis, brightness is energy. Describe what you see.",
-    ),
-    (
-        "events",
-        "From this spectrogram, list every distinct acoustic event you can identify, with its "
-        "approximate start and end time in seconds. Say what each one is.",
-    ),
-    (
-        "voicing",
-        "Wideband spectrograms show voiced sound as regular vertical striations, one per glottal "
-        "pulse. Are there striations here? Over which time ranges, and what fundamental "
-        "frequency do they imply? Explain how you read it off the image.",
-    ),
-    (
-        "production",
-        "Is the sound in this spectrogram produced by a human vocal tract? If so, classify it: "
-        "connected speech, sustained phonation on a vowel, a pitch glide, a cough, a breath, or "
-        "something else. Justify the classification from features visible in the image.",
-    ),
-]
+# Neutral: names the medium and what it may contain, asks for spans and reasoning, and takes no
+# position on what is there. An earlier prompt asked the model to "explain how you read it off the
+# image", which it answered by trying to infer the expected answer -- it wrote that the question looked
+# like it came from an assignment.
+PROMPT = (
+    "This is a spectrogram of an audio recording that can contain vocal sounds. "
+    "Detect the spans, and for each one give its start and end time in seconds and your reasoning "
+    "for what it contains."
+)
+
+# Narrowband resolves harmonics (~35-40 Hz apart at 25 ms); wideband resolves glottal pulses but needs
+# a span short enough for them to occupy more than a pixel or two.
+MODES = {"narrowband": 25.0, "wideband": 4.0}
 
 
-def render(audio: Path, out: Path, fmax: float, win_ms: float) -> Dict[str, Any]:
-    """Write a wideband spectrogram of ``audio``.
+def render(audio: Path, out: Path, mode: str, fmax: float) -> Dict[str, Any]:
+    """Write a spectrogram in the requested analysis mode.
 
     Args:
         audio: Recording to render.
         out: Destination PNG.
+        mode: ``"narrowband"`` or ``"wideband"``.
         fmax: Top of the frequency axis, Hz.
-        win_ms: Analysis window in milliseconds.
 
     Returns:
-        A record of what was rendered.
+        What was rendered, including the resolved window in samples and milliseconds.
     """
     y, sr = sf.read(str(audio), dtype="float32", always_2d=True)
     x = y.mean(axis=1)
-    nfft = max(32, 2 ** round(np.log2(sr * win_ms / 1000)))
+    nfft = max(32, 2 ** round(np.log2(sr * MODES[mode] / 1000)))
     fig, ax = plt.subplots(figsize=(14, 5), constrained_layout=True)
     ax.specgram(x, NFFT=nfft, Fs=sr, noverlap=int(nfft * 0.9), cmap="magma")
     ax.set_ylim(0, fmax)
@@ -76,6 +68,7 @@ def render(audio: Path, out: Path, fmax: float, win_ms: float) -> Dict[str, Any]
         "png": str(out),
         "sr": sr,
         "seconds": x.size / sr,
+        "mode": mode,
         "nfft": nfft,
         "window_ms": nfft / sr * 1000,
         "fmax": fmax,
@@ -83,7 +76,7 @@ def render(audio: Path, out: Path, fmax: float, win_ms: float) -> Dict[str, Any]
 
 
 def main() -> int:
-    """Render, then run every prompt against the image.
+    """Render, ask once, and record the answer with its reasoning and whether it was cut off.
 
     Returns:
         Process exit status.
@@ -92,19 +85,19 @@ def main() -> int:
     ap.add_argument("audio", type=Path)
     ap.add_argument("--out", type=Path, default=Path("vlm.json"))
     ap.add_argument("--png", type=Path, default=Path("spectrogram.png"))
+    ap.add_argument("--mode", choices=sorted(MODES), default="narrowband")
     ap.add_argument("--fmax", type=float, default=8000.0)
-    ap.add_argument("--win-ms", type=float, default=4.0)
-    ap.add_argument("--max-new-tokens", type=int, default=8192)
+    ap.add_argument("--max-new-tokens", type=int, default=16384)
     ap.add_argument("--no-thinking", action="store_true")
     args = ap.parse_args()
 
     from PIL import Image
     from transformers import AutoModelForImageTextToText, AutoProcessor
 
-    meta = render(args.audio, args.png, args.fmax, args.win_ms)
+    meta = render(args.audio, args.png, args.mode, args.fmax)
     print(
-        f"rendered {meta['png']}: {meta['seconds']:.2f}s at {meta['sr']} Hz, "
-        f"{meta['nfft']}-pt = {meta['window_ms']:.1f} ms window, 0-{meta['fmax']:.0f} Hz",
+        f"rendered {meta['png']}: {meta['seconds']:.2f}s at {meta['sr']} Hz, {meta['mode']}, "
+        f"{meta['nfft']}-pt = {meta['window_ms']:.1f} ms, 0-{meta['fmax']:.0f} Hz",
         flush=True,
     )
 
@@ -114,18 +107,50 @@ def main() -> int:
     print(f"loaded {MODEL} on {torch.cuda.device_count()} gpu(s)", flush=True)
 
     image = Image.open(meta["png"]).convert("RGB")
-    rows: List[Dict[str, Any]] = []
-    for name, prompt in PROMPTS:
-        msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": prompt}]}]
-        text = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
-        inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
-        with torch.no_grad():
-            ids = model.generate(**inputs, max_new_tokens=args.max_new_tokens, do_sample=False)
-        answer = processor.batch_decode(ids[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True)[0].strip()
-        rows.append({"prompt": name, "question": prompt, "answer": answer})
-        print(f"\n=== [{name}]\n{answer}", flush=True)
-        args.out.write_text(json.dumps({"model": MODEL, "render": meta, "rows": rows}, indent=2))
-    print(f"\nwrote {args.out}", flush=True)
+    msgs = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": PROMPT}]}]
+    text = processor.apply_chat_template(
+        msgs, add_generation_prompt=True, tokenize=False, enable_thinking=not args.no_thinking
+    )
+    inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
+    n_in = inputs["input_ids"].shape[1]
+    with torch.no_grad():
+        # The card's thinking-mode sampling. Greedy decoding is explicitly not what it asks for.
+        ids = model.generate(
+            **inputs,
+            max_new_tokens=args.max_new_tokens,
+            do_sample=True,
+            temperature=1.0,
+            top_p=0.95,
+            top_k=20,
+            repetition_penalty=1.0,
+        )
+    n_new = int(ids.shape[1]) - n_in
+    raw = processor.batch_decode(ids[:, n_in:], skip_special_tokens=True)[0].strip()
+
+    thinking, answer = "", raw
+    if "</think>" in raw:
+        head, _, tail = raw.partition("</think>")
+        thinking, answer = head.replace("<think>", "").strip(), tail.strip()
+
+    record = {
+        "model": MODEL,
+        "render": meta,
+        "prompt": PROMPT,
+        "new_tokens": n_new,
+        "max_new_tokens": args.max_new_tokens,
+        "hit_budget": n_new >= args.max_new_tokens,
+        "thinking": thinking,
+        "answer": answer,
+    }
+    args.out.write_text(json.dumps(record, indent=2))
+    print(
+        f"\ntokens generated: {n_new} of {args.max_new_tokens}"
+        f"{'  ** HIT BUDGET, OUTPUT IS TRUNCATED **' if record['hit_budget'] else ''}",
+        flush=True,
+    )
+    if thinking:
+        print(f"\n--- reasoning ({len(thinking)} chars) ---\n{thinking}", flush=True)
+    print(f"\n--- answer ---\n{answer}\n\nwrote {args.out}", flush=True)
     return 0
 
 
