@@ -71,7 +71,7 @@ survive this step.
 #### How far into noise this survives
 
 Extraction is limited by the **span proposal**, never by the interpretation. Across pink noise added at
-SNRs measured over the speech span, with PREPROCESS's noise-adaptive gate:
+SNRs measured over the speech span, with PREPROCESS's local-floor gate at this branch's `K` of 12 dB:
 
 | SNR over the speech | span proposed? | IoU with the label | YAMNet coverage | verdict |
 | --- | --- | --- | --- | --- |
@@ -80,7 +80,7 @@ SNRs measured over the speech span, with PREPROCESS's noise-adaptive gate:
 | +10 dB | yes | 0.17 | 100% | **speech** |
 | +5 dB | merged with a cough | 0.10 | 67% | flag |
 | 0 dB | merged with a cough | 0.10 | 50% | flag |
-| −5 dB | **gate below floor** | — | — | `fail` |
+| −5 dB | **no contrast** — speech is 3.9 dB above the local floor | — | — | `fail` |
 
 **YAMNet never becomes the limit** — `Speech` holds 0.987–0.998 with 100% coverage throughout, so the
 classifier is still right about a span the envelope can no longer find. That is the opposite of what one
@@ -102,7 +102,7 @@ disagree exactly as they should, YAMNet still seeing speech in the window while 
 | outcome | when | why |
 | --- | --- | --- |
 | **speech spans** | both instruments vote speech | passed to step 2 |
-| **`fail`** | no span gets a speech vote from either instrument, **or** PREPROCESS reports `gate_below_floor` | there is nothing for this branch to measure. Not a claim that the recording is empty — a statement that this branch has no subject. The two causes are distinguished in the reason, because "too noisy to propose a span" and "no speech present" are different findings |
+| **`fail`** | no span gets a speech vote from either instrument, **or** PREPROCESS reports `no_contrast` | there is nothing for this branch to measure. Not a claim that the recording is empty — a statement that this branch has no subject. The two causes are distinguished in the reason, because "too noisy to propose a span" and "no speech present" are different findings |
 | **`flag`** | the two instruments **disagree** on a span, or a span's measures fall inside the gaps above | a human resolves this faster than any rule available here |
 
 **Disagreement is the definition of uncertain, and it is deliberately not a threshold.** With gaps of
