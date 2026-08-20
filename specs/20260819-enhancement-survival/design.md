@@ -159,3 +159,34 @@ Secondary observations from the same sweep:
 - **Speech is flat at <=0.009 across all 694 windows.** With the 0.348 on the full verified event and
   the duration table never crossing 0.5, that is three independent measurements agreeing that HeAR
   does not report this speech.
+
+## All eight classes at 500 ms: Snore is the second-most-active class, and every hit is false
+
+A 500 ms window at 100 ms hop, 136 positions, rastered over all eight detector labels rather than the
+four plotted before. See `hear_raster_500ms.png`.
+
+| class | peak | windows >0.5 | where |
+| --- | --- | --- | --- |
+| Cough | 1.000 | 12 | all 12 inside the two verified coughs |
+| Breathe | 0.928 | 13 | breath_1, breath_2, and 4.05-4.25 |
+| **Snore** | **0.864** | **16** | **all 16 false** |
+| Throat Clear | 0.722 | 1 | 12.45 s, inside speech |
+| Baby Cough | 0.637 | 1 | 8.45 s, inside the adult cough |
+| Laugh | 0.102 | 0 | — |
+| Sneeze | 0.092 | 0 | — |
+| Speech | 0.080 | 0 | — |
+
+**`Snore` produces more detections than `Cough` and there is no snoring in the recording.** It fires
+at 1.15, 3.05, 3.45, 3.85-4.15, 7.45-7.55, 8.75 and 12.55-12.75 s — in verified-empty audio, inside
+breath_1, and inside the speech span. Restricting earlier plots to four labels hid this entirely, and
+it is the strongest evidence against reading these posteriors as corroboration: the model's most
+active class after cough is one with no instances present.
+
+Two smaller confusions, both timed correctly: `Baby Cough` 0.637 on an adult cough, and
+`Throat Clear` 0.722 inside speech.
+
+**A candidate unlabelled event at 3.9-4.25 s.** `Breathe` exceeds 0.5 there at 160 ms (3 windows),
+320 ms and 500 ms, and `Snore` peaks at the same place. Four window lengths and two classes agree on a
+stretch the branch-1 document lists as verified-empty. Either the list is wrong at that point or both
+classes share a false positive; it wants a human listen, and until then the empty-stretch list should
+not be treated as verified there.
