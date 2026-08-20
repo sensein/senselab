@@ -29,7 +29,8 @@ missing derivative must not take the whole node down, because most consumers nee
 | `energy_envelope` | broadband envelope, ~3 ms smoothing | airway onsets; the residual's RMS floor; voice branch energy level and modulation rate |
 | `level` | peak dBFS, RMS dBFS, LUFS | voice branch — loud phonation is energy *relative to the rest of the recording*, so it needs a file-level reference; also clipping |
 | `squim` | STOI, PESQ, SI-SDR from the objective head; MOS from the subjective head | speech branch quality gate |
-| `spectrogram` | 20 ms window, 10 ms hop | span refinement; anything rendering the signal for a reader or a model |
+| `spectrogram_wb` | 5 ms window, 5 ms hop — wideband | onsets and transients; glottal pulses; anything reading voicing structure |
+| `spectrogram_nb` | 20 ms window, 5 ms hop — narrowband | harmonics and F0 read off their spacing; span refinement; rendering for a reader or a model |
 | `gammatone` | auditory filterbank output | short-transient detection, where a cochleagram resolves what a linear-frequency window smears |
 
 **Every row has a named consumer, and that is the admission rule.** A derivative with no consumer is a
@@ -39,21 +40,37 @@ branch needs something new here, it declares the input and this node grows the o
 
 ## Two things about the parameters worth stating
 
-**A 20 ms window is narrowband by the convention the branch documents use.** Wideband means a short
-analysis window, roughly 3-5 ms, which resolves glottal pulses as vertical striations and formants as
-broad bands; narrowband means roughly 20-30 ms, which resolves individual harmonics as horizontal lines
-and smears transients. At 20 ms the harmonics separate by about 40 Hz, so F0 is readable as their
-spacing — and the striations are not visible. That is a reasonable default for spectral content, and it
-is worth naming so nothing downstream claims to have read voicing pulses off it.
+**Two spectrograms, because one window cannot carry both cues.** The hop and the window are
+independent: the hop sets how finely the view is sampled in time, the window sets what is resolvable at
+all. So both share a 5 ms hop and differ only in window.
 
-**The envelope and the spectrogram are complementary, not redundant.** A 10 ms hop gives 10 ms of time
-resolution, which is coarser than the ±5 ms an envelope achieves on a cough onset. So time precision
-comes from `energy_envelope` and frequency precision from `spectrogram`, and a consumer wanting both
-takes both. Neither is a substitute for the other, which is why both are here.
+At a measured F0 of 88.1 Hz the glottal period is 11.4 ms, and the arithmetic decides:
+
+| window | frequency resolution, Hann | harmonics resolve | pulses resolve |
+| --- | --- | --- | --- |
+| 5 ms | 300 Hz | no | yes, 0.44 of a period |
+| 10 ms | 150 Hz | no | marginally, 0.88 of a period |
+| 20 ms | 75 Hz | **yes** | no |
+
+Resolving harmonics needs the resolution finer than F0; resolving pulses needs the window shorter than
+the period. **A 10 ms window satisfies neither with any margin for a low male voice** — it cannot
+separate 88 Hz harmonics, and at 0.88 of a period its pulses smear. It is the one choice in that table
+that shows neither cue cleanly, which is why the node emits 5 ms and 20 ms instead of a compromise
+between them.
+
+Emitting both also removes a failure this project has already met: a model was handed one wideband view
+of a recording, reasoned correctly that it saw no harmonic stacks, and concluded there was no sustained
+vowel — on four seconds of 88 Hz voicing. The analysis window determined the conclusion. With both
+views computed, the choice of cue belongs to the consumer and is visible in what it asked for.
+
+**The envelope is still not redundant with either spectrogram.** A 5 ms hop gives 5 ms of time
+resolution, which is at the edge of the ±5 ms an envelope achieves on a cough onset, and the envelope's
+~3 ms smoothing sees the rise directly rather than through a windowed transform. So onset precision
+comes from `energy_envelope`, and the spectrograms carry what frequency structure is present.
 
 ## What exists and what does not
 
-`squim` has both heads available already. The envelope and a 20/10 spectrogram are ordinary DSP.
+`squim` has both heads available already. The envelope and both spectrograms are ordinary DSP.
 **`level`'s LUFS and `gammatone` are new** — neither exists yet, LUFS needs a loudness meter and
 gammatone needs a filterbank, and both are dependencies to add rather than code to write.
 
