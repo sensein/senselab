@@ -156,6 +156,34 @@ four verified windows). Two independent instruments agreeing to within ~30 ms is
 evidence available, so disagreement beyond that is a flag, not an averaging opportunity. HeAR's native
 onsets are barred from this step: on breath 2 its error is **+532 ms**, its 2 s window showing through.
 
+### 2b. What the silence floor makes measurable: HeAR's two channels are not equally usable
+
+PREPROCESS's `silence` derivative is not only a floor. It is a set of windows certified as containing
+nothing, which makes it possible to ask of any detector: *what does it report where there is nothing?*
+Asked of HeAR over the labelled recording — 16 of 136 gated 500 ms windows lie wholly inside
+YAMNet-silence — the two channels this branch cares about answer very differently:
+
+| HeAR channel | max inside certified silence | max outside | gap |
+| --- | --- | --- | --- |
+| `Cough` | **0.009** | 1.000 | clean separation |
+| `Breathe` | **0.764** | 0.933 | **0.17** |
+
+**The cough channel is usable as a detector and the breath channel is not.** No threshold separates
+0.764 from 0.933, so a breath decision resting on HeAR's score alone would fire in windows containing
+nothing — 0.764 at 4.15 s, 0.600 at 4.25 s and 0.481 at 1.15 s, all inside silence. This is a
+per-channel property, and it is the reason this branch fuses breath evidence rather than thresholding
+one instrument: the fusion in step 5 is doing necessary work for breath and comparatively little for
+cough.
+
+Two things follow for how this branch is built. **The silence mask belongs in the fusion as negative
+evidence**, not merely as the floor's source — a firing that lies wholly inside certified silence is
+evidence against, and it is available for every instrument at no extra cost. And **any new instrument
+should be characterised this way before it is trusted**, since the measurement needs no labels at all:
+it needs only a recording, its silence mask, and the instrument's own output.
+
+The usual limits hold — one recording, one adult, 16 silent windows — so this establishes the shape of
+the asymmetry and not its magnitude.
+
 ### 3. Type the event — HeAR in excerpt mode
 
 For each proposed region, sweep a 160 ms window at a 20 ms hop, each excerpt embedded in an

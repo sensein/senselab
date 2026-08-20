@@ -21,7 +21,7 @@ preprocess(audio, preemphasis=True) -> derivatives
 Internally two conditioning steps run before any derivative is computed:
 
 ```
-                            +--> plain -------------> squim, level, ASR x2, alignment
+                            +--> plain -------------> squim, level, ASR x2, alignment, silence
 audio --> resample to 16 kHz +
                             +--> pre-emphasis ------> envelope, spectrograms, gammatone
                                  (switchable)
@@ -35,12 +35,13 @@ missing derivative must not take the whole node down, because most consumers nee
 
 | derivative | what it is | consumed by |
 | --- | --- | --- |
-| `energy_envelope` | analytic-signal magnitude `\|x + jH{x}\|`, zero-phase 40 Hz lowpass, autoscaled to its own maximum | airway modulation rate; the residual's RMS floor; voice branch energy level |
+| `energy_envelope` | analytic-signal magnitude `\|x + jH{x}\|`, zero-phase 40 Hz lowpass, autoscaled to its own maximum, with a floor from `silence` | airway modulation rate; the residual's RMS floor; voice branch energy level |
 | `level` | peak dBFS, RMS dBFS, LUFS — **plain signal, never pre-emphasised** | voice branch — loud phonation is energy *relative to the rest of the recording*, so it needs a file-level reference; also clipping |
 | `squim` | STOI, PESQ, SI-SDR from the objective head; MOS from the subjective head — **plain signal, never pre-emphasised** | speech branch quality gate |
 | `spectrogram_wb` | 5 ms window, 5 ms hop — wideband | onsets and transients; glottal pulses; anything reading voicing structure |
 | `spectrogram_nb` | 20 ms window, 5 ms hop — narrowband | harmonics and F0 read off their spacing; span refinement; rendering for a reader or a model |
 | `gammatone` | auditory filterbank output | short-transient detection, where a cochleagram resolves what a linear-frequency window smears |
+| `silence` | YAMNet `Silence` per 0.96 s window at its native 0.48 s hop, and the floor derived from it — **plain signal** | the envelope's floor, which every span rule references; airway's `t_not_after_s` |
 | `asr_crisperwhisper` | transcript with word and token edges — **plain signal** | speech branch transcript and speaker spans; airway branch's second onset estimate; voice branch's lexical exclusion |
 | `asr_qwen` | transcript with word timings — **plain signal** | speech branch agreement confidence; a second opinion the speech branch compares against CrisperWhisper |
 | `alignment` | forced alignment of the agreed transcript to the audio | word- and phone-level spans for every consumer that needs where a word was, not just that it was said |
@@ -179,6 +180,50 @@ So the switch governs the derivatives whose value pre-emphasis *changes*, and do
 whose **definition** it breaks. A consumer asking for a plain-signal derivative gets the same answer
 whether the switch is on or off, which is the point: the switch is a knob on the analysis, not on what
 the recording's level or its quality scores mean.
+
+## The envelope floor comes from YAMNet's `Silence`, not from a percentile
+
+Every span rule in every branch is expressed relative to a floor — propose at `floor + 18 dB`, close the
+offset at a fraction of `peak - floor`. So the floor is not a display parameter; it is the reference the
+rules are written against, and how it is defined belongs here rather than in each branch.
+
+**A percentile of the envelope assumes its own answer.** Taking the 10th percentile asserts that about a
+tenth of the recording is silence. On a recording that is 90% speech the 10th percentile is quiet speech,
+and nothing about the resulting number reveals that it is not a noise floor. YAMNet's `Silence` decides
+which windows *are* silence, so the floor stays valid whatever the mix — which is the property a
+percentile cannot have.
+
+`Silence` is usable as a gate because its distribution on real audio is **bimodal**: across the 29
+windows of the labelled recording every score is either ≤ 0.36 or ≥ 0.62, with nothing in between, and
+`Silence` is the top-1 label in 11 of them. A 0.5 threshold therefore sits in an empty gap rather than
+being fitted to a value.
+
+**The statistic over those windows must be robust, and one number says why.** Inside YAMNet-silence the
+envelope reaches **−225 dB** — exact zero samples, which real recordings contain. A minimum or a mean
+over that region is meaningless; the floor is the **median** of the envelope across silence-labelled
+windows.
+
+**Measured against the percentile it replaces, on a file where both are computable:**
+
+| floor | value |
+| --- | --- |
+| 10th percentile of the whole file | −56.79 dB |
+| median over YAMNet `Silence` (56% of this file) | −53.53 dB |
+
+3.26 dB apart, which is a validation of the percentile *for this recording* and licenses nothing beyond
+it — the two agree here because this file genuinely is more than half silence.
+
+**The floor decides which events exist, not only where they end.** Raising it by those 3.26 dB changes
+the envelope's span set from 7 to 5: the mouth non-speech sound disappears, because its peak stands 20 dB
+above the lower floor and a proposal needs 18 dB above the higher one. The same change *improves* cough
+1, whose offset moves from 9.28 s to 8.51 s against a labelled end of 8.494 s. So the floor trades
+sensitivity on low-contrast events against tightness on high-contrast ones, and that trade is a decision
+this node makes once for every branch rather than one each branch makes silently.
+
+**When YAMNet labels no window as silence, the floor has no producer.** That is the node's existing rule
+and not a new exception: the derivative is absent, and a consumer whose rules reference a floor does not
+run. A recording with no silence in it is exactly the case where an assumed floor would be most wrong,
+so inventing one there is the failure this design is avoiding.
 
 ## ASR runs here, not in the speech branch
 
