@@ -81,6 +81,12 @@ Anything else a node wants to hand on is an element or an assertion, and belongs
 rendering — a figure — is an artifact beside the store, and carries the element ids it drew so a mark on
 it traces back to the assertion behind it.
 
+## The last fold
+
+[`verdict.md`](verdict.md) folds every node's verdict into a file-level one. It is a reader of the store
+like any other node, with two properties worth stating here: it reads *verdicts* rather than elements,
+and where two nodes contradict each other it records both and flags rather than choosing.
+
 ## What this replaces
 
 The per-node "inputs" tables in the design files are now **what each node reads in practice**, not a
