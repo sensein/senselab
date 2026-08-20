@@ -18,6 +18,7 @@ events. These justify the *shape* of a rule. Every constant needs more files.
 | [`squim.md`](squim.md) | why quality is measured per span and never per file |
 | [`diarization.md`](diarization.md) | pyannote's count against its spans |
 | [`separation.md`](separation.md) | MossFormer separation and enhancement survival across SNR |
+| [`open.md`](open.md) | **what is still unmeasured**, and what died with the round-based workflow |
 | [`preprocess-params.md`](preprocess-params.md) | pre-emphasis, the two spectrograms, the envelope filter, the sample rate |
 | [`taxonomy.md`](taxonomy.md) | the screening set: what each detector contributes, and what it is barred from |
 | [`voice.md`](voice.md) | the phonation gate's interval, why the product is periods, the two boundary facts |
