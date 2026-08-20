@@ -1,8 +1,8 @@
 # Port tables
 
 The normative interface definition for the triage workflow. Where this file and
-[`workflow.nf`](workflow.nf) disagree, this file is the specification. The diagrams in
-[`flowchart.md`](flowchart.md) draw exactly these ports; [`design.md`](design.md) argues for them.
+this file is the specification, and [`design.md`](design.md) argues for it. The diagrams and the
+pseudocode that drew these ports have been deleted and will be regenerated from the node documents.
 
 ## 1. The rules
 

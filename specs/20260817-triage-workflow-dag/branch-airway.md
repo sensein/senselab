@@ -1,7 +1,7 @@
 # BRANCH — airway. Which types, and where.
 
-Drafted 2026-08-19. This file governs the airway branch; where `flowchart.md`, `workflow.nf`,
-`design.md` or `branch-1-airway.md` disagree they are stale. `branch-1-airway.md` in particular is a
+Drafted 2026-08-19. This file governs the airway branch; where
+`design.md` disagrees it is stale. An earlier airway draft, now deleted, was a
 superseded draft of this same branch and is not a starting point.
 
 ## What it decides

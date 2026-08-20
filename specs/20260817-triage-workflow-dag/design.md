@@ -1,5 +1,12 @@
 # The triage workflow, designed from the questions backwards
 
+> **Superseded, 2026-08-20.** This document indexes a graph that no longer exists: `flowchart.md` and
+> `workflow.nf` have been deleted and will be regenerated from the node documents, and its framing of
+> the work as phases against a findings register is not the current goal. The design is now
+> `admit.md`, `taxonomy.md`, `branch-speech.md`, `branch-airway.md`, `branch-voice.md`, with
+> `decisions.md` and `ports.md` alongside. Kept only for the measurements and arguments in its later
+> sections, which nothing else records.
+
 **Status:** design, 2026-08-17. Three files:
 
 - **[`flowchart.md`](flowchart.md)** — the graph, as ten mermaid diagrams. Self-contained; start there.
