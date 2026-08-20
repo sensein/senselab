@@ -40,6 +40,15 @@ So a branch's outcome is read **against what TAXONOMY said about its kind**:
 | undecided | `pass` | resolved to present |
 | undecided | `fail` | resolved to absent |
 | — | `flag` | **flag**, whatever the screen said |
+| present or undecided | **never ran** | **flag** — a kind the graph was asked about has no answer |
+| absent | **never ran** | **expected.** Contributes nothing, exactly as `fail` would |
+
+**A branch that never ran is not a branch that failed**, and an earlier version of this table had no row
+for it. The difference matters: `fail` is a branch reporting it has no subject, which is evidence; not
+running is the absence of evidence, and on a kind the screen called present or undecided that is a gap a
+human should see. The two must not collapse, because a graph that skipped a node for an operational
+reason — a model unavailable, a budget exhausted, a crash — would otherwise be indistinguishable from one
+that looked and found nothing.
 
 The two contradiction rows are the reason this node exists. A graph that disagrees with itself is exactly
 what a human should look at, and neither the screen nor the branch is entitled to overrule the other on
@@ -52,7 +61,7 @@ Evaluated in order; the first that applies wins.
 | order | condition | `triage` |
 | --- | --- | --- |
 | 1 | ADMIT failed | `fail` — nothing ran, and nothing is claimed about the recording |
-| 2 | any node returned `flag`, or any contradiction row above fired | `flag` |
+| 2 | any node returned `flag`, any contradiction row above fired, or a branch for a present or undecided kind never ran | `flag` |
 | 3 | every kind is absent, so no branch had a subject | `fail` |
 | 4 | otherwise | `pass` |
 
@@ -80,6 +89,7 @@ must not be read as cleared — the audio was never examined for content the tra
 triage:   pass | flag | fail
 release:  releasable | withheld | not_assessed
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
+ran:      { node: "completed" | "skipped" | "errored" }            # so a gap is not read as a finding
 kinds:    { airway: state, speech: state, voice_no_words: state }   # after resolution
 view:     the verdict element id, and the node verdict ids it folded
 ```
