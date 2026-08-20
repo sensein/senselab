@@ -432,7 +432,17 @@ supported models.
 **The count gate is pyannote alone, and only to two voices.** Seed-17 probe, recorded in
 `model_registry.yaml:168-280`: exact speaker-count accuracy at k=1 is 100% for pyannote, 0% for
 Sortformer (0/20) and MOSS, 50% for child-adult, unrecorded for VibeVoice and DiariZen. Pyannote holds
-85% at k=2 and falls to ≤45% for k≥3. Two caveats travel with those numbers: the corpus is
+85% at k=2 and falls to ≤45% for k≥3.
+
+**Correction, 2026-08-20.** D16 says the k-figures are "unrecorded for VibeVoice and DiariZen"; the
+registry it cites records both, so that sentence is stale. And the ranking inverts above k=1:
+`model_registry.yaml:168-280` has **VibeVoice at 95% at k=2** and **DiariZen at 75-90% at k=2-3**,
+against pyannote's 85% at k=2. Pyannote's 100% at k=1 is what is exceptional; it is not the best
+counter everywhere, and any node that runs *because* the count was not 1 operates in precisely the
+regime where it is not. The inversion settles nothing either, because at 20 sessions per k these
+figures are 17/20 against 19/20.
+
+Two caveats travel with those numbers: the corpus is
 TTS-composed with no room acoustics or channel variation, 20 sessions per k, and the raw
 `profile.json` is **not in the repository** — the per-k figures exist only as summaries transcribed
 from a cluster-side artifact and cannot be recomputed from a checkout.
