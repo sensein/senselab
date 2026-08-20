@@ -29,9 +29,9 @@ audio --> resample 16 kHz --+
 | --- | --- | --- | --- |
 | `energy_envelope` | `\|x + jH{x}\|`, zero-phase 40 Hz Butterworth lowpass, **dBFS** | pre-emph | `spans`; voice branch level and modulation rate |
 | `silence` | YAMNet `Silence` per 0.96 s window, 0.48 s hop, threshold 0.5 | plain | the local floor; airway negative evidence |
-| `spans` | see below | pre-emph | AIRWAY classifies; SPEECH interprets |
+| `spans` | see below | pre-emph | AIRWAY classifies. **SPEECH derives its own spans from word timings and does not read this** |
 | `level` | peak dBFS, RMS dBFS, LUFS | plain | voice branch reference level; clipping |
-| `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file** |
+| `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file**; reported, not gated |
 | `asr_crisperwhisper` | transcript, word and token edges | plain | speech transcript and spans; airway lexical check; voice lexical exclusion |
 | `asr_qwen` | transcript, word timings | plain | speech agreement confidence |
 | `alignment` | forced alignment of the agreed transcript | plain | word and phone spans |
@@ -54,8 +54,13 @@ merge     = overlapping spans
 
 | parameter | value | scope |
 | --- | --- | --- |
-| `K` | **18 dB** AIRWAY, **12 dB** SPEECH | per consumer |
+| `K` | **18 dB** | per consumer; AIRWAY is the only consumer today |
 | `hangover` | 120 ms | per consumer; must be shorter than the shortest event to be bounded |
+
+**`spans` has one consumer.** It lives here because the rules and the floor are shared machinery, not
+because two branches read it — SPEECH now derives spans from word timings instead. By this node's own
+admission rule that is grounds to move it into AIRWAY, and it stays only while the voice branch's use
+is undecided.
 
 Spans carry `peak_over_floor_db` and **no label**. If no peak anywhere reaches `K` above the local
 floor, the node reports **`no_contrast`** rather than an empty list.

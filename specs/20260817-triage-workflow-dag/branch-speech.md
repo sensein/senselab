@@ -3,100 +3,127 @@
 ## Signature
 
 ```
-speech(spans, squim, asr_crisperwhisper, asr_qwen, alignment, silence,
-       airway_spans?, target_embedding?, hint?)
-    -> fail(reason) | flag(reason, partial) | pass(product)
+speech(asr_crisperwhisper, asr_qwen, alignment, energy_envelope, silence,
+       airway_spans?, hint?) -> fail(reason) | flag(reason, partial) | pass(product)
 ```
+
+**Speech spans come from detected speech, not from the envelope.** ASR runs first and its word timings
+define this branch's spans, so `spans` from PREPROCESS is not an input here.
 
 | input | from | used for |
 | --- | --- | --- |
-| `spans` | PREPROCESS, `K` = 12 dB | the candidate spans this branch interprets |
-| `silence` | PREPROCESS | the floor the spans were derived against |
-| `asr_crisperwhisper`, `asr_qwen`, `alignment` | PREPROCESS | transcript, edges, agreement |
-| `squim` | computed **per span**, not per file | the speech test in step 1, the quality gate in step 3 |
-| `airway_spans` | AIRWAY | withdrawing pyannote segments that are airway events |
-| `target_embedding` | caller, optional | target attribution |
-| `hint` | caller | conditions the outcome only |
+| `asr_crisperwhisper`, `asr_qwen` | PREPROCESS, plain signal | the transcript, its word edges, and the agreement between them |
+| `alignment` | PREPROCESS | published word and phone edges |
+| `energy_envelope`, `silence` | PREPROCESS | the fabrication test in step 1 |
+| `airway_spans` | AIRWAY, optional | withdrawing a diarizer segment inside the speech interval that is an airway event |
+| `hint` | caller, optional | task context; carries the target embedding **and the model that produced it** |
 
-This branch runs pyannote, an optional second diarizer, an optional speaker-embedding comparison, and
-optional separation. **It runs no ASR.**
+This branch runs pyannote, an optional second diarizer, and an optional speaker-embedding comparison.
+**It runs no ASR.**
 
-## 1. Extract speech — interpret the spans
+## Flow
 
-Two instruments vote on each span, both over the whole span:
+```
+  1. TRANSCRIPT   asr_crisperwhisper ⋈ asr_qwen  ──►  per-word confidence
+                  fabrication test vs envelope + local floor
+        │  no words → fail
+        ▼
+  2. SPEECH SPANS from word timings
+        │
+        ▼
+  3. CORROBORATE  YAMNet Speech coverage + SQUIM per span
+        │  disagree → flag
+        ▼
+  4. DIARIZE      pyannote over [first word start, last word end] only
+        │  count ≠ 1 → second diarizer, report disagreement
+        ▼
+  5. IDENTIFY     words → speakers; target match only if the hint carries one
+        │
+        ▼            ┌──────────────────────────────────────┐
+     pass(product) ◄─┤ 6. QUALITY — parallel, reported only │
+                     └──────────────────────────────────────┘
+```
 
-| instrument | measure |
-| --- | --- |
-| YAMNet `Speech` | coverage — fraction of overlapping 0.96 s windows ≥ 0.5 |
-| SQUIM over the span | STOI, SI-SDR. Used here as a **test of whether the span is speech**, not as quality |
+## 1. Transcript
 
-| both vote | outcome |
-| --- | --- |
-| speech | the span is a speech span, to step 2 |
-| not speech | the span is not this branch's subject |
-| **disagree** | **`flag`** — the measure that made it ambiguous travels with the flag |
-
-`fail` when no span carries a speech vote, or PREPROCESS reported `no_contrast`. The two causes are
-distinguished in the reason.
-
-## 2. Speaker count — pyannote
-
-`pyannote/speaker-diarization-community-1`. Codomain **{1, 2, ≥3}**.
-
-- A pyannote segment overlapping an `airway_spans` entry is **withdrawn**, not relabelled.
-- Count ≠ 1 consults a second diarizer and **reports disagreement**; it does not replace pyannote.
-
-## 3. Quality — over speech spans
-
-SQUIM objective head, per speech span. The subjective head is not used: it needs a non-matching
-reference, which is a config artifact nobody has declared.
-
-Reported, not gated: no threshold on STOI or PESQ has been derived, so `fail` is unreachable by this
-route until one exists.
-
-## 4. Transcript — two recognizers, compared
-
-- **Word agreement** between `asr_crisperwhisper` and `asr_qwen` gives per-word confidence.
-- **Edges** come from CrisperWhisper alone, not an average.
-- **A word slot over no energy and no periodicity** is a fabrication candidate, tested against
+- **Word agreement** between the two recognizers gives per-word confidence. **This is the clean
+  transcript** — there is no separate cleaning step.
+- **Edges** come from `alignment`; CrisperWhisper alone supplies them where alignment is absent.
+- **A word over no energy and no periodicity is a fabrication candidate**, tested against
   `energy_envelope` and its local floor.
 
 Agreement bounds confidence from above and is reported as agreement, never as correctness.
 
-## 5. Separation — optional, off by default
+`fail` when neither recognizer returns a word: no speech was detected, so this branch has no subject.
 
-`MossFormer2_SS_16K`, two streams. Available for recordings where speech and airway events overlap.
-Off by default.
+## 2. Speech spans
 
-## 6. Target comparison — optional
+Words are grouped into spans by their timings. A span is the extent of a run of words.
 
-Only when `target_embedding` is supplied. Absent one, speakers are `SPEAKER_*` and no identity is
-claimed.
+## 3. Corroboration
+
+Two instruments per span, each over the whole span:
+
+| instrument | measure |
+| --- | --- |
+| YAMNet `Speech` | coverage — fraction of overlapping 0.96 s windows ≥ 0.5 |
+| SQUIM over the span | STOI, SI-SDR, as a **test of whether the span is speech** |
+
+Both agreeing confirms the span. Disagreement is a **`flag`**, and the measure that made it ambiguous
+travels with the flag.
+
+## 4. Diarization
+
+`pyannote/speaker-diarization-community-1`, applied **only to `[first word start, last word end]`**.
+Codomain **{1, 2, ≥3}**.
+
+- Restricting the interval is what keeps non-speech events out of the speaker count.
+- A segment inside the interval that overlaps an `airway_spans` entry is **withdrawn**, not relabelled.
+- Count ≠ 1 consults a second diarizer and **reports disagreement**; it does not replace pyannote. The
+  product still carries per-speaker spans.
+
+## 5. Speaker identification
+
+Words are attributed to speakers by their timings against the diarizer's segments. A word straddling a
+boundary, or falling inside a withdrawn segment, is marked rather than assigned.
+
+**Target comparison happens only when the hint supplies a target embedding**, and the hint must carry
+**the model and revision that produced it**. Embeddings from different models are not comparable, so a
+target without provenance is refused rather than compared. Absent a target, speakers are `SPEAKER_*` and
+no identity is claimed.
+
+## 6. Quality — parallel, reported
+
+SQUIM objective head over the **target speaker's** speech spans; over every speech span when no target
+was given. The subjective head is not used: it needs a non-matching reference, which is a config
+artifact nobody has declared.
+
+**Reported, never gated.** No threshold has been derived, so no recording is dismissed on quality. This
+step is a parallel branch of the graph and blocks nothing. It becomes a gate when thresholds exist.
 
 ## Outcome
 
 | outcome | when |
 | --- | --- |
-| `fail` | no speech span in step 1, or `no_contrast` |
-| `flag` | step 1's instruments disagreed; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given and no speaker matches; a hint asserts speech not found |
-| `pass` | a transcript with per-word confidence, spans attributed to speakers, quality measured over the speech spans |
+| `fail` | no words from either recognizer |
+| `flag` | step 3's instruments disagreed; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given without model provenance, or with provenance and no speaker matches; a hint asserts speech not found |
+| `pass` | a transcript with per-word confidence, spans attributed to speakers, quality reported |
 
 ## Product
 
 ```
 transcript:    [ { word, start, end, confidence, speaker } ]
+speech_spans:  [ { start, end, corroborated, yamnet_coverage } ]
 speaker_spans: [ { start, end, speaker, withdrawn, withdrawn_because } ]
 speaker_count: 1 | 2 | ">=3"
-quality:       { per_span: [ {start, end, stoi, pesq, si_sdr} ], spans_measured_s }
-target_match:  { speaker, similarity } | absent
+quality:       { per_span: [ {start, end, stoi, pesq, si_sdr} ], scope: "target" | "all" }
+target_match:  { speaker, similarity, model, revision } | absent
 figure:        one aligned figure per recording
 ```
-
-Span extents are **locators, not edges**. Published word edges come from `alignment`.
 
 ## Out of scope
 
 ASR (PREPROCESS runs it), airway detection (reads `airway_spans`), speaker identity without a target,
-emotion, language identification, diarizer ranking.
+emotion, language identification, diarizer ranking, quality gating.
 
 Derivations live in [`benchmarks/`](benchmarks/).

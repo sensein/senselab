@@ -12,9 +12,29 @@
 | 11.62–13.06 s | the speech |
 
 **1.74 s of the 3.18 s it calls speech is cough.** So the count is usable while anything derived from
-its spans — speech duration, turn count, speaking rate — is not, until `airway_spans` is subtracted.
-Segments are withdrawn rather than relabelled, because a withdrawn segment is what a reader needs to see
-when the count and the spans disagree.
+its spans — speech duration, turn count, speaking rate — is not, unless the non-speech is excluded first.
+
+## Restricting the interval removes them, rather than withdrawing them
+
+Applying pyannote only to `[first word start, last word end]` — the speech branch's rule — is measured
+against applying it to the whole file:
+
+| input to pyannote | segments | speakers | onset error | offset error |
+| --- | --- | --- | --- | --- |
+| whole file, 14.03 s | **3** — two of them coughs | 1 | **0 ms** | −140 ms |
+| speech span only, 1.41 s | **1** | 1 | +160 ms | **0 ms** |
+| span ± 0.5 s, 2.41 s | 1 | 1 | −70 ms | +310 ms |
+| span ± 1.0 s, 3.41 s | 1 | 1 | −30 ms | +130 ms |
+| label extent, 1.58 s | 1 | 1 | +30 ms | +50 ms |
+
+pyannote runs without complaint on 1.41 s, so short intervals are not a risk on this material. The
+restriction eliminates the cough segments outright rather than requiring them to be withdrawn afterwards,
+and it trades boundary errors rather than improving both: the whole file gives an exact onset and a
+−140 ms offset, the restricted interval an exact offset and a +160 ms onset. Padding makes both worse.
+
+`airway_spans` withdrawal is still needed for an airway event that falls *inside* the speech interval,
+which this recording does not contain. Segments are withdrawn rather than relabelled, because a withdrawn
+segment is what a reader needs to see when the count and the spans disagree.
 
 Its speech segment: onset **11.62 s against a label of 11.62 s** — exact — and offset 13.06 against
 13.20, **−140 ms early**. The onset-sharp / offset-early asymmetry that holds across every instrument
