@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -130,6 +131,7 @@ def main() -> int:
     )
     inputs = processor(text=[text], images=[image], return_tensors="pt").to(model.device)
     n_in = inputs["input_ids"].shape[1]
+    t_gen = time.perf_counter()
     with torch.no_grad():
         # The card's thinking-mode sampling. Greedy decoding is explicitly not what it asks for.
         ids = model.generate(
@@ -141,6 +143,9 @@ def main() -> int:
             top_k=20,
             repetition_penalty=1.0,
         )
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    gen_s = time.perf_counter() - t_gen
     n_new = int(ids.shape[1]) - n_in
     raw = processor.batch_decode(ids[:, n_in:], skip_special_tokens=True)[0].strip()
 
@@ -154,6 +159,9 @@ def main() -> int:
         "render": meta,
         "prompt": PROMPT,
         "new_tokens": n_new,
+        "generate_seconds": gen_s,
+        "tokens_per_second": n_new / gen_s if gen_s > 0 else 0.0,
+        "fla_on_path": any("pylibs/fla" in p for p in sys.path),
         "max_new_tokens": args.max_new_tokens,
         "hit_budget": n_new >= args.max_new_tokens,
         "thinking": thinking,
@@ -162,6 +170,8 @@ def main() -> int:
     args.out.write_text(json.dumps(record, indent=2))
     print(
         f"\ntokens generated: {n_new} of {args.max_new_tokens}"
+        f" in {gen_s:.1f} s = {record['tokens_per_second']:.2f} tok/s"
+        f" (fla on path: {record['fla_on_path']})"
         f"{'  ** HIT BUDGET, OUTPUT IS TRUNCATED **' if record['hit_budget'] else ''}",
         flush=True,
     )
