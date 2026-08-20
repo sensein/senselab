@@ -1945,6 +1945,279 @@ every contributing reason rather than only the deciding one."
 
 ---
 
+### Task 10: The disruptions task
+
+**Files:**
+- Create: `src/senselab/audio/tasks/disruptions/__init__.py`, `src/senselab/audio/tasks/disruptions/api.py`
+- Test: `src/tests/audio/tasks/disruptions_test.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `Disruptions` (frozen dataclass) and `detect_disruptions(audio, start_s, end_s, *, clip_headroom=0.999, min_clip_run=3, min_dropout_ms=10.0, discontinuity_threshold=0.5) -> Disruptions`.
+
+Derivation: `branch-speech.md` step 8. Counts and extents, never a score. The four parameters are
+conventional rather than fitted, and the docstring says so; the *tolerance* — how much is too much — has
+no value and is not this function's business.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+"""Recording disruptions: clipping, dropouts, discontinuities, DC offset."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.disruptions import Disruptions, detect_disruptions
+
+SR = 16000
+
+
+def _audio(x: np.ndarray) -> Audio:
+    return Audio(waveform=x.astype("float32")[None, :], sampling_rate=SR)
+
+
+def _tone(seconds: float = 1.0, amp: float = 0.5, freq: float = 200.0) -> np.ndarray:
+    t = np.arange(int(seconds * SR)) / SR
+    return amp * np.sin(2 * np.pi * freq * t)
+
+
+class TestClipping:
+    def test_a_clean_tone_has_no_clipping(self):
+        d = detect_disruptions(_audio(_tone()), 0.0, 1.0)
+        assert d.clipped_runs == 0
+        assert d.clipped_s == 0.0
+
+    def test_a_saturated_tone_is_clipped(self):
+        d = detect_disruptions(_audio(np.clip(_tone(amp=2.0), -1.0, 1.0)), 0.0, 1.0)
+        assert d.clipped_runs >= 100, "200 Hz for 1 s saturates on every half cycle"
+        assert d.clipped_s > 0.1
+
+    def test_a_single_full_scale_sample_is_not_clipping(self):
+        x = _tone()
+        x[5000] = 1.0
+        assert detect_disruptions(_audio(x), 0.0, 1.0).clipped_runs == 0
+
+
+class TestDropouts:
+    def test_a_zero_run_is_a_dropout(self):
+        x = _tone()
+        x[4000:8000] = 0.0
+        d = detect_disruptions(_audio(x), 0.0, 1.0)
+        assert d.dropout_runs == 1
+        assert d.dropout_s == pytest.approx(4000 / SR, abs=0.002)
+
+    def test_a_run_shorter_than_the_minimum_is_not_a_dropout(self):
+        x = _tone()
+        x[4000:4020] = 0.0
+        assert detect_disruptions(_audio(x), 0.0, 1.0).dropout_runs == 0
+
+
+class TestDiscontinuities:
+    def test_a_step_is_a_discontinuity(self):
+        x = _tone(amp=0.1)
+        x[8000:] += 0.9
+        assert detect_disruptions(_audio(x), 0.0, 1.0).discontinuities >= 1
+
+    def test_a_smooth_tone_has_none(self):
+        assert detect_disruptions(_audio(_tone()), 0.0, 1.0).discontinuities == 0
+
+
+class TestDcOffset:
+    def test_a_bias_is_reported(self):
+        d = detect_disruptions(_audio(_tone() + 0.2), 0.0, 1.0)
+        assert d.dc_offset == pytest.approx(0.2, abs=0.01)
+
+    def test_a_centred_signal_reports_near_zero(self):
+        assert abs(detect_disruptions(_audio(_tone()), 0.0, 1.0).dc_offset) < 0.01
+
+
+class TestScoping:
+    def test_only_the_requested_span_is_measured(self):
+        x = _tone(seconds=3.0)
+        x[: SR] = np.clip(_tone(amp=2.0)[: SR], -1.0, 1.0)
+        assert detect_disruptions(_audio(x), 1.5, 2.5).clipped_runs == 0
+        assert detect_disruptions(_audio(x), 0.0, 1.0).clipped_runs > 0
+
+    def test_a_clean_span_reports_zero_rather_than_nothing(self):
+        d = detect_disruptions(_audio(_tone()), 0.0, 1.0)
+        assert isinstance(d, Disruptions)
+        assert (d.clipped_runs, d.dropout_runs, d.discontinuities) == (0, 0, 0)
+```
+
+- [ ] **Step 2: Run and watch them fail**
+
+Run: `uv run pytest src/tests/audio/tasks/disruptions_test.py -v`
+Expected: FAIL at collection — no module `senselab.audio.tasks.disruptions`.
+
+- [ ] **Step 3: Implement `api.py`**
+
+```python
+"""Detecting recording disruptions within a span.
+
+Counts and extents, never a score. How much disruption makes a span unusable is a tolerance nobody has
+derived, and it is the caller's decision rather than this module's.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from senselab.audio.data_structures import Audio
+
+CLIP_HEADROOM = 0.999
+MIN_CLIP_RUN = 3
+MIN_DROPOUT_MS = 10.0
+DISCONTINUITY_THRESHOLD = 0.5
+
+
+@dataclass(frozen=True)
+class Disruptions:
+    """What was found in one span.
+
+    Attributes:
+        start: Span onset in seconds.
+        end: Span offset in seconds.
+        clipped_runs: Number of runs of consecutive samples at or beyond the headroom.
+        clipped_s: Total duration of those runs.
+        dropout_runs: Number of runs of exact zeros at least ``min_dropout_ms`` long.
+        dropout_s: Total duration of those runs.
+        discontinuities: Number of sample-to-sample jumps exceeding the threshold.
+        dc_offset: Mean sample value over the span.
+    """
+
+    start: float
+    end: float
+    clipped_runs: int
+    clipped_s: float
+    dropout_runs: int
+    dropout_s: float
+    discontinuities: int
+    dc_offset: float
+
+
+def _runs(mask: np.ndarray, minimum: int) -> tuple[int, int]:
+    """Count runs of True at least ``minimum`` long, and their total length.
+
+    Args:
+        mask: Boolean array.
+        minimum: Shortest run that counts.
+
+    Returns:
+        ``(run_count, total_samples)``.
+    """
+    if not mask.any():
+        return 0, 0
+    edges = np.diff(mask.astype(np.int8))
+    starts = list(np.flatnonzero(edges == 1) + 1)
+    ends = list(np.flatnonzero(edges == -1) + 1)
+    if mask[0]:
+        starts.insert(0, 0)
+    if mask[-1]:
+        ends.append(len(mask))
+    lengths = [e - s for s, e in zip(starts, ends) if e - s >= minimum]
+    return len(lengths), int(sum(lengths))
+
+
+def detect_disruptions(
+    audio: Audio,
+    start_s: float,
+    end_s: float,
+    *,
+    clip_headroom: float = CLIP_HEADROOM,
+    min_clip_run: int = MIN_CLIP_RUN,
+    min_dropout_ms: float = MIN_DROPOUT_MS,
+    discontinuity_threshold: float = DISCONTINUITY_THRESHOLD,
+) -> Disruptions:
+    """Measure disruptions inside one span.
+
+    The four parameters are conventional rather than fitted: a single sample at full scale is not
+    clipping, which is why ``min_clip_run`` exists, and the values are the usual ones rather than values
+    derived from labelled verdicts.
+
+    Args:
+        audio: The recording. A multi-channel input is averaged.
+        start_s: Span onset.
+        end_s: Span offset.
+        clip_headroom: A sample at or beyond this absolute value counts as clipped.
+        min_clip_run: Shortest run of clipped samples that counts as a clipping event.
+        min_dropout_ms: Shortest run of exact zeros that counts as a dropout.
+        discontinuity_threshold: Absolute sample-to-sample jump that counts as a discontinuity.
+
+    Returns:
+        The span's disruptions. Every count is exact; a clean span reports zeros.
+    """
+    x = np.asarray(audio.waveform, dtype=np.float64)
+    if x.ndim > 1:
+        x = x.mean(axis=0)
+    sr = audio.sampling_rate
+    segment = x[max(0, int(start_s * sr)) : min(len(x), int(end_s * sr))]
+    if segment.size == 0:
+        return Disruptions(start_s, end_s, 0, 0.0, 0, 0.0, 0, 0.0)
+    clip_runs, clip_n = _runs(np.abs(segment) >= clip_headroom, min_clip_run)
+    drop_runs, drop_n = _runs(segment == 0.0, max(1, int(min_dropout_ms * sr / 1000)))
+    jumps = int(np.count_nonzero(np.abs(np.diff(segment)) > discontinuity_threshold))
+    return Disruptions(
+        start=start_s,
+        end=end_s,
+        clipped_runs=clip_runs,
+        clipped_s=clip_n / sr,
+        dropout_runs=drop_runs,
+        dropout_s=drop_n / sr,
+        discontinuities=jumps,
+        dc_offset=float(segment.mean()),
+    )
+```
+
+And `__init__.py`:
+
+```python
+"""Recording disruptions."""
+
+from senselab.audio.tasks.disruptions.api import (
+    CLIP_HEADROOM,
+    DISCONTINUITY_THRESHOLD,
+    MIN_CLIP_RUN,
+    MIN_DROPOUT_MS,
+    Disruptions,
+    detect_disruptions,
+)
+
+__all__ = [
+    "CLIP_HEADROOM",
+    "DISCONTINUITY_THRESHOLD",
+    "MIN_CLIP_RUN",
+    "MIN_DROPOUT_MS",
+    "Disruptions",
+    "detect_disruptions",
+]
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `uv run pytest src/tests/audio/tasks/disruptions_test.py -v`
+Expected: all PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+uv run ruff format src/senselab/audio/tasks/disruptions/ src/tests/audio/tasks/disruptions_test.py
+git add src/senselab/audio/tasks/disruptions/ src/tests/audio/tasks/disruptions_test.py
+git commit -m "feat(disruptions): clipping, dropouts, discontinuities and DC offset per span
+
+SQUIM is a speech-quality estimator trained on particular degradations, so hard clipping
+can read as acceptable or as generic noise rather than as the defect it is. These are
+counts and extents rather than a score, scoped to a span, and a clean span reports zeros
+-- which is a different statement from a span nobody measured. How much is too much is a
+tolerance nobody has derived and is the caller's decision."
+```
+
+---
+
 ## What this plan does not build
 
 - **The nine node implementations.** They consume everything above and are a second plan.
