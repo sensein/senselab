@@ -19,6 +19,7 @@ events. These justify the *shape* of a rule. Every constant needs more files.
 | [`diarization.md`](diarization.md) | pyannote's count against its spans |
 | [`separation.md`](separation.md) | MossFormer separation and enhancement survival across SNR |
 | [`preprocess-params.md`](preprocess-params.md) | pre-emphasis, the two spectrograms, the envelope filter, the sample rate |
+| [`voice.md`](voice.md) | the phonation gate's interval, why the product is periods, the two boundary facts |
 
 Scripts that produced these live in [`scripts/`](scripts/). They read the labels through
 `../../labels.py`, so ground truth has exactly one owner in this repository.
