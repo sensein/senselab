@@ -42,7 +42,7 @@ fi
 uv pip install --python "$VENV/bin/python" -q \
   torch torchaudio --index-url https://download.pytorch.org/whl/cu128
 uv pip install --python "$VENV/bin/python" -q \
-  "transformers>=4.57" accelerate qwen-omni-utils soundfile librosa numpy av
+  "transformers>=4.57" accelerate qwen-omni-utils soundfile librosa numpy av audioread soxr
 
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 "$VENV/bin/python" -c "import transformers,torch;print('transformers',transformers.__version__,'torch',torch.__version__)"
