@@ -121,3 +121,31 @@ takes it to nothing in the second case while a max fires on a single spurious wi
 
 This is the same failure that made a four-axis grid report that it had run while its defaults disabled
 every cross-axis coupling: a default aggregator that silently nulls what it claims to measure.
+
+## The aggregation rule: count confident windows, do not average scores
+
+**Supersedes the quantile-versus-mean discussion above.** The rule is the one the raster plots already
+use: reduce each window to a binary judgement, then count.
+
+Per window, per kind: take the maximum over that kind's family labels. If it clears the confidence
+threshold, the window is a detection for that kind. Over the waveform, the kind is present when the
+number of confident windows reaches a named per-kind minimum. The evidence is the list of those
+windows, which is exactly what a raster row displays.
+
+**This removes the duration dependence for misses**, which is why it is the right rule. Averaging a
+score series makes a 0.3 s cough vanish in a ten-minute recording; counting confident windows does not
+— one confident window is one confident window whatever surrounds it. The threshold sits on the
+per-window score, where the event is locally strong, instead of on an aggregate the recording length
+has already diluted.
+
+**It moves the duration dependence onto false positives instead, and that is the cost to carry.** A
+longer recording offers more windows and therefore more chances for a spurious confident one, so a
+"one window is enough" rule grows less safe as recordings lengthen. Measured, on the verified
+recording at a 500 ms window: **`Snore` cleared 0.5 in 16 windows and there is no snoring in the
+file** — more windows than `Cough`, which was correct in all 12 of its own. A one-window rule reports
+`Snore` present.
+
+So the per-kind minimum count is a real parameter and not a formality, and it is unfitted like the
+rest. Two things keep that safe here: the node can `flag` rather than having to choose, and per D6 span
+detection downstream adjudicates and can withdraw what this stage admitted. Presence is deliberately
+a liberal pre-filter; it is not the verdict.
