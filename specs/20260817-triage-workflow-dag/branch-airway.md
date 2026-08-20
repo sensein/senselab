@@ -122,10 +122,11 @@ reading. Cough spans reach 100% coverage, breath spans 67–75%.
 the recording leave an empty interval containing it: `Cough` jumps 0.84 → 0.27, `Speech` 0.92 → 0.14,
 `Breathing` 0.59 → 0.36.
 
-**It catches the one span that should be caught.** Four of five confirm; the fifth is 11.75–13.16 s,
-where YAMNet reports `Speech` at 80% coverage and 0.996 on the span, and the span is flagged. The
-lexical check below flags the same file independently — one reads acoustic class, the other reads words,
-and a recording can fail either way alone, so the redundancy stays.
+**All four airway-labelled spans confirm.** The fifth proposed span, 11.75–13.16 s, never reaches this
+step: HeAR gave it no label of interest, so there is nothing for YAMNet to confirm or contest. YAMNet
+would in fact call it `Speech` at 80% coverage, which is the same conclusion by a different route — but
+the branch does not need that second opinion to reject it, and an earlier draft of this file was wrong to
+present the two as independent mechanisms catching one span. HeAR alone rejects it, at step 2.
 
 **What survives of the breath/cough asymmetry** is narrower than the earlier draft claimed and still
 worth knowing: YAMNet is confident *that* a breath span is breath-family but not *which* member —
@@ -133,33 +134,51 @@ worth knowing: YAMNet is confident *that* a breath span is breath-family but not
 why the mapping treats `Breathing`, `Sigh` and `Gasp` as one family for confirmation. The difficulty is
 in breath's internal label granularity, not in detecting breath.
 
-### 3. Lexical contamination — are there words among the airway events?
+### 3. Lexical contamination — words *among* the airway events
 
-Any ASR word whose interval intersects **`[first span start, last span end]`** contaminates the branch's
-own working interval, and **such a file is flagged for review**. `asr_crisperwhisper` already carries
-word edges from PREPROCESS, so this costs nothing here.
+Any ASR word whose interval intersects **`[first airway-labelled span start, last airway-labelled span
+end]`** flags the file for review. `asr_crisperwhisper` carries word edges from PREPROCESS, so this
+costs nothing here.
 
-The interval is deliberately the whole stretch spanned by airway activity, gaps included, rather than
-each span separately. Speech interleaved *between* airway events is the case worth catching: it means
-either the recording is not the single-purpose airway capture it was taken for, or a span the envelope
-proposed is speech rather than an airway event, and neither is something this branch should resolve on
-its own.
+**The interval is defined over airway-labelled spans only** — spans that came out of step 2 carrying a
+label of interest. A proposed span that HeAR declined to label is not an airway event and must not
+extend the interval, because letting it do so makes the rule circular: a speech span would define the
+very interval in which its own words are then found, and every recording containing both airway events
+and speech would flag itself regardless of how they are arranged.
 
-**The labelled recording exercises this rule.** Its spans run 2.32–13.16 s and it contains speech at
-11.62–13.20 s, so it is flagged — correctly. That is worth stating plainly: the recording used to derive
-every span rule above is itself a file this branch refuses to pass.
+The interval spans gaps between airway events deliberately. Speech *interleaved among* airway events is
+the case worth catching — it means either the recording is not the single-purpose capture it was taken
+for, or a span the envelope proposed is speech. Speech *before or after* all of them is neither.
 
-Note what this check is *not*. It reads word presence, not word timing, and it plays no part in locating
-any span. An earlier design used CrisperWhisper token edges as a second onset estimate; that is still
-unused, for the reason at the end of this file.
+**The labelled recording shows the difference, and it passes.** Its four airway-labelled spans run
+2.32–9.96 s; its speech is at 11.62–13.20 s, entirely after them. The interval is `[2.32, 9.96]`, no word
+falls inside it, and the file is not flagged — the correct outcome, since a cough sequence followed by
+unrelated speech is not a contaminated cough recording.
+
+Note what this check is *not*. It reads word presence, not word timing, and plays no part in locating any
+span.
+
+### 3b. Proposed spans that carry no airway label
+
+The envelope proposes on energy, so it proposes spans that are not airway events — the 11.75–13.16 s
+speech span is one. Such a span is **recorded with a null label and excluded from everything that
+follows**: it does not extend the lexical interval, it is not put to YAMNet (there is no label to
+confirm or contest), and it does not contribute to the outcome.
+
+It is recorded rather than discarded because it is a proposal the branch declined, and a reader checking
+the figure will see the span shaded and needs to know the branch considered and rejected it. Silently
+dropping it would make the figure disagree with the product.
 
 ### 4. Outcome
 
 | outcome | when | why this and not the other |
 | --- | --- | --- |
 | `fail` | no span proposed at all, **and** no hint declares airway content | there is nothing to classify, so the branch cannot produce its product. Not a finding about the recording — a statement that this branch has none |
-| `flag` | spans exist but none carries a label of interest; **or** words fall inside the span interval; **or** a hint declares airway content the branch did not find | each is a case where a human resolves faster than any rule here would |
-| `pass` | at least one span carries a label of interest, no lexical contamination, and nothing the hint asserts is missing | the product below |
+| `flag` | spans exist but none carries a label of interest; **or** words fall inside the airway-labelled interval; **or** a hint declares airway content the branch did not find | each is a case where a human resolves faster than any rule here would |
+| `pass` | at least one span carries a label of interest, no lexical contamination inside that interval, and nothing the hint asserts is missing | the product below |
+
+**The labelled recording is a `pass`** — four airway spans, two breath and two cough, all confirmed by
+YAMNet, no words among them. Worth stating because an earlier draft of this file had it flagging itself.
 
 **The hint changes what an absence means, which is the only thing it is allowed to do.** With no hint,
 finding no cough is simply a finding. With a hint declaring a voluntary cough task, finding no cough is a
