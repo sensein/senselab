@@ -3,8 +3,8 @@ warnings.filterwarnings("ignore")
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-sys.path.insert(0,"/Users/satra/software/sensein/agentharness/scripts")
-from score_against_labels import LABELS
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+from labels import LABELS
 from scipy.signal import resample_poly, hilbert, butter, filtfilt, stft
 T="/Users/satra/.claude/jobs/295c3f8a/tmp/"
 y,sr=sf.read("/Users/satra/Downloads/streaming-audio-2026-07-30T04-21-56-487Z.wav",dtype="float32",always_2d=True)
