@@ -37,6 +37,8 @@ EVENTS: List[Tuple[float, float, str]] = [
     (11.62, 13.20, "speech"),
 ]
 PLOT_LABELS = ["Breathe", "Cough", "Speech", "Throat Clear"]
+# All eight detector labels, for the raster. They are independent presence probabilities.
+ALL_LABELS = ["Baby Cough", "Breathe", "Cough", "Laugh", "Sneeze", "Snore", "Speech", "Throat Clear"]
 
 
 def windows(n_samples: int, win: int, hop: int) -> List[int]:
@@ -80,6 +82,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path, default=Path("hear_sweep.png"))
     ap.add_argument("--win-ms", type=float, default=WIN_MS)
     ap.add_argument("--hop-ms", type=float, default=HOP_MS)
+    ap.add_argument("--raster", action="store_true", help="heatmap over all eight labels")
     args = ap.parse_args()
 
     base = Audio(filepath=args.audio)
@@ -96,14 +99,15 @@ def main() -> int:
     clips = [Audio(waveform=embed(wav[:, s : s + win], buf), sampling_rate=SR) for s in starts]
     detections = detect_health_acoustic_events(clips)
 
-    curves: Dict[str, List[float]] = {lab: [] for lab in PLOT_LABELS}
+    labels = ALL_LABELS if args.raster else PLOT_LABELS
+    curves: Dict[str, List[float]] = {lab: [] for lab in labels}
     for det in detections:
         flat: Dict[str, float] = {}
         for w in det:
             for d in w.get("label_scores", []):
                 for k, v in d.items():
                     flat[k] = max(flat.get(k, 0.0), float(v))
-        for lab in PLOT_LABELS:
+        for lab in labels:
             curves[lab].append(flat.get(lab, 0.0))
 
     centres = np.array([(s + win / 2) / SR for s in starts])
@@ -122,20 +126,36 @@ def main() -> int:
             ax.axvspan(a, b, color=colours[kind], alpha=0.16, lw=0)
         ax_s.text((a + b) / 2, ax_s.get_ylim()[1] * 0.92, kind, ha="center", fontsize=8, color=colours[kind])
 
-    for lab in PLOT_LABELS:
-        ax_h.plot(centres, curves[lab], lw=1.3, label=lab)
-    ax_h.axhline(0.5, color="k", ls=":", lw=0.8)
-    ax_h.set_ylim(-0.02, 1.02)
-    ax_h.set_xlabel("time (s)")
-    ax_h.set_ylabel("HeAR probability")
-    ax_h.legend(loc="upper left", fontsize=8, ncols=4)
-    ax_h.grid(alpha=0.25)
+    if args.raster:
+        order = sorted(labels, key=lambda lab: -max(curves[lab]))
+        mat = np.array([curves[lab] for lab in order])
+        edges_x = np.append(centres, centres[-1] + (centres[1] - centres[0]) if len(centres) > 1 else 1.0)
+        im = ax_h.pcolormesh(
+            edges_x, np.arange(len(order) + 1), mat, cmap="viridis", vmin=0.0, vmax=1.0, shading="flat"
+        )
+        ax_h.set_yticks(np.arange(len(order)) + 0.5)
+        ax_h.set_yticklabels([f"{lab}  ({max(curves[lab]):.2f})" for lab in order], fontsize=8)
+        ax_h.invert_yaxis()
+        ax_h.set_xlabel("time (s)")
+        for a, b, _ in EVENTS:
+            ax_h.axvline(a, color="w", lw=0.7, alpha=0.7)
+            ax_h.axvline(b, color="w", lw=0.7, alpha=0.7, ls=":")
+        fig.colorbar(im, ax=ax_h, pad=0.01, label="probability")
+    else:
+        for lab in labels:
+            ax_h.plot(centres, curves[lab], lw=1.3, label=lab)
+        ax_h.axhline(0.5, color="k", ls=":", lw=0.8)
+        ax_h.set_ylim(-0.02, 1.02)
+        ax_h.set_ylabel("HeAR probability")
+        ax_h.set_xlabel("time (s)")
+        ax_h.legend(loc="upper left", fontsize=8, ncols=4)
+        ax_h.grid(alpha=0.25)
 
     fig.tight_layout()
     fig.savefig(args.out, dpi=140)
     print(f"wrote {args.out}", flush=True)
 
-    for lab in PLOT_LABELS:
+    for lab in labels:
         arr = np.array(curves[lab])
         hits = [f"{centres[i]:.2f}" for i in np.where(arr > 0.5)[0]]
         print(
