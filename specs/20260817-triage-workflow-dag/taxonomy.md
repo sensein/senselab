@@ -141,6 +141,35 @@ voiced — a diarizer's raw posterior reads 0.574 and 0.906 on the two verified 
 admit it if airway had not already claimed it. Breath is the mirror case: unvoiced, so the gate would
 never admit it, and it must come from airway detection or not at all.
 
+### Two tracks carry the whole residual
+
+The gate and the discrimination inside it are both functions of the same pair: an **energy** track and
+a **periodicity/F0** track. Nothing about this category needs a label space.
+
+| residual member | what distinguishes it, from those two tracks |
+| --- | --- |
+| sustained vowel | high periodicity held for a long run, F0 roughly constant |
+| pitch glide | high periodicity, F0 sweeping monotonically — a trajectory, not a level |
+| loud phonation | energy high *relative to the rest of the recording*; periodicity unremarkable |
+| maximum phonation time | the **duration** of the voiced run is itself the measurement |
+| laughter | periodicity intermittent in bursts, energy amplitude-modulated |
+| crying | high periodicity at a high absolute F0, sustained with modulation |
+| vocal imitation | nothing reliable — the trajectory can be anything |
+
+So six features, all cheap and all derived from those two tracks: periodicity level, F0 level, F0
+trajectory, energy level, energy modulation rate, and voiced-run duration. That set is the residual
+branch's instrument, and TAXONOMY needs only the first to gate.
+
+**Task hints resolve what the tracks cannot.** A hint names the task, so it says which member to expect
+— `prolonged-vowel`, `glides`, `loudness`, `maximum-phonation-time` — and the features then confirm or
+contradict it rather than having to identify it unaided. Imitation is the case that needs this: a child
+imitating a dog passes the gate, because the vocal tract made it, and no trajectory distinguishes it
+from any other wordless voicing.
+
+The hint conditions the **decision**, never the measurement. The two tracks are computed the same way
+with or without one, so a hint can never manufacture evidence — it can only choose among readings of
+evidence that already exists, and a hint contradicted by the tracks is itself a finding.
+
 **The residual is the one place grids must be compared.** Deciding that voicing was *not* claimed needs
 the gate's voiced windows checked for time overlap against the airway and speech detectors' confident
 windows. That is window-level bookkeeping, not event localisation, but it is a comparison across grids
