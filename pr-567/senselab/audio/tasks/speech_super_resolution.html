@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="pdoc 16.0.0"/>
-    <title>senselab.utils API documentation</title>
+    <title>senselab.audio.tasks.speech_super_resolution API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -17,34 +17,38 @@
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
         <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
-        <div>            <a class="pdoc-button module-list-button" href="../senselab.html">
+        <div>            <a class="pdoc-button module-list-button" href="../tasks.html">
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
   <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
   <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
-</svg>                &nbsp;senselab</a>
+</svg>                &nbsp;senselab.audio.tasks</a>
 
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
-
-            <h2>Submodules</h2>
+            <h2>Contents</h2>
             <ul>
-                    <li><a href="utils/backend_parameters.html">backend_parameters</a></li>
-                    <li><a href="utils/clearvoice.html">clearvoice</a></li>
-                    <li><a href="utils/compatibility.html">compatibility</a></li>
-                    <li><a href="utils/compatibility_test_runner.html">compatibility_test_runner</a></li>
-                    <li><a href="utils/config.html">config</a></li>
-                    <li><a href="utils/constants.html">constants</a></li>
-                    <li><a href="utils/cuda_probe.html">cuda_probe</a></li>
-                    <li><a href="utils/data_structures.html">data_structures</a></li>
-                    <li><a href="utils/dependencies.html">dependencies</a></li>
-                    <li><a href="utils/file_lock.html">file_lock</a></li>
-                    <li><a href="utils/model_revision.html">model_revision</a></li>
-                    <li><a href="utils/portable_audio_io.html">portable_audio_io</a></li>
-                    <li><a href="utils/subprocess_venv.html">subprocess_venv</a></li>
-                    <li><a href="utils/tasks.html">tasks</a></li>
-            </ul>
+  <li><a href="#speech-super-resolution">Speech super-resolution</a>
+  <ul>
+    <li><a href="#task-overview">Task overview</a></li>
+    <li><a href="#model">Model</a></li>
+    <li><a href="#provenance">Provenance</a></li>
+    <li><a href="#not-measured-here">Not measured here</a></li>
+  </ul></li>
+</ul>
+
+
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#super_resolve_audios">super_resolve_audios</a>
+            </li>
+            <li>
+                    <a class="variable" href="#DEFAULT_SUPER_RESOLUTION_MODEL">DEFAULT_SUPER_RESOLUTION_MODEL</a>
+            </li>
+    </ul>
 
 
 
@@ -58,20 +62,202 @@
     <main class="pdoc">
             <section class="module-info">
                     <h1 class="modulename">
-<a href="./../senselab.html">senselab</a><wbr>.utils    </h1>
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.speech_super_resolution    </h1>
 
-                        <div class="docstring"><p>This module contains the implementation of utility functions.</p>
+                        <div class="docstring"><h1 id="speech-super-resolution">Speech super-resolution</h1>
+
+<h2 id="task-overview">Task overview</h2>
+
+<p>Speech super-resolution — bandwidth extension — reconstructs the high-frequency band a recording never
+captured, turning low-resolution speech into 48 kHz audio. It is not resampling: interpolating a 16 kHz
+signal to 48 kHz adds samples but no content, whereas this predicts the missing band.</p>
+
+<p>It is a <strong>separate task from enhancement</strong>, not a mode of it, because its output contract differs: the
+result is 48 kHz whatever the input rate was. Folding it into <code>enhance_audios</code> would give one function
+two output contracts, decided by which model id was passed.</p>
+
+<h2 id="model">Model</h2>
+
+<p>One backend, in an isolated subprocess venv:
+<a href="https://huggingface.co/alibabasglab/MossFormer2_SR_48K"><code>alibabasglab/MossFormer2_SR_48K</code></a> from
+<a href="https://github.com/modelscope/ClearerVoice-Studio">ClearerVoice-Studio</a> (Apache-2.0). Two stages: a
+MossFormer2 predicting a mel representation, then a HiFi-GAN vocoder, followed by upstream's own
+bandwidth substitution, which keeps the input's own band and splices in only what was missing.</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="">senselab.audio.tasks.speech_super_resolution</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">super_resolve_audios</span>
+
+<span class="n">upsampled</span> <span class="o">=</span> <span class="n">super_resolve_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">)</span>          <span class="c1"># 48 kHz out</span>
+<span class="n">upsampled</span> <span class="o">=</span> <span class="n">super_resolve_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">parameters</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;timeout_s&quot;</span><span class="p">:</span> <span class="mi">3600</span><span class="p">})</span>
+</code></pre>
 </div>
 
-                        <input id="mod-utils-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<p>The input is resampled to 48 kHz on the host first, because the model fills in bandwidth rather than
+resampling. Upstream reports an effective input rate of at least 16 kHz is needed.</p>
 
-                        <label class="view-source-button" for="mod-utils-view-source"><span>View Source</span></label>
+<p>Upstream's own numbers, on VoiceBank-DEMAND downsampled and then restored (log-spectral distance,
+lower is better):</p>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;This module contains the implementation of utility functions.&quot;&quot;&quot;</span>
+<table>
+<thead>
+<tr>
+  <th>Input rate</th>
+  <th>16 kHz</th>
+  <th>24 kHz</th>
+  <th>32 kHz</th>
+  <th>48 kHz</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>Original</td>
+  <td>2.80</td>
+  <td>2.60</td>
+  <td>2.29</td>
+  <td>1.46</td>
+</tr>
+<tr>
+  <td>Restored</td>
+  <td><strong>1.93</strong></td>
+  <td><strong>1.52</strong></td>
+  <td><strong>1.50</strong></td>
+  <td>1.42</td>
+</tr>
+</tbody>
+</table>
+
+<p>At 48 kHz no super-resolution is applied, so that column measures enhancement rather than bandwidth
+extension. When the input is both narrowband and noisy, upstream pairs this with
+<code>MossFormer2_SE_48K</code> — run <code>enhance_audios</code> first, then this.</p>
+
+<h2 id="provenance">Provenance</h2>
+
+<p>Upstream's loader accepts no revision, so senselab pre-stages the checkpoint at a resolved commit and
+points the loader at that local path. Every returned <code>Audio</code> carries <code>metadata["clearvoice"]</code> naming
+the model and that commit, and <code>metadata["backend_parameters"]</code> naming the parameters that ran. The
+mechanism, and the 1.74 GB optimizer state deliberately not downloaded, are in
+<code>specs/20260819-clearvoice-integration/design.md</code>.</p>
+
+<h2 id="not-measured-here">Not measured here</h2>
+
+<p>This checkpoint has not been run end to end in this repository: its two-stage weights total 1.6 GB and
+no bandwidth-extension ground truth was available. Dispatch, staging, the device, the ceiling and the
+output rate are covered by tests; the quality numbers above are upstream's own.</p>
+</div>
+
+                        <input id="mod-speech_super_resolution-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+
+                        <label class="view-source-button" for="mod-speech_super_resolution-view-source"><span>View Source</span></label>
+
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;.. include:: ./doc.md&quot;&quot;&quot;</span>  <span class="c1"># noqa: D415</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">DEFAULT_SUPER_RESOLUTION_MODEL</span><span class="p">,</span> <span class="n">super_resolve_audios</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;super_resolve_audios&quot;</span><span class="p">,</span> <span class="s2">&quot;DEFAULT_SUPER_RESOLUTION_MODEL&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="super_resolve_audios">
+                            <input id="super_resolve_audios-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+                    <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.speech_super_resolution.super_resolve_audios&#39;)</div>
+
+        <span class="def">def</span>
+        <span class="name">super_resolve_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">parameters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="super_resolve_audios-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#super_resolve_audios"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="super_resolve_audios-21"><a href="#super_resolve_audios-21"><span class="linenos">21</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.speech_super_resolution.super_resolve_audios&quot;</span><span class="p">)</span>
+</span><span id="super_resolve_audios-22"><a href="#super_resolve_audios-22"><span class="linenos">22</span></a><span class="k">def</span><span class="w"> </span><span class="nf">super_resolve_audios</span><span class="p">(</span>
+</span><span id="super_resolve_audios-23"><a href="#super_resolve_audios-23"><span class="linenos">23</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="super_resolve_audios-24"><a href="#super_resolve_audios-24"><span class="linenos">24</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="super_resolve_audios-25"><a href="#super_resolve_audios-25"><span class="linenos">25</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="super_resolve_audios-26"><a href="#super_resolve_audios-26"><span class="linenos">26</span></a>    <span class="n">parameters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="super_resolve_audios-27"><a href="#super_resolve_audios-27"><span class="linenos">27</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
+</span><span id="super_resolve_audios-28"><a href="#super_resolve_audios-28"><span class="linenos">28</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Reconstruct the high band of each audio, returning 48 kHz output.</span>
+</span><span id="super_resolve_audios-29"><a href="#super_resolve_audios-29"><span class="linenos">29</span></a>
+</span><span id="super_resolve_audios-30"><a href="#super_resolve_audios-30"><span class="linenos">30</span></a><span class="sd">    One backend today: ClearVoice&#39;s ``MossFormer2_SR_48K``, in an isolated subprocess venv.</span>
+</span><span id="super_resolve_audios-31"><a href="#super_resolve_audios-31"><span class="linenos">31</span></a>
+</span><span id="super_resolve_audios-32"><a href="#super_resolve_audios-32"><span class="linenos">32</span></a><span class="sd">    Args:</span>
+</span><span id="super_resolve_audios-33"><a href="#super_resolve_audios-33"><span class="linenos">33</span></a><span class="sd">        audios: Inputs. Resampled to the model&#39;s rate and downmixed to mono.</span>
+</span><span id="super_resolve_audios-34"><a href="#super_resolve_audios-34"><span class="linenos">34</span></a><span class="sd">        model: ``HFModel`` naming a ClearVoice super-resolution checkpoint. ``None`` uses</span>
+</span><span id="super_resolve_audios-35"><a href="#super_resolve_audios-35"><span class="linenos">35</span></a><span class="sd">            ``alibabasglab/MossFormer2_SR_48K``.</span>
+</span><span id="super_resolve_audios-36"><a href="#super_resolve_audios-36"><span class="linenos">36</span></a><span class="sd">        device: CUDA or CPU. ``None`` leaves the choice to the backend.</span>
+</span><span id="super_resolve_audios-37"><a href="#super_resolve_audios-37"><span class="linenos">37</span></a><span class="sd">        parameters: Backend-specific parameters, validated against the selected backend&#39;s signature —</span>
+</span><span id="super_resolve_audios-38"><a href="#super_resolve_audios-38"><span class="linenos">38</span></a><span class="sd">            an unknown key raises rather than being ignored. For this backend: ``timeout_s``.</span>
+</span><span id="super_resolve_audios-39"><a href="#super_resolve_audios-39"><span class="linenos">39</span></a>
+</span><span id="super_resolve_audios-40"><a href="#super_resolve_audios-40"><span class="linenos">40</span></a><span class="sd">    Returns:</span>
+</span><span id="super_resolve_audios-41"><a href="#super_resolve_audios-41"><span class="linenos">41</span></a><span class="sd">        One 48 kHz ``Audio`` per input.</span>
+</span><span id="super_resolve_audios-42"><a href="#super_resolve_audios-42"><span class="linenos">42</span></a>
+</span><span id="super_resolve_audios-43"><a href="#super_resolve_audios-43"><span class="linenos">43</span></a><span class="sd">    Raises:</span>
+</span><span id="super_resolve_audios-44"><a href="#super_resolve_audios-44"><span class="linenos">44</span></a><span class="sd">        NotImplementedError: If ``model`` names no known super-resolution backend.</span>
+</span><span id="super_resolve_audios-45"><a href="#super_resolve_audios-45"><span class="linenos">45</span></a><span class="sd">        ValueError: If a parameter key is not one the backend declares.</span>
+</span><span id="super_resolve_audios-46"><a href="#super_resolve_audios-46"><span class="linenos">46</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="super_resolve_audios-47"><a href="#super_resolve_audios-47"><span class="linenos">47</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="super_resolve_audios-48"><a href="#super_resolve_audios-48"><span class="linenos">48</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="n">DEFAULT_SUPER_RESOLUTION_MODEL</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="super_resolve_audios-49"><a href="#super_resolve_audios-49"><span class="linenos">49</span></a>
+</span><span id="super_resolve_audios-50"><a href="#super_resolve_audios-50"><span class="linenos">50</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="n">is_clearvoice_model_id</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)):</span>
+</span><span id="super_resolve_audios-51"><a href="#super_resolve_audios-51"><span class="linenos">51</span></a>        <span class="n">clearvoice_model_spec</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">),</span> <span class="n">expected_task</span><span class="o">=</span><span class="n">CLEARVOICE_SUPER_RESOLUTION_TASK</span><span class="p">)</span>
+</span><span id="super_resolve_audios-52"><a href="#super_resolve_audios-52"><span class="linenos">52</span></a>        <span class="n">kwargs</span><span class="p">,</span> <span class="n">record</span> <span class="o">=</span> <span class="n">resolve_backend_parameters</span><span class="p">(</span>
+</span><span id="super_resolve_audios-53"><a href="#super_resolve_audios-53"><span class="linenos">53</span></a>            <span class="n">super_resolve_audios_with_clearvoice</span><span class="p">,</span> <span class="n">parameters</span><span class="p">,</span> <span class="n">backend_name</span><span class="o">=</span><span class="s2">&quot;clearvoice&quot;</span>
+</span><span id="super_resolve_audios-54"><a href="#super_resolve_audios-54"><span class="linenos">54</span></a>        <span class="p">)</span>
+</span><span id="super_resolve_audios-55"><a href="#super_resolve_audios-55"><span class="linenos">55</span></a>        <span class="n">results</span> <span class="o">=</span> <span class="n">super_resolve_audios_with_clearvoice</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span id="super_resolve_audios-56"><a href="#super_resolve_audios-56"><span class="linenos">56</span></a>        <span class="n">record_parameters_on</span><span class="p">(</span><span class="n">results</span><span class="p">,</span> <span class="n">record</span><span class="p">)</span>
+</span><span id="super_resolve_audios-57"><a href="#super_resolve_audios-57"><span class="linenos">57</span></a>        <span class="k">return</span> <span class="n">results</span>
+</span><span id="super_resolve_audios-58"><a href="#super_resolve_audios-58"><span class="linenos">58</span></a>
+</span><span id="super_resolve_audios-59"><a href="#super_resolve_audios-59"><span class="linenos">59</span></a>    <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="super_resolve_audios-60"><a href="#super_resolve_audios-60"><span class="linenos">60</span></a>        <span class="sa">f</span><span class="s2">&quot;No super-resolution backend for </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="si">!r}</span><span class="s2">. Supported: HFModel ids naming a &quot;</span>
+</span><span id="super_resolve_audios-61"><a href="#super_resolve_audios-61"><span class="linenos">61</span></a>        <span class="sa">f</span><span class="s2">&quot;ClearVoice super-resolution checkpoint (</span><span class="si">{</span><span class="n">DEFAULT_SUPER_RESOLUTION_MODEL</span><span class="si">}</span><span class="s2">).&quot;</span>
+</span><span id="super_resolve_audios-62"><a href="#super_resolve_audios-62"><span class="linenos">62</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Reconstruct the high band of each audio, returning 48 kHz output.</p>
+
+<p>One backend today: ClearVoice's <code>MossFormer2_SR_48K</code>, in an isolated subprocess venv.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audios:</strong>  Inputs. Resampled to the model's rate and downmixed to mono.</li>
+<li><strong>model:</strong>  <code>HFModel</code> naming a ClearVoice super-resolution checkpoint. <code>None</code> uses
+<code>alibabasglab/MossFormer2_SR_48K</code>.</li>
+<li><strong>device:</strong>  CUDA or CPU. <code>None</code> leaves the choice to the backend.</li>
+<li><strong>parameters:</strong>  Backend-specific parameters, validated against the selected backend's signature —
+an unknown key raises rather than being ignored. For this backend: <code>timeout_s</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>One 48 kHz <code>Audio</code> per input.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>NotImplementedError:</strong>  If <code>model</code> names no known super-resolution backend.</li>
+<li><strong>ValueError:</strong>  If a parameter key is not one the backend declares.</li>
+</ul>
+</div>
+
+
+                </section>
+                <section id="DEFAULT_SUPER_RESOLUTION_MODEL">
+                    <div class="attr variable">
+            <span class="name">DEFAULT_SUPER_RESOLUTION_MODEL</span>        =
+<span class="default_value">&#39;alibabasglab/MossFormer2_SR_48K&#39;</span>
+
+        
+    </div>
+    <a class="headerlink" href="#DEFAULT_SUPER_RESOLUTION_MODEL"></a>
+    
+    
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {
@@ -125,7 +311,7 @@
                 script.async = true;
                 script.onload = () => resolve(window.pdocSearch);
                 script.onerror = (e) => reject(e);
-                script.src = "../search.js";
+                script.src = "../../../search.js";
                 document.getElementsByTagName("head")[0].appendChild(script);
             });
         } catch (e) {
@@ -167,7 +353,7 @@
             }
             for (let result of results.slice(0, 10)) {
                 let doc = result.doc;
-                let url = `../${doc.modulename.replaceAll(".", "/")}.html`;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
                 if (doc.qualname) {
                     url += `#${doc.qualname}`;
                 }

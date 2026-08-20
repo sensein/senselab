@@ -34,6 +34,7 @@
     <li><a href="#task-overview">Task Overview</a></li>
     <li><a href="#models">Models</a></li>
     <li><a href="#driftse-one-step-diffusion-enhancement">DriftSE (one-step diffusion enhancement)</a></li>
+    <li><a href="#clearvoice-frcrn-mossformergan-mossformer2">ClearVoice (FRCRN, MossFormerGAN, MossFormer2)</a></li>
     <li><a href="#evaluation">Evaluation</a></li>
   </ul></li>
 </ul>
@@ -154,6 +155,102 @@ Hann-tapered overlap-add for long inputs, and a recorded RNG seed. Those deviati
 commits, the licence history, the venv's dependency set and every measurement behind the choices are
 in <code>specs/20260818-083214-driftse-upstream-mit/design.md</code>.</p>
 
+<h2 id="clearvoice-frcrn-mossformergan-mossformer2">ClearVoice (FRCRN, MossFormerGAN, MossFormer2)</h2>
+
+<p><a href="https://github.com/modelscope/ClearerVoice-Studio">ClearerVoice-Studio</a> (Alibaba Speech Lab,
+Apache-2.0) contributes three enhancers, in an isolated subprocess venv:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Model id</th>
+  <th>Rate</th>
+  <th>Upstream PESQ (VB-DMD / DNS-2020)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>alibabasglab/FRCRN_SE_16K</code></td>
+  <td>16 kHz</td>
+  <td>3.23 / 3.24</td>
+</tr>
+<tr>
+  <td><code>alibabasglab/MossFormerGAN_SE_16K</code></td>
+  <td>16 kHz</td>
+  <td>3.47 / 3.57</td>
+</tr>
+<tr>
+  <td><code>alibabasglab/MossFormer2_SE_48K</code></td>
+  <td>48 kHz</td>
+  <td>3.16 / 2.94</td>
+</tr>
+</tbody>
+</table>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn"><a href="">senselab.audio.tasks.speech_enhancement</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">enhance_audios</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn"><a href="../../utils/data_structures.html">senselab.utils.data_structures</a></span><span class="w"> </span><span class="kn">import</span> <span class="n">HFModel</span>
+
+<span class="n">enhanced</span> <span class="o">=</span> <span class="n">enhance_audios</span><span class="p">(</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">HFModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;alibabasglab/FRCRN_SE_16K&quot;</span><span class="p">))</span>
+</code></pre>
+</div>
+
+<p>Inputs are resampled to the checkpoint's rate and downmixed to mono; the output has the input's
+sample count at that rate. <code>parameters={"timeout_s": ...}</code> is the one knob.</p>
+
+<h3 id="choosing-between-them-decides-which-non-speech-element-survives">Choosing between them decides which non-speech element survives</h3>
+
+<p>Measured against six human-verified events on a real recording — capability facts that are <strong>not</strong> in
+upstream's documentation, and the reason an enhancer is not a neutral preprocessing step for any
+analysis that treats breaths or coughs as signal:</p>
+
+<table>
+<thead>
+<tr>
+  <th></th>
+  <th>breaths</th>
+  <th>coughs</th>
+  <th>input energy kept</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>FRCRN_SE_16K</code></td>
+  <td>kept (−2.0, −5.5 dB)</td>
+  <td>kept (−1.0, +0.1 dB)</td>
+  <td>most</td>
+</tr>
+<tr>
+  <td><code>MossFormer2_SE_48K</code></td>
+  <td><strong>destroyed</strong> (−37, −40 dB)</td>
+  <td>kept (−0.6, +0.2 dB)</td>
+  <td>most</td>
+</tr>
+<tr>
+  <td><code>MossFormerGAN_SE_16K</code></td>
+  <td><strong>destroyed</strong> (−51 dB)</td>
+  <td>2 of 4 removed</td>
+  <td>~8%</td>
+</tr>
+</tbody>
+</table>
+
+<p>So: <code>FRCRN_SE_16K</code> when non-speech events matter, <code>MossFormerGAN_SE_16K</code> when only speech does, and
+<code>MossFormer2_SE_48K</code> when the recording is fullband and breaths are not of interest.</p>
+
+<p>All three <strong>conserve energy</strong>: output never exceeds input (−12.2 to −0.0 dB), in phase at zero lag,
+and clean speech is left essentially untouched — every SepFormer checkpoint tested failed that check.
+Peaks stayed ≤ 0.95, so no clipping exposure was observed. Independently reproduced here on clean
+16 kHz conversational speech: <code>FRCRN_SE_16K</code> returned −0.01 dB RMS at r = 1.0000.</p>
+
+<p><code>FRCRN_SE_16K</code> is one of two ClearVoice checkpoints whose input upstream RMS-normalises to −25 dBFS;
+the inverse scalar is applied to the output, and reported in <code>metadata["clearvoice"]</code>.</p>
+
+<p>Each returned <code>Audio</code> carries <code>metadata["clearvoice"]</code> with the model id and the <strong>resolved commit</strong>
+its weights came from — necessary because upstream's loader accepts no revision. How that is pinned,
+and every deviation from upstream's own inference path, is in
+<code>specs/20260819-clearvoice-integration/design.md</code>.</p>
+
 <h2 id="evaluation">Evaluation</h2>
 
 <h3 id="metrics">Metrics</h3>
@@ -187,80 +284,107 @@ in <code>specs/20260818-083214-driftse-upstream-mit/design.md</code>.</p>
                     <div class="decorator decorator-requires_compatibility">@requires_compatibility(&#39;audio.tasks.speech_enhancement.enhance_audios&#39;)</div>
 
         <span class="def">def</span>
-        <span class="name">enhance_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>:</span></span>
+        <span class="name">enhance_audios</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>,</span><span class="param">	<span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/model.html#SenselabModel">senselab.utils.data_structures.model.SenselabModel</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n"><a href="../../utils/data_structures/device.html#DeviceType">senselab.utils.data_structures.device.DeviceType</a></span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">parameters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span></span><span class="return-annotation">) -> <span class="n">List</span><span class="p">[</span><span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span><span class="p">]</span>:</span></span>
 
                 <label class="view-source-button" for="enhance_audios-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#enhance_audios"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="enhance_audios-19"><a href="#enhance_audios-19"><span class="linenos">19</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.speech_enhancement.enhance_audios&quot;</span><span class="p">)</span>
-</span><span id="enhance_audios-20"><a href="#enhance_audios-20"><span class="linenos">20</span></a><span class="k">def</span><span class="w"> </span><span class="nf">enhance_audios</span><span class="p">(</span>
-</span><span id="enhance_audios-21"><a href="#enhance_audios-21"><span class="linenos">21</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
-</span><span id="enhance_audios-22"><a href="#enhance_audios-22"><span class="linenos">22</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="enhance_audios-23"><a href="#enhance_audios-23"><span class="linenos">23</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="enhance_audios-24"><a href="#enhance_audios-24"><span class="linenos">24</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
-</span><span id="enhance_audios-25"><a href="#enhance_audios-25"><span class="linenos">25</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Enhances all audios using the given model.</span>
-</span><span id="enhance_audios-26"><a href="#enhance_audios-26"><span class="linenos">26</span></a>
-</span><span id="enhance_audios-27"><a href="#enhance_audios-27"><span class="linenos">27</span></a><span class="sd">    Supports **SpeechBrain** (default) and **DriftSE** (HF-identified) backends:</span>
-</span><span id="enhance_audios-28"><a href="#enhance_audios-28"><span class="linenos">28</span></a><span class="sd">    - If `model` is a `SpeechBrainModel` (or `None`), uses SpeechBrain.</span>
-</span><span id="enhance_audios-29"><a href="#enhance_audios-29"><span class="linenos">29</span></a><span class="sd">    - If `model` is an `HFModel` and `model.path_or_uri` starts with `&quot;LIANGXU123/DriftSE&quot;`,</span>
-</span><span id="enhance_audios-30"><a href="#enhance_audios-30"><span class="linenos">30</span></a><span class="sd">      uses DriftSE (one-step diffusion enhancement) via an isolated subprocess venv.</span>
-</span><span id="enhance_audios-31"><a href="#enhance_audios-31"><span class="linenos">31</span></a>
-</span><span id="enhance_audios-32"><a href="#enhance_audios-32"><span class="linenos">32</span></a><span class="sd">    Args:</span>
-</span><span id="enhance_audios-33"><a href="#enhance_audios-33"><span class="linenos">33</span></a><span class="sd">        audios (List[Audio]): The list of audio objects to be enhanced.</span>
-</span><span id="enhance_audios-34"><a href="#enhance_audios-34"><span class="linenos">34</span></a><span class="sd">        model (SenselabModel): The model used for enhancement.</span>
-</span><span id="enhance_audios-35"><a href="#enhance_audios-35"><span class="linenos">35</span></a><span class="sd">            If None, the default model &quot;speechbrain/sepformer-wham16k-enhancement&quot; is used.</span>
-</span><span id="enhance_audios-36"><a href="#enhance_audios-36"><span class="linenos">36</span></a><span class="sd">        device (Optional[DeviceType]): The device to run the model on (default is None).</span>
-</span><span id="enhance_audios-37"><a href="#enhance_audios-37"><span class="linenos">37</span></a>
-</span><span id="enhance_audios-38"><a href="#enhance_audios-38"><span class="linenos">38</span></a><span class="sd">    Returns:</span>
-</span><span id="enhance_audios-39"><a href="#enhance_audios-39"><span class="linenos">39</span></a><span class="sd">        List[Audio]: The list of enhanced audio objects.</span>
-</span><span id="enhance_audios-40"><a href="#enhance_audios-40"><span class="linenos">40</span></a>
-</span><span id="enhance_audios-41"><a href="#enhance_audios-41"><span class="linenos">41</span></a><span class="sd">    Raises:</span>
-</span><span id="enhance_audios-42"><a href="#enhance_audios-42"><span class="linenos">42</span></a><span class="sd">        NotImplementedError: If an unsupported model type is passed.</span>
-</span><span id="enhance_audios-43"><a href="#enhance_audios-43"><span class="linenos">43</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="enhance_audios-44"><a href="#enhance_audios-44"><span class="linenos">44</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="enhance_audios-45"><a href="#enhance_audios-45"><span class="linenos">45</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;speechbrain/sepformer-wham16k-enhancement&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
-</span><span id="enhance_audios-46"><a href="#enhance_audios-46"><span class="linenos">46</span></a>
-</span><span id="enhance_audios-47"><a href="#enhance_audios-47"><span class="linenos">47</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SpeechBrainModel</span><span class="p">):</span>
-</span><span id="enhance_audios-48"><a href="#enhance_audios-48"><span class="linenos">48</span></a>        <span class="k">return</span> <span class="n">SpeechBrainEnhancer</span><span class="o">.</span><span class="n">enhance_audios_with_speechbrain</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-</span><span id="enhance_audios-49"><a href="#enhance_audios-49"><span class="linenos">49</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_DRIFTSE_MODEL_PREFIX</span><span class="p">):</span>
-</span><span id="enhance_audios-50"><a href="#enhance_audios-50"><span class="linenos">50</span></a>        <span class="k">return</span> <span class="n">enhance_audios_with_driftse</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
-</span><span id="enhance_audios-51"><a href="#enhance_audios-51"><span class="linenos">51</span></a>    <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
-</span><span id="enhance_audios-52"><a href="#enhance_audios-52"><span class="linenos">52</span></a>        <span class="sa">f</span><span class="s2">&quot;No enhancement backend for </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="si">!r}</span><span class="s2">. Supported: SpeechBrain models, &quot;</span>
-</span><span id="enhance_audios-53"><a href="#enhance_audios-53"><span class="linenos">53</span></a>        <span class="sa">f</span><span class="s2">&quot;and HFModel ids starting with </span><span class="si">{</span><span class="n">_DRIFTSE_MODEL_PREFIX</span><span class="si">!r}</span><span class="s2">.&quot;</span>
-</span><span id="enhance_audios-54"><a href="#enhance_audios-54"><span class="linenos">54</span></a>    <span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="enhance_audios-25"><a href="#enhance_audios-25"><span class="linenos">25</span></a><span class="nd">@requires_compatibility</span><span class="p">(</span><span class="s2">&quot;audio.tasks.speech_enhancement.enhance_audios&quot;</span><span class="p">)</span>
+</span><span id="enhance_audios-26"><a href="#enhance_audios-26"><span class="linenos">26</span></a><span class="k">def</span><span class="w"> </span><span class="nf">enhance_audios</span><span class="p">(</span>
+</span><span id="enhance_audios-27"><a href="#enhance_audios-27"><span class="linenos">27</span></a>    <span class="n">audios</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">],</span>
+</span><span id="enhance_audios-28"><a href="#enhance_audios-28"><span class="linenos">28</span></a>    <span class="n">model</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">SenselabModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="enhance_audios-29"><a href="#enhance_audios-29"><span class="linenos">29</span></a>    <span class="n">device</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DeviceType</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="enhance_audios-30"><a href="#enhance_audios-30"><span class="linenos">30</span></a>    <span class="n">parameters</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="enhance_audios-31"><a href="#enhance_audios-31"><span class="linenos">31</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
+</span><span id="enhance_audios-32"><a href="#enhance_audios-32"><span class="linenos">32</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Enhance every audio with the given model, returning one signal per input.</span>
+</span><span id="enhance_audios-33"><a href="#enhance_audios-33"><span class="linenos">33</span></a>
+</span><span id="enhance_audios-34"><a href="#enhance_audios-34"><span class="linenos">34</span></a><span class="sd">    Three backends, selected by the model:</span>
+</span><span id="enhance_audios-35"><a href="#enhance_audios-35"><span class="linenos">35</span></a>
+</span><span id="enhance_audios-36"><a href="#enhance_audios-36"><span class="linenos">36</span></a><span class="sd">    - a ``SpeechBrainModel`` (or ``None``) uses SpeechBrain, in process;</span>
+</span><span id="enhance_audios-37"><a href="#enhance_audios-37"><span class="linenos">37</span></a><span class="sd">    - an ``HFModel`` under ``LIANGXU123/DriftSE`` uses DriftSE, one-step diffusion in an isolated venv;</span>
+</span><span id="enhance_audios-38"><a href="#enhance_audios-38"><span class="linenos">38</span></a><span class="sd">    - an ``HFModel`` naming a ClearVoice enhancement checkpoint uses ClearVoice, in an isolated venv.</span>
+</span><span id="enhance_audios-39"><a href="#enhance_audios-39"><span class="linenos">39</span></a>
+</span><span id="enhance_audios-40"><a href="#enhance_audios-40"><span class="linenos">40</span></a><span class="sd">    Args:</span>
+</span><span id="enhance_audios-41"><a href="#enhance_audios-41"><span class="linenos">41</span></a><span class="sd">        audios: The audios to enhance.</span>
+</span><span id="enhance_audios-42"><a href="#enhance_audios-42"><span class="linenos">42</span></a><span class="sd">        model: The enhancement model. ``None`` uses ``speechbrain/sepformer-wham16k-enhancement``.</span>
+</span><span id="enhance_audios-43"><a href="#enhance_audios-43"><span class="linenos">43</span></a><span class="sd">        device: The device to run on. ``None`` lets the backend choose.</span>
+</span><span id="enhance_audios-44"><a href="#enhance_audios-44"><span class="linenos">44</span></a><span class="sd">        parameters: Backend-specific parameters, validated against the **selected** backend&#39;s own</span>
+</span><span id="enhance_audios-45"><a href="#enhance_audios-45"><span class="linenos">45</span></a><span class="sd">            signature: an unknown or misspelled key raises rather than being ignored, and the</span>
+</span><span id="enhance_audios-46"><a href="#enhance_audios-46"><span class="linenos">46</span></a><span class="sd">            effective set is recorded on each result&#39;s ``metadata[&quot;backend_parameters&quot;]``. DriftSE</span>
+</span><span id="enhance_audios-47"><a href="#enhance_audios-47"><span class="linenos">47</span></a><span class="sd">            declares ``variant``, ``seed``, ``sigma``, ``chunk_s``, ``overlap_s`` and ``timeout_s``;</span>
+</span><span id="enhance_audios-48"><a href="#enhance_audios-48"><span class="linenos">48</span></a><span class="sd">            ClearVoice declares ``timeout_s``; SpeechBrain declares none.</span>
+</span><span id="enhance_audios-49"><a href="#enhance_audios-49"><span class="linenos">49</span></a>
+</span><span id="enhance_audios-50"><a href="#enhance_audios-50"><span class="linenos">50</span></a><span class="sd">    Returns:</span>
+</span><span id="enhance_audios-51"><a href="#enhance_audios-51"><span class="linenos">51</span></a><span class="sd">        One enhanced ``Audio`` per input, in order.</span>
+</span><span id="enhance_audios-52"><a href="#enhance_audios-52"><span class="linenos">52</span></a>
+</span><span id="enhance_audios-53"><a href="#enhance_audios-53"><span class="linenos">53</span></a><span class="sd">    Raises:</span>
+</span><span id="enhance_audios-54"><a href="#enhance_audios-54"><span class="linenos">54</span></a><span class="sd">        NotImplementedError: If ``model`` names no known enhancement backend.</span>
+</span><span id="enhance_audios-55"><a href="#enhance_audios-55"><span class="linenos">55</span></a><span class="sd">        ValueError: If a parameter key is not one the selected backend declares.</span>
+</span><span id="enhance_audios-56"><a href="#enhance_audios-56"><span class="linenos">56</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="enhance_audios-57"><a href="#enhance_audios-57"><span class="linenos">57</span></a>    <span class="k">if</span> <span class="n">model</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="enhance_audios-58"><a href="#enhance_audios-58"><span class="linenos">58</span></a>        <span class="n">model</span> <span class="o">=</span> <span class="n">SpeechBrainModel</span><span class="p">(</span><span class="n">path_or_uri</span><span class="o">=</span><span class="s2">&quot;speechbrain/sepformer-wham16k-enhancement&quot;</span><span class="p">,</span> <span class="n">revision</span><span class="o">=</span><span class="s2">&quot;main&quot;</span><span class="p">)</span>
+</span><span id="enhance_audios-59"><a href="#enhance_audios-59"><span class="linenos">59</span></a>
+</span><span id="enhance_audios-60"><a href="#enhance_audios-60"><span class="linenos">60</span></a>    <span class="n">backend</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Callable</span><span class="p">[</span><span class="o">...</span><span class="p">,</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="enhance_audios-61"><a href="#enhance_audios-61"><span class="linenos">61</span></a>    <span class="n">backend_name</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+</span><span id="enhance_audios-62"><a href="#enhance_audios-62"><span class="linenos">62</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">SpeechBrainModel</span><span class="p">):</span>
+</span><span id="enhance_audios-63"><a href="#enhance_audios-63"><span class="linenos">63</span></a>        <span class="n">backend</span><span class="p">,</span> <span class="n">backend_name</span> <span class="o">=</span> <span class="n">SpeechBrainEnhancer</span><span class="o">.</span><span class="n">enhance_audios_with_speechbrain</span><span class="p">,</span> <span class="s2">&quot;speechbrain&quot;</span>
+</span><span id="enhance_audios-64"><a href="#enhance_audios-64"><span class="linenos">64</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_DRIFTSE_MODEL_PREFIX</span><span class="p">):</span>
+</span><span id="enhance_audios-65"><a href="#enhance_audios-65"><span class="linenos">65</span></a>        <span class="n">backend</span><span class="p">,</span> <span class="n">backend_name</span> <span class="o">=</span> <span class="n">enhance_audios_with_driftse</span><span class="p">,</span> <span class="s2">&quot;driftse&quot;</span>
+</span><span id="enhance_audios-66"><a href="#enhance_audios-66"><span class="linenos">66</span></a>    <span class="k">elif</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="n">is_clearvoice_model_id</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)):</span>
+</span><span id="enhance_audios-67"><a href="#enhance_audios-67"><span class="linenos">67</span></a>        <span class="c1"># Rejects a separation or super-resolution checkpoint before any work happens, rather than</span>
+</span><span id="enhance_audios-68"><a href="#enhance_audios-68"><span class="linenos">68</span></a>        <span class="c1"># letting the backend discover it after staging 670 MB of weights.</span>
+</span><span id="enhance_audios-69"><a href="#enhance_audios-69"><span class="linenos">69</span></a>        <span class="n">clearvoice_model_spec</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">),</span> <span class="n">expected_task</span><span class="o">=</span><span class="n">CLEARVOICE_ENHANCEMENT_TASK</span><span class="p">)</span>
+</span><span id="enhance_audios-70"><a href="#enhance_audios-70"><span class="linenos">70</span></a>        <span class="n">backend</span><span class="p">,</span> <span class="n">backend_name</span> <span class="o">=</span> <span class="n">enhance_audios_with_clearvoice</span><span class="p">,</span> <span class="s2">&quot;clearvoice&quot;</span>
+</span><span id="enhance_audios-71"><a href="#enhance_audios-71"><span class="linenos">71</span></a>
+</span><span id="enhance_audios-72"><a href="#enhance_audios-72"><span class="linenos">72</span></a>    <span class="k">if</span> <span class="n">backend</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="enhance_audios-73"><a href="#enhance_audios-73"><span class="linenos">73</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+</span><span id="enhance_audios-74"><a href="#enhance_audios-74"><span class="linenos">74</span></a>            <span class="sa">f</span><span class="s2">&quot;No enhancement backend for </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="si">!r}</span><span class="s2">. Supported: SpeechBrain models, HFModel &quot;</span>
+</span><span id="enhance_audios-75"><a href="#enhance_audios-75"><span class="linenos">75</span></a>            <span class="sa">f</span><span class="s2">&quot;ids starting with </span><span class="si">{</span><span class="n">_DRIFTSE_MODEL_PREFIX</span><span class="si">!r}</span><span class="s2">, and ClearVoice enhancement checkpoints &quot;</span>
+</span><span id="enhance_audios-76"><a href="#enhance_audios-76"><span class="linenos">76</span></a>            <span class="s2">&quot;under &#39;alibabasglab/&#39;.&quot;</span>
+</span><span id="enhance_audios-77"><a href="#enhance_audios-77"><span class="linenos">77</span></a>        <span class="p">)</span>
+</span><span id="enhance_audios-78"><a href="#enhance_audios-78"><span class="linenos">78</span></a>
+</span><span id="enhance_audios-79"><a href="#enhance_audios-79"><span class="linenos">79</span></a>    <span class="n">kwargs</span><span class="p">,</span> <span class="n">record</span> <span class="o">=</span> <span class="n">resolve_backend_parameters</span><span class="p">(</span><span class="n">backend</span><span class="p">,</span> <span class="n">parameters</span><span class="p">,</span> <span class="n">backend_name</span><span class="o">=</span><span class="n">backend_name</span><span class="p">)</span>
+</span><span id="enhance_audios-80"><a href="#enhance_audios-80"><span class="linenos">80</span></a>    <span class="n">enhanced</span> <span class="o">=</span> <span class="n">backend</span><span class="p">(</span><span class="n">audios</span><span class="o">=</span><span class="n">audios</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</span><span id="enhance_audios-81"><a href="#enhance_audios-81"><span class="linenos">81</span></a>    <span class="n">record_parameters_on</span><span class="p">(</span><span class="n">enhanced</span><span class="p">,</span> <span class="n">record</span><span class="p">)</span>
+</span><span id="enhance_audios-82"><a href="#enhance_audios-82"><span class="linenos">82</span></a>    <span class="k">return</span> <span class="n">enhanced</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>Enhances all audios using the given model.</p>
+            <div class="docstring"><p>Enhance every audio with the given model, returning one signal per input.</p>
 
-<p>Supports <strong>SpeechBrain</strong> (default) and <strong>DriftSE</strong> (HF-identified) backends:</p>
+<p>Three backends, selected by the model:</p>
 
 <ul>
-<li>If <code>model</code> is a <code>SpeechBrainModel</code> (or <code>None</code>), uses SpeechBrain.</li>
-<li>If <code>model</code> is an <code>HFModel</code> and <code>model.path_or_uri</code> starts with <code>"LIANGXU123/DriftSE"</code>,
-uses DriftSE (one-step diffusion enhancement) via an isolated subprocess venv.</li>
+<li>a <code>SpeechBrainModel</code> (or <code>None</code>) uses SpeechBrain, in process;</li>
+<li>an <code>HFModel</code> under <code>LIANGXU123/DriftSE</code> uses DriftSE, one-step diffusion in an isolated venv;</li>
+<li>an <code>HFModel</code> naming a ClearVoice enhancement checkpoint uses ClearVoice, in an isolated venv.</li>
 </ul>
 
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
-<li><strong>audios (List[Audio]):</strong>  The list of audio objects to be enhanced.</li>
-<li><strong>model (SenselabModel):</strong>  The model used for enhancement.
-If None, the default model "speechbrain/sepformer-wham16k-enhancement" is used.</li>
-<li><strong>device (Optional[DeviceType]):</strong>  The device to run the model on (default is None).</li>
+<li><strong>audios:</strong>  The audios to enhance.</li>
+<li><strong>model:</strong>  The enhancement model. <code>None</code> uses <code>speechbrain/sepformer-wham16k-enhancement</code>.</li>
+<li><strong>device:</strong>  The device to run on. <code>None</code> lets the backend choose.</li>
+<li><strong>parameters:</strong>  Backend-specific parameters, validated against the <strong>selected</strong> backend's own
+signature: an unknown or misspelled key raises rather than being ignored, and the
+effective set is recorded on each result's <code>metadata["backend_parameters"]</code>. DriftSE
+declares <code>variant</code>, <code>seed</code>, <code>sigma</code>, <code>chunk_s</code>, <code>overlap_s</code> and <code>timeout_s</code>;
+ClearVoice declares <code>timeout_s</code>; SpeechBrain declares none.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>List[Audio]: The list of enhanced audio objects.</p>
+  <p>One enhanced <code>Audio</code> per input, in order.</p>
 </blockquote>
 
 <h6 id="raises">Raises:</h6>
 
 <ul>
-<li><strong>NotImplementedError:</strong>  If an unsupported model type is passed.</li>
+<li><strong>NotImplementedError:</strong>  If <code>model</code> names no known enhancement backend.</li>
+<li><strong>ValueError:</strong>  If a parameter key is not one the selected backend declares.</li>
 </ul>
 </div>
 
