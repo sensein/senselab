@@ -96,3 +96,28 @@ the thing:
 - **Sustained vowel and pitch glide.** No label in any of the four. Nobody has yet measured what a
   prolonged vowel *does* fire, so whether this kind is screenable at all is an open measurement rather
   than a settled negative.
+
+## Detection aggregates over the waveform
+
+Presence is a whole-file question, so each detector's output is reduced over the entire recording to
+one value per kind. No localisation happens here and none is needed: a branch asks where.
+
+The reduction is not the same operation for all four, because they do not all produce a score series:
+
+- **YAMNet, AST, HeAR** emit a per-window score series. The reduction is the named per-kind aggregator
+  over that series, after folding labels into the kind's family.
+- **CrisperWhisper** emits a token list with timings. Its reduction is a presence count over token
+  types — did any `[cough]` or `[breath]` token appear, and were there words at all — not a quantile
+  over anything.
+
+**The consequence to design against: whole-waveform aggregation dilutes a short event by recording
+length.** A 0.3 s cough is 5% of a 6 s recording and 0.05% of a 10-minute one. A mean over windows
+takes it to nothing in the second case while a max fires on a single spurious window in either. So
+
+- the aggregator is a named per-kind config value, not a default, and short kinds want a high quantile
+  or a top-k mean rather than either extreme;
+- and a presence threshold fitted on short recordings does not transfer to long ones. The threshold
+  is duration-dependent, or the aggregator has to remove the dependence before the threshold sees it.
+
+This is the same failure that made a four-axis grid report that it had run while its defaults disabled
+every cross-axis coupling: a default aggregator that silently nulls what it claims to measure.
