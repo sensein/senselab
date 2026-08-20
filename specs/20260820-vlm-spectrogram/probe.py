@@ -8,12 +8,14 @@ model read the image correctly; the image could not carry the question. Narrowba
 because harmonics are the cue this model demonstrably reasons with.
 
 The colour scale is the second load-bearing render choice. ``specgram`` normalises over the full data
-range, which on this recording is 165 dB (-211 to -46 dB): a noise floor 45 dB below the signal lands
-at 61% of the palette and reads as structure. The run at that setting located both events correctly
-and then made three claims with no measurable support -- harmonics to 6 kHz where 4-8 kHz holds 0.003%
-of the energy, a "broadband sweep to 7.5 kHz" where the actual feature is a rising harmonic fan below
-2.5 kHz, and a "click" at 8.38 s where a z=2.0 column of noise floor sits. Clipping to ``dyn_range``
-dB below the loudest bin puts the floor at the bottom of the palette.
+range, which on this recording is 165 dB (-211 to -46 dB), so a noise floor 45 dB below the signal
+lands at 61% of the palette and reads as structure. Clipping to ``dyn_range`` dB below the loudest bin
+puts the floor at the bottom of the palette instead. Running both settings on the same recording
+separates render artifact from model error: the unfloored run's "harmonics to ~6 kHz" disappeared at a
+60 dB floor, leaving "0.5-2.5 kHz", which is where the energy measurably is; its reading of the
+7.7-8.25 s event as an "unvoiced broadband burst rising to ~7 kHz" survived unchanged, and that event
+is a voiced rising harmonic fan, F0 85 to 230 Hz, with 0.03% of its energy above 4 kHz. A 45 dB change
+in the floor left that claim untouched, so it is a misreading of a harmonic fan, not an artifact.
 """
 
 from __future__ import annotations
