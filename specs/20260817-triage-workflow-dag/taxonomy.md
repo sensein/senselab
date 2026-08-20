@@ -14,7 +14,7 @@ consumes, coarser could not route.
 ## Signature
 
 ```
-taxonomy(audio) -> fail(reason) | flag(reason, kinds) | pass(kinds)
+taxonomy(audio) -> fail(reason) | flag(reason, kinds) | pass(kinds, residual_windows)
 ```
 
 | port | direction | type | meaning |
@@ -22,7 +22,7 @@ taxonomy(audio) -> fail(reason) | flag(reason, kinds) | pass(kinds)
 | `audio` | in | decoded audio | from ADMIT, the recording as supplied |
 | `fail` | out | reason | no branch would run |
 | `flag` | out | reason, kinds | a human decides; the partial answer travels with it |
-| `pass` | out | kinds | one presence `Estimate` per kind |
+| `pass` | out | kinds, residual_windows | one presence `Estimate` per kind, plus the voiced windows the residual claimed |
 
 Each `Estimate` carries its evidence count and spread, so `kinds` is the whole product — there is no
 separate evidence port for a consumer to join back.
@@ -122,14 +122,29 @@ make this.** `Human voice` and `Respiratory sounds` are not in YAMNet's 521, so 
 
 Normalised autocorrelation, with an RMS floor so periodic room tone cannot pass:
 
+Measured on **`streaming-audio-2026-08-20T01-51-14-067Z.wav`**, which is **not** the human-verified
+recording:
+
 | region | RMS | F0 | periodicity |
 | --- | --- | --- | --- |
-| sustained voicing, 3.20-3.40 s | 0.0188 | 87.4 Hz | **0.933** |
-| sustained voicing, 4.40-4.60 s | 0.0161 | 88.1 Hz | **0.934** |
+| 3.20-3.40 s | 0.0188 | 87.4 Hz | **0.933** |
+| 4.40-4.60 s | 0.0161 | 88.1 Hz | **0.934** |
 | quiet stretches | 0.0004-0.0007 | unstable | **0.22-0.44** |
 
-This is the **only parameter in this node with an empirical basis.** One recording is one recording, but
-every other threshold here has nothing behind it, so this is where a derivation can start. HNR is an
+**The provenance matters and weakens the claim.** That recording carries no human labels, and
+"sustained voicing" is an inference *from these very numbers* — F0 stable near 87 Hz at periodicity
+0.93 for about four seconds — not something anyone verified by ear. Using them to justify a voicing
+gate is therefore circular for the purpose of identifying voicing.
+
+The numbers also do not transfer. At the identical timestamps the human-verified recording
+`streaming-audio-2026-07-30T04-21-56-487Z.wav` reads periodicity **0.558** and **0.134**, because those
+windows fall in a verified breath and a verified-empty stretch respectively. Two recordings, two
+different worlds.
+
+What survives is narrower than "an empirical basis" and worth stating exactly: **within one unlabelled
+recording, normalised autocorrelation separates a sustained periodic stretch from the quiet stretches
+around it by a wide margin.** That is a real acoustic contrast and a reasonable place for a derivation
+to start. It is not a fitted threshold, and it is not validated against any label. HNR is an
 alternative or an addition and is unmeasured.
 
 **F0 dispersion discriminates within the residual, it does not gate it.** A sustained vowel holds F0
@@ -169,6 +184,12 @@ from any other wordless voicing.
 The hint conditions the **decision**, never the measurement. The two tracks are computed the same way
 with or without one, so a hint can never manufacture evidence — it can only choose among readings of
 evidence that already exists, and a hint contradicted by the tracks is itself a finding.
+
+**The residual's window set is published, not recomputed.** The overlap bookkeeping below produces a
+concrete result — which voiced windows neither airway nor speech claimed — and that result leaves on
+the `residual_windows` port. A branch that had to recompute it would become downstream of its siblings
+and would stall whenever airway was absent, which is the same producer-consumer gap that has bitten
+this project before: a value the code is written to honour never reaching the code that honours it.
 
 **The residual is the one place grids must be compared.** Deciding that voicing was *not* claimed needs
 the gate's voiced windows checked for time overlap against the airway and speech detectors' confident
