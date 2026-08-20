@@ -164,12 +164,34 @@ has published it into whatever reads the verdict, which is the opposite of the p
 
 ## 8. Quality — parallel, reported
 
-SQUIM objective head over the **target speaker's** speech spans — on that speaker's separated stream
-when separation ran, on the recording when it did not. Over every speech span when no target was given. The subjective head is not used: it needs a non-matching reference, which is a config
-artifact nobody has declared.
+Two independent readings per relevant span — the **target speaker's** speech spans, on that speaker's
+separated stream when separation ran and on the recording when it did not; every speech span when no
+target was given.
 
-**Reported, never gated.** No threshold has been derived, so no recording is dismissed on quality. This
-step is a parallel branch of the graph and blocks nothing. It becomes a gate when thresholds exist.
+| reading | what it answers |
+| --- | --- |
+| `squim` objective head — STOI, PESQ, SI-SDR | how intelligible the speech is |
+| `disruptions` — clipping, dropouts, discontinuities, DC offset | whether the recording is intact |
+
+**These are not redundant, and the second is not derivable from the first.** SQUIM is a *speech*-quality
+estimator trained on particular degradations, so hard clipping can read as acceptable or as generic
+noise rather than as the specific defect it is. A clipped span and a reverberant span can score alike
+while needing opposite responses — one is a capture fault to fix at source, the other is a property of
+the room.
+
+Per span, `disruptions` reports **counts and extents, not a score**: clipped sample runs and their total
+duration, zero-run dropouts, sample-to-sample discontinuities, and DC offset. A span with none reports
+zero, which is a different statement from a span nobody measured.
+
+The subjective SQUIM head is not used: it needs a non-matching reference, which is a config artifact
+nobody has declared.
+
+**Reported, never gated.** No threshold has been derived for either reading, so no recording is dismissed
+on quality. This step is a parallel branch of the graph and blocks nothing. It becomes a gate when
+thresholds exist.
+
+Disruption *counts* are exact and need no threshold — a clipped run either happened or it did not. What
+has no derived value is **how much is too much**, and that is the gate, not the measurement.
 
 ## Outcome
 
@@ -206,6 +228,7 @@ What a consumer reads through the view, by element kind:
 | `stream` | one per separated source, or the recording itself | 5 |
 | `pii` | category and extent per finding, the detectors that ran, the detectors that failed, and which recognizer's hypothesis carried it. **Never the matched text** | 7 |
 | `measurement` | SQUIM per span, tagged with the stream it was taken on | 8 |
+| `measurement` | disruption counts and extents per span — clipped runs and duration, dropouts, discontinuities, DC offset | 8 |
 | `target_match` | speaker, similarity, and the model + revision of both embeddings | 6 |
 
 **`partial` on a `flag` is a view, not a payload** — the same element ids, with the contested assertions

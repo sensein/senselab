@@ -8,6 +8,7 @@ stated and its constant unjustified — not silently guessed.
 | item | what it blocks | what would settle it |
 | --- | --- | --- |
 | **SQUIM thresholds over speech spans** | SPEECH's quality `fail` is unreachable, so "dismiss because of quality" has no path | labelled quality verdicts on speech spans, from more than one recording |
+| **How much disruption is too much** | the same `fail`. Disruption *counts* are exact and need no threshold; what has no value is the tolerance — how many clipped runs, or what clipped duration, makes a span unusable | labelled verdicts pairing disruption counts with a human judgement of usability |
 | **The phonation gate's floors** | VOICE's gate carries an interval — periodicity `(0.44, 0.933)`, RMS `(0.0007, 0.0161)` — and no value | labelled voiced/unvoiced verdicts; a wide gap on one file cannot locate the boundary on another |
 | **The redaction padding margin** | REDACT pads outward by a margin that must exceed the *worst* alignment edge error, which is unquantified | edge error distribution for `alignment` over many words, not its median |
 
