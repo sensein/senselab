@@ -33,7 +33,7 @@ audio --> resample 16 kHz --+
 | `energy_envelope` | `\|x + jH{x}\|`, zero-phase 40 Hz Butterworth lowpass, **dBFS** | pre-emph | `spans`; voice branch level and modulation rate |
 | `silence` | YAMNet `Silence` per 0.96 s window, 0.48 s hop, threshold 0.5 | plain | the local floor; airway negative evidence |
 | `spans` | see below | pre-emph | AIRWAY classifies. **SPEECH derives its own spans from word timings and does not read this** |
-| `level` | peak dBFS, RMS dBFS, LUFS | plain | voice branch reference level; clipping |
+| `level` | peak dBFS, RMS dBFS, LUFS | plain | voice branch reference level. **File-level only** — per-span disruption detection is SPEECH step 8 |
 | `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file**; reported, not gated |
 | `asr_crisperwhisper` | transcript, word and token edges | plain | speech transcript and spans; airway lexical check; voice lexical exclusion |
 | `asr_qwen` | transcript, word timings | plain | speech agreement confidence |
