@@ -68,12 +68,41 @@ so a *low* score is evidence the span is not speech — which is the same fact t
 quality measure on non-speech, put to work. Step 2 does the quality reading, and only on spans that
 survive this step.
 
+#### How far into noise this survives
+
+Extraction is limited by the **span proposal**, never by the interpretation. Across pink noise added at
+SNRs measured over the speech span, with PREPROCESS's noise-adaptive gate:
+
+| SNR over the speech | span proposed? | IoU with the label | YAMNet coverage | verdict |
+| --- | --- | --- | --- | --- |
+| as captured | yes | 0.89 | 80% | **speech** |
+| +20 dB | yes | 0.17 | 100% | **speech** |
+| +10 dB | yes | 0.17 | 100% | **speech** |
+| +5 dB | merged with a cough | 0.10 | 67% | flag |
+| 0 dB | merged with a cough | 0.10 | 50% | flag |
+| −5 dB | **gate below floor** | — | — | `fail` |
+
+**YAMNet never becomes the limit** — `Speech` holds 0.987–0.998 with 100% coverage throughout, so the
+classifier is still right about a span the envelope can no longer find. That is the opposite of what one
+would guess, and it decides where effort belongs: improving speech extraction under noise means
+improving proposal, not classification.
+
+**Extent degrades long before detection does.** IoU falls 0.89 → 0.17 by +10 dB while the verdict is
+still confidently speech. So under any noise the span says *where* the speech is and not *how far it
+runs*, which is independent support for taking edges from `alignment` and treating the span as a
+locator. A `pass` should not publish an envelope-derived speech boundary as an edge.
+
+**Below about +5 dB the failure mode changes from missing to merging.** The span that survives runs
+9.61–12.00 s, joining cough 2 to the speech, and its SQUIM collapses (STOI 0.254) because the region is
+no longer speech. That is why a merged span reads as `flag` rather than `pass`: the two instruments
+disagree exactly as they should, YAMNet still seeing speech in the window while SQUIM sees a mixture.
+
 #### The three outcomes of this step
 
 | outcome | when | why |
 | --- | --- | --- |
 | **speech spans** | both instruments vote speech | passed to step 2 |
-| **`fail`** | no span gets a speech vote from either instrument | there is nothing for this branch to measure. Not a claim that the recording is empty — a statement that this branch has no subject |
+| **`fail`** | no span gets a speech vote from either instrument, **or** PREPROCESS reports `gate_below_floor` | there is nothing for this branch to measure. Not a claim that the recording is empty — a statement that this branch has no subject. The two causes are distinguished in the reason, because "too noisy to propose a span" and "no speech present" are different findings |
 | **`flag`** | the two instruments **disagree** on a span, or a span's measures fall inside the gaps above | a human resolves this faster than any rule available here |
 
 **Disagreement is the definition of uncertain, and it is deliberately not a threshold.** With gaps of

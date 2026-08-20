@@ -1,7 +1,7 @@
 import numpy as np, warnings, soundfile as sf, json, torch, sys
 warnings.filterwarnings("ignore")
-sys.path.insert(0,"/Users/satra/software/sensein/agentharness/scripts")
-from score_against_labels import LABELS
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent))
+from labels import LABELS
 from scipy.signal import resample_poly
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import HFModel

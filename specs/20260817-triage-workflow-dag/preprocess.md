@@ -193,7 +193,7 @@ Three rules, each measured against the labelled recording's six events:
 
 | rule | value | why not otherwise |
 | --- | --- | --- |
-| propose | peaks ≥ `floor + 18 dB`, separated by ≥ 150 ms | at `floor + 12 dB` a low-contrast peak's offset threshold sits near the floor, so its walk is effectively unbounded — two coughs 1.7 s apart merged into one 6 s span |
+| propose | peaks ≥ the gate, separated by ≥ 150 ms. The gate is `floor + 18 dB` on a quiet file and `peak − 25 dB` on a noisy one — selected by the measured floor, see below | at `floor + 12 dB` a low-contrast peak's offset threshold sits near the floor, so its walk is effectively unbounded — two coughs 1.7 s apart merged into one 6 s span |
 | onset | walk back from the peak to `peak − 15 dB` | peak-anchored puts 5 of 5 airway onsets inside the labels' declared windows; the same envelope with a floor-referenced threshold manages 2 of 6, every error early |
 | offset | walk forward to `peak − 0.7 × (peak − floor)`, closing only after 120 ms continuously below | the events do not share a dynamic range — 20.0 dB for a mouth sound against 56.8 dB for a cough — so one fixed drop is at once too shallow for a cough and unreachable for the click. Median offset error 84.3 ms, against 573.9 ms for a fixed `peak − 10 dB` |
 
@@ -205,6 +205,42 @@ a fixed threshold then fires on. The accuracy is a property of these rules.
 On the labelled recording they yield **five spans**: 2.32–3.29, 5.32–6.22, 7.92–8.51, 9.61–9.96 and
 11.75–13.16 s. Four are airway events and one is speech, and **the spans themselves carry no label** —
 this node does not know which is which and must not guess.
+
+**The propose gate is selected from the measured noise floor, because a floor-anchored gate loses the
+quieter events as noise rises.** This is structural rather than a badly chosen constant. Measured on the
+labelled recording with pink noise added at a range of SNRs over its speech, the distance from the file's
+loudest event down to its speech peak is **constant** — 22.1, 22.0, 21.9, 21.6, 20.9, 19.2 dB — while the
+floor climbs from −53.5 dB to −23.1 dB. The events keep their positions relative to each other; only the
+floor moves. So `floor + K` necessarily crosses the quieter event, and it does:
+
+| propose gate | speech span detected down to | ambiguous down to | no span at |
+| --- | --- | --- | --- |
+| `floor + 18 dB` | +20 dB SNR | — | **+10 dB** |
+| `peak − 25 dB` | **+10 dB** | **0 dB** | −5 dB |
+| `peak − 30 dB` | +10 dB | +5 dB | 0 dB |
+| `peak − 35 dB` | +20 dB | +10 dB | +5 dB |
+
+**A lower gate is not simply better**: at `peak − 35 dB` the span merges a cough into the speech
+(9.61–13.16 s), so there is an optimum rather than a monotone. And the shipped floor-anchored gate is
+**better on the quiet file** — IoU 0.89 against 0.75 for `peak − 25 dB` — and worse on every noisy one.
+
+So the gate is chosen by the floor, which is itself the noisiness estimate this node already computes:
+
+| measured floor | gate | why |
+| --- | --- | --- |
+| below −40 dB — a quiet recording | `floor + 18 dB` | best extent on this material, and the airway span set stays separated |
+| −40 dB or above — a noisy recording | `peak − 25 dB` | floor-independent by construction, and buys two SNR steps of usable range |
+| gate would fall **below** the floor | **no spans, and say so** | the noise floor has risen above the level a gate would need. This is a *diagnosable* refusal, not an empty result, and a consumer must be able to tell the two apart |
+
+**`gate_below_floor` is a first-class outcome.** At −5 dB SNR on this recording, speech stands 3.9 dB
+above the floor, and no threshold recovers it. Reporting "no spans" without reporting why would let a
+consumer read an unmeasurable recording as a quiet one.
+
+**Limits, and they are tighter than usual here.** One recording, one speaker, one noise colour (pink,
+one seed), SNR defined over the speech span, and the mixture rescaled to avoid clipping — which is
+itself a change to the signal. The −40 dB switch point is read off six points from one file and is the
+weakest number in this section; the *shape* — floor-anchored for quiet, peak-anchored for noisy, refuse
+when the gate sinks below the floor — is what the measurement supports.
 
 **One parameter is per-consumer and cannot be settled here.** The 120 ms hangover must be shorter than
 the shortest event a consumer intends to bound; at 250 ms it overshoots a 202 ms mouth click by 418 ms,
