@@ -23,7 +23,7 @@ element:  { id, kind, extent?, author, evidence }
 | field | meaning |
 | --- | --- |
 | `id` | stable, assigned once by the node that first proposed the element |
-| `kind` | `span`, `word`, `speaker`, `interval`, `measurement` |
+| `kind` | `span`, `word`, `speaker`, `interval`, `measurement`, `kind`, `stream`, `pii`, `run`, `verdict` |
 | `extent` | `(start, end)` where the element has one. Absent for file-level elements |
 | `author` | the node that proposed it, with model and revision where a model was involved |
 | `evidence` | whatever the author measured, verbatim |
@@ -31,8 +31,11 @@ element:  { id, kind, extent?, author, evidence }
 An **assertion** is a later node's claim *about* an element:
 
 ```
-assertion: { element_id, verb, value?, author, evidence }
+assertion: { id, element_id, verb, value?, author, evidence }
 ```
+
+An assertion carries its **own** id, because `confirm` and `contest` must name the assertion they answer.
+Without one, "an independent instrument agrees with a named prior assertion" is unstateable.
 
 | verb | meaning |
 | --- | --- |
@@ -80,6 +83,26 @@ Because the store holds the content, a node returns **no copy of it**. A product
 Anything else a node wants to hand on is an element or an assertion, and belongs in the store. A
 rendering — a figure — is an artifact beside the store, and carries the element ids it drew so a mark on
 it traces back to the assertion behind it.
+
+## Ordering is declared by what a node reads
+
+Read-anything does not mean read-anytime. A node that reads another node's assertions **depends on that
+node**, and the dependency is real whether or not it appears in a port table:
+
+```
+ADMIT → PREPROCESS → TAXONOMY → AIRWAY → SPEECH → ┬─→ REDACT ─┬→ VERDICT
+                                             └──→ VOICE ──┘
+```
+
+**The branches are not concurrent, and the store is why.** SPEECH withdraws diarizer segments that
+overlap AIRWAY's labelled spans, and VOICE's residual subtracts both AIRWAY's and SPEECH's claims. Only
+`REDACT ∥ VOICE` survives. An earlier description of this graph as a three-way fan-out was wrong: the
+store converted undeclared reads into declared ordering, which is a cost of the store and not a free
+gain.
+
+SPEECH's read of AIRWAY is optional — it withdraws segments if airway spans exist — so a caller may run
+the two concurrently and accept that no withdrawal happens. VOICE's read is not optional: without both
+prior branches' claims there is no residual to compute.
 
 ## The last fold
 

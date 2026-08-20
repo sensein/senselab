@@ -31,7 +31,8 @@ process SPEECH {
     tag   "${meta.id}"
     label 'triage_asr'
 
-    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*'
+    publishDir path: { "${params.store_dir}/${meta.id}" }, mode: 'copy', pattern: 'store/*',
+               saveAs: { fn -> fn.substring(fn.lastIndexOf('/') + 1) }
 
     input:
     tuple val(meta), path(audio), path(derivatives, stageAs: 'derivatives'), path(store_in, stageAs: 'store_in/*')
@@ -43,6 +44,10 @@ process SPEECH {
     tuple val(meta), path("store/verdict.speech.json"),    emit: verdict
     tuple val(meta), path("store/figure.speech.*"),        emit: figure, optional: true
     tuple val(meta), path("streams"),                      emit: streams, optional: true
+    // A PRODUCT, not an outcome: it exists iff a transcript exists to redact. REDACT joins on it,
+    // so a recording with no speech never reaches REDACT and `verdict.md` gives
+    // release = not_assessed rather than a `releasable` that examined nothing.
+    tuple val(meta), path("store/marker.transcript.json"), emit: marker, optional: true
     path  "versions.yml",                                  emit: versions
 
     script:

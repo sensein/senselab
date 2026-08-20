@@ -82,12 +82,21 @@ kind alone.
 
 | outcome | when |
 | --- | --- |
-| `fail` | every kind is absent — no branch would run |
+| `fail` | every kind is absent — nothing is predicted present |
 | `flag` | any kind is undecided |
 | `pass` | every kind is present or absent, and at least one is present |
 
-An `undecided` kind still runs its branch. The branch's own outcome resolves it, and the resolution is
-written back to the store as an assertion over the `kind` element.
+**TAXONOMY is advisory, not a gate. Every branch runs regardless of what it says.** Its verdict is a
+prediction, and [`verdict.md`](verdict.md) scores the branches against it.
+
+This is deliberate and it costs compute. The alternative — gating, so a kind called absent skips its
+branch — makes TAXONOMY's own errors invisible: a masked event is exactly what this workflow exists to
+catch, and a screen that can retire a kind before any branch looks can never be shown to have been wrong.
+It also makes `verdict.md`'s "absent, and the branch passed anyway" row unreachable by construction,
+which is the row that detects precisely that failure.
+
+Gating is available as an opt-in for cost-constrained runs, and a gated run is recorded as such, because
+under gating an absent kind's `fail` carries no evidence.
 
 ## Product
 
