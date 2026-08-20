@@ -67,6 +67,20 @@ because embeddings from different models are not comparable.
 declared input list. What it *must* do is record what it read, so a claim can be traced to the elements
 behind it.
 
+## A node's product is a verdict and a view
+
+Because the store holds the content, a node returns **no copy of it**. A product is three things:
+
+| part | why it is not in the store |
+| --- | --- |
+| `outcome` | `fail` / `flag` / `pass` is a judgement about the whole node, not an assertion about an element |
+| `verdict` | the node's summary under the fold *it* intends. Two readers folding the same elements differently would not reach it |
+| `view` | the element ids the node authored or asserted over, so a consumer need not scan the store |
+
+Anything else a node wants to hand on is an element or an assertion, and belongs in the store. A
+rendering — a figure — is an artifact beside the store, and carries the element ids it drew so a mark on
+it traces back to the assertion behind it.
+
 ## What this replaces
 
 The per-node "inputs" tables in the design files are now **what each node reads in practice**, not a
