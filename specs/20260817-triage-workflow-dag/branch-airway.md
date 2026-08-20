@@ -22,6 +22,7 @@ no view of the signal that PREPROCESS does not already share.
 | `energy_envelope` | PREPROCESS, pre-emphasised | span proposal and both boundaries |
 | `silence` | PREPROCESS, YAMNet `Silence` | the envelope's floor; negative evidence in classification |
 | `spectrogram_wb`, `gammatone` | PREPROCESS, pre-emphasised | the figure only — no decision reads them |
+| `asr_crisperwhisper` | PREPROCESS, plain | word *presence* inside the span interval; never word times |
 
 ## What it does, in three steps
 
@@ -51,8 +52,25 @@ figure exists to expose.
 ### 2. Labels, from HeAR restricted to the labels of interest
 
 HeAR runs as a **gated sweep** — a 500 ms rectangular gate stepped at 100 ms, each gate placed inside a
-2 s buffer, because the detector's graph rejects every input length except 2 s outright. A span's label
-is the label of interest with the highest score among sweep windows overlapping that span.
+2 s buffer, because the detector's graph rejects every input length except 2 s outright.
+
+**Classification runs over the entire span, by coverage rather than by peak.** A span's score for a label
+is the *fraction of the windows overlapping that span* whose score clears 0.5, and its label is the label
+of interest with the highest coverage. Taking a maximum instead lets one 500 ms window name a 1.4 s span,
+and that is not a hypothetical failure:
+
+| span | HeAR by coverage | YAMNet by maximum | YAMNet by coverage |
+| --- | --- | --- | --- |
+| 2.32–3.29 s | `Breathe` 36% | **`Gasp` 0.740** | **`Breathing` 75%** |
+| 5.32–6.22 s | `Breathe` 36% | `Breathing` 0.915 | `Breathing` 67% |
+| 7.92–8.51 s | `Cough` 64% | `Cough` 0.863 | `Cough` 100% |
+| 9.61–9.96 s | `Cough` 62% | `Cough` 1.000 | `Cough` 100% |
+| 11.75–13.16 s | `Cough` **0%** | `Speech` 0.993 | `Speech` 80% |
+
+On the first span a maximum names `Gasp` off a single loud window where coverage names `Breathing`, which
+is the correct reading of an exhalation. And on the last span HeAR's maximum is a deceptive `Cough` 0.372
+while its coverage is **0%** — no window anywhere in the span clears the bar. Coverage also separates the
+three cases cleanly: cough spans 62–64%, breath spans 36%, non-airway 0%.
 
 `labels_of_interest` is configurable and **defaults to `{"Cough", "Breathe"}`** — HeAR's own names, of
 its eight. Restricting the label space is not cosmetic: it is what keeps `Snore` and `Throat Clear`,
@@ -76,6 +94,36 @@ for every channel at no cost.
 
 This measurement needs no labels: a recording, its silence mask, and the instrument's own output. Any
 channel added to `labels_of_interest` should be characterised this way before a verdict rests on it.
+
+### 2b. YAMNet confirms or contests the label, but only when confident
+
+HeAR is not the only instrument with airway labels, and YAMNet's are independent of it. So each span's
+label is put to YAMNet over that same whole span, by the same coverage rule, under one restriction:
+**YAMNet votes only when it is confident, and abstains otherwise.** An unconfident YAMNet must not
+weaken a HeAR label, because absence of evidence from a 0.96 s window is not evidence against.
+
+| YAMNet's coverage winner | effect |
+| --- | --- |
+| maps to HeAR's label — `Cough`→`Cough`, `Breathe`→{`Breathing`, `Sigh`, `Gasp`} | **confirm**; the span's label stands with two independent instruments behind it |
+| a confident label outside that mapping — `Speech`, `Silence`, another airway kind | **contest**; the span is flagged rather than relabelled, because two instruments disagreeing is not a majority for either |
+| nothing reaches confidence anywhere in the span | **abstain**; HeAR's label stands unchallenged and is recorded as single-source |
+
+**0.5 is the confidence bar, and it is not fitted.** For each of the three labels that matter here,
+YAMNet's scores across the recording leave an empty interval containing it: `Cough` jumps 0.84 → 0.27,
+`Speech` 0.92 → 0.14, `Breathing` 0.59 → 0.36. The bar sits in a gap for all three rather than being
+tuned to any of them.
+
+**It catches the one span that should be caught.** Four of five spans confirm; the fifth is
+11.75–13.16 s, where HeAR's weak `Cough` meets YAMNet's `Speech` at 80% coverage, and the span is
+flagged. That is the same span the lexical check below also flags — two independent mechanisms reaching
+the same file. The redundancy is worth keeping: one reads acoustic class and the other reads words, and a
+recording can fail either way alone.
+
+**The two models agree about which of the two default kinds is hard.** YAMNet's gap below its confident
+`Cough` scores is 0.57 wide and below `Breathing` only 0.32; HeAR separates `Cough` from certified
+silence cleanly and `Breathe` not at all. Two independently trained models placing the difficulty in the
+same place is the strongest statement available here that **breath is intrinsically harder than cough**
+on this material, and not an artefact of either model.
 
 ### 3. Lexical contamination — are there words among the airway events?
 
@@ -122,7 +170,8 @@ branch could not find breath", never as "there is none."
 ## The product
 
 ```
-spans: [ { start, end, label, score, inside_silence, peak_over_floor_db } ]
+spans: [ { start, end, label, coverage, yamnet: confirm|contest|abstain,
+           inside_silence, peak_over_floor_db } ]
 figure: one aligned figure per recording
 ```
 
