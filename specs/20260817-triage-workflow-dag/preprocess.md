@@ -42,7 +42,7 @@ missing derivative must not take the whole node down, because most consumers nee
 | `spectrogram_nb` | 20 ms window, 5 ms hop — narrowband | harmonics and F0 read off their spacing; span refinement; rendering for a reader or a model |
 | `gammatone` | auditory filterbank output | short-transient detection, where a cochleagram resolves what a linear-frequency window smears |
 | `silence` | YAMNet `Silence` per 0.96 s window at its native 0.48 s hop, and the floor derived from it — **plain signal** | the envelope's floor, which every span rule references; airway's `t_not_after_s` |
-| `asr_crisperwhisper` | transcript with word and token edges — **plain signal** | speech branch transcript and speaker spans; airway branch's second onset estimate; voice branch's lexical exclusion |
+| `asr_crisperwhisper` | transcript with word and token edges — **plain signal** | speech branch transcript and speaker spans; airway branch's lexical-contamination check; voice branch's lexical exclusion |
 | `asr_qwen` | transcript with word timings — **plain signal** | speech branch agreement confidence; a second opinion the speech branch compares against CrisperWhisper |
 | `alignment` | forced alignment of the agreed transcript to the audio | word- and phone-level spans for every consumer that needs where a word was, not just that it was said |
 
@@ -235,7 +235,7 @@ on whichever branch happened to own the model.
 | branch | what it reads the timings for |
 | --- | --- |
 | speech | the transcript itself, per-speaker spans, and the agreement between the two ASRs as a confidence |
-| airway | a second, independent onset estimate. The airway branch already specifies this — CrisperWhisper token edges land +20, +32, −26, −10 ms against four verified windows, and two instruments agreeing to ~30 ms is its strongest onset evidence |
+| airway | word *presence* only — any word inside the interval its spans cover flags the file for review. Not word times: token edges land +20, +32, −26, −10 ms against four verified windows, so a second onset source is available, but it needs a disagreement rule no measurement supports yet |
 | voice | lexical exclusion. Voice-no-words is defined as vocalic activity that is *not* speech, so it needs to know where words are in order to subtract them |
 
 **The consequence for the speech branch is that it consumes transcripts instead of producing them.** Its
