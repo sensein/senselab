@@ -88,8 +88,11 @@ unsure   otherwise
 
 The fold is deliberately blind to *which* family member fired: one verified exhalation returned
 `Breathing` 0.89, `Sigh` 0.77, `Gasp` 0.72 and `Sneeze` 0.70 at once, and an argmax over those names
-reads noise. But the family must be drawn to the kind and no wider — `Snore` is an airway label and it
-cleared 0.5 in 16 windows on a file containing no snoring, which a max imports at full strength.
+reads noise. But the family must be drawn to the kind and no wider. `Snore` is an airway-family member in both
+label spaces, and HeAR's `Snore` cleared 0.5 in **16 of 136 windows** on a file containing no snoring —
+more than its `Cough`, which was correct in all 12 of its own. A max over a family imports that at full
+strength. (Those counts are HeAR's, from a 500 ms sweep at 100 ms hop, not YAMNet's; YAMNet's `Snoring`
+reached 0.819 in 2 of its 29 native windows on the same file.)
 
 **File-level detector — AST.** One window covers the recording, so there is nothing to count. It needs
 a band, or every score becomes a decision:
@@ -243,5 +246,6 @@ can withdraw what presence admitted.
 ## The live risk
 
 False-positive accumulation is a property of aggregate mode: more windows means more chances for a
-spurious confident one. `Snore` clearing 0.5 in 16 windows on a file containing no snoring is the
-measured case, and it is why `min_families` and `min_n` are real parameters rather than formalities.
+spurious confident one. HeAR's `Snore` clearing 0.5 in 16 of 136 windows on a file containing no
+snoring is the measured case, and it is why `min_families` and `min_n` are real parameters rather than
+formalities.
