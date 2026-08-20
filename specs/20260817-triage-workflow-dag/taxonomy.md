@@ -149,3 +149,72 @@ So the per-kind minimum count is a real parameter and not a formality, and it is
 rest. Two things keep that safe here: the node can `flag` rather than having to choose, and per D6 span
 detection downstream adjudicates and can withdraw what this stage admitted. Presence is deliberately
 a liberal pre-filter; it is not the verdict.
+
+## The aggregation function
+
+Each detector runs on its **own default window**. They do not align, and that is what shapes the
+function.
+
+| detector | window | hop | windows over a 14.03 s file |
+| --- | --- | --- | --- |
+| YAMNet | 0.96 s | 0.48 s | 29 |
+| AST | 0.96 s | 0.48 s | 29 |
+| HeAR | **2 s, fixed** | 0.25 s | **50** |
+| CrisperWhisper | — | — | not a grid: tokens with timings |
+
+```
+taxonomy(audio) -> {kind: Estimate}
+
+for detector d in {yamnet, ast, hear, crisperwhisper}:
+    for kind k:
+        # 1. fold labels into the kind, per window: max over the family
+        series[d][k] = [ max(w.scores[l] for l in family(d, k)) for w in windows(d) ]
+
+        # 2. threshold per (detector, kind) -- HeAR's 0.5 is not YAMNet's 0.5
+        hits[d][k] = [ s >= tau[d][k] for s in series[d][k] ]
+
+        # 3. count, and the detector's own verdict
+        n[d][k]    = count(hits[d][k])
+        says[d][k] = present  if n[d][k] >= min_n[d][k]
+                     absent   if n[d][k] == 0
+                     unsure   otherwise
+
+# 4. combine verdicts, not counts
+kind[k] = Estimate(
+    present  if enough detectors say present,
+    absent   if every detector that can see k says absent,
+    unsure   otherwise,
+    evidence = the confident windows per detector,
+)
+```
+
+**Counts are combined at the verdict level, never summed across detectors.** A 2 s HeAR window and a
+0.96 s YAMNet window are not the same unit, so `n[hear][k] + n[yamnet][k]` is a number with no
+meaning. Each detector reaches its own verdict on its own grid; the verdicts combine.
+
+**CrisperWhisper has no grid**, so steps 1–3 do not apply to it. Its contribution is the presence of
+token types — did any `[cough]` or `[breath]` appear, were there words at all — and it enters step 4
+as a verdict like the others.
+
+**A raw window count is not hop-invariant, and this is the trap the table above sets up.** HeAR's 2 s
+window on a 0.25 s hop means a single event sits inside roughly eight consecutive windows, so it
+produces a run of about eight hits; the same event gives YAMNet two or three. Measured on the verified
+file, the same 14.03 s yields 50 HeAR windows against 29 for YAMNet. So `min_n = 3` is a far weaker
+requirement for HeAR than for YAMNet, and setting one number for both would be an unmeasured decision
+disguised as a shared default.
+
+Two ways to remove the dependence, and the second is better:
+
+- express `min_n` in units of the detector's own hop, so the parameter means the same duration
+  everywhere;
+- or **count contiguous runs rather than windows.** One event produces one run whatever the hop, which
+  is what "a detection" should mean, and it makes `min_n` a count of events rather than of frames.
+
+Runs also carry the evidence a reader wants — where, and how long — for free.
+
+**What the family fold must not do.** Step 1 takes a max over the kind's labels, so it is deliberately
+insensitive to which member of a family fired. That is the point: one verified exhalation returned
+`Breathing` 0.89, `Sigh` 0.77, `Gasp` 0.72 and `Sneeze` 0.70 at once, and an argmax over those names
+is reading noise. But the fold must be over the *kind's own* family only. `Snore` is in the airway
+family and fired 16 times on a file with no snoring, so a family drawn too wide imports its own false
+positives at full strength through the max.
