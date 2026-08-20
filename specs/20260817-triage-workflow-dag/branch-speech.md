@@ -45,8 +45,11 @@ This branch runs pyannote, an optional second diarizer, and an optional speaker-
         ▼
   6. IDENTIFY     words → speakers; target match only if the hint carries one
         │
+        ▼
+  7. PII SCAN     scan the transcript; scope the decision by speaker
+        │  PII in target spans, or target unknown, or a detector failed → flag
         ▼            ┌──────────────────────────────────────┐
-     pass(product) ◄─┤ 7. QUALITY — parallel, reported only │
+     pass(product) ◄─┤ 8. QUALITY — parallel, reported only │
                      └──────────────────────────────────────┘
 ```
 
@@ -115,7 +118,49 @@ boundary, or falling inside a withdrawn segment, is marked rather than assigned.
 target without provenance is refused rather than compared. Absent a target, speakers are `SPEAKER_*` and
 no identity is claimed.
 
-## 7. Quality — parallel, reported
+## 7. PII
+
+`senselab.text.tasks.pii_detection.scan_for_pii` over the transcript, then **this branch's own decision
+rule** rather than the module's default — the module splits scanning from deciding precisely so a caller
+can impose its own.
+
+**Both recognizers' transcripts are scanned.** Each detection carries the `asr_model` that produced it,
+so a finding present in both is corroborated and one present in a single hypothesis is not. That is
+evidence to record, not a threshold to apply here.
+
+### The decision is scoped by speaker
+
+| finding | outcome |
+| --- | --- |
+| PII overlapping a **target speaker** span | **`flag`** |
+| PII overlapping only a **non-target** speaker's spans | no flag |
+| PII when **no target is known** | **`flag`** — there is no speaker to exempt |
+| a detector **failed to run** | **`flag`** — "could not check" is not "clean" |
+
+`PiiScan.failures` exists for that last row and must be honoured: an empty `spans` with a populated
+`failures` means the scan did not happen, and reading it as a clean result is the one outcome worse than
+not scanning.
+
+### Three limits on what a clean scan means
+
+**Speaker scope catches who *spoke* it, not who it is *about*.** A clinician saying the participant's
+name is the participant's PII spoken by a non-target speaker, and the rule above does not flag it. This
+is a known gap in the rule as specified, not an oversight in the implementation.
+
+**The scan reads a transcript, so it is a lower bound.** A mis-transcribed name is missed while the
+**audio still contains it**. A clean scan is a statement about the text, never about the recording, and
+nothing downstream may treat it as clearance to release audio.
+
+**The store now holds PII.** Once a transcript is written, the store is sensitive. So a PII finding
+`label`s the offending `word` elements, and **every artifact must respect that marking** — in particular
+the figure, which renders words and would otherwise leak what the scan just found.
+
+### What the product may carry
+
+`verdict` carries **category and extent, never the matched text**. A verdict that quotes the PII it found
+has published it into whatever reads the verdict, which is the opposite of the point.
+
+## 8. Quality — parallel, reported
 
 SQUIM objective head over the **target speaker's** speech spans — on that speaker's separated stream
 when separation ran, on the recording when it did not. Over every speech span when no target was given. The subjective head is not used: it needs a non-matching reference, which is a config
@@ -129,7 +174,7 @@ step is a parallel branch of the graph and blocks nothing. It becomes a gate whe
 | outcome | when |
 | --- | --- |
 | `fail` | no words from either recognizer |
-| `flag` | step 3's instruments disagreed; the count is ≥3 so separation cannot isolate a speaker; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given without model provenance, or with provenance and no speaker matches; a hint asserts speech not found |
+| `flag` | PII in a target speaker's spans, or PII with no known target, or a PII detector failed to run; step 3's instruments disagreed; the count is ≥3 so separation cannot isolate a speaker; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given without model provenance, or with provenance and no speaker matches; a hint asserts speech not found |
 | `pass` | words, spans, speakers and quality are in the store, and the verdict below says what the branch concluded |
 
 ## Product
@@ -140,7 +185,7 @@ same facts that can drift from the first.
 
 ```
 outcome:  fail(reason) | flag(reason, partial) | pass
-verdict:  { speaker_count, target_speaker?, words_n, speech_s, flags[] }
+verdict:  { speaker_count, target_speaker?, words_n, speech_s, pii{categories[], n, scanned_by[], failed[]}, flags[] }
 view:     the element ids this branch authored or asserted over
 figure:   one aligned figure per recording          # an artifact, not in the store
 ```
@@ -152,12 +197,13 @@ What a consumer reads through the view, by element kind:
 
 | kind | what it carries | authored in |
 | --- | --- | --- |
-| `word` | text, extent, confidence from agreement, speaker, stream | 1, 6 |
+| `word` | text, extent, confidence from agreement, speaker, stream, `pii` marking if any | 1, 6, 7 |
 | `span` (speech) | extent, corroboration, YAMNet coverage, `refines` a PREPROCESS span where one overlapped | 2, 3 |
 | `interval` | the diarizer's window, `[first word start, last word end]` | 4 |
 | `speaker` | diarizer segments, `withdraw`n ones retained with their reason | 4, 6 |
 | `stream` | one per separated source, or the recording itself | 5 |
-| `measurement` | SQUIM per span, tagged with the stream it was taken on | 7 |
+| `pii` | category and extent per finding, the detectors that ran, the detectors that failed, and which recognizer's hypothesis carried it. **Never the matched text** | 7 |
+| `measurement` | SQUIM per span, tagged with the stream it was taken on | 8 |
 | `target_match` | speaker, similarity, and the model + revision of both embeddings | 6 |
 
 **`partial` on a `flag` is a view, not a payload** — the same element ids, with the contested assertions
@@ -169,7 +215,8 @@ back to the assertion that produced it.
 ## Out of scope
 
 ASR (PREPROCESS runs it), airway detection (reads `airway_spans`), speaker identity without a target,
-emotion, language identification, diarizer ranking, quality gating.
+emotion, language identification, diarizer ranking, quality gating, and redaction — this branch
+*detects* PII and marks it; removing or bleeping it is a separate decision nobody has taken.
 
 Every element and assertion above goes to the [element store](store.md) with its provenance.
 Derivations live in [`benchmarks/`](benchmarks/).
