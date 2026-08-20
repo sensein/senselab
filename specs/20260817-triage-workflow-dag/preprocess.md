@@ -15,7 +15,16 @@ becoming the place where decisions hide.
 ## Signature
 
 ```
-preprocess(audio) -> derivatives
+preprocess(audio, preemphasis=True) -> derivatives
+```
+
+Internally two conditioning steps run before any derivative is computed:
+
+```
+                            +--> plain -------------> squim, level
+audio --> resample to 16 kHz +
+                            +--> pre-emphasis ------> envelope, spectrograms, gammatone
+                                 (switchable)
 ```
 
 There is no `fail` and no `flag`. A derivative that cannot be computed — a model unavailable, a
@@ -27,8 +36,8 @@ missing derivative must not take the whole node down, because most consumers nee
 | derivative | what it is | consumed by |
 | --- | --- | --- |
 | `energy_envelope` | analytic-signal magnitude `\|x + jH{x}\|`, zero-phase 40 Hz lowpass, autoscaled to its own maximum | airway modulation rate; the residual's RMS floor; voice branch energy level |
-| `level` | peak dBFS, RMS dBFS, LUFS | voice branch — loud phonation is energy *relative to the rest of the recording*, so it needs a file-level reference; also clipping |
-| `squim` | STOI, PESQ, SI-SDR from the objective head; MOS from the subjective head | speech branch quality gate |
+| `level` | peak dBFS, RMS dBFS, LUFS — **plain signal, never pre-emphasised** | voice branch — loud phonation is energy *relative to the rest of the recording*, so it needs a file-level reference; also clipping |
+| `squim` | STOI, PESQ, SI-SDR from the objective head; MOS from the subjective head — **plain signal, never pre-emphasised** | speech branch quality gate |
 | `spectrogram_wb` | 5 ms window, 5 ms hop — wideband | onsets and transients; glottal pulses; anything reading voicing structure |
 | `spectrogram_nb` | 20 ms window, 5 ms hop — narrowband | harmonics and F0 read off their spacing; span refinement; rendering for a reader or a model |
 | `gammatone` | auditory filterbank output | short-transient detection, where a cochleagram resolves what a linear-frequency window smears |
@@ -111,6 +120,62 @@ error that rule produces — which is the same admission rule as the table above
 rather than to existence. 40 Hz is the right modulation bandwidth for the thing the envelope is
 actually for: how amplitude varies over a syllable or a cough, not where the cough begins.
 
+## Conditioning: resample, then pre-emphasis
+
+### Resample to 16 kHz
+
+One resampler, here, named — the rate's justification is the next section. From 48 kHz it is an
+integer decimation by 3, which is the common case and the cheap one. Resampling **can** overshoot full
+scale, a trap this repository has already paid for in its write path; on the labelled recording it did
+not (peak 0.9648 to 0.9593), so the guard is worth having and is not worth asserting as inevitable.
+
+### Pre-emphasis, switchable
+
+A first-order difference, `y[n] = x[n] - a*x[n-1]`, with `a = 0.97` — a +6 dB/octave tilt that offsets
+the glottal source's roll-off and is conventional in speech analysis rather than fitted here. It is a
+**switchable component**: on by default, and one flag turns it off for a consumer that wants the
+signal as recorded.
+
+It earns its place on the derivative it was least obviously for. Event-to-floor contrast in the
+Hilbert envelope, plain against pre-emphasised:
+
+| event | plain | pre-emphasised | gain |
+| --- | --- | --- | --- |
+| cough 1 | 45.84 dB | 56.79 dB | **+10.95** |
+| exhalation 1 | 30.53 dB | 38.60 dB | +8.08 |
+| mouth non-speech sound | 12.65 dB | 20.01 dB | **+7.36** |
+| cough 2 | 51.93 dB | 55.66 dB | +3.73 |
+| speech | 31.41 dB | 34.68 dB | +3.27 |
+| exhalation 2 | 29.94 dB | 31.71 dB | +1.77 |
+
+Every event gains, and **the largest gains land on the two hardest events** — the mouth click, which
+one agent run missed entirely, and cough 1. That is the expected direction, since both carry 14-16% of
+their energy in 4-8 kHz, which is exactly what the tilt boosts.
+
+### Both signals stay available, and each derivative declares which one it reads
+
+Pre-emphasis does not consume its input. The node holds the resampled signal **and** its pre-emphasised
+form, and every row of the derivative table names which of the two it reads — so this is a property of
+the graph, not a special case bolted onto it. Most derivatives read the pre-emphasised signal.
+`squim` and `level` read the plain one, and that is not a preference.
+
+**SQUIM goes off-distribution, and says so incoherently.** Pre-emphasised, it reports STOI rising
+0.8635 to 0.9683 while SI-SDR falls -12.917 to -20.676 dB. One signal cannot be materially more
+intelligible *and* far more distorted; the two heads disagree because neither is being asked about a
+signal like its training data. A speech-branch quality gate reading STOI would be inflated by 0.10,
+which is enough to flip a verdict on the strength of a filter nobody intended as a quality change.
+
+**`level` stops measuring what it names.** Pre-emphasis is not gain-neutral — peak drops 0.9593 to
+0.4199 and RMS falls 6.2 dB — so peak dBFS and RMS dBFS would describe the filtered signal while
+being read as the recording's level, and clipping detection would miss a clipped input outright. LUFS
+is worse than merely shifted (-30.75 to -31.83): it is defined by a standard K-weighting, and a signal
+pre-filtered by something else does not have a LUFS.
+
+So the switch governs the derivatives whose value pre-emphasis *changes*, and does not reach the two
+whose **definition** it breaks. A consumer asking for a plain-signal derivative gets the same answer
+whether the switch is on or off, which is the point: the switch is a knob on the analysis, not on what
+the recording's level or its quality scores mean.
+
 ## Working sample rate: 16 kHz
 
 Every model downstream of this node is 16 kHz native — YAMNet, HeAR, AST, CrisperWhisper and SQUIM all
@@ -136,11 +201,9 @@ of their energy in 4-8 kHz and their 95% points at 6981 and 7272 Hz — just **u
 Speech is the most band-limited thing in the file, at 632 Hz. So the rate is set by the airway branch,
 not the speech branch, and the events that most need the top octave are the clicks and coughs.
 
-Two consequences worth writing down. A narrowband input — a telephone or 8 kHz-sampled recording, with
+One consequence worth writing down: a narrowband input — a telephone or 8 kHz-sampled recording, with
 a 4 kHz ceiling — would cut real airway content, not just headroom, so it is a genuine restriction on
-what the airway branch can conclude rather than a formality. And resampling is not free of its own
-artefact: it overshoots, so a signal at full scale can exceed ±1 afterwards, which is a known trap in
-this repository's write path and applies here too.
+what the airway branch can conclude rather than a formality.
 
 ## What exists and what does not
 
