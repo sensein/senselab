@@ -26,7 +26,7 @@ missing derivative must not take the whole node down, because most consumers nee
 
 | derivative | what it is | consumed by |
 | --- | --- | --- |
-| `energy_envelope` | broadband envelope, ~3 ms smoothing | airway onsets; the residual's RMS floor; voice branch energy level and modulation rate |
+| `energy_envelope` | analytic-signal magnitude `\|x + jH{x}\|`, zero-phase 40 Hz lowpass, autoscaled to its own maximum | airway modulation rate; the residual's RMS floor; voice branch energy level |
 | `level` | peak dBFS, RMS dBFS, LUFS | voice branch — loud phonation is energy *relative to the rest of the recording*, so it needs a file-level reference; also clipping |
 | `squim` | STOI, PESQ, SI-SDR from the objective head; MOS from the subjective head | speech branch quality gate |
 | `spectrogram_wb` | 5 ms window, 5 ms hop — wideband | onsets and transients; glottal pulses; anything reading voicing structure |
@@ -79,14 +79,73 @@ that view as striation spacing. What was missing was **pixels** — at ten secon
 image. A rendering has two independent adequacy conditions, the analysis window and the pixel density
 of the span, and only the first is visible in the parameters.
 
-**The envelope is still not redundant with either spectrogram.** A 5 ms hop gives 5 ms of time
-resolution, which is at the edge of the ±5 ms an envelope achieves on a cough onset, and the envelope's
-~3 ms smoothing sees the rise directly rather than through a windowed transform. So onset precision
-comes from `energy_envelope`, and the spectrograms carry what frequency structure is present.
+**The envelope is a Hilbert modulation envelope, and it is not an onset detector.** It is the
+magnitude of the analytic signal, `|x + jH{x}|`, lowpassed at 40 Hz and autoscaled by its own maximum
+so it is invariant to input gain. Two parameter choices carry measurements.
+
+*Zero-phase, not causal.* A 4th-order Butterworth applied forward-and-backward (`filtfilt`) has no
+group delay; the same filter applied once does. Against the six labelled events, zero-phase is better
+in both median and worst case — median 63.5 ms against 90.1 ms, worst 137.9 ms against 147.4 ms — so
+the filter is zero-phase, which also means this envelope is offline-only by construction.
+
+*40 Hz, and the reason is not onset precision.* Sweeping the cutoff against those same labels:
+
+| cutoff | envelope rise time | median onset error | worst |
+| --- | --- | --- | --- |
+| 10 Hz | 100 ms | 75.4 ms | 130.5 ms |
+| 20 Hz | 50 ms | 52.2 ms | 130.4 ms |
+| **40 Hz** | **25 ms** | **63.5 ms** | 137.9 ms |
+| 80 Hz | 12.5 ms | 129.1 ms | 142.9 ms |
+| 320 Hz | 3.1 ms | 144.0 ms | 147.9 ms |
+
+**A wider band makes onsets worse, not better** — 144 ms at 320 Hz against 63 ms at 40 Hz — and every
+error is early. A wider-band envelope tracks pre-event fluctuation more faithfully, so a fixed
+floor-plus-6 dB rule fires on it sooner. The onset error is therefore dominated by **the detection
+rule**, not by the envelope's bandwidth, and no cutoff in that table buys the few-millisecond
+precision an airway onset wants.
+
+So this retracts a claim an earlier draft of this file made: that onset precision comes from the
+envelope, at about ±5 ms. Nothing measured supports it. **This node emits the envelope and claims
+nothing about onset accuracy**; a consumer that needs a span owns its detection rule and owns the
+error that rule produces — which is the same admission rule as the table above, applied to precision
+rather than to existence. 40 Hz is the right modulation bandwidth for the thing the envelope is
+actually for: how amplitude varies over a syllable or a cough, not where the cough begins.
+
+## Working sample rate: 16 kHz
+
+Every model downstream of this node is 16 kHz native — YAMNet, HeAR, AST, CrisperWhisper and SQUIM all
+resample internally — so the choice is not whether to resample but whether to do it **once, here, with
+one named resampler**, or N times inside N backends with whatever each one ships. It happens once here.
+
+The cost is measurable rather than assumed. On the labelled recording, per event, the share of energy
+that an 8 kHz Nyquist discards:
+
+| event | above 8 kHz | above 4 kHz | 95% of energy below |
+| --- | --- | --- | --- |
+| mouth non-speech sound | 1.610% | 13.918% | 7272 Hz |
+| cough 1 | 3.661% | 16.124% | 6981 Hz |
+| cough 2 | 0.741% | 3.189% | 2438 Hz |
+| exhalation 1 | 0.225% | 4.754% | 3801 Hz |
+| exhalation 2 | 0.088% | 4.374% | 3615 Hz |
+| speech | 0.178% | 1.853% | 632 Hz |
+| whole file | 1.448% | 6.576% | — |
+
+**16 kHz keeps at least 96.3% of every labelled event's energy**, so it is adequate. But the table also
+says where the margin is thin, and it is not where one would guess: the two sharpest events put 14-16%
+of their energy in 4-8 kHz and their 95% points at 6981 and 7272 Hz — just **under** the 8 kHz ceiling.
+Speech is the most band-limited thing in the file, at 632 Hz. So the rate is set by the airway branch,
+not the speech branch, and the events that most need the top octave are the clicks and coughs.
+
+Two consequences worth writing down. A narrowband input — a telephone or 8 kHz-sampled recording, with
+a 4 kHz ceiling — would cut real airway content, not just headroom, so it is a genuine restriction on
+what the airway branch can conclude rather than a formality. And resampling is not free of its own
+artefact: it overshoots, so a signal at full scale can exceed ±1 afterwards, which is a known trap in
+this repository's write path and applies here too.
 
 ## What exists and what does not
 
-`squim` has both heads available already. The envelope and both spectrograms are ordinary DSP.
+`squim` has both heads available already. Both spectrograms are ordinary DSP, and the Hilbert envelope
+needs only `scipy.signal.hilbert` plus a Butterworth already available.
 **`level`'s LUFS and `gammatone` are new** — neither exists yet, LUFS needs a loudness meter and
 gammatone needs a filterbank, and both are dependencies to add rather than code to write.
 
