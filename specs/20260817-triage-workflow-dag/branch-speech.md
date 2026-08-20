@@ -3,20 +3,23 @@
 ## Signature
 
 ```
-speech(asr_crisperwhisper, asr_qwen, alignment, energy_envelope, silence,
-       airway_spans?, hint?) -> fail(reason) | flag(reason, partial) | pass(product)
+speech(store, hint?) -> fail(reason) | flag(reason, partial) | pass(product)
 ```
 
-**Speech spans come from detected speech, not from the envelope.** ASR runs first and its word timings
-define this branch's spans, so `spans` from PREPROCESS is not an input here.
+Reads and writes the [element store](store.md). **Speech spans come from detected speech**: ASR word
+timings propose them, and PREPROCESS's envelope spans are `refine`d where they overlap rather than being
+the source.
 
-| input | from | used for |
+What it reads from the store:
+
+| element | author | used for |
 | --- | --- | --- |
-| `asr_crisperwhisper`, `asr_qwen` | PREPROCESS, plain signal | the transcript, its word edges, and the agreement between them |
+| `asr_crisperwhisper`, `asr_qwen` words | PREPROCESS | the transcript, its edges, and the agreement between them |
 | `alignment` | PREPROCESS | published word and phone edges |
 | `energy_envelope`, `silence` | PREPROCESS | the fabrication test in step 1 |
-| `airway_spans` | AIRWAY, optional | withdrawing a diarizer segment inside the speech interval that is an airway event |
-| `hint` | caller, optional | task context; carries the target embedding **and the model that produced it** |
+| `span` elements | PREPROCESS | `refine`d against word timings; a span with no words is left alone |
+| airway-labelled spans | AIRWAY, if present | withdrawing a diarizer segment inside the speech interval |
+| `hint` | caller, optional | task context; a target embedding **with the model and revision that produced it** |
 
 This branch runs pyannote, an optional second diarizer, and an optional speaker-embedding comparison.
 **It runs no ASR.**
@@ -37,10 +40,13 @@ This branch runs pyannote, an optional second diarizer, and an optional speaker-
   4. DIARIZE      pyannote over [first word start, last word end] only
         │  count ≠ 1 → second diarizer, report disagreement
         ▼
-  5. IDENTIFY     words → speakers; target match only if the hint carries one
+  5. SEPARATE     only when count ≠ 1 → MossFormer2_SS_16K, one stream per speaker
+        │
+        ▼
+  6. IDENTIFY     words → speakers; target match only if the hint carries one
         │
         ▼            ┌──────────────────────────────────────┐
-     pass(product) ◄─┤ 6. QUALITY — parallel, reported only │
+     pass(product) ◄─┤ 7. QUALITY — parallel, reported only │
                      └──────────────────────────────────────┘
 ```
 
@@ -82,7 +88,24 @@ Codomain **{1, 2, ≥3}**.
 - Count ≠ 1 consults a second diarizer and **reports disagreement**; it does not replace pyannote. The
   product still carries per-speaker spans.
 
-## 5. Speaker identification
+## 5. Separation — to pull a speaker out
+
+**Runs when the speaker count is not 1.** `MossFormer2_SS_16K`, two streams, over the speech interval.
+With one speaker there is nothing to separate and it does not run.
+
+Its purpose is to isolate a speaker so that steps 6 and 7 measure one voice rather than a mixture. Each
+stream is written to the store as its own element, and every measurement taken on a stream records which
+stream it came from — a transcript or a quality reading from a separated stream is not the same claim as
+one from the recording.
+
+`n_sources` is fixed at 2 by the checkpoint. A count of ≥3 therefore cannot be served by this model, and
+the branch reports that rather than separating into the wrong number.
+
+Whether separation improves anything is **unmeasured on overlapping speech** — see
+[`benchmarks/separation.md`](benchmarks/separation.md). It is specified here because the flow needs a
+way to isolate a speaker, not because its benefit is established.
+
+## 6. Speaker identification
 
 Words are attributed to speakers by their timings against the diarizer's segments. A word straddling a
 boundary, or falling inside a withdrawn segment, is marked rather than assigned.
@@ -92,10 +115,10 @@ boundary, or falling inside a withdrawn segment, is marked rather than assigned.
 target without provenance is refused rather than compared. Absent a target, speakers are `SPEAKER_*` and
 no identity is claimed.
 
-## 6. Quality — parallel, reported
+## 7. Quality — parallel, reported
 
-SQUIM objective head over the **target speaker's** speech spans; over every speech span when no target
-was given. The subjective head is not used: it needs a non-matching reference, which is a config
+SQUIM objective head over the **target speaker's** speech spans — on that speaker's separated stream
+when separation ran, on the recording when it did not. Over every speech span when no target was given. The subjective head is not used: it needs a non-matching reference, which is a config
 artifact nobody has declared.
 
 **Reported, never gated.** No threshold has been derived, so no recording is dismissed on quality. This
@@ -106,17 +129,18 @@ step is a parallel branch of the graph and blocks nothing. It becomes a gate whe
 | outcome | when |
 | --- | --- |
 | `fail` | no words from either recognizer |
-| `flag` | step 3's instruments disagreed; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given without model provenance, or with provenance and no speaker matches; a hint asserts speech not found |
+| `flag` | step 3's instruments disagreed; the count is ≥3 so separation cannot isolate a speaker; speaker count ≠ 1; the recognizers disagree beyond threshold; fabrication candidates survive; a target was given without model provenance, or with provenance and no speaker matches; a hint asserts speech not found |
 | `pass` | a transcript with per-word confidence, spans attributed to speakers, quality reported |
 
 ## Product
 
 ```
 transcript:    [ { word, start, end, confidence, speaker } ]
-speech_spans:  [ { start, end, corroborated, yamnet_coverage } ]
+speech_spans:  [ { start, end, corroborated, yamnet_coverage, refines? } ]
+streams:       [ { id, speaker, source: "recording" | "separated" } ]
 speaker_spans: [ { start, end, speaker, withdrawn, withdrawn_because } ]
 speaker_count: 1 | 2 | ">=3"
-quality:       { per_span: [ {start, end, stoi, pesq, si_sdr} ], scope: "target" | "all" }
+quality:       { per_span: [ {start, end, stoi, pesq, si_sdr, stream} ], scope: "target" | "all" }
 target_match:  { speaker, similarity, model, revision } | absent
 figure:        one aligned figure per recording
 ```
@@ -126,4 +150,5 @@ figure:        one aligned figure per recording
 ASR (PREPROCESS runs it), airway detection (reads `airway_spans`), speaker identity without a target,
 emotion, language identification, diarizer ranking, quality gating.
 
+Every element and assertion above goes to the [element store](store.md) with its provenance.
 Derivations live in [`benchmarks/`](benchmarks/).

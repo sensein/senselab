@@ -3,15 +3,18 @@
 ## Signature
 
 ```
-airway(spans, silence, asr_crisperwhisper, hint?, labels_of_interest={"Cough","Breathe"})
+airway(store, hint?, labels_of_interest={"Cough","Breathe"})
     -> fail(reason) | flag(reason, spans) | pass(airway_spans, unlabelled_spans, figure)
 ```
 
-| input | from | used for |
+Reads and writes the [element store](store.md). It **proposes no elements of its own**: it `label`s,
+`confirm`s and `contest`s the `span` elements PREPROCESS wrote.
+
+| element read | author | used for |
 | --- | --- | --- |
-| `spans` | PREPROCESS, `K` = 18 dB | the candidate spans this branch classifies |
+| `span` elements at `K` = 18 dB | PREPROCESS | the candidates this branch classifies |
 | `silence` | PREPROCESS | negative evidence in classification |
-| `asr_crisperwhisper` | PREPROCESS | word *presence* only, never word times |
+| `asr_crisperwhisper` words | PREPROCESS | word *presence* only, never word times |
 | `spectrogram_wb`, `gammatone` | PREPROCESS | the figure only |
 | `hint` | caller | conditions the outcome only |
 
@@ -60,7 +63,8 @@ unlabelled_spans: [ { start, end, peak_over_floor_db } ]
 figure:           one aligned figure per recording
 ```
 
-`airway_spans` is the product. `unlabelled_spans` is carried for other nodes and read by nothing here.
+`airway_spans` is the product. Unlabelled spans need no separate field in the store — they are the
+`span` elements this branch attached no `label` to, and any node may read them.
 
 The figure carries the waveform, the envelope with its floor and both span sets, YAMNet `Silence`, the
 wideband spectrogram, the gammatone view and the HeAR channels in use, on one time axis.
@@ -70,4 +74,5 @@ wideband spectrogram, the gammatone view and the HeAR channels in use, on one ti
 Counts and bouts (no measured merge criterion), severity, any type beyond `labels_of_interest`, and
 onset estimation from ASR.
 
+Every label, confirmation and contest goes to the [element store](store.md) with its provenance.
 Derivations live in [`benchmarks/`](benchmarks/).
