@@ -3,11 +3,14 @@
 ## Signature
 
 ```
-preprocess(audio, preemphasis=True) -> derivatives
+preprocess(audio, preemphasis=True) -> store
 ```
 
-No `fail`, no `flag`. A derivative that cannot be computed is not emitted, and a consumer with no
-product does not run.
+Every derivative below is **written to the [element store](store.md)** with its provenance. Later nodes
+refine what they find there rather than receiving it as an argument.
+
+No `fail`, no `flag`. A derivative that cannot be computed is simply absent from the store, and a
+consumer that needs it does not run.
 
 ## Conditioning
 
@@ -39,7 +42,8 @@ audio --> resample 16 kHz --+
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
 | `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
 
-A derivative is admitted only with a named consumer.
+A derivative is admitted when it is written to the store with provenance. It does not need a
+declared consumer — see [`store.md`](store.md).
 
 ## `spans`
 
@@ -54,13 +58,12 @@ merge     = overlapping spans
 
 | parameter | value | scope |
 | --- | --- | --- |
-| `K` | **18 dB** | per consumer; AIRWAY is the only consumer today |
+| `K` | **18 dB** | per reader; AIRWAY reads at this setting |
 | `hangover` | 120 ms | per consumer; must be shorter than the shortest event to be bounded |
 
-**`spans` has one consumer.** It lives here because the rules and the floor are shared machinery, not
-because two branches read it — SPEECH now derives spans from word timings instead. By this node's own
-admission rule that is grounds to move it into AIRWAY, and it stays only while the voice branch's use
-is undecided.
+Spans are written to the store as elements of kind `span`, carrying `peak_over_floor_db` and no label.
+Any node may read them; SPEECH proposes its own spans from word timings and `refine`s these where they
+overlap.
 
 Spans carry `peak_over_floor_db` and **no label**. If no peak anywhere reaches `K` above the local
 floor, the node reports **`no_contrast`** rather than an empty list.
