@@ -16,6 +16,11 @@ export HF_HOME=/orcd/data/satra/002/huggingface
 export HF_HUB_CACHE="$HF_HOME/hub"
 export HF_TOKEN="$(cat ~/.cache/huggingface/token)"
 export UV_CACHE_DIR="$POOL/uv-cache"
+# Qwen3.8 is mostly Gated DeltaNet. Without flash-linear-attention those blocks fall back to a
+# torch implementation, which cost ~6 min per answer. fla is Triton-based, so no nvcc is needed;
+# causal-conv1d is only an optional extra of it and is not installed. Kept on PYTHONPATH rather
+# than installed into the shared senselab venv.
+export PYTHONPATH="$POOL/pylibs/fla${PYTHONPATH:+:$PYTHONPATH}"
 
 REPO="$SCRATCH/senselab-audiolm"       # its own checkout; the sweep uses senselab-bench
 BRANCH="triage"
