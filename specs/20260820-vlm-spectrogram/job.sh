@@ -22,6 +22,17 @@ export UV_CACHE_DIR="$POOL/uv-cache"
 # than installed into the shared senselab venv.
 export PYTHONPATH="$POOL/pylibs/fla${PYTHONPATH:+:$PYTHONPATH}"
 
+# fla's kernels are Triton, and Triton JIT-compiles a small CPython extension (cuda_utils) on first
+# use. The venv's interpreter is /usr/bin/python3.12, whose headers are not installed on this
+# cluster: /usr/include/python3.12 holds only pyconfig-64.h, so the gcc call fails on a missing
+# Python.h. Borrow headers from a uv-managed CPython of the same version.
+uv python install 3.12 >/dev/null 2>&1 || true
+PYINC="$HOME/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/include/python3.12"
+[[ -f "$PYINC/Python.h" ]] || { echo "no Python.h at $PYINC" >&2; exit 1; }
+export C_INCLUDE_PATH="$PYINC${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+echo "== fla:       $POOL/pylibs/fla"
+echo "== py headers $PYINC"
+
 REPO="$SCRATCH/senselab-audiolm"       # its own checkout; the sweep uses senselab-bench
 BRANCH="triage"
 AUDIO="${AUDIO:?set AUDIO}"
