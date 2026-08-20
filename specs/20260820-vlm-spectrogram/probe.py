@@ -94,7 +94,8 @@ def main() -> int:
     ap.add_argument("--png", type=Path, default=Path("spectrogram.png"))
     ap.add_argument("--fmax", type=float, default=8000.0)
     ap.add_argument("--win-ms", type=float, default=4.0)
-    ap.add_argument("--max-new-tokens", type=int, default=768)
+    ap.add_argument("--max-new-tokens", type=int, default=8192)
+    ap.add_argument("--no-thinking", action="store_true")
     args = ap.parse_args()
 
     from PIL import Image
