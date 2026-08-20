@@ -20,7 +20,8 @@ no ASR**: PREPROCESS does, and this branch compares what it is given.
 
 | input | from | used for |
 | --- | --- | --- |
-| `silence`, `energy_envelope` | PREPROCESS | coarse speech regions; the floor every span rule references |
+| `spans` | PREPROCESS | the candidate spans this branch interprets. Same rules, same spans, as AIRWAY |
+| `silence` | PREPROCESS, YAMNet `Silence` | the floor the spans were derived against |
 | `squim` | PREPROCESS, plain signal | file-level quality — **necessary but not sufficient**, see below |
 | `asr_crisperwhisper`, `asr_qwen`, `alignment` | PREPROCESS, plain signal | the transcript, its word edges, and the agreement between two recognizers |
 | `spectrogram_wb`, `gammatone` | PREPROCESS | the figure only |
@@ -29,32 +30,65 @@ no ASR**: PREPROCESS does, and this branch compares what it is given.
 
 ## What it does, in five steps
 
-### 1. Coarse speech regions — YAMNet `Speech`, and only as a presence gate
+### 1. Extract speech — interpret the spans PREPROCESS found
 
-`Speech` is the cleanest gate measured anywhere in this design. On the labelled recording its scores
-across 29 windows are 0.993, 0.987, 0.980, 0.970, 0.919, then **0.145** — a **0.77-wide empty gap**, so a
-0.5 threshold is not fitted to anything.
+**Speech is extracted, not searched for.** `spans` arrives from PREPROCESS, produced by the same rules
+the airway branch uses, and this step decides which of those spans is speech. Two independent
+instruments vote on each span, and both are computed over the **whole span**:
 
-**Its boundaries are not speech edges, and the error is large and one-directional.** The region where
-`Speech ≥ 0.5` runs 10.08–13.44 s against a label of 11.62–13.20:
+| instrument | what it contributes |
+| --- | --- |
+| YAMNet `Speech` | coverage over the span — the fraction of its overlapping 0.96 s windows scoring ≥ 0.5 |
+| SQUIM, over the span | STOI and SI-SDR. Meaningful only if the span is speech, which is what makes it a *test* of that |
 
-| | region | label | error |
+On the labelled recording's five spans the two agree completely, and the margins are not close:
+
+| span | STOI | SI-SDR | YAMNet `Speech` max | coverage | verdict |
+| --- | --- | --- | --- | --- | --- |
+| 2.32–3.29 s | 0.404 | −15.73 | 0.145 | **0%** | not speech |
+| 5.32–6.22 s | 0.498 | −15.10 | 0.020 | **0%** | not speech |
+| 7.92–8.51 s | 0.313 | −14.52 | 0.030 | **0%** | not speech |
+| 9.61–9.96 s | 0.535 | −14.69 | 0.036 | **0%** | not speech |
+| **11.75–13.16 s** | **0.954** | **+16.90** | **0.993** | **80%** | **speech** |
+
+| separation | speech | the rest | gap |
 | --- | --- | --- | --- |
-| onset | 10.08 s | 11.62 s | **−1.54 s** |
-| offset | 13.44 s | 13.20 s | +0.24 s |
+| STOI | 0.954 | 0.313–0.535 | **+0.419** |
+| SI-SDR | +16.90 dB | −15.73…−14.52 dB | **+31.4 dB** |
+| YAMNet max | 0.993 | 0.020–0.145 | **+0.848** |
+| coverage | 80% | 0% throughout | binary |
 
-A 0.96 s window with a 0.48 s hop cannot do better than its own hop, and the −1.54 s onset is worse
-than that: the window at 10.08–11.04 s scores `Speech` **0.9194** over a stretch the labels call
-nothing. So this step establishes *where to look*, and **edges come from step 4**. This is the same
-division the airway branch draws between HeAR and the envelope, for the same reason.
+Three independent measures separate the one speech span from the four airway spans with room to spare,
+and coverage does it **binarily** — 80% against zero, with nothing between. That is why the decision
+rests on agreement between two instruments rather than on a threshold in either: the threshold is not
+the load-bearing part, the agreement is.
 
-**One unresolved observation, recorded rather than explained.** That 10.08–11.04 s window is not empty:
-the envelope carries real energy through roughly 10.3–11.2 s, and an early span rule of the airway
-branch proposed a span there. Either the recording holds speech the labels do not mark, or YAMNet is
-confidently wrong over a full second. Nothing here settles it, and **the branch must not treat the
-label file as exhaustive** — a coarse region with no label is not evidence of a false positive.
+**SQUIM is used here as a test, not as a quality report.** Its numbers are only interpretable on speech,
+so a *low* score is evidence the span is not speech — which is the same fact that makes it useless as a
+quality measure on non-speech, put to work. Step 2 does the quality reading, and only on spans that
+survive this step.
 
-### 2. Quality, over speech regions and never over the file
+#### The three outcomes of this step
+
+| outcome | when | why |
+| --- | --- | --- |
+| **speech spans** | both instruments vote speech | passed to step 2 |
+| **`fail`** | no span gets a speech vote from either instrument | there is nothing for this branch to measure. Not a claim that the recording is empty — a statement that this branch has no subject |
+| **`flag`** | the two instruments **disagree** on a span, or a span's measures fall inside the gaps above | a human resolves this faster than any rule available here |
+
+**Disagreement is the definition of uncertain, and it is deliberately not a threshold.** With gaps of
++0.419 STOI, +31.4 dB SI-SDR and +0.848 YAMNet, a span landing between the two populations is outside
+everything measured, and inventing a cut point to place it would be fitting a constant to a case never
+observed. So an ambiguous span is flagged, and the number that made it ambiguous travels with the flag.
+
+**What this step cannot see, stated because it bounds `fail`.** A span is proposed only if it peaks
+18 dB above the silence floor. Quiet speech below that never becomes a span, so it cannot be interpreted
+here and would produce `fail` rather than a low-quality `pass`. On the labelled recording the coarse
+YAMNet region reaches back to 10.08 s, 1.54 s before the speech label, over energy that the span rules
+do not propose and the labels do not cover — so this is not hypothetical, and a `fail` from this branch
+should be read as "no span crossed the bar", never as "no speech".
+
+### 2. Quality, over speech spans and never over the file
 
 SQUIM is a *speech*-quality estimator, so what it is given decides whether its answer means anything.
 Measured on the labelled recording:
@@ -71,7 +105,7 @@ Measured on the labelled recording:
 number would reject a recording whose speech is in fact clean, and on this file the speech is 11% of the
 duration, so the file-level figure is mostly a measurement of coughs and silence.
 
-Two consequences. **The gate reads SQUIM over the coarse regions from step 1**, not `squim` from
+Two consequences. **The gate reads SQUIM over the speech spans from step 1**, not `squim` from
 PREPROCESS — which means PREPROCESS's file-level `squim` is *not* this branch's quality input, and one
 of the two must change: either PREPROCESS learns to emit per-region SQUIM given regions, or this branch
 computes it and PREPROCESS's row loses this consumer. **That decision is open and is flagged rather
@@ -151,8 +185,8 @@ waits for a recording with overlap.
 
 | outcome | when |
 | --- | --- |
-| `fail` | no coarse speech region at all, or quality over the speech regions is too poor to measure by a derived threshold that does not yet exist |
-| `flag` | speaker count is not 1; the two recognizers disagree beyond threshold; fabrication candidates survive; a hint asserts speech content the branch did not find; or a target was given and no speaker matches it |
+| `fail` | no span carried a speech vote in step 1, or quality over the speech spans is too poor to measure by a derived threshold that does not yet exist |
+| `flag` | step 1's two instruments disagreed on a span; speaker count is not 1; the two recognizers disagree beyond threshold; fabrication candidates survive; a hint asserts speech content the branch did not find; or a target was given and no speaker matches it |
 | `pass` | a transcript with per-word confidence, spans attributed to speakers, and quality measured over the speech |
 
 **`fail` is currently unreachable by the quality route**, because the threshold it needs has not been

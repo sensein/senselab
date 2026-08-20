@@ -19,35 +19,28 @@ no view of the signal that PREPROCESS does not already share.
 
 | input | from | used for |
 | --- | --- | --- |
-| `energy_envelope` | PREPROCESS, pre-emphasised | span proposal and both boundaries |
-| `silence` | PREPROCESS, YAMNet `Silence` | the envelope's floor; negative evidence in classification |
+| `spans` | PREPROCESS | the candidate spans this branch classifies. It does not derive them |
+| `silence` | PREPROCESS, YAMNet `Silence` | negative evidence in classification |
 | `spectrogram_wb`, `gammatone` | PREPROCESS, pre-emphasised | the figure only — no decision reads them |
 | `asr_crisperwhisper` | PREPROCESS, plain | word *presence* inside the span interval; never word times |
 
 ## What it does, in three steps
 
-### 1. Spans, from the floor and the envelope
+### 1. Spans — read from PREPROCESS, not derived here
 
-The floor is the median envelope level over YAMNet-silence windows; PREPROCESS derives it and its
-justification lives there. Given the floor, a span is proposed and bounded by three rules, each measured
-against the labelled recording's six events:
+`spans` is a PREPROCESS derivative. The rules that produce it — propose at `floor + 18 dB`, onset
+peak-anchored at `peak − 15 dB`, offset at `0.7 × (peak − floor)` with a 120 ms hangover — and the
+measurements behind them live in that node, because **SPEECH needs the same spans** and two producers of
+one product is the failure PREPROCESS exists to prevent.
 
-| rule | value | why not otherwise |
-| --- | --- | --- |
-| propose | peaks ≥ `floor + 18 dB`, separated by ≥ 150 ms | at `floor + 12 dB` a low-contrast peak's offset threshold sits near the floor, so its walk is effectively unbounded and two coughs 1.7 s apart merged into one 6 s span |
-| onset | walk back from the peak to `peak − 15 dB` | peak-anchored lands 5/5 airway onsets inside the labels' declared windows; the same envelope with a floor-referenced threshold lands 2/6, and every one of its errors is early |
-| offset | walk forward to `peak − 0.7 × (peak − floor)`, closing only after 120 ms continuously below | the events do not share a dynamic range — 20.0 dB for a mouth sound against 56.8 dB for a cough — so a fixed drop is at once too shallow for one and unreachable for the other. Median offset error 84.3 ms, against 573.9 ms for a fixed `peak − 10 dB` |
+This branch was where those rules were first measured, and moving them out changes nothing about them.
+What it changes is this branch's job: **it interprets spans, it does not find them.** On the labelled
+recording it is handed five, of which it will claim four.
 
-**The anchor, not the threshold, is what makes the onset work**, and this is why PREPROCESS emits a
-40 Hz modulation envelope while explicitly claiming no onset accuracy: widening the envelope's bandwidth
-makes onsets *worse* (median 144 ms at 320 Hz against 63 ms at 40 Hz), because a wider band tracks
-pre-event fluctuation that a fixed threshold then fires on. Accuracy is a property of this rule, and
-therefore of this branch.
-
-**Two limits on those figures.** They come from one recording, one healthy adult, six events, and they
-justify the *shape* of each rule rather than its constant. And the peak was located inside a labelled
-span; here the same rules run unsupervised over the whole envelope, which is the harder problem the
-figure exists to expose.
+A span arrives with `peak_over_floor_db`, which this branch passes through to its product because it
+governs whether the span's offset means anything, and with the caveat PREPROCESS records: the 120 ms
+hangover is shorter than the shortest event this branch intends to bound, and a consumer wanting
+otherwise must ask.
 
 ### 2. Labels — the whole span, as one input to HeAR
 

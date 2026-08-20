@@ -23,8 +23,8 @@ Internally two conditioning steps run before any derivative is computed:
 ```
                             +--> plain -------------> squim, level, ASR x2, alignment, silence
 audio --> resample to 16 kHz +
-                            +--> pre-emphasis ------> envelope, spectrograms, gammatone
-                                 (switchable)
+                            +--> pre-emphasis ------> envelope --> spans
+                                 (switchable)             spectrograms, gammatone
 ```
 
 There is no `fail` and no `flag`. A derivative that cannot be computed — a model unavailable, a
@@ -41,6 +41,7 @@ missing derivative must not take the whole node down, because most consumers nee
 | `spectrogram_wb` | 5 ms window, 5 ms hop — wideband | onsets and transients; glottal pulses; anything reading voicing structure |
 | `spectrogram_nb` | 20 ms window, 5 ms hop — narrowband | harmonics and F0 read off their spacing; span refinement; rendering for a reader or a model |
 | `gammatone` | auditory filterbank output | short-transient detection, where a cochleagram resolves what a linear-frequency window smears |
+| `spans` | candidate event spans from the envelope: propose, onset, offset — the rules below | AIRWAY classifies them with HeAR; SPEECH interprets them with SQUIM and YAMNet. **Two consumers, which is why this lives here** |
 | `silence` | YAMNet `Silence` per 0.96 s window at its native 0.48 s hop, and the floor derived from it — **plain signal** | the envelope's floor, which every span rule references; airway's `t_not_after_s` |
 | `asr_crisperwhisper` | transcript with word and token edges — **plain signal** | speech branch transcript and speaker spans; airway branch's lexical-contamination check; voice branch's lexical exclusion |
 | `asr_qwen` | transcript with word timings — **plain signal** | speech branch agreement confidence; a second opinion the speech branch compares against CrisperWhisper |
@@ -180,6 +181,40 @@ So the switch governs the derivatives whose value pre-emphasis *changes*, and do
 whose **definition** it breaks. A consumer asking for a plain-signal derivative gets the same answer
 whether the switch is on or off, which is the point: the switch is a knob on the analysis, not on what
 the recording's level or its quality scores mean.
+
+## Span detection lives here, because two branches need the same spans
+
+Both AIRWAY and SPEECH begin from "where in this recording is something happening". They began by
+deriving that separately, which is the condition this node exists to prevent — two producers of one
+product, differing in ways nobody chose. So the envelope's span rules are a PREPROCESS derivative, and a
+branch's job is to **interpret** a span, never to find one.
+
+Three rules, each measured against the labelled recording's six events:
+
+| rule | value | why not otherwise |
+| --- | --- | --- |
+| propose | peaks ≥ `floor + 18 dB`, separated by ≥ 150 ms | at `floor + 12 dB` a low-contrast peak's offset threshold sits near the floor, so its walk is effectively unbounded — two coughs 1.7 s apart merged into one 6 s span |
+| onset | walk back from the peak to `peak − 15 dB` | peak-anchored puts 5 of 5 airway onsets inside the labels' declared windows; the same envelope with a floor-referenced threshold manages 2 of 6, every error early |
+| offset | walk forward to `peak − 0.7 × (peak − floor)`, closing only after 120 ms continuously below | the events do not share a dynamic range — 20.0 dB for a mouth sound against 56.8 dB for a cough — so one fixed drop is at once too shallow for a cough and unreachable for the click. Median offset error 84.3 ms, against 573.9 ms for a fixed `peak − 10 dB` |
+
+**The anchor, not the threshold, is what makes the onset work**, which is also why this node claims no
+onset accuracy for `energy_envelope` itself: widening the envelope's bandwidth makes onsets *worse*
+(median 144 ms at 320 Hz against 63 ms at 40 Hz), because a wider band tracks pre-event fluctuation that
+a fixed threshold then fires on. The accuracy is a property of these rules.
+
+On the labelled recording they yield **five spans**: 2.32–3.29, 5.32–6.22, 7.92–8.51, 9.61–9.96 and
+11.75–13.16 s. Four are airway events and one is speech, and **the spans themselves carry no label** —
+this node does not know which is which and must not guess.
+
+**One parameter is per-consumer and cannot be settled here.** The 120 ms hangover must be shorter than
+the shortest event a consumer intends to bound; at 250 ms it overshoots a 202 ms mouth click by 418 ms,
+because the rule has to observe more silence than the event lasts before it will close. A consumer
+needing a different hangover asks for it; the shipped value is not a universal.
+
+**Limits.** One recording, one healthy adult, six events. These justify the *shape* of each rule and not
+its constant, and the peak in every scored case was located inside a labelled span — running the same
+rules unsupervised over a whole envelope is the harder problem, and it is what the figure exists to
+expose.
 
 ## The envelope floor comes from YAMNet's `Silence`, not from a percentile
 
