@@ -190,3 +190,30 @@ Two smaller confusions, both timed correctly: `Baby Cough` 0.637 on an adult cou
 stretch the branch-1 document lists as verified-empty. Either the list is wrong at that point or both
 classes share a false positive; it wants a human listen, and until then the empty-stretch list should
 not be treated as verified there.
+
+## Correction: 160 ms is clean for Cough only, and Snore is what HeAR calls speech
+
+The window trade-off above scored three labels and concluded 160 ms had "perfect precision". That
+holds for `Cough` and not for the model. Over all eight labels at 160 ms:
+
+| class | peak | >0.5 | where |
+| --- | --- | --- | --- |
+| Cough | 0.998 | 24 | all inside the two verified coughs |
+| **Snore** | **0.878** | **7** | **12.22-12.84 s, every one inside the verified speech** |
+| Breathe | 0.845 | 15 | the two breaths, plus 3.94-4.02 |
+| Baby Cough | 0.522 | 1 | 8.30 s, inside the adult cough |
+| Throat Clear | 0.195 | 0 | — |
+| Sneeze | 0.107 | 0 | — |
+| Laugh | 0.053 | 0 | — |
+| Speech | 0.009 | 0 | — |
+
+`Snore` outpeaks `Breathe` at this window length and every one of its detections lands in the speech
+span. At 500 ms it reaches 0.864 over 16 windows, spreading into verified-empty audio as well.
+
+Put beside the six measurements showing HeAR never reports `Speech` above 0.08 on this recording, the
+reading changes: **it is not failing to detect the speech, it is detecting it as snoring.** A
+confirmer whose response to speech is `Snore` 0.88 and `Speech` 0.01 is not reporting a weaker version
+of the right answer.
+
+Plots: `hear_raster_160ms.png`, `hear_raster_320ms.png`, `hear_raster_500ms.png`, with the
+spectrogram and raster sharing one time axis and the verified event bounds drawn across both.

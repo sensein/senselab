@@ -111,9 +111,20 @@ def main() -> int:
             curves[lab].append(flat.get(lab, 0.0))
 
     centres = np.array([(s + win / 2) / SR for s in starts])
-    fig, (ax_s, ax_h) = plt.subplots(2, 1, figsize=(14, 7), sharex=True, height_ratios=[1.1, 1])
+    duration = n / SR
+
+    # A dedicated colorbar column, so attaching one does not shrink the raster relative to the
+    # spectrogram -- the two panels must keep identical width for their time axes to line up.
+    fig = plt.figure(figsize=(14, 7), constrained_layout=True)
+    gs = fig.add_gridspec(2, 2, width_ratios=[60, 1], height_ratios=[1.1, 1])
+    ax_s = fig.add_subplot(gs[0, 0])
+    ax_h = fig.add_subplot(gs[1, 0], sharex=ax_s)
+    cax = fig.add_subplot(gs[1, 1])
+    fig.add_subplot(gs[0, 1]).axis("off")
 
     ax_s.specgram(wav[0].numpy(), NFFT=512, Fs=SR, noverlap=384, cmap="magma")
+    ax_s.set_xlim(0.0, duration)
+    ax_s.tick_params(labelbottom=False)  # shared with the panel below
     ax_s.set_ylabel("Hz")
     ax_s.set_title(
         f"{args.audio.name} — {args.win_ms:.0f} ms rectangular window swept at {args.hop_ms:.0f} ms hop, "
@@ -129,7 +140,8 @@ def main() -> int:
     if args.raster:
         order = sorted(labels, key=lambda lab: -max(curves[lab]))
         mat = np.array([curves[lab] for lab in order])
-        edges_x = np.append(centres, centres[-1] + (centres[1] - centres[0]) if len(centres) > 1 else 1.0)
+        half = (hop / SR) / 2 if len(centres) > 1 else 0.5
+        edges_x = np.append(centres - half, centres[-1] + half)
         im = ax_h.pcolormesh(
             edges_x, np.arange(len(order) + 1), mat, cmap="viridis", vmin=0.0, vmax=1.0, shading="flat"
         )
@@ -140,7 +152,7 @@ def main() -> int:
         for a, b, _ in EVENTS:
             ax_h.axvline(a, color="w", lw=0.7, alpha=0.7)
             ax_h.axvline(b, color="w", lw=0.7, alpha=0.7, ls=":")
-        fig.colorbar(im, ax=ax_h, pad=0.01, label="probability")
+        fig.colorbar(im, cax=cax, label="probability")
     else:
         for lab in labels:
             ax_h.plot(centres, curves[lab], lw=1.3, label=lab)
@@ -150,8 +162,9 @@ def main() -> int:
         ax_h.set_xlabel("time (s)")
         ax_h.legend(loc="upper left", fontsize=8, ncols=4)
         ax_h.grid(alpha=0.25)
+        cax.axis("off")
 
-    fig.tight_layout()
+    ax_h.set_xlim(0.0, duration)
     fig.savefig(args.out, dpi=140)
     print(f"wrote {args.out}", flush=True)
 
