@@ -20,7 +20,7 @@ when its condition is a matter of degree — which is why the "too quiet" row be
 ## Signature
 
 ```
-admit(audio_file) -> fail(reason) | pass(audio, level_track, band_floor, clip_track)
+admit(audio_file) -> fail(reason) | pass(audio)
 ```
 
 | port | direction | type | meaning |
@@ -28,12 +28,17 @@ admit(audio_file) -> fail(reason) | pass(audio, level_track, band_floor, clip_tr
 | `audio_file` | in | path | the recording, as supplied |
 | `fail` | out | reason | the file cannot be measured; nothing else is claimed about it |
 | `audio` | out | decoded audio | samples, rate, channel count |
-| `level_track` | out | series | broadband level over time |
-| `band_floor` | out | per-band scalar | estimated noise floor per band |
-| `clip_track` | out | series | samples at or beyond full scale |
 
-The three tracks are **measurements, not verdicts**. Nothing here judges them. A consumer that wants
-to act on level or clipping applies its own threshold and owns that decision.
+**That is the whole port list.** An earlier draft of this file also emitted `level_track`,
+`band_floor` and `clip_track`. No node consumes them, so they are not outputs.
+
+The temptation was that they are nearly free — ADMIT has to look at the samples anyway to test
+all-zero and constant, so a level track and a clip track fall out of the same pass. "Nearly free" is
+not a reason. It is how the previous graph accumulated ports nothing read, and a port with no declared
+consumer is a guess about a node that does not exist yet. If a later node needs a level track it
+declares that input, and the thing that computes it need not be ADMIT.
+
+Deciding measurability requires a variance check, not a level track.
 
 ## Decision rule — degenerate conditions only
 
@@ -81,7 +86,7 @@ represented and where a doubtful answer can flag rather than delete.
 - No speech, voice or event detection.
 - No enhancement, and no second version of the audio. Enhancement is an operation a later node may
   invoke for its own purpose; it is not a product of this one.
-- No quality verdict. It emits the tracks a quality judgement would need and makes none.
+- No quality verdict, and no measurements in service of one.
 - No resampling or channel reduction as a *decision*: whatever normalisation a consumer needs, that
   consumer performs, so the admitted audio stays the recording as supplied.
 
