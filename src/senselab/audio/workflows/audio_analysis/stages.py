@@ -513,7 +513,8 @@ def stage_background_mask(
         pass_summary: The summary built so far — diarization and scene blocks must be in it.
         duration_s: Recording duration.
         task_type: Task name from metadata, or ``None`` for the conservative fallback.
-        grid: Bucket grid; a default 0.5 s grid is used when omitted.
+        grid: Bucket grid; ``BucketGrid()`` — the run's one grid, ``grid.DEFAULT_TIME_GRID`` —
+            is used when omitted.
         profile: Detection-margin profile; the bundled default is loaded when omitted.
         guard_interval_s: Override for the profile's guard interval.
         long_window_s: Long-window classifier window, for the FR-045 support flag.

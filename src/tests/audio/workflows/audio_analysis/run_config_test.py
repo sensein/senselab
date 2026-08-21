@@ -122,6 +122,33 @@ def test_each_moved_value_equals_the_constant_it_replaced() -> None:
             )
 
 
+PACKAGED_CONFIG_HASH = "e0e66114efc7ac08c04c90b354de94e98e477a5e0e275a0696f1bad1fcbe4136"
+"""``config_hash`` of the packaged ``data/run_config/default.yaml`` as of schema ``version: 3``."""
+
+
+def test_the_packaged_configs_identity_is_pinned_to_a_literal() -> None:
+    """Run identity must move only when a value moves.
+
+    ``load_run_config`` hashes the *merged mapping*, so every key in the packaged YAML is part of
+    the run's identity — including ``derivation``, which reads like documentation and is a string
+    value. A word changed inside it restamps the run summary, every L1 signal parquet, every L2
+    estimate, the disagreements index and the LS bundle, and two behaviourally identical runs then
+    report different configs. Only a literal catches that; comparing the hash to a recomputation of
+    the same file cannot. See F-189 in ``specs/20260815-215106-analyze-audio-audit/register.md``.
+
+    Update the literal deliberately, in the same commit as the value change that earned it.
+    """
+    from senselab.audio.workflows.audio_analysis.run_config import load_run_config
+
+    identity = load_run_config(None).identity
+    assert identity.version == "3", "bumping the schema version is a deliberate identity change"
+    assert identity.config_hash == PACKAGED_CONFIG_HASH, (
+        "the packaged config's identity moved. If a decision value changed, update "
+        "PACKAGED_CONFIG_HASH here in the same commit. If only prose changed, it was edited inside "
+        "a hashed value — put the correction in a `#` comment instead, which is not parsed."
+    )
+
+
 def test_an_override_reaches_each_section() -> None:
     """A section nothing can override is a section that only looks configurable."""
     from senselab.audio.workflows.audio_analysis.run_config import load_run_config

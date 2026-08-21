@@ -4,15 +4,23 @@ repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
   rev: v0.14.5
   hooks:
+  # Spec trees hold design notes plus the one-off scripts that reproduce a finding. Those scripts are
+  # evidence -- several deliberately contain the defective pattern they demonstrate -- so linting
+  # them to library standards asks them to stop being reproductions, and formatting them edits the
+  # record of what was measured. Excluded here rather than in pyproject's ruff config, because
+  # pyproject describes the package and `specs/` is not part of it (it is not in the wheel, and as
+  # of this change not in the sdist either). The mypy hook below excludes the same trees.
   - id: ruff
+    exclude: ^specs/
   - id: ruff-format
+    exclude: ^specs/
 
 - repo: https://github.com/pre-commit/mirrors-mypy
   rev: v1.18.2
   hooks:
   - id: mypy
     args: [--ignore-missing-imports, --extra-checks]
-    exclude: ^scripts/
+    exclude: ^(scripts|specs)/
     additional_dependencies:
     - pydantic>=1.10.4
     - types-requests
@@ -41,8 +49,11 @@ repos:
     args: [--maxkb=15000]
   - id: check-case-conflict
   - id: end-of-file-fixer
+    exclude: ^specs/.*/raw/
   - id: trailing-whitespace
+    exclude: ^specs/.*/raw/
   - id: pretty-format-json
+    exclude: ^specs/.*/raw/
     args:
     - --autofix
     - --indent=4
@@ -61,9 +72,12 @@ repos:
     # AER: alignment error rate. FPR: false-positive rate. PASE: Problem-Agnostic Speech
     # Encoder, a model name. preemptable: Slurm's own spelling (PreemptMode, the
     # mit_preemptable partition) -- codespell wants "preemptible", but that is not the
-    # partition's actual name. All four are terms codespell reads as misspellings of other
-    # words.
-    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable']
+    # partition's actual name. caf: Apple Core Audio Format. als: MPEG-4 ALS, both file
+    # extensions in the I/O format matrix. Each is a term codespell reads as a misspelling of
+    # another word. Raw captured output is excluded rather than corrected: it is a verbatim
+    # record, and a truncated word in a printed table is part of what was printed.
+    exclude: ^specs/.*/raw/
+    args: [--skip=*.ipynb, --ignore-words-list, 'AER,FPR,PASE,preemptable,caf,als']
     additional_dependencies:
     - tomli
 - repo: local

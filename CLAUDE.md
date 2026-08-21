@@ -61,10 +61,11 @@ Key audio processing capabilities in `audio/tasks/`:
 - Google-style docstrings (enforced by ruff, `convention = "google"`)
 - Line length 120; type hints required (mypy with the pydantic plugin)
 - Tests in `src/tests/` mirroring the package, named `*_test.py`
-- **Explain *why* in comments and docstrings, not *what*.** The codebase's convention is that a
-  non-obvious choice records the measurement or failure that drove it, so a later reader can
-  disagree with the reasoning rather than guess at it. Several sections below are that convention
-  applied to the module docs.
+- **Rationale does not go in code.** Docstrings and comments say what a thing is and how to call it;
+  the measurement behind a choice, the failure that drove it and the rejected alternatives go in
+  `specs/`. This reverses an earlier convention, so much of the tree still carries multi-paragraph
+  rationale inline — move it out when you edit such a file rather than extending it. A `derivation:`
+  block in a `data/` profile is not code and stays where it is.
 
 ## Traps that have cost time
 
@@ -206,11 +207,18 @@ next to the code they describe:
   background-scene and per-speaker-identity design.
 - `specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md` — decisions D-1…D-27.
 - `specs/20260728-221507-per-speaker-identity-scene/l1-post-processing-register.md` — every L1/L2
-  boundary violation, one row each, with its status and the measurement behind it. **Open items are
-  tracked here, not in this file.**
+  boundary violation, one item each (numbered 1-27, no `F-*` ids), with its status and the
+  measurement behind it.
+- `specs/20260815-215106-analyze-audio-audit/register.md` — the audit's findings, `F-1`..`F-187`,
+  one row each with its tier, severity and what the triage graph should do about it. This is where
+  every `F-*` id lives; the L1/L2 register above holds none of them.
 - `specs/20260508-173136-compare-uncertainty/` — the comparator's contracts.
 - `specs/20260506-154425-audio-analysis-asr-extensions/` — the ASR backend extensions
   (Canary-Qwen, Qwen3-ASR, MMS alignment) and the separable ASR/alignment caches.
+
+**Open items are tracked in the two registers above, not in this file.** Which one depends on what
+the item is: an L1 emitting a decision instead of a measurement goes in the first, a defect claim
+with a mechanism goes in the second.
 
 Three id namespaces stay distinct because all three once rendered as `S0`: a model's own speaker
 labels (`SPEAKER_00`, `spk0`), the pass-wide cluster harmonising labels across diarizers (`C0`), and

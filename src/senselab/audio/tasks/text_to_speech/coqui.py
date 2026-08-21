@@ -2,6 +2,9 @@
 
 Coqui TTS has conflicting dependencies (pins older transformers, requires
 Python <=3.11). It runs in an isolated subprocess venv managed by uv.
+
+Synthesized audio comes back as WAV/FLOAT; why the output cannot go in a fixed-point
+container: ``specs/20260819-091500-wav-subtype-sweep/design.md``.
 """
 
 import json
@@ -13,7 +16,13 @@ from typing import Any, Dict, List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import CoquiTTSModel, DeviceType, Language, _select_device_and_dtype
-from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+from senselab.utils.subprocess_venv import (
+    _clean_subprocess_env,
+    ensure_venv,
+    parse_subprocess_result,
+    stage_portable_audio_io,
+    venv_python,
+)
 
 # Reuse the same coqui venv as voice_cloning
 _COQUI_VENV = "coqui"
@@ -47,6 +56,9 @@ try:
     target_paths = args.get("target_paths", [])
     output_dir = args["output_dir"]
 
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import write_audio
+
     tts = TTS(model_id).to(device=device)
     output_sr = tts.synthesizer.output_sample_rate
 
@@ -67,8 +79,10 @@ try:
         if wav.dim() == 1:
             wav = wav.unsqueeze(0)
 
-        out_path = str(Path(output_dir) / f"tts_{idx}.flac")
-        sf.write(out_path, wav.squeeze().cpu().numpy(), output_sr, format="FLAC")
+        # write_audio, not sf.write: TTS.api.tts() returns the decoder's raw output, which
+        # nothing bounds to +-1 (measured for XTTS-v2 in the spec named in the module docstring).
+        out_path = str(Path(output_dir) / f"tts_{idx}.wav")
+        write_audio(out_path, wav.squeeze().cpu().numpy(), output_sr)
         output_paths.append(out_path)
 
     print(json.dumps({"output_paths": output_paths, "sample_rate": output_sr}))
@@ -127,8 +141,8 @@ class CoquiTTS:
             target_paths: List[str] = []
             if targets:
                 for i, audio in enumerate(targets):
-                    path = str(tmp / f"target_{i}.flac")
-                    audio.save_to_file(path, format="flac")
+                    path = str(tmp / f"target_{i}.wav")
+                    audio.save_to_file(path)
                     target_paths.append(path)
 
             input_json = json.dumps(
@@ -139,6 +153,7 @@ class CoquiTTS:
                     "language": language.alpha_2 if language else None,
                     "target_paths": target_paths,
                     "output_dir": str(tmp),
+                    "io_dir": stage_portable_audio_io(tmp),
                 }
             )
 

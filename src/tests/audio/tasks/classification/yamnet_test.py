@@ -25,9 +25,9 @@ import numpy as np
 import pytest
 
 from senselab.audio.tasks.classification.yamnet import (
-    LOSSLESS_WAV_SUBTYPE,
     write_worker_wav,
 )
+from senselab.utils.portable_audio_io import LOSSLESS_WAV_SUBTYPE
 
 SR = 16000
 

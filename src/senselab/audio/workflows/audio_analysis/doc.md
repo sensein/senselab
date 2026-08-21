@@ -16,7 +16,7 @@ enumerated three axes in literal tuples.
 
 ## One grid
 
-**Every axis is harvested on `axes.DEFAULT_TIME_GRID`** — a 0.1 s window at a 0.1 s hop — so row *i*
+**Every axis is harvested on `grid.DEFAULT_TIME_GRID`** — a 0.1 s window at a 0.1 s hop — so row *i*
 of one axis is row *i* of another and a cross-axis join needs no reconciliation.
 
 This was measured, not assumed. With a per-axis grid the four axes carried 242 / 242 / 19 / 8 rows
@@ -74,11 +74,24 @@ subset of the consensus fold's), and the per-bucket `avg_logprob` / `token_entro
 `alignment_ctc_score` reads.
 
 The `speaker` axis measures **attribution**: how sure we are *who* is speaking, composed by
-`attribution.py` from three voters — per-speaker presence doubt (`max` over the speakers present of
-the entropy of the model share), ASR word-location doubt (`1 - temporal_confidence`,
-coverage-weighted over the words reaching the bucket), and target-activity doubt (the mask region's
-uncertainty, only where its `state` is not `target_active`). A bucket the mask confidently calls
-`target_free` carries no vote at all: there is nobody to attribute.
+`attribution.py` from **two scored voters and a gate** — `speaker_assignment` (normalised Shannon
+entropy of the diarizers' distribution over the answers they gave, `SIL` among them, with **no
+speaker privileged**) and `target_activity` (the mask region's uncertainty, contributed only where
+its `state` is not `target_active`), gated by `word_coverage`. This paragraph described three voters
+including a `max` per-speaker term and an ASR word-location doubt long after both were removed: the
+`max` elected the single most-contested speaker and reported that speaker's doubt, a targeted
+reading with no target supplied, and word-location doubt contributed ~0.223 of standing jitter in
+every bucket as a *vote* before it became the gate. See `attribution.py`'s module docstring.
+
+A bucket the mask confidently calls `target_free` carries no vote at all: there is nobody to
+attribute. A bucket no recognized word reaches is cleared the same way — **except where the mask
+positively reports a voice** (`target_active` or `nontarget_active`), because word absence is only a
+proxy for speech absence and it holds for adult connected speech, not for a cry, a cough or a groan,
+while both scored voters are word-independent (F-165, `speaker._VOCAL_ACTIVITY`). **None of the
+three mask-state readings — the `target_free` clear, this exemption, or the `target_activity` voter
+— fires on a run today**: `stages` puts `BackgroundMask.to_json()` into the pass summary and that
+emits counters only, so the per-region table never reaches this code and `state` is always `None`
+(F-187 in `specs/20260815-215106-analyze-audio-audit/register.md`).
 
 It asked "was it the same speaker as before?" until 2026-08-05, scored per (diar × embedder) pair
 against embedding cosine — which on a 0.1 s grid asks ten times a second against 0.5 s windows, and

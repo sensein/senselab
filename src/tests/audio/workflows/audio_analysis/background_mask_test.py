@@ -586,19 +586,16 @@ def test_continuous_conversation_still_has_uncertainty_at_its_boundaries() -> No
 
 
 def test_the_mask_is_cut_on_the_grid_it_is_given(tmp_path: Path) -> None:
-    """``stage_background_mask`` honours ``grid`` rather than its 0.5 s fallback.
+    """``stage_background_mask`` honours the ``grid`` it is given, not its own fallback.
 
-    D-24 settles that ``background_mask`` shares ``speech_presence``'s grid, and it is forced
-    twice over: the mask is *derived from* presence — a region is target-free where presence has
-    settled — so on different grids that derivation needs a projection, and every projection is a
-    place to lose localisation.
+    That ``background_mask`` shares ``speech_presence``'s grid is D-24
+    (``specs/20260728-221507-per-speaker-identity-scene/layered-architecture.md``).
 
     Called directly rather than through ``run_pass``: the pass would also run
     ``stage_background_sources``, which does real DSP and makes a wiring assertion cost minutes.
     """
     from types import SimpleNamespace
 
-    # One turn ending at 0.35 s — a boundary only a grid finer than 0.5 s can place.
     import pandas as pd
 
     from senselab.audio.workflows.audio_analysis.grid import BucketGrid
@@ -606,6 +603,9 @@ def test_the_mask_is_cut_on_the_grid_it_is_given(tmp_path: Path) -> None:
     from senselab.audio.workflows.audio_analysis.stage_context import StageContext
     from senselab.audio.workflows.audio_analysis.stages import stage_background_mask
 
+    # One turn ending at 0.35 s: the 0.05 s grid below places that edge exactly, the run's 0.1 s
+    # default reports 0.3. The stage's fallback is `grid or BucketGrid()`, so a test that passes
+    # the default pins nothing — dropping the argument would produce identical rows.
     nested = [[SimpleNamespace(start=0.0, end=0.35)]]
     summary = {"diarization": {"by_model": {"m": {"status": "ok", "result": nested}}}}
     ctx = StageContext(perturbation="raw", audio_signature="a" * 64, variant="unmodified", run_dir=tmp_path)
@@ -615,14 +615,15 @@ def test_the_mask_is_cut_on_the_grid_it_is_given(tmp_path: Path) -> None:
         pass_summary=summary,
         duration_s=1.0,
         task_type="speech",
-        grid=BucketGrid(win_length=0.1, hop_length=0.1),
+        grid=BucketGrid(win_length=0.05, hop_length=0.05),
     )
 
     rows = pd.read_parquet(belief_dir(tmp_path) / "background_mask.parquet")
     edges = sorted({round(float(e), 6) for e in rows["end"]})
-    assert len(rows) > 1, f"a 0.1 s grid over a turn ending mid-recording is not one region: {rows}"
-    assert any(e not in (0.5, 1.0) for e in edges), (
-        f"every region boundary landed on the 0.5 s fallback grid, so the given grid was ignored: {edges}"
+    assert len(rows) > 1, f"a turn ending mid-recording is not one region: {rows}"
+    assert 0.35 in edges, (
+        f"the turn ends at 0.35 s and only the 0.05 s grid passed here can cut there — on the "
+        f"default 0.1 s grid the same region ends at 0.3, so the given grid was ignored: {edges}"
     )
 
 
@@ -630,7 +631,9 @@ def test_the_cli_cuts_the_mask_on_the_runs_one_grid() -> None:
     """The wiring, not the knob — the same gap the variant test above was written for.
 
     ``stage_background_mask`` accepted a ``grid`` from the day it was written and no caller ever
-    passed one, so the mask ran at ``BucketGrid()``'s 0.5 s while presence ran at 0.1 s. A unit test
+    passed one, so the mask ran at ``BucketGrid()``'s then-default 0.5 s while presence ran at
+    0.1 s. That default is now ``grid.DEFAULT_TIME_GRID`` itself, which closes the gap by one more
+    route, but the wiring is what this pins. A unit test
     that hands the stage a grid by hand cannot see that; this reads the source. It now asserts the
     plan takes the run's *single* grid through the one constructor, rather than rebuilding it from
     presence's two CLI values — which was a second construction of a pair of floats that could only

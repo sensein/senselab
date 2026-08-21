@@ -7,10 +7,22 @@ from typing import Any, Dict, List, Union
 
 import av
 import numpy as np
-import soundfile as sf
+import torch
 
+from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import from_strings_to_files, get_common_directory, logger
+from senselab.utils.portable_audio_io import subtype_preference
 from senselab.utils.tasks.input_output import read_files_from_disk
+
+# The codec hints a caller can pass, mapped to what the file is actually written at. An
+# unlisted hint resolves to whatever preserves most of what the container can hold.
+_SUBTYPE_FOR_ACODEC = {
+    "pcm_s16le": "PCM_16",
+    "pcm_s24le": "PCM_24",
+    "pcm_s32le": "PCM_32",
+    "pcm_f32le": "FLOAT",
+    "pcm_f64le": "DOUBLE",
+}
 
 
 def extract_audios_from_local_videos(
@@ -26,8 +38,12 @@ def extract_audios_from_local_videos(
     Args:
         files: Path(s) to video files.
         audio_format: Output audio format (default: wav).
-        acodec: Audio codec hint (default: pcm_s16le). Used to select
-            output sample format (16-bit signed int for pcm_s16le).
+        acodec: Audio codec hint (default: pcm_s16le), mapped to the subtype the file is
+            written at -- ``pcm_s16le`` to PCM_16, ``pcm_s24le`` to PCM_24, ``pcm_f32le`` to
+            FLOAT, anything else to whatever preserves most of what ``audio_format`` can hold.
+            A lossy decode can overshoot ±1; where the requested subtype cannot hold that,
+            the excess is clipped and the loss is logged rather than raising, because a bulk
+            extraction should not abort on one transient.
 
     Returns:
         A dataset dict of the extracted audio files.
@@ -57,17 +73,17 @@ def extract_audios_from_local_videos(
         if not frames:
             return False
 
-        audio_data = np.concatenate(frames)
+        audio_data = np.concatenate(frames).astype(np.float32)
 
-        # Match codec hint to sample format
-        if "s16" in codec:
-            audio_data = (
-                (audio_data * 32767).clip(-32768, 32767).astype(np.int16)
-                if audio_data.dtype != np.int16
-                else audio_data
-            )
-
-        sf.write(output_audio_path, audio_data, sample_rate, format=fmt.upper())
+        # Through Audio, so the subtype resolution and the range policy are the ones every
+        # other senselab write uses. out_of_range="warn": the caller chose the container, and a
+        # bulk extraction should report a clipped transient rather than abort on it.
+        Audio(waveform=torch.from_numpy(audio_data).unsqueeze(0), sampling_rate=sample_rate).save_to_file(
+            output_audio_path,
+            format=fmt,
+            subtype=subtype_preference(fmt, _SUBTYPE_FOR_ACODEC.get(codec)),
+            out_of_range="warn",
+        )
         return True
 
     if isinstance(files, str):

@@ -16,22 +16,6 @@ from senselab.audio.tasks.preprocessing import resample_audios
 from senselab.utils.data_structures.logging import logger
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
 
-LOSSLESS_WAV_SUBTYPE = "FLOAT"
-"""WAV subtype for the worker hand-off.
-
-The temp WAV is the only lossy step between senselab and the TensorFlow subprocess, and
-this classifier has an absolute low-level floor — so a fixed-point write is exactly the
-wrong thing here. Measured with a 16-bit write: a -100 dBFS signal reads back at -93 dBFS,
-because 16-bit quantization noise is louder than the content; at -120 dBFS it reads back as
-exact zeros, which the model reports as silence with full confidence.
-
-Two reasons that matters beyond losing a faint source. First, background characterization
-deliberately presents this classifier quiet residual audio. Second, 16-bit quantization
-noise is statistically indistinguishable from analog broadband noise, so amplifying it
-yields the water-like environmental labels the noise-character guard exists to reject —
-a fabricated finding rather than a missed one.
-"""
-
 
 def write_worker_wav(path: "Path | str", waveform: Any, sampling_rate: int) -> Dict[str, Any]:  # noqa: ANN401
     """Write a lossless mono WAV for the YAMNet worker and report input-path artifacts.
@@ -48,14 +32,16 @@ def write_worker_wav(path: "Path | str", waveform: Any, sampling_rate: int) -> D
         (FR-017d, FR-019b).
     """
     import numpy as np
-    import soundfile as sf
+    import torch
 
     arr = np.asarray(waveform, dtype=np.float32)
     if arr.ndim > 1:
         arr = arr.mean(axis=0) if arr.shape[0] < arr.shape[-1] else arr.mean(axis=-1)
+    # At or beyond full scale on the *input*, which is a different measurement from the write's
+    # own out-of-range fraction: this one reports what arrived, not what the container lost.
     clipped = float(np.count_nonzero(np.abs(arr) >= 0.9999) / arr.size) if arr.size else 0.0
-    sf.write(str(path), arr, sampling_rate, subtype=LOSSLESS_WAV_SUBTYPE)
-    return {"subtype": LOSSLESS_WAV_SUBTYPE, "clipped_fraction": clipped, "requantized": False}
+    report = Audio(waveform=torch.from_numpy(arr).unsqueeze(0), sampling_rate=sampling_rate).save_to_file(str(path))
+    return {"subtype": report.subtype, "clipped_fraction": clipped, "requantized": False}
 
 
 _YAMNET_VENV = "yamnet"
