@@ -128,12 +128,6 @@
                     <a class="class" href="#PiiSpan">PiiSpan</a>
                             <ul class="memberlist">
                         <li>
-                                <a class="function" href="#PiiSpan.__init__">PiiSpan</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#PiiSpan.text">text</a>
-                        </li>
-                        <li>
                                 <a class="variable" href="#PiiSpan.category">category</a>
                         </li>
                         <li>
@@ -141,9 +135,6 @@
                         </li>
                         <li>
                                 <a class="variable" href="#PiiSpan.asr_model">asr_model</a>
-                        </li>
-                        <li>
-                                <a class="variable" href="#PiiSpan.score">score</a>
                         </li>
                 </ul>
 
@@ -548,38 +539,38 @@ rather than stalling a batch scan indefinitely.</li>
 
     </div>
     <a class="headerlink" href="#PiiReport"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="PiiReport-159"><a href="#PiiReport-159"><span class="linenos">159</span></a><span class="nd">@dataclass</span>
-</span><span id="PiiReport-160"><a href="#PiiReport-160"><span class="linenos">160</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PiiReport</span><span class="p">:</span>
-</span><span id="PiiReport-161"><a href="#PiiReport-161"><span class="linenos">161</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Aggregated PII findings for one scanned input.</span>
-</span><span id="PiiReport-162"><a href="#PiiReport-162"><span class="linenos">162</span></a>
-</span><span id="PiiReport-163"><a href="#PiiReport-163"><span class="linenos">163</span></a><span class="sd">    Carries no notion of a run &quot;pass&quot; or a per-pass tag — that is audio-workflow vocabulary</span>
-</span><span id="PiiReport-164"><a href="#PiiReport-164"><span class="linenos">164</span></a><span class="sd">    that belongs to the caller, not to a standalone text/ScriptLine detector. A caller that</span>
-</span><span id="PiiReport-165"><a href="#PiiReport-165"><span class="linenos">165</span></a><span class="sd">    needs that association (e.g. tagging findings by which pass produced them) keys its own</span>
-</span><span id="PiiReport-166"><a href="#PiiReport-166"><span class="linenos">166</span></a><span class="sd">    ``{tag: PiiReport}`` mapping on top of this type instead (see the ``audio_analysis``</span>
-</span><span id="PiiReport-167"><a href="#PiiReport-167"><span class="linenos">167</span></a><span class="sd">    workflow&#39;s per-pass PII adapter).</span>
-</span><span id="PiiReport-168"><a href="#PiiReport-168"><span class="linenos">168</span></a><span class="sd">    &quot;&quot;&quot;</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="PiiReport-166"><a href="#PiiReport-166"><span class="linenos">166</span></a><span class="nd">@dataclass</span>
+</span><span id="PiiReport-167"><a href="#PiiReport-167"><span class="linenos">167</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PiiReport</span><span class="p">:</span>
+</span><span id="PiiReport-168"><a href="#PiiReport-168"><span class="linenos">168</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Aggregated PII findings for one scanned input.</span>
 </span><span id="PiiReport-169"><a href="#PiiReport-169"><span class="linenos">169</span></a>
-</span><span id="PiiReport-170"><a href="#PiiReport-170"><span class="linenos">170</span></a>    <span class="n">contains_pii</span><span class="p">:</span> <span class="nb">bool</span>
-</span><span id="PiiReport-171"><a href="#PiiReport-171"><span class="linenos">171</span></a>    <span class="n">n_spans</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="PiiReport-172"><a href="#PiiReport-172"><span class="linenos">172</span></a>    <span class="n">categories</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
-</span><span id="PiiReport-173"><a href="#PiiReport-173"><span class="linenos">173</span></a>    <span class="n">spans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiSpan</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="PiiReport-174"><a href="#PiiReport-174"><span class="linenos">174</span></a>    <span class="n">failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
-</span><span id="PiiReport-175"><a href="#PiiReport-175"><span class="linenos">175</span></a>    <span class="c1"># Comma-joined list of detectors that successfully ran inside the</span>
-</span><span id="PiiReport-176"><a href="#PiiReport-176"><span class="linenos">176</span></a>    <span class="c1"># subprocess venv for this report — e.g. ``&quot;gliner,presidio,rules&quot;`` when</span>
-</span><span id="PiiReport-177"><a href="#PiiReport-177"><span class="linenos">177</span></a>    <span class="c1"># all three loaded cleanly, ``&quot;presidio,rules&quot;`` when GLiNER failed but</span>
-</span><span id="PiiReport-178"><a href="#PiiReport-178"><span class="linenos">178</span></a>    <span class="c1"># the others worked, or ``None`` when no detector ran.</span>
-</span><span id="PiiReport-179"><a href="#PiiReport-179"><span class="linenos">179</span></a>    <span class="n">detector_used</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</span><span id="PiiReport-180"><a href="#PiiReport-180"><span class="linenos">180</span></a>    <span class="c1"># Continuous detection confidence in ``[0, 1]`` computed from per-</span>
-</span><span id="PiiReport-181"><a href="#PiiReport-181"><span class="linenos">181</span></a>    <span class="c1"># detector raw scores plus cross-detector and cross-ASR-model</span>
-</span><span id="PiiReport-182"><a href="#PiiReport-182"><span class="linenos">182</span></a>    <span class="c1"># agreement. ``None`` ⇔ detectors did not actually run (subprocess</span>
-</span><span id="PiiReport-183"><a href="#PiiReport-183"><span class="linenos">183</span></a>    <span class="c1"># failure, ``detectors=[]`` short-circuit, all detectors failed to</span>
-</span><span id="PiiReport-184"><a href="#PiiReport-184"><span class="linenos">184</span></a>    <span class="c1"># load) — distinct from ``0.0`` which means &quot;ran, found nothing&quot;.</span>
-</span><span id="PiiReport-185"><a href="#PiiReport-185"><span class="linenos">185</span></a>    <span class="c1"># No category-severity weighting: in pediatric / clinical voice</span>
-</span><span id="PiiReport-186"><a href="#PiiReport-186"><span class="linenos">186</span></a>    <span class="c1"># data the most-&quot;severe&quot; Presidio categories (US_SSN, CREDIT_CARD)</span>
-</span><span id="PiiReport-187"><a href="#PiiReport-187"><span class="linenos">187</span></a>    <span class="c1"># have near-zero true-positive rate and are dominated by ASR</span>
-</span><span id="PiiReport-188"><a href="#PiiReport-188"><span class="linenos">188</span></a>    <span class="c1"># digit-hallucinations, so weighting them up would inflate exactly</span>
-</span><span id="PiiReport-189"><a href="#PiiReport-189"><span class="linenos">189</span></a>    <span class="c1"># the hits a reviewer should de-prioritize.</span>
-</span><span id="PiiReport-190"><a href="#PiiReport-190"><span class="linenos">190</span></a>    <span class="n">detection_confidence</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="PiiReport-170"><a href="#PiiReport-170"><span class="linenos">170</span></a><span class="sd">    Carries no notion of a run &quot;pass&quot; or a per-pass tag — that is audio-workflow vocabulary</span>
+</span><span id="PiiReport-171"><a href="#PiiReport-171"><span class="linenos">171</span></a><span class="sd">    that belongs to the caller, not to a standalone text/ScriptLine detector. A caller that</span>
+</span><span id="PiiReport-172"><a href="#PiiReport-172"><span class="linenos">172</span></a><span class="sd">    needs that association (e.g. tagging findings by which pass produced them) keys its own</span>
+</span><span id="PiiReport-173"><a href="#PiiReport-173"><span class="linenos">173</span></a><span class="sd">    ``{tag: PiiReport}`` mapping on top of this type instead (see the ``audio_analysis``</span>
+</span><span id="PiiReport-174"><a href="#PiiReport-174"><span class="linenos">174</span></a><span class="sd">    workflow&#39;s per-pass PII adapter).</span>
+</span><span id="PiiReport-175"><a href="#PiiReport-175"><span class="linenos">175</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="PiiReport-176"><a href="#PiiReport-176"><span class="linenos">176</span></a>
+</span><span id="PiiReport-177"><a href="#PiiReport-177"><span class="linenos">177</span></a>    <span class="n">contains_pii</span><span class="p">:</span> <span class="nb">bool</span>
+</span><span id="PiiReport-178"><a href="#PiiReport-178"><span class="linenos">178</span></a>    <span class="n">n_spans</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="PiiReport-179"><a href="#PiiReport-179"><span class="linenos">179</span></a>    <span class="n">categories</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</span><span id="PiiReport-180"><a href="#PiiReport-180"><span class="linenos">180</span></a>    <span class="n">spans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiSpan</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="PiiReport-181"><a href="#PiiReport-181"><span class="linenos">181</span></a>    <span class="n">failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+</span><span id="PiiReport-182"><a href="#PiiReport-182"><span class="linenos">182</span></a>    <span class="c1"># Comma-joined list of detectors that successfully ran inside the</span>
+</span><span id="PiiReport-183"><a href="#PiiReport-183"><span class="linenos">183</span></a>    <span class="c1"># subprocess venv for this report — e.g. ``&quot;gliner,presidio,rules&quot;`` when</span>
+</span><span id="PiiReport-184"><a href="#PiiReport-184"><span class="linenos">184</span></a>    <span class="c1"># all three loaded cleanly, ``&quot;presidio,rules&quot;`` when GLiNER failed but</span>
+</span><span id="PiiReport-185"><a href="#PiiReport-185"><span class="linenos">185</span></a>    <span class="c1"># the others worked, or ``None`` when no detector ran.</span>
+</span><span id="PiiReport-186"><a href="#PiiReport-186"><span class="linenos">186</span></a>    <span class="n">detector_used</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</span><span id="PiiReport-187"><a href="#PiiReport-187"><span class="linenos">187</span></a>    <span class="c1"># Continuous detection confidence in ``[0, 1]`` computed from per-</span>
+</span><span id="PiiReport-188"><a href="#PiiReport-188"><span class="linenos">188</span></a>    <span class="c1"># detector raw scores plus cross-detector and cross-ASR-model</span>
+</span><span id="PiiReport-189"><a href="#PiiReport-189"><span class="linenos">189</span></a>    <span class="c1"># agreement. ``None`` ⇔ detectors did not actually run (subprocess</span>
+</span><span id="PiiReport-190"><a href="#PiiReport-190"><span class="linenos">190</span></a>    <span class="c1"># failure, ``detectors=[]`` short-circuit, all detectors failed to</span>
+</span><span id="PiiReport-191"><a href="#PiiReport-191"><span class="linenos">191</span></a>    <span class="c1"># load) — distinct from ``0.0`` which means &quot;ran, found nothing&quot;.</span>
+</span><span id="PiiReport-192"><a href="#PiiReport-192"><span class="linenos">192</span></a>    <span class="c1"># No category-severity weighting: in pediatric / clinical voice</span>
+</span><span id="PiiReport-193"><a href="#PiiReport-193"><span class="linenos">193</span></a>    <span class="c1"># data the most-&quot;severe&quot; Presidio categories (US_SSN, CREDIT_CARD)</span>
+</span><span id="PiiReport-194"><a href="#PiiReport-194"><span class="linenos">194</span></a>    <span class="c1"># have near-zero true-positive rate and are dominated by ASR</span>
+</span><span id="PiiReport-195"><a href="#PiiReport-195"><span class="linenos">195</span></a>    <span class="c1"># digit-hallucinations, so weighting them up would inflate exactly</span>
+</span><span id="PiiReport-196"><a href="#PiiReport-196"><span class="linenos">196</span></a>    <span class="c1"># the hits a reviewer should de-prioritize.</span>
+</span><span id="PiiReport-197"><a href="#PiiReport-197"><span class="linenos">197</span></a>    <span class="n">detection_confidence</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 </span></pre></div>
 
 
@@ -697,33 +688,33 @@ workflow's per-pass PII adapter).</p>
 
     </div>
     <a class="headerlink" href="#PiiScan"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="PiiScan-130"><a href="#PiiScan-130"><span class="linenos">130</span></a><span class="nd">@dataclass</span>
-</span><span id="PiiScan-131"><a href="#PiiScan-131"><span class="linenos">131</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PiiScan</span><span class="p">:</span>
-</span><span id="PiiScan-132"><a href="#PiiScan-132"><span class="linenos">132</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What the detectors found for one input, before anything is concluded from it.</span>
-</span><span id="PiiScan-133"><a href="#PiiScan-133"><span class="linenos">133</span></a>
-</span><span id="PiiScan-134"><a href="#PiiScan-134"><span class="linenos">134</span></a><span class="sd">    The output of :func:`scan_for_pii` and the input to :func:`decide_pii`. It carries</span>
-</span><span id="PiiScan-135"><a href="#PiiScan-135"><span class="linenos">135</span></a><span class="sd">    evidence and nothing else: no ``contains_pii``, no confidence, no threshold applied.</span>
-</span><span id="PiiScan-136"><a href="#PiiScan-136"><span class="linenos">136</span></a><span class="sd">    Running the detectors and deciding what their agreement means are separate jobs, and a</span>
-</span><span id="PiiScan-137"><a href="#PiiScan-137"><span class="linenos">137</span></a><span class="sd">    caller that wants the second one done differently — a different corroboration rule, a</span>
-</span><span id="PiiScan-138"><a href="#PiiScan-138"><span class="linenos">138</span></a><span class="sd">    severity ordering this module deliberately does not impose, an aggregation across</span>
-</span><span id="PiiScan-139"><a href="#PiiScan-139"><span class="linenos">139</span></a><span class="sd">    several transcripts of the same recording — needs the evidence without a verdict</span>
-</span><span id="PiiScan-140"><a href="#PiiScan-140"><span class="linenos">140</span></a><span class="sd">    already baked into it.</span>
-</span><span id="PiiScan-141"><a href="#PiiScan-141"><span class="linenos">141</span></a>
-</span><span id="PiiScan-142"><a href="#PiiScan-142"><span class="linenos">142</span></a><span class="sd">    Attributes:</span>
-</span><span id="PiiScan-143"><a href="#PiiScan-143"><span class="linenos">143</span></a><span class="sd">        spans: Deduped detections for this input. Deduplication is normalisation, not</span>
-</span><span id="PiiScan-144"><a href="#PiiScan-144"><span class="linenos">144</span></a><span class="sd">            judgement: two detectors reporting the same ``(category, text, source)`` are</span>
-</span><span id="PiiScan-145"><a href="#PiiScan-145"><span class="linenos">145</span></a><span class="sd">            one finding by definition.</span>
-</span><span id="PiiScan-146"><a href="#PiiScan-146"><span class="linenos">146</span></a><span class="sd">        detectors_used: Names of the detectors that actually ran. Load-bearing for any</span>
-</span><span id="PiiScan-147"><a href="#PiiScan-147"><span class="linenos">147</span></a><span class="sd">            agreement rule downstream — it is the denominator, and &quot;two of two agreed&quot; is</span>
-</span><span id="PiiScan-148"><a href="#PiiScan-148"><span class="linenos">148</span></a><span class="sd">            a different claim from &quot;two of four agreed&quot;.</span>
-</span><span id="PiiScan-149"><a href="#PiiScan-149"><span class="linenos">149</span></a><span class="sd">        failures: Why a detector did not run, keyed by name. An empty ``spans`` with a</span>
-</span><span id="PiiScan-150"><a href="#PiiScan-150"><span class="linenos">150</span></a><span class="sd">            populated ``failures`` is &quot;we could not check&quot;, which must never be read as</span>
-</span><span id="PiiScan-151"><a href="#PiiScan-151"><span class="linenos">151</span></a><span class="sd">            &quot;we checked and it was clean&quot;.</span>
-</span><span id="PiiScan-152"><a href="#PiiScan-152"><span class="linenos">152</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="PiiScan-153"><a href="#PiiScan-153"><span class="linenos">153</span></a>
-</span><span id="PiiScan-154"><a href="#PiiScan-154"><span class="linenos">154</span></a>    <span class="n">spans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiSpan</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="PiiScan-155"><a href="#PiiScan-155"><span class="linenos">155</span></a>    <span class="n">detectors_used</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-</span><span id="PiiScan-156"><a href="#PiiScan-156"><span class="linenos">156</span></a>    <span class="n">failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="PiiScan-137"><a href="#PiiScan-137"><span class="linenos">137</span></a><span class="nd">@dataclass</span>
+</span><span id="PiiScan-138"><a href="#PiiScan-138"><span class="linenos">138</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PiiScan</span><span class="p">:</span>
+</span><span id="PiiScan-139"><a href="#PiiScan-139"><span class="linenos">139</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What the detectors found for one input, before anything is concluded from it.</span>
+</span><span id="PiiScan-140"><a href="#PiiScan-140"><span class="linenos">140</span></a>
+</span><span id="PiiScan-141"><a href="#PiiScan-141"><span class="linenos">141</span></a><span class="sd">    The output of :func:`scan_for_pii` and the input to :func:`decide_pii`. It carries</span>
+</span><span id="PiiScan-142"><a href="#PiiScan-142"><span class="linenos">142</span></a><span class="sd">    evidence and nothing else: no ``contains_pii``, no confidence, no threshold applied.</span>
+</span><span id="PiiScan-143"><a href="#PiiScan-143"><span class="linenos">143</span></a><span class="sd">    Running the detectors and deciding what their agreement means are separate jobs, and a</span>
+</span><span id="PiiScan-144"><a href="#PiiScan-144"><span class="linenos">144</span></a><span class="sd">    caller that wants the second one done differently — a different corroboration rule, a</span>
+</span><span id="PiiScan-145"><a href="#PiiScan-145"><span class="linenos">145</span></a><span class="sd">    severity ordering this module deliberately does not impose, an aggregation across</span>
+</span><span id="PiiScan-146"><a href="#PiiScan-146"><span class="linenos">146</span></a><span class="sd">    several transcripts of the same recording — needs the evidence without a verdict</span>
+</span><span id="PiiScan-147"><a href="#PiiScan-147"><span class="linenos">147</span></a><span class="sd">    already baked into it.</span>
+</span><span id="PiiScan-148"><a href="#PiiScan-148"><span class="linenos">148</span></a>
+</span><span id="PiiScan-149"><a href="#PiiScan-149"><span class="linenos">149</span></a><span class="sd">    Attributes:</span>
+</span><span id="PiiScan-150"><a href="#PiiScan-150"><span class="linenos">150</span></a><span class="sd">        spans: Deduped detections for this input. Deduplication is normalisation, not</span>
+</span><span id="PiiScan-151"><a href="#PiiScan-151"><span class="linenos">151</span></a><span class="sd">            judgement: two detectors reporting the same ``(category, text, source)`` are</span>
+</span><span id="PiiScan-152"><a href="#PiiScan-152"><span class="linenos">152</span></a><span class="sd">            one finding by definition.</span>
+</span><span id="PiiScan-153"><a href="#PiiScan-153"><span class="linenos">153</span></a><span class="sd">        detectors_used: Names of the detectors that actually ran. Load-bearing for any</span>
+</span><span id="PiiScan-154"><a href="#PiiScan-154"><span class="linenos">154</span></a><span class="sd">            agreement rule downstream — it is the denominator, and &quot;two of two agreed&quot; is</span>
+</span><span id="PiiScan-155"><a href="#PiiScan-155"><span class="linenos">155</span></a><span class="sd">            a different claim from &quot;two of four agreed&quot;.</span>
+</span><span id="PiiScan-156"><a href="#PiiScan-156"><span class="linenos">156</span></a><span class="sd">        failures: Why a detector did not run, keyed by name. An empty ``spans`` with a</span>
+</span><span id="PiiScan-157"><a href="#PiiScan-157"><span class="linenos">157</span></a><span class="sd">            populated ``failures`` is &quot;we could not check&quot;, which must never be read as</span>
+</span><span id="PiiScan-158"><a href="#PiiScan-158"><span class="linenos">158</span></a><span class="sd">            &quot;we checked and it was clean&quot;.</span>
+</span><span id="PiiScan-159"><a href="#PiiScan-159"><span class="linenos">159</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="PiiScan-160"><a href="#PiiScan-160"><span class="linenos">160</span></a>
+</span><span id="PiiScan-161"><a href="#PiiScan-161"><span class="linenos">161</span></a>    <span class="n">spans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiSpan</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="PiiScan-162"><a href="#PiiScan-162"><span class="linenos">162</span></a>    <span class="n">detectors_used</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+</span><span id="PiiScan-163"><a href="#PiiScan-163"><span class="linenos">163</span></a>    <span class="n">failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -802,57 +793,53 @@ populated <code><a href="#PiiScan.failures">failures</a></code> is "we could not
                 <section id="PiiSpan">
                             <input id="PiiSpan-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr class">
-                    <div class="decorator decorator-dataclass">@dataclass</div>
-
+            
     <span class="def">class</span>
-    <span class="name">PiiSpan</span>:
+    <span class="name">PiiSpan</span><wbr>(<span class="base"><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></span>):
 
                 <label class="view-source-button" for="PiiSpan-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#PiiSpan"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="PiiSpan-119"><a href="#PiiSpan-119"><span class="linenos">119</span></a><span class="nd">@dataclass</span>
-</span><span id="PiiSpan-120"><a href="#PiiSpan-120"><span class="linenos">120</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PiiSpan</span><span class="p">:</span>
-</span><span id="PiiSpan-121"><a href="#PiiSpan-121"><span class="linenos">121</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One PII detection in a transcript.&quot;&quot;&quot;</span>
-</span><span id="PiiSpan-122"><a href="#PiiSpan-122"><span class="linenos">122</span></a>
-</span><span id="PiiSpan-123"><a href="#PiiSpan-123"><span class="linenos">123</span></a>    <span class="n">text</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="PiiSpan-124"><a href="#PiiSpan-124"><span class="linenos">124</span></a>    <span class="n">category</span><span class="p">:</span> <span class="nb">str</span>  <span class="c1"># presidio entity_type, e.g. &quot;PERSON&quot;, &quot;EMAIL_ADDRESS&quot;, &quot;PHONE_NUMBER&quot;</span>
-</span><span id="PiiSpan-125"><a href="#PiiSpan-125"><span class="linenos">125</span></a>    <span class="n">source</span><span class="p">:</span> <span class="nb">str</span>  <span class="c1"># &quot;presidio&quot; or &quot;gliner/&lt;original_label&gt;&quot;</span>
-</span><span id="PiiSpan-126"><a href="#PiiSpan-126"><span class="linenos">126</span></a>    <span class="n">asr_model</span><span class="p">:</span> <span class="nb">str</span>
-</span><span id="PiiSpan-127"><a href="#PiiSpan-127"><span class="linenos">127</span></a>    <span class="n">score</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>  <span class="c1"># detector confidence in [0, 1]</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="PiiSpan-119"><a href="#PiiSpan-119"><span class="linenos">119</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PiiSpan</span><span class="p">(</span><span class="n">ScriptLine</span><span class="p">):</span>
+</span><span id="PiiSpan-120"><a href="#PiiSpan-120"><span class="linenos">120</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One PII detection, as the timed line it sits in.</span>
+</span><span id="PiiSpan-121"><a href="#PiiSpan-121"><span class="linenos">121</span></a>
+</span><span id="PiiSpan-122"><a href="#PiiSpan-122"><span class="linenos">122</span></a><span class="sd">    A ``ScriptLine``, so ``text``, ``start``, ``end``, ``speaker``, ``score`` and ``timestamp_model``</span>
+</span><span id="PiiSpan-123"><a href="#PiiSpan-123"><span class="linenos">123</span></a><span class="sd">    are inherited and mean what they mean everywhere else. ``start`` and ``end`` are None until</span>
+</span><span id="PiiSpan-124"><a href="#PiiSpan-124"><span class="linenos">124</span></a><span class="sd">    something locates the finding — scanning a bare string cannot.</span>
+</span><span id="PiiSpan-125"><a href="#PiiSpan-125"><span class="linenos">125</span></a>
+</span><span id="PiiSpan-126"><a href="#PiiSpan-126"><span class="linenos">126</span></a><span class="sd">    Attributes:</span>
+</span><span id="PiiSpan-127"><a href="#PiiSpan-127"><span class="linenos">127</span></a><span class="sd">        category: The entity type, e.g. ``&quot;PERSON&quot;``, ``&quot;EMAIL_ADDRESS&quot;``.</span>
+</span><span id="PiiSpan-128"><a href="#PiiSpan-128"><span class="linenos">128</span></a><span class="sd">        source: The detector that found it, e.g. ``&quot;presidio&quot;`` or ``&quot;gliner/&lt;label&gt;&quot;``.</span>
+</span><span id="PiiSpan-129"><a href="#PiiSpan-129"><span class="linenos">129</span></a><span class="sd">        asr_model: Identifier of the scanned input.</span>
+</span><span id="PiiSpan-130"><a href="#PiiSpan-130"><span class="linenos">130</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="PiiSpan-131"><a href="#PiiSpan-131"><span class="linenos">131</span></a>
+</span><span id="PiiSpan-132"><a href="#PiiSpan-132"><span class="linenos">132</span></a>    <span class="n">category</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="PiiSpan-133"><a href="#PiiSpan-133"><span class="linenos">133</span></a>    <span class="n">source</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="PiiSpan-134"><a href="#PiiSpan-134"><span class="linenos">134</span></a>    <span class="n">asr_model</span><span class="p">:</span> <span class="nb">str</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>One PII detection in a transcript.</p>
+            <div class="docstring"><p>One PII detection, as the timed line it sits in.</p>
+
+<p>A <code>ScriptLine</code>, so <code><a href="#PiiSpan.text">text</a></code>, <code><a href="#PiiSpan.start">start</a></code>, <code><a href="#PiiSpan.end">end</a></code>, <code><a href="#PiiSpan.speaker">speaker</a></code>, <code><a href="#PiiSpan.score">score</a></code> and <code><a href="#PiiSpan.timestamp_model">timestamp_model</a></code>
+are inherited and mean what they mean everywhere else. <code><a href="#PiiSpan.start">start</a></code> and <code><a href="#PiiSpan.end">end</a></code> are None until
+something locates the finding — scanning a bare string cannot.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>category:</strong>  The entity type, e.g. <code>"PERSON"</code>, <code>"EMAIL_ADDRESS"</code>.</li>
+<li><strong>source:</strong>  The detector that found it, e.g. <code>"presidio"</code> or <code>"gliner/&lt;label&gt;"</code>.</li>
+<li><strong>asr_model:</strong>  Identifier of the scanned input.</li>
+</ul>
 </div>
 
 
-                            <div id="PiiSpan.__init__" class="classattr">
-                                <div class="attr function">
-            
-        <span class="name">PiiSpan</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">text</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">category</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">source</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">asr_model</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">score</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span></span>)</span>
-
-        
-    </div>
-    <a class="headerlink" href="#PiiSpan.__init__"></a>
-    
-    
-
-                            </div>
-                            <div id="PiiSpan.text" class="classattr">
-                                <div class="attr variable">
-            <span class="name">text</span><span class="annotation">: str</span>
-
-        
-    </div>
-    <a class="headerlink" href="#PiiSpan.text"></a>
-    
-    
-
-                            </div>
                             <div id="PiiSpan.category" class="classattr">
                                 <div class="attr variable">
-            <span class="name">category</span><span class="annotation">: str</span>
+            <span class="name">category</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
 
         
     </div>
@@ -863,7 +850,8 @@ populated <code><a href="#PiiScan.failures">failures</a></code> is "we could not
                             </div>
                             <div id="PiiSpan.source" class="classattr">
                                 <div class="attr variable">
-            <span class="name">source</span><span class="annotation">: str</span>
+            <span class="name">source</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
 
         
     </div>
@@ -874,7 +862,8 @@ populated <code><a href="#PiiScan.failures">failures</a></code> is "we could not
                             </div>
                             <div id="PiiSpan.asr_model" class="classattr">
                                 <div class="attr variable">
-            <span class="name">asr_model</span><span class="annotation">: str</span>
+            <span class="name">asr_model</span><span class="annotation">: str</span>        =
+<span class="default_value">PydanticUndefined</span>
 
         
     </div>
@@ -883,17 +872,33 @@ populated <code><a href="#PiiScan.failures">failures</a></code> is "we could not
     
 
                             </div>
-                            <div id="PiiSpan.score" class="classattr">
-                                <div class="attr variable">
-            <span class="name">score</span><span class="annotation">: float | None</span>        =
-<span class="default_value">None</span>
+                            <div class="inherited">
+                                <h5>Inherited Members</h5>
+                                <dl>
+                                    <div><dt><a href="../../utils/data_structures/script_line.html#ScriptLine">senselab.utils.data_structures.script_line.ScriptLine</a></dt>
+                                <dd id="PiiSpan.text" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.text">text</a></dd>
+                <dd id="PiiSpan.speaker" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.speaker">speaker</a></dd>
+                <dd id="PiiSpan.start" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.start">start</a></dd>
+                <dd id="PiiSpan.end" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.end">end</a></dd>
+                <dd id="PiiSpan.chunks" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.chunks">chunks</a></dd>
+                <dd id="PiiSpan.score" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.score">score</a></dd>
+                <dd id="PiiSpan.avg_logprob" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.avg_logprob">avg_logprob</a></dd>
+                <dd id="PiiSpan.no_speech_prob" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.no_speech_prob">no_speech_prob</a></dd>
+                <dd id="PiiSpan.timestamp_source" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.timestamp_source">timestamp_source</a></dd>
+                <dd id="PiiSpan.timestamp_model" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.timestamp_model">timestamp_model</a></dd>
+                <dd id="PiiSpan.token_entropy" class="variable"><a href="../../utils/data_structures/script_line.html#ScriptLine.token_entropy">token_entropy</a></dd>
+                <dd id="PiiSpan.validate_text_and_speaker" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.validate_text_and_speaker">validate_text_and_speaker</a></dd>
+                <dd id="PiiSpan.strings_must_be_stripped" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.strings_must_be_stripped">strings_must_be_stripped</a></dd>
+                <dd id="PiiSpan.timestamps_must_be_positive" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.timestamps_must_be_positive">timestamps_must_be_positive</a></dd>
+                <dd id="PiiSpan.get_text" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.get_text">get_text</a></dd>
+                <dd id="PiiSpan.get_speaker" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.get_speaker">get_speaker</a></dd>
+                <dd id="PiiSpan.get_timestamps" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.get_timestamps">get_timestamps</a></dd>
+                <dd id="PiiSpan.get_chunks" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.get_chunks">get_chunks</a></dd>
+                <dd id="PiiSpan.iter_leaves" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.iter_leaves">iter_leaves</a></dd>
+                <dd id="PiiSpan.from_dict" class="function"><a href="../../utils/data_structures/script_line.html#ScriptLine.from_dict">from_dict</a></dd>
 
-        
-    </div>
-    <a class="headerlink" href="#PiiSpan.score"></a>
-    
-    
-
+            </div>
+                                </dl>
                             </div>
                 </section>
                 <section id="decide_pii">
@@ -907,82 +912,82 @@ populated <code><a href="#PiiScan.failures">failures</a></code> is "we could not
 
     </div>
     <a class="headerlink" href="#decide_pii"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="decide_pii-516"><a href="#decide_pii-516"><span class="linenos">516</span></a><span class="k">def</span><span class="w"> </span><span class="nf">decide_pii</span><span class="p">(</span>
-</span><span id="decide_pii-517"><a href="#decide_pii-517"><span class="linenos">517</span></a>    <span class="n">scans</span><span class="p">:</span> <span class="n">PiiScan</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">],</span>
-</span><span id="decide_pii-518"><a href="#decide_pii-518"><span class="linenos">518</span></a>    <span class="n">require_cross_source_corroboration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="decide_pii-519"><a href="#decide_pii-519"><span class="linenos">519</span></a>    <span class="n">n_sources</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
-</span><span id="decide_pii-520"><a href="#decide_pii-520"><span class="linenos">520</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PiiReport</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiReport</span><span class="p">]:</span>
-</span><span id="decide_pii-521"><a href="#decide_pii-521"><span class="linenos">521</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Turn detector evidence into a verdict.</span>
-</span><span id="decide_pii-522"><a href="#decide_pii-522"><span class="linenos">522</span></a>
-</span><span id="decide_pii-523"><a href="#decide_pii-523"><span class="linenos">523</span></a><span class="sd">    The aggregation-and-threshold half, deliberately separate from :func:`scan_for_pii`.</span>
-</span><span id="decide_pii-524"><a href="#decide_pii-524"><span class="linenos">524</span></a><span class="sd">    Everything here is a *decision*: how many detectors must agree before a finding counts,</span>
-</span><span id="decide_pii-525"><a href="#decide_pii-525"><span class="linenos">525</span></a><span class="sd">    how per-detector scores and agreement combine into one confidence, and what</span>
-</span><span id="decide_pii-526"><a href="#decide_pii-526"><span class="linenos">526</span></a><span class="sd">    ``contains_pii`` ends up being. None of it re-runs a detector, and none of</span>
-</span><span id="decide_pii-527"><a href="#decide_pii-527"><span class="linenos">527</span></a><span class="sd">    :func:`scan_for_pii`&#39;s parameters appear here — that separation is the point. A caller</span>
-</span><span id="decide_pii-528"><a href="#decide_pii-528"><span class="linenos">528</span></a><span class="sd">    with a different corroboration rule, a severity ordering this module declines to</span>
-</span><span id="decide_pii-529"><a href="#decide_pii-529"><span class="linenos">529</span></a><span class="sd">    impose, or an aggregation across several transcripts of one recording replaces this</span>
-</span><span id="decide_pii-530"><a href="#decide_pii-530"><span class="linenos">530</span></a><span class="sd">    function and keeps the scan.</span>
-</span><span id="decide_pii-531"><a href="#decide_pii-531"><span class="linenos">531</span></a>
-</span><span id="decide_pii-532"><a href="#decide_pii-532"><span class="linenos">532</span></a><span class="sd">    Args:</span>
-</span><span id="decide_pii-533"><a href="#decide_pii-533"><span class="linenos">533</span></a><span class="sd">        scans: One :class:`PiiScan`, or a sequence of them.</span>
-</span><span id="decide_pii-534"><a href="#decide_pii-534"><span class="linenos">534</span></a><span class="sd">        require_cross_source_corroboration: When ``True`` (default) and ≥2 detectors ran,</span>
-</span><span id="decide_pii-535"><a href="#decide_pii-535"><span class="linenos">535</span></a><span class="sd">            only flip ``contains_pii`` for a ``(category, normalized_text)`` pair that ≥2</span>
-</span><span id="decide_pii-536"><a href="#decide_pii-536"><span class="linenos">536</span></a><span class="sd">            of them independently flagged. Agreement keys on a coarse family rather than</span>
-</span><span id="decide_pii-537"><a href="#decide_pii-537"><span class="linenos">537</span></a><span class="sd">            the raw category, so two detectors naming the same entity slightly differently</span>
-</span><span id="decide_pii-538"><a href="#decide_pii-538"><span class="linenos">538</span></a><span class="sd">            still corroborate. When only one detector ran, corroboration cannot apply and</span>
-</span><span id="decide_pii-539"><a href="#decide_pii-539"><span class="linenos">539</span></a><span class="sd">            any single detection counts — one witness is not a quorum, but it is not</span>
-</span><span id="decide_pii-540"><a href="#decide_pii-540"><span class="linenos">540</span></a><span class="sd">            nothing either.</span>
-</span><span id="decide_pii-541"><a href="#decide_pii-541"><span class="linenos">541</span></a><span class="sd">        n_sources: How many independent transcripts of the same underlying content this</span>
-</span><span id="decide_pii-542"><a href="#decide_pii-542"><span class="linenos">542</span></a><span class="sd">            evidence came from. ``1`` for standalone text. A workflow that scans several</span>
-</span><span id="decide_pii-543"><a href="#decide_pii-543"><span class="linenos">543</span></a><span class="sd">            ASR backends&#39; transcripts of one recording passes the count so cross-source</span>
-</span><span id="decide_pii-544"><a href="#decide_pii-544"><span class="linenos">544</span></a><span class="sd">            agreement can raise confidence — a span only one transcript contains is the</span>
-</span><span id="decide_pii-545"><a href="#decide_pii-545"><span class="linenos">545</span></a><span class="sd">            prototypical ASR hallucination.</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="decide_pii-540"><a href="#decide_pii-540"><span class="linenos">540</span></a><span class="k">def</span><span class="w"> </span><span class="nf">decide_pii</span><span class="p">(</span>
+</span><span id="decide_pii-541"><a href="#decide_pii-541"><span class="linenos">541</span></a>    <span class="n">scans</span><span class="p">:</span> <span class="n">PiiScan</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">],</span>
+</span><span id="decide_pii-542"><a href="#decide_pii-542"><span class="linenos">542</span></a>    <span class="n">require_cross_source_corroboration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="decide_pii-543"><a href="#decide_pii-543"><span class="linenos">543</span></a>    <span class="n">n_sources</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="decide_pii-544"><a href="#decide_pii-544"><span class="linenos">544</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PiiReport</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiReport</span><span class="p">]:</span>
+</span><span id="decide_pii-545"><a href="#decide_pii-545"><span class="linenos">545</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Turn detector evidence into a verdict.</span>
 </span><span id="decide_pii-546"><a href="#decide_pii-546"><span class="linenos">546</span></a>
-</span><span id="decide_pii-547"><a href="#decide_pii-547"><span class="linenos">547</span></a><span class="sd">    Returns:</span>
-</span><span id="decide_pii-548"><a href="#decide_pii-548"><span class="linenos">548</span></a><span class="sd">        A single ``PiiReport`` for a single scan; a list of the same length and order for a</span>
-</span><span id="decide_pii-549"><a href="#decide_pii-549"><span class="linenos">549</span></a><span class="sd">        sequence. ``detector_used=None`` and ``detection_confidence=None`` together mean</span>
-</span><span id="decide_pii-550"><a href="#decide_pii-550"><span class="linenos">550</span></a><span class="sd">        detection did not actually run — distinct from ``detection_confidence == 0.0``,</span>
-</span><span id="decide_pii-551"><a href="#decide_pii-551"><span class="linenos">551</span></a><span class="sd">        which means it ran and found nothing.</span>
-</span><span id="decide_pii-552"><a href="#decide_pii-552"><span class="linenos">552</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="decide_pii-553"><a href="#decide_pii-553"><span class="linenos">553</span></a>    <span class="n">is_scalar</span> <span class="o">=</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scans</span><span class="p">,</span> <span class="n">PiiScan</span><span class="p">)</span>
-</span><span id="decide_pii-554"><a href="#decide_pii-554"><span class="linenos">554</span></a>    <span class="n">scan_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">scans</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scans</span><span class="p">,</span> <span class="n">PiiScan</span><span class="p">)</span> <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="n">scans</span><span class="p">)</span>
+</span><span id="decide_pii-547"><a href="#decide_pii-547"><span class="linenos">547</span></a><span class="sd">    The aggregation-and-threshold half, deliberately separate from :func:`scan_for_pii`.</span>
+</span><span id="decide_pii-548"><a href="#decide_pii-548"><span class="linenos">548</span></a><span class="sd">    Everything here is a *decision*: how many detectors must agree before a finding counts,</span>
+</span><span id="decide_pii-549"><a href="#decide_pii-549"><span class="linenos">549</span></a><span class="sd">    how per-detector scores and agreement combine into one confidence, and what</span>
+</span><span id="decide_pii-550"><a href="#decide_pii-550"><span class="linenos">550</span></a><span class="sd">    ``contains_pii`` ends up being. None of it re-runs a detector, and none of</span>
+</span><span id="decide_pii-551"><a href="#decide_pii-551"><span class="linenos">551</span></a><span class="sd">    :func:`scan_for_pii`&#39;s parameters appear here — that separation is the point. A caller</span>
+</span><span id="decide_pii-552"><a href="#decide_pii-552"><span class="linenos">552</span></a><span class="sd">    with a different corroboration rule, a severity ordering this module declines to</span>
+</span><span id="decide_pii-553"><a href="#decide_pii-553"><span class="linenos">553</span></a><span class="sd">    impose, or an aggregation across several transcripts of one recording replaces this</span>
+</span><span id="decide_pii-554"><a href="#decide_pii-554"><span class="linenos">554</span></a><span class="sd">    function and keeps the scan.</span>
 </span><span id="decide_pii-555"><a href="#decide_pii-555"><span class="linenos">555</span></a>
-</span><span id="decide_pii-556"><a href="#decide_pii-556"><span class="linenos">556</span></a>    <span class="n">reports</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiReport</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="decide_pii-557"><a href="#decide_pii-557"><span class="linenos">557</span></a>    <span class="k">for</span> <span class="n">scan</span> <span class="ow">in</span> <span class="n">scan_list</span><span class="p">:</span>
-</span><span id="decide_pii-558"><a href="#decide_pii-558"><span class="linenos">558</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">:</span>
-</span><span id="decide_pii-559"><a href="#decide_pii-559"><span class="linenos">559</span></a>            <span class="c1"># Nothing ran, so there is nothing to decide. contains_pii=False is the safe</span>
-</span><span id="decide_pii-560"><a href="#decide_pii-560"><span class="linenos">560</span></a>            <span class="c1"># report, and detection_confidence stays None so it cannot be read as 0.0</span>
-</span><span id="decide_pii-561"><a href="#decide_pii-561"><span class="linenos">561</span></a>            <span class="c1"># (&quot;checked, clean&quot;).</span>
-</span><span id="decide_pii-562"><a href="#decide_pii-562"><span class="linenos">562</span></a>            <span class="n">reports</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-</span><span id="decide_pii-563"><a href="#decide_pii-563"><span class="linenos">563</span></a>                <span class="n">PiiReport</span><span class="p">(</span>
-</span><span id="decide_pii-564"><a href="#decide_pii-564"><span class="linenos">564</span></a>                    <span class="n">contains_pii</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-</span><span id="decide_pii-565"><a href="#decide_pii-565"><span class="linenos">565</span></a>                    <span class="n">n_spans</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
-</span><span id="decide_pii-566"><a href="#decide_pii-566"><span class="linenos">566</span></a>                    <span class="n">categories</span><span class="o">=</span><span class="p">[],</span>
-</span><span id="decide_pii-567"><a href="#decide_pii-567"><span class="linenos">567</span></a>                    <span class="n">spans</span><span class="o">=</span><span class="p">[],</span>
-</span><span id="decide_pii-568"><a href="#decide_pii-568"><span class="linenos">568</span></a>                    <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">failures</span><span class="p">),</span>
-</span><span id="decide_pii-569"><a href="#decide_pii-569"><span class="linenos">569</span></a>                    <span class="n">detector_used</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="decide_pii-570"><a href="#decide_pii-570"><span class="linenos">570</span></a>                    <span class="n">detection_confidence</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-</span><span id="decide_pii-571"><a href="#decide_pii-571"><span class="linenos">571</span></a>                <span class="p">)</span>
-</span><span id="decide_pii-572"><a href="#decide_pii-572"><span class="linenos">572</span></a>            <span class="p">)</span>
-</span><span id="decide_pii-573"><a href="#decide_pii-573"><span class="linenos">573</span></a>            <span class="k">continue</span>
-</span><span id="decide_pii-574"><a href="#decide_pii-574"><span class="linenos">574</span></a>
-</span><span id="decide_pii-575"><a href="#decide_pii-575"><span class="linenos">575</span></a>        <span class="n">reports</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-</span><span id="decide_pii-576"><a href="#decide_pii-576"><span class="linenos">576</span></a>            <span class="n">PiiReport</span><span class="p">(</span>
-</span><span id="decide_pii-577"><a href="#decide_pii-577"><span class="linenos">577</span></a>                <span class="n">contains_pii</span><span class="o">=</span><span class="n">_corroborated_contains_pii</span><span class="p">(</span>
-</span><span id="decide_pii-578"><a href="#decide_pii-578"><span class="linenos">578</span></a>                    <span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">,</span> <span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">,</span> <span class="n">require_cross_source_corroboration</span>
-</span><span id="decide_pii-579"><a href="#decide_pii-579"><span class="linenos">579</span></a>                <span class="p">),</span>
-</span><span id="decide_pii-580"><a href="#decide_pii-580"><span class="linenos">580</span></a>                <span class="n">n_spans</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">),</span>
-</span><span id="decide_pii-581"><a href="#decide_pii-581"><span class="linenos">581</span></a>                <span class="n">categories</span><span class="o">=</span><span class="nb">sorted</span><span class="p">({</span><span class="n">s</span><span class="o">.</span><span class="n">category</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">}),</span>
-</span><span id="decide_pii-582"><a href="#decide_pii-582"><span class="linenos">582</span></a>                <span class="n">spans</span><span class="o">=</span><span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">,</span>
-</span><span id="decide_pii-583"><a href="#decide_pii-583"><span class="linenos">583</span></a>                <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">failures</span><span class="p">),</span>
-</span><span id="decide_pii-584"><a href="#decide_pii-584"><span class="linenos">584</span></a>                <span class="n">detector_used</span><span class="o">=</span><span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">),</span>
-</span><span id="decide_pii-585"><a href="#decide_pii-585"><span class="linenos">585</span></a>                <span class="n">detection_confidence</span><span class="o">=</span><span class="n">_compute_detection_confidence</span><span class="p">(</span>
-</span><span id="decide_pii-586"><a href="#decide_pii-586"><span class="linenos">586</span></a>                    <span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">,</span> <span class="n">n_asr_models</span><span class="o">=</span><span class="n">n_sources</span><span class="p">,</span> <span class="n">n_detectors_run</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">)</span>
-</span><span id="decide_pii-587"><a href="#decide_pii-587"><span class="linenos">587</span></a>                <span class="p">),</span>
-</span><span id="decide_pii-588"><a href="#decide_pii-588"><span class="linenos">588</span></a>            <span class="p">)</span>
-</span><span id="decide_pii-589"><a href="#decide_pii-589"><span class="linenos">589</span></a>        <span class="p">)</span>
-</span><span id="decide_pii-590"><a href="#decide_pii-590"><span class="linenos">590</span></a>
-</span><span id="decide_pii-591"><a href="#decide_pii-591"><span class="linenos">591</span></a>    <span class="k">return</span> <span class="n">reports</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">is_scalar</span> <span class="k">else</span> <span class="n">reports</span>
+</span><span id="decide_pii-556"><a href="#decide_pii-556"><span class="linenos">556</span></a><span class="sd">    Args:</span>
+</span><span id="decide_pii-557"><a href="#decide_pii-557"><span class="linenos">557</span></a><span class="sd">        scans: One :class:`PiiScan`, or a sequence of them.</span>
+</span><span id="decide_pii-558"><a href="#decide_pii-558"><span class="linenos">558</span></a><span class="sd">        require_cross_source_corroboration: When ``True`` (default) and ≥2 detectors ran,</span>
+</span><span id="decide_pii-559"><a href="#decide_pii-559"><span class="linenos">559</span></a><span class="sd">            only flip ``contains_pii`` for a ``(category, normalized_text)`` pair that ≥2</span>
+</span><span id="decide_pii-560"><a href="#decide_pii-560"><span class="linenos">560</span></a><span class="sd">            of them independently flagged. Agreement keys on a coarse family rather than</span>
+</span><span id="decide_pii-561"><a href="#decide_pii-561"><span class="linenos">561</span></a><span class="sd">            the raw category, so two detectors naming the same entity slightly differently</span>
+</span><span id="decide_pii-562"><a href="#decide_pii-562"><span class="linenos">562</span></a><span class="sd">            still corroborate. When only one detector ran, corroboration cannot apply and</span>
+</span><span id="decide_pii-563"><a href="#decide_pii-563"><span class="linenos">563</span></a><span class="sd">            any single detection counts — one witness is not a quorum, but it is not</span>
+</span><span id="decide_pii-564"><a href="#decide_pii-564"><span class="linenos">564</span></a><span class="sd">            nothing either.</span>
+</span><span id="decide_pii-565"><a href="#decide_pii-565"><span class="linenos">565</span></a><span class="sd">        n_sources: How many independent transcripts of the same underlying content this</span>
+</span><span id="decide_pii-566"><a href="#decide_pii-566"><span class="linenos">566</span></a><span class="sd">            evidence came from. ``1`` for standalone text. A workflow that scans several</span>
+</span><span id="decide_pii-567"><a href="#decide_pii-567"><span class="linenos">567</span></a><span class="sd">            ASR backends&#39; transcripts of one recording passes the count so cross-source</span>
+</span><span id="decide_pii-568"><a href="#decide_pii-568"><span class="linenos">568</span></a><span class="sd">            agreement can raise confidence — a span only one transcript contains is the</span>
+</span><span id="decide_pii-569"><a href="#decide_pii-569"><span class="linenos">569</span></a><span class="sd">            prototypical ASR hallucination.</span>
+</span><span id="decide_pii-570"><a href="#decide_pii-570"><span class="linenos">570</span></a>
+</span><span id="decide_pii-571"><a href="#decide_pii-571"><span class="linenos">571</span></a><span class="sd">    Returns:</span>
+</span><span id="decide_pii-572"><a href="#decide_pii-572"><span class="linenos">572</span></a><span class="sd">        A single ``PiiReport`` for a single scan; a list of the same length and order for a</span>
+</span><span id="decide_pii-573"><a href="#decide_pii-573"><span class="linenos">573</span></a><span class="sd">        sequence. ``detector_used=None`` and ``detection_confidence=None`` together mean</span>
+</span><span id="decide_pii-574"><a href="#decide_pii-574"><span class="linenos">574</span></a><span class="sd">        detection did not actually run — distinct from ``detection_confidence == 0.0``,</span>
+</span><span id="decide_pii-575"><a href="#decide_pii-575"><span class="linenos">575</span></a><span class="sd">        which means it ran and found nothing.</span>
+</span><span id="decide_pii-576"><a href="#decide_pii-576"><span class="linenos">576</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="decide_pii-577"><a href="#decide_pii-577"><span class="linenos">577</span></a>    <span class="n">is_scalar</span> <span class="o">=</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scans</span><span class="p">,</span> <span class="n">PiiScan</span><span class="p">)</span>
+</span><span id="decide_pii-578"><a href="#decide_pii-578"><span class="linenos">578</span></a>    <span class="n">scan_list</span> <span class="o">=</span> <span class="p">[</span><span class="n">scans</span><span class="p">]</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">scans</span><span class="p">,</span> <span class="n">PiiScan</span><span class="p">)</span> <span class="k">else</span> <span class="nb">list</span><span class="p">(</span><span class="n">scans</span><span class="p">)</span>
+</span><span id="decide_pii-579"><a href="#decide_pii-579"><span class="linenos">579</span></a>
+</span><span id="decide_pii-580"><a href="#decide_pii-580"><span class="linenos">580</span></a>    <span class="n">reports</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiReport</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="decide_pii-581"><a href="#decide_pii-581"><span class="linenos">581</span></a>    <span class="k">for</span> <span class="n">scan</span> <span class="ow">in</span> <span class="n">scan_list</span><span class="p">:</span>
+</span><span id="decide_pii-582"><a href="#decide_pii-582"><span class="linenos">582</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">:</span>
+</span><span id="decide_pii-583"><a href="#decide_pii-583"><span class="linenos">583</span></a>            <span class="c1"># Nothing ran, so there is nothing to decide. contains_pii=False is the safe</span>
+</span><span id="decide_pii-584"><a href="#decide_pii-584"><span class="linenos">584</span></a>            <span class="c1"># report, and detection_confidence stays None so it cannot be read as 0.0</span>
+</span><span id="decide_pii-585"><a href="#decide_pii-585"><span class="linenos">585</span></a>            <span class="c1"># (&quot;checked, clean&quot;).</span>
+</span><span id="decide_pii-586"><a href="#decide_pii-586"><span class="linenos">586</span></a>            <span class="n">reports</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="decide_pii-587"><a href="#decide_pii-587"><span class="linenos">587</span></a>                <span class="n">PiiReport</span><span class="p">(</span>
+</span><span id="decide_pii-588"><a href="#decide_pii-588"><span class="linenos">588</span></a>                    <span class="n">contains_pii</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+</span><span id="decide_pii-589"><a href="#decide_pii-589"><span class="linenos">589</span></a>                    <span class="n">n_spans</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+</span><span id="decide_pii-590"><a href="#decide_pii-590"><span class="linenos">590</span></a>                    <span class="n">categories</span><span class="o">=</span><span class="p">[],</span>
+</span><span id="decide_pii-591"><a href="#decide_pii-591"><span class="linenos">591</span></a>                    <span class="n">spans</span><span class="o">=</span><span class="p">[],</span>
+</span><span id="decide_pii-592"><a href="#decide_pii-592"><span class="linenos">592</span></a>                    <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">failures</span><span class="p">),</span>
+</span><span id="decide_pii-593"><a href="#decide_pii-593"><span class="linenos">593</span></a>                    <span class="n">detector_used</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="decide_pii-594"><a href="#decide_pii-594"><span class="linenos">594</span></a>                    <span class="n">detection_confidence</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="decide_pii-595"><a href="#decide_pii-595"><span class="linenos">595</span></a>                <span class="p">)</span>
+</span><span id="decide_pii-596"><a href="#decide_pii-596"><span class="linenos">596</span></a>            <span class="p">)</span>
+</span><span id="decide_pii-597"><a href="#decide_pii-597"><span class="linenos">597</span></a>            <span class="k">continue</span>
+</span><span id="decide_pii-598"><a href="#decide_pii-598"><span class="linenos">598</span></a>
+</span><span id="decide_pii-599"><a href="#decide_pii-599"><span class="linenos">599</span></a>        <span class="n">reports</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="decide_pii-600"><a href="#decide_pii-600"><span class="linenos">600</span></a>            <span class="n">PiiReport</span><span class="p">(</span>
+</span><span id="decide_pii-601"><a href="#decide_pii-601"><span class="linenos">601</span></a>                <span class="n">contains_pii</span><span class="o">=</span><span class="n">_corroborated_contains_pii</span><span class="p">(</span>
+</span><span id="decide_pii-602"><a href="#decide_pii-602"><span class="linenos">602</span></a>                    <span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">,</span> <span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">,</span> <span class="n">require_cross_source_corroboration</span>
+</span><span id="decide_pii-603"><a href="#decide_pii-603"><span class="linenos">603</span></a>                <span class="p">),</span>
+</span><span id="decide_pii-604"><a href="#decide_pii-604"><span class="linenos">604</span></a>                <span class="n">n_spans</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">),</span>
+</span><span id="decide_pii-605"><a href="#decide_pii-605"><span class="linenos">605</span></a>                <span class="n">categories</span><span class="o">=</span><span class="nb">sorted</span><span class="p">({</span><span class="n">s</span><span class="o">.</span><span class="n">category</span> <span class="k">for</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">}),</span>
+</span><span id="decide_pii-606"><a href="#decide_pii-606"><span class="linenos">606</span></a>                <span class="n">spans</span><span class="o">=</span><span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">,</span>
+</span><span id="decide_pii-607"><a href="#decide_pii-607"><span class="linenos">607</span></a>                <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">failures</span><span class="p">),</span>
+</span><span id="decide_pii-608"><a href="#decide_pii-608"><span class="linenos">608</span></a>                <span class="n">detector_used</span><span class="o">=</span><span class="s2">&quot;,&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">),</span>
+</span><span id="decide_pii-609"><a href="#decide_pii-609"><span class="linenos">609</span></a>                <span class="n">detection_confidence</span><span class="o">=</span><span class="n">_compute_detection_confidence</span><span class="p">(</span>
+</span><span id="decide_pii-610"><a href="#decide_pii-610"><span class="linenos">610</span></a>                    <span class="n">scan</span><span class="o">.</span><span class="n">spans</span><span class="p">,</span> <span class="n">n_asr_models</span><span class="o">=</span><span class="n">n_sources</span><span class="p">,</span> <span class="n">n_detectors_run</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="n">scan</span><span class="o">.</span><span class="n">detectors_used</span><span class="p">)</span>
+</span><span id="decide_pii-611"><a href="#decide_pii-611"><span class="linenos">611</span></a>                <span class="p">),</span>
+</span><span id="decide_pii-612"><a href="#decide_pii-612"><span class="linenos">612</span></a>            <span class="p">)</span>
+</span><span id="decide_pii-613"><a href="#decide_pii-613"><span class="linenos">613</span></a>        <span class="p">)</span>
+</span><span id="decide_pii-614"><a href="#decide_pii-614"><span class="linenos">614</span></a>
+</span><span id="decide_pii-615"><a href="#decide_pii-615"><span class="linenos">615</span></a>    <span class="k">return</span> <span class="n">reports</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">is_scalar</span> <span class="k">else</span> <span class="n">reports</span>
 </span></pre></div>
 
 
@@ -1082,48 +1087,48 @@ differently on two machines with nothing in the report explaining the gap.</p>
 
     </div>
     <a class="headerlink" href="#detect_pii"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_pii-594"><a href="#detect_pii-594"><span class="linenos">594</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_pii</span><span class="p">(</span>
-</span><span id="detect_pii-595"><a href="#detect_pii-595"><span class="linenos">595</span></a>    <span class="n">inputs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span><span class="p">],</span>
-</span><span id="detect_pii-596"><a href="#detect_pii-596"><span class="linenos">596</span></a>    <span class="n">detectors</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="detect_pii-597"><a href="#detect_pii-597"><span class="linenos">597</span></a>    <span class="n">presidio_score_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.4</span><span class="p">,</span>
-</span><span id="detect_pii-598"><a href="#detect_pii-598"><span class="linenos">598</span></a>    <span class="n">gliner_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="detect_pii-599"><a href="#detect_pii-599"><span class="linenos">599</span></a>    <span class="n">gliner_labels</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="detect_pii-600"><a href="#detect_pii-600"><span class="linenos">600</span></a>    <span class="n">gliner_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
-</span><span id="detect_pii-601"><a href="#detect_pii-601"><span class="linenos">601</span></a>    <span class="n">require_cross_source_corroboration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
-</span><span id="detect_pii-602"><a href="#detect_pii-602"><span class="linenos">602</span></a>    <span class="n">local_llm_config</span><span class="p">:</span> <span class="n">LocalLlmConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="detect_pii-603"><a href="#detect_pii-603"><span class="linenos">603</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PiiReport</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiReport</span><span class="p">]:</span>
-</span><span id="detect_pii-604"><a href="#detect_pii-604"><span class="linenos">604</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Scan for PII and decide on the result: :func:`scan_for_pii` then :func:`decide_pii`.</span>
-</span><span id="detect_pii-605"><a href="#detect_pii-605"><span class="linenos">605</span></a>
-</span><span id="detect_pii-606"><a href="#detect_pii-606"><span class="linenos">606</span></a><span class="sd">    The convenience path for the common case, and deliberately nothing more than the</span>
-</span><span id="detect_pii-607"><a href="#detect_pii-607"><span class="linenos">607</span></a><span class="sd">    composition of the two halves — it exists so a caller who wants the default decision</span>
-</span><span id="detect_pii-608"><a href="#detect_pii-608"><span class="linenos">608</span></a><span class="sd">    does not have to write both calls, not to hide the split. Reach for the halves directly</span>
-</span><span id="detect_pii-609"><a href="#detect_pii-609"><span class="linenos">609</span></a><span class="sd">    when the decision needs to differ from the default: ``scan_for_pii`` gives the evidence,</span>
-</span><span id="detect_pii-610"><a href="#detect_pii-610"><span class="linenos">610</span></a><span class="sd">    and any rule can be applied to it.</span>
-</span><span id="detect_pii-611"><a href="#detect_pii-611"><span class="linenos">611</span></a>
-</span><span id="detect_pii-612"><a href="#detect_pii-612"><span class="linenos">612</span></a><span class="sd">    Args:</span>
-</span><span id="detect_pii-613"><a href="#detect_pii-613"><span class="linenos">613</span></a><span class="sd">        inputs: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-614"><a href="#detect_pii-614"><span class="linenos">614</span></a><span class="sd">        detectors: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-615"><a href="#detect_pii-615"><span class="linenos">615</span></a><span class="sd">        presidio_score_threshold: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-616"><a href="#detect_pii-616"><span class="linenos">616</span></a><span class="sd">        gliner_model: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-617"><a href="#detect_pii-617"><span class="linenos">617</span></a><span class="sd">        gliner_labels: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-618"><a href="#detect_pii-618"><span class="linenos">618</span></a><span class="sd">        gliner_threshold: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-619"><a href="#detect_pii-619"><span class="linenos">619</span></a><span class="sd">        require_cross_source_corroboration: See :func:`decide_pii`.</span>
-</span><span id="detect_pii-620"><a href="#detect_pii-620"><span class="linenos">620</span></a><span class="sd">        local_llm_config: See :func:`scan_for_pii`.</span>
-</span><span id="detect_pii-621"><a href="#detect_pii-621"><span class="linenos">621</span></a>
-</span><span id="detect_pii-622"><a href="#detect_pii-622"><span class="linenos">622</span></a><span class="sd">    Returns:</span>
-</span><span id="detect_pii-623"><a href="#detect_pii-623"><span class="linenos">623</span></a><span class="sd">        A single ``PiiReport`` when ``inputs`` is a scalar; a list of the same length and</span>
-</span><span id="detect_pii-624"><a href="#detect_pii-624"><span class="linenos">624</span></a><span class="sd">        order otherwise.</span>
-</span><span id="detect_pii-625"><a href="#detect_pii-625"><span class="linenos">625</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="detect_pii-626"><a href="#detect_pii-626"><span class="linenos">626</span></a>    <span class="n">scans</span> <span class="o">=</span> <span class="n">scan_for_pii</span><span class="p">(</span>
-</span><span id="detect_pii-627"><a href="#detect_pii-627"><span class="linenos">627</span></a>        <span class="n">inputs</span><span class="p">,</span>
-</span><span id="detect_pii-628"><a href="#detect_pii-628"><span class="linenos">628</span></a>        <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span><span class="p">,</span>
-</span><span id="detect_pii-629"><a href="#detect_pii-629"><span class="linenos">629</span></a>        <span class="n">presidio_score_threshold</span><span class="o">=</span><span class="n">presidio_score_threshold</span><span class="p">,</span>
-</span><span id="detect_pii-630"><a href="#detect_pii-630"><span class="linenos">630</span></a>        <span class="n">gliner_model</span><span class="o">=</span><span class="n">gliner_model</span><span class="p">,</span>
-</span><span id="detect_pii-631"><a href="#detect_pii-631"><span class="linenos">631</span></a>        <span class="n">gliner_labels</span><span class="o">=</span><span class="n">gliner_labels</span><span class="p">,</span>
-</span><span id="detect_pii-632"><a href="#detect_pii-632"><span class="linenos">632</span></a>        <span class="n">gliner_threshold</span><span class="o">=</span><span class="n">gliner_threshold</span><span class="p">,</span>
-</span><span id="detect_pii-633"><a href="#detect_pii-633"><span class="linenos">633</span></a>        <span class="n">local_llm_config</span><span class="o">=</span><span class="n">local_llm_config</span><span class="p">,</span>
-</span><span id="detect_pii-634"><a href="#detect_pii-634"><span class="linenos">634</span></a>    <span class="p">)</span>
-</span><span id="detect_pii-635"><a href="#detect_pii-635"><span class="linenos">635</span></a>    <span class="k">return</span> <span class="n">decide_pii</span><span class="p">(</span><span class="n">scans</span><span class="p">,</span> <span class="n">require_cross_source_corroboration</span><span class="o">=</span><span class="n">require_cross_source_corroboration</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_pii-618"><a href="#detect_pii-618"><span class="linenos">618</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_pii</span><span class="p">(</span>
+</span><span id="detect_pii-619"><a href="#detect_pii-619"><span class="linenos">619</span></a>    <span class="n">inputs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span><span class="p">],</span>
+</span><span id="detect_pii-620"><a href="#detect_pii-620"><span class="linenos">620</span></a>    <span class="n">detectors</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="detect_pii-621"><a href="#detect_pii-621"><span class="linenos">621</span></a>    <span class="n">presidio_score_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.4</span><span class="p">,</span>
+</span><span id="detect_pii-622"><a href="#detect_pii-622"><span class="linenos">622</span></a>    <span class="n">gliner_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="detect_pii-623"><a href="#detect_pii-623"><span class="linenos">623</span></a>    <span class="n">gliner_labels</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="detect_pii-624"><a href="#detect_pii-624"><span class="linenos">624</span></a>    <span class="n">gliner_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+</span><span id="detect_pii-625"><a href="#detect_pii-625"><span class="linenos">625</span></a>    <span class="n">require_cross_source_corroboration</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
+</span><span id="detect_pii-626"><a href="#detect_pii-626"><span class="linenos">626</span></a>    <span class="n">local_llm_config</span><span class="p">:</span> <span class="n">LocalLlmConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="detect_pii-627"><a href="#detect_pii-627"><span class="linenos">627</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PiiReport</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiReport</span><span class="p">]:</span>
+</span><span id="detect_pii-628"><a href="#detect_pii-628"><span class="linenos">628</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Scan for PII and decide on the result: :func:`scan_for_pii` then :func:`decide_pii`.</span>
+</span><span id="detect_pii-629"><a href="#detect_pii-629"><span class="linenos">629</span></a>
+</span><span id="detect_pii-630"><a href="#detect_pii-630"><span class="linenos">630</span></a><span class="sd">    The convenience path for the common case, and deliberately nothing more than the</span>
+</span><span id="detect_pii-631"><a href="#detect_pii-631"><span class="linenos">631</span></a><span class="sd">    composition of the two halves — it exists so a caller who wants the default decision</span>
+</span><span id="detect_pii-632"><a href="#detect_pii-632"><span class="linenos">632</span></a><span class="sd">    does not have to write both calls, not to hide the split. Reach for the halves directly</span>
+</span><span id="detect_pii-633"><a href="#detect_pii-633"><span class="linenos">633</span></a><span class="sd">    when the decision needs to differ from the default: ``scan_for_pii`` gives the evidence,</span>
+</span><span id="detect_pii-634"><a href="#detect_pii-634"><span class="linenos">634</span></a><span class="sd">    and any rule can be applied to it.</span>
+</span><span id="detect_pii-635"><a href="#detect_pii-635"><span class="linenos">635</span></a>
+</span><span id="detect_pii-636"><a href="#detect_pii-636"><span class="linenos">636</span></a><span class="sd">    Args:</span>
+</span><span id="detect_pii-637"><a href="#detect_pii-637"><span class="linenos">637</span></a><span class="sd">        inputs: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-638"><a href="#detect_pii-638"><span class="linenos">638</span></a><span class="sd">        detectors: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-639"><a href="#detect_pii-639"><span class="linenos">639</span></a><span class="sd">        presidio_score_threshold: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-640"><a href="#detect_pii-640"><span class="linenos">640</span></a><span class="sd">        gliner_model: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-641"><a href="#detect_pii-641"><span class="linenos">641</span></a><span class="sd">        gliner_labels: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-642"><a href="#detect_pii-642"><span class="linenos">642</span></a><span class="sd">        gliner_threshold: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-643"><a href="#detect_pii-643"><span class="linenos">643</span></a><span class="sd">        require_cross_source_corroboration: See :func:`decide_pii`.</span>
+</span><span id="detect_pii-644"><a href="#detect_pii-644"><span class="linenos">644</span></a><span class="sd">        local_llm_config: See :func:`scan_for_pii`.</span>
+</span><span id="detect_pii-645"><a href="#detect_pii-645"><span class="linenos">645</span></a>
+</span><span id="detect_pii-646"><a href="#detect_pii-646"><span class="linenos">646</span></a><span class="sd">    Returns:</span>
+</span><span id="detect_pii-647"><a href="#detect_pii-647"><span class="linenos">647</span></a><span class="sd">        A single ``PiiReport`` when ``inputs`` is a scalar; a list of the same length and</span>
+</span><span id="detect_pii-648"><a href="#detect_pii-648"><span class="linenos">648</span></a><span class="sd">        order otherwise.</span>
+</span><span id="detect_pii-649"><a href="#detect_pii-649"><span class="linenos">649</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="detect_pii-650"><a href="#detect_pii-650"><span class="linenos">650</span></a>    <span class="n">scans</span> <span class="o">=</span> <span class="n">scan_for_pii</span><span class="p">(</span>
+</span><span id="detect_pii-651"><a href="#detect_pii-651"><span class="linenos">651</span></a>        <span class="n">inputs</span><span class="p">,</span>
+</span><span id="detect_pii-652"><a href="#detect_pii-652"><span class="linenos">652</span></a>        <span class="n">detectors</span><span class="o">=</span><span class="n">detectors</span><span class="p">,</span>
+</span><span id="detect_pii-653"><a href="#detect_pii-653"><span class="linenos">653</span></a>        <span class="n">presidio_score_threshold</span><span class="o">=</span><span class="n">presidio_score_threshold</span><span class="p">,</span>
+</span><span id="detect_pii-654"><a href="#detect_pii-654"><span class="linenos">654</span></a>        <span class="n">gliner_model</span><span class="o">=</span><span class="n">gliner_model</span><span class="p">,</span>
+</span><span id="detect_pii-655"><a href="#detect_pii-655"><span class="linenos">655</span></a>        <span class="n">gliner_labels</span><span class="o">=</span><span class="n">gliner_labels</span><span class="p">,</span>
+</span><span id="detect_pii-656"><a href="#detect_pii-656"><span class="linenos">656</span></a>        <span class="n">gliner_threshold</span><span class="o">=</span><span class="n">gliner_threshold</span><span class="p">,</span>
+</span><span id="detect_pii-657"><a href="#detect_pii-657"><span class="linenos">657</span></a>        <span class="n">local_llm_config</span><span class="o">=</span><span class="n">local_llm_config</span><span class="p">,</span>
+</span><span id="detect_pii-658"><a href="#detect_pii-658"><span class="linenos">658</span></a>    <span class="p">)</span>
+</span><span id="detect_pii-659"><a href="#detect_pii-659"><span class="linenos">659</span></a>    <span class="k">return</span> <span class="n">decide_pii</span><span class="p">(</span><span class="n">scans</span><span class="p">,</span> <span class="n">require_cross_source_corroboration</span><span class="o">=</span><span class="n">require_cross_source_corroboration</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1169,35 +1174,35 @@ and any rule can be applied to it.</p>
 
     </div>
     <a class="headerlink" href="#flatten_script_line"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="flatten_script_line-193"><a href="#flatten_script_line-193"><span class="linenos">193</span></a><span class="k">def</span><span class="w"> </span><span class="nf">flatten_script_line</span><span class="p">(</span><span class="n">line</span><span class="p">:</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-</span><span id="flatten_script_line-194"><a href="#flatten_script_line-194"><span class="linenos">194</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Join a ScriptLine&#39;s text with its nested chunks&#39;, depth-first.</span>
-</span><span id="flatten_script_line-195"><a href="#flatten_script_line-195"><span class="linenos">195</span></a>
-</span><span id="flatten_script_line-196"><a href="#flatten_script_line-196"><span class="linenos">196</span></a><span class="sd">    Backends differ in where they put the words: Whisper returns segment text</span>
-</span><span id="flatten_script_line-197"><a href="#flatten_script_line-197"><span class="linenos">197</span></a><span class="sd">    plus word-level ``chunks``, a forced aligner returns segment-level lines with</span>
-</span><span id="flatten_script_line-198"><a href="#flatten_script_line-198"><span class="linenos">198</span></a><span class="sd">    word-level chunks nested underneath, and a diarization line carries a speaker</span>
-</span><span id="flatten_script_line-199"><a href="#flatten_script_line-199"><span class="linenos">199</span></a><span class="sd">    and no text at all. Scanning only ``text`` would make PII coverage silently</span>
-</span><span id="flatten_script_line-200"><a href="#flatten_script_line-200"><span class="linenos">200</span></a><span class="sd">    depend on which backend produced the transcript, so the whole tree is</span>
-</span><span id="flatten_script_line-201"><a href="#flatten_script_line-201"><span class="linenos">201</span></a><span class="sd">    flattened instead.</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="flatten_script_line-200"><a href="#flatten_script_line-200"><span class="linenos">200</span></a><span class="k">def</span><span class="w"> </span><span class="nf">flatten_script_line</span><span class="p">(</span><span class="n">line</span><span class="p">:</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+</span><span id="flatten_script_line-201"><a href="#flatten_script_line-201"><span class="linenos">201</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Join a ScriptLine&#39;s text with its nested chunks&#39;, depth-first.</span>
 </span><span id="flatten_script_line-202"><a href="#flatten_script_line-202"><span class="linenos">202</span></a>
-</span><span id="flatten_script_line-203"><a href="#flatten_script_line-203"><span class="linenos">203</span></a><span class="sd">    Args:</span>
-</span><span id="flatten_script_line-204"><a href="#flatten_script_line-204"><span class="linenos">204</span></a><span class="sd">        line: The ``ScriptLine`` to flatten. Its own ``text`` (if any) comes</span>
-</span><span id="flatten_script_line-205"><a href="#flatten_script_line-205"><span class="linenos">205</span></a><span class="sd">            first, followed by each child&#39;s flattened text in order.</span>
-</span><span id="flatten_script_line-206"><a href="#flatten_script_line-206"><span class="linenos">206</span></a>
-</span><span id="flatten_script_line-207"><a href="#flatten_script_line-207"><span class="linenos">207</span></a><span class="sd">    Returns:</span>
-</span><span id="flatten_script_line-208"><a href="#flatten_script_line-208"><span class="linenos">208</span></a><span class="sd">        The concatenated, whitespace-normalized text. Empty string when the</span>
-</span><span id="flatten_script_line-209"><a href="#flatten_script_line-209"><span class="linenos">209</span></a><span class="sd">        line and all its descendants carry no text (e.g. a diarization line</span>
-</span><span id="flatten_script_line-210"><a href="#flatten_script_line-210"><span class="linenos">210</span></a><span class="sd">        with only a ``speaker`` label) — this is a normal, documented result,</span>
-</span><span id="flatten_script_line-211"><a href="#flatten_script_line-211"><span class="linenos">211</span></a><span class="sd">        not an error.</span>
-</span><span id="flatten_script_line-212"><a href="#flatten_script_line-212"><span class="linenos">212</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="flatten_script_line-213"><a href="#flatten_script_line-213"><span class="linenos">213</span></a>    <span class="n">parts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="flatten_script_line-214"><a href="#flatten_script_line-214"><span class="linenos">214</span></a>    <span class="n">own</span> <span class="o">=</span> <span class="p">(</span><span class="n">line</span><span class="o">.</span><span class="n">text</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-</span><span id="flatten_script_line-215"><a href="#flatten_script_line-215"><span class="linenos">215</span></a>    <span class="k">if</span> <span class="n">own</span><span class="p">:</span>
-</span><span id="flatten_script_line-216"><a href="#flatten_script_line-216"><span class="linenos">216</span></a>        <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">own</span><span class="p">)</span>
-</span><span id="flatten_script_line-217"><a href="#flatten_script_line-217"><span class="linenos">217</span></a>    <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">line</span><span class="o">.</span><span class="n">chunks</span> <span class="ow">or</span> <span class="p">[]:</span>
-</span><span id="flatten_script_line-218"><a href="#flatten_script_line-218"><span class="linenos">218</span></a>        <span class="n">nested</span> <span class="o">=</span> <span class="n">flatten_script_line</span><span class="p">(</span><span class="n">child</span><span class="p">)</span>
-</span><span id="flatten_script_line-219"><a href="#flatten_script_line-219"><span class="linenos">219</span></a>        <span class="k">if</span> <span class="n">nested</span><span class="p">:</span>
-</span><span id="flatten_script_line-220"><a href="#flatten_script_line-220"><span class="linenos">220</span></a>            <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">nested</span><span class="p">)</span>
-</span><span id="flatten_script_line-221"><a href="#flatten_script_line-221"><span class="linenos">221</span></a>    <span class="k">return</span> <span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">parts</span><span class="p">)</span>
+</span><span id="flatten_script_line-203"><a href="#flatten_script_line-203"><span class="linenos">203</span></a><span class="sd">    Backends differ in where they put the words: Whisper returns segment text</span>
+</span><span id="flatten_script_line-204"><a href="#flatten_script_line-204"><span class="linenos">204</span></a><span class="sd">    plus word-level ``chunks``, a forced aligner returns segment-level lines with</span>
+</span><span id="flatten_script_line-205"><a href="#flatten_script_line-205"><span class="linenos">205</span></a><span class="sd">    word-level chunks nested underneath, and a diarization line carries a speaker</span>
+</span><span id="flatten_script_line-206"><a href="#flatten_script_line-206"><span class="linenos">206</span></a><span class="sd">    and no text at all. Scanning only ``text`` would make PII coverage silently</span>
+</span><span id="flatten_script_line-207"><a href="#flatten_script_line-207"><span class="linenos">207</span></a><span class="sd">    depend on which backend produced the transcript, so the whole tree is</span>
+</span><span id="flatten_script_line-208"><a href="#flatten_script_line-208"><span class="linenos">208</span></a><span class="sd">    flattened instead.</span>
+</span><span id="flatten_script_line-209"><a href="#flatten_script_line-209"><span class="linenos">209</span></a>
+</span><span id="flatten_script_line-210"><a href="#flatten_script_line-210"><span class="linenos">210</span></a><span class="sd">    Args:</span>
+</span><span id="flatten_script_line-211"><a href="#flatten_script_line-211"><span class="linenos">211</span></a><span class="sd">        line: The ``ScriptLine`` to flatten. Its own ``text`` (if any) comes</span>
+</span><span id="flatten_script_line-212"><a href="#flatten_script_line-212"><span class="linenos">212</span></a><span class="sd">            first, followed by each child&#39;s flattened text in order.</span>
+</span><span id="flatten_script_line-213"><a href="#flatten_script_line-213"><span class="linenos">213</span></a>
+</span><span id="flatten_script_line-214"><a href="#flatten_script_line-214"><span class="linenos">214</span></a><span class="sd">    Returns:</span>
+</span><span id="flatten_script_line-215"><a href="#flatten_script_line-215"><span class="linenos">215</span></a><span class="sd">        The concatenated, whitespace-normalized text. Empty string when the</span>
+</span><span id="flatten_script_line-216"><a href="#flatten_script_line-216"><span class="linenos">216</span></a><span class="sd">        line and all its descendants carry no text (e.g. a diarization line</span>
+</span><span id="flatten_script_line-217"><a href="#flatten_script_line-217"><span class="linenos">217</span></a><span class="sd">        with only a ``speaker`` label) — this is a normal, documented result,</span>
+</span><span id="flatten_script_line-218"><a href="#flatten_script_line-218"><span class="linenos">218</span></a><span class="sd">        not an error.</span>
+</span><span id="flatten_script_line-219"><a href="#flatten_script_line-219"><span class="linenos">219</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="flatten_script_line-220"><a href="#flatten_script_line-220"><span class="linenos">220</span></a>    <span class="n">parts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="flatten_script_line-221"><a href="#flatten_script_line-221"><span class="linenos">221</span></a>    <span class="n">own</span> <span class="o">=</span> <span class="p">(</span><span class="n">line</span><span class="o">.</span><span class="n">text</span> <span class="ow">or</span> <span class="s2">&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
+</span><span id="flatten_script_line-222"><a href="#flatten_script_line-222"><span class="linenos">222</span></a>    <span class="k">if</span> <span class="n">own</span><span class="p">:</span>
+</span><span id="flatten_script_line-223"><a href="#flatten_script_line-223"><span class="linenos">223</span></a>        <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">own</span><span class="p">)</span>
+</span><span id="flatten_script_line-224"><a href="#flatten_script_line-224"><span class="linenos">224</span></a>    <span class="k">for</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">line</span><span class="o">.</span><span class="n">chunks</span> <span class="ow">or</span> <span class="p">[]:</span>
+</span><span id="flatten_script_line-225"><a href="#flatten_script_line-225"><span class="linenos">225</span></a>        <span class="n">nested</span> <span class="o">=</span> <span class="n">flatten_script_line</span><span class="p">(</span><span class="n">child</span><span class="p">)</span>
+</span><span id="flatten_script_line-226"><a href="#flatten_script_line-226"><span class="linenos">226</span></a>        <span class="k">if</span> <span class="n">nested</span><span class="p">:</span>
+</span><span id="flatten_script_line-227"><a href="#flatten_script_line-227"><span class="linenos">227</span></a>            <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">nested</span><span class="p">)</span>
+</span><span id="flatten_script_line-228"><a href="#flatten_script_line-228"><span class="linenos">228</span></a>    <span class="k">return</span> <span class="s2">&quot; &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">parts</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -1240,150 +1245,151 @@ first, followed by each child's flattened text in order.</li>
 
     </div>
     <a class="headerlink" href="#scan_for_pii"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="scan_for_pii-370"><a href="#scan_for_pii-370"><span class="linenos">370</span></a><span class="k">def</span><span class="w"> </span><span class="nf">scan_for_pii</span><span class="p">(</span>
-</span><span id="scan_for_pii-371"><a href="#scan_for_pii-371"><span class="linenos">371</span></a>    <span class="n">inputs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span><span class="p">],</span>
-</span><span id="scan_for_pii-372"><a href="#scan_for_pii-372"><span class="linenos">372</span></a>    <span class="n">detectors</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="scan_for_pii-373"><a href="#scan_for_pii-373"><span class="linenos">373</span></a>    <span class="n">presidio_score_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.4</span><span class="p">,</span>
-</span><span id="scan_for_pii-374"><a href="#scan_for_pii-374"><span class="linenos">374</span></a>    <span class="n">gliner_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="scan_for_pii-375"><a href="#scan_for_pii-375"><span class="linenos">375</span></a>    <span class="n">gliner_labels</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="scan_for_pii-376"><a href="#scan_for_pii-376"><span class="linenos">376</span></a>    <span class="n">gliner_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
-</span><span id="scan_for_pii-377"><a href="#scan_for_pii-377"><span class="linenos">377</span></a>    <span class="n">local_llm_config</span><span class="p">:</span> <span class="n">LocalLlmConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-</span><span id="scan_for_pii-378"><a href="#scan_for_pii-378"><span class="linenos">378</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PiiScan</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]:</span>
-</span><span id="scan_for_pii-379"><a href="#scan_for_pii-379"><span class="linenos">379</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Run the detectors over a string or ``ScriptLine`` and return what they found.</span>
-</span><span id="scan_for_pii-380"><a href="#scan_for_pii-380"><span class="linenos">380</span></a>
-</span><span id="scan_for_pii-381"><a href="#scan_for_pii-381"><span class="linenos">381</span></a><span class="sd">    Execution only. Every parameter here says *how to run the detectors* — which ones, at</span>
-</span><span id="scan_for_pii-382"><a href="#scan_for_pii-382"><span class="linenos">382</span></a><span class="sd">    what per-detector score floor, against which label set, at which endpoint. Nothing here</span>
-</span><span id="scan_for_pii-383"><a href="#scan_for_pii-383"><span class="linenos">383</span></a><span class="sd">    decides what the findings mean; that is :func:`decide_pii`&#39;s job, and the two are</span>
-</span><span id="scan_for_pii-384"><a href="#scan_for_pii-384"><span class="linenos">384</span></a><span class="sd">    separate functions so a caller can keep one and replace the other.</span>
-</span><span id="scan_for_pii-385"><a href="#scan_for_pii-385"><span class="linenos">385</span></a>
-</span><span id="scan_for_pii-386"><a href="#scan_for_pii-386"><span class="linenos">386</span></a><span class="sd">    Standalone: no dependency on any audio-workflow concept (a run &quot;pass&quot;, a per-pass tag,</span>
-</span><span id="scan_for_pii-387"><a href="#scan_for_pii-387"><span class="linenos">387</span></a><span class="sd">    an ASR-model ensemble). A ``ScriptLine`` is flattened to text via</span>
-</span><span id="scan_for_pii-388"><a href="#scan_for_pii-388"><span class="linenos">388</span></a><span class="sd">    :func:`flatten_script_line` first, then both shapes go through the same</span>
-</span><span id="scan_for_pii-389"><a href="#scan_for_pii-389"><span class="linenos">389</span></a><span class="sd">    subprocess-backed detection.</span>
-</span><span id="scan_for_pii-390"><a href="#scan_for_pii-390"><span class="linenos">390</span></a>
-</span><span id="scan_for_pii-391"><a href="#scan_for_pii-391"><span class="linenos">391</span></a><span class="sd">    Every non-empty input is sent to ``detect_pii_via_subprocess`` in a single batched call</span>
-</span><span id="scan_for_pii-392"><a href="#scan_for_pii-392"><span class="linenos">392</span></a><span class="sd">    (one entry per input index) rather than one subprocess per input — the venv&#39;s model</span>
-</span><span id="scan_for_pii-393"><a href="#scan_for_pii-393"><span class="linenos">393</span></a><span class="sd">    loads (~5-10s each for Presidio/GLiNER) dominate cost, so batching a whole sequence</span>
-</span><span id="scan_for_pii-394"><a href="#scan_for_pii-394"><span class="linenos">394</span></a><span class="sd">    pays that once.</span>
-</span><span id="scan_for_pii-395"><a href="#scan_for_pii-395"><span class="linenos">395</span></a>
-</span><span id="scan_for_pii-396"><a href="#scan_for_pii-396"><span class="linenos">396</span></a><span class="sd">    Args:</span>
-</span><span id="scan_for_pii-397"><a href="#scan_for_pii-397"><span class="linenos">397</span></a><span class="sd">        inputs: A ``str``, a ``ScriptLine``, or a sequence of either.</span>
-</span><span id="scan_for_pii-398"><a href="#scan_for_pii-398"><span class="linenos">398</span></a><span class="sd">        detectors: Subset of ``{&quot;presidio&quot;, &quot;gliner&quot;, &quot;rules&quot;, &quot;llm&quot;}`` to run. ``None``</span>
-</span><span id="scan_for_pii-399"><a href="#scan_for_pii-399"><span class="linenos">399</span></a><span class="sd">            (default) runs :func:`default_detectors` — the first three; ``&quot;llm&quot;`` is known</span>
-</span><span id="scan_for_pii-400"><a href="#scan_for_pii-400"><span class="linenos">400</span></a><span class="sd">            but never default-on, so it has to be named explicitly. An empty list (``[]``)</span>
-</span><span id="scan_for_pii-401"><a href="#scan_for_pii-401"><span class="linenos">401</span></a><span class="sd">            is the caller explicitly disabling detection: no subprocess is spawned and the</span>
-</span><span id="scan_for_pii-402"><a href="#scan_for_pii-402"><span class="linenos">402</span></a><span class="sd">            scan comes back with an explicit ``&quot;pii_disabled&quot;`` failure note.</span>
-</span><span id="scan_for_pii-403"><a href="#scan_for_pii-403"><span class="linenos">403</span></a><span class="sd">        presidio_score_threshold: Drop Presidio detections below this score.</span>
-</span><span id="scan_for_pii-404"><a href="#scan_for_pii-404"><span class="linenos">404</span></a><span class="sd">        gliner_model: Override the GLiNER checkpoint.</span>
-</span><span id="scan_for_pii-405"><a href="#scan_for_pii-405"><span class="linenos">405</span></a><span class="sd">        gliner_labels: Labels passed to GLiNER&#39;s ``predict_entities``. ``None`` uses the</span>
-</span><span id="scan_for_pii-406"><a href="#scan_for_pii-406"><span class="linenos">406</span></a><span class="sd">            subprocess module&#39;s curated HIPAA-18 default set. Keep it flat — see</span>
-</span><span id="scan_for_pii-407"><a href="#scan_for_pii-407"><span class="linenos">407</span></a><span class="sd">            ``doc.md`` on competing-claim interference.</span>
-</span><span id="scan_for_pii-408"><a href="#scan_for_pii-408"><span class="linenos">408</span></a><span class="sd">        gliner_threshold: Drop GLiNER predictions below this score.</span>
-</span><span id="scan_for_pii-409"><a href="#scan_for_pii-409"><span class="linenos">409</span></a><span class="sd">        local_llm_config: Endpoint for the optional local-LLM detector. Ignored unless</span>
-</span><span id="scan_for_pii-410"><a href="#scan_for_pii-410"><span class="linenos">410</span></a><span class="sd">            ``&quot;llm&quot;`` is named in ``detectors``; defaults to</span>
-</span><span id="scan_for_pii-411"><a href="#scan_for_pii-411"><span class="linenos">411</span></a><span class="sd">            :class:`~senselab.text.tasks.pii_detection.local_llm.LocalLlmConfig`&#39;s own</span>
-</span><span id="scan_for_pii-412"><a href="#scan_for_pii-412"><span class="linenos">412</span></a><span class="sd">            loopback default. A non-loopback URL raises at construction — see that module</span>
-</span><span id="scan_for_pii-413"><a href="#scan_for_pii-413"><span class="linenos">413</span></a><span class="sd">            for why that is a checked invariant rather than a documented one.</span>
-</span><span id="scan_for_pii-414"><a href="#scan_for_pii-414"><span class="linenos">414</span></a>
-</span><span id="scan_for_pii-415"><a href="#scan_for_pii-415"><span class="linenos">415</span></a><span class="sd">    Returns:</span>
-</span><span id="scan_for_pii-416"><a href="#scan_for_pii-416"><span class="linenos">416</span></a><span class="sd">        A single :class:`PiiScan` when ``inputs`` is a scalar; a list of the same length and</span>
-</span><span id="scan_for_pii-417"><a href="#scan_for_pii-417"><span class="linenos">417</span></a><span class="sd">        order otherwise. An empty ``detectors_used`` means no detector ran for that batch,</span>
-</span><span id="scan_for_pii-418"><a href="#scan_for_pii-418"><span class="linenos">418</span></a><span class="sd">        and ``failures`` says why — never confuse it with &quot;ran and found nothing&quot;, which is</span>
-</span><span id="scan_for_pii-419"><a href="#scan_for_pii-419"><span class="linenos">419</span></a><span class="sd">        an empty ``spans`` alongside a populated ``detectors_used``.</span>
-</span><span id="scan_for_pii-420"><a href="#scan_for_pii-420"><span class="linenos">420</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="scan_for_pii-421"><a href="#scan_for_pii-421"><span class="linenos">421</span></a>    <span class="n">items</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span><span class="p">]</span>
-</span><span id="scan_for_pii-422"><a href="#scan_for_pii-422"><span class="linenos">422</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">)):</span>
-</span><span id="scan_for_pii-423"><a href="#scan_for_pii-423"><span class="linenos">423</span></a>        <span class="n">is_scalar</span> <span class="o">=</span> <span class="kc">True</span>
-</span><span id="scan_for_pii-424"><a href="#scan_for_pii-424"><span class="linenos">424</span></a>        <span class="n">items</span> <span class="o">=</span> <span class="p">[</span><span class="n">inputs</span><span class="p">]</span>
-</span><span id="scan_for_pii-425"><a href="#scan_for_pii-425"><span class="linenos">425</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="scan_for_pii-426"><a href="#scan_for_pii-426"><span class="linenos">426</span></a>        <span class="n">is_scalar</span> <span class="o">=</span> <span class="kc">False</span>
-</span><span id="scan_for_pii-427"><a href="#scan_for_pii-427"><span class="linenos">427</span></a>        <span class="n">items</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
-</span><span id="scan_for_pii-428"><a href="#scan_for_pii-428"><span class="linenos">428</span></a>
-</span><span id="scan_for_pii-429"><a href="#scan_for_pii-429"><span class="linenos">429</span></a>    <span class="n">texts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">flatten_script_line</span><span class="p">(</span><span class="n">item</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="k">else</span> <span class="n">item</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">]</span>
-</span><span id="scan_for_pii-430"><a href="#scan_for_pii-430"><span class="linenos">430</span></a>
-</span><span id="scan_for_pii-431"><a href="#scan_for_pii-431"><span class="linenos">431</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_finish</span><span class="p">(</span><span class="n">scans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">PiiScan</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]:</span>
-</span><span id="scan_for_pii-432"><a href="#scan_for_pii-432"><span class="linenos">432</span></a>        <span class="k">return</span> <span class="n">scans</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">is_scalar</span> <span class="k">else</span> <span class="n">scans</span>
-</span><span id="scan_for_pii-433"><a href="#scan_for_pii-433"><span class="linenos">433</span></a>
-</span><span id="scan_for_pii-434"><a href="#scan_for_pii-434"><span class="linenos">434</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_empty</span><span class="p">(</span><span class="n">failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]:</span>
-</span><span id="scan_for_pii-435"><a href="#scan_for_pii-435"><span class="linenos">435</span></a>        <span class="k">return</span> <span class="p">[</span><span class="n">PiiScan</span><span class="p">(</span><span class="n">spans</span><span class="o">=</span><span class="p">[],</span> <span class="n">detectors_used</span><span class="o">=</span><span class="p">[],</span> <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">failures</span><span class="p">))</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">texts</span><span class="p">]</span>
-</span><span id="scan_for_pii-436"><a href="#scan_for_pii-436"><span class="linenos">436</span></a>
-</span><span id="scan_for_pii-437"><a href="#scan_for_pii-437"><span class="linenos">437</span></a>    <span class="c1"># Explicit ``detectors=[]`` means the caller has chosen to disable PII detection.</span>
-</span><span id="scan_for_pii-438"><a href="#scan_for_pii-438"><span class="linenos">438</span></a>    <span class="c1"># Checked before anything else so it wins regardless of input content, giving a clean</span>
-</span><span id="scan_for_pii-439"><a href="#scan_for_pii-439"><span class="linenos">439</span></a>    <span class="c1"># three-way distinction between &quot;pii_disabled&quot;, &quot;ran, found nothing&quot;, and &quot;subprocess</span>
-</span><span id="scan_for_pii-440"><a href="#scan_for_pii-440"><span class="linenos">440</span></a>    <span class="c1"># failed&quot; that any caller layered on top of this function can rely on.</span>
-</span><span id="scan_for_pii-441"><a href="#scan_for_pii-441"><span class="linenos">441</span></a>    <span class="k">if</span> <span class="n">detectors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="scan_for_pii-442"><a href="#scan_for_pii-442"><span class="linenos">442</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">({</span><span class="s2">&quot;pii_disabled&quot;</span><span class="p">:</span> <span class="s2">&quot;PII detection disabled by caller (detectors=[]).&quot;</span><span class="p">}))</span>
-</span><span id="scan_for_pii-443"><a href="#scan_for_pii-443"><span class="linenos">443</span></a>
-</span><span id="scan_for_pii-444"><a href="#scan_for_pii-444"><span class="linenos">444</span></a>    <span class="c1"># Index-keyed so a batch of inputs shares one subprocess call; empty/whitespace-only</span>
-</span><span id="scan_for_pii-445"><a href="#scan_for_pii-445"><span class="linenos">445</span></a>    <span class="c1"># entries never reach the detectors.</span>
-</span><span id="scan_for_pii-446"><a href="#scan_for_pii-446"><span class="linenos">446</span></a>    <span class="n">transcripts_by_index</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">):</span> <span class="n">t</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">texts</span><span class="p">)</span> <span class="k">if</span> <span class="n">t</span> <span class="ow">and</span> <span class="n">t</span><span class="o">.</span><span class="n">strip</span><span class="p">()}</span>
-</span><span id="scan_for_pii-447"><a href="#scan_for_pii-447"><span class="linenos">447</span></a>
-</span><span id="scan_for_pii-448"><a href="#scan_for_pii-448"><span class="linenos">448</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">transcripts_by_index</span><span class="p">:</span>
-</span><span id="scan_for_pii-449"><a href="#scan_for_pii-449"><span class="linenos">449</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">({}))</span>
-</span><span id="scan_for_pii-450"><a href="#scan_for_pii-450"><span class="linenos">450</span></a>
-</span><span id="scan_for_pii-451"><a href="#scan_for_pii-451"><span class="linenos">451</span></a>    <span class="k">try</span><span class="p">:</span>
-</span><span id="scan_for_pii-452"><a href="#scan_for_pii-452"><span class="linenos">452</span></a>        <span class="n">subprocess_kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="scan_for_pii-453"><a href="#scan_for_pii-453"><span class="linenos">453</span></a>            <span class="s2">&quot;presidio_score_threshold&quot;</span><span class="p">:</span> <span class="n">presidio_score_threshold</span><span class="p">,</span>
-</span><span id="scan_for_pii-454"><a href="#scan_for_pii-454"><span class="linenos">454</span></a>            <span class="s2">&quot;gliner_threshold&quot;</span><span class="p">:</span> <span class="n">gliner_threshold</span><span class="p">,</span>
-</span><span id="scan_for_pii-455"><a href="#scan_for_pii-455"><span class="linenos">455</span></a>        <span class="p">}</span>
-</span><span id="scan_for_pii-456"><a href="#scan_for_pii-456"><span class="linenos">456</span></a>        <span class="k">if</span> <span class="n">detectors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="scan_for_pii-457"><a href="#scan_for_pii-457"><span class="linenos">457</span></a>            <span class="n">subprocess_kwargs</span><span class="p">[</span><span class="s2">&quot;detectors&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">detectors</span>
-</span><span id="scan_for_pii-458"><a href="#scan_for_pii-458"><span class="linenos">458</span></a>        <span class="k">if</span> <span class="n">gliner_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="scan_for_pii-459"><a href="#scan_for_pii-459"><span class="linenos">459</span></a>            <span class="n">subprocess_kwargs</span><span class="p">[</span><span class="s2">&quot;gliner_model&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">gliner_model</span>
-</span><span id="scan_for_pii-460"><a href="#scan_for_pii-460"><span class="linenos">460</span></a>        <span class="k">if</span> <span class="n">gliner_labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="scan_for_pii-461"><a href="#scan_for_pii-461"><span class="linenos">461</span></a>            <span class="n">subprocess_kwargs</span><span class="p">[</span><span class="s2">&quot;gliner_labels&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">gliner_labels</span>
-</span><span id="scan_for_pii-462"><a href="#scan_for_pii-462"><span class="linenos">462</span></a>        <span class="n">result</span> <span class="o">=</span> <span class="n">detect_pii_via_subprocess</span><span class="p">(</span><span class="n">transcripts_by_index</span><span class="p">,</span> <span class="o">**</span><span class="n">subprocess_kwargs</span><span class="p">)</span>
-</span><span id="scan_for_pii-463"><a href="#scan_for_pii-463"><span class="linenos">463</span></a>    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># noqa: BLE001 — caller needs a scan to continue, not a crash</span>
-</span><span id="scan_for_pii-464"><a href="#scan_for_pii-464"><span class="linenos">464</span></a>        <span class="n">msg</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;PII subprocess failed: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span>
-</span><span id="scan_for_pii-465"><a href="#scan_for_pii-465"><span class="linenos">465</span></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;warn: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
-</span><span id="scan_for_pii-466"><a href="#scan_for_pii-466"><span class="linenos">466</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">({</span><span class="s2">&quot;pii_subprocess&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="p">}))</span>
-</span><span id="scan_for_pii-467"><a href="#scan_for_pii-467"><span class="linenos">467</span></a>
-</span><span id="scan_for_pii-468"><a href="#scan_for_pii-468"><span class="linenos">468</span></a>    <span class="n">spans_by_index_raw</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;spans_by_asr&quot;</span><span class="p">,</span> <span class="p">{})</span>
-</span><span id="scan_for_pii-469"><a href="#scan_for_pii-469"><span class="linenos">469</span></a>    <span class="n">failures</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;failures&quot;</span><span class="p">,</span> <span class="p">{}))</span>
-</span><span id="scan_for_pii-470"><a href="#scan_for_pii-470"><span class="linenos">470</span></a>    <span class="n">detectors_used</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;detectors_used&quot;</span><span class="p">,</span> <span class="p">[]))</span>
-</span><span id="scan_for_pii-471"><a href="#scan_for_pii-471"><span class="linenos">471</span></a>
-</span><span id="scan_for_pii-472"><a href="#scan_for_pii-472"><span class="linenos">472</span></a>    <span class="c1"># The local LLM runs here, not in the venv -- it needs nothing but stdlib urllib</span>
-</span><span id="scan_for_pii-473"><a href="#scan_for_pii-473"><span class="linenos">473</span></a>    <span class="c1"># (see local_llm.py). Merged before the &quot;did anything run?&quot; check below so that</span>
-</span><span id="scan_for_pii-474"><a href="#scan_for_pii-474"><span class="linenos">474</span></a>    <span class="c1"># `detectors=[&quot;llm&quot;]`, which leaves the worker with nothing to do, is still a real</span>
-</span><span id="scan_for_pii-475"><a href="#scan_for_pii-475"><span class="linenos">475</span></a>    <span class="c1"># scan rather than a no-detector early return.</span>
-</span><span id="scan_for_pii-476"><a href="#scan_for_pii-476"><span class="linenos">476</span></a>    <span class="k">if</span> <span class="n">detectors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">DETECTOR_LLM</span> <span class="ow">in</span> <span class="n">detectors</span><span class="p">:</span>
-</span><span id="scan_for_pii-477"><a href="#scan_for_pii-477"><span class="linenos">477</span></a>        <span class="c1"># Keyed off transcripts_by_index, not texts: empty/whitespace-only inputs never</span>
-</span><span id="scan_for_pii-478"><a href="#scan_for_pii-478"><span class="linenos">478</span></a>        <span class="c1"># reach the venv detectors either, and asking an LLM about an empty string costs</span>
-</span><span id="scan_for_pii-479"><a href="#scan_for_pii-479"><span class="linenos">479</span></a>        <span class="c1"># a round trip to be told nothing.</span>
-</span><span id="scan_for_pii-480"><a href="#scan_for_pii-480"><span class="linenos">480</span></a>        <span class="n">llm_results</span> <span class="o">=</span> <span class="p">{</span>
-</span><span id="scan_for_pii-481"><a href="#scan_for_pii-481"><span class="linenos">481</span></a>            <span class="n">i</span><span class="p">:</span> <span class="n">scan_or_fail</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">local_llm_config</span> <span class="ow">or</span> <span class="n">LocalLlmConfig</span><span class="p">())</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">transcripts_by_index</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-</span><span id="scan_for_pii-482"><a href="#scan_for_pii-482"><span class="linenos">482</span></a>        <span class="p">}</span>
-</span><span id="scan_for_pii-483"><a href="#scan_for_pii-483"><span class="linenos">483</span></a>        <span class="n">first_failure</span> <span class="o">=</span> <span class="nb">next</span><span class="p">((</span><span class="n">r</span><span class="o">.</span><span class="n">failure</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">llm_results</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">r</span><span class="o">.</span><span class="n">failure</span><span class="p">),</span> <span class="kc">None</span><span class="p">)</span>
-</span><span id="scan_for_pii-484"><a href="#scan_for_pii-484"><span class="linenos">484</span></a>        <span class="k">if</span> <span class="n">first_failure</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-</span><span id="scan_for_pii-485"><a href="#scan_for_pii-485"><span class="linenos">485</span></a>            <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">llm_result</span> <span class="ow">in</span> <span class="n">llm_results</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-</span><span id="scan_for_pii-486"><a href="#scan_for_pii-486"><span class="linenos">486</span></a>                <span class="n">spans_by_index_raw</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="p">[])</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">llm_result</span><span class="o">.</span><span class="n">spans</span><span class="p">)</span>
-</span><span id="scan_for_pii-487"><a href="#scan_for_pii-487"><span class="linenos">487</span></a>            <span class="n">detectors_used</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">DETECTOR_LLM</span><span class="p">)</span>
-</span><span id="scan_for_pii-488"><a href="#scan_for_pii-488"><span class="linenos">488</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="scan_for_pii-489"><a href="#scan_for_pii-489"><span class="linenos">489</span></a>            <span class="c1"># One failure fails the detector for the whole batch rather than leaving it</span>
-</span><span id="scan_for_pii-490"><a href="#scan_for_pii-490"><span class="linenos">490</span></a>            <span class="c1"># counted as &quot;ran&quot; for some inputs and not others: `detectors_used` is the</span>
-</span><span id="scan_for_pii-491"><a href="#scan_for_pii-491"><span class="linenos">491</span></a>            <span class="c1"># agreement denominator, so a per-input denominator would make two scans in</span>
-</span><span id="scan_for_pii-492"><a href="#scan_for_pii-492"><span class="linenos">492</span></a>            <span class="c1"># one batch incomparable.</span>
-</span><span id="scan_for_pii-493"><a href="#scan_for_pii-493"><span class="linenos">493</span></a>            <span class="n">failures</span><span class="p">[</span><span class="s2">&quot;llm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">first_failure</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="scan_for_pii-393"><a href="#scan_for_pii-393"><span class="linenos">393</span></a><span class="k">def</span><span class="w"> </span><span class="nf">scan_for_pii</span><span class="p">(</span>
+</span><span id="scan_for_pii-394"><a href="#scan_for_pii-394"><span class="linenos">394</span></a>    <span class="n">inputs</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span> <span class="o">|</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span><span class="p">],</span>
+</span><span id="scan_for_pii-395"><a href="#scan_for_pii-395"><span class="linenos">395</span></a>    <span class="n">detectors</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="scan_for_pii-396"><a href="#scan_for_pii-396"><span class="linenos">396</span></a>    <span class="n">presidio_score_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.4</span><span class="p">,</span>
+</span><span id="scan_for_pii-397"><a href="#scan_for_pii-397"><span class="linenos">397</span></a>    <span class="n">gliner_model</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="scan_for_pii-398"><a href="#scan_for_pii-398"><span class="linenos">398</span></a>    <span class="n">gliner_labels</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="scan_for_pii-399"><a href="#scan_for_pii-399"><span class="linenos">399</span></a>    <span class="n">gliner_threshold</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.5</span><span class="p">,</span>
+</span><span id="scan_for_pii-400"><a href="#scan_for_pii-400"><span class="linenos">400</span></a>    <span class="n">local_llm_config</span><span class="p">:</span> <span class="n">LocalLlmConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+</span><span id="scan_for_pii-401"><a href="#scan_for_pii-401"><span class="linenos">401</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">PiiScan</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]:</span>
+</span><span id="scan_for_pii-402"><a href="#scan_for_pii-402"><span class="linenos">402</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Run the detectors over a string or ``ScriptLine`` and return what they found.</span>
+</span><span id="scan_for_pii-403"><a href="#scan_for_pii-403"><span class="linenos">403</span></a>
+</span><span id="scan_for_pii-404"><a href="#scan_for_pii-404"><span class="linenos">404</span></a><span class="sd">    Execution only. Every parameter here says *how to run the detectors* — which ones, at</span>
+</span><span id="scan_for_pii-405"><a href="#scan_for_pii-405"><span class="linenos">405</span></a><span class="sd">    what per-detector score floor, against which label set, at which endpoint. Nothing here</span>
+</span><span id="scan_for_pii-406"><a href="#scan_for_pii-406"><span class="linenos">406</span></a><span class="sd">    decides what the findings mean; that is :func:`decide_pii`&#39;s job, and the two are</span>
+</span><span id="scan_for_pii-407"><a href="#scan_for_pii-407"><span class="linenos">407</span></a><span class="sd">    separate functions so a caller can keep one and replace the other.</span>
+</span><span id="scan_for_pii-408"><a href="#scan_for_pii-408"><span class="linenos">408</span></a>
+</span><span id="scan_for_pii-409"><a href="#scan_for_pii-409"><span class="linenos">409</span></a><span class="sd">    Standalone: no dependency on any audio-workflow concept (a run &quot;pass&quot;, a per-pass tag,</span>
+</span><span id="scan_for_pii-410"><a href="#scan_for_pii-410"><span class="linenos">410</span></a><span class="sd">    an ASR-model ensemble). A ``ScriptLine`` is flattened to text via</span>
+</span><span id="scan_for_pii-411"><a href="#scan_for_pii-411"><span class="linenos">411</span></a><span class="sd">    :func:`flatten_script_line` first, then both shapes go through the same</span>
+</span><span id="scan_for_pii-412"><a href="#scan_for_pii-412"><span class="linenos">412</span></a><span class="sd">    subprocess-backed detection.</span>
+</span><span id="scan_for_pii-413"><a href="#scan_for_pii-413"><span class="linenos">413</span></a>
+</span><span id="scan_for_pii-414"><a href="#scan_for_pii-414"><span class="linenos">414</span></a><span class="sd">    Every non-empty input is sent to ``detect_pii_via_subprocess`` in a single batched call</span>
+</span><span id="scan_for_pii-415"><a href="#scan_for_pii-415"><span class="linenos">415</span></a><span class="sd">    (one entry per input index) rather than one subprocess per input — the venv&#39;s model</span>
+</span><span id="scan_for_pii-416"><a href="#scan_for_pii-416"><span class="linenos">416</span></a><span class="sd">    loads (~5-10s each for Presidio/GLiNER) dominate cost, so batching a whole sequence</span>
+</span><span id="scan_for_pii-417"><a href="#scan_for_pii-417"><span class="linenos">417</span></a><span class="sd">    pays that once.</span>
+</span><span id="scan_for_pii-418"><a href="#scan_for_pii-418"><span class="linenos">418</span></a>
+</span><span id="scan_for_pii-419"><a href="#scan_for_pii-419"><span class="linenos">419</span></a><span class="sd">    Args:</span>
+</span><span id="scan_for_pii-420"><a href="#scan_for_pii-420"><span class="linenos">420</span></a><span class="sd">        inputs: A ``str``, a ``ScriptLine``, or a sequence of either.</span>
+</span><span id="scan_for_pii-421"><a href="#scan_for_pii-421"><span class="linenos">421</span></a><span class="sd">        detectors: Subset of ``{&quot;presidio&quot;, &quot;gliner&quot;, &quot;rules&quot;, &quot;llm&quot;}`` to run. ``None``</span>
+</span><span id="scan_for_pii-422"><a href="#scan_for_pii-422"><span class="linenos">422</span></a><span class="sd">            (default) runs :func:`default_detectors` — the first three; ``&quot;llm&quot;`` is known</span>
+</span><span id="scan_for_pii-423"><a href="#scan_for_pii-423"><span class="linenos">423</span></a><span class="sd">            but never default-on, so it has to be named explicitly. An empty list (``[]``)</span>
+</span><span id="scan_for_pii-424"><a href="#scan_for_pii-424"><span class="linenos">424</span></a><span class="sd">            is the caller explicitly disabling detection: no subprocess is spawned and the</span>
+</span><span id="scan_for_pii-425"><a href="#scan_for_pii-425"><span class="linenos">425</span></a><span class="sd">            scan comes back with an explicit ``&quot;pii_disabled&quot;`` failure note.</span>
+</span><span id="scan_for_pii-426"><a href="#scan_for_pii-426"><span class="linenos">426</span></a><span class="sd">        presidio_score_threshold: Drop Presidio detections below this score.</span>
+</span><span id="scan_for_pii-427"><a href="#scan_for_pii-427"><span class="linenos">427</span></a><span class="sd">        gliner_model: Override the GLiNER checkpoint.</span>
+</span><span id="scan_for_pii-428"><a href="#scan_for_pii-428"><span class="linenos">428</span></a><span class="sd">        gliner_labels: Labels passed to GLiNER&#39;s ``predict_entities``. ``None`` uses the</span>
+</span><span id="scan_for_pii-429"><a href="#scan_for_pii-429"><span class="linenos">429</span></a><span class="sd">            subprocess module&#39;s curated HIPAA-18 default set. Keep it flat — see</span>
+</span><span id="scan_for_pii-430"><a href="#scan_for_pii-430"><span class="linenos">430</span></a><span class="sd">            ``doc.md`` on competing-claim interference.</span>
+</span><span id="scan_for_pii-431"><a href="#scan_for_pii-431"><span class="linenos">431</span></a><span class="sd">        gliner_threshold: Drop GLiNER predictions below this score.</span>
+</span><span id="scan_for_pii-432"><a href="#scan_for_pii-432"><span class="linenos">432</span></a><span class="sd">        local_llm_config: Endpoint for the optional local-LLM detector. Ignored unless</span>
+</span><span id="scan_for_pii-433"><a href="#scan_for_pii-433"><span class="linenos">433</span></a><span class="sd">            ``&quot;llm&quot;`` is named in ``detectors``; defaults to</span>
+</span><span id="scan_for_pii-434"><a href="#scan_for_pii-434"><span class="linenos">434</span></a><span class="sd">            :class:`~senselab.text.tasks.pii_detection.local_llm.LocalLlmConfig`&#39;s own</span>
+</span><span id="scan_for_pii-435"><a href="#scan_for_pii-435"><span class="linenos">435</span></a><span class="sd">            loopback default. A non-loopback URL raises at construction — see that module</span>
+</span><span id="scan_for_pii-436"><a href="#scan_for_pii-436"><span class="linenos">436</span></a><span class="sd">            for why that is a checked invariant rather than a documented one.</span>
+</span><span id="scan_for_pii-437"><a href="#scan_for_pii-437"><span class="linenos">437</span></a>
+</span><span id="scan_for_pii-438"><a href="#scan_for_pii-438"><span class="linenos">438</span></a><span class="sd">    Returns:</span>
+</span><span id="scan_for_pii-439"><a href="#scan_for_pii-439"><span class="linenos">439</span></a><span class="sd">        A single :class:`PiiScan` when ``inputs`` is a scalar; a list of the same length and</span>
+</span><span id="scan_for_pii-440"><a href="#scan_for_pii-440"><span class="linenos">440</span></a><span class="sd">        order otherwise. An empty ``detectors_used`` means no detector ran for that batch,</span>
+</span><span id="scan_for_pii-441"><a href="#scan_for_pii-441"><span class="linenos">441</span></a><span class="sd">        and ``failures`` says why — never confuse it with &quot;ran and found nothing&quot;, which is</span>
+</span><span id="scan_for_pii-442"><a href="#scan_for_pii-442"><span class="linenos">442</span></a><span class="sd">        an empty ``spans`` alongside a populated ``detectors_used``.</span>
+</span><span id="scan_for_pii-443"><a href="#scan_for_pii-443"><span class="linenos">443</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="scan_for_pii-444"><a href="#scan_for_pii-444"><span class="linenos">444</span></a>    <span class="n">items</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="n">ScriptLine</span><span class="p">]</span>
+</span><span id="scan_for_pii-445"><a href="#scan_for_pii-445"><span class="linenos">445</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">inputs</span><span class="p">,</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">)):</span>
+</span><span id="scan_for_pii-446"><a href="#scan_for_pii-446"><span class="linenos">446</span></a>        <span class="n">is_scalar</span> <span class="o">=</span> <span class="kc">True</span>
+</span><span id="scan_for_pii-447"><a href="#scan_for_pii-447"><span class="linenos">447</span></a>        <span class="n">items</span> <span class="o">=</span> <span class="p">[</span><span class="n">inputs</span><span class="p">]</span>
+</span><span id="scan_for_pii-448"><a href="#scan_for_pii-448"><span class="linenos">448</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="scan_for_pii-449"><a href="#scan_for_pii-449"><span class="linenos">449</span></a>        <span class="n">is_scalar</span> <span class="o">=</span> <span class="kc">False</span>
+</span><span id="scan_for_pii-450"><a href="#scan_for_pii-450"><span class="linenos">450</span></a>        <span class="n">items</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">inputs</span><span class="p">)</span>
+</span><span id="scan_for_pii-451"><a href="#scan_for_pii-451"><span class="linenos">451</span></a>
+</span><span id="scan_for_pii-452"><a href="#scan_for_pii-452"><span class="linenos">452</span></a>    <span class="n">texts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">flatten_script_line</span><span class="p">(</span><span class="n">item</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="k">else</span> <span class="n">item</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">items</span><span class="p">]</span>
+</span><span id="scan_for_pii-453"><a href="#scan_for_pii-453"><span class="linenos">453</span></a>
+</span><span id="scan_for_pii-454"><a href="#scan_for_pii-454"><span class="linenos">454</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_finish</span><span class="p">(</span><span class="n">scans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="n">PiiScan</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]:</span>
+</span><span id="scan_for_pii-455"><a href="#scan_for_pii-455"><span class="linenos">455</span></a>        <span class="k">return</span> <span class="n">scans</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">if</span> <span class="n">is_scalar</span> <span class="k">else</span> <span class="n">scans</span>
+</span><span id="scan_for_pii-456"><a href="#scan_for_pii-456"><span class="linenos">456</span></a>
+</span><span id="scan_for_pii-457"><a href="#scan_for_pii-457"><span class="linenos">457</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_empty</span><span class="p">(</span><span class="n">failures</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]:</span>
+</span><span id="scan_for_pii-458"><a href="#scan_for_pii-458"><span class="linenos">458</span></a>        <span class="k">return</span> <span class="p">[</span><span class="n">PiiScan</span><span class="p">(</span><span class="n">spans</span><span class="o">=</span><span class="p">[],</span> <span class="n">detectors_used</span><span class="o">=</span><span class="p">[],</span> <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">failures</span><span class="p">))</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">texts</span><span class="p">]</span>
+</span><span id="scan_for_pii-459"><a href="#scan_for_pii-459"><span class="linenos">459</span></a>
+</span><span id="scan_for_pii-460"><a href="#scan_for_pii-460"><span class="linenos">460</span></a>    <span class="c1"># Explicit ``detectors=[]`` means the caller has chosen to disable PII detection.</span>
+</span><span id="scan_for_pii-461"><a href="#scan_for_pii-461"><span class="linenos">461</span></a>    <span class="c1"># Checked before anything else so it wins regardless of input content, giving a clean</span>
+</span><span id="scan_for_pii-462"><a href="#scan_for_pii-462"><span class="linenos">462</span></a>    <span class="c1"># three-way distinction between &quot;pii_disabled&quot;, &quot;ran, found nothing&quot;, and &quot;subprocess</span>
+</span><span id="scan_for_pii-463"><a href="#scan_for_pii-463"><span class="linenos">463</span></a>    <span class="c1"># failed&quot; that any caller layered on top of this function can rely on.</span>
+</span><span id="scan_for_pii-464"><a href="#scan_for_pii-464"><span class="linenos">464</span></a>    <span class="k">if</span> <span class="n">detectors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">len</span><span class="p">(</span><span class="n">detectors</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="scan_for_pii-465"><a href="#scan_for_pii-465"><span class="linenos">465</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">({</span><span class="s2">&quot;pii_disabled&quot;</span><span class="p">:</span> <span class="s2">&quot;PII detection disabled by caller (detectors=[]).&quot;</span><span class="p">}))</span>
+</span><span id="scan_for_pii-466"><a href="#scan_for_pii-466"><span class="linenos">466</span></a>
+</span><span id="scan_for_pii-467"><a href="#scan_for_pii-467"><span class="linenos">467</span></a>    <span class="c1"># Index-keyed so a batch of inputs shares one subprocess call; empty/whitespace-only</span>
+</span><span id="scan_for_pii-468"><a href="#scan_for_pii-468"><span class="linenos">468</span></a>    <span class="c1"># entries never reach the detectors.</span>
+</span><span id="scan_for_pii-469"><a href="#scan_for_pii-469"><span class="linenos">469</span></a>    <span class="n">transcripts_by_index</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">):</span> <span class="n">t</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">texts</span><span class="p">)</span> <span class="k">if</span> <span class="n">t</span> <span class="ow">and</span> <span class="n">t</span><span class="o">.</span><span class="n">strip</span><span class="p">()}</span>
+</span><span id="scan_for_pii-470"><a href="#scan_for_pii-470"><span class="linenos">470</span></a>
+</span><span id="scan_for_pii-471"><a href="#scan_for_pii-471"><span class="linenos">471</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">transcripts_by_index</span><span class="p">:</span>
+</span><span id="scan_for_pii-472"><a href="#scan_for_pii-472"><span class="linenos">472</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">({}))</span>
+</span><span id="scan_for_pii-473"><a href="#scan_for_pii-473"><span class="linenos">473</span></a>
+</span><span id="scan_for_pii-474"><a href="#scan_for_pii-474"><span class="linenos">474</span></a>    <span class="k">try</span><span class="p">:</span>
+</span><span id="scan_for_pii-475"><a href="#scan_for_pii-475"><span class="linenos">475</span></a>        <span class="n">subprocess_kwargs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="scan_for_pii-476"><a href="#scan_for_pii-476"><span class="linenos">476</span></a>            <span class="s2">&quot;presidio_score_threshold&quot;</span><span class="p">:</span> <span class="n">presidio_score_threshold</span><span class="p">,</span>
+</span><span id="scan_for_pii-477"><a href="#scan_for_pii-477"><span class="linenos">477</span></a>            <span class="s2">&quot;gliner_threshold&quot;</span><span class="p">:</span> <span class="n">gliner_threshold</span><span class="p">,</span>
+</span><span id="scan_for_pii-478"><a href="#scan_for_pii-478"><span class="linenos">478</span></a>        <span class="p">}</span>
+</span><span id="scan_for_pii-479"><a href="#scan_for_pii-479"><span class="linenos">479</span></a>        <span class="k">if</span> <span class="n">detectors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="scan_for_pii-480"><a href="#scan_for_pii-480"><span class="linenos">480</span></a>            <span class="n">subprocess_kwargs</span><span class="p">[</span><span class="s2">&quot;detectors&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">detectors</span>
+</span><span id="scan_for_pii-481"><a href="#scan_for_pii-481"><span class="linenos">481</span></a>        <span class="k">if</span> <span class="n">gliner_model</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="scan_for_pii-482"><a href="#scan_for_pii-482"><span class="linenos">482</span></a>            <span class="n">subprocess_kwargs</span><span class="p">[</span><span class="s2">&quot;gliner_model&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">gliner_model</span>
+</span><span id="scan_for_pii-483"><a href="#scan_for_pii-483"><span class="linenos">483</span></a>        <span class="k">if</span> <span class="n">gliner_labels</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="scan_for_pii-484"><a href="#scan_for_pii-484"><span class="linenos">484</span></a>            <span class="n">subprocess_kwargs</span><span class="p">[</span><span class="s2">&quot;gliner_labels&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">gliner_labels</span>
+</span><span id="scan_for_pii-485"><a href="#scan_for_pii-485"><span class="linenos">485</span></a>        <span class="n">result</span> <span class="o">=</span> <span class="n">detect_pii_via_subprocess</span><span class="p">(</span><span class="n">transcripts_by_index</span><span class="p">,</span> <span class="o">**</span><span class="n">subprocess_kwargs</span><span class="p">)</span>
+</span><span id="scan_for_pii-486"><a href="#scan_for_pii-486"><span class="linenos">486</span></a>    <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">exc</span><span class="p">:</span>  <span class="c1"># noqa: BLE001 — caller needs a scan to continue, not a crash</span>
+</span><span id="scan_for_pii-487"><a href="#scan_for_pii-487"><span class="linenos">487</span></a>        <span class="n">msg</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;PII subprocess failed: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">exc</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">exc</span><span class="si">}</span><span class="s2">&quot;</span>
+</span><span id="scan_for_pii-488"><a href="#scan_for_pii-488"><span class="linenos">488</span></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;warn: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
+</span><span id="scan_for_pii-489"><a href="#scan_for_pii-489"><span class="linenos">489</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">({</span><span class="s2">&quot;pii_subprocess&quot;</span><span class="p">:</span> <span class="n">msg</span><span class="p">}))</span>
+</span><span id="scan_for_pii-490"><a href="#scan_for_pii-490"><span class="linenos">490</span></a>
+</span><span id="scan_for_pii-491"><a href="#scan_for_pii-491"><span class="linenos">491</span></a>    <span class="n">spans_by_index_raw</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;spans_by_asr&quot;</span><span class="p">,</span> <span class="p">{})</span>
+</span><span id="scan_for_pii-492"><a href="#scan_for_pii-492"><span class="linenos">492</span></a>    <span class="n">failures</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;failures&quot;</span><span class="p">,</span> <span class="p">{}))</span>
+</span><span id="scan_for_pii-493"><a href="#scan_for_pii-493"><span class="linenos">493</span></a>    <span class="n">detectors_used</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;detectors_used&quot;</span><span class="p">,</span> <span class="p">[]))</span>
 </span><span id="scan_for_pii-494"><a href="#scan_for_pii-494"><span class="linenos">494</span></a>
-</span><span id="scan_for_pii-495"><a href="#scan_for_pii-495"><span class="linenos">495</span></a>    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">msg</span> <span class="ow">in</span> <span class="n">failures</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-</span><span id="scan_for_pii-496"><a href="#scan_for_pii-496"><span class="linenos">496</span></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;warn: PII / </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
-</span><span id="scan_for_pii-497"><a href="#scan_for_pii-497"><span class="linenos">497</span></a>
-</span><span id="scan_for_pii-498"><a href="#scan_for_pii-498"><span class="linenos">498</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">detectors_used</span><span class="p">:</span>
-</span><span id="scan_for_pii-499"><a href="#scan_for_pii-499"><span class="linenos">499</span></a>        <span class="n">no_detector_msg</span> <span class="o">=</span> <span class="s2">&quot;No PII detector (Presidio, GLiNER, rules, llm) ran.&quot;</span>
-</span><span id="scan_for_pii-500"><a href="#scan_for_pii-500"><span class="linenos">500</span></a>        <span class="n">failures</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;no_pii_detector&quot;</span><span class="p">,</span> <span class="n">no_detector_msg</span><span class="p">)</span>
-</span><span id="scan_for_pii-501"><a href="#scan_for_pii-501"><span class="linenos">501</span></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;warn: </span><span class="si">{</span><span class="n">no_detector_msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
-</span><span id="scan_for_pii-502"><a href="#scan_for_pii-502"><span class="linenos">502</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">(</span><span class="n">failures</span><span class="p">))</span>
-</span><span id="scan_for_pii-503"><a href="#scan_for_pii-503"><span class="linenos">503</span></a>
-</span><span id="scan_for_pii-504"><a href="#scan_for_pii-504"><span class="linenos">504</span></a>    <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span>
-</span><span id="scan_for_pii-505"><a href="#scan_for_pii-505"><span class="linenos">505</span></a>        <span class="p">[</span>
-</span><span id="scan_for_pii-506"><a href="#scan_for_pii-506"><span class="linenos">506</span></a>            <span class="n">PiiScan</span><span class="p">(</span>
-</span><span id="scan_for_pii-507"><a href="#scan_for_pii-507"><span class="linenos">507</span></a>                <span class="n">spans</span><span class="o">=</span><span class="n">_materialize_spans</span><span class="p">(</span><span class="n">spans_by_index_raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="p">[]),</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)),</span>
-</span><span id="scan_for_pii-508"><a href="#scan_for_pii-508"><span class="linenos">508</span></a>                <span class="n">detectors_used</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">detectors_used</span><span class="p">),</span>
-</span><span id="scan_for_pii-509"><a href="#scan_for_pii-509"><span class="linenos">509</span></a>                <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">failures</span><span class="p">),</span>
-</span><span id="scan_for_pii-510"><a href="#scan_for_pii-510"><span class="linenos">510</span></a>            <span class="p">)</span>
-</span><span id="scan_for_pii-511"><a href="#scan_for_pii-511"><span class="linenos">511</span></a>            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">texts</span><span class="p">))</span>
-</span><span id="scan_for_pii-512"><a href="#scan_for_pii-512"><span class="linenos">512</span></a>        <span class="p">]</span>
-</span><span id="scan_for_pii-513"><a href="#scan_for_pii-513"><span class="linenos">513</span></a>    <span class="p">)</span>
+</span><span id="scan_for_pii-495"><a href="#scan_for_pii-495"><span class="linenos">495</span></a>    <span class="c1"># The local LLM runs here, not in the venv -- it needs nothing but stdlib urllib</span>
+</span><span id="scan_for_pii-496"><a href="#scan_for_pii-496"><span class="linenos">496</span></a>    <span class="c1"># (see local_llm.py). Merged before the &quot;did anything run?&quot; check below so that</span>
+</span><span id="scan_for_pii-497"><a href="#scan_for_pii-497"><span class="linenos">497</span></a>    <span class="c1"># `detectors=[&quot;llm&quot;]`, which leaves the worker with nothing to do, is still a real</span>
+</span><span id="scan_for_pii-498"><a href="#scan_for_pii-498"><span class="linenos">498</span></a>    <span class="c1"># scan rather than a no-detector early return.</span>
+</span><span id="scan_for_pii-499"><a href="#scan_for_pii-499"><span class="linenos">499</span></a>    <span class="k">if</span> <span class="n">detectors</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">DETECTOR_LLM</span> <span class="ow">in</span> <span class="n">detectors</span><span class="p">:</span>
+</span><span id="scan_for_pii-500"><a href="#scan_for_pii-500"><span class="linenos">500</span></a>        <span class="c1"># Keyed off transcripts_by_index, not texts: empty/whitespace-only inputs never</span>
+</span><span id="scan_for_pii-501"><a href="#scan_for_pii-501"><span class="linenos">501</span></a>        <span class="c1"># reach the venv detectors either, and asking an LLM about an empty string costs</span>
+</span><span id="scan_for_pii-502"><a href="#scan_for_pii-502"><span class="linenos">502</span></a>        <span class="c1"># a round trip to be told nothing.</span>
+</span><span id="scan_for_pii-503"><a href="#scan_for_pii-503"><span class="linenos">503</span></a>        <span class="n">llm_results</span> <span class="o">=</span> <span class="p">{</span>
+</span><span id="scan_for_pii-504"><a href="#scan_for_pii-504"><span class="linenos">504</span></a>            <span class="n">i</span><span class="p">:</span> <span class="n">scan_or_fail</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">local_llm_config</span> <span class="ow">or</span> <span class="n">LocalLlmConfig</span><span class="p">())</span> <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">transcripts_by_index</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+</span><span id="scan_for_pii-505"><a href="#scan_for_pii-505"><span class="linenos">505</span></a>        <span class="p">}</span>
+</span><span id="scan_for_pii-506"><a href="#scan_for_pii-506"><span class="linenos">506</span></a>        <span class="n">first_failure</span> <span class="o">=</span> <span class="nb">next</span><span class="p">((</span><span class="n">r</span><span class="o">.</span><span class="n">failure</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">llm_results</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">r</span><span class="o">.</span><span class="n">failure</span><span class="p">),</span> <span class="kc">None</span><span class="p">)</span>
+</span><span id="scan_for_pii-507"><a href="#scan_for_pii-507"><span class="linenos">507</span></a>        <span class="k">if</span> <span class="n">first_failure</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+</span><span id="scan_for_pii-508"><a href="#scan_for_pii-508"><span class="linenos">508</span></a>            <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">llm_result</span> <span class="ow">in</span> <span class="n">llm_results</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+</span><span id="scan_for_pii-509"><a href="#scan_for_pii-509"><span class="linenos">509</span></a>                <span class="n">spans_by_index_raw</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="p">[])</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">llm_result</span><span class="o">.</span><span class="n">spans</span><span class="p">)</span>
+</span><span id="scan_for_pii-510"><a href="#scan_for_pii-510"><span class="linenos">510</span></a>            <span class="n">detectors_used</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">DETECTOR_LLM</span><span class="p">)</span>
+</span><span id="scan_for_pii-511"><a href="#scan_for_pii-511"><span class="linenos">511</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="scan_for_pii-512"><a href="#scan_for_pii-512"><span class="linenos">512</span></a>            <span class="c1"># One failure fails the detector for the whole batch rather than leaving it</span>
+</span><span id="scan_for_pii-513"><a href="#scan_for_pii-513"><span class="linenos">513</span></a>            <span class="c1"># counted as &quot;ran&quot; for some inputs and not others: `detectors_used` is the</span>
+</span><span id="scan_for_pii-514"><a href="#scan_for_pii-514"><span class="linenos">514</span></a>            <span class="c1"># agreement denominator, so a per-input denominator would make two scans in</span>
+</span><span id="scan_for_pii-515"><a href="#scan_for_pii-515"><span class="linenos">515</span></a>            <span class="c1"># one batch incomparable.</span>
+</span><span id="scan_for_pii-516"><a href="#scan_for_pii-516"><span class="linenos">516</span></a>            <span class="n">failures</span><span class="p">[</span><span class="s2">&quot;llm&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">first_failure</span>
+</span><span id="scan_for_pii-517"><a href="#scan_for_pii-517"><span class="linenos">517</span></a>
+</span><span id="scan_for_pii-518"><a href="#scan_for_pii-518"><span class="linenos">518</span></a>    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">msg</span> <span class="ow">in</span> <span class="n">failures</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+</span><span id="scan_for_pii-519"><a href="#scan_for_pii-519"><span class="linenos">519</span></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;warn: PII / </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
+</span><span id="scan_for_pii-520"><a href="#scan_for_pii-520"><span class="linenos">520</span></a>
+</span><span id="scan_for_pii-521"><a href="#scan_for_pii-521"><span class="linenos">521</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">detectors_used</span><span class="p">:</span>
+</span><span id="scan_for_pii-522"><a href="#scan_for_pii-522"><span class="linenos">522</span></a>        <span class="n">no_detector_msg</span> <span class="o">=</span> <span class="s2">&quot;No PII detector (Presidio, GLiNER, rules, llm) ran.&quot;</span>
+</span><span id="scan_for_pii-523"><a href="#scan_for_pii-523"><span class="linenos">523</span></a>        <span class="n">failures</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">&quot;no_pii_detector&quot;</span><span class="p">,</span> <span class="n">no_detector_msg</span><span class="p">)</span>
+</span><span id="scan_for_pii-524"><a href="#scan_for_pii-524"><span class="linenos">524</span></a>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;warn: </span><span class="si">{</span><span class="n">no_detector_msg</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">file</span><span class="o">=</span><span class="n">sys</span><span class="o">.</span><span class="n">stderr</span><span class="p">)</span>
+</span><span id="scan_for_pii-525"><a href="#scan_for_pii-525"><span class="linenos">525</span></a>        <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">_empty</span><span class="p">(</span><span class="n">failures</span><span class="p">))</span>
+</span><span id="scan_for_pii-526"><a href="#scan_for_pii-526"><span class="linenos">526</span></a>
+</span><span id="scan_for_pii-527"><a href="#scan_for_pii-527"><span class="linenos">527</span></a>    <span class="n">scans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PiiScan</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="scan_for_pii-528"><a href="#scan_for_pii-528"><span class="linenos">528</span></a>    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">item</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">items</span><span class="p">):</span>
+</span><span id="scan_for_pii-529"><a href="#scan_for_pii-529"><span class="linenos">529</span></a>        <span class="n">line</span> <span class="o">=</span> <span class="n">item</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">item</span><span class="p">,</span> <span class="n">ScriptLine</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span>
+</span><span id="scan_for_pii-530"><a href="#scan_for_pii-530"><span class="linenos">530</span></a>        <span class="n">scans</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="scan_for_pii-531"><a href="#scan_for_pii-531"><span class="linenos">531</span></a>            <span class="n">PiiScan</span><span class="p">(</span>
+</span><span id="scan_for_pii-532"><a href="#scan_for_pii-532"><span class="linenos">532</span></a>                <span class="n">spans</span><span class="o">=</span><span class="n">_materialize_spans</span><span class="p">(</span><span class="n">spans_by_index_raw</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="p">[]),</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">),</span> <span class="n">line</span><span class="o">=</span><span class="n">line</span><span class="p">),</span>
+</span><span id="scan_for_pii-533"><a href="#scan_for_pii-533"><span class="linenos">533</span></a>                <span class="n">detectors_used</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">detectors_used</span><span class="p">),</span>
+</span><span id="scan_for_pii-534"><a href="#scan_for_pii-534"><span class="linenos">534</span></a>                <span class="n">failures</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">failures</span><span class="p">),</span>
+</span><span id="scan_for_pii-535"><a href="#scan_for_pii-535"><span class="linenos">535</span></a>            <span class="p">)</span>
+</span><span id="scan_for_pii-536"><a href="#scan_for_pii-536"><span class="linenos">536</span></a>        <span class="p">)</span>
+</span><span id="scan_for_pii-537"><a href="#scan_for_pii-537"><span class="linenos">537</span></a>    <span class="k">return</span> <span class="n">_finish</span><span class="p">(</span><span class="n">scans</span><span class="p">)</span>
 </span></pre></div>
 
 
