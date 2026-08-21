@@ -93,15 +93,12 @@ def fold_file_verdict(
         verdict = by_kind.get(kind)
         state = ran.get(node)
         if verdict is None:
-            if state in (RunState.SKIPPED, RunState.ERRORED) and predicted in (
-                KindState.PRESENT,
-                KindState.UNDECIDED,
-            ):
-                contradictions.append(
-                    NodeVerdict(
-                        node, Outcome.FLAG, kind, f"contradiction: {kind} was {predicted.value} and {node} never ran"
-                    )
-                )
+            if predicted in (KindState.PRESENT, KindState.UNDECIDED):
+                if state is RunState.COMPLETED:
+                    why = f"contradiction: {kind} was {predicted.value} and {node} completed without a verdict"
+                else:
+                    why = f"contradiction: {kind} was {predicted.value} and {node} never ran"
+                contradictions.append(NodeVerdict(node, Outcome.FLAG, kind, why))
             continue
         if predicted is KindState.PRESENT and verdict.outcome is Outcome.FAIL:
             contradictions.append(
@@ -115,12 +112,16 @@ def fold_file_verdict(
                 NodeVerdict(node, Outcome.FLAG, kind, f"contradiction: {kind} predicted absent, {node} passed")
             )
         elif predicted is KindState.UNDECIDED:
-            kinds[kind] = KindState.PRESENT if verdict.outcome is Outcome.PASS else KindState.ABSENT
+            if verdict.outcome is Outcome.PASS:
+                kinds[kind] = KindState.PRESENT
+            elif verdict.outcome is Outcome.FAIL:
+                kinds[kind] = KindState.ABSENT
     reasons.extend(contradictions)
 
     admit = next((v for v in node_verdicts if v.node == "ADMIT"), None)
     if admit and admit.outcome is Outcome.FAIL:
-        return FileVerdict(Outcome.FAIL, release, kinds, [admit], dict(ran))
+        ordered = [admit, *(r for r in reasons if r is not admit)]
+        return FileVerdict(Outcome.FAIL, release, kinds, ordered, dict(ran))
     if any(v.outcome is Outcome.FLAG for v in reasons):
         return FileVerdict(Outcome.FLAG, release, kinds, reasons, dict(ran))
     if kinds and all(s is KindState.ABSENT for s in kinds.values()):
