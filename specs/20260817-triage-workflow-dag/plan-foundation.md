@@ -349,12 +349,14 @@ class TestAgents:
     """An agent may be a model, and its commit may be unknown."""
 
     def test_a_resolved_commit_is_accepted(self) -> None:
+        """A resolved commit is accepted."""
         s = _store()
         sha = "9b2eb2853c426676255cc6ac5804b7f1fe8e563f"
         a = s.agent(agent_type="model", model_id="google/hear", commit_sha=sha)
         assert s.get_agent(a).commit_sha == sha
 
     def test_a_ref_masquerading_as_a_commit_is_refused(self) -> None:
+        """A ref masquerading as a commit is refused."""
         s = _store()
         with pytest.raises(ValueError, match="40-hex"):
             s.agent(agent_type="model", model_id="google/hear", commit_sha="main")
@@ -367,11 +369,13 @@ class TestAgents:
         assert got.commit_sha is None and got.unresolved_reason == "hub 503"
 
     def test_a_model_agent_needs_one_of_the_two(self) -> None:
+        """A model agent needs one of the two."""
         s = _store()
         with pytest.raises(ValueError, match="commit_sha or unresolved_reason"):
             s.agent(agent_type="model", model_id="google/hear")
 
     def test_an_activity_records_which_agent_ran_it(self) -> None:
+        """An activity records which agent ran it."""
         s = _store()
         a = s.agent(agent_type="software", version="0.1.0")
         act = s.activity(node="PREPROCESS", step=None, parameters={})
@@ -383,6 +387,7 @@ class TestInvalidation:
     """Withdrawal keeps the entity."""
 
     def test_an_invalidated_entity_is_still_readable(self) -> None:
+        """An invalidated entity is still readable."""
         s = _store()
         seg = s.entity(prov_type="speaker", extent=(7.9, 9.0), attributes={"speaker": "SPEAKER_00"})
         act = s.activity(node="SPEECH", step="withdraw", parameters={"reason": "airway span"})
@@ -391,6 +396,7 @@ class TestInvalidation:
         assert s.get_entity(seg).attributes["speaker"] == "SPEAKER_00"
 
     def test_nothing_can_be_deleted(self) -> None:
+        """Nothing can be deleted."""
         s = _store()
         assert not hasattr(s, "delete_entity")
         assert not hasattr(s, "remove_relation")
@@ -400,6 +406,7 @@ class TestOrderIndependence:
     """Append-only makes a merge a set union."""
 
     def test_merging_in_either_order_gives_the_same_fingerprint(self) -> None:
+        """Merging in either order gives the same fingerprint."""
         a, b = _store(), _store()
         a.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
         b.entity(prov_type="word", extent=(1.1, 1.4), attributes={"word": "hello"})
@@ -409,7 +416,8 @@ class TestOrderIndependence:
 class TestRoundTrip:
     """PROV-JSON-shaped JSONL survives a round trip."""
 
-    def test_entities_activities_agents_and_relations_all_return(self, tmp_path) -> None:
+    def test_entities_activities_agents_and_relations_all_return(self, tmp_path: Path) -> None:
+        """Entities activities agents and relations all return."""
         s = _store()
         ag = s.agent(agent_type="model", model_id="google/hear", commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f")
         act = s.activity(node="AIRWAY", step="classify", parameters={"labels": ["Cough"]})
@@ -500,7 +508,7 @@ class Agent:
     version: str | None = None
 
 
-def _digest(payload: Any) -> str:
+def _digest(payload: object) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
@@ -771,6 +779,7 @@ class TestMeasuredValues:
     """A value with a derivation is readable."""
 
     def test_the_measured_values_are_present(self) -> None:
+        """The measured values are present."""
         cfg = load_triage_config()
         assert cfg.require("envelope.lowpass_hz") == 40.0
         assert cfg.require("spans.onset_drop_db") == 15.0
@@ -781,6 +790,7 @@ class TestMeasuredValues:
         assert cfg.require("phonation.periods_per_window") == 4.5
 
     def test_identity_travels_with_the_config(self) -> None:
+        """Identity travels with the config."""
         cfg = load_triage_config()
         assert cfg.name == "senselab-triage/default"
         assert isinstance(cfg.version, int)
@@ -791,11 +801,13 @@ class TestUnsetValues:
     """A number nobody measured must be impossible to use by accident."""
 
     def test_reading_an_unset_value_raises_and_names_it(self) -> None:
+        """Reading an unset value raises and names it."""
         cfg = load_triage_config()
         with pytest.raises(ValueError, match="phonation.hnr_floor_db"):
             cfg.require("phonation.hnr_floor_db")
 
     def test_the_error_points_at_what_would_settle_it(self) -> None:
+        """The error points at what would settle it."""
         cfg = load_triage_config()
         with pytest.raises(ValueError, match="benchmarks/open.md"):
             cfg.require("redaction.padding_ms")
@@ -808,6 +820,7 @@ class TestUnsetValues:
             assert cfg.get(path, "MISSING") is None, f"{path} must be present and null"
 
     def test_get_returns_a_default_instead_of_raising(self) -> None:
+        """Get returns a default instead of raising."""
         cfg = load_triage_config()
         assert cfg.get("phonation.hnr_floor_db", 8.0) == 8.0
 
@@ -815,18 +828,21 @@ class TestUnsetValues:
 class TestOverrides:
     """Whole-file overrides, and the hash follows the merged mapping."""
 
-    def test_an_override_supplies_an_unset_value(self, tmp_path) -> None:
+    def test_an_override_supplies_an_unset_value(self, tmp_path: Path) -> None:
+        """An override supplies an unset value."""
         override = tmp_path / "o.yaml"
         override.write_text("redaction:\n  padding_ms: 250\n")
         cfg = load_triage_config(override)
         assert cfg.require("redaction.padding_ms") == 250
 
-    def test_an_override_changes_the_hash(self, tmp_path) -> None:
+    def test_an_override_changes_the_hash(self, tmp_path: Path) -> None:
+        """An override changes the hash."""
         override = tmp_path / "o.yaml"
         override.write_text("spans:\n  onset_drop_db: 12.0\n")
         assert load_triage_config(override).config_hash != load_triage_config().config_hash
 
-    def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path) -> None:
+    def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path: Path) -> None:
+        """An unknown key is refused rather than ignored."""
         override = tmp_path / "o.yaml"
         override.write_text("spans:\n  onset_drpo_db: 12.0\n")
         with pytest.raises(ValueError, match="onset_drpo_db"):
