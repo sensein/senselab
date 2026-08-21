@@ -111,7 +111,6 @@ preemphasis:
 envelope:
   lowpass_hz: 40.0
   filter_order: 4
-  zero_phase: true
 
 floor:
   window_s: 3.0

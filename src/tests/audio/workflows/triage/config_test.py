@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
+import senselab.audio.tasks
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 
 
@@ -103,3 +105,37 @@ class TestOverrides:
         override.write_text("spans:\n  onset_drpo_db: 12.0\n")
         with pytest.raises(ValueError, match="onset_drpo_db"):
             load_triage_config(override)
+
+
+_KEY_PATTERN = re.compile(r"`+([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)`+")
+_TASK_MODULES = ("envelope", "spans", "gammatone", "phonation", "redaction", "disruptions")
+
+
+def _docstring_config_keys() -> dict[str, set[str]]:
+    """Collect every ``section.key`` a task api docstring names, per module."""
+    keys: dict[str, set[str]] = {}
+    for name in _TASK_MODULES:
+        source = (Path(senselab.audio.tasks.__file__).parent / name / "api.py").read_text()
+        keys[name] = set(_KEY_PATTERN.findall(source))
+    return keys
+
+
+class TestDocstringKeysResolve:
+    """Every config key a task docstring names must exist in the default configuration."""
+
+    def test_each_module_names_at_least_one_key(self) -> None:
+        """An empty extraction means the pattern broke, not that a module has no keys."""
+        for name, keys in _docstring_config_keys().items():
+            assert keys, f"no `section.key` references extracted from {name}/api.py"
+
+    def test_every_docstring_key_resolves_in_the_default_config(self) -> None:
+        """A key a docstring tells the caller to read must be present in default.yaml, even if null."""
+        cfg = load_triage_config()
+        for name, keys in _docstring_config_keys().items():
+            for key in sorted(keys):
+                node: object = cfg.values
+                for part in key.split("."):
+                    assert isinstance(node, dict) and part in node, (
+                        f"{name}/api.py names `{key}` but it does not resolve in default.yaml"
+                    )
+                    node = node[part]

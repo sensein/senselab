@@ -37,11 +37,22 @@ class Entity:
 
 @dataclass(frozen=True)
 class Activity:
-    """One node execution, or one step of one."""
+    """One node execution, or one step of one.
+
+    Attributes:
+        id: The activity's id. ``started`` and ``ended`` are not part of it.
+        node: The node executing.
+        step: Which step of it, when a node has several.
+        started: When it began, ISO 8601, or None when unrecorded.
+        ended: When it finished, ISO 8601, or None when unrecorded.
+        parameters: The values it ran with.
+    """
 
     id: str
     node: str
     step: str | None
+    started: str | None = None
+    ended: str | None = None
     parameters: dict[str, Any] = field(default_factory=dict)
 
 
@@ -101,19 +112,31 @@ class ProvStore:
         self._entities[eid] = Entity(id=eid, prov_type=prov_type, extent=extent, attributes=dict(attributes))
         return eid
 
-    def activity(self, *, node: str, step: str | None, parameters: dict[str, Any]) -> str:
+    def activity(
+        self,
+        *,
+        node: str,
+        step: str | None,
+        parameters: dict[str, Any],
+        started: str | None = None,
+        ended: str | None = None,
+    ) -> str:
         """Add an activity.
 
         Args:
             node: The node executing.
             step: Which step of it, when a node has several.
             parameters: The values it ran with.
+            started: When it began, ISO 8601. Excluded from the id digest.
+            ended: When it finished, ISO 8601. Excluded from the id digest.
 
         Returns:
-            Its id.
+            Its id — the same for two executions that differ only in ``started``/``ended``.
         """
         aid = f"act-{_digest([self.run_id, node, step, parameters])}"
-        self._activities[aid] = Activity(id=aid, node=node, step=step, parameters=dict(parameters))
+        self._activities[aid] = Activity(
+            id=aid, node=node, step=step, started=started, ended=ended, parameters=dict(parameters)
+        )
         return aid
 
     def agent(

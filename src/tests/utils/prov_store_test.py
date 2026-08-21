@@ -188,3 +188,37 @@ class TestRoundTrip:
         path.write_text('{"record": "banana"}\n')
         with pytest.raises(ValueError, match="banana"):
             ProvStore.read_jsonl(path)
+
+
+class TestActivityTimestamps:
+    """An activity records when it ran, without the timestamps entering its identity."""
+
+    def test_timestamps_survive_a_round_trip(self, tmp_path: Path) -> None:
+        """``started`` and ``ended`` come back exactly as written."""
+        s = _store()
+        act = s.activity(
+            node="AIRWAY",
+            step="classify",
+            parameters={"labels": ["Cough"]},
+            started="2026-08-21T10:00:00+00:00",
+            ended="2026-08-21T10:00:07+00:00",
+        )
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        back = ProvStore.read_jsonl(path)
+        assert back._activities[act].started == "2026-08-21T10:00:00+00:00"
+        assert back._activities[act].ended == "2026-08-21T10:00:07+00:00"
+
+    def test_two_runs_differing_only_in_timestamps_share_an_id(self) -> None:
+        """Re-running a node with identical inputs mints the same activity id."""
+        s = _store()
+        first = s.activity(node="AIRWAY", step="classify", parameters={"k": 1}, started="2026-08-21T10:00:00+00:00")
+        second = s.activity(node="AIRWAY", step="classify", parameters={"k": 1}, started="2026-08-21T11:30:00+00:00")
+        assert first == second
+
+    def test_timestamps_are_optional(self) -> None:
+        """An activity without timestamps is still representable, with both fields None."""
+        s = _store()
+        act = s.activity(node="PREPROCESS", step=None, parameters={})
+        assert s._activities[act].started is None
+        assert s._activities[act].ended is None
