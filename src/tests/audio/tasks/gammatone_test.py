@@ -49,3 +49,10 @@ class TestFilterbank:
         )
         assert energy.shape[0] == 24 == len(cf)
         assert energy.shape[1] == pytest.approx(2.0 / 0.01, abs=2)
+
+    def test_energy_is_absolute_not_relative(self) -> None:
+        """Halving the amplitude drops every channel ~6 dB; a max-normalised bank would show no change."""
+        _, loud = gammatone_filterbank(_tone(1000.0), n_channels=40, low_hz=80.0, high_hz=7800.0, hop_s=0.005)
+        quiet = Audio(waveform=_tone(1000.0).waveform * 0.5, sampling_rate=SR)
+        _, soft = gammatone_filterbank(quiet, n_channels=40, low_hz=80.0, high_hz=7800.0, hop_s=0.005)
+        assert np.median(loud - soft) == pytest.approx(6.02, abs=0.5)
