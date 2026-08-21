@@ -12,7 +12,7 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, cast, get_args
 
 PROV_TYPE = Literal[
     "span", "word", "speaker", "interval", "measurement", "kind", "stream", "pii", "verdict", "assertion"
@@ -23,6 +23,15 @@ RELATION = Literal[
 ]
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_PROV_TYPES = frozenset(get_args(PROV_TYPE))
+_AGENT_TYPES = frozenset(get_args(AGENT_TYPE))
+_RELATIONS = frozenset(get_args(RELATION))
+_RECORD_KEYS: dict[str, frozenset[str]] = {
+    "entity": frozenset({"id", "prov_type", "extent", "attributes"}),
+    "activity": frozenset({"id", "node", "step", "started", "ended", "parameters"}),
+    "agent": frozenset({"id", "agent_type", "model_id", "commit_sha", "unresolved_reason", "version"}),
+    "relation": frozenset({"relation", "source", "target"}),
+}
 
 
 @dataclass(frozen=True)
@@ -80,6 +89,32 @@ class Agent:
 
 def _digest(payload: object) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def _check_agent_fields(
+    agent_type: str, model_id: str | None, commit_sha: str | None, unresolved_reason: str | None
+) -> None:
+    """Refuse agent field combinations the store never accepts, at write time and at read-back alike.
+
+    Raises:
+        ValueError: If ``commit_sha`` is not exactly 40 hex characters, if ``commit_sha`` and
+            ``unresolved_reason`` are supplied together, if ``unresolved_reason`` is empty, or if a
+            model agent is missing ``model_id`` or supplies neither a commit nor a reason it is
+            missing.
+    """
+    if commit_sha is not None and not _SHA.fullmatch(commit_sha):
+        raise ValueError(
+            f"commit_sha must be a resolved 40-hex commit, got {commit_sha!r}. A ref recorded as a "
+            "commit makes the provenance confidently wrong."
+        )
+    if commit_sha is not None and unresolved_reason is not None:
+        raise ValueError("commit_sha and unresolved_reason contradict each other; supply exactly one")
+    if unresolved_reason is not None and not unresolved_reason.strip():
+        raise ValueError("unresolved_reason must not be empty; an empty reason says nothing")
+    if agent_type == "model" and model_id is None:
+        raise ValueError("a model agent needs model_id")
+    if agent_type == "model" and commit_sha is None and unresolved_reason is None:
+        raise ValueError("a model agent needs commit_sha or unresolved_reason; silence is not a third option")
 
 
 class ProvStore:
@@ -166,19 +201,7 @@ class ProvStore:
                 model agent is missing ``model_id`` or supplies neither a commit nor a reason it is
                 missing.
         """
-        if commit_sha is not None and not _SHA.fullmatch(commit_sha):
-            raise ValueError(
-                f"commit_sha must be a resolved 40-hex commit, got {commit_sha!r}. A ref recorded as a "
-                "commit makes the provenance confidently wrong."
-            )
-        if commit_sha is not None and unresolved_reason is not None:
-            raise ValueError("commit_sha and unresolved_reason contradict each other; supply exactly one")
-        if unresolved_reason is not None and not unresolved_reason.strip():
-            raise ValueError("unresolved_reason must not be empty; an empty reason says nothing")
-        if agent_type == "model" and model_id is None:
-            raise ValueError("a model agent needs model_id")
-        if agent_type == "model" and commit_sha is None and unresolved_reason is None:
-            raise ValueError("a model agent needs commit_sha or unresolved_reason; silence is not a third option")
+        _check_agent_fields(agent_type, model_id, commit_sha, unresolved_reason)
         gid = f"agent-{_digest([self.run_id, agent_type, model_id, commit_sha, unresolved_reason, version])}"
         self._agents[gid] = Agent(
             id=gid,
@@ -275,28 +298,61 @@ class ProvStore:
 
     @classmethod
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
-        """Read a store back.
+        """Read a store back, holding every record to the write-time invariants.
+
+        Relations pass through the same membership check as the relation methods, so a file carrying
+        the same relation line twice reads back as one triple. Agent fields pass through the same
+        checks as :meth:`agent`. A store written by :meth:`write_jsonl` always reads back unchanged.
+
+        Args:
+            path: The JSONL file to read.
+            run_id: The run id of the returned store.
+
+        Returns:
+            The reconstructed store.
 
         Raises:
-            ValueError: If a line carries an unrecognised ``record`` kind.
+            ValueError: If a line is not an object carrying a ``record`` key, carries an unrecognised
+                record kind, is missing required keys or carrying unexpected ones, names an unknown
+                ``prov_type``, ``agent_type`` or relation, or holds agent fields that :meth:`agent`
+                refuses. The error names the file, the line and the offending record.
         """
         store = cls(run_id=run_id)
-        for line in Path(path).read_text().splitlines():
+        for line_no, line in enumerate(Path(path).read_text().splitlines(), start=1):
             if not line.strip():
                 continue
             rec = json.loads(line)
+            where = f"{path}, line {line_no}"
+            if not isinstance(rec, dict) or "record" not in rec:
+                raise ValueError(f"{where}: not an object carrying a 'record' key: {line!r}")
             kind = rec.pop("record")
+            expected = _RECORD_KEYS.get(kind)
+            if expected is None:
+                raise ValueError(f"{where}: unrecognised record kind {kind!r}")
+            missing, unexpected = sorted(expected - rec.keys()), sorted(rec.keys() - expected)
+            if missing or unexpected:
+                raise ValueError(
+                    f"{where}: {kind} record missing keys {missing}, carrying unexpected keys {unexpected}: {line!r}"
+                )
             if kind == "entity":
+                if rec["prov_type"] not in _PROV_TYPES:
+                    raise ValueError(f"{where}: entity {rec['id']!r} has unknown prov_type {rec['prov_type']!r}")
                 extent = rec.pop("extent")
                 store._entities[rec["id"]] = Entity(extent=tuple(extent) if extent else None, **rec)
             elif kind == "activity":
                 store._activities[rec["id"]] = Activity(**rec)
             elif kind == "agent":
+                if rec["agent_type"] not in _AGENT_TYPES:
+                    raise ValueError(f"{where}: agent {rec['id']!r} has unknown agent_type {rec['agent_type']!r}")
+                try:
+                    _check_agent_fields(rec["agent_type"], rec["model_id"], rec["commit_sha"], rec["unresolved_reason"])
+                except ValueError as err:
+                    raise ValueError(f"{where}: agent {rec['id']!r}: {err}") from err
                 store._agents[rec["id"]] = Agent(**rec)
-            elif kind == "relation":
-                store._relations.append((rec["relation"], rec["source"], rec["target"]))
             else:
-                raise ValueError(f"unrecognised record kind {kind!r} in {path}")
+                if rec["relation"] not in _RELATIONS:
+                    raise ValueError(f"{where}: unknown relation {rec['relation']!r}")
+                store._relate(cast(RELATION, rec["relation"]), rec["source"], rec["target"])
         return store
 
     @classmethod
