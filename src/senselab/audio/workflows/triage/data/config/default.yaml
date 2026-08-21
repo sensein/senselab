@@ -1,0 +1,150 @@
+# The triage workflow configuration. One file, versioned, with its derivation written down.
+#
+# No number appears in the code. A value here is either measured -- with the measurement named -- or
+# `null`, meaning nobody has measured it and reading it raises. There is no third state: a default
+# chosen to make a signature tidy is an unmeasured decision with a public interface.
+#
+# `derivation` below is a config *value*, not a comment: the loader hashes the merged mapping, so
+# editing a word of it changes `config_hash` and two behaviourally identical runs report different
+# identities. Corrections to its prose belong in `#` comments like this one.
+version: 1
+name: senselab-triage/default
+
+derivation: |
+  Envelope lowpass 40 Hz, zero-phase -- benchmarks/preprocess-params.md. Sweeping the cutoff against
+  six labelled events, a wider band makes onsets worse (median 144 ms at 320 Hz against 63 ms at
+  40 Hz) because it tracks pre-event fluctuation a fixed threshold then fires on. 40 Hz is the
+  modulation bandwidth the envelope is for, not an onset-precision choice. Zero-phase beats causal,
+  63.5 ms against 90.1 ms median, which makes the envelope offline-only.
+
+  Floor: rolling 3 s window, 10th percentile, in dBFS -- benchmarks/spans.md. Local and absolute
+  because a global anchor fails two ways: a floor-anchored gate loses the quieter event as noise
+  raises the floor, and a peak-anchored one moves 49.1 dB within one recording and is destroyed by a
+  single 30 ms click. Normalising the envelope by its own maximum is the fault both share.
+
+  Span onset drop 15 dB, peak-anchored -- benchmarks/spans.md. 5 of 6 labelled onsets inside their
+  declared windows, against 2 of 6 for a floor-referenced threshold on the same envelope.
+
+  Span offset 0.7 of each event's own range, 120 ms hangover -- benchmarks/spans.md. Median offset
+  error 84.3 ms against 573.9 ms for a fixed peak-10 dB. A fixed drop cannot serve both a 20 dB
+  mouth sound and a 57 dB cough. The hangover must be shorter than the shortest event to be bounded:
+  at 250 ms it overshoots a 202 ms click by 418 ms.
+
+  Span propose K, per reader -- benchmarks/spans.md and snr.md. 18 dB for airway, whose events stand
+  53-57 dB above the floor. 12 dB detects a speech span to +10 dB SNR and still survives an injected
+  click; 8 dB collapses the clean-file span set from six to two by merging, so lower is not freely
+  better. SPEECH no longer reads these spans -- it derives its own from word timings -- so only the
+  airway value is in use.
+
+  Pre-emphasis 0.97 -- conventional in speech analysis, not fitted here. It raises event-to-floor
+  contrast on every labelled event and most on the two hardest, cough 1 by +10.95 dB and the mouth
+  sound by +7.36 dB, both of which carry 14-16% of their energy in 4-8 kHz.
+
+  Spectrograms 5 ms and 20 ms window, 5 ms hop -- benchmarks/preprocess-params.md. At F0 88.1 Hz the
+  glottal period is 11.4 ms, so 10 ms resolves neither harmonics (150 Hz against 88 Hz spacing) nor
+  pulses (0.88 of a period). Two windows rather than a compromise between them.
+
+  Gammatone 40 ERB channels, 80-7800 Hz, 5 ms hop -- conventional auditory-filterbank settings.
+
+  Praat harmonicity settings hop_s 0.01, silence_threshold 0.1, periods_per_window 4.5 --
+  Praat's own documented defaults for the cc method, which extract_harmonicity_descriptors
+  (praat_parselmouth.py:569) already uses. Conventional, not fitted here.
+
+  Floor evaluation grid 0.1 s -- a granularity rather than a threshold: the percentile is evaluated
+  every 100 ms and interpolated between, which is finer than the 3 s window it summarises.
+
+  Disruption parameters -- conventional. A single sample at full scale is not clipping, which is what
+  min_clip_run is for. The counts these produce are exact; what has no measured value is the
+  tolerance, which is quality.disruption_* below.
+
+  UNSET, and why -- benchmarks/open.md carries each of these:
+    phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
+      autocorrelation, (0.44, 0.933) and (0.0007, 0.0161) on one recording, and the implementation now
+      uses Praat harmonicity in dB. The units differ, so the interval does not transfer and neither
+      floor has a value. CLAUDE.md records a related trap: a 2-10 dB HNR ramp under which ordinary
+      voiced speech, median 8.12 dB, read as only partly voiced.
+    redaction.padding_ms: must exceed the *worst* alignment edge error, which is unquantified. The
+      median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
+      neighbour, only one is recoverable.
+    speech.word_gap_ms: any value is a claim about what makes one utterance.
+    taxonomy.min_families.*: the asymmetry is known -- airway has three eligible families, speech two
+      -- but neither count has a derived value.
+    quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
+      so SPEECH's quality fail is unreachable by design until they do.
+
+resample:
+  target_hz: 16000
+
+preemphasis:
+  enabled: true
+  coefficient: 0.97
+
+envelope:
+  lowpass_hz: 40.0
+  filter_order: 4
+  zero_phase: true
+
+floor:
+  window_s: 3.0
+  percentile: 10.0
+  eval_grid_s: 0.1
+
+spans:
+  onset_drop_db: 15.0
+  offset_fraction: 0.7
+  hangover_ms: 120
+  min_duration_ms: 50
+  min_separation_ms: 150
+  k_db:
+    airway: 18.0
+
+spectrogram:
+  wideband_window_ms: 5.0
+  narrowband_window_ms: 20.0
+  hop_ms: 5.0
+
+gammatone:
+  n_channels: 40
+  low_hz: 80.0
+  high_hz: 7800.0
+  hop_ms: 5.0
+
+hear:
+  window_s: 2.0
+  label_floor: 0.5
+
+yamnet:
+  silence_threshold: 0.5
+  coverage_threshold: 0.5
+
+phonation:
+  f0_min_hz: null
+  f0_max_hz: null
+  hnr_floor_db: null
+  rms_floor: null
+  hop_s: 0.01
+  silence_threshold: 0.1
+  periods_per_window: 4.5
+
+speech:
+  word_gap_ms: null
+
+taxonomy:
+  min_families:
+    airway: null
+    speech: null
+
+quality:
+  stoi_floor: null
+  pesq_floor: null
+  disruption_clipped_s_max: null
+  disruption_dropout_s_max: null
+
+disruptions:
+  clip_headroom: 0.999
+  min_clip_run: 3
+  min_dropout_ms: 10.0
+  discontinuity_threshold: 0.5
+
+redaction:
+  padding_ms: null
