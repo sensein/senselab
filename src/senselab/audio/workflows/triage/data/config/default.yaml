@@ -136,7 +136,7 @@ gammatone:
   n_channels: 40
   low_hz: 80.0
   high_hz: 7800.0
-  hop_ms: 5.0
+  hop_s: 0.005
 
 hear:
   window_s: 2.0

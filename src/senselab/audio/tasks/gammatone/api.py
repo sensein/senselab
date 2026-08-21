@@ -39,13 +39,11 @@ def gammatone_filterbank(
         n_channels: Number of ERB-spaced channels. Read it from ``gammatone.n_channels``.
         low_hz: Lowest centre frequency. Read it from ``gammatone.low_hz``.
         high_hz: Highest centre frequency. Read it from ``gammatone.high_hz``.
-        hop_s: Frame hop for the energy summary. Read it from ``gammatone.hop_ms``.
+        hop_s: Frame hop for the energy summary. Read it from ``gammatone.hop_s``.
 
     Returns:
         ``(centre_frequencies, energy_db)`` with shapes ``(n_channels,)`` and ``(n_channels, n_frames)``.
-        ``energy_db`` is **absolute dBFS**, never normalised by the bank's own maximum: one loud
-        sample must not rescale the whole view, which is the fault `benchmarks/spans.md` records for
-        the envelope and which applies identically here.
+        ``energy_db`` is absolute dBFS, not normalised to the bank's maximum.
     """
     x = np.asarray(audio.waveform, dtype=np.float64)
     if x.ndim > 1:
