@@ -28,6 +28,7 @@ stated and its constant unjustified — not silently guessed.
 | item | current state |
 | --- | --- |
 | **The word-gap threshold** grouping words into speech spans | unspecified. Any value is a claim about what makes one utterance |
+| **The F0 search range** — `phonation.f0_min_hz` and `f0_max_hz` | no single range serves both populations: wide enough for a low adult male fundamental admits period-doubling artefacts, narrow enough to exclude them cuts off infant and high-F0 voices. The caller must state which population it is measuring, and a run whose F0 sits where the range is ambiguous is flagged rather than resolved |
 | **What consumes fabrication candidates** | SPEECH detects them and nothing acts on them |
 | **`min_families` per kind** | TAXONOMY states the asymmetry (airway 3 families, speech 2) but not the values |
 
