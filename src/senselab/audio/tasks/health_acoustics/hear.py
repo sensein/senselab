@@ -384,6 +384,45 @@ def plan_centred_windows(n_samples: int, centre_samples: Sequence[int]) -> List[
     return starts
 
 
+def span_to_hear_buffer(audio: Audio, start_s: float, end_s: float, *, placement: str = "centre") -> Audio:
+    """Place one span inside a 2 s buffer containing nothing else.
+
+    The detector's graph accepts exactly 2 s. A span shorter than that is placed in a silent buffer so the
+    model sees the span and silence, never a neighbouring event. This is for the event detector only and
+    must not be used to produce embeddings.
+
+    Args:
+        audio: The recording, at 16 kHz.
+        start_s: Span onset.
+        end_s: Span offset.
+        placement: ``"centre"``, ``"start"`` or ``"end"`` — where in the buffer the span sits.
+
+    Returns:
+        Audio of exactly 2 s at the input's sampling rate.
+
+    Raises:
+        ValueError: If the span is longer than the window, or ``placement`` is not one of the three.
+    """
+    sr = audio.sampling_rate
+    want = int(round(HEAR_WINDOW_SECONDS * sr))
+    x = np.asarray(audio.waveform.detach().cpu(), dtype=np.float32)
+    if x.ndim > 1:
+        x = x.mean(axis=0)
+    segment = x[int(start_s * sr) : int(end_s * sr)]
+    if len(segment) > want:
+        raise ValueError(
+            f"span {start_s:.3f}-{end_s:.3f}s is {len(segment) / sr:.3f}s, longer than the "
+            f"{HEAR_WINDOW_SECONDS:g} s the detector accepts. Split it or classify a sub-span."
+        )
+    offsets = {"centre": (want - len(segment)) // 2, "start": 0, "end": want - len(segment)}
+    if placement not in offsets:
+        raise ValueError(f"placement must be one of {sorted(offsets)}, got {placement!r}")
+    buffer = np.zeros(want, dtype=np.float32)
+    off = offsets[placement]
+    buffer[off : off + len(segment)] = segment
+    return Audio(waveform=buffer[None, :], sampling_rate=sr)
+
+
 def stage_hear_snapshot() -> Tuple[str, Path]:
     """Stage the pinned ``google/hear`` commit and return ``(sha, snapshot_dir)``.
 
