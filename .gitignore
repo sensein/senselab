@@ -188,6 +188,10 @@ data/
 # back to the undocumented in-code default instead of failing loudly.
 !src/senselab/utils/tasks/data/
 !src/senselab/utils/tasks/data/**
+# ...but the triage workflow ships checked-in package data (the versioned config); a bare
+# `data/` pattern would hide it from both git and hatchling's VCS-aware file selection.
+!src/senselab/audio/workflows/triage/data/
+!src/senselab/audio/workflows/triage/data/**
 # pdoc documentation
 docs/
 
