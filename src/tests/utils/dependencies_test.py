@@ -74,6 +74,15 @@ def test_a_newline_suffixed_sha_is_not_passed_through(tmp_path: Path, monkeypatc
         _get_cached_commit_hash("org/model", "e" * 40 + "\n")
 
 
+def test_point_ref_at_does_not_mistake_a_newline_suffixed_sha_for_a_commit(tmp_path: Path) -> None:
+    """Only a genuine 40-hex commit skips the pointer write; a newline-suffixed one is a ref name."""
+    sha = "c" * 40
+    dep._point_ref_at(tmp_path, sha, sha)
+    assert not (tmp_path / "refs").exists(), "a commit needs no refs/ pointer"
+    dep._point_ref_at(tmp_path, sha + "\n", sha)
+    assert (tmp_path / "refs").is_dir(), "a non-commit ref must get its pointer written"
+
+
 def test_resolve_model_returns_sha_and_snapshot_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """resolve_model returns the immutable SHA + local snapshot dir without re-downloading a cached model."""
     sha = "b" * 40
