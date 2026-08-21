@@ -52,6 +52,9 @@ dependencies = [
   # ITU-R BS.1770 gated loudness (numpy/scipy only, no transitive weight).
   "librosa>=0.11",
   "pyloudnorm>=0.1.1",
+  # PyYAML was previously transitive only; the triage workflow's config loader imports `yaml`
+  # directly, so it must be declared.
+  "pyyaml>=6.0",
   # Data / utilities
   "pydantic>=2.11",
   "pycountry>=24.6",
