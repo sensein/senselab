@@ -53,11 +53,40 @@ derivation: |
   Floor evaluation grid 0.1 s -- a granularity rather than a threshold: the percentile is evaluated
   every 100 ms and interpolated between, which is finer than the 3 s window it summarises.
 
+  Resample target 16000 Hz -- benchmarks/preprocess-params.md. Every downstream model is 16 kHz
+  native (YAMNet, HeAR, AST, CrisperWhisper, SQUIM), so the choice is one named resample here or N
+  inside N backends. At least 96.3% of every labelled event's energy survives an 8 kHz Nyquist; the
+  thin margin is the airway events, whose 95% points sit at 6981 and 7272 Hz, not speech, which is
+  band-limited to 632 Hz.
+
+  Envelope filter order 4 -- conventional Butterworth order, not fitted. Applied forward-and-backward,
+  so the effective order is doubled and the phase response is exactly flat.
+
+  Span min_duration_ms 50 and min_separation_ms 150 -- conventional. The first discards a proposal
+  shorter than anything the instruments here localise; the second stops one event yielding several
+  peaks. Neither is fitted, and both are weaker than the three rules above them.
+
+  HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
+  length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
+
+  HeAR label_floor 0.5 -- benchmarks/hear-yamnet.md. Given a whole span, the winning label scores
+  0.940-0.996 while the runner-up scores 0.02-0.41, so 0.5 sits in a wide empty interval rather than
+  being tuned to either side.
+
+  YAMNet silence_threshold and coverage_threshold, both 0.5 -- benchmarks/hear-yamnet.md and
+  taxonomy.md. Silence is bimodal across the reference recording's 29 windows: every score is <=0.36
+  or >=0.62. The labels that matter leave the same kind of gap containing 0.5 -- Cough jumps
+  0.84 -> 0.27, Speech 0.92 -> 0.14, Breathing 0.59 -> 0.36. A threshold in an empty interval is not
+  a fitted value.
+
   Disruption parameters -- conventional. A single sample at full scale is not clipping, which is what
   min_clip_run is for. The counts these produce are exact; what has no measured value is the
   tolerance, which is quality.disruption_* below.
 
   UNSET, and why -- benchmarks/open.md carries each of these:
+    phonation.f0_min_hz, phonation.f0_max_hz: no single search range serves both a low adult male
+      fundamental and an infant voice -- a range wide enough for one admits period-doubling artefacts
+      in the other -- so the caller must state which population it is measuring.
     phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
       autocorrelation, (0.44, 0.933) and (0.0007, 0.0161) on one recording, and the implementation now
       uses Praat harmonicity in dB. The units differ, so the interval does not transfer and neither

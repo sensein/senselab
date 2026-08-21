@@ -18,6 +18,7 @@ import yaml  # type: ignore[import-untyped]
 
 _DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
 _OPEN_QUESTIONS = "specs/20260817-triage-workflow-dag/benchmarks/open.md"
+_ABSENT = object()
 
 
 @dataclass(frozen=True)
@@ -46,12 +47,8 @@ class TriageConfig:
         Returns:
             The value, or ``default``.
         """
-        node: Any = self.values
-        for part in path.split("."):
-            if not isinstance(node, dict) or part not in node:
-                return default
-            node = node[part]
-        return default if node is None else node
+        node = self._lookup(path)
+        return default if node is _ABSENT or node is None else node
 
     def require(self, path: str) -> Any:  # noqa: ANN401
         """Read a value that must have been measured.
@@ -63,9 +60,15 @@ class TriageConfig:
             The value.
 
         Raises:
-            ValueError: If the value is absent, or is null because nobody has measured it.
+            ValueError: If the key does not exist (a typo), or if it is null because nobody has
+                measured it.
         """
-        found = self.get(path, None)
+        found = self._lookup(path)
+        if found is _ABSENT:
+            raise ValueError(
+                f"unknown configuration key {path!r} in {self.name}; check the spelling against "
+                "data/config/default.yaml"
+            )
         if found is None:
             raise ValueError(
                 f"{path} has no value in {self.name}. It is null because nobody has measured it — see "
@@ -73,6 +76,14 @@ class TriageConfig:
                 "than defaulting it here."
             )
         return found
+
+    def _lookup(self, path: str) -> Any:  # noqa: ANN401
+        node: Any = self.values
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                return _ABSENT
+            node = node[part]
+        return node
 
 
 def _merge(base: dict[str, Any], over: dict[str, Any], trail: str = "") -> dict[str, Any]:
