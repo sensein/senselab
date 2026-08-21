@@ -15,7 +15,13 @@
 - Tests live in `src/tests/` mirroring the package, named `*_test.py`.
 - Google-style docstrings; line length 120; type hints required (mypy with the pydantic plugin).
 - **Rationale does not go in code.** Docstrings say what a thing is and how to call it. Measurements and rejected alternatives go in `specs/20260817-triage-workflow-dag/benchmarks/`.
-- **Parameters the design leaves undecided must be keyword-only with no default**, so their absence is visible in the signature. These are: the phonation gate floors, SQUIM thresholds, the redaction padding margin, the word-gap threshold, `min_families` per kind.
+- **No numeric constant appears in code.** Not as a signature default, not as a module-level constant.
+  Every number lives in `data/config/default.yaml` with its derivation beside it, per `CLAUDE.md`:
+  "Thresholds belong in `data/` with a written derivation, never as code literals." Functions take the
+  values they need as arguments; the caller reads them from the config.
+- **A value nobody has measured is `null` in the config, and reading it raises.** The loader names the
+  parameter and points at `benchmarks/open.md`. This replaces keyword-only-without-default as the
+  mechanism for making an unmeasured value impossible to use by accident.
 - A model load passes a **resolved 40-hex commit SHA, never a ref**. There is an AST-sweep guard test.
 - `uv sync` is subtractive — always pass `--all-extras`.
 - Run `ruff format` before every commit.
@@ -39,7 +45,7 @@ Verified before planning this: `PiiSpan` is a plain `@dataclass` (not frozen), e
 
 **Interfaces:**
 - Consumes: `ScriptLine` from `senselab.utils.data_structures`.
-- Produces: `class PiiSpan(ScriptLine)` adding `category: str`, `source: str`, `asr_model: str`. Location is `span.start` / `span.end`; attribution is `span.speaker`. Task 8 (redaction) and the node plan's SPEECH step 7 consume those directly.
+- Produces: `class PiiSpan(ScriptLine)` adding `category: str`, `source: str`, `asr_model: str`. Location is `span.start` / `span.end`; attribution is `span.speaker`. Task 9 (redaction) and the node plan's SPEECH step 7 consume those directly.
 - **Every existing `PiiSpan(...)` construction keeps working** — all are keyword-only and pass only fields the subclass still has.
 
 - [ ] **Step 1: Write the failing tests**
@@ -222,114 +228,168 @@ dataclasses.asdict on a span, which now uses model_dump."
 
 ---
 
-### Task 2: The element store mechanism
+### Task 2: The provenance store
 
 **Files:**
-- Create: `src/senselab/utils/element_store.py`
-- Test: `src/tests/utils/element_store_test.py`
+- Create: `src/senselab/utils/prov_store.py`
+- Test: `src/tests/utils/prov_store_test.py`
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `Element`, `Assertion`, `ModelProvenance`, `ElementStore` with `.add_element()`, `.assert_over()`, `.elements()`, `.assertions_for()`, `.write_jsonl()`, `.read_jsonl()`, `.merge()`. Tasks 3–9 and every node consume these.
+- Produces: `Entity`, `Activity`, `Agent`, `ProvStore` with `.entity()`, `.activity()`, `.agent()`, the six relation methods, `.write_jsonl()`, `.read_jsonl()`, `.merge()`, `.fingerprint()`. Tasks 3–10 and every node consume these.
+
+**W3C PROV, modelled directly — no library.** No `prov` or `rdflib` dependency is added. The three node
+types and six relations are the PROV data model's own; the JSONL is PROV-JSON-shaped so it can be exported
+later without re-modelling.
+
+**Do not add a fourth 40-hex validator.** `audio_hints.py:47` `SpeakerEmbeddingProvenance` and
+`signal.py:56` `SignalProvenance` already validate resolved commits. `Agent` follows their shape:
+`commit_sha` for the resolved value, `unresolved_reason` for the case where resolution failed. A field
+named `revision` would mean the *ref* in this codebase, which is the opposite of what is wanted.
 
 Top-level `utils/`, not `utils/data_structures/`, to avoid that package's `__init__` fan-in.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-"""The element store: append-only, provenance-carrying, order-independent."""
+"""The provenance store: PROV entities, activities, agents; append-only and order-independent."""
 
 from __future__ import annotations
 
 import pytest
 
-from senselab.utils.element_store import Assertion, Element, ElementStore, ModelProvenance
+from senselab.utils.prov_store import Activity, Agent, Entity, ProvStore
 
 
-def _store() -> ElementStore:
-    return ElementStore(run_id="run-1")
+def _store() -> ProvStore:
+    return ProvStore(run_id="run-1")
 
 
-class TestAppendOnly:
-    def test_an_element_keeps_its_author_and_evidence(self):
+class TestPurpose:
+    """A store records what was produced, by what, using what."""
+
+    def test_an_entity_records_the_activity_that_generated_it(self) -> None:
+        """wasGeneratedBy replaces an author field."""
         s = _store()
-        eid = s.add_element(kind="span", extent=(1.0, 2.0), author="PREPROCESS",
-                            evidence={"peak_over_floor_db": 31.4})
-        (el,) = s.elements()
-        assert el.id == eid and el.kind == "span" and el.extent == (1.0, 2.0)
-        assert el.evidence["peak_over_floor_db"] == 31.4
+        act = s.activity(node="PREPROCESS", step="spans", parameters={"k_db": 18.0})
+        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={"peak_over_floor_db": 31.4})
+        s.was_generated_by(ent, act)
+        assert s.generated_by(ent) == act
+        assert s.get_entity(ent).extent == (1.0, 2.0)
 
-    def test_an_assertion_carries_its_own_id_so_confirm_can_name_it(self):
+    def test_used_records_what_a_node_read(self) -> None:
+        """The relation that makes dependency order inspectable rather than inferred."""
         s = _store()
-        eid = s.add_element(kind="span", extent=(1.0, 2.0), author="PREPROCESS", evidence={})
-        aid = s.assert_over(eid, verb="label", value="Cough", author="AIRWAY", evidence={"coverage": 1.0})
-        cid = s.assert_over(eid, verb="confirm", value=aid, author="AIRWAY", evidence={"yamnet": 1.0})
-        assert cid != aid
-        verbs = {a.verb: a for a in s.assertions_for(eid)}
-        assert verbs["confirm"].value == aid
+        upstream = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        act = s.activity(node="AIRWAY", step="classify", parameters={})
+        s.used(act, upstream)
+        assert s.uses_of(act) == [upstream]
 
-    def test_a_contest_does_not_remove_the_label_it_contests(self):
+    def test_an_assertion_is_an_entity_derived_from_what_it_is_about(self) -> None:
+        """label/confirm/contest are entities, so a confirm can name the assertion it answers."""
         s = _store()
-        eid = s.add_element(kind="span", extent=(11.75, 13.16), author="PREPROCESS", evidence={})
-        aid = s.assert_over(eid, verb="label", value="Cough", author="AIRWAY", evidence={})
-        s.assert_over(eid, verb="contest", value=aid, author="AIRWAY", evidence={"yamnet": "Speech"})
-        verbs = [a.verb for a in s.assertions_for(eid)]
-        assert verbs == ["label", "contest"], "both survive, in order"
+        span = s.entity(prov_type="span", extent=(7.9, 8.5), attributes={})
+        act = s.activity(node="AIRWAY", step="classify", parameters={})
+        label = s.entity(prov_type="assertion", extent=None, attributes={"verb": "label", "value": "Cough"})
+        s.was_generated_by(label, act)
+        s.was_derived_from(label, span)
+        confirm = s.entity(prov_type="assertion", extent=None, attributes={"verb": "confirm"})
+        s.was_derived_from(confirm, label)
+        assert s.derived_from(confirm) == [label]
+        assert s.derived_from(label) == [span]
 
-    def test_nothing_can_be_deleted(self):
-        s = _store()
-        assert not hasattr(s, "delete_element")
-        assert not hasattr(s, "remove_assertion")
 
+class TestAgents:
+    """An agent may be a model, and its commit may be unknown."""
 
-class TestProvenance:
-    def test_a_model_authored_element_requires_a_resolved_sha(self):
-        s = _store()
-        with pytest.raises(ValueError, match="40-hex"):
-            s.add_element(kind="span", extent=None, author="AIRWAY", evidence={},
-                          model=ModelProvenance(model_id="google/hear", revision="main"))
-
-    def test_a_forty_hex_revision_is_accepted(self):
+    def test_a_resolved_commit_is_accepted(self) -> None:
         s = _store()
         sha = "9b2eb2853c426676255cc6ac5804b7f1fe8e563f"
-        eid = s.add_element(kind="measurement", extent=None, author="AIRWAY", evidence={},
-                            model=ModelProvenance(model_id="google/hear", revision=sha))
-        assert s.element(eid).model.revision == sha
+        a = s.agent(agent_type="model", model_id="google/hear", commit_sha=sha)
+        assert s.get_agent(a).commit_sha == sha
+
+    def test_a_ref_masquerading_as_a_commit_is_refused(self) -> None:
+        s = _store()
+        with pytest.raises(ValueError, match="40-hex"):
+            s.agent(agent_type="model", model_id="google/hear", commit_sha="main")
+
+    def test_an_unresolved_commit_is_representable_rather_than_fatal(self) -> None:
+        """A Hub outage must degrade, not block every write."""
+        s = _store()
+        a = s.agent(agent_type="model", model_id="google/hear", unresolved_reason="hub 503")
+        got = s.get_agent(a)
+        assert got.commit_sha is None and got.unresolved_reason == "hub 503"
+
+    def test_a_model_agent_needs_one_of_the_two(self) -> None:
+        s = _store()
+        with pytest.raises(ValueError, match="commit_sha or unresolved_reason"):
+            s.agent(agent_type="model", model_id="google/hear")
+
+    def test_an_activity_records_which_agent_ran_it(self) -> None:
+        s = _store()
+        a = s.agent(agent_type="software", version="0.1.0")
+        act = s.activity(node="PREPROCESS", step=None, parameters={})
+        s.was_associated_with(act, a)
+        assert s.associated_with(act) == [a]
+
+
+class TestInvalidation:
+    """Withdrawal keeps the entity."""
+
+    def test_an_invalidated_entity_is_still_readable(self) -> None:
+        s = _store()
+        seg = s.entity(prov_type="speaker", extent=(7.9, 9.0), attributes={"speaker": "SPEAKER_00"})
+        act = s.activity(node="SPEECH", step="withdraw", parameters={"reason": "airway span"})
+        s.was_invalidated_by(seg, act)
+        assert s.is_invalidated(seg)
+        assert s.get_entity(seg).attributes["speaker"] == "SPEAKER_00"
+
+    def test_nothing_can_be_deleted(self) -> None:
+        s = _store()
+        assert not hasattr(s, "delete_entity")
+        assert not hasattr(s, "remove_relation")
 
 
 class TestOrderIndependence:
-    def test_merging_in_any_order_gives_the_same_store(self):
+    """Append-only makes a merge a set union."""
+
+    def test_merging_in_either_order_gives_the_same_fingerprint(self) -> None:
         a, b = _store(), _store()
-        a.add_element(kind="span", extent=(1.0, 2.0), author="PREPROCESS", evidence={})
-        b.add_element(kind="word", extent=(1.1, 1.4), author="SPEECH", evidence={"word": "hello"})
-        one = ElementStore.merge([a, b]).fingerprint()
-        two = ElementStore.merge([b, a]).fingerprint()
-        assert one == two
+        a.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        b.entity(prov_type="word", extent=(1.1, 1.4), attributes={"word": "hello"})
+        assert ProvStore.merge([a, b]).fingerprint() == ProvStore.merge([b, a]).fingerprint()
 
 
 class TestRoundTrip:
-    def test_jsonl_survives_a_round_trip(self, tmp_path):
+    """PROV-JSON-shaped JSONL survives a round trip."""
+
+    def test_entities_activities_agents_and_relations_all_return(self, tmp_path) -> None:
         s = _store()
-        eid = s.add_element(kind="span", extent=(1.0, 2.0), author="PREPROCESS", evidence={"k": 18})
-        s.assert_over(eid, verb="label", value="Cough", author="AIRWAY", evidence={})
-        p = tmp_path / "store.jsonl"
-        s.write_jsonl(p)
-        back = ElementStore.read_jsonl(p)
+        ag = s.agent(agent_type="model", model_id="google/hear", commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f")
+        act = s.activity(node="AIRWAY", step="classify", parameters={"labels": ["Cough"]})
+        ent = s.entity(prov_type="span", extent=(7.9, 8.5), attributes={})
+        s.was_generated_by(ent, act)
+        s.was_associated_with(act, ag)
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        back = ProvStore.read_jsonl(path)
         assert back.fingerprint() == s.fingerprint()
+        assert back.associated_with(act) == [ag]
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `uv run pytest src/tests/utils/element_store_test.py -v`
-Expected: FAIL at collection — `ModuleNotFoundError: No module named 'senselab.utils.element_store'`
+Run: `uv run pytest src/tests/utils/prov_store_test.py -v`
+Expected: FAIL at collection — `ModuleNotFoundError: No module named 'senselab.utils.prov_store'`
 
 - [ ] **Step 3: Implement**
 
 ```python
-"""An append-only store of elements and the assertions nodes make over them.
+"""An append-only provenance store, modelled on W3C PROV.
 
-Elements are things the graph believes might exist; assertions are later claims about them. Nothing is
-deleted and nothing is overwritten, so merging two stores is a set union and is order-independent.
+Entities are what the graph believes exists, activities are node executions, agents are what acted.
+Relations are PROV's own. Nothing is modified after it is added, so merging two stores is a set union
+and is order-independent.
 """
 
 from __future__ import annotations
@@ -339,271 +399,681 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Literal, Sequence
+from typing import Any, Literal, Sequence
 
-KIND = Literal["span", "word", "speaker", "interval", "measurement", "kind", "stream", "pii", "run", "verdict"]
-VERB = Literal["label", "confirm", "contest", "refine", "withdraw", "measure"]
+PROV_TYPE = Literal[
+    "span", "word", "speaker", "interval", "measurement", "kind", "stream", "pii", "verdict", "assertion"
+]
+AGENT_TYPE = Literal["model", "software"]
+RELATION = Literal[
+    "wasGeneratedBy", "used", "wasAssociatedWith", "wasAttributedTo", "wasDerivedFrom", "wasInvalidatedBy"
+]
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True)
-class ModelProvenance:
-    """The model behind an element or assertion.
+class Entity:
+    """Something the graph believes exists."""
+
+    id: str
+    prov_type: PROV_TYPE
+    extent: tuple[float, float] | None
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Activity:
+    """One node execution, or one step of one."""
+
+    id: str
+    node: str
+    step: str | None
+    parameters: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Agent:
+    """What acted: a model at a resolved commit, or the software itself.
 
     Attributes:
-        model_id: The model's identifier, e.g. ``"google/hear"``.
-        revision: A resolved 40-hex commit SHA. A ref is refused.
+        id: The agent's id.
+        agent_type: ``"model"`` or ``"software"``.
+        model_id: The model's identifier, for a model agent.
+        commit_sha: A resolved 40-hex commit, when resolution succeeded.
+        unresolved_reason: Why the commit is unknown, when it is. A provenance model that cannot say
+            "I could not resolve this" forces either a lie or a crash.
+        version: Software version, for a software agent.
     """
 
-    model_id: str
-    revision: str
-
-    def __post_init__(self) -> None:
-        """Reject a revision that is not a resolved commit.
-
-        Raises:
-            ValueError: If ``revision`` is not 40 hex characters.
-        """
-        if not _SHA.match(self.revision):
-            raise ValueError(
-                f"revision must be a resolved 40-hex commit SHA, got {self.revision!r}. "
-                "Recording a ref makes the provenance confidently wrong."
-            )
-
-
-@dataclass(frozen=True)
-class Element:
-    """Something the graph believes might exist."""
-
     id: str
-    kind: KIND
-    extent: tuple[float, float] | None
-    author: str
-    evidence: dict[str, Any] = field(default_factory=dict)
-    model: ModelProvenance | None = None
+    agent_type: AGENT_TYPE
+    model_id: str | None = None
+    commit_sha: str | None = None
+    unresolved_reason: str | None = None
+    version: str | None = None
 
 
-@dataclass(frozen=True)
-class Assertion:
-    """A later claim about an element."""
-
-    id: str
-    element_id: str
-    verb: VERB
-    value: Any
-    author: str
-    evidence: dict[str, Any] = field(default_factory=dict)
-    model: ModelProvenance | None = None
-
-
-def _digest(payload: dict[str, Any]) -> str:
+def _digest(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
-class ElementStore:
-    """An append-only collection of elements and assertions.
+class ProvStore:
+    """An append-only PROV document.
 
     Args:
-        run_id: Identifier for the run, mixed into every id so two runs never collide.
+        run_id: Mixed into every id so two runs never collide.
     """
 
     def __init__(self, run_id: str) -> None:
         """Create an empty store."""
         self.run_id = run_id
-        self._elements: dict[str, Element] = {}
-        self._assertions: list[Assertion] = []
+        self._entities: dict[str, Entity] = {}
+        self._activities: dict[str, Activity] = {}
+        self._agents: dict[str, Agent] = {}
+        self._relations: list[tuple[RELATION, str, str]] = []
 
-    def add_element(
-        self,
-        *,
-        kind: KIND,
-        extent: tuple[float, float] | None,
-        author: str,
-        evidence: dict[str, Any],
-        model: ModelProvenance | None = None,
-    ) -> str:
-        """Append an element.
+    def entity(self, *, prov_type: PROV_TYPE, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:
+        """Add an entity.
 
         Args:
-            kind: What sort of thing this is.
-            extent: ``(start, end)`` in seconds, or None for a file-level element.
-            author: The node proposing it.
-            evidence: Whatever the author measured, verbatim.
-            model: Provenance, required when a model produced the element.
+            prov_type: What sort of thing it is.
+            extent: ``(start, end)`` in seconds, or None for something without one.
+            attributes: Whatever describes it.
 
         Returns:
-            The element's id.
+            Its id.
         """
-        eid = f"{kind}-{_digest({'r': self.run_id, 'k': kind, 'x': extent, 'a': author, 'e': evidence})}"
-        self._elements[eid] = Element(
-            id=eid, kind=kind, extent=extent, author=author, evidence=dict(evidence), model=model
-        )
+        eid = f"{prov_type}-{_digest([self.run_id, prov_type, extent, attributes])}"
+        self._entities[eid] = Entity(id=eid, prov_type=prov_type, extent=extent, attributes=dict(attributes))
         return eid
 
-    def assert_over(
-        self,
-        element_id: str,
-        *,
-        verb: VERB,
-        value: Any,
-        author: str,
-        evidence: dict[str, Any],
-        model: ModelProvenance | None = None,
-    ) -> str:
-        """Append an assertion about an element.
+    def activity(self, *, node: str, step: str | None, parameters: dict[str, Any]) -> str:
+        """Add an activity.
 
         Args:
-            element_id: The element being asserted over.
-            verb: What kind of claim this is.
-            value: The claim's payload — a label, or the id of the assertion being confirmed or contested.
-            author: The node making the claim.
-            evidence: Whatever the author measured.
-            model: Provenance, required when a model produced the claim.
+            node: The node executing.
+            step: Which step of it, when a node has several.
+            parameters: The values it ran with.
 
         Returns:
-            The assertion's own id, which ``confirm`` and ``contest`` name.
-
-        Raises:
-            KeyError: If ``element_id`` is not in the store.
+            Its id.
         """
-        if element_id not in self._elements:
-            raise KeyError(f"no element {element_id!r} to assert over")
-        aid = f"a-{_digest({'r': self.run_id, 'e': element_id, 'v': verb, 'x': value, 'a': author, 'd': evidence})}"
-        self._assertions.append(
-            Assertion(
-                id=aid, element_id=element_id, verb=verb, value=value,
-                author=author, evidence=dict(evidence), model=model,
-            )
-        )
+        aid = f"act-{_digest([self.run_id, node, step, parameters])}"
+        self._activities[aid] = Activity(id=aid, node=node, step=step, parameters=dict(parameters))
         return aid
 
-    def element(self, element_id: str) -> Element:
-        """Return one element.
+    def agent(
+        self,
+        *,
+        agent_type: AGENT_TYPE,
+        model_id: str | None = None,
+        commit_sha: str | None = None,
+        unresolved_reason: str | None = None,
+        version: str | None = None,
+    ) -> str:
+        """Add an agent.
 
         Args:
-            element_id: Its id.
+            agent_type: ``"model"`` or ``"software"``.
+            model_id: Required for a model agent.
+            commit_sha: A resolved 40-hex commit.
+            unresolved_reason: Why the commit is unknown, if it is.
+            version: Software version, for a software agent.
 
         Returns:
-            The element.
+            Its id.
+
+        Raises:
+            ValueError: If ``commit_sha`` is not 40 hex characters, or a model agent supplies neither a
+                commit nor a reason it is missing.
         """
-        return self._elements[element_id]
+        if commit_sha is not None and not _SHA.match(commit_sha):
+            raise ValueError(
+                f"commit_sha must be a resolved 40-hex commit, got {commit_sha!r}. A ref recorded as a "
+                "commit makes the provenance confidently wrong."
+            )
+        if agent_type == "model" and commit_sha is None and unresolved_reason is None:
+            raise ValueError("a model agent needs commit_sha or unresolved_reason; silence is not a third option")
+        gid = f"agent-{_digest([self.run_id, agent_type, model_id, commit_sha, unresolved_reason, version])}"
+        self._agents[gid] = Agent(
+            id=gid,
+            agent_type=agent_type,
+            model_id=model_id,
+            commit_sha=commit_sha,
+            unresolved_reason=unresolved_reason,
+            version=version,
+        )
+        return gid
 
-    def elements(self, kind: KIND | None = None) -> list[Element]:
-        """Return elements, optionally of one kind.
+    def _relate(self, relation: RELATION, source: str, target: str) -> None:
+        self._relations.append((relation, source, target))
 
-        Args:
-            kind: Restrict to this kind, or None for all.
+    def was_generated_by(self, entity_id: str, activity_id: str) -> None:
+        """Record that an activity produced an entity."""
+        self._relate("wasGeneratedBy", entity_id, activity_id)
 
-        Returns:
-            Elements in insertion order.
-        """
-        return [e for e in self._elements.values() if kind is None or e.kind == kind]
+    def used(self, activity_id: str, entity_id: str) -> None:
+        """Record that an activity read an entity."""
+        self._relate("used", activity_id, entity_id)
 
-    def assertions_for(self, element_id: str) -> list[Assertion]:
-        """Return every assertion about one element, in the order they were made.
+    def was_associated_with(self, activity_id: str, agent_id: str) -> None:
+        """Record which agent ran an activity."""
+        self._relate("wasAssociatedWith", activity_id, agent_id)
 
-        Args:
-            element_id: The element's id.
+    def was_attributed_to(self, entity_id: str, agent_id: str) -> None:
+        """Record which agent is answerable for an entity."""
+        self._relate("wasAttributedTo", entity_id, agent_id)
 
-        Returns:
-            Its assertions.
-        """
-        return [a for a in self._assertions if a.element_id == element_id]
+    def was_derived_from(self, entity_id: str, source_entity_id: str) -> None:
+        """Record that an entity refines or answers another, keeping both."""
+        self._relate("wasDerivedFrom", entity_id, source_entity_id)
+
+    def was_invalidated_by(self, entity_id: str, activity_id: str) -> None:
+        """Record that an entity should no longer be read as what it was. It is not removed."""
+        self._relate("wasInvalidatedBy", entity_id, activity_id)
+
+    def get_entity(self, entity_id: str) -> Entity:
+        """Return one entity."""
+        return self._entities[entity_id]
+
+    def get_agent(self, agent_id: str) -> Agent:
+        """Return one agent."""
+        return self._agents[agent_id]
+
+    def entities(self, prov_type: PROV_TYPE | None = None) -> list[Entity]:
+        """Return entities, optionally of one type."""
+        return [e for e in self._entities.values() if prov_type is None or e.prov_type == prov_type]
+
+    def _targets(self, relation: RELATION, source: str) -> list[str]:
+        return [t for r, s, t in self._relations if r == relation and s == source]
+
+    def generated_by(self, entity_id: str) -> str | None:
+        """Return the activity that generated an entity, or None."""
+        found = self._targets("wasGeneratedBy", entity_id)
+        return found[0] if found else None
+
+    def uses_of(self, activity_id: str) -> list[str]:
+        """Return the entities an activity read."""
+        return self._targets("used", activity_id)
+
+    def associated_with(self, activity_id: str) -> list[str]:
+        """Return the agents associated with an activity."""
+        return self._targets("wasAssociatedWith", activity_id)
+
+    def derived_from(self, entity_id: str) -> list[str]:
+        """Return the entities an entity was derived from."""
+        return self._targets("wasDerivedFrom", entity_id)
+
+    def is_invalidated(self, entity_id: str) -> bool:
+        """Whether an entity has been invalidated."""
+        return bool(self._targets("wasInvalidatedBy", entity_id))
 
     def write_jsonl(self, path: str | Path) -> None:
-        """Write the store as one JSON object per line.
-
-        Args:
-            path: Destination file.
-        """
-        lines = [json.dumps({"type": "element", **asdict(e)}, sort_keys=True, default=str) for e in self._elements.values()]
-        lines += [json.dumps({"type": "assertion", **asdict(a)}, sort_keys=True, default=str) for a in self._assertions]
+        """Write the store as one PROV-JSON-shaped record per line."""
+        lines = [json.dumps({"record": "entity", **asdict(e)}, sort_keys=True, default=str) for e in self._entities.values()]
+        lines += [json.dumps({"record": "activity", **asdict(a)}, sort_keys=True, default=str) for a in self._activities.values()]
+        lines += [json.dumps({"record": "agent", **asdict(g)}, sort_keys=True, default=str) for g in self._agents.values()]
+        lines += [json.dumps({"record": "relation", "relation": r, "source": s, "target": t}, sort_keys=True) for r, s, t in self._relations]
         Path(path).write_text("\n".join(lines) + "\n")
 
     @classmethod
-    def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ElementStore":
-        """Read a store back.
-
-        Args:
-            path: The file to read.
-            run_id: Run id for the reconstructed store.
-
-        Returns:
-            The store.
-        """
+    def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
+        """Read a store back."""
         store = cls(run_id=run_id)
         for line in Path(path).read_text().splitlines():
             if not line.strip():
                 continue
             rec = json.loads(line)
-            kind = rec.pop("type")
-            model = rec.pop("model", None)
-            prov = ModelProvenance(**model) if model else None
-            if kind == "element":
+            kind = rec.pop("record")
+            if kind == "entity":
                 extent = rec.pop("extent")
-                store._elements[rec["id"]] = Element(
-                    extent=tuple(extent) if extent else None, model=prov, **rec
-                )
+                store._entities[rec["id"]] = Entity(extent=tuple(extent) if extent else None, **rec)
+            elif kind == "activity":
+                store._activities[rec["id"]] = Activity(**rec)
+            elif kind == "agent":
+                store._agents[rec["id"]] = Agent(**rec)
             else:
-                store._assertions.append(Assertion(model=prov, **rec))
+                store._relations.append((rec["relation"], rec["source"], rec["target"]))
         return store
 
     @classmethod
-    def merge(cls, stores: Sequence["ElementStore"]) -> "ElementStore":
-        """Union several stores.
-
-        Append-only means no element is ever mutated, so the union is order-independent.
-
-        Args:
-            stores: The stores to merge.
-
-        Returns:
-            One store holding every element and assertion.
-        """
+    def merge(cls, stores: Sequence["ProvStore"]) -> "ProvStore":
+        """Union several stores. Append-only makes this order-independent."""
         out = cls(run_id="merged")
         for s in stores:
-            out._elements.update(s._elements)
-        seen: set[str] = set()
+            out._entities.update(s._entities)
+            out._activities.update(s._activities)
+            out._agents.update(s._agents)
+        seen: set[tuple[RELATION, str, str]] = set()
         for s in stores:
-            for a in s._assertions:
-                if a.id not in seen:
-                    seen.add(a.id)
-                    out._assertions.append(a)
+            for rel in s._relations:
+                if rel not in seen:
+                    seen.add(rel)
+                    out._relations.append(rel)
         return out
 
     def fingerprint(self) -> str:
-        """A content hash that ignores insertion order.
-
-        Returns:
-            A hex digest identical for stores holding the same elements and assertions.
-        """
-        eids = sorted(self._elements)
-        aids = sorted(a.id for a in self._assertions)
-        return _digest({"e": eids, "a": aids})
+        """A content hash that ignores insertion order."""
+        return _digest(
+            {
+                "e": sorted(self._entities),
+                "act": sorted(self._activities),
+                "ag": sorted(self._agents),
+                "r": sorted(f"{r}:{s}:{t}" for r, s, t in self._relations),
+            }
+        )
 ```
 
 - [ ] **Step 4: Run the tests**
 
-Run: `uv run pytest src/tests/utils/element_store_test.py -v`
+Run: `uv run pytest src/tests/utils/prov_store_test.py -v`
 Expected: all PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-uv run ruff format src/senselab/utils/element_store.py src/tests/utils/element_store_test.py
-git add src/senselab/utils/element_store.py src/tests/utils/element_store_test.py
-git commit -m "feat(store): an append-only element store with provenance
+uv run ruff format src/senselab/utils/prov_store.py src/tests/utils/prov_store_test.py
+git add src/senselab/utils/prov_store.py src/tests/utils/prov_store_test.py
+git commit -m "feat(prov): an append-only provenance store on the W3C PROV model
 
-Elements and assertions, nothing deleted and nothing overwritten, so merging two
-stores is a set union and order-independent -- verified by fingerprint equality under
-reordering. A model-authored record must carry a resolved 40-hex commit; a ref is
-refused at construction."
+Entities, activities and agents with PROV's own relations, modelled directly rather than
+via a library -- no prov or rdflib dependency, and the JSONL is PROV-JSON-shaped so it can
+be exported later without re-modelling.
+
+PROV supplies what an ad-hoc vocabulary was missing. used() records what a node read, so
+dependency order is queryable rather than inferred. wasDerivedFrom keeps the source, which
+is what refine needed. wasInvalidatedBy marks an entity unusable without deleting it, which
+is what withdraw needed.
+
+An agent carries commit_sha or unresolved_reason, following SpeakerEmbeddingProvenance
+rather than adding a fourth 40-hex validator, and deliberately not naming the field
+revision -- which means the ref in this codebase. A model agent must supply one of the two:
+a provenance model that cannot say 'I could not resolve this' forces a lie or a crash."
 ```
 
 ---
 
-### Task 3: The envelope task
+### Task 3: The triage configuration
+
+**Files:**
+- Create: `src/senselab/audio/workflows/triage/data/config/default.yaml`
+- Create: `src/senselab/audio/workflows/triage/config.py`
+- Test: `src/tests/audio/workflows/triage/config_test.py`
+
+**Interfaces:**
+- Consumes: nothing.
+- Produces: `TriageConfig` with `.require(path) -> float | int | str` and `.get(path, default=None)`, plus `load_triage_config(override=None) -> TriageConfig` carrying `.name`, `.version`, `.config_hash`. **Every later task reads its numbers from this.**
+
+Follows the pattern of `audio_analysis/data/run_config/default.yaml` and `run_config.py`: one versioned
+file, `derivation` as a config *value* so editing it changes the hash, whole-file overrides deep-merged,
+and `{name, version, config_hash}` stamped into artifacts.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+"""The triage configuration: every number, its derivation, and what happens when one is unset."""
+
+from __future__ import annotations
+
+import pytest
+
+from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+
+
+class TestMeasuredValues:
+    """A value with a derivation is readable."""
+
+    def test_the_measured_values_are_present(self) -> None:
+        cfg = load_triage_config()
+        assert cfg.require("envelope.lowpass_hz") == 40.0
+        assert cfg.require("spans.onset_drop_db") == 15.0
+        assert cfg.require("spans.offset_fraction") == 0.7
+        assert cfg.require("spans.k_db.airway") == 18.0
+        assert cfg.require("preemphasis.coefficient") == 0.97
+
+    def test_identity_travels_with_the_config(self) -> None:
+        cfg = load_triage_config()
+        assert cfg.name == "senselab-triage/default"
+        assert isinstance(cfg.version, int)
+        assert len(cfg.config_hash) == 16
+
+
+class TestUnsetValues:
+    """A number nobody measured must be impossible to use by accident."""
+
+    def test_reading_an_unset_value_raises_and_names_it(self) -> None:
+        cfg = load_triage_config()
+        with pytest.raises(ValueError, match="phonation.hnr_floor_db"):
+            cfg.require("phonation.hnr_floor_db")
+
+    def test_the_error_points_at_what_would_settle_it(self) -> None:
+        cfg = load_triage_config()
+        with pytest.raises(ValueError, match="benchmarks/open.md"):
+            cfg.require("redaction.padding_ms")
+
+    def test_every_unset_value_is_null_rather_than_absent(self) -> None:
+        """Absent is a typo; null is a decision not yet taken."""
+        cfg = load_triage_config()
+        for path in ("phonation.hnr_floor_db", "phonation.rms_floor", "redaction.padding_ms",
+                     "speech.word_gap_ms", "quality.stoi_floor", "taxonomy.min_families.airway"):
+            assert cfg.get(path, "MISSING") is None, f"{path} must be present and null"
+
+    def test_get_returns_a_default_instead_of_raising(self) -> None:
+        cfg = load_triage_config()
+        assert cfg.get("phonation.hnr_floor_db", 8.0) == 8.0
+
+
+class TestOverrides:
+    """Whole-file overrides, and the hash follows the merged mapping."""
+
+    def test_an_override_supplies_an_unset_value(self, tmp_path) -> None:
+        override = tmp_path / "o.yaml"
+        override.write_text("redaction:\n  padding_ms: 250\n")
+        cfg = load_triage_config(override)
+        assert cfg.require("redaction.padding_ms") == 250
+
+    def test_an_override_changes_the_hash(self, tmp_path) -> None:
+        override = tmp_path / "o.yaml"
+        override.write_text("spans:\n  onset_drop_db: 12.0\n")
+        assert load_triage_config(override).config_hash != load_triage_config().config_hash
+
+    def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path) -> None:
+        override = tmp_path / "o.yaml"
+        override.write_text("spans:\n  onset_drpo_db: 12.0\n")
+        with pytest.raises(ValueError, match="onset_drpo_db"):
+            load_triage_config(override)
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `uv run pytest src/tests/audio/workflows/triage/config_test.py -v`
+Expected: FAIL at collection — no module `senselab.audio.workflows.triage.config`.
+
+- [ ] **Step 3: Write `data/config/default.yaml`**
+
+```yaml
+# The triage workflow configuration. One file, versioned, with its derivation written down.
+#
+# No number appears in the code. A value here is either measured -- with the measurement named -- or
+# `null`, meaning nobody has measured it and reading it raises. There is no third state: a default
+# chosen to make a signature tidy is an unmeasured decision with a public interface.
+#
+# `derivation` below is a config *value*, not a comment: the loader hashes the merged mapping, so
+# editing a word of it changes `config_hash` and two behaviourally identical runs report different
+# identities. Corrections to its prose belong in `#` comments like this one.
+version: 1
+name: senselab-triage/default
+
+derivation: |
+  Envelope lowpass 40 Hz, zero-phase -- benchmarks/preprocess-params.md. Sweeping the cutoff against
+  six labelled events, a wider band makes onsets worse (median 144 ms at 320 Hz against 63 ms at
+  40 Hz) because it tracks pre-event fluctuation a fixed threshold then fires on. 40 Hz is the
+  modulation bandwidth the envelope is for, not an onset-precision choice. Zero-phase beats causal,
+  63.5 ms against 90.1 ms median, which makes the envelope offline-only.
+
+  Floor: rolling 3 s window, 10th percentile, in dBFS -- benchmarks/spans.md. Local and absolute
+  because a global anchor fails two ways: a floor-anchored gate loses the quieter event as noise
+  raises the floor, and a peak-anchored one moves 49.1 dB within one recording and is destroyed by a
+  single 30 ms click. Normalising the envelope by its own maximum is the fault both share.
+
+  Span onset drop 15 dB, peak-anchored -- benchmarks/spans.md. 5 of 6 labelled onsets inside their
+  declared windows, against 2 of 6 for a floor-referenced threshold on the same envelope.
+
+  Span offset 0.7 of each event's own range, 120 ms hangover -- benchmarks/spans.md. Median offset
+  error 84.3 ms against 573.9 ms for a fixed peak-10 dB. A fixed drop cannot serve both a 20 dB
+  mouth sound and a 57 dB cough. The hangover must be shorter than the shortest event to be bounded:
+  at 250 ms it overshoots a 202 ms click by 418 ms.
+
+  Span propose K, per reader -- benchmarks/spans.md and snr.md. 18 dB for airway, whose events stand
+  53-57 dB above the floor. 12 dB detects a speech span to +10 dB SNR and still survives an injected
+  click; 8 dB collapses the clean-file span set from six to two by merging, so lower is not freely
+  better. SPEECH no longer reads these spans -- it derives its own from word timings -- so only the
+  airway value is in use.
+
+  Pre-emphasis 0.97 -- conventional in speech analysis, not fitted here. It raises event-to-floor
+  contrast on every labelled event and most on the two hardest, cough 1 by +10.95 dB and the mouth
+  sound by +7.36 dB, both of which carry 14-16% of their energy in 4-8 kHz.
+
+  Spectrograms 5 ms and 20 ms window, 5 ms hop -- benchmarks/preprocess-params.md. At F0 88.1 Hz the
+  glottal period is 11.4 ms, so 10 ms resolves neither harmonics (150 Hz against 88 Hz spacing) nor
+  pulses (0.88 of a period). Two windows rather than a compromise between them.
+
+  Gammatone 40 ERB channels, 80-7800 Hz, 5 ms hop -- conventional auditory-filterbank settings.
+
+  Disruption parameters -- conventional. A single sample at full scale is not clipping, which is what
+  min_clip_run is for. The counts these produce are exact; what has no measured value is the
+  tolerance, which is quality.disruption_* below.
+
+  UNSET, and why -- benchmarks/open.md carries each of these:
+    phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
+      autocorrelation, (0.44, 0.933) and (0.0007, 0.0161) on one recording, and the implementation now
+      uses Praat harmonicity in dB. The units differ, so the interval does not transfer and neither
+      floor has a value. CLAUDE.md records a related trap: a 2-10 dB HNR ramp under which ordinary
+      voiced speech, median 8.12 dB, read as only partly voiced.
+    redaction.padding_ms: must exceed the *worst* alignment edge error, which is unquantified. The
+      median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
+      neighbour, only one is recoverable.
+    speech.word_gap_ms: any value is a claim about what makes one utterance.
+    taxonomy.min_families.*: the asymmetry is known -- airway has three eligible families, speech two
+      -- but neither count has a derived value.
+    quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
+      so SPEECH's quality fail is unreachable by design until they do.
+
+resample:
+  target_hz: 16000
+
+preemphasis:
+  enabled: true
+  coefficient: 0.97
+
+envelope:
+  lowpass_hz: 40.0
+  filter_order: 4
+  zero_phase: true
+
+floor:
+  window_s: 3.0
+  percentile: 10.0
+
+spans:
+  onset_drop_db: 15.0
+  offset_fraction: 0.7
+  hangover_ms: 120
+  min_duration_ms: 50
+  min_separation_ms: 150
+  k_db:
+    airway: 18.0
+
+spectrogram:
+  wideband_window_ms: 5.0
+  narrowband_window_ms: 20.0
+  hop_ms: 5.0
+
+gammatone:
+  n_channels: 40
+  low_hz: 80.0
+  high_hz: 7800.0
+  hop_ms: 5.0
+
+hear:
+  window_s: 2.0
+  label_floor: 0.5
+
+yamnet:
+  silence_threshold: 0.5
+  coverage_threshold: 0.5
+
+phonation:
+  f0_min_hz: null
+  f0_max_hz: null
+  hnr_floor_db: null
+  rms_floor: null
+
+speech:
+  word_gap_ms: null
+
+taxonomy:
+  min_families:
+    airway: null
+    speech: null
+
+quality:
+  stoi_floor: null
+  pesq_floor: null
+  disruption_clipped_s_max: null
+  disruption_dropout_s_max: null
+
+disruptions:
+  clip_headroom: 0.999
+  min_clip_run: 3
+  min_dropout_ms: 10.0
+  discontinuity_threshold: 0.5
+
+redaction:
+  padding_ms: null
+```
+
+- [ ] **Step 4: Write `config.py`**
+
+```python
+"""Loading the triage configuration.
+
+Every number the triage workflow uses lives in ``data/config/default.yaml`` beside the measurement that
+produced it. A value nobody has measured is ``null`` there, and reading it raises rather than returning a
+number nobody chose.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+_DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
+_OPEN_QUESTIONS = "specs/20260817-triage-workflow-dag/benchmarks/open.md"
+
+
+@dataclass(frozen=True)
+class TriageConfig:
+    """One resolved configuration.
+
+    Attributes:
+        name: The configuration's name.
+        version: Schema version of the file.
+        config_hash: Hash of the merged mapping, so a run's configuration can be named.
+        values: The merged mapping.
+    """
+
+    name: str
+    version: int
+    config_hash: str
+    values: dict[str, Any]
+
+    def get(self, path: str, default: Any = None) -> Any:
+        """Read a value, returning ``default`` when it is absent or null.
+
+        Args:
+            path: Dotted path, e.g. ``"spans.onset_drop_db"``.
+            default: Returned when the value is missing or null.
+
+        Returns:
+            The value, or ``default``.
+        """
+        node: Any = self.values
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                return default
+            node = node[part]
+        return default if node is None else node
+
+    def require(self, path: str) -> Any:
+        """Read a value that must have been measured.
+
+        Args:
+            path: Dotted path.
+
+        Returns:
+            The value.
+
+        Raises:
+            ValueError: If the value is absent, or is null because nobody has measured it.
+        """
+        found = self.get(path, None)
+        if found is None:
+            raise ValueError(
+                f"{path} has no value in {self.name}. It is null because nobody has measured it — see "
+                f"{_OPEN_QUESTIONS} for what would settle it. Supply it with a config override rather "
+                "than defaulting it here."
+            )
+        return found
+
+
+def _merge(base: dict[str, Any], over: dict[str, Any], trail: str = "") -> dict[str, Any]:
+    out = deepcopy(base)
+    for key, value in over.items():
+        where = f"{trail}.{key}" if trail else key
+        if key not in out:
+            raise ValueError(f"unknown configuration key {where!r}; overrides may not introduce keys")
+        if isinstance(value, dict) and isinstance(out[key], dict):
+            out[key] = _merge(out[key], value, where)
+        else:
+            out[key] = value
+    return out
+
+
+def load_triage_config(override: str | Path | None = None) -> TriageConfig:
+    """Load the packaged configuration, deep-merging one override over it.
+
+    Args:
+        override: Path to a partial YAML. Its keys must already exist in the packaged file — a typo
+            is refused rather than silently ignored.
+
+    Returns:
+        The resolved configuration, carrying the hash of the merged mapping.
+
+    Raises:
+        ValueError: If the override introduces a key the packaged file does not have.
+    """
+    values = yaml.safe_load(_DEFAULT.read_text())
+    if override is not None:
+        values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
+    digest = hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()[:16]
+    return TriageConfig(name=values["name"], version=int(values["version"]), config_hash=digest, values=values)
+```
+
+- [ ] **Step 5: Run the tests**
+
+Run: `uv run pytest src/tests/audio/workflows/triage/config_test.py -v`
+Expected: all PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+uv run ruff format src/senselab/audio/workflows/triage/ src/tests/audio/workflows/triage/config_test.py
+git add src/senselab/audio/workflows/triage/ src/tests/audio/workflows/triage/config_test.py
+git commit -m "feat(triage): one versioned config, with every number's derivation beside it
+
+No number appears in the triage code -- not as a signature default, not as a module
+constant. CLAUDE.md already required this and the audio_analysis run_config already
+demonstrates the shape: derivation as a config value so editing it changes the hash, and
+whole-file overrides that refuse an unknown key rather than ignoring it.
+
+A value nobody has measured is null, and require() raises naming the parameter and pointing
+at benchmarks/open.md. That replaces keyword-only-without-default as the mechanism: an
+unmeasured number is now impossible to use by accident rather than merely conspicuous.
+Eleven are null today, including both phonation floors -- whose measured interval was in
+autocorrelation units the Praat implementation does not use."
+```
+
+---
+
+### Task 4: The envelope task
 
 **Files:**
 - Create: `src/senselab/audio/tasks/envelope/__init__.py`, `src/senselab/audio/tasks/envelope/api.py`
@@ -611,7 +1081,7 @@ refused at construction."
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `hilbert_envelope_dbfs(audio) -> np.ndarray`, `rolling_floor_dbfs(envelope_db, sr, window_s=3.0, percentile=10.0) -> np.ndarray`. Task 4 consumes both.
+- Produces: `hilbert_envelope_dbfs(audio) -> np.ndarray`, `rolling_floor_dbfs(envelope_db, sr, window_s=3.0, percentile=10.0) -> np.ndarray`. Task 5 consumes both.
 
 Derivation: `benchmarks/preprocess-params.md` (zero-phase, 40 Hz) and `benchmarks/spans.md` (why local and absolute).
 
@@ -777,14 +1247,14 @@ tested directly: an injected click leaves the rest of the envelope within 0.5 dB
 
 ---
 
-### Task 4: The spans task
+### Task 5: The spans task
 
 **Files:**
 - Create: `src/senselab/audio/tasks/spans/__init__.py`, `src/senselab/audio/tasks/spans/api.py`
 - Test: `src/tests/audio/tasks/spans_test.py`
 
 **Interfaces:**
-- Consumes: `hilbert_envelope_dbfs`, `rolling_floor_dbfs` from Task 3.
+- Consumes: `hilbert_envelope_dbfs`, `rolling_floor_dbfs` from Task 4.
 - Produces: `Span` (frozen dataclass: `start`, `end`, `peak_over_floor_db`) and
   `propose_spans(envelope_db, floor_db, sampling_rate, *, k_db, onset_drop_db=15.0, offset_fraction=0.7, hangover_ms=120, min_duration_ms=50) -> list[Span] | NoContrast`.
   `NoContrast` is a distinct return, not an empty list.
@@ -1019,7 +1489,7 @@ unmeasurable recording cannot read as a quiet one."
 
 ---
 
-### Task 5: The gammatone task
+### Task 6: The gammatone task
 
 **Files:**
 - Create: `src/senselab/audio/tasks/gammatone/__init__.py`, `src/senselab/audio/tasks/gammatone/api.py`
@@ -1179,7 +1649,7 @@ Tested by exciting a single channel with a pure tone."
 
 ---
 
-### Task 6: The HeAR whole-span buffer
+### Task 7: The HeAR whole-span buffer
 
 **Why:** `capability-map.md` found that HeAR's module actively refuses the padded input AIRWAY specifies. The path works only because a buffer of exactly 32000 samples passes its length check. That coincidence needs a named function rather than each caller rediscovering it.
 
@@ -1188,7 +1658,7 @@ Tested by exciting a single channel with a pure tone."
 - Test: `src/tests/audio/tasks/health_acoustics_test.py`
 
 **Interfaces:**
-- Consumes: nothing. It takes `start_s`/`end_s` as floats, so a caller may pass a `Span`'s fields or any other pair — no dependency on Task 4.
+- Consumes: nothing. It takes `start_s`/`end_s` as floats, so a caller may pass a `Span`'s fields or any other pair — no dependency on Task 5.
 - Produces: `span_to_hear_buffer(audio, start_s, end_s, *, placement="centre") -> Audio` returning exactly 2 s at the input rate.
 
 - [ ] **Step 1: Write the failing tests**
@@ -1303,7 +1773,7 @@ than 2 s refused rather than truncated."
 
 ---
 
-### Task 7: The phonation task
+### Task 8: The phonation task
 
 **Files:**
 - Create: `src/senselab/audio/tasks/phonation/__init__.py`, `src/senselab/audio/tasks/phonation/api.py`
@@ -1538,7 +2008,7 @@ adult and infant voices."
 
 ---
 
-### Task 8: The redaction task
+### Task 9: The redaction task
 
 **Files:**
 - Create: `src/senselab/audio/tasks/redaction/__init__.py`, `src/senselab/audio/tasks/redaction/api.py`
@@ -1717,7 +2187,7 @@ preserved and the category never carries the matched text."
 
 ---
 
-### Task 9: The triage vocabulary
+### Task 10: The triage vocabulary
 
 **Files:**
 - Create: `src/senselab/audio/workflows/triage/__init__.py`, `src/senselab/audio/workflows/triage/vocabulary.py`
@@ -2020,7 +2490,7 @@ every contributing reason rather than only the deciding one."
 
 ---
 
-### Task 10: The disruptions task
+### Task 11: The disruptions task
 
 **Files:**
 - Create: `src/senselab/audio/tasks/disruptions/__init__.py`, `src/senselab/audio/tasks/disruptions/api.py`

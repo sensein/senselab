@@ -12,77 +12,62 @@ either overwrites it — destroying the evidence — or has nowhere to put its d
 
 The store fixes both by being **append-only**.
 
-## Elements and assertions
+## The model is W3C PROV
 
-An **element** is a thing the graph believes might exist:
+The store is a **PROV document**: three node types and a fixed set of relations, so provenance is the
+structure rather than a field bolted onto one. Nothing here invents vocabulary that PROV already has.
 
-```
-element:  { id, kind, extent?, author, evidence }
-```
-
-| field | meaning |
+| PROV term | here |
 | --- | --- |
-| `id` | stable, assigned once by the node that first proposed the element |
-| `kind` | `span`, `word`, `speaker`, `interval`, `measurement`, `kind`, `stream`, `pii`, `run`, `verdict` |
-| `extent` | `(start, end)` where the element has one. Absent for file-level elements |
-| `author` | the node that proposed it, with model and revision where a model was involved |
-| `evidence` | whatever the author measured, verbatim |
-
-An **assertion** is a later node's claim *about* an element:
+| **Entity** | something the graph believes exists — a span, a word, a speaker, a measurement, a stream, a kind, a verdict. **An assertion is also an Entity**, which is why it has an id |
+| **Activity** | one node's execution, or one step of one — `PREPROCESS`, `AIRWAY.classify`. Carries the parameters it ran with |
+| **Agent** | what acted: a model, with its id and resolved commit, or the software itself |
 
 ```
-assertion: { id, element_id, verb, value?, author, evidence }
+entity:   { id, prov_type, extent?, attributes }
+activity: { id, node, step?, started, ended, parameters }
+agent:    { id, agent_type: "model" | "software", model_id?, commit_sha?, unresolved_reason?, version? }
 ```
 
-An assertion carries its **own** id, because `confirm` and `contest` must name the assertion they answer.
-Without one, "an independent instrument agrees with a named prior assertion" is unstateable.
+### Relations, all PROV's own
 
-| verb | meaning |
-| --- | --- |
-| `label` | this element is of this kind or class |
-| `confirm` | an independent instrument agrees with a named prior assertion |
-| `contest` | an independent instrument disagrees. **Both survive** |
-| `refine` | a narrower extent or a better value, with the prior extent retained |
-| `withdraw` | this element should not be read as what it was proposed as, and why |
-| `measure` | attach a measurement without claiming identity |
+| relation | replaces | meaning |
+| --- | --- | --- |
+| `wasGeneratedBy(entity, activity)` | the old `author` field | which run produced this |
+| `used(activity, entity)` | nothing — it was implicit | what a node **read**. This is what makes ordering inspectable rather than inferred |
+| `wasAssociatedWith(activity, agent)` | the old `model` field | which model ran, and at which commit |
+| `wasAttributedTo(entity, agent)` | — | who is answerable for the entity |
+| `wasDerivedFrom(entity, entity)` | the old `refine` verb | a narrower extent or a better value, with the coarse one retained |
+| `wasInvalidatedBy(entity, activity)` | the old `withdraw` verb | this should no longer be read as what it was — and PROV keeps the entity |
 
-**Nothing is deleted and nothing is overwritten.** The current view of an element is a fold over its
-assertions, and the fold is a reader's choice — a consumer that trusts only confirmed labels and one
-that wants every claim both read the same store.
+**`label`, `confirm`, `contest` and `measure` remain**, as Entities of `prov_type` `assertion`, each
+`wasGeneratedBy` the activity that made it and `wasDerivedFrom` the entity it is about. A `confirm` or
+`contest` is additionally `wasDerivedFrom` the assertion it answers — which is why an assertion needs its
+own id, and the PROV model makes that requirement structural rather than a thing to remember.
 
-## Consequences
+**`refine` and `withdraw` are gone as verbs**, because PROV already has both relations and its semantics
+are the ones this design argued for independently: `wasDerivedFrom` keeps the source, and
+`wasInvalidatedBy` marks an entity unusable without deleting it.
 
-**`contest` does not resolve.** Two instruments disagreeing is a majority for neither, so the store
-holds both and the outcome is a `flag`. A node must not invent a tie-break it cannot measure.
+### What PROV buys beyond tidiness
 
-**`withdraw` is not deletion.** A pyannote segment withdrawn as an airway event stays in the store with
-its reason, because a reader comparing a speaker count against speaker spans needs to see why they
-differ.
+**`used` closes a hole.** Nodes were told to "record what they read", with nothing to record it in. It is
+now a relation, so the graph's real dependency order is queryable — and the finding that the branches are
+not concurrent (below) is something the store can now *show* rather than something a reader has to
+reconstruct.
 
-**`refine` keeps the coarse extent.** A span from the envelope refined by word timings retains both, so
-a later reader can tell a locator from an edge.
+**An unresolved commit is representable.** An Agent carries `commit_sha` **or** `unresolved_reason`, so a
+Hub outage degrades to an agent whose commit is honestly unknown instead of blocking every write. A
+provenance model that cannot say "I could not resolve this" forces a lie or a crash.
 
-**Provenance is not optional.** An element or assertion authored by a model carries the model id and
-resolved revision. An embedding comparison additionally carries the model that produced the target,
-because embeddings from different models are not comparable.
+**It serialises to a standard.** The JSONL persistence below is PROV-JSON-shaped, so nothing has to be
+re-modelled if the store is ever exported or joined with provenance from outside this project.
 
-**Anything in the store may be used.** A node reads what it finds useful and is not restricted to a
-declared input list. What it *must* do is record what it read, so a claim can be traced to the elements
-behind it.
+### Append-only still does the work
 
-## A node's product is a verdict and a view
-
-Because the store holds the content, a node returns **no copy of it**. A product is three things:
-
-| part | why it is not in the store |
-| --- | --- |
-| `outcome` | `fail` / `flag` / `pass` is a judgement about the whole node, not an assertion about an element |
-| `verdict` | the node's summary under the fold *it* intends. Two readers folding the same elements differently would not reach it |
-| `view` | the element ids the node authored or asserted over, so a consumer need not scan the store |
-
-Anything else a node wants to hand on is an element or an assertion, and belongs in the store. A
-rendering — a figure — is an artifact beside the store, and carries the element ids it drew so a mark on
-it traces back to the assertion behind it.
+Every record is added, never modified. So merging two stores is a set union and is order-independent, and
+the current view of an entity is a fold over the relations touching it — the fold being the reader's
+choice. PROV changes the vocabulary, not that property.
 
 ## Ordering is declared by what a node reads
 
