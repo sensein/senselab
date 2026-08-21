@@ -138,14 +138,22 @@ class ProvStore:
             Its id.
 
         Raises:
-            ValueError: If ``commit_sha`` is not 40 hex characters, or a model agent supplies neither a
-                commit nor a reason it is missing.
+            ValueError: If ``commit_sha`` is not exactly 40 hex characters, if ``commit_sha`` and
+                ``unresolved_reason`` are supplied together, if ``unresolved_reason`` is empty, or if a
+                model agent is missing ``model_id`` or supplies neither a commit nor a reason it is
+                missing.
         """
-        if commit_sha is not None and not _SHA.match(commit_sha):
+        if commit_sha is not None and not _SHA.fullmatch(commit_sha):
             raise ValueError(
                 f"commit_sha must be a resolved 40-hex commit, got {commit_sha!r}. A ref recorded as a "
                 "commit makes the provenance confidently wrong."
             )
+        if commit_sha is not None and unresolved_reason is not None:
+            raise ValueError("commit_sha and unresolved_reason contradict each other; supply exactly one")
+        if unresolved_reason is not None and not unresolved_reason.strip():
+            raise ValueError("unresolved_reason must not be empty; an empty reason says nothing")
+        if agent_type == "model" and model_id is None:
+            raise ValueError("a model agent needs model_id")
         if agent_type == "model" and commit_sha is None and unresolved_reason is None:
             raise ValueError("a model agent needs commit_sha or unresolved_reason; silence is not a third option")
         gid = f"agent-{_digest([self.run_id, agent_type, model_id, commit_sha, unresolved_reason, version])}"
@@ -160,7 +168,9 @@ class ProvStore:
         return gid
 
     def _relate(self, relation: RELATION, source: str, target: str) -> None:
-        self._relations.append((relation, source, target))
+        triple = (relation, source, target)
+        if triple not in self._relations:
+            self._relations.append(triple)
 
     def was_generated_by(self, entity_id: str, activity_id: str) -> None:
         """Record that an activity produced an entity."""
@@ -242,7 +252,11 @@ class ProvStore:
 
     @classmethod
     def read_jsonl(cls, path: str | Path, run_id: str = "read") -> "ProvStore":
-        """Read a store back."""
+        """Read a store back.
+
+        Raises:
+            ValueError: If a line carries an unrecognised ``record`` kind.
+        """
         store = cls(run_id=run_id)
         for line in Path(path).read_text().splitlines():
             if not line.strip():
@@ -256,8 +270,10 @@ class ProvStore:
                 store._activities[rec["id"]] = Activity(**rec)
             elif kind == "agent":
                 store._agents[rec["id"]] = Agent(**rec)
-            else:
+            elif kind == "relation":
                 store._relations.append((rec["relation"], rec["source"], rec["target"]))
+            else:
+                raise ValueError(f"unrecognised record kind {kind!r} in {path}")
         return store
 
     @classmethod

@@ -63,6 +63,36 @@ class TestAgents:
         with pytest.raises(ValueError, match="40-hex"):
             s.agent(agent_type="model", model_id="google/hear", commit_sha="main")
 
+    def test_a_sha_with_a_trailing_newline_is_refused(self) -> None:
+        """Unstripped subprocess output must not become a recorded commit."""
+        s = _store()
+        sha_with_newline = "9b2eb2853c426676255cc6ac5804b7f1fe8e563f\n"
+        with pytest.raises(ValueError, match="40-hex"):
+            s.agent(agent_type="model", model_id="google/hear", commit_sha=sha_with_newline)
+
+    def test_a_model_agent_needs_a_model_id(self) -> None:
+        """The docstring's 'required for a model agent' is enforced."""
+        s = _store()
+        with pytest.raises(ValueError, match="model_id"):
+            s.agent(agent_type="model", commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f")
+
+    def test_an_empty_unresolved_reason_is_refused(self) -> None:
+        """An empty reason is not a reason."""
+        s = _store()
+        with pytest.raises(ValueError, match="empty"):
+            s.agent(agent_type="model", model_id="google/hear", unresolved_reason="")
+
+    def test_a_commit_and_an_unresolved_reason_together_are_refused(self) -> None:
+        """A resolved commit with an unresolved reason is a self-contradictory record."""
+        s = _store()
+        with pytest.raises(ValueError, match="exactly one"):
+            s.agent(
+                agent_type="model",
+                model_id="google/hear",
+                commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f",
+                unresolved_reason="hub 503",
+            )
+
     def test_an_unresolved_commit_is_representable_rather_than_fatal(self) -> None:
         """A Hub outage must degrade, not block every write."""
         s = _store()
@@ -114,6 +144,24 @@ class TestOrderIndependence:
         b.entity(prov_type="word", extent=(1.1, 1.4), attributes={"word": "hello"})
         assert ProvStore.merge([a, b]).fingerprint() == ProvStore.merge([b, a]).fingerprint()
 
+    def test_repeating_a_relation_does_not_change_the_fingerprint(self) -> None:
+        """A re-run node recording the same relation twice is a no-op."""
+        s = _store()
+        act = s.activity(node="PREPROCESS", step=None, parameters={})
+        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        s.was_generated_by(ent, act)
+        before = s.fingerprint()
+        s.was_generated_by(ent, act)
+        assert s.fingerprint() == before
+
+    def test_merging_a_store_with_itself_alone_is_idempotent(self) -> None:
+        """merge([s]) carries the same content hash as s."""
+        s = _store()
+        act = s.activity(node="PREPROCESS", step=None, parameters={})
+        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        s.was_generated_by(ent, act)
+        assert ProvStore.merge([s]).fingerprint() == s.fingerprint()
+
 
 class TestRoundTrip:
     """PROV-JSON-shaped JSONL survives a round trip."""
@@ -131,3 +179,12 @@ class TestRoundTrip:
         back = ProvStore.read_jsonl(path)
         assert back.fingerprint() == s.fingerprint()
         assert back.associated_with(act) == [ag]
+        assert back.get_entity(ent) == s.get_entity(ent)
+        assert back.get_agent(ag) == s.get_agent(ag)
+
+    def test_an_unrecognised_record_kind_is_a_legible_error(self, tmp_path: Path) -> None:
+        """A corrupt line names its kind instead of dying on a raw KeyError."""
+        path = tmp_path / "prov.jsonl"
+        path.write_text('{"record": "banana"}\n')
+        with pytest.raises(ValueError, match="banana"):
+            ProvStore.read_jsonl(path)
