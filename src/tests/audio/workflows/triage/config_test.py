@@ -40,6 +40,18 @@ class TestUnsetValues:
         with pytest.raises(ValueError, match="phonation.hnr_floor_db"):
             cfg.require("phonation.hnr_floor_db")
 
+    def test_a_typo_is_an_unknown_key_not_an_unmeasured_value(self) -> None:
+        """An absent key is a typo, and the error says so instead of citing open.md."""
+        cfg = load_triage_config()
+        with pytest.raises(ValueError, match="unknown configuration key"):
+            cfg.require("phonation.hnr_flor_db")
+
+    def test_a_null_key_is_unmeasured_not_unknown(self) -> None:
+        """A present-null key still points at open.md, never at the typo message."""
+        cfg = load_triage_config()
+        with pytest.raises(ValueError, match="benchmarks/open.md"):
+            cfg.require("phonation.rms_floor")
+
     def test_the_error_points_at_what_would_settle_it(self) -> None:
         """The error names the open-questions file."""
         cfg = load_triage_config()
