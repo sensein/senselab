@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -11,6 +13,27 @@ from senselab.utils.prov_store import Activity, Agent, Entity, ProvStore
 
 def _store() -> ProvStore:
     return ProvStore(run_id="run-1")
+
+
+def _rewrite_records(path: Path, kind: str, mutate: Callable[[dict[str, object]], object]) -> None:
+    """Rewrite every record of one kind in a written JSONL file through the given mutation."""
+    lines = []
+    for line in path.read_text().splitlines():
+        rec = json.loads(line)
+        if rec.get("record") == kind:
+            mutate(rec)
+            line = json.dumps(rec, sort_keys=True)
+        lines.append(line)
+    path.write_text("\n".join(lines) + "\n")
+
+
+def _written_model_agent(tmp_path: Path) -> Path:
+    """Write a store holding one valid model agent and return the file path."""
+    s = _store()
+    s.agent(agent_type="model", model_id="google/hear", commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f")
+    path = tmp_path / "prov.jsonl"
+    s.write_jsonl(path)
+    return path
 
 
 class TestPurpose:
@@ -167,26 +190,110 @@ class TestRoundTrip:
     """PROV-JSON-shaped JSONL survives a round trip."""
 
     def test_entities_activities_agents_and_relations_all_return(self, tmp_path: Path) -> None:
-        """Writing then reading a store preserves records, relations and the fingerprint."""
+        """Every field of every record type returns by equality, not only the fields the ids digest."""
         s = _store()
-        ag = s.agent(agent_type="model", model_id="google/hear", commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f")
-        act = s.activity(node="AIRWAY", step="classify", parameters={"labels": ["Cough"]})
-        ent = s.entity(prov_type="span", extent=(7.9, 8.5), attributes={})
-        s.was_generated_by(ent, act)
-        s.was_associated_with(act, ag)
+        resolved = s.agent(
+            agent_type="model", model_id="google/hear", commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f"
+        )
+        unresolved = s.agent(agent_type="model", model_id="openai/whisper-large-v3", unresolved_reason="hub 503")
+        s.agent(agent_type="software", version="0.1.0")
+        act = s.activity(
+            node="AIRWAY",
+            step="classify",
+            parameters={"labels": ["Cough"]},
+            started="2026-08-21T10:00:00+00:00",
+            ended="2026-08-21T10:00:07+00:00",
+        )
+        span = s.entity(prov_type="span", extent=(7.9, 8.5), attributes={"peak_over_floor_db": 31.4})
+        verdict = s.entity(prov_type="verdict", extent=None, attributes={"value": "keep"})
+        s.was_generated_by(verdict, act)
+        s.used(act, span)
+        s.was_associated_with(act, resolved)
+        s.was_attributed_to(verdict, unresolved)
+        s.was_derived_from(verdict, span)
+        s.was_invalidated_by(span, act)
         path = tmp_path / "prov.jsonl"
         s.write_jsonl(path)
         back = ProvStore.read_jsonl(path)
         assert back.fingerprint() == s.fingerprint()
-        assert back.associated_with(act) == [ag]
-        assert back.get_entity(ent) == s.get_entity(ent)
-        assert back.get_agent(ag) == s.get_agent(ag)
+        assert back._entities == s._entities
+        assert back._activities == s._activities
+        assert back._agents == s._agents
+        assert back._relations == s._relations
 
     def test_an_unrecognised_record_kind_is_a_legible_error(self, tmp_path: Path) -> None:
         """A corrupt line names its kind instead of dying on a raw KeyError."""
         path = tmp_path / "prov.jsonl"
         path.write_text('{"record": "banana"}\n')
         with pytest.raises(ValueError, match="banana"):
+            ProvStore.read_jsonl(path)
+
+
+class TestReadBackValidation:
+    """What is enforced at write time also holds after a read."""
+
+    def test_a_duplicated_relation_line_reads_back_as_one_triple(self, tmp_path: Path) -> None:
+        """A file carrying the same relation twice must not resurrect the duplicate-triple divergence."""
+        s = _store()
+        act = s.activity(node="PREPROCESS", step=None, parameters={})
+        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        s.was_generated_by(ent, act)
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        relation_line = next(ln for ln in path.read_text().splitlines() if json.loads(ln)["record"] == "relation")
+        path.write_text(path.read_text() + relation_line + "\n")
+        back = ProvStore.read_jsonl(path)
+        assert back._relations == s._relations
+        assert ProvStore.merge([back]).fingerprint() == back.fingerprint()
+
+    def test_a_ref_in_commit_sha_is_refused_on_read(self, tmp_path: Path) -> None:
+        """A hand-edited ref in commit_sha fails the read, naming the record."""
+        path = _written_model_agent(tmp_path)
+        _rewrite_records(path, "agent", lambda rec: rec.update(commit_sha="main"))
+        with pytest.raises(ValueError, match="agent-.*40-hex"):
+            ProvStore.read_jsonl(path)
+
+    def test_a_newline_suffixed_sha_is_refused_on_read(self, tmp_path: Path) -> None:
+        """A newline-suffixed SHA fails the read exactly as it fails the write."""
+        path = _written_model_agent(tmp_path)
+        _rewrite_records(path, "agent", lambda rec: rec.update(commit_sha="9b2eb2853c426676255cc6ac5804b7f1fe8e563f\n"))
+        with pytest.raises(ValueError, match="40-hex"):
+            ProvStore.read_jsonl(path)
+
+    def test_a_model_agent_with_neither_commit_nor_reason_is_refused_on_read(self, tmp_path: Path) -> None:
+        """Silence about the commit is refused on read, as agent() refuses it on write."""
+        path = _written_model_agent(tmp_path)
+        _rewrite_records(path, "agent", lambda rec: rec.update(commit_sha=None))
+        with pytest.raises(ValueError, match="commit_sha or unresolved_reason"):
+            ProvStore.read_jsonl(path)
+
+    def test_a_record_missing_required_keys_names_them(self, tmp_path: Path) -> None:
+        """A record missing a key fails naming the key and the line, not with a bare TypeError."""
+        s = _store()
+        s.activity(node="PREPROCESS", step=None, parameters={})
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        _rewrite_records(path, "activity", lambda rec: rec.pop("node"))
+        with pytest.raises(ValueError, match=r"missing keys \['node'\]"):
+            ProvStore.read_jsonl(path)
+
+    def test_a_line_without_a_record_key_is_a_legible_error(self, tmp_path: Path) -> None:
+        """A line that is not a record object fails legibly, not with a KeyError."""
+        path = tmp_path / "prov.jsonl"
+        path.write_text('{"id": "span-abc"}\n')
+        with pytest.raises(ValueError, match="'record' key"):
+            ProvStore.read_jsonl(path)
+
+    def test_an_unknown_relation_is_refused_on_read(self, tmp_path: Path) -> None:
+        """A relation outside PROV's own six fails the read instead of loading quietly."""
+        s = _store()
+        act = s.activity(node="PREPROCESS", step=None, parameters={})
+        ent = s.entity(prov_type="span", extent=(1.0, 2.0), attributes={})
+        s.was_generated_by(ent, act)
+        path = tmp_path / "prov.jsonl"
+        s.write_jsonl(path)
+        _rewrite_records(path, "relation", lambda rec: rec.update(relation="causedBy"))
+        with pytest.raises(ValueError, match="causedBy"):
             ProvStore.read_jsonl(path)
 
 
