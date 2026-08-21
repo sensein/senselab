@@ -38,6 +38,34 @@ class TestPlanning:
         assert len(out) == 1, "an audible sliver between two redactions is a leak"
         assert out[0].category == "PERSON+DATE"
 
+    def test_an_inverted_extent_raises(self) -> None:
+        """An extent with end < start raises instead of passing through to a silent no-op."""
+        with pytest.raises(ValueError, match="PERSON"):
+            plan_redactions([RedactionExtent(1.5, 1.0, "PERSON")], padding_ms=100)
+
+    def test_a_negative_end_raises(self) -> None:
+        """An extent whose end is negative raises instead of selecting a wrong region."""
+        with pytest.raises(ValueError, match="DATE"):
+            plan_redactions([RedactionExtent(1.0, -0.5, "DATE")], padding_ms=100)
+
+    def test_a_non_finite_bound_raises(self) -> None:
+        """An extent with a NaN or infinite bound raises."""
+        with pytest.raises(ValueError, match="PERSON"):
+            plan_redactions([RedactionExtent(float("nan"), 1.0, "PERSON")], padding_ms=100)
+        with pytest.raises(ValueError, match="DATE"):
+            plan_redactions([RedactionExtent(1.0, float("inf"), "DATE")], padding_ms=100)
+
+    def test_replanning_merged_output_does_not_duplicate_categories(self) -> None:
+        """A compound category arriving at a merge contributes each label once, in first-seen order."""
+        first = plan_redactions(
+            [RedactionExtent(1.0, 1.1, "PERSON"), RedactionExtent(1.15, 1.25, "DATE")], padding_ms=50
+        )
+        second = plan_redactions(
+            [RedactionExtent(1.4, 1.5, "DATE"), RedactionExtent(1.55, 1.65, "PERSON")], padding_ms=50
+        )
+        (out,) = plan_redactions([*first, *second], padding_ms=100)
+        assert out.category == "PERSON+DATE"
+
 
 class TestApplying:
     """Applying silences exactly the planned extents and nothing else."""
@@ -57,3 +85,17 @@ class TestApplying:
         audio = Audio(waveform=np.ones((1, 3 * SR), dtype="float32"), sampling_rate=SR)
         out = apply_redactions(audio, [RedactionExtent(1.0, 1.5, "PERSON")])
         assert np.asarray(out.waveform).shape[-1] == 3 * SR
+
+    def test_the_end_boundary_rounds_up(self) -> None:
+        """A fractional end silences the sample it falls inside; truncation would leave it audible."""
+        audio = Audio(waveform=np.ones((1, 3 * SR), dtype="float32"), sampling_rate=SR)
+        out = apply_redactions(audio, [RedactionExtent(1.0, 1.50003, "PERSON")])
+        w = np.asarray(out.waveform).squeeze()
+        assert w[24000] == 0.0
+        assert w[24001] == 1.0
+
+    def test_an_extent_that_cannot_land_leaves_the_audio_unchanged(self) -> None:
+        """A degenerate extent selects no samples; it never zeroes a wrong region."""
+        audio = Audio(waveform=np.ones((1, 3 * SR), dtype="float32"), sampling_rate=SR)
+        out = apply_redactions(audio, [RedactionExtent(1.5, 1.0, "PERSON"), RedactionExtent(1.0, -0.5, "DATE")])
+        assert np.all(np.asarray(out.waveform) == 1.0)
