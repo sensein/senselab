@@ -51,7 +51,8 @@ Verified before planning this: `PiiSpan` is a plain `@dataclass` (not frozen), e
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_a_finding_is_a_script_line():
+def test_a_finding_is_a_script_line() -> None:
+    """An unlocated finding is a ScriptLine with start and end still None."""
     from senselab.text.tasks.pii_detection.api import PiiSpan
     from senselab.utils.data_structures import ScriptLine
 
@@ -60,7 +61,8 @@ def test_a_finding_is_a_script_line():
     assert span.start is None and span.end is None, "unlocated until something locates it"
 
 
-def test_a_located_finding_reports_its_extent_and_speaker_natively():
+def test_a_located_finding_reports_its_extent_and_speaker_natively() -> None:
+    """Location is the inherited start/end/speaker, with no parallel start_s name."""
     from senselab.text.tasks.pii_detection.api import PiiSpan
 
     span = PiiSpan(
@@ -72,7 +74,8 @@ def test_a_located_finding_reports_its_extent_and_speaker_natively():
     assert not hasattr(span, "start_s"), "no parallel name for a field that already exists"
 
 
-def test_the_timing_provenance_lives_on_the_finding():
+def test_the_timing_provenance_lives_on_the_finding() -> None:
+    """A finding records which producer timed it, via the inherited timestamp_model."""
     from senselab.text.tasks.pii_detection.api import PiiSpan
 
     span = PiiSpan(
@@ -84,7 +87,8 @@ def test_the_timing_provenance_lives_on_the_finding():
     )
 
 
-def test_scanning_a_script_line_carries_its_timing_onto_every_finding():
+def test_scanning_a_script_line_carries_its_timing_onto_every_finding() -> None:
+    """Every finding from a scanned line inherits that line's extent and speaker."""
     from senselab.text.tasks.pii_detection.api import scan_for_pii
     from senselab.utils.data_structures import ScriptLine
 
@@ -95,7 +99,8 @@ def test_scanning_a_script_line_carries_its_timing_onto_every_finding():
     assert all(sp.speaker == "SPEAKER_01" for sp in scan.spans)
 
 
-def test_scanning_a_bare_string_leaves_the_finding_unlocated():
+def test_scanning_a_bare_string_leaves_the_finding_unlocated() -> None:
+    """A bare string carries no timing, so its findings claim none."""
     from senselab.text.tasks.pii_detection.api import scan_for_pii
 
     scan = scan_for_pii("call alice@example.com", detectors=["rules"])
@@ -147,26 +152,43 @@ class PiiSpan(ScriptLine):
 
 - [ ] **Step 5: Carry the line's timing through the scanner**
 
-In `_materialize_spans`, accept the scanned line and copy its timing onto every span:
+The real `_materialize_spans` (`api.py:326`) already has two behaviours this step must not lose:
+it dedupes on `(category, text.strip().lower(), source)` — so "Jane Doe" from Presidio and
+"jane doe " from the rules cascade are one finding per detector, which
+`_compute_detection_confidence`'s agreement counting depends on — and it skips a raw span whose
+`text` is empty, whitespace-only or missing, reading every key with a `.get(...) or <default>`.
+That guard matters *more* after the subclassing: `ScriptLine` accepts `text=""`, so an empty
+finding would materialise and inflate `n_spans`, and a missing `text` alongside no `speaker`
+would raise `ValidationError` instead of being skipped. Keep the body and add only the timing
+copy:
 
 ```python
 def _materialize_spans(
     raw_spans: list[dict[str, Any]], source_id: str, line: ScriptLine | None = None
 ) -> list[PiiSpan]:
-    """Turn raw detector output into ``PiiSpan``s.
+    """Build deduped ``PiiSpan`` objects from one input's raw subprocess spans.
+
+    Dedupe key is ``(category, normalized_text, source)`` so a single entity detected by
+    both Presidio and GLiNER counts once per detector rather than once per phrasing —
+    mirrors the per-ASR-model dedup the ``audio_analysis`` workflow's per-pass PII adapter
+    does on top of this.
 
     Args:
-        raw_spans: Detector dicts carrying ``text``, ``category`` and ``source``.
-        source_id: Identifier of the scanned input.
-        line: The line scanned, when the input was one. Its extent, speaker and timing provenance are
-            copied onto every finding.
+        raw_spans: Raw span dicts for one input, as returned under one
+            ``spans_by_asr`` key by ``detect_pii_via_subprocess``.
+        source_id: Identifier for the scanned input, stored on ``PiiSpan.asr_model``.
+            Standalone text has no ASR backend; this reuses that field as the
+            per-input identifier ``_compute_detection_confidence`` groups by, rather
+            than adding a parallel field for a single-input-per-report caller.
+        line: The line scanned, when the input was one. Its extent, speaker and timing
+            provenance are copied onto every finding; a bare-string input leaves them None.
 
     Returns:
-        One ``PiiSpan`` per distinct (category, text, source).
+        Deduped ``PiiSpan`` list for the input.
     """
     seen: set[tuple[str, str, str]] = set()
-    out: list[PiiSpan] = []
-    timing = (
+    spans: list[PiiSpan] = []
+    timing: dict[str, Any] = (
         {
             "start": line.start,
             "end": line.end,
@@ -178,34 +200,58 @@ def _materialize_spans(
         else {}
     )
     for raw in raw_spans:
-        key = (raw["category"], raw["text"], raw["source"])
-        if key in seen:
+        text: str = raw.get("text") or ""
+        category: str = raw.get("category") or ""
+        source: str = raw.get("source") or "unknown"
+        normalized = text.strip().lower()
+        dedup_key: tuple[str, str, str] = (category, normalized, source)
+        if not normalized or dedup_key in seen:
             continue
-        seen.add(key)
-        out.append(
+        seen.add(dedup_key)
+        score = raw.get("score")
+        spans.append(
             PiiSpan(
-                text=raw["text"],
-                category=raw["category"],
-                source=raw["source"],
+                text=text,
+                category=category,
+                source=source,
                 asr_model=source_id,
-                score=raw.get("score"),
+                score=float(score) if score is not None else None,
                 **timing,
             )
         )
-    return out
+    return spans
 ```
 
-At the call site in `scan_for_pii`, pass the input through when it is a `ScriptLine`:
+The call site is the final `return _finish(...)` of `scan_for_pii` (`api.py:503-511`), a list
+comprehension over `range(len(texts))` with no per-item `ScriptLine` in scope. Replace the whole
+comprehension with a loop over `items` — in scope from the top of the function — so each input's
+line can travel to its spans:
 
 ```python
+    scans: list[PiiScan] = []
+    for i, item in enumerate(items):
         line = item if isinstance(item, ScriptLine) else None
-        spans = _materialize_spans(raw, source_id=source_id, line=line)
+        scans.append(
+            PiiScan(
+                spans=_materialize_spans(spans_by_index_raw.get(str(i), []), str(i), line=line),
+                detectors_used=list(detectors_used),
+                failures=dict(failures),
+            )
+        )
+    return _finish(scans)
 ```
 
 - [ ] **Step 6: Run the new tests and everything that touches PII**
 
 Run: `uv run pytest src/tests/text/tasks/ src/tests/audio/tasks/pii_detection_test.py src/tests/audio/workflows/pii_adapter_test.py -v`
-Expected: the five new tests PASS and **every existing test passes unchanged**, except any that asserts the exact key set of a serialised span — `pii_adapter_test.py` is the one that might. If it does, the artifact genuinely gained keys and the assertion should be updated to match; if any *other* test fails, the change was not additive and the production code is wrong.
+Expected: the five new tests PASS and **every existing test passes unchanged**. No test in the tree
+asserts the exact key set of a serialised span — `pii_adapter_test.py:102-104` checks only that
+`payload["spans"]` is truthy and that every span carries `perturbation` and `asr_model` — so a
+failure anywhere means the change was not additive and the production code is wrong. The one real
+shape change is in Step 4's serialisation: `model_dump(exclude_none=True)` **drops** `score` when it
+is None, where `asdict` always emitted `"score": None`. `global_summary.py` reads `s.score` as an
+attribute and is unaffected, but any external consumer of `pii.json` that indexes `span["score"]`
+must switch to `.get("score")`.
 
 - [ ] **Step 7: Commit**
 
@@ -731,6 +777,8 @@ class TestMeasuredValues:
         assert cfg.require("spans.offset_fraction") == 0.7
         assert cfg.require("spans.k_db.airway") == 18.0
         assert cfg.require("preemphasis.coefficient") == 0.97
+        assert cfg.require("floor.eval_grid_s") == 0.1
+        assert cfg.require("phonation.periods_per_window") == 4.5
 
     def test_identity_travels_with_the_config(self) -> None:
         cfg = load_triage_config()
@@ -841,6 +889,13 @@ derivation: |
 
   Gammatone 40 ERB channels, 80-7800 Hz, 5 ms hop -- conventional auditory-filterbank settings.
 
+  Praat harmonicity settings hop_s 0.01, silence_threshold 0.1, periods_per_window 4.5 --
+  Praat's own documented defaults for the cc method, which extract_harmonicity_descriptors
+  (praat_parselmouth.py:569) already uses. Conventional, not fitted here.
+
+  Floor evaluation grid 0.1 s -- a granularity rather than a threshold: the percentile is evaluated
+  every 100 ms and interpolated between, which is finer than the 3 s window it summarises.
+
   Disruption parameters -- conventional. A single sample at full scale is not clipping, which is what
   min_clip_run is for. The counts these produce are exact; what has no measured value is the
   tolerance, which is quality.disruption_* below.
@@ -875,6 +930,7 @@ envelope:
 floor:
   window_s: 3.0
   percentile: 10.0
+  eval_grid_s: 0.1
 
 spans:
   onset_drop_db: 15.0
@@ -909,6 +965,9 @@ phonation:
   f0_max_hz: null
   hnr_floor_db: null
   rms_floor: null
+  hop_s: 0.01
+  silence_threshold: 0.1
+  periods_per_window: 4.5
 
 speech:
   word_gap_ms: null
@@ -1081,9 +1140,11 @@ autocorrelation units the Praat implementation does not use."
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `hilbert_envelope_dbfs(audio) -> np.ndarray`, `rolling_floor_dbfs(envelope_db, sr, window_s=3.0, percentile=10.0) -> np.ndarray`. Task 5 consumes both.
+- Produces: `hilbert_envelope_dbfs(audio, *, lowpass_hz, filter_order) -> np.ndarray`, `rolling_floor_dbfs(envelope_db, sampling_rate, *, window_s, percentile) -> np.ndarray`. Task 5 consumes both.
 
-Derivation: `benchmarks/preprocess-params.md` (zero-phase, 40 Hz) and `benchmarks/spans.md` (why local and absolute).
+Every parameter is required: the values live in `envelope.*` and `floor.*` of Task 3's config with
+their derivation, and no number appears in this module. Derivation: `benchmarks/preprocess-params.md`
+(zero-phase, 40 Hz) and `benchmarks/spans.md` (why local and absolute).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1106,37 +1167,51 @@ def _tone(seconds: float, amp: float, freq: float = 200.0) -> Audio:
     return Audio(waveform=(amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)[None, :], sampling_rate=SR)
 
 
+def _env(audio: Audio) -> np.ndarray:
+    """Run the envelope with the config's measured values; the fixture supplies the literals."""
+    return hilbert_envelope_dbfs(audio, lowpass_hz=40.0, filter_order=4)
+
+
 class TestEnvelopeIsAbsolute:
-    def test_a_half_scale_tone_sits_near_minus_six_dbfs(self):
-        env = hilbert_envelope_dbfs(_tone(1.0, 0.5))
+    """The envelope is dBFS, never normalised by the input's own maximum."""
+
+    def test_a_half_scale_tone_sits_near_minus_six_dbfs(self) -> None:
+        """A 0.5-amplitude tone reads close to -6 dBFS, pinning the absolute reference."""
+        env = _env(_tone(1.0, 0.5))
         mid = env[SR // 4 : -SR // 4]
         assert -7.5 < float(np.median(mid)) < -4.5
 
-    def test_scaling_the_input_shifts_the_envelope_by_the_same_amount(self):
-        loud = float(np.median(hilbert_envelope_dbfs(_tone(1.0, 0.5))[SR // 4 : -SR // 4]))
-        quiet = float(np.median(hilbert_envelope_dbfs(_tone(1.0, 0.05))[SR // 4 : -SR // 4]))
+    def test_scaling_the_input_shifts_the_envelope_by_the_same_amount(self) -> None:
+        """A 20 dB input change moves the envelope 20 dB — absolute, not max-normalised."""
+        loud = float(np.median(_env(_tone(1.0, 0.5))[SR // 4 : -SR // 4]))
+        quiet = float(np.median(_env(_tone(1.0, 0.05))[SR // 4 : -SR // 4]))
         assert loud - quiet == pytest.approx(20.0, abs=1.0), "dBFS is absolute, not max-normalised"
 
-    def test_a_loud_click_elsewhere_does_not_move_the_rest(self):
+    def test_a_loud_click_elsewhere_does_not_move_the_rest(self) -> None:
+        """One 30 ms click cannot rescale the envelope far from it."""
         quiet = _tone(2.0, 0.05)
         clicked = quiet.waveform.numpy().copy() if hasattr(quiet.waveform, "numpy") else np.array(quiet.waveform)
         clicked[0, SR : SR + 480] += 0.95
-        a = hilbert_envelope_dbfs(quiet)
-        b = hilbert_envelope_dbfs(Audio(waveform=clicked.astype(np.float32), sampling_rate=SR))
+        a = _env(quiet)
+        b = _env(Audio(waveform=clicked.astype(np.float32), sampling_rate=SR))
         early = slice(SR // 8, SR // 2)
         assert float(np.median(b[early])) == pytest.approx(float(np.median(a[early])), abs=0.5)
 
 
 class TestRollingFloor:
-    def test_the_floor_tracks_a_level_change_rather_than_averaging_it(self):
+    """The floor tracks the recording rather than summarising it."""
+
+    def test_the_floor_tracks_a_level_change_rather_than_averaging_it(self) -> None:
+        """A -60 to -30 dB step moves the floor to each level, not to their mean."""
         env = np.concatenate([np.full(5 * SR, -60.0), np.full(5 * SR, -30.0)])
         fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0)
         assert fl[SR] == pytest.approx(-60.0, abs=1.0)
         assert fl[9 * SR] == pytest.approx(-30.0, abs=1.0)
 
-    def test_the_floor_is_one_value_per_sample(self):
+    def test_the_floor_is_one_value_per_sample(self) -> None:
+        """The floor track has the envelope's own shape."""
         env = np.full(3 * SR, -50.0)
-        assert rolling_floor_dbfs(env, SR).shape == env.shape
+        assert rolling_floor_dbfs(env, SR, window_s=3.0, percentile=10.0).shape == env.shape
 ```
 
 - [ ] **Step 2: Run and watch them fail**
@@ -1156,19 +1231,17 @@ from scipy.signal import butter, filtfilt, hilbert
 
 from senselab.audio.data_structures import Audio
 
-ENVELOPE_LOWPASS_HZ = 40.0
-FLOOR_WINDOW_S = 3.0
-FLOOR_PERCENTILE = 10.0
 
-
-def hilbert_envelope_dbfs(audio: Audio, lowpass_hz: float = ENVELOPE_LOWPASS_HZ) -> np.ndarray:
+def hilbert_envelope_dbfs(audio: Audio, *, lowpass_hz: float, filter_order: int) -> np.ndarray:
     """The analytic-signal magnitude, lowpassed, in dBFS.
 
     The filter is zero-phase, so the envelope is offline-only.
 
     Args:
         audio: Mono audio. A multi-channel input is averaged.
-        lowpass_hz: Cutoff of the zero-phase Butterworth lowpass.
+        lowpass_hz: Cutoff of the zero-phase Butterworth lowpass. Read it from
+            ``envelope.lowpass_hz`` in the triage config.
+        filter_order: Order of the Butterworth design. Read it from ``envelope.filter_order``.
 
     Returns:
         One dBFS value per input sample. Absolute, never normalised by the input's maximum.
@@ -1176,7 +1249,7 @@ def hilbert_envelope_dbfs(audio: Audio, lowpass_hz: float = ENVELOPE_LOWPASS_HZ)
     x = np.asarray(audio.waveform, dtype=np.float64)
     if x.ndim > 1:
         x = x.mean(axis=0)
-    b, a = butter(4, lowpass_hz / (audio.sampling_rate / 2), "low")
+    b, a = butter(filter_order, lowpass_hz / (audio.sampling_rate / 2), "low")
     env = np.maximum(filtfilt(b, a, np.abs(hilbert(x))), 1e-12)
     return 20.0 * np.log10(env)
 
@@ -1184,23 +1257,29 @@ def hilbert_envelope_dbfs(audio: Audio, lowpass_hz: float = ENVELOPE_LOWPASS_HZ)
 def rolling_floor_dbfs(
     envelope_db: np.ndarray,
     sampling_rate: int,
-    window_s: float = FLOOR_WINDOW_S,
-    percentile: float = FLOOR_PERCENTILE,
+    *,
+    window_s: float,
+    percentile: float,
+    eval_grid_s: float,
 ) -> np.ndarray:
     """A low percentile of the envelope over a sliding window.
 
     Args:
         envelope_db: Output of :func:`hilbert_envelope_dbfs`.
         sampling_rate: Samples per second of ``envelope_db``.
-        window_s: Width of the sliding window.
-        percentile: Which percentile within the window is the floor.
+        window_s: Width of the sliding window. Read it from ``floor.window_s``.
+        percentile: Which percentile within the window is the floor. Config `floor.percentile`.
+        eval_grid_s: How often the percentile is evaluated before interpolation. Config
+            `floor.eval_grid_s` — a granularity, not a threshold, but it is still a number and so
+            still belongs in the config. Read it from
+            ``floor.percentile``.
 
     Returns:
         One floor value per sample of ``envelope_db``.
     """
     n = len(envelope_db)
     half = int(window_s * sampling_rate) // 2
-    step = max(1, int(0.1 * sampling_rate))
+    step = max(1, int(eval_grid_s * sampling_rate))
     centres = np.arange(0, n, step)
     vals = [float(np.percentile(envelope_db[max(0, c - half) : min(n, c + half)], percentile)) for c in centres]
     return np.interp(np.arange(n), centres, vals)
@@ -1211,18 +1290,9 @@ And `__init__.py`:
 ```python
 """Amplitude envelope and local floor."""
 
-from senselab.audio.tasks.envelope.api import (
-    ENVELOPE_LOWPASS_HZ,
-    FLOOR_PERCENTILE,
-    FLOOR_WINDOW_S,
-    hilbert_envelope_dbfs,
-    rolling_floor_dbfs,
-)
+from senselab.audio.tasks.envelope.api import hilbert_envelope_dbfs, rolling_floor_dbfs
 
 __all__ = [
-    "ENVELOPE_LOWPASS_HZ",
-    "FLOOR_PERCENTILE",
-    "FLOOR_WINDOW_S",
     "hilbert_envelope_dbfs",
     "rolling_floor_dbfs",
 ]
@@ -1256,10 +1326,12 @@ tested directly: an injected click leaves the rest of the envelope within 0.5 dB
 **Interfaces:**
 - Consumes: `hilbert_envelope_dbfs`, `rolling_floor_dbfs` from Task 4.
 - Produces: `Span` (frozen dataclass: `start`, `end`, `peak_over_floor_db`) and
-  `propose_spans(envelope_db, floor_db, sampling_rate, *, k_db, onset_drop_db=15.0, offset_fraction=0.7, hangover_ms=120, min_duration_ms=50) -> list[Span] | NoContrast`.
+  `propose_spans(envelope_db, floor_db, sampling_rate, *, k_db, onset_drop_db, offset_fraction, hangover_ms, min_duration_ms, min_separation_ms) -> list[Span] | NoContrast`.
   `NoContrast` is a distinct return, not an empty list.
 
-Derivation: `benchmarks/spans.md`.
+Every rule parameter is required, `min_separation_ms` included: the values live in `spans.*` of
+Task 3's config with their derivation, and no number appears in this module. Derivation:
+`benchmarks/spans.md`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1283,42 +1355,68 @@ def _envelope(events: list[tuple[float, float, float]], seconds: float = 14.0, f
     return env
 
 
-class TestGate:
-    def test_a_peak_below_k_is_not_proposed(self):
-        env = _envelope([(2.0, 2.5, -45.0)])
-        out = propose_spans(env, np.full_like(env, -55.0), SR, k_db=18.0)
-        assert out == []
+def _propose(env: np.ndarray, floor: np.ndarray) -> list[Span] | NoContrast:
+    """Run propose_spans with the config's measured values; the fixture supplies the literals."""
+    return propose_spans(
+        env, floor, SR, k_db=18.0, onset_drop_db=15.0, offset_fraction=0.7,
+        hangover_ms=120, min_duration_ms=50, min_separation_ms=150,
+    )
 
-    def test_a_peak_above_k_is_proposed(self):
+
+class TestGate:
+    """Only a peak that clears k_db over the local floor proposes a span."""
+
+    def test_a_peak_below_k_is_not_proposed(self) -> None:
+        """Of one 10 dB peak and one 35 dB peak, only the one clearing 18 dB becomes a span."""
+        env = _envelope([(2.0, 2.5, -45.0), (8.0, 8.5, -20.0)])
+        out = _propose(env, np.full_like(env, -55.0))
+        assert not isinstance(out, NoContrast)
+        assert len(out) == 1, "the 10 dB event must be gated out, not merely narrowed"
+        (span,) = out
+        assert span.start == pytest.approx(8.0, abs=0.05)
+        assert span.end == pytest.approx(8.5, abs=0.05)
+
+    def test_a_peak_above_k_is_proposed(self) -> None:
+        """A 35 dB event over the floor clears the 18 dB gate."""
         env = _envelope([(2.0, 2.5, -20.0)])
-        out = propose_spans(env, np.full_like(env, -55.0), SR, k_db=18.0)
+        out = _propose(env, np.full_like(env, -55.0))
         assert len(out) == 1 and isinstance(out[0], Span)
 
-    def test_two_events_far_apart_stay_two_spans(self):
+    def test_two_events_far_apart_stay_two_spans(self) -> None:
+        """Distant events do not merge."""
         env = _envelope([(2.0, 2.5, -20.0), (8.0, 8.5, -20.0)])
-        out = propose_spans(env, np.full_like(env, -55.0), SR, k_db=18.0)
+        out = _propose(env, np.full_like(env, -55.0))
         assert len(out) == 2
 
 
 class TestNoContrast:
-    def test_no_peak_anywhere_is_no_contrast_not_an_empty_list(self):
+    """An unmeasurable recording is a distinct value, not a quiet one."""
+
+    def test_no_peak_anywhere_is_no_contrast_not_an_empty_list(self) -> None:
+        """A flat envelope 1 dB over its floor yields NoContrast naming the gate."""
         env = np.full(int(3.0 * SR), -30.0)
-        out = propose_spans(env, np.full_like(env, -29.0), SR, k_db=18.0)
+        out = _propose(env, np.full_like(env, -29.0))
         assert isinstance(out, NoContrast)
         assert "18" in out.reason
 
 
 class TestKIsRequired:
-    def test_k_has_no_default(self):
+    """No rule parameter has a default."""
+
+    def test_k_has_no_default(self) -> None:
+        """Calling without the rule parameters is a TypeError, not a silent default."""
         env = _envelope([(2.0, 2.5, -20.0)])
         with pytest.raises(TypeError):
             propose_spans(env, np.full_like(env, -55.0), SR)  # type: ignore[call-arg]
 
 
 class TestSpanCarriesItsContrast:
-    def test_peak_over_floor_travels_with_the_span(self):
+    """A span reports how far its peak stood above the floor."""
+
+    def test_peak_over_floor_travels_with_the_span(self) -> None:
+        """A -20 dB event over a -55 dB floor reports 35 dB of contrast."""
         env = _envelope([(2.0, 2.5, -20.0)])
-        (span,) = propose_spans(env, np.full_like(env, -55.0), SR, k_db=18.0)
+        (span,) = _propose(env, np.full_like(env, -55.0))
         assert span.peak_over_floor_db == pytest.approx(35.0, abs=0.5)
 ```
 
@@ -1338,12 +1436,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from scipy.signal import find_peaks
-
-ONSET_DROP_DB = 15.0
-OFFSET_FRACTION = 0.7
-HANGOVER_MS = 120
-MIN_DURATION_MS = 50
-MIN_SEPARATION_MS = 150
 
 
 @dataclass(frozen=True)
@@ -1380,10 +1472,11 @@ def propose_spans(
     sampling_rate: int,
     *,
     k_db: float,
-    onset_drop_db: float = ONSET_DROP_DB,
-    offset_fraction: float = OFFSET_FRACTION,
-    hangover_ms: int = HANGOVER_MS,
-    min_duration_ms: int = MIN_DURATION_MS,
+    onset_drop_db: float,
+    offset_fraction: float,
+    hangover_ms: int,
+    min_duration_ms: int,
+    min_separation_ms: int,
 ) -> list[Span] | NoContrast:
     """Propose spans from an envelope, anchoring the onset to each event's own peak.
 
@@ -1391,19 +1484,23 @@ def propose_spans(
         envelope_db: Envelope in dBFS.
         floor_db: Local floor, same length as ``envelope_db``.
         sampling_rate: Samples per second.
-        k_db: How far above the local floor a peak must rise to be proposed. No default: the value is
-            per-reader and unmeasured across readers.
-        onset_drop_db: Walk back from the peak to ``peak - onset_drop_db``.
-        offset_fraction: Walk forward to ``peak - offset_fraction * (peak - floor)``.
+        k_db: How far above the local floor a peak must rise to be proposed. Per reader: read it
+            from ``spans.k_db.<reader>`` in the triage config.
+        onset_drop_db: Walk back from the peak to ``peak - onset_drop_db``. Read it from
+            ``spans.onset_drop_db``.
+        offset_fraction: Walk forward to ``peak - offset_fraction * (peak - floor)``. Read it from
+            ``spans.offset_fraction``.
         hangover_ms: The offset closes only after this long continuously below threshold. Must be shorter
-            than the shortest event to be bounded.
-        min_duration_ms: Discard spans shorter than this.
+            than the shortest event to be bounded. Read it from ``spans.hangover_ms``.
+        min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.
+        min_separation_ms: Minimum distance between two proposed peaks. Read it from
+            ``spans.min_separation_ms``.
 
     Returns:
         Merged spans in time order, or :class:`NoContrast` when no peak clears ``k_db``.
     """
     above = envelope_db - floor_db
-    peaks, _ = find_peaks(above, height=k_db, distance=int(MIN_SEPARATION_MS * sampling_rate / 1000))
+    peaks, _ = find_peaks(above, height=k_db, distance=int(min_separation_ms * sampling_rate / 1000))
     if len(peaks) == 0:
         return NoContrast(
             reason=f"no peak rose {k_db} dB above the local floor; the largest rose {float(above.max()):.1f} dB"
@@ -1444,21 +1541,9 @@ And `__init__.py`:
 ```python
 """Span proposal from an envelope."""
 
-from senselab.audio.tasks.spans.api import (
-    HANGOVER_MS,
-    MIN_DURATION_MS,
-    OFFSET_FRACTION,
-    ONSET_DROP_DB,
-    NoContrast,
-    Span,
-    propose_spans,
-)
+from senselab.audio.tasks.spans.api import NoContrast, Span, propose_spans
 
 __all__ = [
-    "HANGOVER_MS",
-    "MIN_DURATION_MS",
-    "OFFSET_FRACTION",
-    "ONSET_DROP_DB",
     "NoContrast",
     "Span",
     "propose_spans",
@@ -1472,8 +1557,18 @@ Expected: all PASS.
 
 - [ ] **Step 5: Reproduce the benchmark on the reference recording**
 
-Run: `uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/floor.py`
-Expected: five spans at 2.32–3.29, 5.32–6.22, 7.92–8.51, 9.61–9.96, 11.75–13.16 s, matching `benchmarks/spans.md`. If they differ, the implementation diverges from the measured rules — fix the implementation, not the benchmark.
+Run: `uv run python specs/20260817-triage-workflow-dag/benchmarks/scripts/s2b.py` — the span
+producer, applying the same rules (`K` = 18 dB, onset `peak − 15 dB`, offset fraction 0.7, 120 ms
+hangover, 50 ms minimum, 150 ms separation). `floor.py` beside it is a floor comparison, not the
+span producer. Caveat before running: `s2b.py` reads its stage-1 envelope from job scratch on the
+machine that produced the benchmark (`/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz`); on any
+other host it cannot run and this step is a recorded expectation, not a check.
+Expected: **six** spans on the clean reference recording — the `K` = 18 dB row of
+`benchmarks/spans.md`'s "Propose threshold `K`" table. That file records the count, not the
+extents, so the comparison is on the count. Note also that `s2b.py` gates against a *scalar*
+floor where `propose_spans` takes the rolling floor track, so boundaries may differ by samples;
+a different span *count* means the implementation diverges from the measured rules — fix the
+implementation, not the benchmark.
 
 - [ ] **Step 6: Commit**
 
@@ -1482,9 +1577,10 @@ uv run ruff format src/senselab/audio/tasks/spans/ src/tests/audio/tasks/spans_t
 git add src/senselab/audio/tasks/spans/ src/tests/audio/tasks/spans_test.py
 git commit -m "feat(spans): peak-anchored onset, range-relative offset, no_contrast as a value
 
-k_db is keyword-only with no default because it is per-reader and no cross-reader value
-was measured. NoContrast is a distinct return rather than an empty list, so an
-unmeasurable recording cannot read as a quiet one."
+Every rule parameter is a required keyword argument with no default -- the values live in
+the triage config beside their derivation, and k_db is additionally per-reader. NoContrast
+is a distinct return rather than an empty list, so an unmeasurable recording cannot read
+as a quiet one."
 ```
 
 ---
@@ -1497,7 +1593,10 @@ unmeasurable recording cannot read as a quiet one."
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `gammatone_filterbank(audio, *, n_channels=40, low_hz=80.0, high_hz=7800.0, hop_s=0.005) -> tuple[np.ndarray, np.ndarray]` returning `(centre_frequencies, energy_db)` of shape `(n_channels,)` and `(n_channels, n_frames)`.
+- Produces: `gammatone_filterbank(audio, *, n_channels, low_hz, high_hz, hop_s) -> tuple[np.ndarray, np.ndarray]` returning `(centre_frequencies, energy_db)` of shape `(n_channels,)` and `(n_channels, n_frames)`.
+
+Every parameter is required: the values live in `gammatone.*` of Task 3's config, and no number
+appears in this module.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1521,26 +1620,36 @@ def _tone(freq: float, seconds: float = 1.0) -> Audio:
 
 
 class TestErbSpacing:
-    def test_centres_span_the_requested_range_and_increase(self):
+    """Centre frequencies sit on the ERB-rate scale."""
+
+    def test_centres_span_the_requested_range_and_increase(self) -> None:
+        """Forty centres run 80 to 7800 Hz, ascending."""
         cf = erb_space(80.0, 7800.0, 40)
         assert len(cf) == 40
         assert cf[0] == pytest.approx(80.0, abs=1.0)
         assert cf[-1] == pytest.approx(7800.0, abs=10.0)
         assert np.all(np.diff(cf) > 0)
 
-    def test_spacing_is_wider_at_high_frequency(self):
+    def test_spacing_is_wider_at_high_frequency(self) -> None:
+        """ERB spacing widens with frequency, unlike a linear grid."""
         cf = erb_space(80.0, 7800.0, 40)
         assert (cf[-1] - cf[-2]) > (cf[1] - cf[0]) * 5
 
 
 class TestFilterbank:
-    def test_a_tone_excites_the_channel_nearest_its_frequency(self):
-        cf, energy = gammatone_filterbank(_tone(1000.0))
+    """The bank resolves frequency into the right channel at the right shape."""
+
+    def test_a_tone_excites_the_channel_nearest_its_frequency(self) -> None:
+        """A 1 kHz tone lands in the channel centred nearest 1 kHz."""
+        cf, energy = gammatone_filterbank(_tone(1000.0), n_channels=40, low_hz=80.0, high_hz=7800.0, hop_s=0.005)
         loudest = int(np.argmax(energy.mean(axis=1)))
         assert abs(cf[loudest] - 1000.0) < 250.0
 
-    def test_shape_is_channels_by_frames(self):
-        cf, energy = gammatone_filterbank(_tone(1000.0, seconds=2.0), n_channels=24, hop_s=0.01)
+    def test_shape_is_channels_by_frames(self) -> None:
+        """The output is (n_channels, n_frames) with the centres alongside."""
+        cf, energy = gammatone_filterbank(
+            _tone(1000.0, seconds=2.0), n_channels=24, low_hz=80.0, high_hz=7800.0, hop_s=0.01
+        )
         assert energy.shape[0] == 24 == len(cf)
         assert energy.shape[1] == pytest.approx(2.0 / 0.01, abs=2)
 ```
@@ -1562,11 +1671,6 @@ from scipy.signal import gammatone, hilbert, lfilter
 
 from senselab.audio.data_structures import Audio
 
-N_CHANNELS = 40
-LOW_HZ = 80.0
-HIGH_HZ = 7800.0
-HOP_S = 0.005
-
 
 def erb_space(low_hz: float, high_hz: float, n_channels: int) -> np.ndarray:
     """Centre frequencies equally spaced on the ERB-rate scale.
@@ -1587,23 +1691,25 @@ def erb_space(low_hz: float, high_hz: float, n_channels: int) -> np.ndarray:
 def gammatone_filterbank(
     audio: Audio,
     *,
-    n_channels: int = N_CHANNELS,
-    low_hz: float = LOW_HZ,
-    high_hz: float = HIGH_HZ,
-    hop_s: float = HOP_S,
+    n_channels: int,
+    low_hz: float,
+    high_hz: float,
+    hop_s: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Energy per auditory channel over time.
 
     Args:
         audio: Mono audio. A multi-channel input is averaged.
-        n_channels: Number of ERB-spaced channels.
-        low_hz: Lowest centre frequency.
-        high_hz: Highest centre frequency.
-        hop_s: Frame hop for the energy summary.
+        n_channels: Number of ERB-spaced channels. Read it from ``gammatone.n_channels``.
+        low_hz: Lowest centre frequency. Read it from ``gammatone.low_hz``.
+        high_hz: Highest centre frequency. Read it from ``gammatone.high_hz``.
+        hop_s: Frame hop for the energy summary. Read it from ``gammatone.hop_ms``.
 
     Returns:
         ``(centre_frequencies, energy_db)`` with shapes ``(n_channels,)`` and ``(n_channels, n_frames)``.
-        ``energy_db`` is relative to the bank's own maximum.
+        ``energy_db`` is **absolute dBFS**, never normalised by the bank's own maximum: one loud
+        sample must not rescale the whole view, which is the fault `benchmarks/spans.md` records for
+        the envelope and which applies identically here.
     """
     x = np.asarray(audio.waveform, dtype=np.float64)
     if x.ndim > 1:
@@ -1617,8 +1723,7 @@ def gammatone_filterbank(
         b, a = gammatone(centre, "iir", fs=sr)
         magnitude = np.abs(hilbert(lfilter(b, a, x)))
         out[k] = magnitude[: n_frames * hop].reshape(n_frames, hop).mean(axis=1)
-    db = 20.0 * np.log10(out + 1e-10)
-    return cf, db - db.max()
+    return cf, 20.0 * np.log10(out + 1e-10)
 ```
 
 And `__init__.py`:
@@ -1626,9 +1731,9 @@ And `__init__.py`:
 ```python
 """Gammatone filterbank."""
 
-from senselab.audio.tasks.gammatone.api import HIGH_HZ, HOP_S, LOW_HZ, N_CHANNELS, erb_space, gammatone_filterbank
+from senselab.audio.tasks.gammatone.api import erb_space, gammatone_filterbank
 
-__all__ = ["HIGH_HZ", "HOP_S", "LOW_HZ", "N_CHANNELS", "erb_space", "gammatone_filterbank"]
+__all__ = ["erb_space", "gammatone_filterbank"]
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -1643,8 +1748,9 @@ uv run ruff format src/senselab/audio/tasks/gammatone/ src/tests/audio/tasks/gam
 git add src/senselab/audio/tasks/gammatone/ src/tests/audio/tasks/gammatone_test.py
 git commit -m "feat(gammatone): ERB-spaced auditory filterbank
 
-Forty channels from 80 to 7800 Hz via scipy.signal.gammatone, summarised on a 5 ms hop.
-Tested by exciting a single channel with a pure tone."
+Channel count, band edges and hop are required arguments read from the triage config,
+which carries 40 channels over 80-7800 Hz on a 5 ms hop; scipy.signal.gammatone does the
+filtering. Tested by exciting a single channel with a pure tone."
 ```
 
 ---
@@ -1655,7 +1761,7 @@ Tested by exciting a single channel with a pure tone."
 
 **Files:**
 - Modify: `src/senselab/audio/tasks/health_acoustics/hear.py` (add the function; do not change the existing guard)
-- Test: `src/tests/audio/tasks/health_acoustics_test.py`
+- Test: `src/tests/audio/tasks/health_acoustics/hear_test.py` — the tree has a **package** here, not a `health_acoustics_test.py` module. Add to the existing file.
 
 **Interfaces:**
 - Consumes: nothing. It takes `start_s`/`end_s` as floats, so a caller may pass a `Span`'s fields or any other pair — no dependency on Task 5.
@@ -1664,7 +1770,8 @@ Tested by exciting a single channel with a pure tone."
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-def test_span_to_hear_buffer_is_exactly_two_seconds():
+def test_span_to_hear_buffer_is_exactly_two_seconds() -> None:
+    """The buffer is exactly the detector's 2 s window at the input rate."""
     import numpy as np
 
     from senselab.audio.data_structures import Audio
@@ -1678,7 +1785,8 @@ def test_span_to_hear_buffer_is_exactly_two_seconds():
     assert buf.sampling_rate == sr
 
 
-def test_span_to_hear_buffer_centres_the_span_and_zeroes_the_rest():
+def test_span_to_hear_buffer_centres_the_span_and_zeroes_the_rest() -> None:
+    """Everything outside the span is silence, never neighbouring audio."""
     import numpy as np
 
     from senselab.audio.data_structures import Audio
@@ -1694,7 +1802,8 @@ def test_span_to_hear_buffer_centres_the_span_and_zeroes_the_rest():
     assert np.all(w[offset : offset + span_len] == 1.0)
 
 
-def test_a_span_longer_than_two_seconds_is_refused():
+def test_a_span_longer_than_two_seconds_is_refused() -> None:
+    """A span the window cannot hold raises rather than being truncated."""
     import numpy as np
     import pytest
 
@@ -1709,10 +1818,14 @@ def test_a_span_longer_than_two_seconds_is_refused():
 
 - [ ] **Step 2: Run and watch them fail**
 
-Run: `uv run pytest src/tests/audio/tasks/health_acoustics_test.py -k span_to_hear -v`
+Run: `uv run pytest src/tests/audio/tasks/health_acoustics/hear_test.py -k span_to_hear -v`
 Expected: FAIL — `ImportError: cannot import name 'span_to_hear_buffer'`.
 
 - [ ] **Step 3: Implement in `hear.py`**
+
+The window length is not re-derived: `hear.py` already names it — `HEAR_WINDOW_SAMPLES = 32000`
+(`hear.py:126`) and `HEAR_WINDOW_SECONDS` (`hear.py:130`) — and the function is added in the same
+module, so it reads those.
 
 ```python
 def span_to_hear_buffer(audio: Audio, start_s: float, end_s: float, *, placement: str = "centre") -> Audio:
@@ -1731,18 +1844,18 @@ def span_to_hear_buffer(audio: Audio, start_s: float, end_s: float, *, placement
         Audio of exactly 2 s at the input's sampling rate.
 
     Raises:
-        ValueError: If the span is longer than 2 s, or ``placement`` is not one of the three.
+        ValueError: If the span is longer than the window, or ``placement`` is not one of the three.
     """
     sr = audio.sampling_rate
-    want = 2 * sr
+    want = int(round(HEAR_WINDOW_SECONDS * sr))
     x = np.asarray(audio.waveform, dtype=np.float32)
     if x.ndim > 1:
         x = x.mean(axis=0)
     segment = x[int(start_s * sr) : int(end_s * sr)]
     if len(segment) > want:
         raise ValueError(
-            f"span {start_s:.3f}-{end_s:.3f}s is {len(segment) / sr:.3f}s, longer than the 2 s the detector "
-            "accepts. Split it or classify a sub-span."
+            f"span {start_s:.3f}-{end_s:.3f}s is {len(segment) / sr:.3f}s, longer than the "
+            f"{HEAR_WINDOW_SECONDS:g} s the detector accepts. Split it or classify a sub-span."
         )
     offsets = {"centre": (want - len(segment)) // 2, "start": 0, "end": want - len(segment)}
     if placement not in offsets:
@@ -1755,14 +1868,14 @@ def span_to_hear_buffer(audio: Audio, start_s: float, end_s: float, *, placement
 
 - [ ] **Step 4: Run the tests**
 
-Run: `uv run pytest src/tests/audio/tasks/health_acoustics_test.py -v`
+Run: `uv run pytest src/tests/audio/tasks/health_acoustics/ -v`
 Expected: the three new tests PASS and the existing ones still pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-uv run ruff format src/senselab/audio/tasks/health_acoustics/hear.py src/tests/audio/tasks/health_acoustics_test.py
-git add src/senselab/audio/tasks/health_acoustics/hear.py src/tests/audio/tasks/health_acoustics_test.py
+uv run ruff format src/senselab/audio/tasks/health_acoustics/hear.py src/tests/audio/tasks/health_acoustics/hear_test.py
+git add src/senselab/audio/tasks/health_acoustics/hear.py src/tests/audio/tasks/health_acoustics/hear_test.py
 git commit -m "feat(hear): name the whole-span buffer instead of rediscovering it
 
 The detector accepts exactly 2 s, so classifying a shorter span means placing it in a
@@ -1780,15 +1893,41 @@ than 2 s refused rather than truncated."
 - Test: `src/tests/audio/tasks/phonation_test.py`
 
 **Interfaces:**
-- Consumes: nothing.
-- Produces: `periodicity_track(audio, *, hop_s=0.01, f0_min_hz, f0_max_hz) -> tuple[np.ndarray, np.ndarray]` giving `(periodicity, f0_hz)`; and `period_marks(audio, start_s, end_s, *, f0_min_hz, f0_max_hz) -> list[PeriodMark]`.
+- Consumes: `PARSELMOUTH_AVAILABLE`, `get_sound` and `parselmouth` from
+  `senselab.audio.tasks.features_extraction.praat_parselmouth` — the same Praat route
+  `extract_harmonicity_descriptors` (`praat_parselmouth.py:569`, via `to_harmonicity_cc()`) and
+  `extract_jitter` (`praat_parselmouth.py:1101`, via `"To PointProcess (periodic, cc)"` at `:1115`)
+  already use. Read those before writing anything.
+- Produces: `hnr_track(audio, *, f0_min_hz, hop_s, silence_threshold, periods_per_window) -> tuple[np.ndarray, np.ndarray]` giving `(times_s, hnr_db)`; and `period_marks(audio, start_s, end_s, *, f0_min_hz, f0_max_hz) -> list[PeriodMark]`. The VOICE node consumes both.
 
-`f0_min_hz` and `f0_max_hz` are keyword-only with no default: `benchmarks/voice.md` records that no single range serves both low adult male and infant voices.
+**On Praat, not hand-rolled.** An earlier draft measured periodicity as a biased `np.correlate`
+normalised by `ac[0]`, which carries a `(1 − lag/N)` taper: with a frame of three longest periods,
+its ceiling for a 100 Hz buzz is exactly 0.80, and for the reference voice at 87 Hz with
+`f0_min_hz = 60` it is 0.77 — below the 0.933 `benchmarks/voice.md` recorded, so the gate interval
+and the estimator were on two different scales. Praat's cc method is the normalised
+cross-correlation that quantity actually is, and senselab already wraps it.
+
+**The units change with it.** The gate's measurement is now **HNR in dB**, not normalised
+autocorrelation. `benchmarks/voice.md`'s interval — periodicity `(0.44, 0.933)`, RMS
+`(0.0007, 0.0161)` — was measured in the old units and **does not transfer**, so
+`phonation.hnr_floor_db` and `phonation.rms_floor` are `null` in `data/config/default.yaml` and
+`require()` raises on both (Task 3 already tests exactly that). This task ships the measurement
+primitives; the VOICE gate stays unreachable until someone measures voiced/unvoiced HNR and RMS on
+labelled data — `benchmarks/open.md` records what would settle it.
+
+**Period marks are Praat pulse times.** Jitter is defined between consecutive periods; marks placed
+at integer multiples of a frame-wise argmax lag can differ only by lag quantisation (62.5 µs at
+16 kHz), which forecloses the measurement the point process exists for. The pulse times are read
+out of the PointProcess object (`Get number of points` / `Get time from index`).
+
+`f0_min_hz` and `f0_max_hz` are keyword-only with no default: `benchmarks/voice.md` records that no
+single range serves both low adult male and infant voices. Every other parameter is required too —
+no number appears in this module.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
-"""Periodicity and the period-mark point process."""
+"""The HNR track and the glottal period marks, both through Praat."""
 
 from __future__ import annotations
 
@@ -1796,7 +1935,7 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.phonation import PeriodMark, period_marks, periodicity_track
+from senselab.audio.tasks.phonation import PeriodMark, hnr_track, period_marks
 
 SR = 16000
 
@@ -1812,37 +1951,60 @@ def _noise(seconds: float = 1.0) -> Audio:
     return Audio(waveform=(0.1 * rng.standard_normal(int(seconds * SR))).astype(np.float32)[None, :], sampling_rate=SR)
 
 
-class TestPeriodicity:
-    def test_a_buzz_is_periodic_and_noise_is_not(self):
-        p_voiced, _ = periodicity_track(_buzz(100.0), f0_min_hz=60.0, f0_max_hz=400.0)
-        p_noise, _ = periodicity_track(_noise(), f0_min_hz=60.0, f0_max_hz=400.0)
-        assert float(np.median(p_voiced)) > 0.9
-        assert float(np.median(p_noise)) < 0.5
+def _hnr(audio: Audio) -> np.ndarray:
+    """Run hnr_track with Praat's documented cc settings; the fixture supplies the literals."""
+    _, hnr_db = hnr_track(audio, f0_min_hz=60.0, hop_s=0.01, silence_threshold=0.1, periods_per_window=4.5)
+    return hnr_db
 
-    def test_f0_is_recovered(self):
-        _, f0 = periodicity_track(_buzz(120.0), f0_min_hz=60.0, f0_max_hz=400.0)
-        assert float(np.median(f0)) == pytest.approx(120.0, abs=4.0)
 
-    def test_the_search_range_is_required(self):
+class TestHnr:
+    """The gate's measurement is harmonicity in dB, from Praat's cc method."""
+
+    def test_a_buzz_is_harmonic_and_noise_is_not(self) -> None:
+        """A 100 Hz harmonic buzz reads far above 20 dB HNR; white noise reads below 0 dB."""
+        assert float(np.median(_hnr(_buzz(100.0)))) > 20.0
+        assert float(np.median(_hnr(_noise()))) < 0.0
+
+    def test_the_track_carries_its_own_times(self) -> None:
+        """Times and values come back paired, equally long and increasing."""
+        times, hnr_db = hnr_track(
+            _buzz(100.0), f0_min_hz=60.0, hop_s=0.01, silence_threshold=0.1, periods_per_window=4.5
+        )
+        assert times.shape == hnr_db.shape
+        assert np.all(np.diff(times) > 0)
+
+    def test_every_parameter_is_required(self) -> None:
+        """No default stands in for a value the caller did not choose."""
         with pytest.raises(TypeError):
-            periodicity_track(_buzz(120.0))  # type: ignore[call-arg]
+            hnr_track(_buzz(100.0))  # type: ignore[call-arg]
 
 
 class TestPeriodMarks:
-    def test_marks_are_spaced_by_one_period(self):
+    """Pulse times come from Praat's point process, not from integer-lag multiples."""
+
+    def test_marks_are_spaced_by_one_period(self) -> None:
+        """A 100 Hz buzz yields pulses one 10 ms period apart across the span."""
         marks = period_marks(_buzz(100.0), 0.2, 0.8, f0_min_hz=60.0, f0_max_hz=400.0)
         assert len(marks) > 40
         gaps = np.diff([m.time_s for m in marks])
         assert float(np.median(gaps)) == pytest.approx(0.01, abs=0.001)
 
-    def test_each_mark_carries_its_period_and_amplitude(self):
+    def test_each_mark_carries_its_period_and_amplitude(self) -> None:
+        """Jitter and shimmer read consecutive periods, so each mark carries both quantities."""
         marks = period_marks(_buzz(100.0), 0.2, 0.4, f0_min_hz=60.0, f0_max_hz=400.0)
         m = marks[len(marks) // 2]
         assert isinstance(m, PeriodMark)
         assert m.period_s == pytest.approx(0.01, abs=0.002)
         assert m.amplitude > 0.0
 
-    def test_noise_yields_no_marks(self):
+    def test_mark_times_stay_in_the_recordings_clock(self) -> None:
+        """Praat places pulses on the waveform inside the span, in absolute time."""
+        marks = period_marks(_buzz(100.0), 0.2, 0.8, f0_min_hz=60.0, f0_max_hz=400.0)
+        assert 0.2 <= marks[0].time_s <= 0.25
+        assert marks[-1].time_s <= 0.8
+
+    def test_noise_yields_no_marks(self) -> None:
+        """White noise gives Praat no periodic pulses, so the answer is absent, not zero."""
         assert period_marks(_noise(), 0.2, 0.8, f0_min_hz=60.0, f0_max_hz=400.0) == []
 ```
 
@@ -1854,7 +2016,7 @@ Expected: FAIL at collection.
 - [ ] **Step 3: Implement `api.py`**
 
 ```python
-"""Periodicity, F0 candidates, and glottal period marks as a point process."""
+"""Harmonicity and glottal period marks, through Praat."""
 
 from __future__ import annotations
 
@@ -1863,73 +2025,71 @@ from dataclasses import dataclass
 import numpy as np
 
 from senselab.audio.data_structures import Audio
-
-HOP_S = 0.01
-PERIODICITY_FOR_MARKS = 0.5
+from senselab.audio.tasks.features_extraction.praat_parselmouth import (
+    PARSELMOUTH_AVAILABLE,
+    get_sound,
+    parselmouth,
+)
 
 
 @dataclass(frozen=True)
 class PeriodMark:
-    """One glottal period boundary.
+    """One glottal period, delimited by two consecutive Praat pulses.
 
     Attributes:
-        time_s: Where the boundary sits.
-        period_s: Duration of the period beginning here.
-        amplitude: Peak absolute amplitude within the period.
-        peak: The normalised autocorrelation value that placed it.
+        time_s: The opening pulse, in the recording's clock.
+        period_s: Time to the next pulse.
+        amplitude: Peak absolute amplitude of the waveform within the period.
     """
 
     time_s: float
     period_s: float
     amplitude: float
-    peak: float
 
 
-def _mono(audio: Audio) -> np.ndarray:
-    x = np.asarray(audio.waveform, dtype=np.float64)
-    return x.mean(axis=0) if x.ndim > 1 else x
+def _require_parselmouth() -> None:
+    """Raise when parselmouth is not installed."""
+    if not PARSELMOUTH_AVAILABLE:
+        raise ModuleNotFoundError(
+            "`parselmouth` is not installed. Please install senselab audio dependencies using `pip install senselab`."
+        )
 
 
-def _autocorr_peak(frame: np.ndarray, sr: int, f0_min_hz: float, f0_max_hz: float) -> tuple[float, float]:
-    frame = frame - frame.mean()
-    if not np.any(frame):
-        return 0.0, 0.0
-    ac = np.correlate(frame, frame, "full")[len(frame) - 1 :]
-    if ac[0] <= 0:
-        return 0.0, 0.0
-    ac = ac / ac[0]
-    lo, hi = int(sr / f0_max_hz), min(int(sr / f0_min_hz), len(ac) - 1)
-    if hi <= lo:
-        return 0.0, 0.0
-    lag = lo + int(np.argmax(ac[lo:hi]))
-    return float(ac[lag]), sr / lag
-
-
-def periodicity_track(
-    audio: Audio, *, f0_min_hz: float, f0_max_hz: float, hop_s: float = HOP_S
+def hnr_track(
+    audio: Audio,
+    *,
+    f0_min_hz: float,
+    hop_s: float,
+    silence_threshold: float,
+    periods_per_window: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Normalised autocorrelation peak and its F0, per frame.
+    """Harmonics-to-noise ratio over time, in dB, via Praat's cc method.
 
     Args:
-        audio: Mono audio. A multi-channel input is averaged.
-        f0_min_hz: Lowest F0 to search. No default: no single range serves both low adult and infant voices.
-        f0_max_hz: Highest F0 to search.
-        hop_s: Frame hop. The frame is three times the longest searched period.
+        audio: The recording. ``get_sound`` handles channel merging and resampling.
+        f0_min_hz: Lowest F0 the analysis considers. Read it from ``phonation.f0_min_hz``.
+        hop_s: Praat's ``time_step``.
+        silence_threshold: Praat's silence threshold.
+        periods_per_window: Praat's analysis window length, in periods of ``f0_min_hz``.
 
     Returns:
-        ``(periodicity, f0_hz)``, one value per frame. ``f0_hz`` is meaningless where periodicity is low
-        and is returned alongside it so the two cannot be separated.
+        ``(times_s, hnr_db)``, one value per frame. Frames Praat judges silent carry its floor
+        value rather than being dropped, so the track and its times stay aligned.
+
+    Raises:
+        ModuleNotFoundError: If parselmouth is not installed.
     """
-    x = _mono(audio)
-    sr = audio.sampling_rate
-    frame_len = int(3 * sr / f0_min_hz)
-    hop = max(1, int(hop_s * sr))
-    starts = range(0, max(1, len(x) - frame_len), hop)
-    pairs = [_autocorr_peak(x[s : s + frame_len], sr, f0_min_hz, f0_max_hz) for s in starts]
-    if not pairs:
-        return np.zeros(0), np.zeros(0)
-    per, f0 = zip(*pairs)
-    return np.asarray(per), np.asarray(f0)
+    _require_parselmouth()
+    snd = get_sound(audio)
+    harmonicity = snd.to_harmonicity_cc(
+        time_step=hop_s,
+        minimum_pitch=f0_min_hz,
+        silence_threshold=silence_threshold,
+        periods_per_window=periods_per_window,
+    )
+    times = np.asarray(harmonicity.xs(), dtype=np.float64)
+    values = np.asarray(harmonicity.values, dtype=np.float64).squeeze(0)
+    return times, values
 
 
 def period_marks(
@@ -1939,53 +2099,53 @@ def period_marks(
     *,
     f0_min_hz: float,
     f0_max_hz: float,
-    periodicity_floor: float = PERIODICITY_FOR_MARKS,
 ) -> list[PeriodMark]:
-    """Place glottal period boundaries inside one span.
+    """Glottal period marks inside one span, from Praat's point process.
 
     Args:
         audio: The recording.
         start_s: Span onset.
         end_s: Span offset.
-        f0_min_hz: Lowest F0 to search.
-        f0_max_hz: Highest F0 to search.
-        periodicity_floor: Below this autocorrelation peak, no mark is placed.
+        f0_min_hz: Lowest F0 to search. Read it from ``phonation.f0_min_hz``.
+        f0_max_hz: Highest F0 to search. Read it from ``phonation.f0_max_hz``.
 
     Returns:
-        Marks in time order. Empty when the span never clears ``periodicity_floor`` — absent, not zero.
+        One mark per pair of consecutive pulses whose gap is a plausible period — within
+        ``[1/f0_max_hz, 1/f0_min_hz]``; a longer gap is a voicing break, not a period. Empty when
+        Praat places no pulses — absent, not zero.
+
+    Raises:
+        ModuleNotFoundError: If parselmouth is not installed.
     """
-    x = _mono(audio)
-    sr = audio.sampling_rate
-    i0, i1 = int(start_s * sr), int(end_s * sr)
-    frame_len = int(3 * sr / f0_min_hz)
+    _require_parselmouth()
+    snd = get_sound(audio)
+    part = snd.extract_part(from_time=start_s, to_time=end_s, preserve_times=True)
+    point_process = parselmouth.praat.call(part, "To PointProcess (periodic, cc)", f0_min_hz, f0_max_hz)
+    n_points = int(parselmouth.praat.call(point_process, "Get number of points"))
+    pulses = [float(parselmouth.praat.call(point_process, "Get time from index", i)) for i in range(1, n_points + 1)]
+    x = np.asarray(part.values, dtype=np.float64).squeeze(0)
+    t0 = float(part.xmin)
+    sr = 1.0 / float(part.dx)
     marks: list[PeriodMark] = []
-    cursor = i0
-    while cursor + frame_len < i1:
-        peak, f0 = _autocorr_peak(x[cursor : cursor + frame_len], sr, f0_min_hz, f0_max_hz)
-        if peak < periodicity_floor or f0 <= 0:
-            cursor += max(1, int(0.005 * sr))
+    for opening, closing in zip(pulses, pulses[1:]):
+        period = closing - opening
+        if not (1.0 / f0_max_hz <= period <= 1.0 / f0_min_hz):
             continue
-        period = int(sr / f0)
-        marks.append(
-            PeriodMark(
-                time_s=cursor / sr,
-                period_s=period / sr,
-                amplitude=float(np.abs(x[cursor : cursor + period]).max()),
-                peak=peak,
-            )
-        )
-        cursor += period
+        i0 = max(0, int((opening - t0) * sr))
+        i1 = min(len(x), int((closing - t0) * sr))
+        amplitude = float(np.abs(x[i0:i1]).max()) if i1 > i0 else 0.0
+        marks.append(PeriodMark(time_s=opening, period_s=period, amplitude=amplitude))
     return marks
 ```
 
 And `__init__.py`:
 
 ```python
-"""Periodicity and period marks."""
+"""Phonation measurements through Praat."""
 
-from senselab.audio.tasks.phonation.api import HOP_S, PeriodMark, period_marks, periodicity_track
+from senselab.audio.tasks.phonation.api import PeriodMark, hnr_track, period_marks
 
-__all__ = ["HOP_S", "PeriodMark", "period_marks", "periodicity_track"]
+__all__ = ["PeriodMark", "hnr_track", "period_marks"]
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -1998,12 +2158,18 @@ Expected: all PASS.
 ```bash
 uv run ruff format src/senselab/audio/tasks/phonation/ src/tests/audio/tasks/phonation_test.py
 git add src/senselab/audio/tasks/phonation/ src/tests/audio/tasks/phonation_test.py
-git commit -m "feat(phonation): periodicity track and period marks as a point process
+git commit -m "feat(phonation): HNR track and period marks through Praat
 
-Period marks rather than an F0 contour: at 87 Hz one period is 11.4 ms, so a fixed-hop
-contour is coarser than what it samples and jitter is unrecoverable from it. The F0
-search range is keyword-only with no default, because no single range serves both low
-adult and infant voices."
+A hand-rolled biased autocorrelation normalised at lag zero carries a (1 - lag/N) taper,
+capping a 100 Hz buzz at 0.80 and putting benchmarks/voice.md's 0.933 out of reach, so the
+gate interval and the estimator were on two different scales. Praat's cc harmonicity and
+point process are already wrapped in features_extraction and measure the real quantities.
+The gate's unit is now HNR in dB, so the autocorrelation interval does not transfer and
+both phonation floors stay null in the config until measured on labelled data. Period
+marks are Praat pulse times rather than integer-lag multiples -- jitter is defined between
+consecutive periods and lag quantisation destroys it. The F0 search range stays
+keyword-only with no default, because no single range serves both low adult and infant
+voices."
 ```
 
 ---
@@ -2015,7 +2181,7 @@ adult and infant voices."
 - Test: `src/tests/audio/tasks/redaction_test.py`
 
 **Interfaces:**
-- Consumes: `PiiSpan` (Task 1) for its `start_s`/`end_s`.
+- Consumes: `PiiSpan` (Task 1) for its `start`/`end` — the inherited `ScriptLine` fields; Task 1's tests pin that no `start_s` alias exists.
 - Produces: `RedactionExtent`, `plan_redactions(extents, *, padding_ms) -> list[RedactionExtent]`, `apply_redactions(audio, extents) -> Audio`.
 
 `padding_ms` is keyword-only with no default: `benchmarks/open.md` records that the margin must exceed the *worst* alignment edge error, which is unquantified.
@@ -2037,20 +2203,26 @@ SR = 16000
 
 
 class TestPlanning:
-    def test_padding_is_required(self):
+    """Padding and merging happen before any audio is touched."""
+
+    def test_padding_is_required(self) -> None:
+        """padding_ms has no default; the margin is unmeasured and must be supplied."""
         with pytest.raises(TypeError):
             plan_redactions([RedactionExtent(1.0, 1.2, "PERSON")])  # type: ignore[call-arg]
 
-    def test_extents_are_padded_outward_on_both_sides(self):
+    def test_extents_are_padded_outward_on_both_sides(self) -> None:
+        """100 ms of padding widens (1.0, 1.2) to (0.9, 1.3)."""
         (out,) = plan_redactions([RedactionExtent(1.0, 1.2, "PERSON")], padding_ms=100)
         assert out.start == pytest.approx(0.9)
         assert out.end == pytest.approx(1.3)
 
-    def test_padding_never_produces_a_negative_start(self):
+    def test_padding_never_produces_a_negative_start(self) -> None:
+        """Padding clamps at the start of the recording."""
         (out,) = plan_redactions([RedactionExtent(0.02, 0.1, "PERSON")], padding_ms=100)
         assert out.start == 0.0
 
-    def test_extents_that_overlap_after_padding_are_merged(self):
+    def test_extents_that_overlap_after_padding_are_merged(self) -> None:
+        """Two paddings that touch become one redaction carrying both categories."""
         out = plan_redactions(
             [RedactionExtent(1.0, 1.1, "PERSON"), RedactionExtent(1.25, 1.35, "DATE")], padding_ms=100
         )
@@ -2059,7 +2231,10 @@ class TestPlanning:
 
 
 class TestApplying:
-    def test_the_redacted_region_is_silent_and_the_rest_is_untouched(self):
+    """Applying silences exactly the planned extents and nothing else."""
+
+    def test_the_redacted_region_is_silent_and_the_rest_is_untouched(self) -> None:
+        """Samples inside the extent go to zero; samples outside keep their values."""
         x = np.ones((1, 3 * SR), dtype="float32")
         audio = Audio(waveform=x, sampling_rate=SR)
         out = apply_redactions(audio, [RedactionExtent(1.0, 1.5, "PERSON")])
@@ -2068,7 +2243,8 @@ class TestApplying:
         assert np.all(w[: int(1.0 * SR)] == 1.0)
         assert np.all(w[int(1.5 * SR) :] == 1.0)
 
-    def test_duration_is_preserved(self):
+    def test_duration_is_preserved(self) -> None:
+        """Silencing replaces samples; it never cuts them out."""
         audio = Audio(waveform=np.ones((1, 3 * SR), dtype="float32"), sampling_rate=SR)
         out = apply_redactions(audio, [RedactionExtent(1.0, 1.5, "PERSON")])
         assert np.asarray(out.waveform).shape[-1] == 3 * SR
@@ -2194,7 +2370,7 @@ preserved and the category never carries the matched text."
 - Test: `src/tests/audio/workflows/triage/vocabulary_test.py`, `src/tests/audio/workflows/triage/__init__.py`
 
 **Interfaces:**
-- Consumes: nothing. The fold takes plain verdicts and mappings, so it is testable without a store; the nodes are what read and write `ElementStore` from Task 2.
+- Consumes: nothing. The fold takes plain verdicts and mappings, so it is testable without a store; the nodes are what read and write the `ProvStore` from Task 2.
 - Produces: `Outcome` (`PASS`/`FLAG`/`FAIL`), `KindState`, `RunState`, `Release`, `NodeVerdict`, `FileVerdict`, and `fold_file_verdict(node_verdicts, kind_predictions, ran, release=Release.NOT_ASSESSED) -> FileVerdict`. The follow-on node plan consumes all of these.
 
 Derivation: `verdict.md`.
@@ -2220,7 +2396,10 @@ def _v(node: str, outcome: Outcome, kind: str | None = None) -> NodeVerdict:
 
 
 class TestBranchFailIsNotFileFail:
-    def test_a_branch_failing_on_an_absent_kind_is_expected(self):
+    """A branch with no subject fails without failing the file."""
+
+    def test_a_branch_failing_on_an_absent_kind_is_expected(self) -> None:
+        """SPEECH failing where TAXONOMY predicted no speech leaves the file a pass."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS), _v("AIRWAY", Outcome.PASS, "airway"),
                            _v("SPEECH", Outcome.FAIL, "speech")],
@@ -2231,7 +2410,10 @@ class TestBranchFailIsNotFileFail:
 
 
 class TestContradictions:
-    def test_present_kind_with_a_failing_branch_flags(self):
+    """A branch outcome disagreeing with TAXONOMY's prediction is a flag."""
+
+    def test_present_kind_with_a_failing_branch_flags(self) -> None:
+        """A kind predicted present whose branch found no subject flags the file."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS), _v("SPEECH", Outcome.FAIL, "speech")],
             kind_predictions={"speech": KindState.PRESENT},
@@ -2240,7 +2422,8 @@ class TestContradictions:
         assert out.triage is Outcome.FLAG
         assert any("contradiction" in r.why for r in out.reasons)
 
-    def test_absent_kind_with_a_passing_branch_flags_and_resolves_the_kind(self):
+    def test_absent_kind_with_a_passing_branch_flags_and_resolves_the_kind(self) -> None:
+        """A kind predicted absent whose branch passed flags, and the kind resolves present."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS), _v("AIRWAY", Outcome.PASS, "airway")],
             kind_predictions={"airway": KindState.ABSENT},
@@ -2251,7 +2434,10 @@ class TestContradictions:
 
 
 class TestNeverRan:
-    def test_a_skipped_branch_on_a_present_kind_flags(self):
+    """A branch that never ran is read against what its kind predicted."""
+
+    def test_a_skipped_branch_on_a_present_kind_flags(self) -> None:
+        """Skipping the branch of a kind predicted present flags the file."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS)],
             kind_predictions={"speech": KindState.PRESENT},
@@ -2259,7 +2445,8 @@ class TestNeverRan:
         )
         assert out.triage is Outcome.FLAG
 
-    def test_a_skipped_branch_on_an_absent_kind_is_expected(self):
+    def test_a_skipped_branch_on_an_absent_kind_is_expected(self) -> None:
+        """Skipping the branch of a kind predicted absent is the graph working as designed."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS), _v("AIRWAY", Outcome.PASS, "airway")],
             kind_predictions={"airway": KindState.PRESENT, "speech": KindState.ABSENT},
@@ -2269,7 +2456,10 @@ class TestNeverRan:
 
 
 class TestOrdering:
-    def test_admit_failing_wins_over_everything(self):
+    """The distinct fail cases stay distinct, and no reason is dropped."""
+
+    def test_admit_failing_wins_over_everything(self) -> None:
+        """ADMIT failing is the file verdict regardless of what the branches said."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.FAIL), _v("AIRWAY", Outcome.FLAG, "airway")],
             kind_predictions={},
@@ -2278,7 +2468,8 @@ class TestOrdering:
         assert out.triage is Outcome.FAIL
         assert out.reasons[0].node == "ADMIT"
 
-    def test_every_kind_absent_is_a_different_fail_from_admit(self):
+    def test_every_kind_absent_is_a_different_fail_from_admit(self) -> None:
+        """No branch having a subject fails the file with a reason that is not ADMIT's."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS)],
             kind_predictions={"airway": KindState.ABSENT, "speech": KindState.ABSENT},
@@ -2287,7 +2478,8 @@ class TestOrdering:
         assert out.triage is Outcome.FAIL
         assert out.reasons[-1].node != "ADMIT"
 
-    def test_reasons_carry_every_contribution_not_only_the_deciding_one(self):
+    def test_reasons_carry_every_contribution_not_only_the_deciding_one(self) -> None:
+        """Two flagging branches both appear in the reasons, not just the first."""
         out = fold_file_verdict(
             node_verdicts=[_v("ADMIT", Outcome.PASS), _v("AIRWAY", Outcome.FLAG, "airway"),
                            _v("VOICE", Outcome.FLAG, "voice_no_words")],
@@ -2468,9 +2660,9 @@ Expected: all PASS.
 
 Run:
 ```bash
-uv run pytest src/tests/utils/element_store_test.py src/tests/audio/tasks/ src/tests/audio/workflows/triage/ src/tests/text/tasks/ -q
+uv run pytest src/tests/utils/prov_store_test.py src/tests/audio/tasks/ src/tests/audio/workflows/triage/ src/tests/text/tasks/ -q
 uv run ruff check src/senselab src/tests
-uv run mypy src/senselab/utils/element_store.py src/senselab/audio/workflows/triage/ src/senselab/audio/tasks/envelope src/senselab/audio/tasks/spans src/senselab/audio/tasks/gammatone src/senselab/audio/tasks/phonation src/senselab/audio/tasks/redaction
+uv run mypy src/senselab/utils/prov_store.py src/senselab/audio/workflows/triage/ src/senselab/audio/tasks/envelope src/senselab/audio/tasks/spans src/senselab/audio/tasks/gammatone src/senselab/audio/tasks/phonation src/senselab/audio/tasks/redaction src/senselab/audio/tasks/disruptions
 ```
 Expected: tests pass, ruff clean, mypy clean.
 
@@ -2498,11 +2690,12 @@ every contributing reason rather than only the deciding one."
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `Disruptions` (frozen dataclass) and `detect_disruptions(audio, start_s, end_s, *, clip_headroom=0.999, min_clip_run=3, min_dropout_ms=10.0, discontinuity_threshold=0.5) -> Disruptions`.
+- Produces: `Disruptions` (frozen dataclass) and `detect_disruptions(audio, start_s, end_s, *, clip_headroom, min_clip_run, min_dropout_ms, discontinuity_threshold) -> Disruptions`.
 
 Derivation: `branch-speech.md` step 8. Counts and extents, never a score. The four parameters are
-conventional rather than fitted, and the docstring says so; the *tolerance* — how much is too much — has
-no value and is not this function's business.
+required arguments; their values live in `disruptions.*` of Task 3's config, whose derivation records
+that they are conventional rather than fitted. The *tolerance* — how much is too much — has no value
+(`quality.disruption_*` is null) and is not this function's business.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2529,65 +2722,94 @@ def _tone(seconds: float = 1.0, amp: float = 0.5, freq: float = 200.0) -> np.nda
     return amp * np.sin(2 * np.pi * freq * t)
 
 
+def _detect(audio: Audio, start_s: float, end_s: float) -> Disruptions:
+    """Run detect_disruptions with the config's conventional values; the fixture supplies the literals."""
+    return detect_disruptions(
+        audio, start_s, end_s, clip_headroom=0.999, min_clip_run=3, min_dropout_ms=10.0,
+        discontinuity_threshold=0.5,
+    )
+
+
 class TestClipping:
-    def test_a_clean_tone_has_no_clipping(self):
-        d = detect_disruptions(_audio(_tone()), 0.0, 1.0)
+    """Clipping is a run of samples at the headroom, never a single sample."""
+
+    def test_a_clean_tone_has_no_clipping(self) -> None:
+        """A half-scale tone reports zero clipped runs and zero clipped time."""
+        d = _detect(_audio(_tone()), 0.0, 1.0)
         assert d.clipped_runs == 0
         assert d.clipped_s == 0.0
 
-    def test_a_saturated_tone_is_clipped(self):
-        d = detect_disruptions(_audio(np.clip(_tone(amp=2.0), -1.0, 1.0)), 0.0, 1.0)
+    def test_a_saturated_tone_is_clipped(self) -> None:
+        """A tone clipped at full scale reports a run on every half cycle."""
+        d = _detect(_audio(np.clip(_tone(amp=2.0), -1.0, 1.0)), 0.0, 1.0)
         assert d.clipped_runs >= 100, "200 Hz for 1 s saturates on every half cycle"
         assert d.clipped_s > 0.1
 
-    def test_a_single_full_scale_sample_is_not_clipping(self):
+    def test_a_single_full_scale_sample_is_not_clipping(self) -> None:
+        """One sample at full scale is below min_clip_run and does not count."""
         x = _tone()
         x[5000] = 1.0
-        assert detect_disruptions(_audio(x), 0.0, 1.0).clipped_runs == 0
+        assert _detect(_audio(x), 0.0, 1.0).clipped_runs == 0
 
 
 class TestDropouts:
-    def test_a_zero_run_is_a_dropout(self):
+    """A dropout is a run of exact zeros at least min_dropout_ms long."""
+
+    def test_a_zero_run_is_a_dropout(self) -> None:
+        """A 250 ms zero run is one dropout of that duration."""
         x = _tone()
         x[4000:8000] = 0.0
-        d = detect_disruptions(_audio(x), 0.0, 1.0)
+        d = _detect(_audio(x), 0.0, 1.0)
         assert d.dropout_runs == 1
         assert d.dropout_s == pytest.approx(4000 / SR, abs=0.002)
 
-    def test_a_run_shorter_than_the_minimum_is_not_a_dropout(self):
+    def test_a_run_shorter_than_the_minimum_is_not_a_dropout(self) -> None:
+        """A 20-sample zero run is shorter than 10 ms and does not count."""
         x = _tone()
         x[4000:4020] = 0.0
-        assert detect_disruptions(_audio(x), 0.0, 1.0).dropout_runs == 0
+        assert _detect(_audio(x), 0.0, 1.0).dropout_runs == 0
 
 
 class TestDiscontinuities:
-    def test_a_step_is_a_discontinuity(self):
+    """A discontinuity is a sample-to-sample jump beyond the threshold."""
+
+    def test_a_step_is_a_discontinuity(self) -> None:
+        """A 0.9 step in an otherwise smooth tone is counted."""
         x = _tone(amp=0.1)
         x[8000:] += 0.9
-        assert detect_disruptions(_audio(x), 0.0, 1.0).discontinuities >= 1
+        assert _detect(_audio(x), 0.0, 1.0).discontinuities >= 1
 
-    def test_a_smooth_tone_has_none(self):
-        assert detect_disruptions(_audio(_tone()), 0.0, 1.0).discontinuities == 0
+    def test_a_smooth_tone_has_none(self) -> None:
+        """A continuous tone produces zero discontinuities."""
+        assert _detect(_audio(_tone()), 0.0, 1.0).discontinuities == 0
 
 
 class TestDcOffset:
-    def test_a_bias_is_reported(self):
-        d = detect_disruptions(_audio(_tone() + 0.2), 0.0, 1.0)
+    """DC offset is the mean sample value over the span."""
+
+    def test_a_bias_is_reported(self) -> None:
+        """A +0.2 bias reads back as 0.2."""
+        d = _detect(_audio(_tone() + 0.2), 0.0, 1.0)
         assert d.dc_offset == pytest.approx(0.2, abs=0.01)
 
-    def test_a_centred_signal_reports_near_zero(self):
-        assert abs(detect_disruptions(_audio(_tone()), 0.0, 1.0).dc_offset) < 0.01
+    def test_a_centred_signal_reports_near_zero(self) -> None:
+        """A zero-mean tone reads near zero."""
+        assert abs(_detect(_audio(_tone()), 0.0, 1.0).dc_offset) < 0.01
 
 
 class TestScoping:
-    def test_only_the_requested_span_is_measured(self):
+    """Measurement is scoped to the requested span."""
+
+    def test_only_the_requested_span_is_measured(self) -> None:
+        """Clipping in the first second is invisible to a span that excludes it."""
         x = _tone(seconds=3.0)
         x[: SR] = np.clip(_tone(amp=2.0)[: SR], -1.0, 1.0)
-        assert detect_disruptions(_audio(x), 1.5, 2.5).clipped_runs == 0
-        assert detect_disruptions(_audio(x), 0.0, 1.0).clipped_runs > 0
+        assert _detect(_audio(x), 1.5, 2.5).clipped_runs == 0
+        assert _detect(_audio(x), 0.0, 1.0).clipped_runs > 0
 
-    def test_a_clean_span_reports_zero_rather_than_nothing(self):
-        d = detect_disruptions(_audio(_tone()), 0.0, 1.0)
+    def test_a_clean_span_reports_zero_rather_than_nothing(self) -> None:
+        """A clean span is zeros — a different statement from a span nobody measured."""
+        d = _detect(_audio(_tone()), 0.0, 1.0)
         assert isinstance(d, Disruptions)
         assert (d.clipped_runs, d.dropout_runs, d.discontinuities) == (0, 0, 0)
 ```
@@ -2613,11 +2835,6 @@ from dataclasses import dataclass
 import numpy as np
 
 from senselab.audio.data_structures import Audio
-
-CLIP_HEADROOM = 0.999
-MIN_CLIP_RUN = 3
-MIN_DROPOUT_MS = 10.0
-DISCONTINUITY_THRESHOLD = 0.5
 
 
 @dataclass(frozen=True)
@@ -2673,25 +2890,25 @@ def detect_disruptions(
     start_s: float,
     end_s: float,
     *,
-    clip_headroom: float = CLIP_HEADROOM,
-    min_clip_run: int = MIN_CLIP_RUN,
-    min_dropout_ms: float = MIN_DROPOUT_MS,
-    discontinuity_threshold: float = DISCONTINUITY_THRESHOLD,
+    clip_headroom: float,
+    min_clip_run: int,
+    min_dropout_ms: float,
+    discontinuity_threshold: float,
 ) -> Disruptions:
     """Measure disruptions inside one span.
-
-    The four parameters are conventional rather than fitted: a single sample at full scale is not
-    clipping, which is why ``min_clip_run`` exists, and the values are the usual ones rather than values
-    derived from labelled verdicts.
 
     Args:
         audio: The recording. A multi-channel input is averaged.
         start_s: Span onset.
         end_s: Span offset.
-        clip_headroom: A sample at or beyond this absolute value counts as clipped.
-        min_clip_run: Shortest run of clipped samples that counts as a clipping event.
-        min_dropout_ms: Shortest run of exact zeros that counts as a dropout.
-        discontinuity_threshold: Absolute sample-to-sample jump that counts as a discontinuity.
+        clip_headroom: A sample at or beyond this absolute value counts as clipped. Read it from
+            ``disruptions.clip_headroom``.
+        min_clip_run: Shortest run of clipped samples that counts as a clipping event. Read it from
+            ``disruptions.min_clip_run``.
+        min_dropout_ms: Shortest run of exact zeros that counts as a dropout. Read it from
+            ``disruptions.min_dropout_ms``.
+        discontinuity_threshold: Absolute sample-to-sample jump that counts as a discontinuity. Read
+            it from ``disruptions.discontinuity_threshold``.
 
     Returns:
         The span's disruptions. Every count is exact; a clean span reports zeros.
@@ -2723,20 +2940,9 @@ And `__init__.py`:
 ```python
 """Recording disruptions."""
 
-from senselab.audio.tasks.disruptions.api import (
-    CLIP_HEADROOM,
-    DISCONTINUITY_THRESHOLD,
-    MIN_CLIP_RUN,
-    MIN_DROPOUT_MS,
-    Disruptions,
-    detect_disruptions,
-)
+from senselab.audio.tasks.disruptions.api import Disruptions, detect_disruptions
 
 __all__ = [
-    "CLIP_HEADROOM",
-    "DISCONTINUITY_THRESHOLD",
-    "MIN_CLIP_RUN",
-    "MIN_DROPOUT_MS",
     "Disruptions",
     "detect_disruptions",
 ]
@@ -2757,8 +2963,10 @@ git commit -m "feat(disruptions): clipping, dropouts, discontinuities and DC off
 SQUIM is a speech-quality estimator trained on particular degradations, so hard clipping
 can read as acceptable or as generic noise rather than as the defect it is. These are
 counts and extents rather than a score, scoped to a span, and a clean span reports zeros
--- which is a different statement from a span nobody measured. How much is too much is a
-tolerance nobody has derived and is the caller's decision."
+-- which is a different statement from a span nobody measured. The four detection
+parameters are required arguments read from the triage config, whose derivation records
+that they are conventional rather than fitted. How much is too much is a tolerance nobody
+has derived and is the caller's decision."
 ```
 
 ---
@@ -2767,7 +2975,7 @@ tolerance nobody has derived and is the caller's decision."
 
 - **The nine node implementations.** They consume everything above and are a second plan.
 - **The Nextflow orchestration**, which already exists at `specs/20260817-triage-workflow-dag/nextflow/` and lints clean with a passing stub run.
-- **Anything requiring an undecided parameter.** SQUIM thresholds, the phonation gate's floors and the redaction margin have no justified value, so the functions above take them as keyword-only arguments with no default. A caller must supply one, and `benchmarks/open.md` records what would settle each.
+- **Anything requiring an undecided parameter.** SQUIM thresholds, the phonation gate's floors and the redaction margin have no justified value: each is `null` in Task 3's config, `require()` raises on it naming what would settle it, and a caller must supply an override. Where such a value is also a function parameter — `padding_ms` — it is keyword-only with no default. `benchmarks/open.md` records them all.
 
 ## Known deviations from the design, to resolve before the node plan
 
