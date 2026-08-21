@@ -441,7 +441,7 @@
 </span><span id="L-352"><a href="#L-352"><span class="linenos">352</span></a><span class="sd">            mutable ``revision`` back as if it were one; the caller can retry</span>
 </span><span id="L-353"><a href="#L-353"><span class="linenos">353</span></a><span class="sd">            against the Hub instead (see ``model_revision._resolve_uncached``).</span>
 </span><span id="L-354"><a href="#L-354"><span class="linenos">354</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-355"><a href="#L-355"><span class="linenos">355</span></a>    <span class="k">if</span> <span class="n">_SHA_RE</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">revision</span><span class="p">):</span>
+</span><span id="L-355"><a href="#L-355"><span class="linenos">355</span></a>    <span class="k">if</span> <span class="n">_SHA_RE</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="n">revision</span><span class="p">):</span>
 </span><span id="L-356"><a href="#L-356"><span class="linenos">356</span></a>        <span class="k">return</span> <span class="n">revision</span>
 </span><span id="L-357"><a href="#L-357"><span class="linenos">357</span></a>
 </span><span id="L-358"><a href="#L-358"><span class="linenos">358</span></a>    <span class="kn">from</span><span class="w"> </span><span class="nn">huggingface_hub</span><span class="w"> </span><span class="kn">import</span> <span class="n">constants</span><span class="p">,</span> <span class="n">try_to_load_from_cache</span>
