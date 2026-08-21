@@ -228,6 +228,12 @@ def test_recording_a_non_sha_is_refused() -> None:
         record_resolution("org/model", "main", "main")
 
 
+def test_recording_a_newline_suffixed_sha_is_refused() -> None:
+    """Unstripped subprocess stdout must not enter the manifest looking like a resolved commit."""
+    with pytest.raises(RevisionResolutionError):
+        record_resolution("org/model", "main", SHA_A + "\n")
+
+
 def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """The mandatory model_info round-trip is retried on a transient error, not fatal.
 
