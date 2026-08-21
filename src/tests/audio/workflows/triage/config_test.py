@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 import senselab.audio.tasks
+from senselab.audio.tasks.health_acoustics.hear import HEAR_WINDOW_SECONDS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 
 
@@ -24,6 +25,11 @@ class TestMeasuredValues:
         assert cfg.require("preemphasis.coefficient") == 0.97
         assert cfg.require("floor.eval_grid_s") == 0.1
         assert cfg.require("phonation.periods_per_window") == 4.5
+
+    def test_the_hear_window_agrees_with_the_model_imposed_constant(self) -> None:
+        """``hear.window_s`` reads back equal to ``HEAR_WINDOW_SECONDS``."""
+        cfg = load_triage_config()
+        assert cfg.require("hear.window_s") == HEAR_WINDOW_SECONDS
 
     def test_identity_travels_with_the_config(self) -> None:
         """The config carries its name, version and hash."""
