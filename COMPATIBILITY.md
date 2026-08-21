@@ -1,5 +1,8 @@
 # Senselab Compatibility Matrix
 
+Hand-maintained. The per-function dependency table is generated from `COMPATIBILITY_MATRIX`
+into `docs/function-dependencies.md` by the docs build (`scripts/generate-compat-matrix.py`).
+
 Minimum and maximum tested versions of senselab dependencies across Python versions.
 Lower bounds verified by pinning each package to its minimum in an isolated venv.
 Upper bounds verified by running the full test suite (490+ tests passing).
@@ -61,6 +64,9 @@ They are not installed in the main senselab environment.
 | diarizen | 3.12 | >=2.1,<2.9 | forked pyannote-audio (git), lightning, speechbrain | Diarization only, no transcription (weights CC BY-NC 4.0 — non-commercial only) |
 | driftse | 3.11 | >=2.3 | torchaudio>=2.3, librosa>=0.10.2 | One-step (1 NFE) speech enhancement, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08) |
 | unasdiff | 3.10 | ==2.6.0 | torchaudio==2.6.0, numpy==1.23.5, librosa==0.10.2.post1 | Unsupervised speech/sound source separation via two diffusion priors, reachable only by explicit model id (licence unresolved upstream, request open since 2026-08-08, mirror private) |
+| clearvoice | 3.11 | >=2.0.1 | torchaudio>=2.0.2, numpy<2, librosa==0.10.2.post1, opencv, scenedetect | ClearerVoice-Studio inference: 3 speech enhancers, a 2-speaker separator, a 48 kHz super-resolver, and an audio-visual target-speaker extractor (Apache-2.0; the extractor also needs ffmpeg on PATH) |
+| clearvoice-speechscore | 3.11 | >=2.0.1 | museval, pesq, pystoi, onnxruntime, gammatone, pysptk, pyworld, xls_r_sqa | SpeechScore's 18 speech-quality metric families, 4 of them reference-free (pinned sparse git clone; needs git on PATH) |
+| hear | 3.11 | none | tensorflow>=2.16,<3, soundfile | Google HeAR health-acoustic embeddings (512-d, fixed 2 s window) + its bundled 8-label health sound event detector; TensorFlow SavedModels, so no torch in this venv (weights gated: Health AI Developer Foundations terms) |
 
 ## System Dependencies
 

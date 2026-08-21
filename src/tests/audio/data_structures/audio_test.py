@@ -5,7 +5,9 @@ from pathlib import Path
 from typing import List, Tuple
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
+import soundfile as sf
 import torch
 import torchaudio
 
@@ -192,7 +194,7 @@ def test_audio_save_to_file(audio_fixture: str, request: pytest.FixtureRequest) 
         temp_file_path = Path(temp_dir) / "test_audio.wav"
 
         # Call save_to_file to save the audio
-        audio_sample.save_to_file(file_path=temp_file_path, format="wav", bits_per_sample=16)
+        audio_sample.save_to_file(file_path=temp_file_path, format="wav", subtype="PCM_16")
 
         # Check if the file was created
         assert temp_file_path.exists(), "The audio file was not saved."
@@ -371,4 +373,115 @@ def test_window_generator_step_greater_than_audio(audio_fixture: str, request: p
     assert len(windowed_audios) == expected_windows, (
         f"Should yield {expected_windows} \
         windows when step size is greater than audio length. Yielded {len(windowed_audios)}."
+    )
+
+
+# --- Windowed reads: the file's timeline and the returned content must agree. ---
+
+STEP_SAMPLING_RATE = 22050
+STEP_HALF_SAMPLES = 66150  # 3.0 s of loud content, then 3.0 s of quiet content
+STEP_QUIET_SCALE = 1e-3  # the quiet half sits 60 dB below the loud half
+STEP_WINDOW_SAMPLES = 4410  # 0.2 s
+STEP_WINDOW_LEAD_IN_SAMPLES = 512  # window starts this far inside the quiet half
+STEP_FORMATS = [".wav", ".flac", ".mp3"]
+
+
+def write_amplitude_step_file(path: Path) -> None:
+    """Writes a two-half file: uniform noise, then the same noise 60 dB down.
+
+    Args:
+        path: Destination path; the container is inferred from its suffix.
+    """
+    generator = torch.Generator().manual_seed(41)
+    loud = torch.rand(STEP_HALF_SAMPLES, generator=generator) * 1.8 - 0.9
+    quiet = (torch.rand(STEP_HALF_SAMPLES, generator=generator) * 1.8 - 0.9) * STEP_QUIET_SCALE
+    signal = torch.cat([loud, quiet]).unsqueeze(0)
+    Audio(waveform=signal, sampling_rate=STEP_SAMPLING_RATE).save_to_file(path)
+
+
+def read_reference_window(path: Path, start: int, frames: int) -> torch.Tensor:
+    """Reads a sample range of the same file with soundfile, as (num_channels, num_samples)."""
+    data, _ = sf.read(str(path), dtype="float32", start=start, frames=frames, always_2d=True)
+    return torch.from_numpy(np.ascontiguousarray(data.T))
+
+
+@pytest.mark.parametrize("suffix", STEP_FORMATS)
+def test_windowed_read_matches_an_independent_decoder(tmp_path: Path, suffix: str) -> None:
+    """A window read by Audio must hold the samples another decoder reads over the same range."""
+    path = tmp_path / f"amplitude_step{suffix}"
+    write_amplitude_step_file(path)
+
+    start = STEP_HALF_SAMPLES + STEP_WINDOW_LEAD_IN_SAMPLES
+    audio = Audio(
+        filepath=str(path),
+        offset_in_sec=start / STEP_SAMPLING_RATE,
+        duration_in_sec=STEP_WINDOW_SAMPLES / STEP_SAMPLING_RATE,
+    )
+    reference = read_reference_window(path, start, STEP_WINDOW_SAMPLES)
+
+    assert audio.waveform.shape == reference.shape, (
+        f"{suffix}: expected {tuple(reference.shape)} samples, got {tuple(audio.waveform.shape)}"
+    )
+    deviation = (audio.waveform - reference).abs().max().item()
+    assert deviation < 1e-3, f"{suffix}: window differs from soundfile over the same range by {deviation:.3e}"
+
+
+@pytest.mark.parametrize("suffix", STEP_FORMATS)
+def test_windowed_read_of_a_quiet_window_holds_no_loud_content(tmp_path: Path, suffix: str) -> None:
+    """A window lying wholly inside the quiet half must not come back carrying the loud half."""
+    path = tmp_path / f"amplitude_step{suffix}"
+    write_amplitude_step_file(path)
+
+    loud_peak = read_reference_window(path, 0, STEP_HALF_SAMPLES).abs().max().item()
+    audio = Audio(
+        filepath=str(path),
+        offset_in_sec=(STEP_HALF_SAMPLES + STEP_WINDOW_LEAD_IN_SAMPLES) / STEP_SAMPLING_RATE,
+        duration_in_sec=STEP_WINDOW_SAMPLES / STEP_SAMPLING_RATE,
+    )
+
+    window_peak = audio.waveform.abs().max().item()
+    assert window_peak < 0.05 * loud_peak, (
+        f"{suffix}: quiet window peaks at {window_peak:.6f}, "
+        f"{window_peak / loud_peak:.3f} of the loud half's {loud_peak:.6f}"
+    )
+
+
+@pytest.mark.parametrize("suffix", STEP_FORMATS)
+def test_offset_only_read_starts_at_the_requested_offset(tmp_path: Path, suffix: str) -> None:
+    """Reading from an offset to the end must return exactly the tail beginning at that offset."""
+    path = tmp_path / f"amplitude_step{suffix}"
+    write_amplitude_step_file(path)
+
+    audio = Audio(filepath=str(path), offset_in_sec=STEP_HALF_SAMPLES / STEP_SAMPLING_RATE)
+    reference = read_reference_window(path, STEP_HALF_SAMPLES, -1)
+
+    assert audio.waveform.shape[-1] == reference.shape[-1], (
+        f"{suffix}: expected {reference.shape[-1]} samples from the offset, got {audio.waveform.shape[-1]}"
+    )
+    deviation = (audio.waveform - reference).abs().max().item()
+    assert deviation < 1e-3, f"{suffix}: tail differs from soundfile over the same range by {deviation:.3e}"
+
+
+@pytest.mark.parametrize("suffix", STEP_FORMATS)
+def test_consecutive_windows_concatenate_to_the_full_decode(tmp_path: Path, suffix: str) -> None:
+    """Windowed reads tiling the file must concatenate back to the whole-file decode."""
+    path = tmp_path / f"amplitude_step{suffix}"
+    write_amplitude_step_file(path)
+
+    whole = Audio(filepath=str(path)).waveform
+    chunk_in_sec = 0.5
+    duration_in_sec = whole.shape[-1] / STEP_SAMPLING_RATE
+    pieces = []
+    start_in_sec = 0.0
+    while start_in_sec < duration_in_sec:
+        chunk = min(chunk_in_sec, duration_in_sec - start_in_sec)
+        pieces.append(Audio(filepath=str(path), offset_in_sec=start_in_sec, duration_in_sec=chunk).waveform)
+        start_in_sec += chunk
+    tiled = torch.cat(pieces, dim=-1)
+
+    assert tiled.shape == whole.shape, (
+        f"{suffix}: tiled windows give {tuple(tiled.shape)} samples against {tuple(whole.shape)} for the full decode"
+    )
+    assert torch.equal(tiled, whole), (
+        f"{suffix}: tiled windows differ from the full decode by {(tiled - whole).abs().max().item():.3e}"
     )
