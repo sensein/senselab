@@ -556,3 +556,35 @@ def test_the_real_detector_rejects_a_non_two_second_window(tmp_path: Path) -> No
     )
     with pytest.raises(RuntimeError, match="Graph execution error"):
         parse_subprocess_result(completed, "HeAR")
+
+
+def test_span_to_hear_buffer_is_exactly_two_seconds() -> None:
+    """The buffer is exactly the detector's 2 s window at the input rate."""
+    sr = 16000
+    audio = Audio(
+        waveform=np.random.default_rng(0).standard_normal((1, 5 * sr)).astype("float32") * 0.1,
+        sampling_rate=sr,
+    )
+    buf = hear.span_to_hear_buffer(audio, 1.0, 1.35)
+    assert buf.waveform.shape[-1] == 2 * sr
+    assert buf.sampling_rate == sr
+
+
+def test_span_to_hear_buffer_centres_the_span_and_zeroes_the_rest() -> None:
+    """Everything outside the span is silence, never neighbouring audio."""
+    sr = 16000
+    x = np.ones((1, 3 * sr), dtype="float32")
+    buf = hear.span_to_hear_buffer(Audio(waveform=x, sampling_rate=sr), 1.0, 1.5)
+    w = np.asarray(buf.waveform).squeeze()
+    span_len = int(0.5 * sr)
+    offset = (2 * sr - span_len) // 2
+    assert np.all(w[:offset] == 0.0), "outside the span must be silence, not neighbouring audio"
+    assert np.all(w[offset : offset + span_len] == 1.0)
+
+
+def test_a_span_longer_than_two_seconds_is_refused() -> None:
+    """A span the window cannot hold raises rather than being truncated."""
+    sr = 16000
+    audio = Audio(waveform=np.zeros((1, 5 * sr), dtype="float32"), sampling_rate=sr)
+    with pytest.raises(ValueError, match="longer than the 2 s"):
+        hear.span_to_hear_buffer(audio, 1.0, 4.0)
