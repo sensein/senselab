@@ -1,3 +1,8 @@
+"""SUPERSEDED. Uses a global floor read from a stored .npz -- the rule benchmarks/spans.md
+retracted. It reports 7 spans at K=18 where the shipped rolling-local-floor rule reports 6.
+Use localgate.py, which implements the current rule.
+"""
+
 import numpy as np
 from scipy.signal import find_peaks
 d=np.load("/Users/satra/.claude/jobs/295c3f8a/tmp/stage1.npz")
