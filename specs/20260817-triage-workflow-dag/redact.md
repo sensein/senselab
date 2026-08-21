@@ -46,6 +46,18 @@ PII scan on its own output**, and:
 transcribe a region that still contains intelligible speech, so a clean re-scan is consistent with an
 incomplete redaction. Verification bounds the failure; it does not prove the negative.
 
+## Two exfiltration paths that are not the artifact
+
+**An error message is a disclosure path.** `plan_redactions` refuses an invalid extent by raising with
+that extent's bounds and category in the message, so the guarantee that a category never carries matched
+text is what keeps the exception out of the logs. This module trusts the construction boundary for that,
+which makes the membership check at the node building extents from findings more than a nicety: it is
+what secures the error message as well as the artifact.
+
+**`+` is a reserved character in a category label.** Merged extents join their categories with it and
+re-planning splits on it, so a label containing `+` would be silently decomposed. No label in
+[`taxonomy.md`](taxonomy.md) contains one, and none may.
+
 ## The store cannot be made releasable
 
 The store holds the unredacted transcript with provenance, by design. Redaction produces a **derivative**
