@@ -452,7 +452,7 @@
 </span><span id="L-363"><a href="#L-363"><span class="linenos">363</span></a>    <span class="k">try</span><span class="p">:</span>
 </span><span id="L-364"><a href="#L-364"><span class="linenos">364</span></a>        <span class="k">if</span> <span class="n">ref_file</span><span class="o">.</span><span class="n">is_file</span><span class="p">():</span>
 </span><span id="L-365"><a href="#L-365"><span class="linenos">365</span></a>            <span class="n">sha</span> <span class="o">=</span> <span class="n">ref_file</span><span class="o">.</span><span class="n">read_text</span><span class="p">()</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-</span><span id="L-366"><a href="#L-366"><span class="linenos">366</span></a>            <span class="k">if</span> <span class="n">_SHA_RE</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">sha</span><span class="p">):</span>
+</span><span id="L-366"><a href="#L-366"><span class="linenos">366</span></a>            <span class="k">if</span> <span class="n">_SHA_RE</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="n">sha</span><span class="p">):</span>
 </span><span id="L-367"><a href="#L-367"><span class="linenos">367</span></a>                <span class="k">return</span> <span class="n">sha</span>
 </span><span id="L-368"><a href="#L-368"><span class="linenos">368</span></a>    <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
 </span><span id="L-369"><a href="#L-369"><span class="linenos">369</span></a>        <span class="k">pass</span>
@@ -772,7 +772,7 @@
 </span><span id="L-683"><a href="#L-683"><span class="linenos">683</span></a><span class="sd">    A failure is ignored: on a group-owned tree the file may belong to another user, and the pinned</span>
 </span><span id="L-684"><a href="#L-684"><span class="linenos">684</span></a><span class="sd">    load path (an explicit ``revision=&lt;sha&gt;``) does not depend on this pointer.</span>
 </span><span id="L-685"><a href="#L-685"><span class="linenos">685</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="L-686"><a href="#L-686"><span class="linenos">686</span></a>    <span class="k">if</span> <span class="n">_SHA_RE</span><span class="o">.</span><span class="n">match</span><span class="p">(</span><span class="n">ref</span><span class="p">):</span>
+</span><span id="L-686"><a href="#L-686"><span class="linenos">686</span></a>    <span class="k">if</span> <span class="n">_SHA_RE</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="n">ref</span><span class="p">):</span>
 </span><span id="L-687"><a href="#L-687"><span class="linenos">687</span></a>        <span class="k">return</span>
 </span><span id="L-688"><a href="#L-688"><span class="linenos">688</span></a>    <span class="n">refs_dir</span> <span class="o">=</span> <span class="n">repo_root</span> <span class="o">/</span> <span class="s2">&quot;refs&quot;</span>
 </span><span id="L-689"><a href="#L-689"><span class="linenos">689</span></a>    <span class="k">try</span><span class="p">:</span>
