@@ -234,6 +234,57 @@ def test_recording_a_newline_suffixed_sha_is_refused() -> None:
         record_resolution("org/model", "main", SHA_A + "\n")
 
 
+def test_a_newline_suffixed_sha_does_not_short_circuit_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A newline-suffixed full SHA — unstripped ``git rev-parse`` output — is not returned unchanged.
+
+    It is not a commit, so it goes through resolution like any other ref instead of riding the
+    already-a-SHA short-circuit into provenance.
+    """
+    monkeypatch.setattr("senselab.utils.model_revision._resolve_uncached", lambda *a, **k: SHA_A)
+    assert resolve_revision("org/model", SHA_A + "\n") == SHA_A
+
+
+def test_a_newline_suffixed_manifest_entry_is_re_resolved(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A manifest entry carrying a trailing newline reads as absent, not as the run's answer."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): SHA_A + "\n"}))
+    monkeypatch.setattr("senselab.utils.model_revision._resolve_uncached", lambda *a, **k: SHA_B)
+    assert resolve_revision("org/model", "main") == SHA_B
+
+
+def test_a_newline_suffixed_winner_is_overwritten_not_adopted() -> None:
+    """``record_resolution`` replaces a newline-suffixed manifest winner instead of handing it back."""
+    manifest_path().parent.mkdir(parents=True, exist_ok=True)
+    manifest_path().write_text(json.dumps({manifest_key("org/model", "main"): SHA_A + "\n"}))
+    assert record_resolution("org/model", "main", SHA_B) == SHA_B
+    assert read_manifest()[manifest_key("org/model", "main")] == SHA_B
+
+
+def test_a_newline_suffixed_local_cache_answer_falls_through_to_the_hub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed local-cache answer degrades to a Hub lookup instead of becoming the resolved commit."""
+    import senselab.utils.model_revision as mr
+
+    class _Info:
+        sha = SHA_B
+
+    monkeypatch.setattr("senselab.utils.dependencies._get_cached_commit_hash", lambda *a, **k: SHA_A + "\n")
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", lambda _self, *, repo_id, revision: _Info())
+    assert mr._resolve_uncached("org/model", "main") == SHA_B
+
+
+def test_a_newline_suffixed_hub_sha_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Hub answer carrying a trailing newline raises rather than leaving ``_resolve_uncached`` as a commit."""
+    import senselab.utils.model_revision as mr
+
+    class _Info:
+        sha = SHA_A + "\n"
+
+    monkeypatch.setattr("senselab.utils.dependencies._get_cached_commit_hash", lambda *a, **k: None)
+    monkeypatch.setattr("huggingface_hub.HfApi.model_info", lambda _self, *, repo_id, revision: _Info())
+    with pytest.raises(RevisionResolutionError, match="no usable commit SHA"):
+        mr._resolve_uncached("org/model", "main")
+
+
 def test_resolution_retries_a_transient_hub_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """The mandatory model_info round-trip is retried on a transient error, not fatal.
 
