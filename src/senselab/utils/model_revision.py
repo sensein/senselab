@@ -150,7 +150,7 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
     """
     # Reject a non-SHA at the door rather than only filtering it on read: an entry is immutable
     # for the run's life, so one bad write poisons every later participant that adopts it.
-    if not _SHA_RE.match(sha):
+    if not _SHA_RE.fullmatch(sha):
         raise RevisionResolutionError(
             f"Refusing to record {sha!r} as the commit for {manifest_key(repo_id, ref)}: "
             "a run manifest entry must be a 40-hex commit SHA."

@@ -352,7 +352,7 @@ def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
             mutable ``revision`` back as if it were one; the caller can retry
             against the Hub instead (see ``model_revision._resolve_uncached``).
     """
-    if _SHA_RE.match(revision):
+    if _SHA_RE.fullmatch(revision):
         return revision
 
     from huggingface_hub import constants, try_to_load_from_cache
