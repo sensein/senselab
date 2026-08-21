@@ -177,7 +177,7 @@ def record_resolution(repo_id: str, ref: str, sha: str, run: Optional[str] = Non
         # *any* present value as authoritative, so a corrupt entry would be handed back to every
         # later caller -- and because entries are immutable for the run's life, nothing would ever
         # dislodge it. Overwriting a non-SHA is the one case where replacing an entry is correct.
-        if winner is not None and _SHA_RE.match(winner):
+        if winner is not None and _SHA_RE.fullmatch(winner):
             return winner
         current[key] = sha
         # Write-then-rename, not write_text directly: a writer killed mid-write
@@ -217,7 +217,7 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
         # cache is the normal first-resolution case, not an anomaly.
         logger.debug("Local cache lookup failed for %s@%s: %s", repo_id, ref, exc)
         local = None
-    if local and _SHA_RE.match(local):
+    if local and _SHA_RE.fullmatch(local):
         return local
 
     try:
@@ -246,7 +246,7 @@ def _resolve_uncached(repo_id: str, ref: str, token: Optional[str] = None) -> st
             f"Cannot resolve {repo_id}@{ref} to a commit SHA: {exc}. "
             "Refusing to load through a mutable ref — the result's provenance would name no commit."
         ) from exc
-    if not sha or not _SHA_RE.match(str(sha)):
+    if not sha or not _SHA_RE.fullmatch(str(sha)):
         raise RevisionResolutionError(f"Hub returned no usable commit SHA for {repo_id}@{ref} (got {sha!r})")
     return str(sha)
 
@@ -261,7 +261,7 @@ def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = 
     Raises:
         RevisionResolutionError: If no SHA can be obtained.
     """
-    if _SHA_RE.match(ref):
+    if _SHA_RE.fullmatch(ref):
         return ref
 
     key = manifest_key(repo_id, ref)
@@ -276,7 +276,7 @@ def resolve_revision(repo_id: str, ref: str = "main", *, token: Optional[str] = 
     # straight into cache keys, provenance and worker payloads -- "confidently wrong" with the
     # loud-failure path bypassed, which is the one outcome this module exists to prevent. A
     # non-SHA entry is therefore treated as absent and re-resolved.
-    if recorded is not None and _SHA_RE.match(recorded):
+    if recorded is not None and _SHA_RE.fullmatch(recorded):
         _MEMO[key] = recorded
         return recorded
     if recorded is not None:

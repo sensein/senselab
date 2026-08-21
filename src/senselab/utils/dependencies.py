@@ -363,7 +363,7 @@ def _get_cached_commit_hash(repo_id: str, revision: str = "main") -> str:
     try:
         if ref_file.is_file():
             sha = ref_file.read_text().strip()
-            if _SHA_RE.match(sha):
+            if _SHA_RE.fullmatch(sha):
                 return sha
     except Exception:
         pass
@@ -683,7 +683,7 @@ def _point_ref_at(repo_root: Path, ref: str, sha: str) -> None:
     A failure is ignored: on a group-owned tree the file may belong to another user, and the pinned
     load path (an explicit ``revision=<sha>``) does not depend on this pointer.
     """
-    if _SHA_RE.match(ref):
+    if _SHA_RE.fullmatch(ref):
         return
     refs_dir = repo_root / "refs"
     try:
