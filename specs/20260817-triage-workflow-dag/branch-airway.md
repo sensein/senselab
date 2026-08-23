@@ -47,12 +47,18 @@ file. The interval spans the gaps between airway events. Unlabelled spans do not
 
 | outcome | when |
 | --- | --- |
-| `fail` | no span proposed, or PREPROCESS reported `no_contrast`, and no hint declares airway content |
-| `flag` | no span carries a label of interest; or YAMNet contests a label; or a word falls inside the interval; or a hint declares airway content not found |
+| `fail` | no airway was established and no hint declares airway content: either no span was proposed (or PREPROCESS reported `no_contrast`), or spans exist and none clears the label floor |
+| `flag` | YAMNet contests a label; or a word falls inside the interval; or no airway was established and a hint declares airway content |
 | `pass` | at least one span carries a label of interest, and none of the above. The labels are in the store; the verdict says what the branch concluded |
 
 A hint changes only what an absence means. It never creates a span, relabels one, alters a threshold,
 or promotes a `fail` to a `pass`.
+
+**Both routes to "no airway established" are the same conclusion, so both answer to the hint the
+same way.** Sub-floor spans used to flag unconditionally while no spans at all failed, which read as
+two different findings about one state; and the unconditional flag meant a recording that simply
+contains no airway event could never come out clean. The `kind` on that verdict stays `airway`
+either way — it is what the node screens, not what it found.
 
 ## Product
 
