@@ -786,7 +786,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         outcome = Outcome.PASS
         why = "words, spans, speakers and quality are in the store"
     verdict_id, verdict = write_verdict(
-        store, transcript, software, node=NODE, outcome=outcome, kind="speech", why=why, detail=detail
+        store, quality, software, node=NODE, outcome=outcome, kind="speech", why=why, detail=detail
     )
     view.append(verdict_id)
     return NodeResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id)

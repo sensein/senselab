@@ -180,6 +180,51 @@ class TestHearClassification:
         assert result.verdict.outcome is Outcome.FAIL
         assert store.get_entity(result.verdict_entity_id).attributes["labelled_n"] == 0
 
+    def test_the_verdict_is_generated_by_the_step_that_concluded(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_airway_store: Callable[..., dict],
+        mock_hear: None,
+        hear_scores: dict[str, float],
+    ) -> None:
+        """Walking generated_by from the verdict must reach the last step, not the first.
+
+        Attributing it to ``classify`` said the conclusion was reached before YAMNet answered and
+        before the lexical read, both of which can turn a pass into a flag.
+        """
+        hear_scores.update({"Cough": 0.9})
+        ids = seed_airway_store(
+            store,
+            spans=((1.5, 1.65, 40.0),),
+            yamnet_windows=[{"start": 1.4, "end": 2.36, "label_scores": [{"Cough": 0.9}]}],
+            words=({"text": "hello", "start": 1.5, "end": 1.6},),
+        )
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        concluding = store.generated_by(result.verdict_entity_id)
+        assert concluding is not None
+        assert store.get_activity(concluding).step == "lexical"
+        assert set(ids["words"]) <= set(store.uses_of(concluding)), "the concluding step is the one that read words"
+
+    def test_the_verdict_of_an_unlabelled_run_is_generated_by_the_confirm_step(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_airway_store: Callable[..., dict],
+        mock_hear: None,
+        hear_scores: dict[str, float],
+    ) -> None:
+        """With no label there is no lexical step, so confirm — which read yamnet_windows — concludes."""
+        hear_scores.update({"Cough": 0.3, "Breathe": 0.2})
+        ids = seed_airway_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        concluding = store.generated_by(result.verdict_entity_id)
+        assert concluding is not None
+        assert store.get_activity(concluding).step == "confirm"
+        assert ids["yamnet"] in store.uses_of(concluding)
+
     def test_airway_has_no_path_to_yamnet_as_a_model(self) -> None:
         """YAMNet is read from the store's native windows; the module cannot classify with it."""
         assert not hasattr(node, "classify_audios")
