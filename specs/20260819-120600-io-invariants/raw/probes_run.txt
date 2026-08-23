@@ -1,0 +1,113 @@
+
+====================================================================================================
+## 1. float -> int16 conversion: rounding rule and scale factor per encoder
+====================================================================================================
+   input float         torchcodec   soundfile PCM_16   ffmpeg pcm_s16le
+   0.000000000                  0                  0                  0
+   1.000000000              32767              32767              32767
+  -1.000000000             -32768             -32768             -32768
+   0.500000000              16384              16384              16384
+   0.499984711              16383              16383              16383
+   0.000030518                  1                  1                  1
+   0.000045776                  2                  1                  2
+   0.000076294                  2                  2                  2
+  -0.000045776                 -2                 -2                 -2
+
+note: 1.0 -> 32767 means /32767-ish or clamped; -1.0 -> -32768 means /32768 scale.
+
+====================================================================================================
+## 2. torchcodec AudioEncoder: accepted input dtypes / shapes
+====================================================================================================
+  float32 (1,N)              OK  -> PCM_16 ch=1 frames=100
+  float64 (1,N)              ValueError: Expected float32 samples, got samples.dtype = torch.float64.
+  float16 (1,N)              ValueError: Expected float32 samples, got samples.dtype = torch.float16.
+  int16 (1,N)                ValueError: Expected float32 samples, got samples.dtype = torch.int16.
+  int32 (1,N)                ValueError: Expected float32 samples, got samples.dtype = torch.int32.
+  float32 1-D (N,)           OK  -> PCM_16 ch=1 frames=100
+  float32 (N,1) time-first   RuntimeError: validateSamples, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Encoder.cpp:36, Trying to e
+  float32 non-contig         OK  -> PCM_16 ch=2 frames=100
+  numpy float32              ValueError: Expected samples to be a Tensor, got type(samples) = <class 'numpy.ndarray'>.
+
+====================================================================================================
+## 2b. soundfile.write accepted input dtypes (WAV/FLOAT)
+====================================================================================================
+  float32                    OK -> FLOAT
+  float64                    OK -> FLOAT
+  int16                      OK -> FLOAT
+  int32                      OK -> FLOAT
+  torch float32 tensor       OK -> FLOAT
+
+====================================================================================================
+## 3. torchcodec: which codec/container does each extension select? (no way to override)
+====================================================================================================
+  .wav    -> ffprobe ['pcm_s16le', 's16', 'N/A', 'wav']   |  WAV/PCM_16
+  .flac   -> ffprobe ['flac', 's32', '24', 'flac']   |  FLAC/PCM_24
+  .ogg    -> ffprobe ['flac', 's32', '24', 'ogg']   |  libsndfile: CANNOT READ
+  .oga    -> ffprobe ['flac', 's32', '24', 'ogg']   |  libsndfile: CANNOT READ
+  .opus   -> ffprobe ['opus', 'fltp', 'N/A', 'ogg']   |  OGG/OPUS
+  .mp3    -> ffprobe ['mp3', 'fltp', 'N/A', 'mp3']   |  MP3/MPEG_LAYER_III
+  .m4a    -> ffprobe ['aac', 'fltp', 'N/A', 'mov,mp4,m4a,3gp,3g2,mj2']   |  libsndfile: CANNOT READ
+  .mp4    -> ffprobe ['aac', 'fltp', 'N/A', 'mov,mp4,m4a,3gp,3g2,mj2']   |  libsndfile: CANNOT READ
+  .aac    -> ffprobe ['aac', 'fltp', 'N/A', 'aac']   |  libsndfile: CANNOT READ
+  .wv     -> ffprobe ['wavpack', 'fltp', '32', 'wv']   |  libsndfile: CANNOT READ
+  .caf    -> ffprobe ['pcm_s16be', 's16', 'N/A', 'caf']   |  CAF/PCM_16
+  .aiff   -> ffprobe ['pcm_s16be', 's16', 'N/A', 'aiff']   |  AIFF/PCM_16
+  .w64    -> ffprobe ['pcm_s16le', 's16', 'N/A', 'w64']   |  W64/PCM_16
+  .mka    -> RuntimeError: validateSampleRate, /Users/runner/work/torchcodec/torchcodec/meta-pytorch/torchcodec/src/torchcodec/_core/Enco
+  .webm   -> ffprobe ['opus', 'fltp', 'N/A', 'matroska,webm']   |  libsndfile: CANNOT READ
+
+====================================================================================================
+## 4. metadata preservation (title/comment) on WAV and FLAC
+====================================================================================================
+  soundfile.write+SoundFile attrs -> read back: ? | TAG:title=SENSELAB_TITLE TAG:comment=SENSELAB_COMMENT
+  ffmpeg -metadata -> read back: TAG:title=SENSELAB_TITLE TAG:comment=SENSELAB_COMMENT TAG:encoder=Lavf62.12.100
+  torchcodec: no metadata parameter exists. Tags written: TAG:encoder=Lavf62.12.100
+  AudioDecoder.metadata fields: ['begin_stream_seconds', 'begin_stream_seconds_from_header', 'bit_rate', 'codec', 'duration_seconds', 'duration_seconds_from_header', 'num_channels', 'sample_format', 'sample_rate', 'stream_index']
+  soundfile can read tags? sf.info has no tags; SoundFile.title -> SENSELAB_TITLE
+
+====================================================================================================
+## 5. audio extraction from a video container (mp4: h264 video + aac audio; mkv: vp9 + opus)
+====================================================================================================
+
+  --- mp4_h264_aac (15284 bytes)
+    torchcodec.AudioDecoder      OK shape=(1, 48128) sr=48000
+    torchaudio.load              OK shape=(1, 48128) sr=48000
+    soundfile.read               LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2/vid_mp4_h264_aac.mp4': Format not recogni
+    librosa.load                 OK shape=(1, 48000) sr=48000
+    ffmpeg-cli                   OK 48128 samples
+
+  --- mkv_vp9_opus (16158 bytes)
+    torchcodec.AudioDecoder      OK shape=(1, 48000) sr=48000
+    torchaudio.load              OK shape=(1, 48000) sr=48000
+    soundfile.read               LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2/vid_mkv_vp9_opus.mkv': Format not recogni
+    librosa.load                 OK shape=(1, 48000) sr=48000
+    ffmpeg-cli                   OK 48000 samples
+
+  --- mov_h264_pcm (101965 bytes)
+    torchcodec.AudioDecoder      OK shape=(1, 48000) sr=48000
+    torchaudio.load              OK shape=(1, 48000) sr=48000
+    soundfile.read               LibsndfileError: Error opening '/Users/satra/.claude/jobs/295c3f8a/tmp/io-audit/work2/vid_mov_h264_pcm.mov': Format not recogni
+    librosa.load                 OK shape=(1, 48000) sr=48000
+    ffmpeg-cli                   OK 48000 samples
+
+====================================================================================================
+## 6. senselab Audio: save_to_file / load round-trip (uses torchcodec when available)
+====================================================================================================
+  in-range float32 (peak .9)   .wav   WAV/PCM_16                             exact=False maxdiff=1.526e-05 in_peak=0.8998 out_peak=0.8998 warns=0
+  in-range float32 (peak .9)   .flac  FLAC/PCM_24                            exact=False maxdiff=1.187e-07 in_peak=0.8998 out_peak=0.8998 warns=0
+  in-range float32 (peak .9)   .ogg   libsndfile CANNOT READ (LibsndfileError) exact=False maxdiff=1.187e-07 in_peak=0.8998 out_peak=0.8998 warns=0
+  16-bit exact grid            .wav   WAV/PCM_16                             exact=True  maxdiff=0.000e+00 in_peak=0.9999 out_peak=0.9999 warns=0
+  16-bit exact grid            .flac  FLAC/PCM_24                            exact=True  maxdiff=0.000e+00 in_peak=0.9999 out_peak=0.9999 warns=0
+  16-bit exact grid            .ogg   libsndfile CANNOT READ (LibsndfileError) exact=True  maxdiff=0.000e+00 in_peak=0.9999 out_peak=0.9999 warns=0
+  out-of-range (peak 3.0)      .wav   WAV/PCM_16                             exact=False maxdiff=2.000e+00 in_peak=3.0000 out_peak=1.0000 warns=0
+  out-of-range (peak 3.0)      .flac  FLAC/PCM_24                            exact=False maxdiff=2.000e+00 in_peak=3.0000 out_peak=1.0000 warns=0
+  out-of-range (peak 3.0)      .ogg   libsndfile CANNOT READ (LibsndfileError) exact=False maxdiff=2.000e+00 in_peak=3.0000 out_peak=1.0000 warns=0
+
+====================================================================================================
+## 7. AudioDecoder: implicit resample / channel-fold parameters (silent transform risk)
+====================================================================================================
+  AudioDecoder(**{}) -> shape=(2, 2000) sr=22050
+  AudioDecoder(**{'sample_rate': 16000}) -> shape=(2, 1452) sr=16000
+  AudioDecoder(**{'num_channels': 1}) -> shape=(1, 2000) sr=22050
+  AudioDecoder(**{'sample_rate': 16000, 'num_channels': 1}) -> shape=(1, 1452) sr=16000
+  soundfile equivalent: none (sf.read never resamples); librosa.load(sr=...) resamples; ffmpeg -ar resamples

@@ -121,6 +121,12 @@ RAW_LOAD_EXCEPTIONS = {
     # the *entire* multi-GB checkpoint snapshot, which would defeat the point of this
     # function (enumerate named speakers without paying for the weights).
     "audio/tasks/text_to_speech/qwen_tts.py",
+    # ClearVoice's loader takes no revision at all, so utils/clearvoice.py pre-stages the checkpoint
+    # itself: resolve_revision for the commit, then hf_hub_download(..., revision=<sha>) for the files
+    # that commit's own last_best_checkpoint manifest names, and the worker is handed the resulting
+    # local snapshot directory. resolve_model is not used because MossFormer2_SR_48K's repository holds
+    # a 1.74 GB optimizer state no inference run reads. See specs/20260819-clearvoice-integration.
+    "utils/clearvoice.py",
     # DriftSE resolves the ref to a commit SHA via resolve_revision and then calls
     # hf_hub_download(..., revision=<sha>) for the single checkpoint file it reads. Upstream's
     # mirror is 2.4 GB -- two 1.14 GB checkpoint variants plus 1648 demo wavs -- so resolve_model

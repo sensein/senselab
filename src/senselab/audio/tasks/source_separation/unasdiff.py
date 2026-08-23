@@ -111,6 +111,7 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    stage_portable_audio_io,
     venv_python,
 )
 
@@ -232,10 +233,6 @@ _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
 # why no lower value is recommended here.
 _DIFFUSION_STEPS = 200
 
-# Every WAV this backend hands to or takes back from the worker. soundfile's WAV default is
-# PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
-_WAV_SUBTYPE = "FLOAT"
-
 # Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
 # Derivation and the measurement behind both numbers:
 # specs/20260818-071500-unasdiff-device-timeout-pcm16.
@@ -310,7 +307,8 @@ try:
     in_paths, out_paths = args["in_paths"], args["out_paths"]
     seed = int(args["seed"])
     requested_device = args.get("device")
-    wav_subtype = args["wav_subtype"]
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import read_audio, write_audio
 
     import fcntl, os, shutil, tempfile as _tempfile
 
@@ -473,7 +471,7 @@ try:
 
     results = []
     for in_path, out_path_list in zip(in_paths, out_paths):
-        y_np, sr = sf.read(in_path, dtype="float32", always_2d=True)
+        y_np, sr = read_audio(in_path, always_2d=True, channels_first=False)
         y = torch.as_tensor(y_np[:, 0]).to(device)
         assert sr == 16000, "worker expects 16 kHz; the host resamples"
 
@@ -485,9 +483,7 @@ try:
 
         for src_wave, out_path in zip(sources, out_path_list):
             src_wave = src_wave / 0.95 * peak
-            # Explicit subtype: soundfile's WAV default is PCM_16, which clips every sample
-            # beyond +-1 on the way back to the host.
-            sf.write(out_path, src_wave.detach().cpu().numpy(), sr, subtype=wav_subtype)
+            write_audio(out_path, src_wave.detach().cpu().numpy(), sr)
         results.append(out_path_list)
 
     print(json.dumps({"output_paths": results, "seed": seed}))
@@ -781,9 +777,7 @@ def separate_with_unasdiff(
             for w, start in enumerate(starts):
                 segment = waveform[start : start + window_samples]
                 in_path = str(tmp / f"in_{i}_{w}.wav")
-                # Not Audio.save_to_file: that writes PCM_16 for a .wav, which clips the input
-                # window before the worker ever reads it.
-                sf.write(in_path, segment.detach().cpu().numpy(), _TARGET_SR, subtype=_WAV_SUBTYPE)
+                Audio(waveform=segment.unsqueeze(0), sampling_rate=_TARGET_SR).save_to_file(in_path)
                 in_paths.append(in_path)
                 out_paths.append([str(tmp / f"out_{i}_{w}_{s}.wav") for s in range(n_sources)])
             window_ranges.append((flat_start, len(in_paths)))
@@ -805,7 +799,7 @@ def separate_with_unasdiff(
                 "seed": seed,
                 "diffusion_steps": diffusion_steps,
                 "device": worker_device,
-                "wav_subtype": _WAV_SUBTYPE,
+                "io_dir": stage_portable_audio_io(tmp),
             }
         )
 

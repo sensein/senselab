@@ -32,6 +32,35 @@ class SpeechBrainEnhancer:
     MIN_LENGTH = 16  # kernel size for speechbrain/sepformer-wham16k-enhancement
     _models: Dict[str, Union["separator", "enhance_model"]] = {}
 
+    @staticmethod
+    def _loader_for(model_uri: str) -> Union[type["separator"], type["enhance_model"]]:
+        """Return the speechbrain inference class for an *enhancement* ``model_uri``.
+
+        Both supported model families are enhancers (denoisers); they differ only in
+        architecture, which dictates the speechbrain inference wrapper:
+
+        - SepFormer-architecture enhancement checkpoints (e.g. ``sepformer-wham16k-enhancement``,
+          ``sepformer-dns4-16k-enhancement``) load via ``SepformerSeparation`` — that is just
+          SepFormer's inference class; for an enhancement checkpoint it emits a single cleaned source.
+        - Spectral-mask checkpoints (e.g. ``metricgan-plus-voicebank``, ``mtl-mimic-voicebank``)
+          load via ``SpectralMaskEnhancement``.
+
+        The architecture is an unambiguous discriminator in the name, so we map it directly
+        rather than loading one class and falling back on the ``compute_stft``/hparams error the
+        wrong class would raise. NOTE: this is keyed on ``sepformer`` (the architecture), not on
+        "separation" — true multi-speaker separation checkpoints (e.g. ``sepformer-wsj02mix``)
+        are out of scope here, because :meth:`enhance_audios_with_speechbrain` reshapes the model
+        output to a single waveform and would garble multiple separated sources.
+
+        Args:
+            model_uri (str): The model path or URI.
+
+        Returns:
+            The ``SepformerSeparation`` class for SepFormer enhancement checkpoints,
+            else the ``SpectralMaskEnhancement`` class.
+        """
+        return separator if "sepformer" in model_uri.lower() else enhance_model
+
     @classmethod
     def _get_speechbrain_model(
         cls,
@@ -67,16 +96,29 @@ class SpeechBrainEnhancer:
             # ``revision`` arg, so we pin via the immutable snapshot path.
             _, snapshot_path = resolve_model(str(model.path_or_uri), model.revision or "main")
             savedir = speechbrain_savedir(str(model.path_or_uri), model.revision)
+            loader = cls._loader_for(str(model.path_or_uri))
+            logger.debug("Loading %s as %s", model.path_or_uri, loader.__name__)
             with speechbrain_loading_cwd(savedir):
                 try:
                     cls._models[key] = retry_on_transient_error(
-                        enhance_model.from_hparams,
+                        loader.from_hparams,
                         source=str(snapshot_path),
                         savedir=str(savedir),
                         run_opts={"device": device_run_opt(device)},
                     )
                 except Exception as e:
-                    logger.info("Trying SepformerSeparation model after SpectralMaskEnhancement failed: %s", e)
+                    # _loader_for routes by name; it is wrong only for off-convention
+                    # models -- e.g. a custom SepFormer checkpoint whose path lacks
+                    # "sepformer", which routes to SpectralMaskEnhancement. Fall back to
+                    # SepformerSeparation for that catch-all branch; a sepformer-named
+                    # model that fails to load is a genuine error, so re-raise.
+                    if loader is not enhance_model:
+                        raise
+                    logger.info(
+                        "SpectralMaskEnhancement failed for %s; trying SepformerSeparation: %s",
+                        model.path_or_uri,
+                        e,
+                    )
                     cls._models[key] = retry_on_transient_error(
                         separator.from_hparams,
                         source=str(snapshot_path),
@@ -85,6 +127,35 @@ class SpeechBrainEnhancer:
                     )
 
         return cls._models[key], device, dtype
+
+    @staticmethod
+    def _single_source(waveform: "torch.Tensor", model: SpeechBrainModel) -> "torch.Tensor":
+        """Return the one enhanced source, refusing a multi-source separation output.
+
+        ``SepformerSeparation.separate_batch`` returns ``(batch, samples, sources)``. An
+        enhancement checkpoint yields one source; a separation checkpoint yields two or three.
+
+        Args:
+            waveform: The tensor returned by ``separate_batch``.
+            model: The model that produced it, named in the error.
+
+        Returns:
+            The waveform with the source axis dropped.
+
+        Raises:
+            ValueError: If more than one source is present.
+        """
+        if waveform.ndim < 3:
+            return waveform
+        n_sources = waveform.shape[-1]
+        if n_sources > 1:
+            raise ValueError(
+                f"{model.path_or_uri} returned {n_sources} separated sources. "
+                "enhance_audios yields one Audio per input and cannot represent a multi-source "
+                "separation; flattening them here would interleave the sources sample-by-sample. "
+                "Use senselab.audio.tasks.source_separation for separation checkpoints."
+            )
+        return waveform[..., 0]
 
     @classmethod
     def enhance_audios_with_speechbrain(
@@ -153,6 +224,7 @@ class SpeechBrainEnhancer:
                         enhanced_waveform = enhancer.enhance_batch(segment.waveform, lengths=torch.tensor([1.0]))
                     else:
                         enhanced_waveform = enhancer.separate_batch(segment.waveform)
+                        enhanced_waveform = cls._single_source(enhanced_waveform, model)
 
                     enhanced_segments.append(
                         Audio(waveform=enhanced_waveform.reshape(1, -1), sampling_rate=segment.sampling_rate)
