@@ -60,7 +60,7 @@ def _generating_node(store: ProvStore, entity_id: str) -> str | None:
     activity_id = store.generated_by(entity_id)
     if activity_id is None:
         return None
-    return store._activities[activity_id].node
+    return store.get_activity(activity_id).node
 
 
 def _runs_of_true(mask: np.ndarray) -> list[tuple[int, int]]:
