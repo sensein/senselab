@@ -398,7 +398,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         timing_model: str | None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
-        """One recognizer: transcript measurement plus one word entity per timed word."""
+        """One recognizer: transcript measurement plus one word entity per chunk that carries timings.
+
+        A chunk missing either bound is counted in ``untimed_chunks_n`` and written as no word; its
+        text stays in the transcript.
+        """
         model = factory()
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
         activity = _step(
@@ -406,7 +410,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         )
         [line] = transcribe_audios([plain], model=model, **kwargs)
         word_ids: list[str] = []
+        untimed_chunks_n = 0
         for chunk in line.chunks or []:
+            if chunk.start is None or chunk.end is None:
+                untimed_chunks_n += 1
+                continue
             attributes = {
                 "text": chunk.text,
                 "score": chunk.score,
@@ -417,7 +425,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 attributes["timestamp_model"] = timing_model
             word_id = store.entity(
                 prov_type="word",
-                extent=(float(chunk.start or 0.0), float(chunk.end or 0.0)),
+                extent=(float(chunk.start), float(chunk.end)),
                 attributes=attributes,
             )
             store.was_generated_by(word_id, activity)
@@ -427,6 +435,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "recognizer": str(model.path_or_uri),
             "transcript": line.text or "",
             "word_ids": word_ids,
+            "untimed_chunks_n": untimed_chunks_n,
             "timestamp_source": source_kind,
         }
         if timing_model is not None:
