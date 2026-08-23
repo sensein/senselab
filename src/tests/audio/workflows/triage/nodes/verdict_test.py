@@ -368,7 +368,11 @@ def test_a_redact_flag_is_withheld_not_releasable(
 def test_an_invalidated_node_verdict_does_not_vote(
     make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
 ) -> None:
-    """An invalidated verdict is not a verdict; the kind it screened is left without an answer."""
+    """An invalidated verdict is not a verdict; the kind it screened is left without an answer.
+
+    The node's activities survive the withdrawal, so the store still says it ran and left nothing —
+    the same reading as a node that raised.
+    """
     store = make_verdict_store(
         node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
         kinds={"speech": "present"},
@@ -379,8 +383,28 @@ def test_an_invalidated_node_verdict_does_not_vote(
     result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
     assert "SPEECH" not in {r.node for r in result.file_verdict.reasons if r.outcome is not Outcome.FLAG}
     assert result.file_verdict.triage is Outcome.FLAG, "a present kind whose only verdict was withdrawn has no answer"
-    assert result.file_verdict.ran["SPEECH"] is RunState.SKIPPED
+    assert result.file_verdict.ran["SPEECH"] is RunState.ERRORED
     assert speech.id not in result.view, "a withdrawn verdict was not folded, so it is not in the view"
+
+
+def test_a_node_that_ran_and_left_no_verdict_is_errored_not_skipped(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """An activity with no verdict is the raising node's signature; a node with neither never ran.
+
+    The store can tell the two apart, so reading both as skipped threw away the distinction between
+    a branch nobody asked for and one that died.
+    """
+    store = make_verdict_store(
+        node_verdicts=[("ADMIT", Outcome.PASS, None), ("TAXONOMY", Outcome.PASS, None)],
+        kinds={"speech": "present"},
+    )
+    store.was_associated_with(store.activity(node="SPEECH", step="transcript", parameters={}), software_agent(store))
+    result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+    assert result.file_verdict.ran["SPEECH"] is RunState.ERRORED
+    assert result.file_verdict.ran["VOICE"] is RunState.SKIPPED, "no activity and no verdict is still never ran"
+    assert any(r.kind == "speech" and "errored without a verdict" in r.why for r in result.file_verdict.reasons)
+    assert _file_verdict_entity(store).attributes["ran"]["SPEECH"] == RunState.ERRORED.value
 
 
 def test_the_later_redact_verdict_governs_the_release_axis(

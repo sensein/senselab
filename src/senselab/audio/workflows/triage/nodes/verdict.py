@@ -155,19 +155,23 @@ def _release_from(verdicts: Sequence[NodeVerdict]) -> Release:
     return Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD
 
 
-def _derived_ran(verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
+def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
     """Whether each graph node ran, as far as the store can say (N26).
 
     Args:
+        store: The provenance store, read for which nodes have an activity.
         verdicts: Every node verdict read from the store.
 
     Returns:
-        ``COMPLETED`` for every node carrying a verdict and ``SKIPPED`` for every other graph node.
-        ``ERRORED`` never appears: a node that raised wrote no verdict and is indistinguishable here
-        from one that was never asked to run.
+        ``COMPLETED`` for a node carrying a verdict, ``ERRORED`` for one carrying an activity but no
+        live verdict, and ``SKIPPED`` for one carrying neither.
     """
     concluded = {v.node for v in verdicts}
-    return {node: RunState.COMPLETED if node in concluded else RunState.SKIPPED for node in _GRAPH_ORDER}
+    attempted = {activity.node for activity in store.activities()}
+    return {
+        node: RunState.COMPLETED if node in concluded else RunState.ERRORED if node in attempted else RunState.SKIPPED
+        for node in _GRAPH_ORDER
+    }
 
 
 def _is_gated(predictions: Mapping[str, KindState], verdicts: Sequence[NodeVerdict]) -> bool:
@@ -206,9 +210,9 @@ def verdict(
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
         ran: Whether each node ran, from the runner, merged over what the store derives so that a
             partial mapping overrides per node without erasing the rest. The derivation reads a
-            written verdict as ``completed`` and every other graph node as ``skipped``, and cannot
-            see ``errored``: a node that raised wrote no verdict and is indistinguishable there from
-            one never asked to run (N26), which is why the runner's mapping wins where it speaks.
+            written verdict as ``completed``, an activity without one as ``errored`` and neither as
+            ``skipped`` (N26); the runner's mapping still wins where it speaks, since it knows why a
+            node it never called was left out.
 
     Returns:
         The file verdict on both axes, the verdict entity it was written to, and a view leading with
@@ -221,7 +225,7 @@ def verdict(
     pairs = _node_verdicts_in_graph_order(store)
     node_verdicts = [node_verdict for _, node_verdict in pairs]
     predictions, kind_ids = _kind_predictions(store)
-    resolved_ran = {**_derived_ran(node_verdicts), **(ran or {})}
+    resolved_ran = {**_derived_ran(store, node_verdicts), **(ran or {})}
     file_verdict = fold_file_verdict(node_verdicts, predictions, resolved_ran, release=_release_from(node_verdicts))
     gated = _is_gated(predictions, node_verdicts)
 
