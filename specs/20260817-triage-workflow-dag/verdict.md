@@ -77,7 +77,11 @@ distinguish them will treat an empty recording as a broken one.
 | --- | --- |
 | REDACT did not run | `not_assessed` |
 | REDACT returned `fail` — a finding survived verification | `withheld` |
+| REDACT returned `flag` — verification was weakened or contested | `withheld`; unresolved is not cleared |
 | REDACT returned `pass` | `releasable`, for **its artifacts only** |
+
+Only `pass` clears an artifact, which makes the mapping total: an `Outcome` member added later
+withholds rather than defaulting to cleared.
 
 **`releasable` never applies to the store.** The store holds the unredacted transcript by design and is
 append-only, so nothing can make it releasable. `release` describes REDACT's artifacts and nothing else.
@@ -102,6 +106,18 @@ hides the others, and a reader deciding what to do next needs the whole set.
 `kinds` is the resolved state after the table above, which may differ from what TAXONOMY wrote. Both
 remain in the store — TAXONOMY's assertion and this node's resolution — so the change is visible rather
 than silent.
+
+`ran` comes from two sources and is **merged, the runner's over the store's**: the store derives
+`completed` for every node that wrote a verdict and `skipped` for every other graph node, and the
+runner's mapping then overrides per node. Only the runner can report `errored`, because a node that
+raised wrote no verdict and the store cannot tell it from one never asked to run; and only the store
+can prove `completed`, so a partial mapping from the runner overrides what it names without erasing
+the rest.
+
+Every read of the store here follows the store's shared rule — an invalidated element is never read,
+and of the survivors asserting the same thing the latest write wins, per node for verdicts and per
+kind for screens. A withdrawn verdict therefore does not vote, and a repaired node contributes once,
+as its repair.
 
 ## Out of scope
 

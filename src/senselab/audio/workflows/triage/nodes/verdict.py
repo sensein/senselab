@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -23,7 +23,7 @@ from senselab.audio.workflows.triage.vocabulary import (
     RunState,
     fold_file_verdict,
 )
-from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
 
@@ -60,6 +60,28 @@ def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
     )
 
 
+def _live_latest(store: ProvStore, prov_type: PROV_TYPE, key: Callable[[Entity], str]) -> list[Entity]:
+    """Entities of one type under the store's shared rule, one per key.
+
+    The rule is the one ``common.find_measurement`` and ``common.resolve_stream`` apply: an
+    invalidated entity is never read, and of the survivors sharing a key the latest write wins.
+
+    Args:
+        store: The provenance store.
+        prov_type: The entity type to read.
+        key: What makes two entities the same assertion — a node name, a kind name.
+
+    Returns:
+        One entity per key, the latest live one, in order of each key's first appearance.
+    """
+    latest: dict[str, Entity] = {}
+    for entity in store.entities(prov_type):
+        if store.is_invalidated(entity.id):
+            continue
+        latest[key(entity)] = entity
+    return list(latest.values())
+
+
 def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVerdict]]:
     """Node verdict entities, ordered by the graph, with nodes outside it last.
 
@@ -67,12 +89,13 @@ def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVe
         store: The provenance store.
 
     Returns:
-        One ``(entity, verdict)`` pair per node verdict; the file verdict itself is excluded by its
-        ``node`` attribute, which is the only discriminator the entity carries.
+        One ``(entity, verdict)`` pair per node, the node's latest live verdict; the file verdict
+        itself is excluded by its ``node`` attribute, which is the only discriminator the entity
+        carries. A withdrawn verdict does not vote and a superseded one is replaced, not added.
     """
     pairs = [
         (entity, _node_verdict_from_entity(entity))
-        for entity in store.entities("verdict")
+        for entity in _live_latest(store, "verdict", lambda e: str(e.attributes.get("node")))
         if entity.attributes.get("node") != NODE
     ]
     return sorted(
@@ -88,13 +111,29 @@ def _kind_predictions(store: ProvStore) -> tuple[dict[str, KindState], list[str]
         store: The provenance store.
 
     Returns:
-        The predictions per kind and the ids of the entities they came from.
+        The predictions per kind, one per kind under the store's shared rule, and the ids of the
+        entities they came from.
+
+    Raises:
+        ValueError: If a kind entity carries a state outside the vocabulary. The message names the
+            kind and the entity so the writer can be found; a state nobody can read must not be
+            folded into a verdict.
     """
     predictions: dict[str, KindState] = {}
     ids: list[str] = []
-    for entity in store.entities("kind"):
+    for entity in _live_latest(store, "kind", lambda e: str(e.attributes["kind"])):
+        kind = entity.attributes["kind"]
         state = entity.attributes["state"]
-        predictions[entity.attributes["kind"]] = KindState.UNDECIDED if state == _NOT_SCREENED else KindState(state)
+        if state == _NOT_SCREENED:
+            predictions[kind] = KindState.UNDECIDED
+        else:
+            try:
+                predictions[kind] = KindState(state)
+            except ValueError as error:
+                raise ValueError(
+                    f"kind entity {entity.id} for kind {kind!r} carries state {state!r}, which is not a KindState; "
+                    "the node that wrote it must be repaired before this screen can be folded"
+                ) from error
         ids.append(entity.id)
     return predictions, ids
 
@@ -106,12 +145,14 @@ def _release_from(verdicts: Sequence[NodeVerdict]) -> Release:
         verdicts: Every node verdict read from the store.
 
     Returns:
-        The release state for REDACT's artifacts only — never for anything in the store.
+        The release state for REDACT's artifacts only — never for anything in the store. Only
+        ``pass`` clears an artifact, so the mapping is total over ``Outcome``: a flag, or any member
+        added later, withholds rather than defaulting to cleared.
     """
     redact = next((v for v in verdicts if v.node == "REDACT"), None)
     if redact is None:
         return Release.NOT_ASSESSED
-    return Release.WITHHELD if redact.outcome is Outcome.FAIL else Release.RELEASABLE
+    return Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD
 
 
 def _derived_ran(verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
@@ -163,18 +204,24 @@ def verdict(
             thresholds.
         hint: Accepted for the shared node shape; not read.
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
-        ran: Whether each node ran, from the runner. When omitted it is derived from which nodes
-            wrote a verdict, and that derivation cannot see ``errored``: a node that raised is
-            recorded as ``skipped`` (N26).
+        ran: Whether each node ran, from the runner, merged over what the store derives so that a
+            partial mapping overrides per node without erasing the rest. The derivation reads a
+            written verdict as ``completed`` and every other graph node as ``skipped``, and cannot
+            see ``errored``: a node that raised wrote no verdict and is indistinguishable there from
+            one never asked to run (N26), which is why the runner's mapping wins where it speaks.
 
     Returns:
         The file verdict on both axes, the verdict entity it was written to, and a view leading with
         that entity followed by every id the fold consumed.
+
+    Raises:
+        ValueError: If a ``kind`` entity carries a state outside the vocabulary (see
+            :func:`_kind_predictions`).
     """
     pairs = _node_verdicts_in_graph_order(store)
     node_verdicts = [node_verdict for _, node_verdict in pairs]
     predictions, kind_ids = _kind_predictions(store)
-    resolved_ran = dict(ran) if ran is not None else _derived_ran(node_verdicts)
+    resolved_ran = {**_derived_ran(node_verdicts), **(ran or {})}
     file_verdict = fold_file_verdict(node_verdicts, predictions, resolved_ran, release=_release_from(node_verdicts))
     gated = _is_gated(predictions, node_verdicts)
 
