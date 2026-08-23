@@ -79,6 +79,10 @@ derivation: |
   0.84 -> 0.27, Speech 0.92 -> 0.14, Breathing 0.59 -> 0.36. A threshold in an empty interval is not
   a fitted value.
 
+  YAMNet top_k 521 -- the full label space, which is a size, not a threshold. classify_audios
+  defaults windowed top_k to 5 and Silence is not always in the top 5 (capability-map 4.2), so a
+  truncated read silently reports zero for a label the model actually emitted.
+
   Disruption parameters -- conventional. A single sample at full scale is not clipping, which is what
   min_clip_run is for. The counts these produce are exact; what has no measured value is the
   tolerance, which is quality.disruption_* below.
@@ -156,6 +160,7 @@ hear:
 yamnet:
   silence_threshold: 0.5
   coverage_threshold: 0.5
+  top_k: 521
 
 phonation:
   f0_min_hz: null
