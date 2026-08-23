@@ -336,3 +336,140 @@ def seed_voice_store(tmp_path: Path) -> Callable[..., dict]:
         return ids
 
     return _seed
+
+
+@pytest.fixture
+def seed_speech_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageConfig, Path]]:
+    """Build ``(store, config, run_dir)`` as ADMIT/PREPROCESS/TAXONOMY/AIRWAY leave them for SPEECH.
+
+    Mirrors the sibling plan's store-schema contract. ``words_cw``/``words_qw`` are
+    ``(text, start, end)`` triples per recognizer; ``airway_label_extent`` also writes a PREPROCESS
+    span over that extent carrying an AIRWAY ``label`` assertion. ``config_yaml`` is the production
+    override mechanism, defaulting to the one unmeasured key every SPEECH test needs.
+    """
+
+    def _make(
+        words_cw: list[tuple[str, float, float]],
+        words_qw: list[tuple[str, float, float]],
+        *,
+        airway_label_extent: tuple[float, float] | None = None,
+        duration_s: float = 6.0,
+        config_yaml: str = "speech:\n  word_gap_ms: 300\n",
+    ) -> tuple[ProvStore, TriageConfig, Path]:
+        from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
+
+        sr = 16000
+        store = ProvStore(run_id="t")
+        rng = np.random.default_rng(0)
+        n = int(duration_s * sr)
+        wave = np.zeros(n, dtype=np.float32)
+        for _, start, end in [*words_cw, *words_qw]:
+            wave[int(start * sr) : int(end * sr)] = 0.1 * rng.standard_normal(int(end * sr) - int(start * sr))
+        if airway_label_extent:
+            start, end = airway_label_extent
+            wave[int(start * sr) : int(end * sr)] = 0.2 * rng.standard_normal(int(end * sr) - int(start * sr))
+        run_dir = tmp_path / "run"
+        (run_dir / "streams").mkdir(parents=True, exist_ok=True)
+        (run_dir / "derivatives").mkdir(exist_ok=True)
+        sf.write(str(run_dir / "streams" / "plain.wav"), wave, sr)
+
+        pre = store.activity(node="PREPROCESS", step=None, parameters={})
+        recording = store.entity(
+            prov_type="stream",
+            extent=(0.0, duration_s),
+            attributes={
+                "name": "recording",
+                "path": str(run_dir / "streams" / "plain.wav"),
+                "sampling_rate": sr,
+                "channels": 1,
+            },
+        )
+        store.was_generated_by(recording, pre)
+        plain = store.entity(
+            prov_type="stream",
+            extent=(0.0, duration_s),
+            attributes={
+                "name": "plain",
+                "path": "streams/plain.wav",
+                "sampling_rate": sr,
+                "channels": 1,
+                "peak_scale": 1.0,
+            },
+        )
+        store.was_generated_by(plain, pre)
+
+        # One sidecar (the Task 2 schema): envelope above the floor exactly where the wave is non-zero.
+        env = np.full(n, -80.0)
+        env[np.abs(wave) > 0] = -30.0
+        floor = np.full(n, -60.0)
+        np.savez(run_dir / "derivatives" / "energy_envelope.npz", envelope_dbfs=env, floor_dbfs=floor)
+        mid = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "energy_envelope",
+                "signal": "preemphasised",
+                "path": "derivatives/energy_envelope.npz",
+                "sampling_rate": sr,
+            },
+        )
+        store.was_generated_by(mid, pre)
+
+        # YAMNet native windows, Speech-positive throughout -- SPEECH reads these from the store.
+        windows, t = [], 0.0
+        while t < duration_s:
+            windows.append(
+                {"start": t, "end": t + 0.96, "label_scores": [{"Speech": 0.9}], "win_length": 0.96, "hop_length": 0.48}
+            )
+            t += 0.48
+        (run_dir / "derivatives" / "yamnet_windows.json").write_text(json.dumps(windows))
+        yw = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "yamnet_windows",
+                "signal": "plain",
+                "path": "derivatives/yamnet_windows.json",
+                "n_windows": len(windows),
+            },
+        )
+        store.was_generated_by(yw, pre)
+
+        for model_id, triples in ((CRISPERWHISPER_ID, words_cw), (QWEN_ID, words_qw)):
+            for text, start, end in triples:
+                wid = store.entity(
+                    prov_type="word",
+                    extent=(start, end),
+                    attributes={"text": text, "score": 0.9, "recognizer": model_id, "timestamp_source": "native"},
+                )
+                store.was_generated_by(wid, pre)
+
+        if airway_label_extent:
+            start, end = airway_label_extent
+            span = store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised"},
+            )
+            store.was_generated_by(span, pre)
+            air = store.activity(node="AIRWAY", step="classify", parameters={})
+            lab = store.entity(
+                prov_type="assertion",
+                extent=(start, end),
+                attributes={
+                    "verb": "label",
+                    "label": "Cough",
+                    "score": 0.97,
+                    "scores": {"Cough": 0.97, "Breathe": 0.1},
+                    "input": "buffered",
+                    "in_certified_silence": None,
+                },
+            )
+            store.was_generated_by(lab, air)
+            store.was_derived_from(lab, span)
+
+        override = tmp_path / "override.yaml"
+        override.write_text(config_yaml)
+        return store, load_triage_config(override), run_dir
+
+    return _make
