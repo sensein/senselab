@@ -1,0 +1,112 @@
+"""The shape every triage node shares: its result type and its store conventions."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from importlib.metadata import version
+from pathlib import Path
+from typing import Any
+
+from senselab.audio.data_structures import Audio
+from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome
+from senselab.utils.prov_store import Entity, ProvStore
+
+
+@dataclass(frozen=True)
+class NodeResult:
+    """What every node returns.
+
+    Attributes:
+        verdict: The node's conclusion, in the graph's shared vocabulary.
+        view: Ids of the store entities this node wrote or asserted over.
+        verdict_entity_id: The verdict entity this node wrote to the store.
+    """
+
+    verdict: NodeVerdict
+    view: tuple[str, ...]
+    verdict_entity_id: str
+
+
+def software_agent(store: ProvStore) -> str:
+    """The agent for work senselab itself performed, at the installed version.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The agent's id.
+    """
+    return store.agent(agent_type="software", version=f"senselab {version('senselab')}")
+
+
+def write_verdict(
+    store: ProvStore,
+    activity_id: str,
+    agent_id: str,
+    *,
+    node: str,
+    outcome: Outcome,
+    kind: str | None,
+    why: str,
+    detail: dict[str, Any],
+) -> tuple[str, NodeVerdict]:
+    """Write one node's verdict entity.
+
+    Args:
+        store: The provenance store.
+        activity_id: The activity that concluded.
+        agent_id: The agent answerable for the verdict.
+        node: The node's name.
+        outcome: What it concluded.
+        kind: The kind the node screens, or None.
+        why: The reason, in controlled vocabulary — never transcript text.
+        detail: The node's design-named verdict fields.
+
+    Returns:
+        The verdict entity's id and the vocabulary verdict.
+    """
+    entity_id = store.entity(
+        prov_type="verdict",
+        extent=None,
+        attributes={"node": node, "outcome": outcome.value, "kind": kind, "why": why, **detail},
+    )
+    store.was_generated_by(entity_id, activity_id)
+    store.was_attributed_to(entity_id, agent_id)
+    return entity_id, NodeVerdict(node=node, outcome=outcome, kind=kind, why=why)
+
+
+def find_measurement(store: ProvStore, name: str) -> Entity | None:
+    """The latest measurement entity carrying this name, or None.
+
+    Args:
+        store: The provenance store.
+        name: The measurement's ``name`` attribute.
+
+    Returns:
+        The entity, or None when nothing carries the name.
+    """
+    found = [e for e in store.entities("measurement") if e.attributes.get("name") == name]
+    return found[-1] if found else None
+
+
+def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
+    """Load a stream the graph wrote earlier, by its name.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory sidecar paths are relative to.
+        name: The stream entity's ``name`` attribute.
+
+    Returns:
+        The stream entity's id and its audio, loaded lazily from the sidecar.
+
+    Raises:
+        LookupError: If no stream entity carries that name.
+    """
+    for entity in store.entities("stream"):
+        if entity.attributes.get("name") == name:
+            path = Path(entity.attributes["path"])
+            if not path.is_absolute():
+                path = run_dir / path
+            return entity.id, Audio(filepath=str(path))
+    raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
