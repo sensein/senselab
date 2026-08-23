@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.data_structures import Audio, AudioHints, TargetSpeakerEmbedding
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
@@ -43,6 +43,7 @@ from senselab.utils.data_structures import HFModel, PyannoteAudioModel, ScriptLi
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "SPEECH"
+EMBEDDING_ID = "speechbrain/spkrec-ecapa-voxceleb"
 
 
 def _diarization_model() -> PyannoteAudioModel:
@@ -62,7 +63,26 @@ def _separation_model() -> HFModel:
 
 def _embedding_model() -> SpeechBrainModel:
     """The speaker-embedding model spec; its commit resolves at construction."""
-    return SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
+    return SpeechBrainModel(path_or_uri=EMBEDDING_ID, revision="main")
+
+
+def _target_refusal(target: TargetSpeakerEmbedding) -> str | None:
+    """Why a target embedding cannot be compared with this node's probe, or ``None`` when it can.
+
+    Args:
+        target: The caller's target-speaker embedding.
+
+    Returns:
+        The refusal, in controlled vocabulary, or ``None`` when the target is comparable.
+    """
+    if target.provenance.model_commit_sha is None:
+        return "target embedding carries no resolved model commit; refused rather than compared"
+    if target.provenance.model_id != EMBEDDING_ID:
+        return (
+            f"target embedding model {target.provenance.model_id} is not the probe {EMBEDDING_ID}; "
+            "embeddings from different models are not comparable"
+        )
+    return None
 
 
 def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
@@ -85,7 +105,7 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
         "discontinuity_threshold": float(config.require("disruptions.discontinuity_threshold")),
     }
     target = hint.target_speaker if hint is not None else None
-    if target is not None and target.provenance.model_commit_sha is not None:
+    if target is not None and _target_refusal(target) is None:
         values["target_match_cosine"] = float(config.require("speech.target_match_cosine"))
     return values
 
@@ -182,15 +202,29 @@ def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(torch.nn.functional.cosine_similarity(a.flatten().float(), b.flatten().float(), dim=0))
 
 
+def _failure_type(failure: str) -> str:
+    """The exception type a detector failure leads with, projected away from its message.
+
+    Args:
+        failure: The detector's failure string, conventionally ``"<Type>: <message>"``.
+
+    Returns:
+        The leading type name, or a controlled placeholder when the string does not carry one.
+    """
+    head, separator, _ = failure.partition(":")
+    return head if separator and head.isidentifier() else "type not recorded"
+
+
 def _decide_pii(findings: list[dict[str, Any]], failures: dict[str, str], target_speaker: str | None) -> list[str]:
     """This branch's own rule over ``scan_for_pii``'s evidence — not ``decide_pii``'s.
 
     Flags when a finding overlaps the target speaker's words, when no target is known and anything
-    was found, or when any detector failed: could-not-check is not clean.
+    was found, or when any detector failed: could-not-check is not clean. A failure is projected to
+    its detector and exception type; its message may quote the scanned input.
     """
     reasons: list[str] = []
     for detector, failure in sorted(failures.items()):
-        reasons.append(f"pii detector {detector} did not run: {failure}")
+        reasons.append(f"pii detector {detector} did not run ({_failure_type(failure)})")
     if findings and target_speaker is None:
         reasons.append("pii found and no target speaker is known; there is no speaker to exempt")
     if target_speaker is not None:
@@ -555,58 +589,51 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
     target_speaker: str | None = None
     target = hint.target_speaker if hint is not None else None
     if target is not None:
-        if target.provenance.model_commit_sha is None:
-            flags.append("target embedding carries no resolved model commit; refused rather than compared")
-        else:
+        refusal = _target_refusal(target)
+        if refusal is not None:
+            flags.append(refusal)
+        elif surviving:
             probe = _embedding_model()
-            if target.provenance.model_id != str(probe.path_or_uri):
-                flags.append(
-                    f"target embedding model {target.provenance.model_id} is not the probe "
-                    f"{probe.path_or_uri}; embeddings from different models are not comparable"
+            labels = sorted({speaker for _, speaker, _ in surviving})
+            audios: list[Audio] = []
+            for label in labels:
+                slices = [
+                    plain.waveform[:, int(s * sr) : int(e * sr)] for _, speaker, (s, e) in surviving if speaker == label
+                ]
+                audios.append(Audio(waveform=torch.cat(slices, dim=1), sampling_rate=sr))
+            embedding_agent = store.agent(
+                agent_type="model", model_id=str(probe.path_or_uri), commit_sha=probe.commit_sha
+            )
+            store.was_associated_with(identify, embedding_agent)
+            embeddings = extract_speaker_embeddings_from_audios(audios, model=probe)
+            target_vector = torch.tensor(target.vector, dtype=torch.float32)
+            cut = float(values["target_match_cosine"])
+            best: tuple[float, str] | None = None
+            for label, embedding in zip(labels, embeddings):
+                similarity = _cosine(embedding, target_vector)
+                match_id = store.entity(
+                    prov_type="target_match",
+                    extent=None,
+                    attributes={
+                        "speaker": label,
+                        "similarity": similarity,
+                        "threshold": cut,
+                        "target_model": target.provenance.model_id,
+                        "target_commit": target.provenance.model_commit_sha,
+                        "probe_model": str(probe.path_or_uri),
+                        "probe_commit": probe.commit_sha,
+                        "stream": plain_id,
+                    },
                 )
-            elif surviving:
-                labels = sorted({speaker for _, speaker, _ in surviving})
-                audios: list[Audio] = []
-                for label in labels:
-                    slices = [
-                        plain.waveform[:, int(s * sr) : int(e * sr)]
-                        for _, speaker, (s, e) in surviving
-                        if speaker == label
-                    ]
-                    audios.append(Audio(waveform=torch.cat(slices, dim=1), sampling_rate=sr))
-                embedding_agent = store.agent(
-                    agent_type="model", model_id=str(probe.path_or_uri), commit_sha=probe.commit_sha
-                )
-                store.was_associated_with(identify, embedding_agent)
-                embeddings = extract_speaker_embeddings_from_audios(audios, model=probe)
-                target_vector = torch.tensor(target.vector, dtype=torch.float32)
-                cut = float(values["target_match_cosine"])
-                best: tuple[float, str] | None = None
-                for label, embedding in zip(labels, embeddings):
-                    similarity = _cosine(embedding, target_vector)
-                    match_id = store.entity(
-                        prov_type="target_match",
-                        extent=None,
-                        attributes={
-                            "speaker": label,
-                            "similarity": similarity,
-                            "threshold": cut,
-                            "target_model": target.provenance.model_id,
-                            "target_commit": target.provenance.model_commit_sha,
-                            "probe_model": str(probe.path_or_uri),
-                            "probe_commit": probe.commit_sha,
-                            "stream": plain_id,
-                        },
-                    )
-                    store.was_generated_by(match_id, identify)
-                    store.was_attributed_to(match_id, embedding_agent)
-                    view.append(match_id)
-                    if best is None or similarity > best[0]:
-                        best = (similarity, label)
-                if best is not None and best[0] >= cut:
-                    target_speaker = best[1]
-                else:
-                    flags.append("a target was given and no speaker matches it")
+                store.was_generated_by(match_id, identify)
+                store.was_attributed_to(match_id, embedding_agent)
+                view.append(match_id)
+                if best is None or similarity > best[0]:
+                    best = (similarity, label)
+            if best is not None and best[0] >= cut:
+                target_speaker = best[1]
+            else:
+                flags.append("a target was given and no speaker matches it")
 
     # Step 7 — PII: scan both hypotheses per span; the decision is speaker-scoped and this branch's own.
     pii_act = store.activity(node=NODE, step="pii", parameters={"systems": [CRISPERWHISPER_ID, QWEN_ID]})

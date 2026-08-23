@@ -464,6 +464,89 @@ def test_target_with_provenance_requires_the_null_cosine_key(seed_speech_store: 
     assert store.fingerprint() == before, "the refusal precedes any store write"
 
 
+def test_provenanced_target_from_another_model_is_refused_like_a_commitless_one(
+    seed_speech_store: SeedSpeechStore,
+) -> None:
+    """Comparability gates the cut, not provenance alone: a wrong-model target is refused, never read."""
+    hint = AudioHints(
+        target_speaker=TargetSpeakerEmbedding(
+            vector=[1.0, 0.0],
+            provenance=SpeakerEmbeddingProvenance(model_id="pyannote/embedding", model_commit_sha="b" * 40),
+        )
+    )
+    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)  # target_match_cosine is null here
+    # the autouse fake for extract_speaker_embeddings_from_audios raises AssertionError if called
+    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.FLAG
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert any("not comparable" in f for f in verdict.attributes["flags"]), "refused, with the reason recorded"
+    assert not store.entities("target_match"), "no comparison happened"
+
+
+def test_pii_whose_speaker_is_unresolved_flags_when_a_target_is_known(
+    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N12: a finding on a word straddling two segments is treated as the target's and flags."""
+    words = [("alice", 1.0, 1.3), ("bob", 2.0, 2.3)]
+    target_yaml = "speech:\n  word_gap_ms: 300\n  target_match_cosine: 0.5\n"
+    hint = AudioHints(
+        target_speaker=TargetSpeakerEmbedding(
+            vector=[1.0, 0.0],
+            provenance=SpeakerEmbeddingProvenance(
+                model_id="speechbrain/spkrec-ecapa-voxceleb", model_commit_sha="a" * 40
+            ),
+        )
+    )
+
+    def fake_diarize(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
+        # On the cropped clock the boundary falls inside "alice", so that word straddles both segments.
+        return [
+            [
+                ScriptLine(speaker="SPEAKER_00", start=0.0, end=0.15),
+                ScriptLine(speaker="SPEAKER_01", start=0.15, end=1.3),
+            ]
+        ]
+
+    def fake_embed(audios: list[Audio], model: Any = None, device: Any = None) -> list[torch.Tensor]:  # noqa: ANN401
+        return [torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0])][: len(audios)]
+
+    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
+    monkeypatch.setattr(speech_module, "extract_speaker_embeddings_from_audios", fake_embed)
+    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
+    monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding("alice", "PERSON"))
+    store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
+    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes.get("target_speaker") == "SPEAKER_00", "a target is known"
+    (straddler,) = [w for w in _consensus_words(store) if w.attributes["text"] == "alice"]
+    assert straddler.attributes["speaker"] is None and straddler.attributes["speaker_note"] == "straddles"
+    assert result.verdict.outcome is Outcome.FLAG
+    assert any("cannot be resolved" in f for f in verdict.attributes["flags"]), "treated as the target's"
+
+
+def test_a_detector_failure_message_never_reaches_the_store_or_the_verdict(
+    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure message can quote the scanned text; only the detector and the exception type escape."""
+    sentinel = "LEAKED-PII-TEXT"
+    monkeypatch.setattr(
+        speech_module,
+        "scan_for_pii",
+        lambda inputs, **kw: [
+            PiiScan(spans=[], detectors_used=["presidio"], failures={"gliner": f"ValueError: {sentinel}"})
+            for _ in inputs
+        ],
+    )
+    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    dumped = json.dumps([(e.prov_type, e.attributes) for e in store.entities()], default=str)
+    assert sentinel not in dumped, "no entity carries a detector's failure message"
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert sentinel not in json.dumps(verdict.attributes, default=str)
+    assert sentinel not in result.verdict.why
+    assert any("gliner" in f and "ValueError" in f for f in verdict.attributes["flags"]), "detector and type remain"
+
+
 def test_quality_is_reported_never_gating(seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch) -> None:
     """Terrible SQUIM numbers and real disruptions leave a pass a pass."""
     monkeypatch.setattr(
