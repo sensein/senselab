@@ -131,6 +131,14 @@ derivation: |
   computed over one 10.24 s analysis frame. Recorded on the AST member -- including an abstained
   one, whose inference still ran -- so the score it measured names the frame it was measured over.
 
+  VOICE additions (plan-nodes-2 N21, N22, N25). phonation.period_doubling_factor 2.0 is the
+  definition of period doubling -- an identity, not a fitted value. voice.hint_tags is vocabulary
+  from the design documents' own member names, not fitted; extended by override. UNSET, continued:
+    phonation.hnr_floor_interval_db, phonation.rms_floor_interval: the near-edge intervals were
+    measured as normalised autocorrelation -- the same (0.44, 0.933) and (0.0007, 0.0161) named
+    above -- and the gate now reads Praat harmonicity in dB and RMS, so the units do not transfer.
+    While null the near-edge flag is inert and the verdict records gate_interval "unmeasured".
+
 resample:
   target_hz: 16000
 
@@ -191,6 +199,12 @@ phonation:
   hop_s: 0.01
   silence_threshold: 0.1
   periods_per_window: 4.5
+  period_doubling_factor: 2.0        # N21 -- the definition of period doubling; an identity
+  hnr_floor_interval_db: null        # N22 -- measured in other units (see derivation); does not transfer
+  rms_floor_interval: null           # N22
+
+voice:
+  hint_tags: [phonation, humming, sustained-vowel, voice]   # N25 -- vocabulary, not fitted
 
 speech:
   word_gap_ms: null

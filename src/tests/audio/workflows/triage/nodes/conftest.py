@@ -232,3 +232,107 @@ def seed_airway_store(tmp_path: Path, config: TriageConfig) -> Callable[..., dic
         return {"stream": stream_id, "spans": span_ids, "yamnet": yamnet_id, "words": word_ids}
 
     return _seed
+
+
+@pytest.fixture
+def seed_voice_store(tmp_path: Path) -> Callable[..., dict]:
+    """A seeder writing the store surface VOICE reads, constructed directly.
+
+    A ``plain`` stream WAV carrying a 220 Hz tone inside each ``loud`` interval (defaulting to the
+    ``energetic`` ones), the ``energy_envelope`` npz sidecar with both tracks and the envelope
+    raised over its floor inside each ``energetic`` interval, PREPROCESS ``span`` entities, AIRWAY
+    ``label`` assertions over the ``airway_labelled`` spans, SPEECH ``span`` entities and,
+    optionally, the ``silence`` measurement.
+    """
+
+    def _seed(
+        store: ProvStore,
+        *,
+        energetic: tuple = (),
+        airway_labelled: tuple = (),
+        speech_spans: tuple = (),
+        unlabelled_spans: tuple = (),
+        loud: tuple | None = None,
+        silence_windows: list | None = None,
+        duration_s: float = 7.0,
+    ) -> dict:
+        """Seed one store; returns the ids of what it wrote."""
+        envelope_rate = 1000
+        sampling_rate = 16000
+        (tmp_path / "streams").mkdir(exist_ok=True)
+        (tmp_path / "derivatives").mkdir(exist_ok=True)
+        rng = np.random.default_rng(0)
+        x = (rng.standard_normal(int(duration_s * sampling_rate)) * 1e-4).astype(np.float32)
+        for start, end in energetic if loud is None else loud:
+            i0, i1 = int(start * sampling_rate), int(end * sampling_rate)
+            t = np.arange(i1 - i0) / sampling_rate
+            x[i0:i1] += (0.3 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+        wav_name = f"plain-{store.run_id}.wav"
+        sf.write(str(tmp_path / "streams" / wav_name), x, sampling_rate)
+
+        n = int(duration_s * envelope_rate)
+        floor = np.full(n, -60.0)
+        envelope = np.full(n, -70.0)
+        for start, end in energetic:
+            envelope[int(start * envelope_rate) : int(end * envelope_rate)] = -30.0
+        np.savez(tmp_path / "derivatives" / "energy_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
+
+        preprocess = store.activity(node="PREPROCESS", step="seed-voice", parameters={})
+        airway_act = store.activity(node="AIRWAY", step="seed-voice", parameters={})
+        speech_act = store.activity(node="SPEECH", step="seed-voice", parameters={})
+        ids: dict = {"labelled_spans": [], "labels": [], "unlabelled_spans": [], "speech_spans": []}
+        stream_id = store.entity(
+            prov_type="stream",
+            extent=(0.0, duration_s),
+            attributes={"name": "plain", "path": f"streams/{wav_name}", "sampling_rate": sampling_rate},
+        )
+        store.was_generated_by(stream_id, preprocess)
+        ids["stream"] = stream_id
+        envelope_id = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "energy_envelope",
+                "path": "derivatives/energy_envelope.npz",
+                "sampling_rate": envelope_rate,
+            },
+        )
+        store.was_generated_by(envelope_id, preprocess)
+        ids["envelope"] = envelope_id
+        for start, end in airway_labelled:
+            span_id = store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised"},
+            )
+            store.was_generated_by(span_id, preprocess)
+            label_id = store.entity(
+                prov_type="assertion", extent=(start, end), attributes={"verb": "label", "label": "Cough"}
+            )
+            store.was_generated_by(label_id, airway_act)
+            store.was_derived_from(label_id, span_id)
+            ids["labelled_spans"].append(span_id)
+            ids["labels"].append(label_id)
+        for start, end in unlabelled_spans:
+            span_id = store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={"peak_over_floor_db": 25.0, "k_db": 18.0, "signal": "preemphasised"},
+            )
+            store.was_generated_by(span_id, preprocess)
+            ids["unlabelled_spans"].append(span_id)
+        for start, end in speech_spans:
+            span_id = store.entity(prov_type="span", extent=(start, end), attributes={"source": "words"})
+            store.was_generated_by(span_id, speech_act)
+            ids["speech_spans"].append(span_id)
+        if silence_windows is not None:
+            silence_id = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": "silence", "signal": "plain", "threshold": 0.5, "windows": silence_windows},
+            )
+            store.was_generated_by(silence_id, preprocess)
+            ids["silence"] = silence_id
+        return ids
+
+    return _seed
