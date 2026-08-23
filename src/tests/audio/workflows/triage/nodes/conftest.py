@@ -473,3 +473,116 @@ def seed_speech_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         return store, load_triage_config(override), run_dir
 
     return _make
+
+
+@pytest.fixture
+def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageConfig, Path]]:
+    """Build ``(store, config, run_dir)`` as PREPROCESS and SPEECH leave them for REDACT.
+
+    ``findings`` are ``((start, end), category)`` or ``((start, end), category, speaker)`` tuples;
+    each writes a ``pii`` entity, a SPEECH word covering it carrying the ``pii`` label assertion
+    and, once per store (unless ``scanned`` is False), the ``pii_scan`` measurement — the shapes
+    Task 5's node writes. Both recognizers' PREPROCESS word entities and model agents are always
+    written so verification can name them. ``config_yaml`` is the production override mechanism,
+    defaulting to the one unmeasured key every REDACT test needs.
+    """
+
+    def _make(
+        _tmp_path: Path | None = None,
+        *,
+        findings: tuple = (),
+        words: tuple = (("hello", 0.2, 0.5, "SPEAKER_00"), ("world", 2.0, 2.3, "SPEAKER_00")),
+        scanned: bool = True,
+        config_yaml: str = "redaction:\n  padding_ms: 50\n",
+    ) -> tuple[ProvStore, TriageConfig, Path]:
+        from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
+
+        sr = 16000
+        duration_s = max([5.0, *(float(extent[1]) + 1.0 for extent, *_ in findings)])
+        rng = np.random.default_rng(0)
+        wave = (0.05 * rng.standard_normal(int(duration_s * sr))).astype(np.float32)
+        run_dir = tmp_path / "run"
+        (run_dir / "streams").mkdir(parents=True, exist_ok=True)
+        sf.write(str(run_dir / "streams" / "plain.wav"), wave, sr)
+
+        store = ProvStore(run_id="t")
+        pre = store.activity(node="PREPROCESS", step=None, parameters={})
+        recording = store.entity(
+            prov_type="stream",
+            extent=(0.0, duration_s),
+            attributes={"name": "recording", "path": "streams/plain.wav", "sampling_rate": sr, "channels": 1},
+        )
+        store.was_generated_by(recording, pre)
+
+        for model_id, sha in ((CRISPERWHISPER_ID, "c" * 40), (QWEN_ID, "d" * 40)):
+            agent = store.agent(agent_type="model", model_id=model_id, commit_sha=sha)
+            asr_act = store.activity(node="PREPROCESS", step=f"asr:{model_id}", parameters={"model": model_id})
+            store.was_associated_with(asr_act, agent)
+            raw_id = store.entity(
+                prov_type="word", extent=(0.2, 0.5), attributes={"text": "hello", "recognizer": model_id}
+            )
+            store.was_generated_by(raw_id, asr_act)
+
+        speech_act = store.activity(node="SPEECH", step="identify", parameters={})
+        pii_act = store.activity(node="SPEECH", step="pii", parameters={})
+        word_rows = sorted(
+            list(words)
+            + [
+                (f"secret{i}", float(extent[0]), float(extent[1]), (rest[0] if rest else "SPEAKER_00"))
+                for i, (extent, _category, *rest) in enumerate(findings)
+            ],
+            key=lambda row: float(row[1]),
+        )
+        word_ids: list[str] = []
+        for text, start, end, speaker in word_rows:
+            word_id = store.entity(
+                prov_type="word",
+                extent=(float(start), float(end)),
+                attributes={"text": str(text), "speaker": speaker, "stream": recording},
+            )
+            store.was_generated_by(word_id, speech_act)
+            word_ids.append(word_id)
+
+        for extent, category, *_rest in findings:
+            pii_id = store.entity(
+                prov_type="pii",
+                extent=(float(extent[0]), float(extent[1])),
+                attributes={
+                    "category": category,
+                    "source": "presidio",
+                    "asr_model": CRISPERWHISPER_ID,
+                    "detectors_used": ["gliner", "presidio", "rules"],
+                    "detectors_failed": [],
+                },
+            )
+            store.was_generated_by(pii_id, pii_act)
+            mark_id = store.entity(
+                prov_type="assertion",
+                extent=(float(extent[0]), float(extent[1])),
+                attributes={"verb": "label", "label": "pii", "category": category},
+            )
+            store.was_generated_by(mark_id, pii_act)
+            covering = next(
+                (
+                    word_id
+                    for word_id, row in zip(word_ids, word_rows)
+                    if float(row[1]) < float(extent[1]) and float(row[2]) > float(extent[0])
+                ),
+                None,
+            )
+            if covering is not None:
+                store.was_derived_from(mark_id, covering)
+
+        if scanned:
+            scan_id = store.entity(
+                prov_type="measurement",
+                extent=None,
+                attributes={"name": "pii_scan", "scanned_by": ["gliner", "presidio", "rules"], "failed": []},
+            )
+            store.was_generated_by(scan_id, pii_act)
+
+        override = tmp_path / "redact-override.yaml"
+        override.write_text(config_yaml)
+        return store, load_triage_config(override), run_dir
+
+    return _make
