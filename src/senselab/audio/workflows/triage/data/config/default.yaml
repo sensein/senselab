@@ -138,7 +138,8 @@ derivation: |
     taxonomy.min_families.*: the asymmetry is known -- airway has three eligible families, speech two
       -- but neither count has a derived value.
     quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
-      so SPEECH's quality fail is unreachable by design until they do.
+      so SPEECH's quality fail is unreachable by design until they do. Reserved: read by nothing yet;
+      SPEECH step 8 reports without gating until these are measured AND wired.
 
   Hint tag vocabularies (speech.hint_tags, voice.hint_tags) -- which may_contain tags count as a
   caller asserting each kind, seeded from the design documents' own member names. Vocabulary, not
