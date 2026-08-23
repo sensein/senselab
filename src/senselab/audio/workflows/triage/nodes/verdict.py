@@ -1,0 +1,213 @@
+"""The VERDICT node: the store's contents read into the vocabulary's fold, and the result recorded.
+
+The fold itself is ``vocabulary.fold_file_verdict``; this node maps store facts onto its inputs and
+writes its result back. The two axes it keeps apart — triage and release — and the mapping table it
+implements are in ``specs/20260817-triage-workflow-dag/verdict.md``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+
+from senselab.audio.data_structures import AudioHints
+from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
+from senselab.audio.workflows.triage.vocabulary import (
+    FileVerdict,
+    KindState,
+    NodeVerdict,
+    Outcome,
+    Release,
+    RunState,
+    fold_file_verdict,
+)
+from senselab.utils.prov_store import Entity, ProvStore
+
+NODE = "VERDICT"
+
+_GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "VOICE", "REDACT")
+_NOT_SCREENED = "not_screened"
+
+
+@dataclass(frozen=True)
+class VerdictResult(NodeResult):
+    """What VERDICT returns.
+
+    Attributes:
+        file_verdict: The graph's conclusion about the recording, on both axes.
+    """
+
+    file_verdict: FileVerdict
+
+
+def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
+    """The vocabulary verdict a ``write_verdict`` entity carries.
+
+    Args:
+        entity: A ``verdict`` entity.
+
+    Returns:
+        Its vocabulary verdict.
+    """
+    attributes = entity.attributes
+    return NodeVerdict(
+        node=attributes["node"],
+        outcome=Outcome(attributes["outcome"]),
+        kind=attributes.get("kind"),
+        why=attributes["why"],
+    )
+
+
+def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVerdict]]:
+    """Node verdict entities, ordered by the graph, with nodes outside it last.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        One ``(entity, verdict)`` pair per node verdict; the file verdict itself is excluded by its
+        ``node`` attribute, which is the only discriminator the entity carries.
+    """
+    pairs = [
+        (entity, _node_verdict_from_entity(entity))
+        for entity in store.entities("verdict")
+        if entity.attributes.get("node") != NODE
+    ]
+    return sorted(
+        pairs,
+        key=lambda pair: _GRAPH_ORDER.index(pair[1].node) if pair[1].node in _GRAPH_ORDER else len(_GRAPH_ORDER),
+    )
+
+
+def _kind_predictions(store: ProvStore) -> tuple[dict[str, KindState], list[str]]:
+    """TAXONOMY's kind entities as ``KindState``s; ``not_screened`` is ``UNDECIDED`` (N27).
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The predictions per kind and the ids of the entities they came from.
+    """
+    predictions: dict[str, KindState] = {}
+    ids: list[str] = []
+    for entity in store.entities("kind"):
+        state = entity.attributes["state"]
+        predictions[entity.attributes["kind"]] = KindState.UNDECIDED if state == _NOT_SCREENED else KindState(state)
+        ids.append(entity.id)
+    return predictions, ids
+
+
+def _release_from(verdicts: Sequence[NodeVerdict]) -> Release:
+    """REDACT's outcome as a release state; an absent verdict means unexamined, never releasable.
+
+    Args:
+        verdicts: Every node verdict read from the store.
+
+    Returns:
+        The release state for REDACT's artifacts only — never for anything in the store.
+    """
+    redact = next((v for v in verdicts if v.node == "REDACT"), None)
+    if redact is None:
+        return Release.NOT_ASSESSED
+    return Release.WITHHELD if redact.outcome is Outcome.FAIL else Release.RELEASABLE
+
+
+def _derived_ran(verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
+    """Whether each graph node ran, as far as the store can say (N26).
+
+    Args:
+        verdicts: Every node verdict read from the store.
+
+    Returns:
+        ``COMPLETED`` for every node carrying a verdict and ``SKIPPED`` for every other graph node.
+        ``ERRORED`` never appears: a node that raised wrote no verdict and is indistinguishable here
+        from one that was never asked to run.
+    """
+    concluded = {v.node for v in verdicts}
+    return {node: RunState.COMPLETED if node in concluded else RunState.SKIPPED for node in _GRAPH_ORDER}
+
+
+def _is_gated(predictions: Mapping[str, KindState], verdicts: Sequence[NodeVerdict]) -> bool:
+    """Whether any absent-predicted kind went without a branch verdict.
+
+    Args:
+        predictions: TAXONOMY's prediction per kind.
+        verdicts: Every node verdict read from the store.
+
+    Returns:
+        True when at least one kind predicted absent has no branch verdict to be read against, so
+        the contradiction check never happened for it.
+    """
+    screened = {v.kind for v in verdicts if v.kind}
+    return any(state is KindState.ABSENT and kind not in screened for kind, state in predictions.items())
+
+
+def verdict(
+    store: ProvStore,
+    source: None,
+    config: TriageConfig,
+    hint: AudioHints | None = None,
+    *,
+    run_dir: Path,
+    ran: Mapping[str, RunState] | None = None,
+) -> VerdictResult:
+    """Fold every node's verdict, TAXONOMY's kinds and REDACT's release into one file verdict.
+
+    Args:
+        store: The provenance store, holding every node's ``verdict`` entity and TAXONOMY's ``kind``
+            entities. This node reads nothing else.
+        source: Accepted for the shared node shape; not read.
+        config: The triage configuration, named in the activity by its hash. VERDICT has no
+            thresholds.
+        hint: Accepted for the shared node shape; not read.
+        run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
+        ran: Whether each node ran, from the runner. When omitted it is derived from which nodes
+            wrote a verdict, and that derivation cannot see ``errored``: a node that raised is
+            recorded as ``skipped`` (N26).
+
+    Returns:
+        The file verdict on both axes, the verdict entity it was written to, and a view leading with
+        that entity followed by every id the fold consumed.
+    """
+    pairs = _node_verdicts_in_graph_order(store)
+    node_verdicts = [node_verdict for _, node_verdict in pairs]
+    predictions, kind_ids = _kind_predictions(store)
+    resolved_ran = dict(ran) if ran is not None else _derived_ran(node_verdicts)
+    file_verdict = fold_file_verdict(node_verdicts, predictions, resolved_ran, release=_release_from(node_verdicts))
+    gated = _is_gated(predictions, node_verdicts)
+
+    software = software_agent(store)
+    activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash})
+    store.was_associated_with(activity, software)
+    folded_ids = [entity.id for entity, _ in pairs] + kind_ids
+    for folded_id in folded_ids:
+        store.used(activity, folded_id)
+
+    verdict_id, node_verdict = write_verdict(
+        store,
+        activity,
+        software,
+        node=NODE,
+        outcome=file_verdict.triage,
+        kind=None,
+        why=f"folded {len(node_verdicts)} node verdicts over {len(predictions)} screened kinds",
+        detail={
+            "triage": file_verdict.triage.value,
+            "release": file_verdict.release.value,
+            "kinds": {kind: state.value for kind, state in file_verdict.kinds.items()},
+            "ran": {node: state.value for node, state in file_verdict.ran.items()},
+            "screened": bool(predictions),
+            "gated": gated,
+            "reasons": [
+                {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in file_verdict.reasons
+            ],
+        },
+    )
+    return VerdictResult(
+        verdict=node_verdict,
+        view=(verdict_id, *folded_ids),
+        verdict_entity_id=verdict_id,
+        file_verdict=file_verdict,
+    )
