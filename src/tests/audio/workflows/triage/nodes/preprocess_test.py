@@ -13,9 +13,11 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as node
 from senselab.audio.workflows.triage.nodes.admit import admit
+from senselab.audio.workflows.triage.nodes.common import clamp_extent
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult, preprocess
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import ScriptLine
@@ -299,6 +301,78 @@ class TestModelDerivatives:
         measurement = _measurement(store, "asr_crisperwhisper")
         assert measurement.attributes["untimed_chunks_n"] == 1
         assert "doctor" in measurement.attributes["transcript"], "the transcript keeps what the recognizer said"
+
+    def test_a_chunk_starting_past_the_decode_is_dropped_and_counted(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        mock_models: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hallucinated word timed after the file ends is not a word; it is a count.
+
+        Observed in production: on a 5.76 s recording Qwen returned words at 11.32 s and 29.08 s.
+        A start at-or-past the decode duration names no sample of this recording, so no word entity
+        is written; the text stays in the transcript, as an untimed chunk's does.
+        """
+
+        def hallucinating_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
+            chunks = [
+                ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
+                ScriptLine(text="podcast", start=11.32, end=11.60, score=0.9),
+            ]
+            return [ScriptLine(text="hello podcast", start=1.50, end=11.60, chunks=chunks, score=0.9)]
+
+        monkeypatch.setattr(node, "transcribe_audios", hallucinating_transcribe)
+        _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
+        words = store.entities("word")
+        assert [w.extent for w in words] == [(1.50, 1.58), (1.50, 1.58)], "one in-bounds word per recognizer"
+        measurement = _measurement(store, "asr_crisperwhisper")
+        assert measurement.attributes["out_of_bounds_chunks_n"] == 1
+        assert measurement.attributes["untimed_chunks_n"] == 0
+        assert "podcast" in measurement.attributes["transcript"], "the transcript keeps what was said"
+
+    def test_a_chunk_overshooting_the_decode_end_is_clamped_not_dropped(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        mock_models: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A word that starts inside the recording and ends past it is plausibly real with a bad end.
+
+        The clamp here is semantic and unbounded in size, which is what distinguishes it from
+        ``nodes.common.clamp_extent``: that one bounds float noise within a single sample period and
+        raises on anything larger. The raw extent would raise there; the stored one does not, which
+        is what stops SPEECH's slice of this word from crashing.
+        """
+
+        def overshooting_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
+            chunks = [ScriptLine(text="hello", start=0.30, end=6.10, score=0.9)]
+            return [ScriptLine(text="hello", start=0.30, end=6.10, chunks=chunks, score=0.9)]
+
+        monkeypatch.setattr(node, "transcribe_audios", overshooting_transcribe)
+        _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
+        plain = Audio(filepath=str(tmp_path / "streams" / "plain.wav"))
+        words = store.entities("word")
+        assert [w.extent for w in words] == [(0.30, 5.76), (0.30, 5.76)], "the end is bound by the decode"
+        measurement = _measurement(store, "asr_crisperwhisper")
+        assert measurement.attributes["out_of_bounds_chunks_n"] == 0, "a clamped word was not dropped"
+        with pytest.raises(ValueError, match="more than one sample period"):
+            clamp_extent((0.30, 6.10), plain)
+        assert clamp_extent(words[0].extent or (0.0, 0.0), plain) == (0.30, 5.76)
+
+    def test_an_in_bounds_chunk_keeps_the_timings_the_recognizer_gave(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
+    ) -> None:
+        """Bounding touches nothing that was already inside the recording."""
+        _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
+        words = store.entities("word")
+        assert {w.extent for w in words} == {(1.50, 1.58), (1.60, 1.66)}
+        for name in ("asr_crisperwhisper", "asr_qwen"):
+            assert _measurement(store, name).attributes["out_of_bounds_chunks_n"] == 0
 
     def test_the_aligner_agent_names_the_model_not_its_whole_spec(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
