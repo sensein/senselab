@@ -4,29 +4,33 @@
 
 **Goal:** Implement the last four nodes of the audio-triage workflow — SPEECH, VOICE, REDACT, VERDICT — over the merged foundation (`ProvStore`, the triage config, the vocabulary, and the six DSP/redaction tasks).
 
-**Scope split:** This plan is Tasks 5–8. The first four nodes — ADMIT, PREPROCESS, TAXONOMY, AIRWAY — are Tasks 1–4 in `plan-nodes-1.md`, planned by a sibling. The two plans answer to the same design documents; where this plan names an element the earlier nodes write, it uses the design documents' own vocabulary (`prov_type` plus attributes), and **the plan reviewer reconciles the two plans' namings**. Nothing here plans, modifies, or assumes internals of the sibling's four nodes beyond what `preprocess.md`, `taxonomy.md`, `branch-airway.md` and `store.md` state.
+**Scope split:** This plan is Tasks 5–8. The first four nodes — ADMIT, PREPROCESS, TAXONOMY, AIRWAY — are Tasks 1–4 in `plan-nodes-1.md`, planned by a sibling. The two plans answer to the same design documents; where this plan names an element the earlier nodes write, it now uses **the sibling plan's store-schema contract** (its §"What the sibling plan's nodes read"), reconciled by the plan review. Nothing here plans, modifies, or assumes internals of the sibling's four nodes beyond that contract.
 
-**Architecture:** Each node is one module in `src/senselab/audio/workflows/triage/nodes/`, taking the store and the config, writing entities/activities/agents/relations to the store, and returning a `NodeProduct` — outcome + verdict + view, never a copy of the store's content. The branches are **not** concurrent: SPEECH reads AIRWAY's labelled spans (optionally — no labels means no withdrawals), VOICE's residual subtracts both AIRWAY's and SPEECH's claims and its read is not optional. Only `REDACT ∥ VOICE` survives as concurrency. No orchestrator is built here.
+**Architecture:** Each node is one module in `src/senselab/audio/workflows/triage/nodes/`, taking the store, a source, the config and an optional hint (the sibling Task 1 contract), writing entities/activities/agents/relations to the store, and returning a `NodeResult` — verdict + view + verdict-entity id, never a copy of the store's content. The branches are **not** concurrent: SPEECH reads AIRWAY's labelled spans (optionally — no labels means no withdrawals), VOICE's residual subtracts both AIRWAY's and SPEECH's claims and its read is not optional. Only `REDACT ∥ VOICE` survives as concurrency. No orchestrator is built here.
 
 **Tech Stack:** Python 3.12, pydantic v2, numpy, scipy, pytest. uv for everything.
 
-## Hard prerequisite: the separation backend is not on this branch
+## Prerequisite, now satisfied: the ClearVoice separation backend is on the merged tree
 
-Verified by reading the tree at the start of planning: `design/triage-workflow-dag`'s
-`src/senselab/audio/tasks/source_separation/api.py` has **only the unasdiff backend**, and its
-containment check **refuses** any `HFModel` whose id does not start with `sensein/unasdiff` — so the
-`separate_audios(audios, model=HFModel("alibabasglab/MossFormer2_SS_16K"), n_sources=2)` call that
-`capability-map.md` §1.5 documents raises `ValueError` on this branch. `utils/clearvoice.py` does not
-exist here either. Both exist on branch **`triage`** (verified:
-`git show triage:src/senselab/audio/tasks/source_separation/api.py` dispatches through
-`is_clearvoice_model_id` to `separate_audios_with_clearvoice(audios, model, device=None, timeout_s=None)`,
-and refuses `n_sources != spec.expected_outputs`). `capability-map.md` describes the `triage` branch
-accurately, not this one — the map is evidence, and on this point it is evidence about a different tree.
+The `triage` merge has happened. On the tree this plan executes on (commit `33bf65ad`),
+`src/senselab/audio/tasks/source_separation/api.py:115-145` dispatches an `HFModel` naming a
+ClearVoice separation checkpoint (`is_clearvoice_model_id`, i.e. `alibabasglab/MossFormer2_SS_16K`)
+to `separate_audios_with_clearvoice(audios, model, device=None, timeout_s=None) -> List[List[Audio]]`.
+Verified constraints of the real dispatch, all binding on Task 5's call:
 
-**Before Task 5's separation step, merge `triage` into this branch** and re-verify
-`separate_audios`'s signature against the merged tree. Everything in Task 5 up to step 5, and all of
-Tasks 6–8, has no dependency on the merge. (The sibling's plan carries the matching prerequisite for
-HeAR; if it has already merged `triage`, re-verify and move on.)
+- **The unasdiff-only arguments must stay at their defaults.** `mode`, `source_classes`, `seed` and
+  `diffusion_steps` are refused (`ValueError`) when set alongside a ClearVoice model
+  (`api.py:117-129`); the node passes none of them.
+- **`n_sources` must equal the checkpoint's fixed output count, 2** (`api.py:130-134`).
+- **`parameters` is validated against the ClearVoice backend's own signature**; ClearVoice declares
+  nothing beyond `timeout_s`, which is already a named argument, so the node omits `parameters` and
+  forwards `timeout_s` only if it has one to forward (`api.py:135-142`).
+- Each output `Audio` carries a `metadata["clearvoice"]` record — keys `model`, `commit`,
+  `capability`, `sampling_rate`, `source_index`, `n_sources`, `input_norm_scalar`,
+  `input_norm_applied_to_output` (`tasks/clearvoice.py:103-112`). For a two-source separation the
+  input normalisation is **not** applied to the outputs (`input_norm_applied_to_output` is false):
+  sources come back RMS-matched to an input normalised to −25 dBFS, not to the caller's level, so
+  absolute level is destroyed on separated streams (N28).
 
 ## Global Constraints
 
@@ -52,84 +56,100 @@ this plan elide pytest fixture parameters (`tmp_path`, `monkeypatch`) and shared
 brevity; the implementer writes each test in full, with a docstring and `-> None`, taking every
 fixture it uses.
 
-## Assumed shared contract — the reviewer reconciles this against `plan-nodes-1.md` Task 1
+## The shared contract — `plan-nodes-1.md` Task 1, as built there
 
-The sibling's Task 1 defines the node contract. This plan **consumes** that contract and restates here
-exactly what it depends on, mirroring the design documents' product sections. If the sibling's Task 1
-names any of this differently, the reviewer reconciles; an implementer of Tasks 5–8 must read the merged
-Task 1 as built, not this restatement.
+The sibling's Task 1 defines the node contract; this plan **consumes** it. What follows is that
+contract as the sibling states it (reconciled by the plan review); an implementer of Tasks 5–8 reads
+the merged Task 1 as built where the two ever differ.
 
 **Module layout.** Nodes at `src/senselab/audio/workflows/triage/nodes/<name>.py` (`speech.py`,
 `voice.py`, `redact.py`, `verdict.py`), shared helpers at
-`src/senselab/audio/workflows/triage/elements.py`. Tests mirror at
-`src/tests/audio/workflows/triage/nodes/<name>_test.py`.
+`src/senselab/audio/workflows/triage/nodes/common.py` (built by Task 1 — **not** a separate
+`elements.py`). `nodes/__init__.py` already exists from Task 1. Tests mirror at
+`src/tests/audio/workflows/triage/nodes/<name>_test.py`, sharing Task 1's `conftest.py`.
 
-**Node signature convention.** Every node takes `(store: ProvStore, config: TriageConfig, run_dir: Path)`
-plus what its design doc names: `hint: AudioHints | None` for the branches, an `artifacts_dir` for
-REDACT, nothing extra for VERDICT. Nodes load audio **through the store**: ADMIT/PREPROCESS write the
-recording and its resampled/pre-emphasised derivatives as WAV sidecars under `run_dir`, each recorded as
-a `stream` entity whose attributes carry the relative `path` and `sampling_rate`; a branch resolves the
-entity, records `used`, and constructs `Audio(filepath=run_dir / attrs["path"])`. Heavy arrays (the
-envelope, its floor) are `.npz` sidecars under `run_dir / "derivatives"` referenced by `measurement`
-entities carrying `{"name", "path", "sampling_rate"}`.
+**Node signature convention** (Task 1's shape, binding):
 
-**Helpers from `elements.py`** (signatures as the sibling's Task 1 produces them):
+```python
+def <node>(store: ProvStore, source: <per-node>, config: TriageConfig,
+           hint: AudioHints | None = None, *, run_dir: Path) -> <Node>Result: ...
+```
+
+| node | `source` | extra keyword-only args | returns |
+| --- | --- | --- | --- |
+| SPEECH | `str` — the store-held stream name, `"plain"` | — | `NodeResult` |
+| VOICE | `str` — `"plain"` | — | `NodeResult` |
+| REDACT | `str` — `"recording"` (full fidelity, N17) | `artifacts_dir: Path` | `RedactResult(NodeResult)` with `.artifacts` |
+| VERDICT | `None` — accepted for the shared shape, unread (it reads only the store) | `ran: Mapping[str, RunState] \| None = None` | `VerdictResult(NodeResult)` with `.file_verdict` |
+
+REDACT and VERDICT accept `hint` for the shared shape and do not read it (the same convention the
+sibling's N21 sets for TAXONOMY). Nodes load audio **through the store** via
+`common.resolve_stream(store, run_dir, name) -> (entity_id, Audio)`, recording `used` on the id.
+Heavy arrays (the envelope and its floor) are one `.npz` sidecar under `run_dir / "derivatives"`
+referenced by a `measurement` entity carrying `{"name", "path", "sampling_rate"}`.
+
+**Helpers from `nodes/common.py`** (exactly as Task 1 builds them):
 
 ```python
 @dataclass(frozen=True)
-class NodeProduct:
-    outcome: Outcome
-    node_verdict: NodeVerdict
-    verdict: dict[str, Any]            # the node-specific verdict mapping from its design doc
-    view: list[str]                    # element ids this node authored or asserted over
+class NodeResult:
+    verdict: NodeVerdict               # the node's conclusion, shared vocabulary
+    view: tuple[str, ...]              # store entity ids the node wrote or asserted over
+    verdict_entity_id: str             # the verdict entity written to the store
 
 def software_agent(store: ProvStore) -> str
-def model_agent(store: ProvStore, *, model_id: str, commit_sha: str | None,
-                unresolved_reason: str | None = None) -> str
-def write_node_verdict(store: ProvStore, *, activity_id: str, node_verdict: NodeVerdict,
-                       detail: dict[str, Any]) -> str          # a "verdict" entity; VERDICT reads these
-def read_node_verdict_entities(store: ProvStore) -> list[Entity]
-def node_verdict_from_entity(entity: Entity) -> NodeVerdict
-def write_measurement(store: ProvStore, *, activity_id: str, name: str, attributes: dict[str, Any],
-                      extent: tuple[float, float] | None = None, agent_id: str | None = None) -> str
-def find_measurements(store: ProvStore, name: str) -> list[Entity]
+def write_verdict(store: ProvStore, activity_id: str, agent_id: str, *, node: str,
+                  outcome: Outcome, kind: str | None, why: str,
+                  detail: dict[str, Any]) -> tuple[str, NodeVerdict]
 def find_measurement(store: ProvStore, name: str) -> Entity | None
-def write_assertion(store: ProvStore, *, verb: str, subject_id: str, activity_id: str,
-                    attributes: dict[str, Any], agent_id: str | None = None,
-                    answers: str | None = None) -> str
-def assertions_about(store: ProvStore, subject_id: str, verb: str | None = None) -> list[Entity]
+def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]
 ```
 
-**What the store holds when Task 5 starts** (the design documents' vocabulary; authored by Tasks 1–4):
+There is no `model_agent`, `write_measurement`, `write_assertion` or `assertions_about` in the
+shared module: a model agent is `store.agent(agent_type="model", model_id=..., commit_sha=...)` (or
+`unresolved_reason=...`) directly, and measurement/assertion writes are `store.entity(...)` plus the
+relation calls — a node module may keep small private helpers for its own repetitions. The design's
+richer per-node verdict mappings go into the verdict entity's attributes through `write_verdict`'s
+`detail=`; the returned `NodeResult` carries only verdict, view and the verdict entity's id.
+
+**What the store holds when Task 5 starts** (the sibling plan's store-schema contract, verbatim
+where read here):
 
 | element | `prov_type` | attributes this plan reads |
 | --- | --- | --- |
-| the recording | `stream` | `{"name": "recording", "path", "sampling_rate"}`, extent `(0.0, duration_s)` |
-| resampled 16 kHz plain signal | `stream` | `{"name": "resampled_16k", "path", "sampling_rate"}` |
-| ASR hypotheses (CrisperWhisper, Qwen) | `word` | `{"text", "asr_model", "score"?, "timestamp_source"?, "timestamp_model"?}`, extent `(start, end)` per word, `ScriptLine`-shaped timing |
-| the envelope and its floor | `measurement` | `{"name": "energy_envelope" / "floor", "path", "sampling_rate"}` — npz sidecars |
-| YAMNet Silence windows | `measurement` | `{"name": "silence", "windows": [{"start", "end", "score"}]}` |
-| SQUIM (PREPROCESS's, per envelope span) | `measurement` | `{"name": "squim", ...}` — read for nothing here; SPEECH re-measures over its own spans |
-| PREPROCESS's envelope spans | `span` | `{"peak_over_floor_db"}`, no label |
-| TAXONOMY's predictions | `kind` | `{"kind": "airway"/"speech"/"voice_no_words", "state": "present"/"absent"/"undecided"/"not_screened", per-family evidence}` |
-| AIRWAY's labels | `assertion` | `{"verb": "label", "label": ...}`, `wasDerivedFrom` the span it labels |
-| every node's conclusion | `verdict` | written via `write_node_verdict`; `node_verdict_from_entity` reads it back |
+| the recording | `stream` | `{"name": "recording", "path" (absolute), "sampling_rate", "channels"}`, extent `(0.0, duration_s)` |
+| resampled 16 kHz plain signal | `stream` | `{"name": "plain", "path": "streams/plain.wav", "sampling_rate", "channels": 1, "peak_scale"}` |
+| ASR hypotheses (CrisperWhisper, Qwen) | `word` | `{"text" (PII), "score", "recognizer", "timestamp_source", "timestamp_model"?}`, extent `(start, end)` per word |
+| the envelope **and** its floor | `measurement` | one entity: `{"name": "energy_envelope", "path" (npz, keys `envelope_dbfs` and `floor_dbfs`), "sampling_rate", "signal"}` |
+| YAMNet native windows | `measurement` | `{"name": "yamnet_windows", "path" (json), "n_windows"}` — windows carry `label_scores` as `[{label: score}, ...]` |
+| YAMNet Silence projection | `measurement` | `{"name": "silence", "threshold", "windows": [{"start", "end", "score", "is_silence"}]}` |
+| the fused transcript | `measurement` | `{"name": "asr_agreement", "words" (the verbatim `fuse_word_streams` output), "systems"}` |
+| SQUIM (PREPROCESS's, per envelope span) | `assertion` | `{"verb": "measure", "name": "squim", ...}` — read for nothing here; SPEECH re-measures over its own spans |
+| PREPROCESS's envelope spans | `span` | `{"peak_over_floor_db", "k_db", "signal"}`, **never a label key** |
+| TAXONOMY's predictions | `kind` | `{"kind": "airway"/"speech"/"voice_no_words", "state": "present"/"absent"/"undecided"/"not_screened", "families", "min_families"}` |
+| AIRWAY's labels | `assertion` | `{"verb": "label", "label", "score", "scores", "input", "in_certified_silence"}`, `wasDerivedFrom` the span it labels, `wasGeneratedBy` an AIRWAY activity |
+| every node's conclusion | `verdict` | `{"node", "outcome", "kind", "why", **detail}` — written via `write_verdict`; read back with `store.entities("verdict")` |
 
 **Where `NodeVerdict`s live (a decision `verdict.md`'s product section forces):** `verdict.md` says the
 fold's view carries "the node verdict ids it folded" — verdicts have element ids, so **they live in the
-store**, as `verdict` entities each node writes via `write_node_verdict` before returning. The
-`NodeProduct` a node returns is a convenience for its caller; VERDICT reads only the store. `ran` is the
+store**, as `verdict` entities each node writes via `write_verdict` before returning. The
+`NodeResult` a node returns is a convenience for its caller; VERDICT reads only the store. `ran` is the
 one thing the store cannot carry (only the runner knows a node **errored**), so VERDICT accepts it from
 the caller, with a derived fallback (Task 8).
 
-**Mocking boundary** (pattern from `src/tests/audio/workflows/pii_adapter_test.py`: patch where the
-callee resolves the name). Every node module imports its model-calling functions **by name at module
-top**; tests `monkeypatch.setattr(node_module, "<name>", fake)` on the node module. No test loads
-YAMNet, SQUIM, pyannote, a second diarizer, MossFormer, ECAPA, an ASR model, Praat, or the PII
-subprocess. Each fake's payload shape is verified in this plan against the real function's return
-type, and each task's Interfaces block restates the shape its fakes must honour. Pure DSP runs real:
-`fuse_word_streams`, envelope/floor reads, span grouping, `detect_disruptions`, `plan_redactions`,
-`apply_redactions`, `extract_segments`, all store operations.
+**Mocking boundary** (Task 1's rule, binding here too — pattern from
+`src/tests/audio/workflows/pii_adapter_test.py`: patch where the callee resolves the name). Every
+node module imports its model-calling functions **by name at module top**; tests
+`monkeypatch.setattr(node_module, "<name>", fake)` on the node module. Model *constructors* that
+resolve a commit over the network (`HFModel(...)`, `PyannoteAudioModel(...)`,
+`SpeechBrainModel(...)`) are reached only through module-level factory functions
+(`_diarization_model()`, `_separation_model()`, `_embedding_model()`, `_verification_model()`), so
+tests monkeypatch those and never touch the Hub. No test loads YAMNet, SQUIM, pyannote, a second
+diarizer, MossFormer, ECAPA, an ASR model, Praat, or the PII subprocess. Each fake's payload shape is
+verified in this plan against the real function's return type, and each task's Interfaces block
+restates the shape its fakes must honour. Pure DSP runs real: `fuse_word_streams`, envelope/floor
+reads, span grouping, `detect_disruptions`, `plan_redactions`, `apply_redactions`,
+`extract_segments`, all store operations.
 
 **Unmeasured `require()` keys make nodes refuse by design.** With the packaged config, SPEECH
 (`speech.word_gap_ms`), VOICE (`phonation.f0_min_hz`, `f0_max_hz`, `hnr_floor_db`, `rms_floor`) and
@@ -151,8 +171,9 @@ YAML override.
 
 Where the design admits more than one implementation (`capability-map.md` §5.2) or a parameter is
 deliberately unmeasured, this plan decides and says so. An implementer must not silently re-decide one.
-Numbered `N*` to stay distinct from the foundation review's `F-*` and the sibling's numbering; the
-reviewer folds duplicates.
+Numbered `N*`, like the sibling's own N1–N23: **each table is scoped to its own file** — a bare `N7`
+in this file means this table's N7. The one duplicate (this file's N13 against the sibling's Task 2
+`yamnet.top_k` addition) is folded below.
 
 | # | point | decision |
 | --- | --- | --- |
@@ -160,7 +181,7 @@ reviewer folds duplicates.
 | N2 | VOICE's gate floors and F0 range are null and the gate cannot run ungated | same mechanism: `require()` at entry on all four `phonation.*` keys. The node's outcome under the packaged config is *unmeasurable-by-config* — surfaced as the raise, recorded by the runner as `errored`, flagged by VERDICT — never an invented floor and never a `fail`, because `fail` claims evidence of absence and an unrun gate has none |
 | N3 | `redaction.padding_ms` is null | REDACT is importable and constructible; `require()` at entry makes it refuse to run without an override, per `redact.md` |
 | N4 | SPEECH step 3's SQUIM half has no fitted cut (open.md) | YAMNet coverage alone decides corroboration; SQUIM STOI/SI-SDR are always recorded per span; the SQUIM vote — and therefore the instrument-disagreement flag — activates only when `speech.speech_test_stoi_floor` / `speech.speech_test_si_sdr_floor` (both new, both `null`) are supplied by override. While null, each span's corroboration records `squim_vote: "not_evaluated"` |
-| N5 | YAMNet per-window score cut and per-span coverage cut | both are `yamnet.coverage_threshold` (0.5): the derivation measured the per-window label-score gap ("Speech 0.92 → 0.14"), and coverage is the fraction of overlapping windows clearing it; a span is YAMNet-confirmed when that fraction ≥ the same key. One measured value, two named uses, stated here. AIRWAY aggregates identically — reviewer reconciles |
+| N5 | YAMNet per-window score cut and per-span coverage cut | both are `yamnet.coverage_threshold` (0.5): the derivation measured the per-window label-score gap ("Speech 0.92 → 0.14"), and coverage is the fraction of overlapping windows clearing it; a span is YAMNet-confirmed when that fraction ≥ the same key. One measured value, two named uses, stated here. Reconciled: AIRWAY aggregates the same way (sibling plan N16 — window counts at ≥ the threshold over the span's overlapping native windows) |
 | N6 | the second diarizer is unnamed in the design | config `speech.second_diarizer: null` (a model id, e.g. `"BUT-FIT/diarizen-wavlm-large-s80-md"` — note CC BY-NC 4.0 weights). While null, count ≠ 1 records `second_diarizer: "not_consulted"` and still flags; it never blocks |
 | N7 | no target-match similarity threshold exists anywhere | config `speech.target_match_cosine: null`. It is `require()`d **only when the hint carries a target embedding** — a caller asking for a comparison the config cannot decide is refused rather than answered with an invented cut. Similarities are still computed and recorded per speaker (a measurement needs no threshold); only the match *decision* needs the key |
 | N8 | "the recognizers disagree beyond threshold" flag has no measured threshold | config `speech.agreement_flag_floor: null`; while null the row is inert and the verdict records `agreement_flag: "not_evaluated"` |
@@ -168,7 +189,7 @@ reviewer folds duplicates.
 | N10 | SPEECH `refine`s a PREPROCESS span — overlap criterion unstated | any temporal intersection > 0 (`benchmarks/snr.md`: IoU falls to 0.17 while the verdict is still speech, so a fraction would drop true refinements) |
 | N11 | PII scan granularity and locating a finding | scan per (speech span × recognizer): one `ScriptLine` per pair carrying the span's words as `chunks`, the span's extent, and the words' `timestamp_model`. A finding is located by normalized-token subsequence match of its text against the span's words; matched `word` elements get `label` assertions `{"label": "pii", "category": ...}` and the finding's extent is `[first matched word start, last matched word end]`; no match → the finding keeps the span extent and the verdict flags `pii_unlocated` |
 | N12 | a finding whose speaker cannot be resolved (mixed span, unassigned words) | treated as target-overlapping — flagged. The rule can exempt only what it can attribute |
-| N13 | `classify_audios` YAMNet defaults to `top_k=5`, so `Speech` can silently vanish (open.md) | config `yamnet.top_k: 521` — the size of YAMNet's label space, an identity, not a threshold; any smaller k makes a missing label unreadable-as-zero |
+| N13 | `classify_audios` YAMNet defaults to `top_k=5`, so `Speech` can silently vanish (open.md) | folded into the sibling plan: its Task 2 adds `yamnet.top_k: 521` with its derivation, and PREPROCESS writes the full native windows to the store as the `yamnet_windows` derivative. **SPEECH reads that derivative rather than re-running YAMNet** — one model run, its votes reproducible against PREPROCESS's (sibling N6), and the truncation cannot arise here |
 | N14 | REDACT "re-runs ASR" — one model or both | both recognizers PREPROCESS used, each loaded **at the commit the store's model agents recorded** (never a ref — the verification runs the recognizer that produced the words), and **any** finding in the verification scan is a `fail` — a new finding is exactly as unsafe as a survivor |
 | N15 | REDACT on a store with no PII scan | refuses (raises): with no scan evidence it cannot distinguish "clean" from "unchecked", and `fail` would misreport ("a finding survived") while `pass` would launder an unexamined recording into `releasable`. The runner records `errored`; VERDICT reads no REDACT verdict → `not_assessed`, which is the designed answer for an unexamined recording |
 | N16 | a PII detector failing **during REDACT's verification** | `fail(reason="verification could not run", survived=[])` → `withheld`. Examined-and-uncertifiable is `withheld`, not `not_assessed`; `survived` stays empty because nothing is known to have survived. `redact.md`'s "survived is non-empty only on fail" permits an empty-survived fail and the reason string carries the distinction |
@@ -183,7 +204,7 @@ reviewer folds duplicates.
 | N25 | "a hint asserts speech/phonation the branch did not find" — `may_contain` is an open vocabulary | config `speech.hint_tags` / `voice.hint_tags`: the tag lists that count as asserting each kind, seeded from the design documents' own member names (not fitted; extended by override). SPEECH additionally reads a non-empty `hint.expected_speech` as asserting speech |
 | N26 | how VERDICT learns `ran`, and what a gated run looks like | `ran` is caller-supplied (only the runner can know `errored`); when omitted it is derived from the store — a node with a `verdict` entity is `completed`, otherwise `skipped`, and the derivation cannot see `errored` (stated limitation). The file-verdict entity carries `gated: true` when any kind predicted **absent** has no branch verdict — marking that the contradiction check did not happen, per `verdict.md` |
 | N27 | TAXONOMY's `voice_no_words: "not_screened"` against the fold's `KindState` | VERDICT maps `not_screened` → `KindState.UNDECIDED`: the fold's undecided rows (pass → present, fail → absent, never-ran → flag) are exactly what an unscreened kind needs |
-| N28 | measurements on separated streams vs. the recording (capability-map §4.5) | record both, never normalise, never compare: every `measurement` entity carries a `stream` attribute naming the stream entity it was taken on, and stream entities carry the `rms_scalar` ClearVoice reports. No code path compares a dBFS-referenced value across streams |
+| N28 | measurements on separated streams vs. the recording (capability-map §4.5) | record both, never normalise, never compare: every `measurement` entity carries a `stream` attribute naming the stream entity it was taken on, and separated-stream entities carry the `input_norm_scalar` from ClearVoice's `metadata["clearvoice"]` record (the scalar that was **not** applied to the outputs). No code path compares a dBFS-referenced value across streams |
 
 ## Config additions (one edit to `data/config/default.yaml`, made in Task 5, extended in Task 6)
 
@@ -204,14 +225,18 @@ speech:
 voice:
   hint_tags: [phonation, humming, sustained-vowel, voice]   # N25
 
-yamnet:
-  top_k: 521                         # N13 — the label space's size; an identity
-
 phonation:
   period_doubling_factor: 2.0        # N21 — the definition of period doubling; an identity
   hnr_floor_interval_db: null        # N22 — benchmarks/voice.md measured an interval in other units
   rms_floor_interval: null           # N22
 ```
+
+`yamnet.top_k: 521` is **not** added here — the sibling plan's Task 2 adds it with its derivation
+(this plan's old N13, now folded). The `speech.speech_test_*` floors are distinct from the packaged
+`quality.stoi_floor` / `quality.pesq_floor`: the former gate step 3's "is this span speech" vote
+(STOI + SI-SDR), the latter are step 8's quality gate (`benchmarks/open.md`'s SQUIM-thresholds row).
+Both families stay `null`; neither is renamed into the other because they answer different
+questions over different measurements.
 
 ---
 
@@ -250,33 +275,47 @@ inside one module, not eight modules.
    projection (category + extent + provenance, never `.text`), per capability-map §3.4.
 
 **Files:**
-- Create: `src/senselab/audio/workflows/triage/nodes/__init__.py`, `src/senselab/audio/workflows/triage/nodes/speech.py`
+- Create: `src/senselab/audio/workflows/triage/nodes/speech.py` (`nodes/__init__.py` exists from the sibling's Task 1)
 - Modify: `src/senselab/utils/prov_store.py` (`PROV_TYPE` + `get_activity`), `src/senselab/audio/workflows/triage/data/config/default.yaml` (keys above)
 - Test: `src/tests/audio/workflows/triage/nodes/speech_test.py`, plus two tests appended to `src/tests/utils/prov_store_test.py`
 
 **Interfaces**
 
-Consumes (all verified on this branch except where the merge prerequisite is named):
-- `elements.py` helpers and `NodeProduct` (assumed shared contract above).
+Consumes (all verified on the merged tree):
+- `nodes/common.py` helpers and `NodeResult` (shared contract above), plus
+  `CRISPERWHISPER_ID`/`QWEN_ID` from `nodes/preprocess.py` — the recognizer ids the store's `word`
+  entities carry as `recognizer`.
 - `fuse_word_streams(word_streams: dict[str, list[dict]], *, weights=None, ...) -> list[dict]` from
-  `senselab.audio.tasks.speech_to_text_ensemble.api` — runs **real** in tests (stdlib-only). Each
-  returned word dict carries `text`, `start`, `end`, `confidence`, `existence_confidence`,
-  `temporal_confidence`, `member_agreement`, `coverage`, `alternates`, `flags`. Note it imports
-  `MIN_EVIDENCE_WEIGHT` from `workflows/audio_analysis/floors` (capability-map §4.9) — an existing
-  coupling this task uses and must not extend.
-- `classify_audios(audios, model="yamnet", top_k=cfg)` → `List[List[Dict]]`, per-window dicts with
-  `start`, `end`, `labels`, `scores` (mocked).
+  `senselab.audio.tasks.speech_to_text_ensemble.api:197` — runs **real** in tests (stdlib-only).
+  Each returned word dict carries `text`, `start`, `end`, `confidence`, `existence_confidence`,
+  `temporal_confidence`, `coverage`, `corroboration`, `member_agreement`, `member_corroboration`,
+  `sources`, `alternates`, `flags` and optionally `speaker` (`api.py:283-289,452-472`). Note it
+  imports from `workflows/audio_analysis/floors` (capability-map §4.9) — an existing coupling this
+  task uses and must not extend.
+- the store's `yamnet_windows` measurement (json sidecar) — SPEECH does **not** re-run YAMNet
+  (N13, folded); windows carry `label_scores` as `[{label: score}, ...]`, read via
+  `label_scores(window)` from `tasks/classification/label_scores.py:21` (real).
 - `extract_objective_quality_features_from_audios(audios, device=None) -> List[Dict[str, Any]]`,
-  dicts with `stoi`, `pesq`, `si_sdr` (NaN on internal failure — kept as recorded values) (mocked).
-- `diarize_audios(audios, model=None, ...) -> List[List[ScriptLine]]` and `PyannoteAudioModel`
-  (mocked; the fake model object carries `path_or_uri` and `commit_sha` attributes because the real
-  one resolves its commit at construction).
-- `separate_audios(audios, model=HFModel("alibabasglab/MossFormer2_SS_16K"), n_sources=2, device=None,
-  timeout_s=None) -> List[List[Audio]]` — **after the `triage` merge**; each output Audio carries
-  `metadata["clearvoice"]` naming model, resolved commit, source index and the un-applied RMS scalar
-  (mocked; the fake reproduces that metadata shape).
-- `extract_speaker_embeddings_from_audios(audios, model=None, device=None) -> List[torch.Tensor]` and
-  `SpeechBrainModel` (mocked).
+  dicts with `stoi`, `pesq`, `si_sdr`; on internal failure it **re-raises** `RuntimeError`
+  (`features_extraction/torchaudio_squim.py:77-81`), so the node catches per span and records the
+  refusal, as PREPROCESS does (mocked).
+- `diarize_audios(audios, model=None, num_speakers=None, min_speakers=None, max_speakers=None,
+  device=None, exclusive=True, max_new_tokens=None) -> List[List[ScriptLine]]`
+  (`speaker_diarization/api.py:65`; mocked). `PyannoteAudioModel` is reached only through the
+  module-level `_diarization_model()` factory (it resolves its commit at construction), which tests
+  monkeypatch; the fake model object carries `path_or_uri` and `commit_sha`.
+- `separate_audios(audios, model=<_separation_model()>, n_sources=2, device=None, timeout_s=None)
+  -> List[List[Audio]]` — the merged ClearVoice dispatch (`source_separation/api.py:115-145`; see
+  the prerequisite section). The unasdiff-only arguments (`mode`, `source_classes`, `seed`,
+  `diffusion_steps`) are never passed — the API refuses them for this model; `n_sources` must be 2;
+  `parameters` is omitted. Each output Audio carries `metadata["clearvoice"]` with keys `model`,
+  `commit`, `capability`, `sampling_rate`, `source_index`, `n_sources`, `input_norm_scalar`,
+  `input_norm_applied_to_output` (mocked; the fake reproduces that exact shape).
+  `_separation_model()` builds `HFModel(path_or_uri="alibabasglab/MossFormer2_SS_16K",
+  revision="main")` and is monkeypatched in tests.
+- `extract_speaker_embeddings_from_audios(audios, model=None, device=None) -> List[torch.Tensor]`
+  (`speaker_embeddings/api.py:32`; mocked). `SpeechBrainModel` is reached only through
+  `_embedding_model()` (monkeypatched).
 - `scan_for_pii(inputs, detectors=None, ...) -> PiiScan | list[PiiScan]`; `PiiSpan` **is a
   `ScriptLine`** (foundation Task 1): findings from a scanned line inherit its `start`/`end`/`speaker`/
   `timestamp_model`; `PiiScan.failures` distinguishes could-not-check from clean (mocked).
@@ -293,14 +332,16 @@ Produces:
 # src/senselab/audio/workflows/triage/nodes/speech.py
 def speech(
     store: ProvStore,
+    source: str,                        # the store-held stream name, "plain"
     config: TriageConfig,
-    run_dir: Path,
     hint: AudioHints | None = None,
-    device: DeviceType | None = None,
-) -> NodeProduct
+    *,
+    run_dir: Path,
+) -> NodeResult
 ```
 
-`verdict` mapping (the design doc's product section, exactly):
+`verdict` mapping (the design doc's product section, exactly), written as the verdict entity's
+attributes via `write_verdict`'s `detail=`:
 `{"speaker_count", "target_speaker"?, "words_n", "speech_s", "pii": {"categories": [], "n",
 "scanned_by": [], "failed": []}, "flags": []}`. `view` lists every element id authored or asserted
 over; on a `flag`, the view **includes** the contested assertions (partial is a view, not a payload).
@@ -310,15 +351,19 @@ confidence from agreement, speaker, stream, `pii`/`fabrication_candidate` label 
 speech `span` entities (extent, corroboration attributes, `wasDerivedFrom` any overlapping PREPROCESS
 span); one `interval` entity (the diarizer's window); `speaker` entities (diarizer segments, withdrawn
 ones retained with `wasInvalidatedBy` and the overlapping airway span recorded on the withdrawal
-activity's parameters); `stream` entities (one per separated source, `wasDerivedFrom` the recording's
-stream); `pii` entities (category, extent, detectors ran/failed, which recognizer's hypothesis —
-**never text**); `measurement` entities (SQUIM and disruptions per span, each carrying `stream`);
-`target_match` entities (speaker, similarity, both embeddings' model + commit); one `verdict` entity.
+activity's parameters); `stream` entities (one per separated source, `wasDerivedFrom` the `plain`
+stream separation ran on, carrying `source_index` and `input_norm_scalar`); `pii` entities (category,
+extent, detectors ran/failed, which recognizer's hypothesis — **never text**); one `measurement`
+entity `{"name": "pii_scan", "scanned_by": [...], "failed": [...]}` recording that the scan ran —
+REDACT's N15 gate reads its presence (the name collides with nothing PREPROCESS writes);
+`measurement` entities (SQUIM and disruptions per span, each carrying `stream`); `target_match`
+entities (speaker, similarity, both embeddings' model + commit); one `verdict` entity.
 
-**Mocking boundary for this task:** `classify_audios`, `extract_objective_quality_features_from_audios`,
-`diarize_audios`, `PyannoteAudioModel`, `separate_audios`, `HFModel`,
-`extract_speaker_embeddings_from_audios`, `SpeechBrainModel`, `scan_for_pii` — all patched **on
-`nodes.speech`**. Everything else real.
+**Mocking boundary for this task:** `extract_objective_quality_features_from_audios`,
+`diarize_audios`, `separate_audios`, `extract_speaker_embeddings_from_audios`, `scan_for_pii`, and
+the factories `_diarization_model`, `_separation_model`, `_embedding_model` — all patched **on
+`nodes.speech`**. Everything else real (YAMNet evidence comes from the seeded store, so there is no
+YAMNet call to fake).
 
 - [ ] **Step 5.1: Store changes, with failing tests first**
 
@@ -357,7 +402,8 @@ the JSONL round-trip and merge tests must stay green.
 
 - [ ] **Step 5.2: Config keys**
 
-Add the keys from the preamble's YAML block (speech/voice/yamnet/phonation additions) to
+Add the keys from the preamble's YAML block (speech/voice/phonation additions; `yamnet.top_k` is the
+sibling Task 2's) to
 `data/config/default.yaml`, each with its `#` derivation comment, and extend the file's `UNSET, and
 why` derivation note with the new null keys. Test (in `speech_test.py`):
 
@@ -381,26 +427,29 @@ One conftest-level builder used by every test in this task (and reused by Tasks 
 ```python
 """SPEECH node tests. Every model call is faked at the node module; DSP and the store run real."""
 
+import json
+
 import numpy as np
 import pytest
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.nodes import speech as speech_module
+from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID as CW
+from senselab.audio.workflows.triage.nodes.preprocess import QWEN_ID as QW
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 
 SR = 16000
-CW = "nyrahealth/CrisperWhisper"
-QW = "Qwen/Qwen3-ASR-Flash"
 
 
 def make_run(tmp_path, words_cw, words_qw, airway_label_extent=None, duration_s=6.0):
     """Build (store, config, run_dir) as ADMIT/PREPROCESS/TAXONOMY/AIRWAY leave them.
 
-    words_*: list of (text, start, end). airway_label_extent: (start, end) to write a
-    PREPROCESS span carrying an AIRWAY label assertion.
+    Mirrors the sibling plan's store-schema contract; lives beside Task 1's ``seed_store`` in the
+    shared conftest. words_*: list of (text, start, end). airway_label_extent: (start, end) to
+    write a PREPROCESS span carrying an AIRWAY label assertion.
     """
     store = ProvStore(run_id="t")
     rng = np.random.default_rng(0)
@@ -412,39 +461,80 @@ def make_run(tmp_path, words_cw, words_qw, airway_label_extent=None, duration_s=
         s, e = airway_label_extent
         wave[int(s * SR) : int(e * SR)] = 0.2 * rng.standard_normal(int(e * SR) - int(s * SR))
     run_dir = tmp_path / "run"
-    (run_dir / "derivatives").mkdir(parents=True)
-    Audio(waveform=wave[None, :], sampling_rate=SR).save_to_file(str(run_dir / "plain.wav"))
+    (run_dir / "streams").mkdir(parents=True)
+    (run_dir / "derivatives").mkdir()
+    Audio(waveform=wave[None, :], sampling_rate=SR).save_to_file(str(run_dir / "streams" / "plain.wav"))
 
     pre = store.activity(node="PREPROCESS", step=None, parameters={})
-    for name, path in (("recording", "plain.wav"), ("resampled_16k", "plain.wav")):
-        sid = store.entity(prov_type="stream", extent=(0.0, duration_s),
-                           attributes={"name": name, "path": path, "sampling_rate": SR})
-        store.was_generated_by(sid, pre)
+    recording = store.entity(
+        prov_type="stream",
+        extent=(0.0, duration_s),
+        attributes={"name": "recording", "path": str(run_dir / "streams" / "plain.wav"),
+                    "sampling_rate": SR, "channels": 1},
+    )
+    store.was_generated_by(recording, pre)
+    plain = store.entity(
+        prov_type="stream",
+        extent=(0.0, duration_s),
+        attributes={"name": "plain", "path": "streams/plain.wav", "sampling_rate": SR,
+                    "channels": 1, "peak_scale": 1.0},
+    )
+    store.was_generated_by(plain, pre)
 
-    # envelope + floor sidecars: envelope is above the floor exactly where the wave is non-zero
+    # One sidecar (the Task 2 schema): envelope above the floor exactly where the wave is non-zero.
     env = np.full(n, -80.0)
     env[np.abs(wave) > 0] = -30.0
     floor = np.full(n, -60.0)
-    np.savez(run_dir / "derivatives" / "envelope.npz", values=env, sampling_rate=SR)
-    np.savez(run_dir / "derivatives" / "floor.npz", values=floor, sampling_rate=SR)
-    for name, path in (("energy_envelope", "derivatives/envelope.npz"), ("floor", "derivatives/floor.npz")):
-        mid = store.entity(prov_type="measurement", extent=None,
-                           attributes={"name": name, "path": path, "sampling_rate": SR})
-        store.was_generated_by(mid, pre)
+    np.savez(run_dir / "derivatives" / "energy_envelope.npz", envelope_dbfs=env, floor_dbfs=floor)
+    mid = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "energy_envelope", "signal": "preemphasised",
+                    "path": "derivatives/energy_envelope.npz", "sampling_rate": SR},
+    )
+    store.was_generated_by(mid, pre)
+
+    # YAMNet native windows, Speech-positive throughout — SPEECH reads these from the store.
+    windows, t = [], 0.0
+    while t < duration_s:
+        windows.append({"start": t, "end": t + 0.96, "label_scores": [{"Speech": 0.9}],
+                        "win_length": 0.96, "hop_length": 0.48})
+        t += 0.48
+    (run_dir / "derivatives" / "yamnet_windows.json").write_text(json.dumps(windows))
+    yw = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "yamnet_windows", "signal": "plain",
+                    "path": "derivatives/yamnet_windows.json", "n_windows": len(windows)},
+    )
+    store.was_generated_by(yw, pre)
 
     for model_id, words in ((CW, words_cw), (QW, words_qw)):
         for text, s, e in words:
-            wid = store.entity(prov_type="word", extent=(s, e),
-                               attributes={"text": text, "asr_model": model_id})
+            wid = store.entity(
+                prov_type="word",
+                extent=(s, e),
+                attributes={"text": text, "score": 0.9, "recognizer": model_id,
+                            "timestamp_source": "native"},
+            )
             store.was_generated_by(wid, pre)
 
     if airway_label_extent:
         s, e = airway_label_extent
-        span = store.entity(prov_type="span", extent=(s, e), attributes={"peak_over_floor_db": 30.0})
+        span = store.entity(
+            prov_type="span",
+            extent=(s, e),
+            attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised"},
+        )
         store.was_generated_by(span, pre)
         air = store.activity(node="AIRWAY", step="classify", parameters={})
-        lab = store.entity(prov_type="assertion", extent=(s, e),
-                           attributes={"verb": "label", "label": "Cough"})
+        lab = store.entity(
+            prov_type="assertion",
+            extent=(s, e),
+            attributes={"verb": "label", "label": "Cough", "score": 0.97,
+                        "scores": {"Cough": 0.97, "Breathe": 0.1}, "input": "buffered",
+                        "in_certified_silence": None},
+        )
         store.was_generated_by(lab, air)
         store.was_derived_from(lab, span)
 
@@ -459,31 +549,36 @@ def _override(tmp_path):
 ```
 
 The default fakes, installed by an autouse fixture so a test only overrides the call it is probing
-(shapes verified against the real functions in the Interfaces block):
+(shapes verified against the real functions in the Interfaces block; YAMNet needs no fake — its
+windows are seeded into the store):
 
 ```python
+class _FakeModel:
+    """A model spec stub carrying exactly what the node reads: path_or_uri and commit_sha."""
+
+    def __init__(self, path_or_uri: str) -> None:
+        """Stub a resolved model."""
+        self.path_or_uri = path_or_uri
+        self.commit_sha = "a" * 40
+
+
 @pytest.fixture(autouse=True)
 def quiet_models(monkeypatch):
-    """One speaker, speech-positive YAMNet, plausible SQUIM, no PII, no separation call."""
-    def fake_yamnet(audios, model, top_k, **kw):
-        dur = audios[0].waveform.shape[-1] / audios[0].sampling_rate
-        wins, t = [], 0.0
-        while t < dur:
-            wins.append({"start": t, "end": t + 0.96, "labels": ["Speech"], "scores": [0.9]})
-            t += 0.48
-        return [wins]
+    """One speaker, plausible SQUIM, no PII, no separation call, no Hub-resolving constructor."""
 
-    def fake_diarize(audios, **kw):
+    def fake_diarize(audios, model=None, **kw):
         dur = audios[0].waveform.shape[-1] / audios[0].sampling_rate
         return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=dur)]]
 
-    monkeypatch.setattr(speech_module, "classify_audios", fake_yamnet)
     monkeypatch.setattr(speech_module, "extract_objective_quality_features_from_audios",
                         lambda audios, device=None: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios])
     monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    monkeypatch.setattr(speech_module, "PyannoteAudioModel",
-                        lambda **kw: type("M", (), {"path_or_uri": kw["path_or_uri"],
-                                                    "commit_sha": "a" * 40})())
+    monkeypatch.setattr(speech_module, "_diarization_model",
+                        lambda: _FakeModel("pyannote/speaker-diarization-community-1"))
+    monkeypatch.setattr(speech_module, "_separation_model",
+                        lambda: _FakeModel("alibabasglab/MossFormer2_SS_16K"))
+    monkeypatch.setattr(speech_module, "_embedding_model",
+                        lambda: _FakeModel("speechbrain/spkrec-ecapa-voxceleb"))
     monkeypatch.setattr(speech_module, "separate_audios",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("separation must not run")))
     monkeypatch.setattr(speech_module, "scan_for_pii",
@@ -503,15 +598,15 @@ def test_packaged_config_refuses_and_the_store_is_untouched() -> None:
     store, _, run_dir = make_run(tmp_path, [("hi", 1.0, 1.3)], [("hi", 1.0, 1.3)])
     before = store.fingerprint()
     with pytest.raises(ValueError, match="speech.word_gap_ms"):
-        speech_module.speech(store, load_triage_config(), run_dir)
+        speech_module.speech(store, "plain", load_triage_config(), run_dir=run_dir)
     assert store.fingerprint() == before, "an unmeasured key must leave the store untouched"
 
 
 def test_no_words_from_either_recognizer_is_a_normal_fail() -> None:
     """fail means this branch has no subject — a cough recording is not an error."""
     store, cfg, run_dir = make_run(tmp_path, [], [])
-    product = speech_module.speech(store, cfg, run_dir)
-    assert product.outcome is Outcome.FAIL
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.FAIL
     assert store.entities("verdict"), "the verdict entity is written even on fail"
 
 
@@ -521,9 +616,12 @@ def test_spans_come_from_word_timings_and_refine_preprocess_spans() -> None:
     words = [("one", 1.0, 1.2), ("two", 1.25, 1.5), ("three", 3.0, 3.4)]
     store, cfg, run_dir = make_run(tmp_path, words, words, airway_label_extent=(4.5, 5.0))
     pre_act = store.activity(node="PREPROCESS", step="spans", parameters={})
-    pre_span = store.entity(prov_type="span", extent=(0.9, 1.6), attributes={"peak_over_floor_db": 20.0})
+    pre_span = store.entity(
+        prov_type="span", extent=(0.9, 1.6),
+        attributes={"peak_over_floor_db": 20.0, "k_db": 18.0, "signal": "preemphasised"},
+    )
     store.was_generated_by(pre_span, pre_act)
-    product = speech_module.speech(store, cfg, run_dir)
+    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     speech_spans = [e for e in store.entities("span")
                     if store.get_activity(store.generated_by(e.id)).node == "SPEECH"]
     assert [tuple(round(x, 2) for x in s.extent) for s in sorted(speech_spans, key=lambda s: s.extent)] \
@@ -543,7 +641,7 @@ def test_pyannote_sees_only_the_word_interval_and_segments_are_offset_back() -> 
     monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
     words = [("one", 2.0, 2.3), ("two", 2.4, 2.8)]
     store, cfg, run_dir = make_run(tmp_path, words, words)
-    speech_module.speech(store, cfg, run_dir)
+    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     assert seen["dur"] == pytest.approx(0.8, abs=1 / SR), "cropped to the interval, not the file"
     seg = store.entities("speaker")[0]
     assert seg.extent == pytest.approx((2.0, 2.8)), "offset added back onto the returned segment"
@@ -559,40 +657,49 @@ def test_a_segment_overlapping_an_airway_label_is_withdrawn_not_relabelled() -> 
                  ScriptLine(speaker="SPEAKER_01", start=3.4, end=3.8)]]  # 2nd overlaps label after offset
 
     monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    product = speech_module.speech(store, cfg, run_dir)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     speakers = store.entities("speaker")
     withdrawn = [s for s in speakers if store.is_invalidated(s.id)]
     assert len(speakers) == 2 and len(withdrawn) == 1
     assert withdrawn[0].attributes["speaker"] == "SPEAKER_01", "withdrawn, never relabelled"
-    assert product.verdict["speaker_count"] == 1, "the count reads un-withdrawn segments only"
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["speaker_count"] == 1, "the count reads un-withdrawn segments only"
 
 
 def test_count_two_separates_and_measurements_record_their_stream() -> None:
-    """MossFormer runs at n_sources=2; streams become entities; SQUIM on a stream names it."""
+    """MossFormer runs at n_sources=2 with no unasdiff arguments; streams become entities."""
     calls = {}
 
-    def fake_separate(audios, model=None, n_sources=None, **kw):
+    def fake_separate(audios, model=None, n_sources=2, device=None, timeout_s=None, **kw):
         calls["n_sources"] = n_sources
+        calls["unasdiff_args"] = {k: v for k, v in kw.items()
+                                  if k in ("mode", "source_classes", "seed", "diffusion_steps")}
         out = []
         for i in range(2):
             a = Audio(waveform=audios[0].waveform, sampling_rate=SR)
-            a.metadata["clearvoice"] = {"model": "alibabasglab/MossFormer2_SS_16K",
-                                        "commit": "b" * 40, "source_index": i, "rms_scalar": 0.31}
+            a.metadata["clearvoice"] = {  # the real record's shape, tasks/clearvoice.py:103-112
+                "model": "alibabasglab/MossFormer2_SS_16K", "commit": "b" * 40,
+                "capability": "separation", "sampling_rate": SR, "source_index": i,
+                "n_sources": 2, "input_norm_scalar": 0.31, "input_norm_applied_to_output": False,
+            }
             out.append(a)
         return [out]
 
     monkeypatch.setattr(speech_module, "separate_audios", fake_separate)
     monkeypatch.setattr(speech_module, "diarize_audios", _two_speaker_fake)
     store, cfg, run_dir = make_run(tmp_path, WORDS, WORDS)
-    product = speech_module.speech(store, cfg, run_dir)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     assert calls["n_sources"] == 2
+    assert calls["unasdiff_args"] == {}, "mode/source_classes/seed/diffusion_steps are unasdiff's; the API refuses them"
     streams = [e for e in store.entities("stream") if "source_index" in e.attributes]
     assert {s.attributes["source_index"] for s in streams} == {0, 1}
-    assert all("rms_scalar" in s.attributes for s in streams), "level died at -25 dBFS; the scalar is the record"
+    assert all("input_norm_scalar" in s.attributes for s in streams), (
+        "level died at the worker's normalisation; the un-applied scalar is the record (N28)"
+    )
     squims = [m for m in store.entities("measurement") if m.attributes.get("name") == "squim"
               and store.get_activity(store.generated_by(m.id)).node == "SPEECH"]
     assert all("stream" in m.attributes for m in squims), "every measurement records its stream (N28)"
-    assert Outcome.FLAG is product.outcome, "count != 1 flags"
+    assert result.verdict.outcome is Outcome.FLAG, "count != 1 flags"
 
 
 def test_count_three_reports_rather_than_separating_wrong() -> None:
@@ -600,9 +707,10 @@ def test_count_three_reports_rather_than_separating_wrong() -> None:
     monkeypatch.setattr(speech_module, "diarize_audios", _three_speaker_fake)
     # autouse fake for separate_audios raises AssertionError if called
     store, cfg, run_dir = make_run(tmp_path, WORDS, WORDS)
-    product = speech_module.speech(store, cfg, run_dir)
-    assert product.outcome is Outcome.FLAG
-    assert any("separation" in f for f in product.verdict["flags"])
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.FLAG
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert any("separation" in f for f in verdict.attributes["flags"])
 
 
 def test_pii_decision_is_speaker_scoped() -> None:
@@ -619,11 +727,11 @@ def test_pii_entities_and_verdict_never_carry_matched_text() -> None:
     secret = "jane.doe@example.com"
     monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding(secret, category="EMAIL_ADDRESS"))
     store, cfg, run_dir = make_run(tmp_path, WORDS_WITH_EMAIL, WORDS_WITH_EMAIL)
-    product = speech_module.speech(store, cfg, run_dir)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     dumped = json.dumps([(e.prov_type, e.attributes) for e in store.entities()
                          if e.prov_type != "word"], default=str)
     assert secret not in dumped, "pii/measurement/verdict entities are projections"
-    assert secret not in json.dumps(product.verdict, default=str)
+    assert secret not in json.dumps(store.get_entity(result.verdict_entity_id).attributes, default=str)
     pii = store.entities("pii")
     assert pii and pii[0].attributes["category"] == "EMAIL_ADDRESS" and pii[0].extent is not None
 
@@ -644,8 +752,8 @@ def test_quality_is_reported_never_gating() -> None:
                         lambda audios, device=None: [{"stoi": 0.1, "pesq": 1.0, "si_sdr": -10.0}
                                                      for _ in audios])
     store, cfg, run_dir = make_run(tmp_path, WORDS, WORDS)
-    product = speech_module.speech(store, cfg, run_dir)
-    assert product.outcome is Outcome.PASS
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.PASS
     dis = [m for m in store.entities("measurement") if m.attributes.get("name") == "disruptions"]
     assert dis and all("clipped_runs" in m.attributes for m in dis), "counts and extents, not a score"
 ```
@@ -655,8 +763,9 @@ Also written (same shapes, one line each here):
 word → that consensus word's confidence < the agreed words'; asserted on the real `fuse_word_streams`);
 `test_a_word_over_no_energy_is_a_fabrication_candidate_and_flags` (word at 5.5–5.7 s where the fixture
 envelope never exceeds the floor → `label` assertion `fabrication_candidate` on the word, flag; N9);
-`test_yamnet_disconfirmation_flags` (fake YAMNet scores below `yamnet.coverage_threshold` over one span
-→ flag, and the span's corroboration attributes carry the coverage that made it ambiguous);
+`test_yamnet_disconfirmation_flags` (seeded `yamnet_windows` whose `Speech` scores sit below
+`yamnet.coverage_threshold` over one span → flag, and the span's corroboration attributes carry the
+coverage that made it ambiguous);
 `test_squim_vote_is_inert_while_thresholds_are_null` (`squim_vote: "not_evaluated"` recorded; no flag
 fires on awful SQUIM; N4); `test_second_diarizer_null_records_not_consulted` (N6);
 `test_straddling_word_is_marked_not_assigned` (word overlapping two segments → attribute
@@ -682,7 +791,8 @@ Module skeleton with the load-bearing logic in full; docstrings say what, `specs
 from __future__ import annotations
 
 # module-top imports of every model-calling function, by name — the mocking boundary
-from senselab.audio.tasks.classification.api import classify_audios
+from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
 )
@@ -691,10 +801,33 @@ from senselab.audio.tasks.source_separation.api import separate_audios
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
 from senselab.audio.tasks.speech_to_text_ensemble.api import fuse_word_streams
+from senselab.audio.workflows.triage.nodes.common import (
+    NodeResult,
+    find_measurement,
+    resolve_stream,
+    software_agent,
+    write_verdict,
+)
+from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.utils.data_structures import HFModel, PyannoteAudioModel, SpeechBrainModel
 
-_NODE = "SPEECH"
+NODE = "SPEECH"
+
+
+def _diarization_model() -> PyannoteAudioModel:
+    """The diarizer's model spec; its commit resolves at construction."""
+    return PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
+
+
+def _separation_model() -> HFModel:
+    """The ClearVoice separation checkpoint; its commit resolves at construction."""
+    return HFModel(path_or_uri="alibabasglab/MossFormer2_SS_16K", revision="main")
+
+
+def _embedding_model() -> SpeechBrainModel:
+    """The speaker-embedding model spec; its commit resolves at construction."""
+    return SpeechBrainModel(path_or_uri="speechbrain/spkrec-ecapa-voxceleb", revision="main")
 
 
 def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
@@ -702,7 +835,6 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
     values = {
         "word_gap_ms": config.require("speech.word_gap_ms"),
         "coverage_threshold": config.require("yamnet.coverage_threshold"),
-        "yamnet_top_k": config.require("yamnet.top_k"),
         "clip_headroom": config.require("disruptions.clip_headroom"),
         "min_clip_run": config.require("disruptions.min_clip_run"),
         "min_dropout_ms": config.require("disruptions.min_dropout_ms"),
@@ -725,14 +857,14 @@ def _group_words_into_spans(words: list[dict], gap_ms: float) -> list[tuple[floa
     return spans
 
 
-def _diarize_interval(store, activity, audio, interval, device):
+def _diarize_interval(store, activity, audio, interval):
     """pyannote over [first word start, last word end] only; segments shifted back."""
     t0, t1 = interval
     (cropped,) = extract_segments([(audio, [(t0, t1)])])[0]
-    model = PyannoteAudioModel(path_or_uri="pyannote/speaker-diarization-community-1", revision="main")
-    agent = model_agent(store, model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
+    model = _diarization_model()
+    agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
     store.was_associated_with(activity, agent)
-    (segments,) = diarize_audios([cropped], model=model, device=device)
+    (segments,) = diarize_audios([cropped], model=model)
     shifted = [ScriptLine(speaker=s.speaker, start=(s.start or 0.0) + t0, end=(s.end or 0.0) + t0)
                for s in segments]
     return shifted, agent
@@ -742,14 +874,24 @@ Withdrawal, the PII decision and the projection, in full:
 
 ```python
 def _airway_labelled_extents(store: ProvStore) -> list[tuple[float, float]]:
-    """Spans carrying a non-invalidated label assertion authored by an AIRWAY activity (N19)."""
+    """Spans carrying a non-invalidated label assertion authored by an AIRWAY activity (N19).
+
+    AIRWAY's label assertions are ``wasDerivedFrom`` the span they label and ``wasGeneratedBy`` an
+    AIRWAY activity (the sibling plan's Task 4 write shape); SPEECH's own label assertions
+    (``pii``, ``fabrication_candidate``) hang off word entities and SPEECH activities, so the node
+    filter excludes them.
+    """
     out = []
-    for span in store.entities("span"):
-        for assertion in assertions_about(store, span.id, verb="label"):
-            act = store.generated_by(assertion.id)
-            if act and store.get_activity(act).node == "AIRWAY" and not store.is_invalidated(assertion.id):
-                out.append(span.extent)
-                break
+    for assertion in store.entities("assertion"):
+        if assertion.attributes.get("verb") != "label" or store.is_invalidated(assertion.id):
+            continue
+        act = store.generated_by(assertion.id)
+        if not act or store.get_activity(act).node != "AIRWAY":
+            continue
+        for source_id in store.derived_from(assertion.id):
+            source = store.get_entity(source_id)
+            if source.prov_type == "span" and source.extent is not None:
+                out.append(source.extent)
     return out
 
 
@@ -782,12 +924,17 @@ def _pii_entity_attributes(finding_span, asr_model, detectors_used, failures) ->
     }
 ```
 
-The main `speech()` orchestrates the eight steps in design order, opening one activity per step
-(`store.activity(node="SPEECH", step="transcript"...)` … `step="quality"`), recording `used` for every
-entity read, and building the verdict mapping exactly as the product section names it. Step 8 runs
-unconditionally after step 7 and touches nothing but `measurement` entities. Outcome assembly: `fail`
-only from the no-words row (or its hint-contradicted `flag` variant); `flag` from the accumulated
-reasons; otherwise `pass`. `write_node_verdict` is called on **every** path, including `fail`.
+The main `speech(store, source, config, hint=None, *, run_dir)` resolves the plain stream with
+`resolve_stream(store, run_dir, source)`, then orchestrates the eight steps in design order, opening
+one activity per step (`store.activity(node=NODE, step="transcript"...)` … `step="quality"`),
+recording `used` for every entity read, and building the verdict mapping exactly as the product
+section names it. Step 3's YAMNet evidence is the store's `yamnet_windows` measurement
+(`find_measurement` + its json sidecar, windows read via `label_scores`); step 8 runs
+unconditionally after step 7 and touches nothing but `measurement` entities. Outcome assembly:
+`fail` only from the no-words row (or its hint-contradicted `flag` variant); `flag` from the
+accumulated reasons; otherwise `pass`. `write_verdict` is called on **every** path, including
+`fail`, with the verdict mapping as its `detail=`; the node returns
+`NodeResult(verdict=..., view=..., verdict_entity_id=...)`.
 
 - [ ] **Step 5.7: Run and watch them pass**
 
@@ -830,10 +977,11 @@ naming, no merged runs.
 **Interfaces**
 
 Consumes:
-- store contents as Tasks 1–5 leave them: the `energy_envelope` / `floor` npz sidecar measurements,
-  `span` entities (PREPROCESS's and SPEECH's, told apart via N19), AIRWAY `label` assertions,
+- store contents as Tasks 1–5 leave them: the one `energy_envelope` measurement and its npz sidecar
+  (keys `envelope_dbfs` **and** `floor_dbfs` — the sibling's Task 2 writes both tracks into one
+  file), `span` entities (PREPROCESS's and SPEECH's, told apart via N19), AIRWAY `label` assertions,
   the `silence` measurement (read and recorded via `used`; the floor sidecar already embodies it),
-  `stream` `resampled_16k` for the audio, `hint` for N25.
+  the `plain` stream via `resolve_stream`, `hint` for N25.
 - `hnr_track(audio, *, f0_min_hz, hop_s, silence_threshold, periods_per_window) -> (times, hnr_db)` —
   real signature verified; silent frames carry Praat's floor value, so track and times stay aligned
   (mocked in node tests).
@@ -858,13 +1006,16 @@ def f0_track(
 # src/senselab/audio/workflows/triage/nodes/voice.py
 def voice(
     store: ProvStore,
+    source: str,                        # the store-held stream name, "plain"
     config: TriageConfig,
-    run_dir: Path,
     hint: AudioHints | None = None,
-) -> NodeProduct
+    *,
+    run_dir: Path,
+) -> NodeResult
 ```
 
-`verdict` mapping (the design doc's product section, exactly):
+`verdict` mapping (the design doc's product section, exactly), written as the verdict entity's
+attributes via `write_verdict`'s `detail=`:
 `{"runs_n", "voiced_s", "f0_median_hz"?, "ambiguous_runs_n", "flags": []}`.
 
 Store writes, by element kind: `span` (voiced run — extent, gate values at onset and offset,
@@ -916,7 +1067,8 @@ Fixture: reuse Task 5's `make_run` builder (move it to
 `src/tests/audio/workflows/triage/nodes/conftest.py` in this step if Task 5 left it in the test
 module), extended so the envelope sidecar can carry energetic intervals that are not word-covered,
 plus a helper writing SPEECH's speech spans into the store the way Task 5 does (a `span` entity
-generated by a `SPEECH` activity). Default fakes: `hnr_track` returns a constant track above any test
+generated by a `SPEECH` activity). Seeded PREPROCESS spans — the `unlabelled_spans` — carry
+`{peak_over_floor_db, k_db, signal}` per the schema, exactly as `make_run` seeds them. Default fakes: `hnr_track` returns a constant track above any test
 floor on the hop grid; `period_marks` returns marks every 1/220 s inside the queried extent;
 `f0_track` matches. The override YAML supplies the four `phonation.*` nulls — the production
 mechanism — with values chosen per-test (they are fixtures, not recommendations).
@@ -927,7 +1079,7 @@ def test_packaged_config_refuses_and_the_store_is_untouched() -> None:
     store, _, run_dir = make_voice_run(tmp_path, energetic=[(1.0, 2.0)])
     before = store.fingerprint()
     with pytest.raises(ValueError, match="phonation\\."):
-        voice_module.voice(store, load_triage_config(), run_dir)
+        voice_module.voice(store, "plain", load_triage_config(), run_dir=run_dir)
     assert store.fingerprint() == before
 
 
@@ -940,7 +1092,7 @@ def test_residual_subtracts_labelled_and_speech_but_not_unlabelled_spans() -> No
         speech_spans=[(3.0, 4.0)],
         unlabelled_spans=[(5.0, 6.0)],
     )
-    product = voice_module.voice(store, cfg, run_dir)
+    voice_module.voice(store, "plain", cfg, run_dir=run_dir)
     runs = [e for e in store.entities("span")
             if store.get_activity(store.generated_by(e.id)).node == "VOICE"]
     assert all(5.0 <= s <= 6.0 for r in runs for s in r.extent), (
@@ -951,8 +1103,8 @@ def test_residual_subtracts_labelled_and_speech_but_not_unlabelled_spans() -> No
 def test_empty_residual_is_a_normal_fail() -> None:
     """Every energetic interval belongs to another branch -> fail, with the verdict written."""
     store, cfg, run_dir = make_voice_run(tmp_path, energetic=[(1.0, 2.0)], airway_labelled=[(1.0, 2.0)])
-    product = voice_module.voice(store, cfg, run_dir)
-    assert product.outcome is Outcome.FAIL
+    result = voice_module.voice(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.FAIL
     assert store.entities("verdict")
 
 
@@ -967,7 +1119,7 @@ def test_runs_are_elementary_never_merged() -> None:
     """A one-frame unvoiced gap yields two runs; nothing merges them."""
     # hnr_track fake dips below the floor for exactly one frame mid-interval
     ...
-    assert product.verdict["runs_n"] == 2
+    assert store.get_entity(result.verdict_entity_id).attributes["runs_n"] == 2
 
 
 def test_marks_are_absent_outside_runs_and_absent_is_not_zero() -> None:
@@ -989,8 +1141,8 @@ def test_period_doubling_alias_inside_the_range_flags() -> None:
     """median F0 * factor (or / factor) inside [f0_min, f0_max] -> ambiguous run, flagged (N21)."""
     # override f0 range [100, 500]; marks at 1/220 s -> 440 also in range -> ambiguous
     ...
-    assert product.outcome is Outcome.FLAG
-    assert product.verdict["ambiguous_runs_n"] == 1
+    assert result.verdict.outcome is Outcome.FLAG
+    assert store.get_entity(result.verdict_entity_id).attributes["ambiguous_runs_n"] == 1
 
 
 def test_gate_interval_flag_is_inert_while_unmeasured() -> None:
@@ -1034,7 +1186,10 @@ def _required(config: TriageConfig) -> dict[str, Any]:
 
 def _residual(store: ProvStore, envelope: np.ndarray, floor: np.ndarray, sr: int) -> list[tuple[float, float]]:
     """Energetic intervals nobody else claimed: envelope > floor, minus airway-labelled spans,
-    minus SPEECH's spans. Unlabelled spans are not subtracted."""
+    minus SPEECH's spans. Unlabelled spans are not subtracted.
+
+    ``envelope`` and ``floor`` are the ``envelope_dbfs``/``floor_dbfs`` arrays of the one
+    ``energy_envelope`` npz sidecar."""
     energetic = _contiguous_true(envelope > floor, sr)
     claimed = _airway_labelled_extents(store) + [
         e.extent for e in store.entities("span")
@@ -1058,8 +1213,8 @@ failed first at the offset frame, or `residual_end` when the run ran into the in
 `marks_n`. Ambiguity: `f0_median` from the run's marks; ambiguous when
 `f0_median * doubling <= f0_max_hz or f0_median / doubling >= f0_min_hz` evaluates the alias inside
 the range (both directions checked; the helper's test pins the arithmetic). `fail` when the residual
-is empty or no run passes; the hint row (N25) upgrades either `fail` to `flag`. `write_node_verdict`
-on every path.
+is empty or no run passes; the hint row (N25) upgrades either `fail` to `flag`. `write_verdict`
+on every path, with the verdict mapping as its `detail=`.
 
 - [ ] **Step 6.5: Run and watch them pass**
 
@@ -1117,7 +1272,9 @@ Consumes:
   invalid extent (real).
 - `apply_redactions(audio, extents) -> Audio` — silences, preserves duration, never mutates (real).
 - `RedactionExtent{start, end, category}` (real).
-- `transcribe_audios(audios, model, ...) -> List[ScriptLine]` and `HFModel` (mocked).
+- `transcribe_audios(audios, model, ...) -> List[ScriptLine]` (mocked). `HFModel` at the recorded
+  commit is reached only through the module-level `_verification_model(model_id, commit_sha)`
+  factory (monkeypatched in tests, so no test constructs an `HFModel`).
 - `scan_for_pii` / `PiiScan` (mocked).
 - `Audio.save_to_file(path)` — WAV default subtype FLOAT; out-of-range write refuses (real).
 
@@ -1126,20 +1283,22 @@ Produces:
 ```python
 # src/senselab/audio/workflows/triage/nodes/redact.py
 @dataclass(frozen=True)
-class RedactProduct:
-    product: NodeProduct
+class RedactResult(NodeResult):
     artifacts: dict[str, Path]        # {"audio": ..., "transcript": ...}; empty on fail
 
 def redact(
     store: ProvStore,
+    source: str,                      # the store-held stream name, "recording" (N17)
     config: TriageConfig,
+    hint: AudioHints | None = None,   # accepted for the shared shape; not read
+    *,
     run_dir: Path,
     artifacts_dir: Path,
-    device: DeviceType | None = None,
-) -> RedactProduct
+) -> RedactResult
 ```
 
-`verdict` mapping (the design doc's product section, exactly):
+`verdict` mapping (the design doc's product section, exactly), written as the verdict entity's
+attributes via `write_verdict`'s `detail=`:
 `{"redactions_n", "by_category": {}, "padding_ms", "verified": bool, "survived": [], "audio_check":
 "bounded"}`. `survived` is non-empty only on the finding-survived `fail` and names **categories,
 never matched text**; the could-not-verify `fail` carries `survived: []` with its reason (N16).
@@ -1152,8 +1311,8 @@ the word entities read for the transcript, and the recording stream. Artifacts a
 `artifacts_dir`, which must not contain or be contained by `run_dir` (checked at entry; the store and
 the release directory must not be sweepable by one publish step — capability-map §3.4).
 
-**Mocking boundary for this task:** `transcribe_audios`, `HFModel`, `scan_for_pii` patched on
-`nodes.redact`. `plan_redactions` / `apply_redactions` / audio IO / the store run real.
+**Mocking boundary for this task:** `transcribe_audios`, `_verification_model`, `scan_for_pii`
+patched on `nodes.redact`. `plan_redactions` / `apply_redactions` / audio IO / the store run real.
 
 - [ ] **Step 7.1: Write the failing tests**
 
@@ -1161,7 +1320,14 @@ Fixture: extend the shared conftest builder with `add_pii_finding(store, extent,
 speaker=...)` writing a `pii` entity + the word-level `pii` label assertions + (once per store) the
 `pii_scan` measurement, the way Task 5's node writes them. Default fakes: `transcribe_audios` returns
 `[ScriptLine(text="", start=0.0, end=0.0)]` (nothing re-transcribed); `scan_for_pii` returns clean
-scans with all three default detectors in `detectors_used`.
+scans with all three default detectors in `detectors_used`; `_verification_model` returns a
+`_FakeModel`. Tests read the verdict mapping off the verdict entity:
+
+```python
+def _verdict(store, result):
+    """The verdict entity's attributes — where the node's design-named mapping lives."""
+    return store.get_entity(result.verdict_entity_id).attributes
+```
 
 ```python
 def test_constructible_but_refuses_without_a_padding_override() -> None:
@@ -1169,7 +1335,7 @@ def test_constructible_but_refuses_without_a_padding_override() -> None:
     store, _, run_dir = make_redact_run(tmp_path, findings=[((1.0, 1.4), "PERSON")])
     before = store.fingerprint()
     with pytest.raises(ValueError, match="redaction.padding_ms"):
-        redact_module.redact(store, load_triage_config(), run_dir, tmp_path / "release")
+        redact_module.redact(store, "recording", load_triage_config(), run_dir=run_dir, artifacts_dir=tmp_path / "release")
     assert store.fingerprint() == before
 
 
@@ -1179,8 +1345,8 @@ def test_every_finding_is_redacted_regardless_of_speaker() -> None:
         tmp_path,
         findings=[((1.0, 1.4), "PERSON", "SPEAKER_00"), ((3.0, 3.5), "LOCATION", "SPEAKER_01")],
     )
-    result = redact_module.redact(store, cfg, run_dir, tmp_path / "release")
-    assert result.product.verdict["redactions_n"] == 2
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert _verdict(store, result)["redactions_n"] == 2
     audio = Audio(filepath=result.artifacts["audio"])
     x = np.asarray(audio.waveform)[0]
     pad = cfg.require("redaction.padding_ms") / 1000.0
@@ -1194,16 +1360,16 @@ def test_padded_overlapping_extents_merge_and_categories_join() -> None:
     store, cfg, run_dir = make_redact_run(
         tmp_path, findings=[((1.0, 1.2), "PERSON"), ((1.25, 1.5), "LOCATION")]
     )  # override padding makes them overlap
-    result = redact_module.redact(store, cfg, run_dir, tmp_path / "release")
-    assert result.product.verdict["redactions_n"] == 1
-    assert result.product.verdict["by_category"] == {"PERSON+LOCATION": 1}
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert _verdict(store, result)["redactions_n"] == 1
+    assert _verdict(store, result)["by_category"] == {"PERSON+LOCATION": 1}
 
 
 def test_a_category_containing_plus_is_refused_by_the_node_not_discovered_later() -> None:
     """+ is reserved for merged categories; a label carrying it would silently decompose (invariant 5)."""
     store, cfg, run_dir = make_redact_run(tmp_path, findings=[((1.0, 1.4), "A+B")])
     with pytest.raises(ValueError, match="reserved") as err:
-        redact_module.redact(store, cfg, run_dir, tmp_path / "release")
+        redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
     assert "A+B" in str(err.value), "the message names the category and bounds only"
     # pii entities carry no text field at all, so the exception cannot quote a match
 
@@ -1219,10 +1385,10 @@ def test_verification_reruns_both_recognizers_and_a_surviving_finding_fails() ->
     monkeypatch.setattr(redact_module, "transcribe_audios", fake_transcribe)
     monkeypatch.setattr(redact_module, "scan_for_pii", _scan_finding("jane doe", "PERSON"))
     store, cfg, run_dir = make_redact_run(tmp_path, findings=[((1.0, 1.4), "PERSON")])
-    result = redact_module.redact(store, cfg, run_dir, tmp_path / "release")
-    assert result.product.outcome is Outcome.FAIL
-    assert result.product.verdict["survived"] == ["PERSON"], "categories, never matched text"
-    assert "jane doe" not in json.dumps(result.product.verdict)
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FAIL
+    assert _verdict(store, result)["survived"] == ["PERSON"], "categories, never matched text"
+    assert "jane doe" not in json.dumps(_verdict(store, result))
     assert sorted(seen_models) == sorted({CW, QW}), "both recognizers PREPROCESS used (N14)"
     assert result.artifacts == {}, "a failed verification releases nothing"
 
@@ -1236,14 +1402,14 @@ def test_a_failed_detector_during_verification_withholds() -> None:
     """could-not-verify is fail(survived=[]) -> withheld, not a pass and not not_assessed (N16)."""
     monkeypatch.setattr(redact_module, "scan_for_pii", _failing_scan({"gliner": "load failed"}))
     ...
-    assert result.product.outcome is Outcome.FAIL
-    assert result.product.verdict["survived"] == []
+    assert result.verdict.outcome is Outcome.FAIL
+    assert _verdict(store, result)["survived"] == []
 
 
 def test_released_artifacts_share_no_element_ids_with_the_store() -> None:
     """An id indexing both the store and a released artifact is a join key back to the PII."""
     store, cfg, run_dir = make_redact_run(tmp_path, findings=[((1.0, 1.4), "PERSON")])
-    result = redact_module.redact(store, cfg, run_dir, tmp_path / "release")
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
     ids = [e.id for e in store.entities()]
     for path in result.artifacts.values():
         blob = path.read_bytes()
@@ -1255,8 +1421,8 @@ def test_the_source_is_not_destroyed_and_the_store_only_grows() -> None:
     """Redaction writes; deletion is an operator decision with its own authorisation."""
     store, cfg, run_dir = make_redact_run(tmp_path, findings=[((1.0, 1.4), "PERSON")])
     entities_before = {e.id for e in store.entities()}
-    redact_module.redact(store, cfg, run_dir, tmp_path / "release")
-    assert (run_dir / "plain.wav").exists()
+    redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert (run_dir / "streams" / "plain.wav").exists()
     assert entities_before <= {e.id for e in store.entities()}, "append-only: nothing removed"
 
 
@@ -1264,19 +1430,19 @@ def test_an_unscanned_store_is_refused_not_certified() -> None:
     """No pii_scan measurement means 'unchecked', which must not launder into releasable (N15)."""
     store, cfg, run_dir = make_redact_run(tmp_path, findings=[], scanned=False)
     with pytest.raises(ValueError, match="no PII scan"):
-        redact_module.redact(store, cfg, run_dir, tmp_path / "release")
+        redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
 
 
 def test_zero_findings_still_verifies_before_passing() -> None:
     """A clean scan's artifact is verified like any other; verification is part of the node."""
     ...
-    assert result.product.verdict["verified"] is True and result.product.verdict["redactions_n"] == 0
+    assert _verdict(store, result)["verified"] is True and _verdict(store, result)["redactions_n"] == 0
 
 
 def test_artifacts_dir_nested_in_run_dir_is_refused() -> None:
     """The store's directory and the release directory must not be one publish step apart."""
     with pytest.raises(ValueError, match="artifacts_dir"):
-        redact_module.redact(store, cfg, run_dir, run_dir / "release")
+        redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=run_dir / "release")
 
 
 def test_transcript_artifact_replaces_findings_with_category_placeholders() -> None:
@@ -1313,7 +1479,12 @@ def _extents_from_findings(store: ProvStore) -> list[RedactionExtent]:
     return extents
 
 
-def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]], device) -> tuple[bool, list[str], bool]:
+def _verification_model(model_id: str, commit_sha: str) -> HFModel:
+    """A recognizer at the commit the store's model agent recorded — never a ref (N14)."""
+    return HFModel(path_or_uri=model_id, revision=commit_sha)
+
+
+def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]]) -> tuple[bool, list[str], bool]:
     """Re-run both recognizers and the scan on the node's own output.
 
     Returns (verified, survived_categories, scan_ran). Any finding anywhere fails; a detector
@@ -1321,8 +1492,7 @@ def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, s
     """
     hypotheses = []
     for model_id, commit_sha in asr_models:  # (id, sha) pairs read from the store's model agents
-        model = HFModel(path_or_uri=model_id, revision=commit_sha)
-        (line,) = transcribe_audios([redacted], model=model, device=device)
+        (line,) = transcribe_audios([redacted], model=_verification_model(model_id, commit_sha))
         hypotheses.append(flatten_script_line(line))
     scans = scan_for_pii([*hypotheses, transcript_text])
     scans = scans if isinstance(scans, list) else [scans]
@@ -1334,7 +1504,8 @@ def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, s
 
 `redact()` order: entry checks (`require("redaction.padding_ms")`, artifacts_dir outside the store tree, the
 `pii_scan` measurement's presence) → `_extents_from_findings` → `plan_redactions` → load the
-`recording` stream → `apply_redactions` → build the transcript from SPEECH's consensus words with
+`recording` stream with `resolve_stream(store, run_dir, source)` → `apply_redactions` → build the
+transcript from SPEECH's consensus words with
 planned-extent words replaced by `[CATEGORY]` → **verify** → only on verified success write both
 artifacts to `artifacts_dir` and return them; on any verification failure write nothing releasable,
 return `artifacts={}` with the `fail` verdict. Store writes as the Interfaces block lists; the verdict
@@ -1397,37 +1568,43 @@ the never-ran rows; undecided resolution. None of that is re-tested here beyond 
 **Interfaces**
 
 Consumes: `fold_file_verdict`, `FileVerdict`, `NodeVerdict`, `Outcome`, `KindState`, `RunState`,
-`Release` from `vocabulary.py`; `read_node_verdict_entities` / `node_verdict_from_entity` /
-`write_node_verdict` / `software_agent` from `elements.py`; `kind` entities as `taxonomy.md`'s product
-writes them (`{"kind", "state"}` with `state` ∈ present/absent/undecided/**not_screened**);
-`ProvStore.get_activity` (N19). **No models — no mocks in this task.**
+`Release` from `vocabulary.py`; `write_verdict` / `software_agent` from `nodes/common.py`; `verdict`
+entities read back with `store.entities("verdict")` (attributes `{"node", "outcome", "kind", "why",
+**detail}` — the shape `write_verdict` writes) via a private `_node_verdict_from_entity`; `kind`
+entities as `taxonomy.md`'s product writes them (`{"kind", "state"}` with `state` ∈
+present/absent/undecided/**not_screened**); `ProvStore.get_activity` (N19). **No models — no mocks
+in this task.**
 
 Produces:
 
 ```python
 # src/senselab/audio/workflows/triage/nodes/verdict.py
 @dataclass(frozen=True)
-class VerdictProduct:
-    file_verdict: FileVerdict
-    view: list[str]                   # the file-verdict entity id, then every id it folded
+class VerdictResult(NodeResult):
+    file_verdict: FileVerdict         # view = (file-verdict entity id, *every id it folded)
 
 def verdict(
     store: ProvStore,
+    source: None,                     # accepted for the shared shape; unread — it reads only the store
     config: TriageConfig,
+    hint: AudioHints | None = None,   # accepted for the shared shape; unread
+    *,
+    run_dir: Path,                    # accepted for the shared shape; VERDICT writes no sidecars
     ran: Mapping[str, RunState] | None = None,
-) -> VerdictProduct
+) -> VerdictResult
 ```
 
 (`config` is taken for signature uniformity and the activity's `config_hash` parameter; VERDICT has no
 thresholds — "any threshold that would turn a flag into a pass" is out of scope by design.)
 
-Store writes: one `VERDICT` activity; one `verdict` entity whose attributes carry
-`{"scope": "file", "triage", "release", "kinds", "ran", "gated", "reasons": [...]}` (reasons as plain
-dicts of `NodeVerdict` fields); `used` from the activity to **every** node-verdict entity and `kind`
-entity folded; `wasGeneratedBy` + `wasAttributedTo` the software agent. Node-verdict entities are
-distinguished from the file verdict by the `scope` attribute (node verdicts carry `scope: "node"` via
-`write_node_verdict`; if the sibling's Task 1 chose a different discriminator, use that — reviewer
-reconciles).
+Store writes: one `VERDICT` activity; one `verdict` entity written via `write_verdict` with
+`node="VERDICT"`, `outcome=<the fold's triage outcome>`, and `detail=` carrying
+`{"triage", "release", "kinds", "ran", "gated", "reasons": [...]}` (reasons as plain dicts of
+`NodeVerdict` fields); `used` from the activity to **every** node-verdict entity and `kind` entity
+folded; `wasGeneratedBy` + `wasAttributedTo` the software agent. Node-verdict entities are
+distinguished from the file verdict by the `node` attribute `write_verdict` already stamps: a node
+verdict carries a graph node's name; the file verdict carries `"VERDICT"` (the sibling's Task 1 has
+no `scope` field, so the node name is the discriminator).
 
 The mappings, stated once and tested:
 
@@ -1445,8 +1622,9 @@ The mappings, stated once and tested:
 
 - [ ] **Step 8.1: Write the failing tests**
 
-Fixture: a builder writing node-verdict and kind entities directly through `write_node_verdict` and
-`store.entity(prov_type="kind", ...)` — no branch nodes run in these tests.
+Fixture: a builder writing node-verdict entities directly through `write_verdict` (one activity per
+seeded node) and kind entities through `store.entity(prov_type="kind", ...)` — no branch nodes run
+in these tests.
 
 ```python
 def test_a_branch_fail_against_an_absent_kind_is_a_file_pass() -> None:
@@ -1459,7 +1637,7 @@ def test_a_branch_fail_against_an_absent_kind_is_a_file_pass() -> None:
         ],
         kinds={"airway": "present", "speech": "absent", "voice_no_words": "not_screened"},
     )
-    result = verdict_module.verdict(store, cfg)
+    result = verdict_module.verdict(store, None, cfg, run_dir=tmp_path)
     assert result.file_verdict.triage is Outcome.PASS, "a branch fail is not a file fail"
     assert result.file_verdict.kinds["voice_no_words"] is KindState.ABSENT, (
         "not_screened maps to UNDECIDED (N27), which VOICE's fail resolves to absent"
@@ -1469,10 +1647,10 @@ def test_a_branch_fail_against_an_absent_kind_is_a_file_pass() -> None:
 def test_admit_fail_and_every_kind_absent_are_distinct_fails() -> None:
     """could-not-measure and measured-and-empty carry different reasons, in different shapes."""
     broken = verdict_module.verdict(make_verdict_store(
-        node_verdicts=[("ADMIT", Outcome.FAIL, None)], kinds={}), cfg)
+        node_verdicts=[("ADMIT", Outcome.FAIL, None)], kinds={}), None, cfg, run_dir=tmp_path)
     empty = verdict_module.verdict(make_verdict_store(
         node_verdicts=[("ADMIT", Outcome.PASS, None), ("TAXONOMY", Outcome.FAIL, None)],
-        kinds={"airway": "absent", "speech": "absent", "voice_no_words": "absent"}), cfg)
+        kinds={"airway": "absent", "speech": "absent", "voice_no_words": "absent"}), None, cfg, run_dir=tmp_path)
     assert broken.file_verdict.triage is empty.file_verdict.triage is Outcome.FAIL
     assert broken.file_verdict.reasons[0].node == "ADMIT"
     assert any("every kind is absent" in r.why for r in empty.file_verdict.reasons)
@@ -1481,16 +1659,16 @@ def test_admit_fail_and_every_kind_absent_are_distinct_fails() -> None:
 
 def test_release_mapping_and_not_assessed_is_not_releasable() -> None:
     """No REDACT verdict -> NOT_ASSESSED; fail -> WITHHELD; pass -> RELEASABLE. Never a default."""
-    none_ran = verdict_module.verdict(make_verdict_store(node_verdicts=BASE, kinds=KINDS), cfg)
+    none_ran = verdict_module.verdict(make_verdict_store(node_verdicts=BASE, kinds=KINDS), None, cfg, run_dir=tmp_path)
     assert none_ran.file_verdict.release is Release.NOT_ASSESSED
     assert none_ran.file_verdict.release is not Release.RELEASABLE, (
         "a recording with no speech has no scan; unexamined must not read as cleared"
     )
     withheld = verdict_module.verdict(make_verdict_store(
-        node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None)], kinds=KINDS), cfg)
+        node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None)], kinds=KINDS), None, cfg, run_dir=tmp_path)
     assert withheld.file_verdict.release is Release.WITHHELD
     released = verdict_module.verdict(make_verdict_store(
-        node_verdicts=[*BASE, ("REDACT", Outcome.PASS, None)], kinds=KINDS), cfg)
+        node_verdicts=[*BASE, ("REDACT", Outcome.PASS, None)], kinds=KINDS), None, cfg, run_dir=tmp_path)
     assert released.file_verdict.release is Release.RELEASABLE
 
 
@@ -1498,7 +1676,7 @@ def test_contradiction_wiring_resolves_the_kind_and_flags() -> None:
     """absent-predicted kind whose branch passed -> flag, kind resolved present, both visible."""
     result = verdict_module.verdict(make_verdict_store(
         node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
-        kinds={"speech": "absent"}), cfg)
+        kinds={"speech": "absent"}), None, cfg, run_dir=tmp_path)
     assert result.file_verdict.triage is Outcome.FLAG
     assert result.file_verdict.kinds["speech"] is KindState.PRESENT
     kind_entities = store.entities("kind")
@@ -1511,14 +1689,14 @@ def test_a_present_kind_whose_branch_never_ran_flags() -> None:
     """The absence of evidence, on a kind the graph was asked about, is a gap a human sees."""
     result = verdict_module.verdict(
         make_verdict_store(node_verdicts=[("ADMIT", Outcome.PASS, None)], kinds={"airway": "present"}),
-        cfg, ran={"ADMIT": RunState.COMPLETED, "AIRWAY": RunState.SKIPPED},
+        None, cfg, run_dir=tmp_path, ran={"ADMIT": RunState.COMPLETED, "AIRWAY": RunState.SKIPPED},
     )
     assert result.file_verdict.triage is Outcome.FLAG
 
 
 def test_ran_is_derived_when_omitted_and_cannot_see_errored() -> None:
     """verdict entity -> completed, none -> skipped; the docstring states the errored blindness (N26)."""
-    result = verdict_module.verdict(make_verdict_store(node_verdicts=BASE, kinds=KINDS), cfg)
+    result = verdict_module.verdict(make_verdict_store(node_verdicts=BASE, kinds=KINDS), None, cfg, run_dir=tmp_path)
     assert result.file_verdict.ran["ADMIT"] is RunState.COMPLETED
     assert result.file_verdict.ran["REDACT"] is RunState.SKIPPED
 
@@ -1526,8 +1704,8 @@ def test_ran_is_derived_when_omitted_and_cannot_see_errored() -> None:
 def test_gated_run_is_marked() -> None:
     """An absent kind with no branch verdict marks gated: the contradiction check did not happen."""
     verdict_module.verdict(make_verdict_store(
-        node_verdicts=[("ADMIT", Outcome.PASS, None)], kinds={"speech": "absent"}), cfg)
-    file_entity = _file_verdict_entity(store)
+        node_verdicts=[("ADMIT", Outcome.PASS, None)], kinds={"speech": "absent"}), None, cfg, run_dir=tmp_path)
+    file_entity = _file_verdict_entity(store)  # the verdict entity whose node attribute is "VERDICT"
     assert file_entity.attributes["gated"] is True
 
 
@@ -1563,10 +1741,16 @@ _GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "VOICE", 
 _NOT_SCREENED = "not_screened"
 
 
+def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
+    """The vocabulary verdict a write_verdict entity carries."""
+    a = entity.attributes
+    return NodeVerdict(node=a["node"], outcome=Outcome(a["outcome"]), kind=a.get("kind"), why=a["why"])
+
+
 def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVerdict]]:
-    """Node-scope verdict entities, ordered by the graph, unknown nodes last in store order."""
-    pairs = [(e, node_verdict_from_entity(e)) for e in read_node_verdict_entities(store)
-             if e.attributes.get("scope") == "node"]
+    """Node verdict entities (node != "VERDICT"), ordered by the graph, unknown nodes last."""
+    pairs = [(e, _node_verdict_from_entity(e)) for e in store.entities("verdict")
+             if e.attributes.get("node") != _NODE]
     return sorted(pairs, key=lambda p: _GRAPH_ORDER.index(p[1].node)
                   if p[1].node in _GRAPH_ORDER else len(_GRAPH_ORDER))
 
@@ -1593,10 +1777,12 @@ def _release_from(verdicts: Sequence[NodeVerdict]) -> Release:
 
 `verdict()` assembles: derived-or-supplied `ran`; `fold_file_verdict(node_verdicts, predictions, ran,
 release=_release_from(...))`; `gated = any(state is KindState.ABSENT and kind has no branch verdict)`;
-writes the file-verdict entity (attributes as the Interfaces block lists, `scope: "file"`), records
-`used` for every folded id, and returns `VerdictProduct(file_verdict, [file_id, *folded_ids])`. Its
-docstring states what the derived `ran` cannot see. No numbers anywhere; the only tables are
-vocabulary.
+writes the file-verdict entity via `write_verdict(store, activity, agent, node=_NODE,
+outcome=file_verdict.triage, kind=None, why=..., detail={"triage", "release", "kinds", "ran",
+"gated", "reasons"})`, records `used` for every folded id, and returns
+`VerdictResult(verdict=..., view=(file_id, *folded_ids), verdict_entity_id=file_id,
+file_verdict=file_verdict)`. Its docstring states what the derived `ran` cannot see. No numbers
+anywhere; the only tables are vocabulary.
 
 - [ ] **Step 8.4: Run and watch them pass**
 
@@ -1640,9 +1826,11 @@ ids; store never releasable; source not destroyed; branch-fail ≠ file-fail; th
    branch cannot label; nothing here computes the run-vs-run contrast or the named offset criterion
    beyond recording which gate condition released. Consumers compute them from the marks — stated,
    not planned.
-5. **The `pii_scan` measurement's exact name/shape is a Task 5 invention** (`{"name": "pii_scan",
-   "scanned_by", "failed"}`) that Task 7's N15 gate depends on; if the reviewer renames it in
-   reconciliation, both tasks move together.
+5. **The `pii_scan` measurement is a Task 5 product** (`{"name": "pii_scan", "scanned_by",
+   "failed"}`), now named in Task 5's store-writes list, that Task 7's N15 gate depends on. Checked
+   against the sibling plan's measurement names (`energy_envelope`, `yamnet_windows`, `silence`,
+   `level`, `asr_*`, `alignment`, `spectrogram_*`, `gammatone`, `spans_no_contrast`): no collision.
+   A rename moves both tasks together.
 6. **REDACT's verification cannot re-run subprocess-venv recognizers cheaply in CI** — the node tests
    mock them, so the end-to-end verification path is exercised only with fakes. A future integration
    test on a GPU host (ORCD recipe exists) would close it.
@@ -1653,9 +1841,10 @@ ids; store never releasable; source not destroyed; branch-fail ≠ file-fail; th
 **Capability-map corrections found while planning** (the map is evidence, not gospel):
 
 - §1.5's `separate_audios(model=HFModel("alibabasglab/MossFormer2_SS_16K"), ...)` row and §4.5's
-  `utils.clearvoice` reference describe branch `triage`, **not** `design/triage-workflow-dag`: on this
-  branch `source_separation/api.py` is unasdiff-only and *refuses* that model id, and
-  `utils/clearvoice.py` does not exist. Hence the merge prerequisite at the top of this plan.
+  `utils.clearvoice` reference were stale on the pre-merge design branch; **the `triage` merge
+  resolved this** — the merged tree's `source_separation/api.py` dispatches that model id to
+  ClearVoice, and `utils/clearvoice.py` exists. The prerequisite section at the top now records the
+  verified post-merge behaviour instead of a merge instruction.
 - §1.5's PII rows ("`PiiSpan` has no offsets and no times", "MISSING — locating a finding") are
   **stale on this branch**: foundation Task 1 landed `PiiSpan(ScriptLine)`, and findings from a
   scanned line inherit its extent and speaker. The projection rule ("never matched text") remains the
