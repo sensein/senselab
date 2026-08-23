@@ -192,7 +192,7 @@ def seed_airway_store(tmp_path: Path, config: TriageConfig) -> Callable[..., dic
         no_contrast_k: float | None = None,
     ) -> dict[str, Any]:
         """Seed one store; returns the ids of what it wrote, keyed ``stream``/``spans``/``yamnet``/``words``."""
-        from senselab.audio.workflows.triage.nodes.airway import CRISPERWHISPER_ID
+        from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID
 
         k_db = float(config.require("spans.k_db.airway"))
         ends = [end for _, end, _ in spans] + [float(w["end"]) for w in words]

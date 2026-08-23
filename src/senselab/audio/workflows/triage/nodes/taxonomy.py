@@ -25,13 +25,14 @@ from senselab.audio.workflows.triage.nodes.common import (
     software_agent,
     write_verdict,
 )
+from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import HFModel
 from senselab.utils.prov_store import ProvStore
 
 NODE = "TAXONOMY"
 AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
-CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
+
 SCREENED_KINDS = ("airway", "speech")
 
 
