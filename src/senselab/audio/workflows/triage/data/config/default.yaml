@@ -48,11 +48,22 @@ derivation: |
 
   Praat harmonicity settings hop_s 0.01, silence_threshold 0.1, periods_per_window 4.5 --
   Praat's own documented defaults for the cc method, which extract_harmonicity_descriptors
-  (praat_parselmouth.py:569) already uses. Conventional, not fitted here. periods_per_window /
-  phonation.f0_min_hz is also VOICE's analysis window, and Praat refuses any segment shorter than
-  it, so a residual interval below that length is pruned before analysis and counted in the
-  verdict's short_intervals_n rather than becoming a raise (measured on real recordings: median
-  residual fragment 33.6 ms, 20 of 41 under the 30 ms window).
+  (praat_parselmouth.py:569) already uses. Conventional, not fitted here. Two lengths follow from
+  them and are not the same length, which cost a round: periods_per_window / f0_min_hz is the
+  analysis window (VOICE's RMS track averages over it), while to_harmonicity_cc refuses any segment
+  shorter than (periods_per_window + 1) / f0_min_hz -- 1.2222x the window. Binary-searched at
+  f0_min 150 Hz: the shortest sound it accepts is exactly 587 samples at 16 kHz = 36.69 ms, against
+  a 30.0 ms window and a 36.667 ms analytic bound. VOICE therefore prunes on the larger figure and
+  counts what it dropped in the verdict's short_intervals_n. Pruning on the window instead left the
+  band [window, 1.2222 x window) unguarded, which is where real fragmented envelopes sit (measured:
+  median residual fragment 33.6 ms, 20 of 41 under 30 ms, and a measured unguarded band of
+  [60 ms, 73.3 ms) under the b2ai override's f0_min).
+
+  Praat's point process needs 3 / f0_min_hz, a third length again, also binary-searched: 640 samples
+  = 40.0 ms at f0_min 75 Hz and 320 = 20.0 ms at 150 Hz, both exactly 3 / f0_min. A gate run is a
+  run of hop_s frames, so one- to four-frame runs are ordinary, and every one of them was shorter
+  than this. VOICE skips period_marks for such a run and counts it in marks_skipped_short_n; the
+  run's marks measurement records unmeasured rather than a count of zero, because nobody looked.
 
   Floor evaluation grid 0.1 s -- a granularity rather than a threshold: the percentile is evaluated
   every 100 ms and interpolated between, which is finer than the 3 s window it summarises.

@@ -1,4 +1,9 @@
-"""VOICE — the residual fold, the two-condition gate, marks not contours. Praat is faked; all else real."""
+"""VOICE — the residual fold, the two-condition gate, marks not contours. All else real.
+
+Praat is faked by default, for speed and platform independence; the boundary tests that pin where its
+own refusals lie put the real hnr_track, f0_track or period_marks back, since a fake cannot say where
+Praat draws that line.
+"""
 
 from __future__ import annotations
 
@@ -50,7 +55,11 @@ def _fake_period_marks(
 
 @pytest.fixture(autouse=True)
 def praat_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Praat is deterministic but slow and platform-sensitive; the phonation tests own the real calls."""
+    """Praat is deterministic but slow and platform-sensitive; the phonation tests own the real calls.
+
+    The boundary tests below substitute the real functions back, because a fake cannot be the oracle
+    for where Praat's own refusal lies.
+    """
     monkeypatch.setattr(voice_module, "hnr_track", _fake_hnr_track)
     monkeypatch.setattr(voice_module, "f0_track", _fake_f0_track)
     monkeypatch.setattr(voice_module, "period_marks", _fake_period_marks)
@@ -373,4 +382,45 @@ def test_a_residual_of_nothing_but_fragments_fails_and_says_so(
     verdict = store.get_entity(result.verdict_entity_id)
     assert result.verdict.outcome is Outcome.FAIL
     assert verdict.attributes["short_intervals_n"] == 2
-    assert "shorter than the analysis window" in result.verdict.why
+    assert "shorter than the minimum analysable duration" in result.verdict.why
+
+
+@pytest.mark.parametrize("duration_ms", [30, 33, 36])
+def test_a_fragment_in_the_unguarded_band_is_pruned(
+    store: ProvStore,
+    seed_voice_store: Callable[..., dict],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    duration_ms: int,
+) -> None:
+    """Praat's harmonicity needs (periods_per_window + 1) / f0_min, not periods_per_window / f0_min.
+
+    At f0_min 150 Hz and 4.5 periods per window the two differ by a factor of 1.2222, and every
+    duration in [30 ms, 36.67 ms) sat inside that gap: long enough to survive a floor set at the
+    window, short enough for Praat to refuse. Real hnr_track and f0_track run, so the refusal is the
+    oracle rather than a fake standing in for it.
+    """
+    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
+    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
+    seed_voice_store(store, energetic=((1.0, 1.0 + duration_ms / 1000.0),))
+    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["short_intervals_n"] == 1
+    assert _voice_spans(store) == []
+    assert result.verdict.outcome is Outcome.FAIL
+
+
+def test_a_fragment_just_over_the_praat_floor_is_analysed(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the boundary: 37 ms clears (periods_per_window + 1) / f0_min and is measured.
+
+    Without this the pruning could be tightened arbitrarily and still look correct.
+    """
+    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
+    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
+    seed_voice_store(store, energetic=((1.0, 1.037),))
+    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["short_intervals_n"] == 0, "37 ms is above the floor and must be analysed"
+    assert verdict.attributes["runs_n"] >= 1, "a 220 Hz tone over the floor passes the gate"
