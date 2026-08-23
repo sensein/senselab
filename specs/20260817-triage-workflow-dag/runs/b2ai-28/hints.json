@@ -1,0 +1,333 @@
+{
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Diadochokinesis-KA.wav": {
+  "may_contain": [
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.diadochokinesis.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Diadochokinesis-PA.wav": {
+  "may_contain": [
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.diadochokinesis.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Diadochokinesis-Pataka.wav": {
+  "may_contain": [
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.diadochokinesis.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Diadochokinesis-TA.wav": {
+  "may_contain": [
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.diadochokinesis.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Diadochokinesis-buttercup.wav": {
+  "may_contain": [
+   "speech",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.diadochokinesis.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Free-speech-1.wav": {
+  "may_contain": [
+   "speech"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.free-speech.v2",
+   "speech_type": "elicited",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Free-speech-2.wav": {
+  "may_contain": [
+   "speech"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.free-speech.v2",
+   "speech_type": "elicited",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Free-speech-3.wav": {
+  "may_contain": [
+   "speech"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.free-speech.v2",
+   "speech_type": "elicited",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Glides-High-to-Low.wav": {
+  "may_contain": [
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.glides",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Glides-Low-to-High.wav": {
+  "may_contain": [
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.glides",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Loudness.wav": {
+  "may_contain": [
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.loudness.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Maximum-phonation-time-1.wav": {
+  "may_contain": [
+   "sustained-vowel",
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.maximum-phonation-time.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Maximum-phonation-time-2.wav": {
+  "may_contain": [
+   "sustained-vowel",
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.maximum-phonation-time.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Maximum-phonation-time-3.wav": {
+  "may_contain": [
+   "sustained-vowel",
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.maximum-phonation-time.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Picture-description.wav": {
+  "may_contain": [
+   "speech"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.picture-description",
+   "speech_type": "elicited",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Prolonged-vowel.wav": {
+  "may_contain": [
+   "sustained-vowel",
+   "phonation",
+   "voice"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.prolonged-vowel",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Rainbow-Passage.wav": {
+  "may_contain": [
+   "read-speech",
+   "speech"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.rainbow-passage",
+   "speech_type": "read",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-Breath-1.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-Breath-2.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-Cough-1.wav": {
+  "may_contain": [
+   "cough",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-Cough-2.wav": {
+  "may_contain": [
+   "cough",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-FiveBreaths-1.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-FiveBreaths-2.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-FiveBreaths-3.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-FiveBreaths-4.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-ThreeQuickBreaths-1.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Respiration-and-cough-ThreeQuickBreaths-2.wav": {
+  "may_contain": [
+   "breathe",
+   "airway"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.respiration-and-cough.v2",
+   "speech_type": "non-lexical",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ },
+ "sub-17cee767-1864-457a-b2ec-446a058a81f8_ses-DA790C5A-93FF-432F-A5B6-418C19A4F2BA_task-Story-recall.wav": {
+  "may_contain": [
+   "speech"
+  ],
+  "targeted_speaker_count": 1,
+  "metadata": {
+   "task_id": "adult.story-recall.v2",
+   "speech_type": "recall",
+   "registry": "b2aiprep@ebc2a14e task_registry v1"
+  }
+ }
+}
