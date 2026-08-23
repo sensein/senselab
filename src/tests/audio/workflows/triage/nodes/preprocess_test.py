@@ -256,6 +256,18 @@ class TestModelDerivatives:
         assert payload, "the aligned transcript is serialised to the sidecar"
         assert calls["align"] == [{"n": 1}]
 
+    def test_the_aligner_agent_names_the_model_not_its_whole_spec(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
+    ) -> None:
+        """A model_id must be a model id: the language table's value is a mapping, not a name."""
+        _run(store, config, tmp_path)
+        alignment = _measurement(store, "alignment")
+        [agent_id] = store.associated_with(store.generated_by(alignment.id) or "")
+        agent = store.get_agent(agent_id)
+        assert agent.model_id == "facebook/wav2vec2-base-960h"
+        assert agent.commit_sha is None
+        assert agent.unresolved_reason is not None, "align_transcriptions reports no commit; the store says so"
+
     def test_squim_is_measured_per_span_as_a_measure_assertion(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None, calls: dict
     ) -> None:

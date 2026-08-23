@@ -471,7 +471,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         fused = state["fused"]
         agent = store.agent(
             agent_type="model",
-            model_id=str(DEFAULT_ALIGN_MODELS_HF[ALIGNMENT_LANGUAGE]),
+            model_id=str(DEFAULT_ALIGN_MODELS_HF[ALIGNMENT_LANGUAGE]["path_or_uri"]),
             unresolved_reason="align_transcriptions loads its aligner internally; the commit is not reported",
         )
         activity = _step("alignment", {"language": ALIGNMENT_LANGUAGE}, (state["asr_agreement_id"],), agent)
