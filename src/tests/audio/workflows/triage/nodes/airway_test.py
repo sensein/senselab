@@ -162,6 +162,24 @@ class TestHearClassification:
         verdict = store.get_entity(result.verdict_entity_id)
         assert verdict.attributes["labelled_n"] == 0
 
+    def test_a_confident_label_outside_the_interest_set_cannot_label_a_span(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_hear: None,
+        hear_scores: dict[str, float],
+    ) -> None:
+        """Speech at 0.9 is not a label of interest: the span stays unlabelled and the branch flags."""
+        hear_scores.clear()
+        hear_scores.update({"Speech": 0.9, "Cough": 0.3})
+        seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        assert _labels(store) == []
+        assert result.verdict.outcome is Outcome.FLAG
+        assert store.get_entity(result.verdict_entity_id).attributes["labelled_n"] == 0
+
     def test_airway_has_no_path_to_yamnet_as_a_model(self) -> None:
         """YAMNet is read from the store's native windows; the module cannot classify with it."""
         assert not hasattr(node, "classify_audios")
@@ -247,6 +265,58 @@ class TestYamnetConfirmation:
         assert confirm.attributes["winner"] == "Sigh"
         assert confirm.attributes["mapped_to"] == "Breathe"
         assert result.verdict.outcome is Outcome.PASS
+
+
+class TestCertifiedSilence:
+    """The label records whether its span lies inside YAMNet-certified silence (N17)."""
+
+    def test_a_span_inside_all_silent_windows_reads_true(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_hear: None,
+    ) -> None:
+        """Every overlapping graded window certified silent: the label says True."""
+        silence = [{"start": 1.0, "end": 2.0, "score": 0.8, "is_silence": True}]
+        seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[], silence_windows=silence)
+        airway(store, "plain", config, run_dir=tmp_path)
+        [label] = _labels(store)
+        assert label.attributes["in_certified_silence"] is True
+
+    def test_a_span_over_mixed_windows_reads_false(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_hear: None,
+    ) -> None:
+        """One overlapping window graded not-silent is enough: the label says False."""
+        silence = [
+            {"start": 1.0, "end": 1.6, "score": 0.8, "is_silence": True},
+            {"start": 1.6, "end": 2.2, "score": 0.2, "is_silence": False},
+        ]
+        seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[], silence_windows=silence)
+        airway(store, "plain", config, run_dir=tmp_path)
+        [label] = _labels(store)
+        assert label.attributes["in_certified_silence"] is False
+
+    def test_a_span_no_graded_window_overlaps_reads_none(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_hear: None,
+    ) -> None:
+        """Graded windows exist but none overlaps the span: the question has no answer, None."""
+        silence = [{"start": 0.0, "end": 1.0, "score": 0.9, "is_silence": True}]
+        seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[], silence_windows=silence)
+        airway(store, "plain", config, run_dir=tmp_path)
+        [label] = _labels(store)
+        assert label.attributes["in_certified_silence"] is None
 
 
 class TestLexicalContamination:
@@ -335,6 +405,19 @@ class TestOutcomeAndHint:
         assert result.verdict.outcome is Outcome.FAIL
         assert "no_contrast" not in result.verdict.why
 
+    def test_a_hint_that_does_not_declare_airway_leaves_an_absence_a_fail(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_hear: None,
+    ) -> None:
+        """Only a hint naming a label of interest or 'airway' conditions the absence; 'music' does not."""
+        seed_store(store, spans=(), yamnet_windows=[], no_contrast_k=18.0)
+        result = airway(store, "plain", config, hint=AudioHints(may_contain=["music"]), run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FAIL
+
     def test_a_hint_changes_nothing_when_spans_are_labelled(
         self,
         store: ProvStore,
@@ -365,6 +448,23 @@ class TestFigure:
         result = airway(store, "plain", config, run_dir=tmp_path)
         assert result.figure_path is not None
         assert result.figure_path.exists()
+
+    def test_the_figure_is_closed_after_saving(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_hear: None,
+    ) -> None:
+        """Saving leaves no open figure behind, so a multi-recording batch does not accumulate them."""
+        import matplotlib.pyplot as plt
+
+        plt.close("all")
+        seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        assert result.figure_path is not None
+        assert plt.get_fignums() == []
 
     def test_a_figure_failure_changes_no_verdict(
         self,

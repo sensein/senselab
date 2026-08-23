@@ -28,9 +28,9 @@ _Context = Union[str, float]  # "auto" | "small" | "medium" | "large" | float sc
 
 def _detect_screen_resolution() -> Tuple[int, int]:
     """Best-effort screen resolution detection. Falls back to 1920x1080."""
-    # Try TkAgg
+    # Try TkAgg; only through an already-open figure -- get_current_fig_manager() would create one.
     try:
-        mgr = plt.get_current_fig_manager()
+        mgr = plt.get_current_fig_manager() if plt.get_fignums() else None
         win = getattr(mgr, "window", None)
         if win is not None and hasattr(win, "winfo_screenwidth"):
             return int(win.winfo_screenwidth()), int(win.winfo_screenheight())

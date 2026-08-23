@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 from senselab.audio.data_structures import Audio, AudioHints
@@ -420,4 +421,5 @@ def _render_figure(
     (run_dir / "figures").mkdir(parents=True, exist_ok=True)
     path = run_dir / "figures" / "airway.png"
     figure.savefig(path)
+    plt.close(figure)
     return path
