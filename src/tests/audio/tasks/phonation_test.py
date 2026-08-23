@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.phonation import PeriodMark, hnr_track, period_marks
+from senselab.audio.tasks.phonation import PeriodMark, f0_track, hnr_track, period_marks
 
 SR = 16000
 
@@ -79,3 +79,25 @@ class TestPeriodMarks:
     def test_noise_yields_no_marks(self) -> None:
         """White noise gives Praat no periodic pulses, so the answer is absent, not zero."""
         assert period_marks(_noise(), 0.2, 0.8, f0_min_hz=60.0, f0_max_hz=400.0) == []
+
+
+class TestF0Track:
+    """F0 travels with the periodicity that placed it: NaN where unvoiced, strength always."""
+
+    def test_f0_track_places_a_steady_tone_and_keeps_strength_with_f0(self) -> None:
+        """A synthetic 220 Hz tone reads near 220 Hz where voiced; unvoiced frames are NaN with strength."""
+        sr = 16000
+        t = np.arange(sr * 2) / sr
+        tone = (0.5 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+        tone[: sr // 2] = 0.0  # half a second of silence first
+        audio = Audio(waveform=tone[None, :], sampling_rate=sr)
+        times, f0, strength = f0_track(audio, f0_min_hz=100.0, f0_max_hz=400.0, hop_s=0.01)
+        assert times.shape == f0.shape == strength.shape
+        voiced = ~np.isnan(f0)
+        assert np.median(f0[voiced]) == pytest.approx(220.0, rel=0.02)
+        assert np.isnan(f0[0]) and not np.isnan(strength[0]), "unvoiced is NaN f0, strength retained"
+
+    def test_every_parameter_is_required(self) -> None:
+        """No default stands in for a value the caller did not choose."""
+        with pytest.raises(TypeError):
+            f0_track(_buzz(100.0))  # type: ignore[call-arg]
