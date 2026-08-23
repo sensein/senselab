@@ -67,6 +67,23 @@ class PreprocessResult(NodeResult):
     absent: tuple[str, ...]
 
 
+def _bound_to_duration(start: float, end: float, duration_s: float) -> tuple[float, float] | None:
+    """Bound one timed span by the duration of the stream it was timed against.
+
+    Args:
+        start: The span's start, in seconds.
+        end: The span's end, in seconds.
+        duration_s: The duration the stream decoded to, in seconds.
+
+    Returns:
+        The span with its end bound by ``duration_s``, or None when its start is at or past
+        ``duration_s``, where it names no part of the stream at all.
+    """
+    if start >= duration_s:
+        return None
+    return start, min(end, duration_s)
+
+
 def _measurement(
     store: ProvStore,
     activity_id: str,
@@ -419,11 +436,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             if chunk.start is None or chunk.end is None:
                 untimed_chunks_n += 1
                 continue
-            start = float(chunk.start)
-            if start >= duration_s:
+            span = _bound_to_duration(float(chunk.start), float(chunk.end), duration_s)
+            if span is None:
                 out_of_bounds_chunks_n += 1
                 continue
-            end = min(float(chunk.end), duration_s)
+            start, end = span
             attributes: dict[str, Any] = {
                 "text": chunk.text,
                 "score": chunk.score,
@@ -462,7 +479,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         state[name + "_id"] = entity_id
 
     def _agreement() -> None:
-        """The fused word list over both recognizers — the derivative SPEECH reads."""
+        """The fused word list over both recognizers — the derivative SPEECH reads.
+
+        ``iter_word_leaves`` re-reads each recognizer's own output, which the bound on the word
+        entities does not reach, so the same bound is applied to the fused list: a word starting at
+        or past the plain stream's duration is dropped and counted in ``out_of_bounds_words_n``, and
+        an end past the duration is bound by it. ``_alignment`` takes its transcript's end from this
+        list, so bounding it here is what keeps a hallucinated timestamp out of the aligner's slice.
+        """
         if "asr_crisperwhisper" not in state or "asr_qwen" not in state:
             raise LookupError("both recognizers are needed")
         activity = _step(
@@ -475,14 +499,25 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             CRISPERWHISPER_ID: iter_word_leaves([state["asr_crisperwhisper"].model_dump()]),
             QWEN_ID: iter_word_leaves([state["asr_qwen"].model_dump()]),
         }
-        fused = fuse_word_streams(streams)
+        fused: list[dict[str, Any]] = []
+        out_of_bounds_words_n = 0
+        for word in fuse_word_streams(streams):
+            span = _bound_to_duration(float(word["start"]), float(word["end"]), duration_s)
+            if span is None:
+                out_of_bounds_words_n += 1
+                continue
+            fused.append({**word, "start": span[0], "end": span[1]})
         entity_id = _measurement(
             store,
             activity,
             software,
             name="asr_agreement",
             signal="plain",
-            attributes={"words": fused, "systems": [CRISPERWHISPER_ID, QWEN_ID]},
+            attributes={
+                "words": fused,
+                "systems": [CRISPERWHISPER_ID, QWEN_ID],
+                "out_of_bounds_words_n": out_of_bounds_words_n,
+            },
             derived_from=(state["asr_crisperwhisper_id"], state["asr_qwen_id"]),
         )
         derivatives["asr_agreement"] = entity_id
