@@ -302,6 +302,55 @@ class TestModelDerivatives:
         assert measurement.attributes["untimed_chunks_n"] == 1
         assert "doctor" in measurement.attributes["transcript"], "the transcript keeps what the recognizer said"
 
+    def test_the_fused_words_are_bounded_so_alignment_survives_a_hallucination(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        mock_models: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """asr_agreement fuses from the recognizer output, which no word-entity bound reaches.
+
+        The production trigger: a hallucinated word at 11.32 s among legitimate ones. The word
+        entities are bounded, but `_agreement` re-derives its list from the raw ScriptLine, so the
+        fused list carried 11.32 s, `_alignment` set the transcript end from it, and
+        `align_transcriptions` refused a slice past the decode. The block loop caught that, so the
+        `alignment` derivative vanished from the run instead of failing it.
+        """
+        received: list[tuple[float, float]] = []
+
+        def hallucinating_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
+            chunks = [
+                ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
+                ScriptLine(text="doctor", start=1.60, end=1.66, score=0.9),
+                ScriptLine(text="podcast", start=11.32, end=11.60, score=0.9),
+            ]
+            return [ScriptLine(text="hello doctor podcast", start=1.50, end=11.60, chunks=chunks, score=0.9)]
+
+        def bound_checking_align(items: list, **kwargs: object) -> list:
+            """Refuse a transcript past the decode, exactly as ``extract_segments`` does."""
+            out = []
+            for audio, transcript, _language in items:
+                duration = audio.waveform.shape[-1] / audio.sampling_rate
+                received.append((float(transcript.start or 0.0), float(transcript.end or 0.0)))
+                if float(transcript.end or 0.0) > duration:
+                    raise ValueError(f"End must be <= duration of the audio ({duration} sec).")
+                out.append([ScriptLine(text=transcript.text, start=transcript.start, end=transcript.end)])
+            return out
+
+        monkeypatch.setattr(node, "transcribe_audios", hallucinating_transcribe)
+        monkeypatch.setattr(node, "align_transcriptions", bound_checking_align)
+        result = _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
+
+        agreement = _measurement(store, "asr_agreement")
+        assert all(float(w["end"]) <= 5.76 for w in agreement.attributes["words"]), "no fused word outruns the decode"
+        assert {w["text"] for w in agreement.attributes["words"]} == {"hello", "doctor"}
+        assert agreement.attributes["out_of_bounds_words_n"] == 1
+
+        assert "alignment" not in result.absent, "a hallucinated word must not delete the alignment derivative"
+        assert received == [(1.50, 1.66)], "the transcript the aligner saw is inside the recording"
+
     def test_a_chunk_starting_past_the_decode_is_dropped_and_counted(
         self,
         store: ProvStore,
