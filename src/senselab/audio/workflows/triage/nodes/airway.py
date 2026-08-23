@@ -22,6 +22,7 @@ from senselab.audio.tasks.plotting.plotting import plot_aligned_panels
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    clamp_extent,
     find_measurement,
     resolve_stream,
     software_agent,
@@ -183,7 +184,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
     buffered: list[tuple[Entity, Audio]] = []
     sliding: list[tuple[Entity, Audio]] = []
     for span in spans:
-        start, end = span.extent or (0.0, 0.0)
+        start, end = clamp_extent(span.extent or (0.0, 0.0), plain)
         try:
             buffered.append((span, span_to_hear_buffer(plain, start, end, placement=placement)))
         except ValueError:  # the function refuses a span longer than the window (N14)

@@ -723,3 +723,43 @@ def test_every_read_is_recorded_with_used(seed_speech_store: SeedSpeechStore) ->
     assert envelope in used
     assert pre_span in used
     assert label in used
+
+
+def test_a_word_ending_a_hair_past_the_decode_is_clamped_not_a_crash(
+    seed_speech_store: SeedSpeechStore,
+) -> None:
+    """The diarization interval is bounded by the decode, so a float hair cannot end the branch.
+
+    The duration here is the cluster's own — 92137 samples at 16 kHz — where a last word ending at
+    the recording's end is reported by ``fuse_word_streams``, which rounds to 1e-4 s, as 5.7586.
+    That is 0.6 of a sample past the decode, and ``extract_segments`` raised "End must be <=
+    duration of the audio (5.7585625 sec)" on it while the same file ran clean on the Mac.
+    """
+    duration_s = 92137 / SR
+    words = [("one", 1.0, 1.3), ("two", 5.0, round(duration_s, 4))]
+    assert words[1][2] > duration_s, "the fixture must reproduce the overshoot, not merely resemble it"
+    store, cfg, run_dir = seed_speech_store(words, words, duration_s=duration_s)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome in (Outcome.PASS, Outcome.FLAG)
+    interval = next(e for e in store.entities("interval") if e.attributes.get("name") == "diarization_interval")
+    assert interval.extent is not None
+    assert interval.extent[1] == duration_s, "the interval the store records is the one that was diarized"
+
+
+def test_a_word_ending_a_tenth_of_a_second_past_the_decode_still_raises(
+    seed_speech_store: SeedSpeechStore,
+) -> None:
+    """An extent that far outside the recording is an inconsistency, and must not be silently trimmed."""
+    words = [("one", 1.0, 1.3), ("two", 5.0, 5.5)]
+    store, cfg, run_dir = seed_speech_store(words, words, duration_s=6.0)
+    stray = store.activity(node="PREPROCESS", step="asr:stray", parameters={})
+    from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID
+
+    word_id = store.entity(
+        prov_type="word",
+        extent=(5.9, 6.1),
+        attributes={"text": "three", "score": 0.9, "recognizer": CRISPERWHISPER_ID, "timestamp_source": "native"},
+    )
+    store.was_generated_by(word_id, stray)
+    with pytest.raises(ValueError, match="past the"):
+        speech_module.speech(store, "plain", cfg, run_dir=run_dir)
