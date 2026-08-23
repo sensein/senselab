@@ -109,10 +109,31 @@ derivation: |
       median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
       neighbour, only one is recoverable.
     speech.word_gap_ms: any value is a claim about what makes one utterance.
+    speech.second_diarizer: no measured ranking of second diarizers exists; while null, a count of
+      not-1 records second_diarizer "not_consulted" and still flags.
+    speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target
+      embedding under this null is refused rather than answered with an invented cut.
+    speech.agreement_flag_floor: "the recognizers disagree beyond threshold" has no measured
+      threshold; while null the flag row is inert and the verdict records "not_evaluated".
+    speech.speech_test_stoi_floor, speech.speech_test_si_sdr_floor: SQUIM thresholds over speech
+      spans are unmeasured; while null each span's corroboration records squim_vote "not_evaluated"
+      and YAMNet coverage alone decides. Distinct from quality.stoi_floor/pesq_floor: these gate
+      step 3's "is this span speech" vote, those gate step 8's quality reading.
+    phonation.hnr_floor_interval_db, phonation.rms_floor_interval: benchmarks/voice.md measured a
+      near-edge interval in normalised-autocorrelation units, which do not transfer to the Praat-dB
+      implementation; while null the near-edge row is inert and the verdict records "unmeasured".
     taxonomy.min_families.*: the asymmetry is known -- airway has three eligible families, speech two
       -- but neither count has a derived value.
     quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
       so SPEECH's quality fail is unreachable by design until they do.
+
+  Hint tag vocabularies (speech.hint_tags, voice.hint_tags) -- which may_contain tags count as a
+  caller asserting each kind, seeded from the design documents' own member names. Vocabulary, not
+  fitted; extended by override.
+
+  phonation.period_doubling_factor 2.0 -- the definition of period doubling, an identity rather
+  than a threshold: a run is ambiguous when its median F0 times or divided by this factor also
+  lies inside the caller's declared range.
 
   Taxonomy presence floors -- yamnet 0.5 from the bimodal gaps benchmarks/hear-yamnet.md records
   (Cough 0.84 -> 0.27, Speech 0.92 -> 0.14, Breathing 0.59 -> 0.36: a threshold inside an empty
@@ -208,6 +229,15 @@ voice:
 
 speech:
   word_gap_ms: null
+  second_diarizer: null              # no measured ranking of second diarizers exists -- benchmarks/open.md
+  target_match_cosine: null          # benchmarks/open.md: no similarity threshold has been derived
+  agreement_flag_floor: null         # benchmarks/open.md: no measured disagreement threshold
+  speech_test_stoi_floor: null       # benchmarks/open.md: SQUIM thresholds over speech spans
+  speech_test_si_sdr_floor: null     # benchmarks/open.md: SQUIM thresholds over speech spans
+  hint_tags: [speech, read-speech]   # vocabulary from the design docs, not fitted
+
+voice:
+  hint_tags: [phonation, humming, sustained-vowel, voice]  # vocabulary from the design docs, not fitted
 
 taxonomy:
   min_families:
