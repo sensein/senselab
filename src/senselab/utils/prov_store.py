@@ -15,7 +15,17 @@ from pathlib import Path
 from typing import Any, Literal, Sequence, cast, get_args
 
 PROV_TYPE = Literal[
-    "span", "word", "speaker", "interval", "measurement", "kind", "stream", "pii", "verdict", "assertion"
+    "span",
+    "word",
+    "speaker",
+    "interval",
+    "measurement",
+    "kind",
+    "stream",
+    "pii",
+    "verdict",
+    "assertion",
+    "target_match",
 ]
 AGENT_TYPE = Literal["model", "software"]
 RELATION = Literal[
@@ -245,6 +255,10 @@ class ProvStore:
     def get_entity(self, entity_id: str) -> Entity:
         """Return one entity."""
         return self._entities[entity_id]
+
+    def get_activity(self, activity_id: str) -> Activity:
+        """Return one activity."""
+        return self._activities[activity_id]
 
     def get_agent(self, agent_id: str) -> Agent:
         """Return one agent."""
