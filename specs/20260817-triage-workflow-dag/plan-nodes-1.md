@@ -8,9 +8,8 @@ AIRWAY — over the merged foundation (`ProvStore`, `TriageConfig`, the vocabula
 
 **Scope split:** A sibling plan (`plan-nodes-2.md`) covers SPEECH, VOICE, REDACT and VERDICT. This plan
 does not describe those nodes beyond the store schema they consume, which §"What the sibling plan's
-nodes read" states precisely. `plan-nodes.md` in this directory is a **dead earlier attempt** at a
-single eight-node plan (it contains duplicated task sections from the crash that killed it); nothing
-here depends on it and nothing may edit it.
+nodes read" states precisely. (An earlier dead single-file attempt, `plan-nodes.md`, has since been
+removed from this directory; nothing depends on it.)
 
 **Architecture:** Each node is one module in `src/senselab/audio/workflows/triage/nodes/` (a new
 package), taking the store, an input (a file path, an `Audio`, or a store-held stream name), the
@@ -27,22 +26,18 @@ code (evidence, not gospel — §"Corrections to capability-map.md" below lists 
 stale). `benchmarks/open.md` lists what is deliberately unmeasured; **supplying a value for any item in
 it is wrong.**
 
-## Hard prerequisite: HeAR is not on this branch
+## Prerequisite, now satisfied: HeAR is on the merged tree
 
-Verified by reading the tree at planning time: `design/triage-workflow-dag` has **no**
-`senselab.audio.tasks.health_acoustics` package. It exists on branch **`triage`** (commits `84604748`
-"HeAR as a task…" through `f0629471`, both reachable from `triage` locally). The whole-span buffer
-helper `span_to_hear_buffer` (commit `bd7afdff`) is **not** assumed by this plan even after that merge
-— it exists only on a worktree agent branch, so **Task 4 inlines the 2 s centred-buffer construction**
-and says so where it does it.
+The `triage` merge has happened. The tree this plan executes on (commit `33bf65ad`) carries
+`senselab.audio.tasks.health_acoustics` in full, **including the whole-span buffer helper**
+`span_to_hear_buffer` and the model-imposed constant `HEAR_WINDOW_SECONDS`
+(`src/senselab/audio/tasks/health_acoustics/hear.py:387,130`), so **Task 4 calls the module function
+and inlines nothing**. Verified against the merged tree:
 
-**Before Task 3 (TAXONOMY) begins, merge `triage` into this branch**, then re-verify this signature
-against the merged tree (verified against the `triage` tree during planning):
-
-- `senselab.audio.tasks.health_acoustics.api.detect_health_acoustic_events(audios: List[Audio], model: str = "hear-event-detector", device: Optional[DeviceType] = None, hop_length: float = 0.25, top_k: Optional[int] = None) -> List[List[Dict[str, Any]]]` — per audio, per-window dicts with `start`, `end`, `label_scores` (descending single-key dicts over the eight `HEAR_EVENT_LABELS`), `win_length` (2.0), `hop_length`. Raises `ValueError` on audio shorter than 2 s at 16 kHz. `top_k=None` keeps all eight.
+- `senselab.audio.tasks.health_acoustics.api.detect_health_acoustic_events(audios: List[Audio], model: str = "hear-event-detector", device: Optional[DeviceType] = None, hop_length: float = 0.25, top_k: Optional[int] = None) -> List[List[Dict[str, Any]]]` — per audio, per-window dicts with `start`, `end`, `label_scores` (descending single-key dicts over the eight `HEAR_EVENT_LABELS`), `win_length` (2.0), `hop_length`. Raises `ValueError` on audio shorter than 2 s at 16 kHz. `top_k=None` keeps all eight (`health_acoustics/api.py:228`).
 - `senselab.audio.tasks.health_acoustics.hear.HEAR_MODEL_ID = "google/hear"`, `HEAR_REVISION` = a 40-hex commit literal, `HEAR_EVENT_LABELS = ("Cough", "Snore", "Baby Cough", "Breathe", "Sneeze", "Throat Clear", "Laugh", "Speech")`.
-
-Tasks 1–2 have no dependency on the merge and may start immediately.
+- `span_to_hear_buffer(audio: Audio, start_s: float, end_s: float, *, placement: str = "centre") -> Audio` — places the whole span in a silent buffer of exactly `HEAR_WINDOW_SECONDS` at the input's rate; **raises `ValueError` on a span longer than the window** ("Split it or classify a sub-span") and on an unknown placement (`"centre"`, `"start"`, `"end"` exist). For the event detector only, never for embeddings.
+- The existing `src/tests/audio/workflows/triage/config_test.py` already pins `hear.window_s == HEAR_WINDOW_SECONDS`, so the config value and the model constant cannot drift.
 
 ## Global Constraints
 
@@ -136,8 +131,8 @@ All carry `extent = (0.0, duration_s)`. `plain` is `wasDerivedFrom` `recording`;
 | `silence` | `threshold`, `windows`: `[{start, end, score, is_silence}, ...]` |
 | `level` | `peak_dbfs`, `rms_dbfs`, `lufs` — file-level only |
 | `asr_crisperwhisper` | `recognizer`, `transcript` (**PII**), `word_ids`, `timestamp_source` = `"native"` |
-| `asr_qwen` | `recognizer`, `transcript` (**PII**), `word_ids`, `timestamp_source` = `"bundled_aligner"`, `timestamp_model` = `"Qwen/Qwen3-ForcedAligner"` |
-| `asr_agreement` | `words`: the verbatim `fuse_word_streams` output (`text`, `start`, `end`, `existence_confidence`, `temporal_confidence`, `member_agreement`, `coverage`, `alternates`, `flags`), `systems` |
+| `asr_qwen` | `recognizer`, `transcript` (**PII**), `word_ids`, `timestamp_source` = `"bundled_aligner"`, `timestamp_model` = `"Qwen/Qwen3-ForcedAligner-0.6B"` |
+| `asr_agreement` | `words`: the verbatim `fuse_word_streams` output (`text`, `start`, `end`, `confidence`, `existence_confidence`, `temporal_confidence`, `coverage`, `corroboration`, `member_agreement`, `member_corroboration`, `sources`, `alternates`, `flags`, `speaker?` — `speech_to_text_ensemble/api.py:283-289,452-472`), `systems` |
 | `alignment` | `path` (json: aligned `ScriptLine.model_dump()` list), `language`, `transcript_source` = `"asr_agreement"` |
 | `spectrogram_wideband`, `spectrogram_narrowband` | `path` (npz, key `spectrogram`), `win_length`, `hop_length`, `n_fft` (samples) |
 | `gammatone` | `path` (npz, keys `centre_frequencies_hz`, `energy_db`), `hop_s` |
@@ -152,9 +147,10 @@ signal}`. **Never a label key.** AIRWAY labels them by assertion; SPEECH derives
 word timings and does not read these (`spans.k_db` has only the `airway` entry).
 
 **`word` entities** (PREPROCESS, one per recognizer word): `extent = (start, end)`, attributes
-`{text (PII), score, recognizer, timestamp_source, timestamp_model?}`. SPEECH authors nothing from
-scratch: its word confidences come from `asr_agreement`, and its withdrawals of diarizer segments
-reference these ids.
+`{text (PII), score, recognizer, timestamp_source, timestamp_model?}`. SPEECH invents no words: the
+consensus `word` entities it authors (per `branch-speech.md`'s product table) are `wasDerivedFrom`
+the `asr_agreement` measurement — their confidences come from the fusion, never from a third
+recognizer — and its withdrawals of diarizer segments reference ids, not text.
 
 **`kind` entities** (TAXONOMY, exactly three): attributes `{kind, state, families, min_families}`
 where `kind ∈ {"airway", "speech", "voice_no_words"}`, `state ∈ {"present", "absent", "undecided",
@@ -210,8 +206,8 @@ touched).
 | N10 | TAXONOMY's within-family fold for family A (YAMNet + AST) | members agree → that state; disagree → the family is unsure; a member whose presence floor is `null` (AST ships unmeasured) **abstains** and is recorded, leaving the family to its voting member; both unavailable → unsure |
 | N11 | which labels can express each kind is nowhere written | config **lists** (semantic vocabularies, not thresholds): `taxonomy.audioset_airway_labels`, `taxonomy.audioset_speech_labels`, `taxonomy.hear_airway_labels`, `taxonomy.lexical_airway_tokens` — each with a derivation naming it a vocabulary mapping read off the detectors' label inventories, overridable |
 | N12 | `taxonomy.md` gives airway **three** eligible families, but `benchmarks/taxonomy.md` says CrisperWhisper's non-lexical labels are unreliable | the lexical family votes airway via bracketed non-lexical tokens anyway — the design's family counts govern, and the fold's agreement requirements are exactly the protection against one unreliable family; the token vocabulary is `taxonomy.lexical_airway_tokens` |
-| N13 | HeAR buffer placement (centre / left / right) is unstated in `branch-airway.md` | **centred**, via config `hear.placement` (only `"centre"` is implemented; any other value raises) — the benchmark numbers (`benchmarks/hear-yamnet.md`) were measured under centred placement. The construction is **inlined in AIRWAY** because `span_to_hear_buffer` is not on this branch (see prerequisite) |
-| N14 | a span longer than `hear.window_s` cannot be placed in the buffer | AIRWAY classifies it over its own sliced audio with the sliding detector (the function's own default hop), label score = max over windows; the assertion records `input: "sliding"`. Unmeasured path, recorded as such |
+| N13 | HeAR buffer placement (centre / left / right) is unstated in `branch-airway.md` | **centred**, via config `hear.placement` — the benchmark numbers (`benchmarks/hear-yamnet.md`) were measured under centred placement. AIRWAY calls `span_to_hear_buffer` (merged; `hear.py:387`), which implements all three placements; the node accepts only `"centre"` from the config and raises on any other value, because the other two are unmeasured |
+| N14 | a span longer than `hear.window_s` cannot be placed in the buffer | `span_to_hear_buffer` raises `ValueError` on such a span, and that refusal is the routing signal: AIRWAY classifies it over its own sliced audio with the sliding detector (the function's own default hop), label score = max over windows; the assertion records `input: "sliding"`. Unmeasured path, recorded as such |
 | N15 | AIRWAY step 3 says "any ASR word"; its read table names `asr_crisperwhisper` only | CrisperWhisper words only, **excluding** bracketed non-lexical tokens (`[cough]`, `[breath]`): an airway annotation inside the airway interval is not lexical contamination |
 | N16 | the YAMNet "coverage winner" is undefined when several labels have coverage | winner = the label with the highest coverage among windows overlapping the span; ties broken by the highest single-window score; **abstain** when no label reaches `yamnet.coverage_threshold` in any overlapping window |
 | N17 | "whether it lies inside certified silence" — intersection or containment? | containment: `in_certified_silence` is true when **every** YAMNet window overlapping the span is certified silent; `None` when the `silence` derivative is absent |
@@ -1188,7 +1184,7 @@ from senselab.utils.prov_store import ProvStore
 NODE = "PREPROCESS"
 CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
 QWEN_ID = "Qwen/Qwen3-ASR-1.7B"
-QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner"
+QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 ALIGNMENT_LANGUAGE = "en"
 
 
@@ -1757,7 +1753,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 - `hilbert_envelope_dbfs(audio, *, lowpass_hz, filter_order) -> np.ndarray`, `rolling_floor_dbfs(envelope_db, sampling_rate, *, window_s, percentile, eval_grid_s) -> np.ndarray` — `tasks/envelope/api.py`.
 - `propose_spans(envelope_db, floor_db, sampling_rate, *, k_db, onset_drop_db, offset_fraction, hangover_ms, min_duration_ms, min_separation_ms) -> list[Span] | NoContrast` — `tasks/spans/api.py`; `Span.start/.end/.peak_over_floor_db`, `NoContrast.reason`.
 - `classify_audios(audios, model="yamnet", top_k=<config>) -> List[List[Dict]]` — windowed dicts `{start, end, label_scores, win_length, hop_length}`; `label_scores(window) -> list[dict[str, float]]` — `tasks/classification/`.
-- `transcribe_audios(audios, model: SenselabModel, language=None, device=None, **kwargs) -> List[ScriptLine]` — routes on `path_or_uri` prefix; `return_timestamps` reaches only the Qwen backend (`api.py:139-143`); word chunks are `ScriptLine(text, start, end, score)`.
+- `transcribe_audios(audios, model: SenselabModel, language=None, device=None, **kwargs) -> List[ScriptLine]` — routes on `path_or_uri` prefix (`_CRISPER_PREFIXES = ("nyralabs/CrisperWhisper2.0",)`, `_QWEN_ASR_PREFIXES = ("Qwen/Qwen3-ASR",)`, `speech_to_text/api.py:32,38`); `return_timestamps` reaches only the Qwen backend (`api.py:137-142`); word chunks are `ScriptLine(text, start, end, score)`.
 - `fuse_word_streams(word_streams: dict[str, list[dict]], *, ...) -> list[dict]` and `iter_word_leaves(node) -> list[dict]` — `tasks/speech_to_text_ensemble/api.py:197/119`. Note the pre-existing coupling: this task module imports from `workflows/audio_analysis/floors` (capability-map §4.9); this plan uses it as-is and adds no second such edge beyond `integrated_lufs` below.
 - `align_transcriptions(audios_and_transcriptions_and_language: List[Tuple[Audio, ScriptLine, Language]], levels_to_keep=..., aligner_model=None) -> List[List[ScriptLine | None]]` — `forced_alignment.py:685`; `DEFAULT_ALIGN_MODELS_HF` from `forced_alignment/constants.py`. The input `ScriptLine` carries `start`/`end` so the whole-recording-alignment stderr warning path never fires.
 - `extract_spectrogram_from_audios(audios, n_fft=1024, win_length=None, hop_length=None) -> List[Dict[str, Tensor]]` — arguments in **samples**; return key `"spectrogram"` (`features_extraction/torchaudio.py:20,54`).
@@ -1765,7 +1761,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 - `extract_objective_quality_features_from_audios(audios, device=None) -> List[Dict[str, Any]]` (`stoi`, `pesq`, `si_sdr`) — refuses non-mono/non-16 kHz; **re-raises** on short spans (capability-map §4.7), which is why `_squim` catches per span.
 - `integrated_lufs(waveform: np.ndarray, sampling_rate: int) -> float` — `workflows/audio_analysis/level.py:138`; the one deliberate cross-workflow import (capability-map §3.3 recommends lifting it to a task later; not this plan's scope).
 - `HFModel(path_or_uri=..., revision="main")` — resolves `.commit_sha` (40-hex) at construction; reached only through `_crisperwhisper_model`/`_qwen_model` so tests never construct one.
-- `Audio.save_to_file(file_path, ...)` — **this branch's signature** (`format/encoding/bits_per_sample/...`), not the `subtype/out_of_range` write-layer the capability map describes from the `triage` branch (see Corrections section).
+- `Audio.save_to_file(file_path, format=None, subtype=None, out_of_range="raise") -> AudioWriteReport` — **the merged write layer** (`audio/data_structures/audio.py:371`): a plain `.wav` write resolves to the `FLOAT` subtype and round-trips float samples bit-exactly, including values beyond ±1, so PREPROCESS's stream sidecars are exact; the peak-scale guard (N2) still runs because downstream consumers read `plain` as a ≤ full-scale signal.
 
 *Produced (the sibling plan's read surface — schema table in the preamble):* `stream` entities
 `plain`/`preemphasised`; `measurement` entities `energy_envelope`, `yamnet_windows`, `silence`,
@@ -1779,8 +1775,9 @@ PreprocessResult` with `PreprocessResult.absent`.
 
 ### Task 3: TAXONOMY
 
-**Prerequisite:** the `triage` branch merge (see "Hard prerequisite" above) — this node imports
-`detect_health_acoustic_events` and `HEAR_MODEL_ID`/`HEAR_REVISION` at module top.
+**Prerequisite:** none outstanding — this node imports `detect_health_acoustic_events` and
+`HEAR_MODEL_ID`/`HEAR_REVISION` at module top; both are on the merged tree (see the prerequisite
+section above).
 
 **Scope:** `src/senselab/audio/workflows/triage/nodes/taxonomy.py`; config additions under
 `taxonomy`; the `seed_store` test fixture (mirrors Task 2's schema); tests at
@@ -2595,9 +2592,9 @@ SPEECH and VOICE read nothing from TAXONOMY (it is advisory). The TAXONOMY `verd
 
 ### Task 4: AIRWAY
 
-**Prerequisite:** the `triage` branch merge (HeAR). `span_to_hear_buffer` is **not** available on this
-branch even after that merge — the buffer construction is inlined below (N13) and the plan says so
-here so nobody hunts for the helper.
+**Prerequisite:** none outstanding — the `triage` merge landed HeAR, and `span_to_hear_buffer` +
+`HEAR_WINDOW_SECONDS` are on the merged tree (`health_acoustics/hear.py:387,130`). The node calls the
+module function; nothing is inlined (N13).
 
 **Scope:** `src/senselab/audio/workflows/triage/nodes/airway.py`; config additions (`hear.placement`,
 `airway.*`); tests at `src/tests/audio/workflows/triage/nodes/airway_test.py`.
@@ -2607,9 +2604,10 @@ here so nobody hunts for the helper.
 - **AIRWAY proposes nothing.** It labels, confirms and contests the `span` elements PREPROCESS wrote
   at `K` = `spans.k_db.airway`; a `no_contrast` finding counts only at that same `K` (N8).
 - **HeAR classifies the whole span placed in a 2 s silent buffer** (`hear.window_s`) containing
-  nothing else, centred (`hear.placement`, N13). A buffer of exactly `window_s · sr` samples makes
-  the detector score exactly one window — the construction is inlined because `span_to_hear_buffer`
-  lives only on the `triage` branch, not here.
+  nothing else, centred (`hear.placement`, N13). The buffer comes from
+  `span_to_hear_buffer(plain, start, end, placement=...)` — a buffer of exactly the model's window
+  makes the detector score exactly one window; a span the function refuses (longer than the window)
+  takes the sliding path (N14).
 - **YAMNet confirms from its own native windows by coverage** — never from a padded span, never from
   the span as an input. Structurally enforced: the module has no import of `classify_audios` at all;
   its YAMNet evidence is the store's `yamnet_windows`.
@@ -2645,8 +2643,9 @@ and append to the `derivation` block:
 
 ```
   HeAR placement centre -- benchmarks/hear-yamnet.md's whole-span numbers were measured with the
-  span centred in the buffer (benchmarks/scripts/spaninput.py). Left- and right-aligned are
-  different inputs and have not been measured, so only centre is implemented.
+  span centred in the buffer (benchmarks/scripts/spaninput.py). span_to_hear_buffer implements
+  start and end placements too, but those are different inputs and have not been measured, so the
+  node accepts only centre.
 
   Airway labels_of_interest {Cough, Breathe} -- branch-airway.md's default, from HeAR's eight. The
   confirmation map Cough -> {Cough}, Breathe -> {Breathing, Sigh, Gasp} is branch-airway.md's step 2
@@ -2748,9 +2747,9 @@ def _answers(store: ProvStore, verb: str) -> list:
 
 
 class TestHearClassification:
-    """Step 1: the whole span, in a silent buffer of exactly the model's window."""
+    """Step 1: the whole span, buffered by the module's own function."""
 
-    def test_the_whole_span_goes_centred_into_a_silent_buffer(
+    def test_the_whole_span_is_buffered_by_the_module_function(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -2758,21 +2757,27 @@ class TestHearClassification:
         seed_store: Callable[..., dict],
         mock_hear: None,
         hear_calls: list[dict[str, Any]],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """One buffer of window_s * sr samples, span centred, zeros elsewhere, one window scored."""
+        """The buffer comes from span_to_hear_buffer at the configured placement; one window scored."""
+        from senselab.audio.tasks.health_acoustics.hear import span_to_hear_buffer
+
+        buffer_calls: list[dict[str, Any]] = []
+
+        def recording_buffer(audio: object, start_s: float, end_s: float, *, placement: str) -> object:
+            """The real function, with its arguments captured."""
+            buffer_calls.append({"start_s": start_s, "end_s": end_s, "placement": placement})
+            return span_to_hear_buffer(audio, start_s, end_s, placement=placement)
+
+        monkeypatch.setattr(node, "span_to_hear_buffer", recording_buffer)
         ids = seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
         result = airway(store, "plain", config, run_dir=tmp_path)
+        [buffer_call] = buffer_calls
+        assert buffer_call == {"start_s": 1.5, "end_s": 1.65, "placement": "centre"}
         window_s = float(config.require("hear.window_s"))
-        buffer_samples = int(window_s * 16000)
         [call] = hear_calls
         assert call["hop_length"] == window_s
-        assert call["lengths"] == [buffer_samples]
-        [buffer] = call["waveforms"]
-        nonzero = (buffer[0] != 0).nonzero().squeeze(-1)
-        span_samples = int(1.65 * 16000) - int(1.5 * 16000)
-        assert int(nonzero.shape[0]) <= span_samples  # nothing else in the buffer
-        centre_offset = (buffer_samples - span_samples) // 2
-        assert abs(int(nonzero[0]) - centre_offset) <= 1  # centred placement
+        assert call["lengths"] == [int(window_s * 16000)]  # the function's whole-window buffer
         [label] = _labels(store)
         assert label.attributes["label"] == "Cough"
         assert label.attributes["input"] == "buffered"
@@ -2788,7 +2793,7 @@ class TestHearClassification:
         mock_hear: None,
         hear_calls: list[dict[str, Any]],
     ) -> None:
-        """A 3 s span cannot be buffered; its own audio is scanned and the assertion says so."""
+        """span_to_hear_buffer refuses a 3 s span; its own audio is scanned and the assertion says so."""
         seed_store(store, spans=((0.5, 3.5, 40.0),), yamnet_windows=[])
         airway(store, "plain", config, run_dir=tmp_path)
         [call] = hear_calls
@@ -3053,9 +3058,9 @@ class TestFigure:
 ```python
 """AIRWAY — interpret PREPROCESS's spans. It proposes nothing: it labels, confirms and contests.
 
-HeAR classifies each whole span placed centred in a silent buffer of exactly the model's window;
-YAMNet confirms from its own native windows by coverage, never from a padded span; ASR words are
-read for presence only. A hint changes only what an absence means.
+HeAR classifies each whole span placed in a silent buffer of exactly the model's window, via
+``span_to_hear_buffer``; YAMNet confirms from its own native windows by coverage, never from a
+padded span; ASR words are read for presence only. A hint changes only what an absence means.
 """
 
 from __future__ import annotations
@@ -3066,11 +3071,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import torch
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
-from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION
+from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION, span_to_hear_buffer
 from senselab.audio.tasks.plotting.plotting import plot_aligned_panels
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
@@ -3211,8 +3215,8 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         )
         return AirwayResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id, figure_path=None)
 
-    # Step 1 — HeAR labels each span: the whole span, centred in a silent buffer of exactly the
-    # model's window; a span longer than the window is scanned over its own audio instead.
+    # Step 1 — HeAR labels each span: the whole span, buffered by span_to_hear_buffer; a span the
+    # function refuses (longer than the window) is scanned over its own audio instead.
     hear_agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
     classify = store.activity(
         node=NODE,
@@ -3233,19 +3237,14 @@ def airway(  # noqa: C901 — the branch's four steps, in order
     if silence is not None:
         store.used(classify, silence.id)
 
-    waveform = plain.waveform
-    buffer_samples = int(window_s * sr)
     buffered: list[tuple[Entity, Audio]] = []
     sliding: list[tuple[Entity, Audio]] = []
     for span in spans:
         start, end = span.extent or (0.0, 0.0)
-        segment = waveform[:, int(start * sr) : int(end * sr)]
-        if segment.shape[-1] <= buffer_samples:
-            buffer = torch.zeros((1, buffer_samples), dtype=waveform.dtype)
-            left = (buffer_samples - segment.shape[-1]) // 2
-            buffer[:, left : left + segment.shape[-1]] = segment
-            buffered.append((span, Audio(waveform=buffer, sampling_rate=sr)))
-        else:
+        try:
+            buffered.append((span, span_to_hear_buffer(plain, start, end, placement=placement)))
+        except ValueError:  # the function refuses a span longer than the window (N14)
+            segment = plain.waveform[:, int(start * sr) : int(end * sr)]
             sliding.append((span, Audio(waveform=segment, sampling_rate=sr)))
 
     scored: list[tuple[Entity, dict[str, float], str]] = []
@@ -3488,11 +3487,15 @@ def _render_figure(
 **Interfaces:**
 
 *Consumed:*
-- `detect_health_acoustic_events` — post-merge signature in the prerequisite section. Two call
-  shapes: buffered spans with `hop_length=window_s` (a buffer of exactly `window_s · sr` samples
-  makes `plan_scan_windows` return one window, so the whole span is scored once and no padding
-  check fires — capability-map §4.1's length coincidence, used deliberately and now pinned by a
-  test), and over-length spans with the function's own default hop.
+- `span_to_hear_buffer(audio, start_s, end_s, *, placement="centre") -> Audio` —
+  `health_acoustics/hear.py:387`. Places the whole span in a silent buffer of exactly
+  `HEAR_WINDOW_SECONDS` at the input's rate; raises `ValueError` on a span longer than the window
+  (AIRWAY's routing signal to the sliding path) or an unknown placement. `hear.window_s` is pinned
+  equal to `HEAR_WINDOW_SECONDS` by the existing config test.
+- `detect_health_acoustic_events` — signature in the prerequisite section. Two call shapes:
+  buffered spans with `hop_length=window_s` (the function's whole-window buffer makes
+  `plan_scan_windows` return one window, so the whole span is scored once and no padding check
+  fires), and over-length spans with the function's own default hop.
 - `HEAR_MODEL_ID`, `HEAR_REVISION` — the agent's identity.
 - `plot_aligned_panels(audio, panels, title="", figsize=None, spectrogram_params=None, context="auto") -> Figure` — panel dicts `{"type": "waveform"}`, `{"type": "features", "data": [(times, values, label, color), ...]}`, `{"type": "segments", "segments": [{"label", "start", "end"}]}`, `{"type": "spectrogram", "mel": bool}` (`tasks/plotting/plotting.py:488-508`). Requires mono input — the plain stream is mono by construction.
 - Store reads: `span` entities filtered to `k_db == spans.k_db.airway`; `spans_no_contrast` (only at
@@ -3514,18 +3517,17 @@ AirwayResult` with `.figure_path`.
 
 ## Corrections to capability-map.md, found while verifying this plan
 
-The map remains the best index into senselab, but four of its rows do not describe **this branch**:
+The map remains the best index into senselab. Two of its stale-on-the-design-branch rows were
+**resolved by the `triage` merge** and two corrections still stand:
 
-1. **`health_acoustics` and the ClearVoice separation backend do not exist on
-   `design/triage-workflow-dag`.** The map's §1.3/§1.4/§1.9 rows for HeAR were verified against the
-   `triage` branch, where the module lives. Hence the merge prerequisite above. Likewise
-   `span_to_hear_buffer` (named in §4.1's remedy) exists only as commit `bd7afdff` on a worktree
-   agent branch — this plan inlines the construction instead.
-2. **`Audio.save_to_file` has the old signature here** — `(file_path, format=None, encoding=None,
-   bits_per_sample=None, buffer_size=4096, backend=None, compression=None)`, not the
-   `subtype`/`out_of_range`/`AudioWriteReport` write layer §1.7 describes (that is PR #570, also on
-   `triage`). PREPROCESS's stream sidecars therefore make no float-exactness claim; the ASR-input
-   test uses a quantisation-tolerant comparison.
+1. **Resolved:** `health_acoustics` (with `span_to_hear_buffer` and `HEAR_WINDOW_SECONDS`,
+   commit `4788ffeb`) and the ClearVoice separation backend both exist on the merged tree
+   (commit `33bf65ad`); the map's §1.3/§1.4/§1.9 rows now describe the tree this plan executes on.
+2. **Resolved:** `Audio.save_to_file` on the merged tree is the
+   `subtype`/`out_of_range`/`AudioWriteReport` write layer §1.7 describes
+   (`audio/data_structures/audio.py:371`): a plain `.wav` write resolves to the `FLOAT` subtype and
+   round-trips float samples bit-exactly. The ASR-input test's quantisation-tolerant comparison is
+   kept as slack, not as a requirement.
 3. **The merged foundation diverges from the map's §2 task specs**, and the merged code governs:
    `envelope/` has no `preemphasise_audios` and no Nyquist/multichannel refusals (PREPROCESS inlines
    the one-line pre-emphasis; a multichannel input was already downmixed by then);
