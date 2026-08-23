@@ -398,10 +398,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         timing_model: str | None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
-        """One recognizer: transcript measurement plus one word entity per chunk that carries timings.
+        """One recognizer: transcript measurement plus one word entity per chunk it timed in bounds.
 
-        A chunk missing either bound is counted in ``untimed_chunks_n`` and written as no word; its
-        text stays in the transcript.
+        A chunk missing either bound is counted in ``untimed_chunks_n`` and written as no word; a
+        chunk starting at or after the plain stream's duration is counted in
+        ``out_of_bounds_chunks_n`` and likewise written as no word. Either way its text stays in the
+        transcript. A chunk that starts in bounds and ends past the duration keeps its word, with
+        the end bound by the duration.
         """
         model = factory()
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
@@ -411,21 +414,29 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         [line] = transcribe_audios([plain], model=model, **kwargs)
         word_ids: list[str] = []
         untimed_chunks_n = 0
+        out_of_bounds_chunks_n = 0
         for chunk in line.chunks or []:
             if chunk.start is None or chunk.end is None:
                 untimed_chunks_n += 1
                 continue
-            attributes = {
+            start = float(chunk.start)
+            if start >= duration_s:
+                out_of_bounds_chunks_n += 1
+                continue
+            end = min(float(chunk.end), duration_s)
+            attributes: dict[str, Any] = {
                 "text": chunk.text,
                 "score": chunk.score,
                 "recognizer": str(model.path_or_uri),
                 "timestamp_source": source_kind,
             }
+            if end < float(chunk.end):
+                attributes["end_clamped_to_duration"] = True
             if timing_model is not None:
                 attributes["timestamp_model"] = timing_model
             word_id = store.entity(
                 prov_type="word",
-                extent=(float(chunk.start), float(chunk.end)),
+                extent=(start, end),
                 attributes=attributes,
             )
             store.was_generated_by(word_id, activity)
@@ -436,6 +447,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "transcript": line.text or "",
             "word_ids": word_ids,
             "untimed_chunks_n": untimed_chunks_n,
+            "out_of_bounds_chunks_n": out_of_bounds_chunks_n,
             "timestamp_source": source_kind,
         }
         if timing_model is not None:
