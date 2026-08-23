@@ -55,6 +55,13 @@ combine. A detector whose window spans the file answers presence directly rather
 A detector is **eligible** for a kind only if its label space can express that kind. An ineligible
 detector does not vote, and is not counted as a vote for absence.
 
+**An empty window list is not a vote either.** A grid-reading member (YAMNet from the store's native
+windows, HeAR from its own) that receives `[]` has no measurement, which is the same state as a
+missing one, so it reads `unavailable` rather than `absent`. Folding `[]` to `absent` produced
+absence evidence out of a detector that never ran — and absence needs unanimity, so one such member
+could carry a kind to `absent` on nothing at all. A list whose scores are all below the floor is the
+real absence evidence and still votes `absent`.
+
 ## Independence — count families, not detectors
 
 | family | members |

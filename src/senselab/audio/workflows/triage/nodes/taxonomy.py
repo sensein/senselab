@@ -149,8 +149,9 @@ def taxonomy(  # noqa: C901 — one member per detector, one fold per kind
 
     def _yamnet_member(kind: str) -> dict[str, Any]:
         """Family A's first member, read from the store's native windows."""
-        if yamnet_windows is None:
-            return {"state": "unavailable", "why": "yamnet_windows absent from the store"}
+        if not yamnet_windows:
+            why = "yamnet_windows absent from the store" if yamnet_windows is None else "yamnet_windows is empty"
+            return {"state": "unavailable", "why": why}
         if floors["yamnet"] is None:
             return {"state": "abstained", "why": "presence floor unmeasured"}
         best, best_label = _windowed_max(yamnet_windows, audioset_labels[kind])
@@ -194,7 +195,7 @@ def taxonomy(  # noqa: C901 — one member per detector, one fold per kind
 
     def _hear_member() -> dict[str, Any]:
         """Family C, airway only: the detector's own sliding grid."""
-        if hear_windows is None:
+        if not hear_windows:
             return {"state": "unavailable", "why": hear_error or "no windows"}
         if floors["hear"] is None:
             return {"state": "abstained", "why": "presence floor unmeasured"}

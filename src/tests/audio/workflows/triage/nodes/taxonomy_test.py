@@ -129,6 +129,41 @@ class TestEligibility:
         speech = _kind(store, "speech")
         assert speech.attributes["families"]["B_lexical"]["state"] == "absent"
 
+    def test_no_windows_is_unavailable_while_all_low_windows_vote_absent(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_detectors: dict[str, Any],
+    ) -> None:
+        """An empty window list is no measurement, not negative evidence; low scores are the evidence."""
+        seed_store(store, yamnet_windows=[], words=())
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        empty = _kind(store, "speech").attributes["families"]["A_audioset"]["members"]["yamnet"]
+        assert empty["state"] == "unavailable"
+        scored_store = ProvStore(run_id="scored")
+        seed_store(scored_store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1})], words=())
+        taxonomy(scored_store, "plain", config, run_dir=tmp_path)
+        scored = _kind(scored_store, "speech").attributes["families"]["A_audioset"]["members"]["yamnet"]
+        assert scored["state"] == "absent", "a window list that measured Speech low is real absence evidence"
+
+    def test_an_empty_hear_grid_is_unavailable_on_the_same_rule(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_detectors: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Family C reads a window list too, so an empty one is no measurement there either."""
+        monkeypatch.setattr(node, "detect_health_acoustic_events", lambda audios, **kw: [[] for _ in audios])
+        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.1})], words=())
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        hear = _kind(store, "airway").attributes["families"]["C_health"]["members"]["hear"]
+        assert hear["state"] == "unavailable"
+
     def test_an_invalidated_word_does_not_vote(
         self,
         store: ProvStore,
