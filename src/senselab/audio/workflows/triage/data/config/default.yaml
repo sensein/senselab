@@ -152,9 +152,8 @@ derivation: |
   computed over one 10.24 s analysis frame. Recorded on the AST member -- including an abstained
   one, whose inference still ran -- so the score it measured names the frame it was measured over.
 
-  VOICE additions (plan-nodes-2 N21, N22, N25). phonation.period_doubling_factor 2.0 is the
-  definition of period doubling -- an identity, not a fitted value. voice.hint_tags is vocabulary
-  from the design documents' own member names, not fitted; extended by override. UNSET, continued:
+  VOICE additions (plan-nodes-2 N21, N22, N25); period_doubling_factor and voice.hint_tags are
+  derived in the paragraphs above. UNSET, continued:
     phonation.hnr_floor_interval_db, phonation.rms_floor_interval: the near-edge intervals were
     measured as normalised autocorrelation -- the same (0.44, 0.933) and (0.0007, 0.0161) named
     above -- and the gate now reads Praat harmonicity in dB and RMS, so the units do not transfer.
@@ -238,8 +237,6 @@ speech:
   speech_test_si_sdr_floor: null     # benchmarks/open.md: SQUIM thresholds over speech spans
   hint_tags: [speech, read-speech]   # vocabulary from the design docs, not fitted
 
-voice:
-  hint_tags: [phonation, humming, sustained-vowel, voice]  # vocabulary from the design docs, not fitted
 
 taxonomy:
   min_families:

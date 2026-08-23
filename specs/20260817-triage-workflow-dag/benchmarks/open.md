@@ -42,6 +42,9 @@ stated and its constant unjustified — not silently guessed.
 | **Span rules inside proposed rather than labelled regions** | every scored peak was located inside a labelled span; unsupervised operation over a whole envelope is the harder problem |
 | **A recording with gaps longer than the widest reader window** | invented events cannot be measured on the reference file — its longest verified-empty stretch is 1.80 s against HeAR's 2 s window, so `verified_empty` measures window bleed |
 | **Labelled data for the non-lexical kind** | VOICE has none, so nothing there can be scored |
+| **Separated-stream quality routing** | branch-speech.md §8 wants a known target's quality measured on that speaker's separated stream; no source-to-speaker assignment mechanism is specified, so SPEECH measures every span on `plain` and records `stream: plain` honestly. Needs a specified assignment (e.g. embedding match per stream) before the routing can exist |
+| **Duplicate PII text within one span** | the word-labelling locator maps a repeated finding text to its first occurrence only; the second occurrence's words carry no `pii` label — an under-redaction hazard for REDACT. The token-subsequence scheme (N11) does not define the repeat case |
+| **N7's record-similarities-without-deciding reading** | the shipped node refuses at entry when a provenanced target arrives while `speech.target_match_cosine` is null, so no similarities are recorded; N7's prose implies they would be. One of the two must move |
 
 ## Retired with the round-based workflow
 
