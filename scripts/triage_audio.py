@@ -103,6 +103,15 @@ def load_hint(path: Path) -> AudioHints:
     payload = yaml.safe_load(path.read_text()) or {}
     if not isinstance(payload, dict):
         raise ValueError(f"{path} must hold a mapping of AudioHints fields, not {type(payload).__name__}")
+    unknown = sorted(str(key) for key in payload if key not in AudioHints.model_fields)
+    if unknown:
+        raise ValueError(
+            f"{path} carries keys AudioHints does not have: {', '.join(unknown)}. "
+            "AudioHints ignores unknown keys, so this would have loaded as an empty hint and every "
+            "absence would have read as a finding. A hints table keyed by filename needs the "
+            "per-file entry extracted first; the fields available are: "
+            f"{', '.join(sorted(AudioHints.model_fields))}."
+        )
     return AudioHints.model_validate(payload)
 
 

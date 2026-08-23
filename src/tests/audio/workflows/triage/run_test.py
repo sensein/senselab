@@ -451,3 +451,30 @@ class TestCli:
         parser = cli.build_parser()
         options = {action.dest for action in parser._actions if action.dest != "help"}
         assert options == {"audio", "out", "config", "hint"}
+
+    def test_a_hints_table_is_refused_rather_than_read_as_an_empty_hint(self, tmp_path: Path) -> None:
+        """AudioHints ignores unknown keys, so a filename-keyed hints table validated to may_contain=[].
+
+        Every absence path then concluded fail with nothing anywhere saying the hint had been
+        dropped — the worst of the three outcomes, because a dropped hint looks like a finding.
+        """
+        cli = _cli()
+        table = tmp_path / "hints.json"
+        table.write_text(json.dumps({"recording-001.wav": {"may_contain": ["cough"]}}))
+        with pytest.raises(ValueError, match="recording-001.wav"):
+            cli.load_hint(table)
+
+    def test_the_refusal_says_a_table_needs_per_file_extraction(self, tmp_path: Path) -> None:
+        """The caller's next move belongs in the message: the file they have is usually the right file."""
+        cli = _cli()
+        table = tmp_path / "hints.json"
+        table.write_text(json.dumps({"recording-001.wav": {"may_contain": ["cough"]}}))
+        with pytest.raises(ValueError, match="per-file"):
+            cli.load_hint(table)
+
+    def test_a_hint_naming_only_real_fields_still_loads(self, tmp_path: Path) -> None:
+        """The control: refusing unknown keys must not refuse the hints the nodes actually read."""
+        cli = _cli()
+        hint_file = tmp_path / "hint.yaml"
+        hint_file.write_text("may_contain: [cough]\nenvironment: clinic\n")
+        assert cli.load_hint(hint_file) == AudioHints(may_contain=["cough"], environment="clinic")
