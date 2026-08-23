@@ -158,7 +158,9 @@ derivation: |
     phonation.hnr_floor_interval_db, phonation.rms_floor_interval: the near-edge intervals were
     measured as normalised autocorrelation -- the same (0.44, 0.933) and (0.0007, 0.0161) named
     above -- and the gate now reads Praat harmonicity in dB and RMS, so the units do not transfer.
-    While null the near-edge flag is inert and the verdict records gate_interval "unmeasured".
+    While null the near-edge flag is inert. gate_interval is three-valued: "measured" iff both
+    intervals are supplied, "partial" when exactly one is, "unmeasured" when neither -- each
+    family's near-edge check arms independently with its own interval.
 
 resample:
   target_hz: 16000
