@@ -292,11 +292,13 @@ def airway(  # noqa: C901 — the branch's four steps, in order
     # Step 3 — lexical contamination over the airway-labelled interval only.
     interval_id: str | None = None
     flag_id: str | None = None
+    concluding = confirm_activity
     if span_labels:
         labelled_extents = [store.get_entity(span_id).extent or (0.0, 0.0) for span_id in span_labels]
         interval = (min(e[0] for e in labelled_extents), max(e[1] for e in labelled_extents))
         lexical = store.activity(node=NODE, step="lexical", parameters={"interval": list(interval)})
         store.was_associated_with(lexical, software)
+        concluding = lexical
         interval_id = store.entity(
             prov_type="interval", extent=interval, attributes={"name": "airway_labelled_interval"}
         )
@@ -341,7 +343,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
 
     verdict_id, verdict = write_verdict(
         store,
-        classify,
+        concluding,
         software,
         node=NODE,
         outcome=outcome,

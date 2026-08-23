@@ -45,6 +45,13 @@ agent:    { id, agent_type: "model" | "software", model_id?, commit_sha?, unreso
 `contest` is additionally `wasDerivedFrom` the assertion it answers — which is why an assertion needs its
 own id, and the PROV model makes that requirement structural rather than a thing to remember.
 
+**A node's `verdict` entity is `wasGeneratedBy` the step that concluded — its last — not its first.**
+AIRWAY attributed its verdict to `classify` and SPEECH to `transcript`, which said each conclusion
+was reached before the steps that can change it had run: YAMNet's answers and the lexical read for
+AIRWAY, diarization, PII and quality for SPEECH. TAXONOMY and REDACT already attributed theirs to
+their last step. For AIRWAY the concluding step is `lexical` when any span carried a label and
+`confirm` otherwise, because `lexical` only exists in the first case.
+
 **`refine` and `withdraw` are gone as verbs**, because PROV already has both relations and its semantics
 are the ones this design argued for independently: `wasDerivedFrom` keeps the source, and
 `wasInvalidatedBy` marks an entity unusable without deleting it.

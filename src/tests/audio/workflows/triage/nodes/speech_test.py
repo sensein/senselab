@@ -168,6 +168,19 @@ def test_no_words_from_either_recognizer_is_a_normal_fail(seed_speech_store: See
     assert store.entities("verdict"), "the verdict entity is written even on fail"
 
 
+def test_the_verdict_is_generated_by_the_step_that_concluded(seed_speech_store: SeedSpeechStore) -> None:
+    """Walking generated_by from the verdict reaches the last step, not the transcript step.
+
+    Attributing it to ``transcript`` said the conclusion was reached before diarization, PII and
+    quality had run, each of which can turn a pass into a flag.
+    """
+    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    concluding = store.generated_by(result.verdict_entity_id)
+    assert concluding is not None
+    assert store.get_activity(concluding).step == "quality"
+
+
 def test_the_no_words_path_still_writes_the_scan_redact_reads(seed_speech_store: SeedSpeechStore) -> None:
     """REDACT refuses a store with no scan measurement, so a branch with no subject must not leave none.
 
