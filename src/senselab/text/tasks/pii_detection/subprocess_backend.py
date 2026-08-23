@@ -64,12 +64,15 @@ optimization but isn't required for correctness.
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 from importlib.resources import files
 from typing import Any, Optional
 
 from senselab.utils.dependencies import hf_subprocess_env
 from senselab.utils.subprocess_venv import _clean_subprocess_env, ensure_venv, parse_subprocess_result, venv_python
+
+logger = logging.getLogger("senselab")
 
 _PII_VENV = "pii-detection"
 _PII_PYTHON = "3.13"
@@ -288,6 +291,7 @@ _HOST_SIDE_DETECTORS = frozenset({DETECTOR_LLM})
 #     "presidio_entities": [str, ...],
 #     "presidio_score_threshold": float,
 #     "gliner_model": str,
+#     "gliner_model_path": str | None,   # staged snapshots/<sha>/ dir; the load target when set
 #     "gliner_revision": str | None,   # resolved commit SHA, never a mutable ref
 #     "gliner_labels": [str, ...],
 #     "gliner_threshold": float,
@@ -309,7 +313,8 @@ _HOST_SIDE_DETECTORS = frozenset({DETECTOR_LLM})
 #   {
 #     "spans_by_asr": {asr_model: [{text, category, source, score}, ...]},
 #     "failures": {detector_name: error_message},
-#     "detectors_used": [str, ...]
+#     "detectors_used": [str, ...],
+#     "gliner_revision": str | None   # the commit GLiNER loaded from; None when it did not load
 #   }
 #
 # Response shape (catastrophic failure, e.g. unparsable input):
@@ -326,7 +331,9 @@ try:
     presidio_entities = args.get("presidio_entities") or []
     presidio_score_threshold = float(args.get("presidio_score_threshold", 0.4))
     gliner_model_id = args.get("gliner_model")
+    gliner_model_path = args.get("gliner_model_path")
     gliner_revision = args.get("gliner_revision")
+    gliner_loaded_revision = None
     gliner_labels = args.get("gliner_labels") or []
     gliner_threshold = float(args.get("gliner_threshold", 0.5))
     gliner_label_map = args.get("gliner_label_map") or {}
@@ -349,12 +356,22 @@ try:
     gliner_model = None
     if "gliner" in detectors_requested and gliner_model_id and gliner_labels:
         try:
+            import os
+            import re
             import torch
             from gliner import GLiNER
-            # GLiNER.from_pretrained takes a real revision kwarg (unlike NeMo/DiariZen), so
-            # the resolved commit SHA the parent staged is passed straight through rather
-            # than falling back to whatever this host's mutable "main" ref points at.
-            gliner_model = GLiNER.from_pretrained(gliner_model_id, revision=gliner_revision)
+            # The staged snapshot directory is the load target when the parent could stage it:
+            # gliner's own from_pretrained consults the Hub tree-listing API even for a fully
+            # cached repo, and that call raises under the HF_HUB_OFFLINE=1 the parent sets.
+            # A snapshot directory is named by the commit it holds, so the recorded revision is
+            # read back off the path that was actually loaded rather than only asserted.
+            if gliner_model_path:
+                gliner_model = GLiNER.from_pretrained(gliner_model_path)
+                basename = os.path.basename(os.path.normpath(gliner_model_path))
+                gliner_loaded_revision = basename if re.fullmatch(r"[0-9a-f]{40}", basename) else gliner_revision
+            else:
+                gliner_model = GLiNER.from_pretrained(gliner_model_id, revision=gliner_revision)
+                gliner_loaded_revision = gliner_revision
             if torch.cuda.is_available():
                 # GLiNER 0.2+ exposes the wrapped HF model on .model; older
                 # builds use the wrapper directly. Try both gracefully so
@@ -367,6 +384,7 @@ try:
         except Exception as exc:
             failures["gliner"] = f"{type(exc).__name__}: {exc}"
             gliner_model = None
+            gliner_loaded_revision = None
 
     # ── Shared cascade module ─────────────────────────────────────
     # ``rules.py``'s source travels in the request (see the request-shape comment above
@@ -529,6 +547,7 @@ try:
         "spans_by_asr": spans_by_asr,
         "failures": failures,
         "detectors_used": detectors_used,
+        "gliner_revision": gliner_loaded_revision,
     }))
 except Exception as exc:
     err = {
@@ -539,6 +558,28 @@ except Exception as exc:
     print(json.dumps({"error": err}))
     sys.exit(1)
 """
+
+
+def _staged_snapshot(repo_id: str, revision: str) -> Optional[str]:
+    """The local snapshot directory for a staged commit, or ``None`` when it could not be staged.
+
+    Args:
+        repo_id: The HuggingFace repo id.
+        revision: The resolved 40-hex commit SHA.
+
+    Returns:
+        The ``snapshots/<sha>/`` directory as a string, or ``None`` — in which case the worker keeps
+        the repo id as its load target and loads online, matching ``hf_subprocess_env``'s own
+        fallback when staging fails.
+    """
+    from senselab.utils.dependencies import resolve_model
+
+    try:
+        _sha, snapshot = resolve_model(repo_id, revision)
+    except Exception as exc:  # noqa: BLE001 — an unstageable model is a fallback, not a crash
+        logger.warning(f"PII / gliner: {repo_id}@{revision} could not be staged ({exc}); the worker will load online.")
+        return None
+    return str(snapshot)
 
 
 def detect_pii_via_subprocess(
@@ -598,7 +639,7 @@ def detect_pii_via_subprocess(
             initial model loads.
 
     Returns:
-        Dict with three keys:
+        Dict with four keys:
 
         - ``"spans_by_asr"`` — ``{asr_model: [{text, category, source, score}, ...]}``.
           Spans from each requested detector are concatenated per ASR
@@ -612,6 +653,9 @@ def detect_pii_via_subprocess(
         - ``"detectors_used"`` — list of detector names that successfully
           loaded. ``[]`` means no detector ran and the spans list will
           always be empty for every ASR model.
+        - ``"gliner_revision"`` — the 40-hex commit the worker loaded GLiNER
+          from, read back off the snapshot directory it opened. ``None``
+          when GLiNER was not requested or did not load.
 
     Raises:
         ValueError: If ``detectors`` contains an unknown detector name.
@@ -654,14 +698,13 @@ def detect_pii_via_subprocess(
     entities = presidio_entities if presidio_entities is not None else list(_PRESIDIO_PII_ENTITIES)
 
     gliner_revision: Optional[str] = None
+    gliner_model_path: Optional[str] = None
     env = _clean_subprocess_env()
     if "gliner" in detectors_resolved and gliner_model:
         # Resolve the ref to a commit SHA before staging, then forward that SHA (never
-        # the ref) to both the worker and hf_subprocess_env -- GLiNER.from_pretrained
-        # takes a real revision kwarg, so this fully pins the load rather than merely
-        # pinning what gets downloaded. Deferred import (not at module top) keeps this
-        # monkeypatch-friendly at senselab.utils.model_revision.resolve_revision,
-        # matching the rest of the codebase.
+        # the ref) to both the worker and hf_subprocess_env. Deferred import (not at module
+        # top) keeps this monkeypatch-friendly at
+        # senselab.utils.model_revision.resolve_revision, matching the rest of the codebase.
         from senselab.utils.model_revision import resolve_revision
 
         gliner_revision = resolve_revision(str(gliner_model), "main")
@@ -671,6 +714,7 @@ def detect_pii_via_subprocess(
         # version check — the 429 source under parallel batch. Only when gliner is
         # actually requested (presidio uses spaCy, not the HF Hub).
         env = hf_subprocess_env(str(gliner_model), gliner_revision, base_env=env)
+        gliner_model_path = _staged_snapshot(str(gliner_model), gliner_revision)
 
     # rules.py's own source travels with the request rather than being duplicated as a
     # second string literal inside _PII_WORKER_SCRIPT -- two ~400-line copies of the same
@@ -688,6 +732,7 @@ def detect_pii_via_subprocess(
             "presidio_entities": entities,
             "presidio_score_threshold": float(presidio_score_threshold),
             "gliner_model": gliner_model,
+            "gliner_model_path": gliner_model_path,
             "gliner_revision": gliner_revision,
             "gliner_labels": labels,
             "gliner_threshold": float(gliner_threshold),
@@ -710,4 +755,5 @@ def detect_pii_via_subprocess(
         "spans_by_asr": output.get("spans_by_asr", {}),
         "failures": output.get("failures", {}),
         "detectors_used": output.get("detectors_used", []),
+        "gliner_revision": output.get("gliner_revision"),
     }
