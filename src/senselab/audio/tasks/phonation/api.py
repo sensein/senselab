@@ -119,3 +119,37 @@ def period_marks(
         amplitude = float(np.abs(x[i0:i1]).max()) if i1 > i0 else 0.0
         marks.append(PeriodMark(time_s=opening, period_s=period, amplitude=amplitude))
     return marks
+
+
+def f0_track(
+    audio: Audio,
+    *,
+    f0_min_hz: float,
+    f0_max_hz: float,
+    hop_s: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """F0 and its strength per frame via Praat's cc pitch: ``(times_s, f0_hz, strength)``.
+
+    Unvoiced frames carry NaN in ``f0_hz`` with their ``strength`` retained, so F0 always travels
+    with the periodicity that placed it and a reader cannot separate them.
+
+    Args:
+        audio: The recording. ``get_sound`` handles channel merging and resampling.
+        f0_min_hz: Lowest F0 to search. Read it from ``phonation.f0_min_hz``.
+        f0_max_hz: Highest F0 to search. Read it from ``phonation.f0_max_hz``.
+        hop_s: Praat's ``time_step``. Read it from ``phonation.hop_s``.
+
+    Returns:
+        ``(times_s, f0_hz, strength)``, one value per frame, all three the same length.
+
+    Raises:
+        ModuleNotFoundError: If parselmouth is not installed.
+    """
+    _require_parselmouth()
+    snd = get_sound(audio)
+    pitch = snd.to_pitch_cc(time_step=hop_s, pitch_floor=f0_min_hz, pitch_ceiling=f0_max_hz)
+    times = np.asarray(pitch.xs(), dtype=np.float64)
+    f0 = np.asarray(pitch.selected_array["frequency"], dtype=np.float64)
+    strength = np.asarray(pitch.selected_array["strength"], dtype=np.float64)
+    f0[f0 == 0.0] = np.nan
+    return times, f0, strength
