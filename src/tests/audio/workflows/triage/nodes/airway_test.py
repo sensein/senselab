@@ -153,12 +153,12 @@ class TestHearClassification:
         mock_hear: None,
         hear_scores: dict[str, float],
     ) -> None:
-        """No label assertion, no substitute record, and the branch flags."""
+        """No label assertion, no substitute record, and no airway established — a fail without a hint."""
         hear_scores.update({"Cough": 0.3, "Breathe": 0.2})
         seed_airway_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
         result = airway(store, "plain", config, run_dir=tmp_path)
         assert _labels(store) == []
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.verdict.outcome is Outcome.FAIL
         verdict = store.get_entity(result.verdict_entity_id)
         assert verdict.attributes["labelled_n"] == 0
 
@@ -171,13 +171,13 @@ class TestHearClassification:
         mock_hear: None,
         hear_scores: dict[str, float],
     ) -> None:
-        """Speech at 0.9 is not a label of interest: the span stays unlabelled and the branch flags."""
+        """Speech at 0.9 is not a label of interest: the span stays unlabelled and, unhinted, the branch fails."""
         hear_scores.clear()
         hear_scores.update({"Speech": 0.9, "Cough": 0.3})
         seed_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
         result = airway(store, "plain", config, run_dir=tmp_path)
         assert _labels(store) == []
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.verdict.outcome is Outcome.FAIL
         assert store.get_entity(result.verdict_entity_id).attributes["labelled_n"] == 0
 
     def test_airway_has_no_path_to_yamnet_as_a_model(self) -> None:
@@ -388,6 +388,31 @@ class TestOutcomeAndHint:
         assert "no_contrast" in result.verdict.why
         hinted_store = ProvStore(run_id="hinted")
         seed_airway_store(hinted_store, spans=(), yamnet_windows=[], no_contrast_k=18.0)
+        hinted = airway(hinted_store, "plain", config, hint=AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+        assert hinted.verdict.outcome is Outcome.FLAG
+
+    def test_spans_that_clear_no_label_floor_are_hint_dependent_like_no_spans_at_all(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_airway_store: Callable[..., dict],
+        mock_hear: None,
+        hear_scores: dict[str, float],
+    ) -> None:
+        """Both routes to no airway established mean the same thing, so both answer to the hint.
+
+        Spans present but none clearing the floor used to flag unconditionally while no spans at all
+        failed, which made the same conclusion two different outcomes.
+        """
+        hear_scores.update({"Cough": 0.3, "Breathe": 0.2})
+        seed_airway_store(store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FAIL
+        assert "label floor" in result.verdict.why
+        assert store.get_entity(result.verdict_entity_id).attributes["flags"] == []
+        hinted_store = ProvStore(run_id="hinted-subfloor")
+        seed_airway_store(hinted_store, spans=((1.5, 1.65, 40.0),), yamnet_windows=[])
         hinted = airway(hinted_store, "plain", config, hint=AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert hinted.verdict.outcome is Outcome.FLAG
 

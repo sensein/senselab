@@ -324,13 +324,15 @@ def airway(  # noqa: C901 — the branch's four steps, in order
             store.was_derived_from(flag_id, interval_id)
             flags.append("lexical_contamination")
 
-    # Step 4 — the outcome. A hint conditions only what an absence means.
+    # Step 4 — the outcome. A hint conditions only what an absence means, on either route to one.
     if not span_labels:
-        why = "no span carries a label of interest"
+        why = "spans exist but none clears the label floor"
         if hint_declares:
             why += "; a hint declares airway content not found"
-        flags.append(why)
-        outcome = Outcome.FLAG
+            flags.append(why)
+            outcome = Outcome.FLAG
+        else:
+            outcome = Outcome.FAIL
     elif flags:
         outcome, why = Outcome.FLAG, "; ".join(flags)
     else:
