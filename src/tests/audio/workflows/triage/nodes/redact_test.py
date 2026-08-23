@@ -415,6 +415,29 @@ def test_both_reverifiable_recognizers_pass_rather_than_flag(make_redact_run: Ma
     assert _verdict(store, result)["verify_systems"] == sorted([CW, QW])
 
 
+def test_zero_reverifiable_recognizers_raise_rather_than_release(
+    make_redact_run: MakeRedactRun, tmp_path: Path
+) -> None:
+    """No recognizer to re-run means no verification at all, which must never release a pair."""
+    store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), commitless=(CW, QW))
+    with pytest.raises(ValueError, match="re-verify"):
+        redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert not (tmp_path / "release").exists(), "no artifact may exist when nothing verified"
+
+
+def test_a_non_finite_padding_override_is_refused_naming_the_key(
+    make_redact_run: MakeRedactRun, tmp_path: Path
+) -> None:
+    """A YAML .inf reaches the same entry check as a negative value and is named the same way."""
+    store, cfg, run_dir = make_redact_run(
+        tmp_path, findings=(((1.0, 1.4), "PERSON"),), config_yaml="redaction:\n  padding_ms: .inf\n"
+    )
+    before = store.fingerprint()
+    with pytest.raises(ValueError, match="redaction.padding_ms"):
+        redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert store.fingerprint() == before
+
+
 def test_an_invalidated_finding_is_not_redacted_and_not_derived_from(
     make_redact_run: MakeRedactRun, tmp_path: Path
 ) -> None:

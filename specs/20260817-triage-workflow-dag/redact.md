@@ -81,7 +81,7 @@ redacted copy.
 
 ```
 artifacts: { audio?, transcript?, figure? }   # each redacted, each independently optional
-verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[], verify_systems[], scan_failed[], unplaced_words_n }
+verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[], verify_systems[], scan_failed[], unplaced_words_n, audio_check }
 ```
 
 `survived` is non-empty only on `fail`, and names **categories**, never matched text.
@@ -89,7 +89,10 @@ verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[]
 `verify_systems` names the recognizers verification actually re-ran; fewer than both of
 PREPROCESS's is a `flag`, never a silent degrade. `scan_failed` names detectors (never their
 messages). `unplaced_words_n` counts words released as `[UNPLACED]` because their extent is
-unknown — text of unknown location is never released verbatim. `padding_ms` must be a
+unknown — text of unknown location is never released verbatim. `audio_check` is the constant
+`"bounded"` on every path: verification bounds the audio failure, it never proves the negative —
+on the scan-incomplete path where no ASR re-ran, the discriminating facts are `verify_systems: []`
+and `verified: false`, not this key. `padding_ms` must be a
 non-negative whole number of milliseconds; zero is accepted as valid but contradicts the
 margin's purpose, and a positive floor is unmeasured — benchmarks/open.md.
 
