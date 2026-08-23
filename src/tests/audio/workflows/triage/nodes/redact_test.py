@@ -544,6 +544,20 @@ def test_a_recognizer_whose_asr_died_in_preprocess_still_degrades_the_check(
     assert QW in result.verdict.why, "the recognizer that could not be re-run is named"
 
 
+def test_the_empty_scan_speechs_no_words_path_writes_is_withheld_not_a_raise(
+    make_redact_run: MakeRedactRun, tmp_path: Path
+) -> None:
+    """SPEECH with no subject writes a scan in which nothing ran, which is unchecked rather than clean.
+
+    The raise is reserved for a store carrying no scan measurement at all, which is not a SPEECH
+    store. This is that store's other side: the measurement exists and says nobody scanned.
+    """
+    store, cfg, run_dir = make_redact_run(tmp_path, scanned_by=())
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FAIL
+    assert result.artifacts == {}
+
+
 def test_the_expected_set_falls_back_to_words_and_says_so(make_redact_run: MakeRedactRun, tmp_path: Path) -> None:
     """A store carrying no PREPROCESS declaration is read from its words, and the verdict records that."""
     store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), declared=False)

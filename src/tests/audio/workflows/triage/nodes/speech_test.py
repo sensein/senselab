@@ -17,6 +17,7 @@ from senselab.audio.data_structures import (
 )
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import speech as speech_module
+from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, flatten_script_line
 from senselab.utils.data_structures import ScriptLine
@@ -165,6 +166,22 @@ def test_no_words_from_either_recognizer_is_a_normal_fail(seed_speech_store: See
     result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     assert result.verdict.outcome is Outcome.FAIL
     assert store.entities("verdict"), "the verdict entity is written even on fail"
+
+
+def test_the_no_words_path_still_writes_the_scan_redact_reads(seed_speech_store: SeedSpeechStore) -> None:
+    """REDACT refuses a store with no scan measurement, so a branch with no subject must not leave none.
+
+    An empty scan is what REDACT's incomplete-scan row already reads as withheld, which is the right
+    conclusion; absence of the measurement instead made REDACT raise on a recording that simply had
+    no speech.
+    """
+    store, cfg, run_dir = seed_speech_store([], [])
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    scan = find_measurement(store, "pii_scan")
+    assert scan is not None, "the measurement is written even when nothing was scanned"
+    assert scan.attributes["scanned_by"] == []
+    assert scan.attributes["failed"] == []
+    assert result.verdict.outcome is Outcome.FAIL
 
 
 def test_hint_asserting_speech_not_found_flags(seed_speech_store: SeedSpeechStore) -> None:
