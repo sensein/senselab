@@ -5,7 +5,8 @@ airway-labelled spans, minus SPEECH's spans — an unlabelled span is not exclud
 AND periodicity; runs are elementary; period marks are a point process per voiced run, absent outside
 runs. The onset is a period and the offset is a criterion, named apart in the span attributes. A
 residual interval shorter than the shortest duration Praat's harmonicity accepts is pruned before
-analysis and counted in the verdict's ``short_intervals_n``.
+analysis and counted in the verdict's ``short_intervals_n``; a gate run shorter than the shortest
+duration its point process accepts has no marks measured and is counted in ``marks_skipped_short_n``.
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "VOICE"
 KIND = "voice_no_words"
+_MARK_PERIODS = 3.0  # Praat's point process needs this many periods of f0_min; its own limit, not a choice
+_MARKS_UNMEASURED = "shorter_than_mark_window"  # a vocabulary token for the skip, not a threshold
 
 
 def _required(config: TriageConfig) -> dict[str, Any]:
@@ -203,6 +206,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         gate_interval = "partial"
     window_s = params["periods_per_window"] / params["f0_min_hz"]
     min_analysis_s = (params["periods_per_window"] + 1.0) / params["f0_min_hz"]
+    min_marks_s = _MARK_PERIODS / params["f0_min_hz"]
 
     envelope_meas = find_measurement(store, "energy_envelope")
     if envelope_meas is None:
@@ -222,6 +226,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
             "hop_s": params["hop_s"],
             "window_s": window_s,
             "min_analysis_s": min_analysis_s,
+            "min_marks_s": min_marks_s,
             "period_doubling_factor": params["doubling"],
             "gate_interval": gate_interval,
         },
@@ -274,6 +279,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
                 "voiced_s": 0.0,
                 "ambiguous_runs_n": 0,
                 "short_intervals_n": short_intervals_n,
+                "marks_skipped_short_n": 0,
                 "flags": [why] if hint_declares else [],
                 "gate_interval": gate_interval,
             },
@@ -294,6 +300,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     runs_n = 0
     voiced_s = 0.0
     ambiguous_runs_n = 0
+    marks_skipped_short_n = 0
 
     for interval_start, interval_end in residual:
         i0, i1 = int(interval_start * sr), int(interval_end * sr)
@@ -320,9 +327,14 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         gate_ok = (hnr_db >= params["hnr_floor_db"]) & (rms >= params["rms_floor"])
         for r0, r1 in _runs_of_true(gate_ok):
             gate_start, gate_end = float(times[r0]), float(times[r1 - 1])
-            marks: list[PeriodMark] = period_marks(
-                plain, gate_start, gate_end, f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"]
+            marks_measured = gate_end - gate_start >= min_marks_s
+            marks: list[PeriodMark] = (
+                period_marks(plain, gate_start, gate_end, f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"])
+                if marks_measured
+                else []
             )
+            if not marks_measured:
+                marks_skipped_short_n += 1
             span_start = float(marks[0].time_s) if marks else gate_start
             attributes = {
                 "onset_kind": "period" if marks else "criterion",
@@ -330,7 +342,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
                 "offset_criterion": _offset_criterion(
                     hnr_db, rms, r1, hnr_floor_db=params["hnr_floor_db"], rms_floor=params["rms_floor"]
                 ),
-                "marks_n": len(marks),
+                "marks_n": len(marks) if marks_measured else None,
                 "hnr_onset_db": float(hnr_db[r0]),
                 "rms_onset": float(rms[r0]),
                 "hnr_offset_db": float(hnr_db[r1 - 1]),
@@ -340,16 +352,15 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
             store.was_generated_by(run_id, activity)
             store.was_attributed_to(run_id, software)
             span_ids.append(run_id)
-            marks_id = store.entity(
-                prov_type="measurement",
-                extent=(span_start, gate_end),
-                attributes={
-                    "name": "period_marks",
-                    "signal": source,
-                    "n": len(marks),
-                    "marks": [{"time_s": m.time_s, "period_s": m.period_s, "amplitude": m.amplitude} for m in marks],
-                },
-            )
+            marks_attributes: dict[str, Any] = {"name": "period_marks", "signal": source}
+            if marks_measured:
+                marks_attributes["n"] = len(marks)
+                marks_attributes["marks"] = [
+                    {"time_s": m.time_s, "period_s": m.period_s, "amplitude": m.amplitude} for m in marks
+                ]
+            else:
+                marks_attributes["unmeasured"] = _MARKS_UNMEASURED
+            marks_id = store.entity(prov_type="measurement", extent=(span_start, gate_end), attributes=marks_attributes)
             store.was_generated_by(marks_id, activity)
             store.was_attributed_to(marks_id, software)
             store.was_derived_from(marks_id, run_id)
@@ -407,6 +418,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         "voiced_s": voiced_s,
         "ambiguous_runs_n": ambiguous_runs_n,
         "short_intervals_n": short_intervals_n,
+        "marks_skipped_short_n": marks_skipped_short_n,
         "flags": flags,
         "gate_interval": gate_interval,
     }

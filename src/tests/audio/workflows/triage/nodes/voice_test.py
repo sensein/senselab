@@ -19,6 +19,7 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.phonation import PeriodMark
 from senselab.audio.tasks.phonation import f0_track as real_f0_track
 from senselab.audio.tasks.phonation import hnr_track as real_hnr_track
+from senselab.audio.tasks.phonation import period_marks as real_period_marks
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
@@ -424,3 +425,68 @@ def test_a_fragment_just_over_the_praat_floor_is_analysed(
     verdict = store.get_entity(result.verdict_entity_id)
     assert verdict.attributes["short_intervals_n"] == 0, "37 ms is above the floor and must be analysed"
     assert verdict.attributes["runs_n"] >= 1, "a 220 Hz tone over the floor passes the gate"
+
+
+def _gate_on_first_frames(n_frames: int) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
+    """An HNR track passing the gate on exactly the first ``n_frames`` frames of each interval.
+
+    The gate is an AND over HNR and RMS, so shaping HNR is how a test builds a run of a chosen frame
+    count. It leaves ``period_marks`` — the function under test here — real.
+    """
+
+    def _track(
+        audio: Audio, *, f0_min_hz: float, hop_s: float, silence_threshold: float, periods_per_window: float
+    ) -> tuple[np.ndarray, np.ndarray]:
+        n = int(round(audio.waveform.shape[-1] / audio.sampling_rate / hop_s))
+        times = (np.arange(n) + 0.5) * hop_s
+        values = np.full(n, -100.0)
+        values[:n_frames] = 20.0
+        return times, values
+
+    return _track
+
+
+@pytest.mark.parametrize("n_frames", [1, 2])
+def test_a_gate_run_shorter_than_the_mark_window_skips_marks_instead_of_raising(
+    store: ProvStore,
+    seed_voice_store: Callable[..., dict],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    n_frames: int,
+) -> None:
+    """Praat's point process refuses a run shorter than 3 / f0_min; a gate run is frames, so short ones are ordinary.
+
+    A one-frame run spans zero seconds and a two-frame run one hop, both under the 20 ms the process
+    needs at f0_min 150 Hz. Real period_marks runs, because only it can say where its refusal is. A
+    skipped run records the skip, never a count of zero, which would claim a measurement nobody took.
+    """
+    monkeypatch.setattr(voice_module, "period_marks", real_period_marks)
+    monkeypatch.setattr(voice_module, "hnr_track", _gate_on_first_frames(n_frames))
+    seed_voice_store(store, energetic=((1.0, 1.3),))
+    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["marks_skipped_short_n"] == 1
+    assert verdict.attributes["runs_n"] == 1, "the run is still a run; only its marks are unmeasured"
+    (run,) = _voice_spans(store)
+    assert run.attributes["marks_n"] is None, "not counted is not counted zero"
+    assert run.attributes["onset_kind"] == "criterion"
+    (marks,) = _marks_measurements(store)
+    assert marks.attributes["unmeasured"] == "shorter_than_mark_window"
+    assert "marks" not in marks.attributes, "no empty list to be mistaken for a measured absence"
+
+
+def test_a_gate_run_of_exactly_the_mark_window_is_measured_by_the_real_point_process(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other side of the boundary: three frames span 20 ms, exactly 3 / f0_min, and are measured.
+
+    Without this the guard could be widened arbitrarily and still look correct.
+    """
+    monkeypatch.setattr(voice_module, "period_marks", real_period_marks)
+    monkeypatch.setattr(voice_module, "hnr_track", _gate_on_first_frames(3))
+    seed_voice_store(store, energetic=((1.0, 1.3),))
+    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["marks_skipped_short_n"] == 0
+    (marks,) = _marks_measurements(store)
+    assert marks.attributes["n"] > 0, "a 220 Hz tone over exactly the mark window has period marks"
