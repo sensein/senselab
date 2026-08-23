@@ -56,7 +56,12 @@ def admit(
 
     Returns:
         The verdict and, on ``pass``, the decoded audio.
+
+    Raises:
+        TypeError: If ``source`` is not a path or a string — a caller error, not a finding about
+            any recording, so nothing is recorded.
     """
+    source = Path(source)
     activity_id = store.activity(node=NODE, step=None, parameters={"audio_file": str(source)})
     agent_id = software_agent(store)
     store.was_associated_with(activity_id, agent_id)
@@ -70,14 +75,16 @@ def admit(
     try:
         audio = Audio(filepath=str(source))
         waveform = audio.waveform
+    except FileNotFoundError:
+        return _fail("file not found")
     except Exception as err:  # noqa: BLE001 — every decode failure is the same finding
         return _fail(f"decode failure: {type(err).__name__}")
     if waveform.shape[-1] == 0:
         return _fail("decode returned zero frames")
     if not bool(torch.any(waveform != 0)):
         return _fail("every sample is zero")
-    if bool(torch.all(waveform == waveform.reshape(-1)[0])):
-        return _fail("constant value; no variance")
+    if bool(torch.all(waveform == waveform[:, :1])):
+        return _fail("constant value per channel; no variance")
 
     duration_s = waveform.shape[-1] / audio.sampling_rate
     stream_id = store.entity(
@@ -85,7 +92,7 @@ def admit(
         extent=(0.0, duration_s),
         attributes={
             "name": "recording",
-            "path": str(Path(source).resolve()),
+            "path": str(source.resolve()),
             "sampling_rate": int(audio.sampling_rate),
             "channels": int(waveform.shape[0]),
         },

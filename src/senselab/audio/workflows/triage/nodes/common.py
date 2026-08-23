@@ -64,7 +64,14 @@ def write_verdict(
 
     Returns:
         The verdict entity's id and the vocabulary verdict.
+
+    Raises:
+        ValueError: If ``detail`` carries any of the reserved keys ``node``, ``outcome``, ``kind``
+            or ``why``, which would let the stored attributes diverge from the returned verdict.
     """
+    shadowed = detail.keys() & {"node", "outcome", "kind", "why"}
+    if shadowed:
+        raise ValueError(f"detail must not shadow the reserved verdict keys: {sorted(shadowed)}")
     entity_id = store.entity(
         prov_type="verdict",
         extent=None,
@@ -76,21 +83,29 @@ def write_verdict(
 
 
 def find_measurement(store: ProvStore, name: str) -> Entity | None:
-    """The latest measurement entity carrying this name, or None.
+    """The latest non-invalidated measurement entity carrying this name, or None.
+
+    Reads by the store's shared rule: invalidated entities are never returned, and of the survivors
+    the latest write wins — the same rule ``resolve_stream`` applies to streams.
 
     Args:
         store: The provenance store.
         name: The measurement's ``name`` attribute.
 
     Returns:
-        The entity, or None when nothing carries the name.
+        The entity, or None when nothing live carries the name.
     """
-    found = [e for e in store.entities("measurement") if e.attributes.get("name") == name]
+    found = [
+        e for e in store.entities("measurement") if e.attributes.get("name") == name and not store.is_invalidated(e.id)
+    ]
     return found[-1] if found else None
 
 
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
     """Load a stream the graph wrote earlier, by its name.
+
+    Reads by the store's shared rule: invalidated entities are never returned, and of the survivors
+    the latest write wins — the same rule ``find_measurement`` applies to measurements.
 
     Args:
         store: The provenance store.
@@ -101,12 +116,13 @@ def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Aud
         The stream entity's id and its audio, loaded lazily from the sidecar.
 
     Raises:
-        LookupError: If no stream entity carries that name.
+        LookupError: If no live stream entity carries that name.
     """
-    for entity in store.entities("stream"):
-        if entity.attributes.get("name") == name:
-            path = Path(entity.attributes["path"])
-            if not path.is_absolute():
-                path = run_dir / path
-            return entity.id, Audio(filepath=str(path))
-    raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
+    found = [e for e in store.entities("stream") if e.attributes.get("name") == name and not store.is_invalidated(e.id)]
+    if not found:
+        raise LookupError(f"no stream named {name!r} in the store; the node that writes it has not run")
+    entity = found[-1]
+    path = Path(entity.attributes["path"])
+    if not path.is_absolute():
+        path = run_dir / path
+    return entity.id, Audio(filepath=str(path))

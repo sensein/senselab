@@ -1,7 +1,7 @@
 """ADMIT rejects only decode failure, all-zero and constant. No thresholds, no flag, no models."""
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 
 import numpy as np
 import pytest
@@ -34,9 +34,18 @@ class TestRejections:
     def test_a_missing_file_fails_rather_than_raising(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A path that does not exist is a decode failure."""
+        """A path that does not exist fails as file-not-found, distinct from a decode failure."""
         result = admit(store, tmp_path / "absent.wav", config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
+        assert result.verdict.why == "file not found"
+
+    def test_a_non_path_source_is_a_type_error_at_the_boundary(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """An object that is not a path raises TypeError before anything is recorded."""
+        with pytest.raises(TypeError):
+            admit(store, cast(Path, object()), config, run_dir=tmp_path)
+        assert store.entities() == []
 
     def test_all_zero_fails(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
@@ -52,6 +61,16 @@ class TestRejections:
     ) -> None:
         """A constant nonzero value has no variance and is unmeasurable."""
         path = wav_writer("dc.wav", np.full(16000, 0.25, dtype=np.float32))
+        result = admit(store, path, config, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FAIL
+        assert "constant" in result.verdict.why
+
+    def test_stereo_two_dc_fails(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, wav_writer: Callable[..., Path]
+    ) -> None:
+        """Two channels at two different constants are still per-channel DC with no variance."""
+        stereo = np.stack([np.full(16000, 0.1, dtype=np.float32), np.full(16000, 0.2, dtype=np.float32)], axis=1)
+        path = wav_writer("two_dc.wav", stereo)
         result = admit(store, path, config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
         assert "constant" in result.verdict.why
@@ -140,6 +159,7 @@ class TestStoreWrites:
         path = wav_writer("zeros.wav", np.zeros(16000, dtype=np.float32))
         admit(store, path, config, run_dir=tmp_path)
         assert store.entities("stream") == []
+        assert len(store.entities()) == 1
         [verdict] = store.entities("verdict")
         assert verdict.attributes["outcome"] == "fail"
 
