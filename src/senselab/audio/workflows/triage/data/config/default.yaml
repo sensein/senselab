@@ -48,7 +48,11 @@ derivation: |
 
   Praat harmonicity settings hop_s 0.01, silence_threshold 0.1, periods_per_window 4.5 --
   Praat's own documented defaults for the cc method, which extract_harmonicity_descriptors
-  (praat_parselmouth.py:569) already uses. Conventional, not fitted here.
+  (praat_parselmouth.py:569) already uses. Conventional, not fitted here. periods_per_window /
+  phonation.f0_min_hz is also VOICE's analysis window, and Praat refuses any segment shorter than
+  it, so a residual interval below that length is pruned before analysis and counted in the
+  verdict's short_intervals_n rather than becoming a raise (measured on real recordings: median
+  residual fragment 33.6 ms, 20 of 41 under the 30 ms window).
 
   Floor evaluation grid 0.1 s -- a granularity rather than a threshold: the percentile is evaluated
   every 100 ms and interpolated between, which is finer than the 3 s window it summarises.

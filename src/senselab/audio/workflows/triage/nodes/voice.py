@@ -3,7 +3,9 @@
 The residual is a store fold: contiguous intervals where the envelope exceeds its local floor, minus
 airway-labelled spans, minus SPEECH's spans — an unlabelled span is not excluded. The gate is energy
 AND periodicity; runs are elementary; period marks are a point process per voiced run, absent outside
-runs. The onset is a period and the offset is a criterion, named apart in the span attributes.
+runs. The onset is a period and the offset is a criterion, named apart in the span attributes. A
+residual interval shorter than the analysis window is pruned before analysis and counted in the
+verdict's ``short_intervals_n``.
 """
 
 from __future__ import annotations
@@ -242,11 +244,18 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     envelope_rate = int(envelope_meas.attributes["sampling_rate"])
     energetic = _contiguous_true(envelope > floor, envelope_rate)
     claimed = [extent for extent, _, _ in labelled] + [span.extent for span in speech if span.extent is not None]
-    residual = _subtract_intervals(energetic, claimed)
+    unclaimed = _subtract_intervals(energetic, claimed)
+    residual = [(start, end) for start, end in unclaimed if end - start >= window_s]
+    short_intervals_n = len(unclaimed) - len(residual)
     hint_declares = _hint_declares_voice(hint, params["hint_tags"])
 
     if not residual:
-        why = "every energetic interval is claimed by another branch" if energetic else "no energy exceeds the floor"
+        if unclaimed:
+            why = "every residual interval is shorter than the analysis window"
+        elif energetic:
+            why = "every energetic interval is claimed by another branch"
+        else:
+            why = "no energy exceeds the floor"
         if hint_declares:
             why += "; a hint declares phonation not found"
         outcome = Outcome.FLAG if hint_declares else Outcome.FAIL
@@ -262,6 +271,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
                 "runs_n": 0,
                 "voiced_s": 0.0,
                 "ambiguous_runs_n": 0,
+                "short_intervals_n": short_intervals_n,
                 "flags": [why] if hint_declares else [],
                 "gate_interval": gate_interval,
             },
@@ -394,6 +404,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         "runs_n": runs_n,
         "voiced_s": voiced_s,
         "ambiguous_runs_n": ambiguous_runs_n,
+        "short_intervals_n": short_intervals_n,
         "flags": flags,
         "gate_interval": gate_interval,
     }
