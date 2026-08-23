@@ -1,16 +1,19 @@
 """The REDACT node: every PII finding padded, merged, silenced, and verified on the node's own output.
 
-Every ``pii`` entity is redacted regardless of speaker. Extents are padded and merged by
-``plan_redactions``; the margin is the ``redaction.padding_ms`` config key, whose derivation is in
-``data/config/default.yaml``. Verification re-runs both recognizers PREPROCESS used, at their
-recorded commits, plus the PII scan over the redacted audio and transcript; the verdict records
-``audio_check: "bounded"`` (see ``specs/20260817-triage-workflow-dag/redact.md``). Artifacts are
-written only on verified success, into a directory disjoint from the run directory, and carry no
-store element id.
+Every non-invalidated ``pii`` entity is redacted regardless of speaker. Extents are padded and merged
+by ``plan_redactions``; the margin is the ``redaction.padding_ms`` config key, whose derivation is in
+``data/config/default.yaml`` and which must be a non-negative whole number of milliseconds.
+Verification re-runs the recognizers PREPROCESS used, at their recorded commits, plus the PII scan
+over the redacted audio and transcript; the verdict records ``audio_check: "bounded"`` (see
+``specs/20260817-triage-workflow-dag/redact.md``). A store whose ``pii_scan`` measurement records a
+failed or absent detector is unchecked rather than clean, and verification over a scan in which no
+detector ran is not a result. Artifacts are written only on verified success, into a directory
+disjoint from the run directory, and carry no store element id.
 """
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +36,9 @@ from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REDACT"
 
+_PADDING_KEY = "redaction.padding_ms"
 _RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not a threshold
+_UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
 
 
 @dataclass(frozen=True)
@@ -47,21 +52,90 @@ class RedactResult(NodeResult):
     artifacts: dict[str, Path]
 
 
-def _extents_from_findings(store: ProvStore) -> list[RedactionExtent]:
-    """Every pii entity, regardless of speaker; the membership check that secures the error path.
+@dataclass(frozen=True)
+class _Verification:
+    """What re-running the recognizers and the scan over the node's own output established.
+
+    Attributes:
+        verified: Whether every scan ran and none of them found anything.
+        survived: The categories found on the redacted output, sorted; never matched text.
+        scan_ran: Whether a detector ran at all — an empty ``failures`` is not evidence that one did.
+    """
+
+    verified: bool
+    survived: list[str]
+    scan_ran: bool
+
+
+def _padding_ms(config: TriageConfig) -> int:
+    """The redaction margin, in whole milliseconds, as a validity check rather than a tunable.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The margin.
+
+    Raises:
+        ValueError: If ``redaction.padding_ms`` has no value, is not a number, is not finite, is not
+            integral, or is negative. A negative or fractional margin is refused rather than coerced.
+    """
+    raw = config.require(_PADDING_KEY)
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError(f"{_PADDING_KEY} must be a number of milliseconds, not {type(raw).__name__}")
+    if isinstance(raw, float):
+        if not math.isfinite(raw):
+            raise ValueError(f"{_PADDING_KEY} must be finite, got {raw!r}")
+        if raw != int(raw):
+            raise ValueError(f"{_PADDING_KEY} must be a whole number of milliseconds, got {raw!r}")
+    value = int(raw)
+    if value < 0:
+        raise ValueError(f"{_PADDING_KEY} must be >= 0, got {value}; a negative margin narrows every extent")
+    return value
+
+
+def _scan_evidence(scan: Entity) -> tuple[list[str], list[str]]:
+    """What the store's ``pii_scan`` measurement says about its own completeness.
+
+    Args:
+        scan: The measurement entity.
+
+    Returns:
+        ``(scanned_by, failed)`` — the detector names that ran and those that did not, sorted. Only
+        names: a failure's message may quote the scanned input.
+    """
+    scanned_by = scan.attributes.get("scanned_by") or []
+    failed = scan.attributes.get("failed") or []
+    return sorted(str(name) for name in scanned_by), sorted(str(name) for name in failed)
+
+
+def _findings(store: ProvStore) -> list[Entity]:
+    """The ``pii`` entities still standing, by the store's latest-non-invalidated rule.
 
     Args:
         store: The provenance store.
 
     Returns:
-        One extent per ``pii`` entity.
+        The non-invalidated findings.
+    """
+    return [finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]
+
+
+def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
+    """Every finding, regardless of speaker; the membership check that secures the error path.
+
+    Args:
+        findings: The live ``pii`` entities.
+
+    Returns:
+        One extent per finding.
 
     Raises:
         ValueError: If a finding's category is empty or carries the reserved merge character, or if
             a finding has no extent. The error names bounds and category, never any matched text.
     """
     extents = []
-    for finding in store.entities("pii"):
+    for finding in findings:
         category = finding.attributes.get("category", "")
         if not category or _RESERVED_CATEGORY_CHAR in category:
             raise ValueError(
@@ -87,8 +161,8 @@ def _verification_model(model_id: str, commit_sha: str) -> HFModel:
     return HFModel(path_or_uri=model_id, revision=commit_sha)
 
 
-def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]]) -> tuple[bool, list[str], bool]:
-    """Re-run both recognizers and the scan on the node's own output.
+def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]]) -> _Verification:
+    """Re-run the recognizers and the scan on the node's own output.
 
     Args:
         redacted: The redacted audio.
@@ -96,8 +170,8 @@ def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, s
         asr_models: ``(model_id, commit_sha)`` pairs read from the store's model agents.
 
     Returns:
-        ``(verified, survived_categories, scan_ran)``. Any finding anywhere fails; a detector
-        failure means the check did not run, which is not a clean result.
+        What the re-run established. Any finding anywhere fails; a scan with a failed detector or
+        with no detector at all did not run, which is not a clean result.
     """
     hypotheses = []
     for model_id, commit_sha in asr_models:
@@ -105,26 +179,28 @@ def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, s
         hypotheses.append(flatten_script_line(line))
     scans = scan_for_pii([*hypotheses, transcript_text])
     scans = scans if isinstance(scans, list) else [scans]
-    if any(s.failures for s in scans):
-        return False, [], False
+    if any(s.failures or not s.detectors_used for s in scans):
+        return _Verification(verified=False, survived=[], scan_ran=False)
     survived = sorted({span.category for s in scans for span in s.spans})
-    return not survived, survived, True
+    return _Verification(verified=not survived, survived=survived, scan_ran=True)
 
 
-def _asr_models(store: ProvStore) -> list[tuple[str, str]]:
-    """``(model_id, commit_sha)`` per recognizer with words in the store, from its model agent (N14).
+def _asr_models(store: ProvStore) -> tuple[list[tuple[str, str]], list[str]]:
+    """The recognizers with words in the store, and which of them carry a resolved commit (N14).
 
     Args:
         store: The provenance store.
 
     Returns:
-        The pairs, sorted by model id.
+        ``([(model_id, commit_sha), ...], [model_id, ...])`` — the re-runnable pairs and every
+        recognizer PREPROCESS used, both sorted by model id.
 
     Raises:
         ValueError: If no word entity leads to a model agent with a resolved commit — verification
             cannot re-run recognizers it cannot name.
     """
     pairs: dict[str, str] = {}
+    recognizers: set[str] = set()
     for word in store.entities("word"):
         recognizer = word.attributes.get("recognizer")
         activity_id = store.generated_by(word.id)
@@ -132,11 +208,13 @@ def _asr_models(store: ProvStore) -> list[tuple[str, str]]:
             continue
         for agent_id in store.associated_with(activity_id):
             agent = store.get_agent(agent_id)
-            if agent.agent_type == "model" and agent.model_id == recognizer and agent.commit_sha is not None:
-                pairs[str(recognizer)] = agent.commit_sha
+            if agent.agent_type == "model" and agent.model_id == recognizer:
+                recognizers.add(str(recognizer))
+                if agent.commit_sha is not None:
+                    pairs[str(recognizer)] = agent.commit_sha
     if not pairs:
         raise ValueError("no recognizer model agent with a resolved commit in the store; nothing can re-verify")
-    return sorted(pairs.items())
+    return sorted(pairs.items()), sorted(recognizers)
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -145,7 +223,7 @@ def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
 
 
 def _consensus_words(store: ProvStore) -> list[Entity]:
-    """SPEECH's word entities, non-invalidated, in time order."""
+    """SPEECH's word entities, non-invalidated, in time order; the unplaced sort first."""
     words = []
     for word in store.entities("word"):
         if store.is_invalidated(word.id):
@@ -153,33 +231,39 @@ def _consensus_words(store: ProvStore) -> list[Entity]:
         activity_id = store.generated_by(word.id)
         if activity_id is not None and store.get_activity(activity_id).node == "SPEECH":
             words.append(word)
-    return sorted(words, key=lambda w: w.extent or (0.0, 0.0))
+    return sorted(words, key=lambda w: w.extent or (-1.0, -1.0))
 
 
-def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> str:
+def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[str, int]:
     """The transcript with every planned extent's words rendered as one ``[CATEGORY]`` placeholder.
 
     A word overlapping a planned extent is replaced along with its padded-in neighbours, matching
-    what the audio lost. No timestamps, no ids, no matched text.
+    what the audio lost. A word the store places nowhere overlaps no extent, so it is rendered as
+    the category-less placeholder rather than released verbatim. No timestamps, no ids, no matched
+    text.
 
     Args:
         words: SPEECH's consensus words, in time order.
         planned: The padded, merged extents.
 
     Returns:
-        The transcript text.
+        The transcript text and the number of words released as unplaced.
     """
     tokens: list[str] = []
     emitted: set[int] = set()
+    unplaced = 0
     for word in words:
-        extent = word.extent or (0.0, 0.0)
-        index = next((i for i, p in enumerate(planned) if _overlaps(extent, (p.start, p.end))), None)
+        if word.extent is None:
+            unplaced += 1
+            tokens.append(_UNPLACED_PLACEHOLDER)
+            continue
+        index = next((i for i, p in enumerate(planned) if _overlaps(word.extent, (p.start, p.end))), None)
         if index is None:
             tokens.append(str(word.attributes.get("text") or ""))
         elif index not in emitted:
             emitted.add(index)
             tokens.append(f"[{planned[index].category}]")
-    return " ".join(token for token in tokens if token)
+    return " ".join(token for token in tokens if token), unplaced
 
 
 def _write_artifacts(redacted: Audio, transcript_text: str, artifacts_dir: Path) -> dict[str, Path]:
@@ -225,12 +309,13 @@ def redact(
         verification passed.
 
     Raises:
-        ValueError: If ``redaction.padding_ms`` has no value, if ``artifacts_dir`` and ``run_dir``
-            contain one another, if the store carries no PII scan measurement (N15), or if a finding's
-            category is unusable (see :func:`_extents_from_findings`).
+        ValueError: If ``redaction.padding_ms`` has no usable value (see :func:`_padding_ms`), if
+            ``artifacts_dir`` and ``run_dir`` contain one another, if the store carries no PII scan
+            measurement (N15), or if a finding's category is unusable (see
+            :func:`_extents_from_findings`).
         LookupError: If no live stream carries ``source``.
     """
-    padding_ms = int(config.require("redaction.padding_ms"))
+    padding_ms = _padding_ms(config)
     run_resolved, release_resolved = run_dir.resolve(), artifacts_dir.resolve()
     if run_resolved.is_relative_to(release_resolved) or release_resolved.is_relative_to(run_resolved):
         raise ValueError(
@@ -240,10 +325,12 @@ def redact(
     scan_measurement = find_measurement(store, "pii_scan")
     if scan_measurement is None:
         raise ValueError("no PII scan measurement in the store (N15); an unscanned recording is unchecked, not clean")
-    findings = store.entities("pii")
-    extents = _extents_from_findings(store)
+    scanned_by, scan_failed = _scan_evidence(scan_measurement)
+    scan_incomplete = bool(scan_failed) or not scanned_by
+    findings = _findings(store)
+    extents = _extents_from_findings(findings)
     planned = plan_redactions(extents, padding_ms=padding_ms)
-    asr_models = _asr_models(store)
+    asr_models, recognizers = _asr_models(store)
     stream_id, recording = resolve_stream(store, run_dir, source)
 
     software = software_agent(store)
@@ -278,25 +365,42 @@ def redact(
     words = _consensus_words(store)
     for word in words:
         store.used(apply_act, word.id)
-    transcript_text = _transcript(words, planned)
+    transcript_text, unplaced_n = _transcript(words, planned)
 
-    verify_act = store.activity(node=NODE, step="verify", parameters={"systems": [mid for mid, _ in asr_models]})
+    verify_systems = [] if scan_incomplete else [model_id for model_id, _ in asr_models]
+    verify_act = store.activity(node=NODE, step="verify", parameters={"systems": verify_systems})
     store.was_associated_with(verify_act, software)
-    for model_id, commit_sha in asr_models:
-        model_agent = store.agent(agent_type="model", model_id=model_id, commit_sha=commit_sha)
-        store.was_associated_with(verify_act, model_agent)
-    verified, survived, scan_ran = _verify(redacted, transcript_text, asr_models)
+    if scan_incomplete:
+        checked = _Verification(verified=False, survived=[], scan_ran=False)
+    else:
+        for model_id, commit_sha in asr_models:
+            model_agent = store.agent(agent_type="model", model_id=model_id, commit_sha=commit_sha)
+            store.was_associated_with(verify_act, model_agent)
+        checked = _verify(redacted, transcript_text, asr_models)
+    unverifiable = sorted(set(recognizers) - set(verify_systems))
 
     artifacts: dict[str, Path] = {}
-    if verified:
-        outcome, why = Outcome.PASS, "every finding redacted; the redacted output re-scans clean"
+    if scan_incomplete:
+        outcome = Outcome.FAIL
+        missing = f"detectors failed: {', '.join(scan_failed)}" if scan_failed else "no detector ran"
+        why = f"the store's pii scan is incomplete ({missing}); an unchecked recording is not a clean one (N15)"
+    elif not checked.scan_ran:
+        outcome = Outcome.FAIL
+        why = "verification did not run: no pii detector ran over the output; an unverified artifact is withheld (N16)"
+    elif checked.survived:
+        outcome = Outcome.FAIL
+        why = "verification found pii on the redacted output: " + ", ".join(checked.survived)
+    elif unverifiable:
+        outcome = Outcome.FLAG
+        why = (
+            "the redacted output re-scans clean, but verification re-ran only "
+            f"{', '.join(verify_systems)}; {', '.join(unverifiable)} records no commit to re-run at"
+        )
         artifacts = _write_artifacts(redacted, transcript_text, artifacts_dir)
-    elif not scan_ran:
-        outcome = Outcome.FAIL
-        why = "verification did not run: a pii detector failed; an unverified artifact is withheld (N16)"
     else:
-        outcome = Outcome.FAIL
-        why = "verification found pii on the redacted output: " + ", ".join(survived)
+        outcome = Outcome.PASS
+        why = "every finding redacted; the redacted output re-scans clean"
+        artifacts = _write_artifacts(redacted, transcript_text, artifacts_dir)
     verdict_id, verdict = write_verdict(
         store,
         verify_act,
@@ -309,8 +413,11 @@ def redact(
             "redactions_n": len(planned),
             "by_category": dict(Counter(extent.category for extent in planned)),
             "padding_ms": padding_ms,
-            "verified": verified,
-            "survived": survived,
+            "verified": checked.verified,
+            "survived": checked.survived,
+            "verify_systems": verify_systems,
+            "scan_failed": scan_failed,
+            "unplaced_words_n": unplaced_n,
             "audio_check": "bounded",
         },
     )

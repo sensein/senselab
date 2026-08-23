@@ -482,8 +482,12 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
     ``findings`` are ``((start, end), category)`` or ``((start, end), category, speaker)`` tuples;
     each writes a ``pii`` entity, a SPEECH word covering it carrying the ``pii`` label assertion
     and, once per store (unless ``scanned`` is False), the ``pii_scan`` measurement — the shapes
-    Task 5's node writes. Both recognizers' PREPROCESS word entities and model agents are always
-    written so verification can name them. ``config_yaml`` is the production override mechanism,
+    Task 5's node writes. ``scanned_by``/``scan_failed`` are that measurement's own evidence fields,
+    so a caller can seed a store scan that did not complete. ``target``, when given, writes SPEECH's
+    verdict entity carrying ``target_speaker`` and flagging only that speaker's findings, so a
+    speaker-scoped reader has something to scope by. Both recognizers' PREPROCESS word entities and
+    model agents are always written so verification can name them; ``commitless`` names recognizers
+    whose model agent records no commit. ``config_yaml`` is the production override mechanism,
     defaulting to the one unmeasured key every REDACT test needs.
     """
 
@@ -493,6 +497,10 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         findings: tuple = (),
         words: tuple = (("hello", 0.2, 0.5, "SPEAKER_00"), ("world", 2.0, 2.3, "SPEAKER_00")),
         scanned: bool = True,
+        scanned_by: tuple[str, ...] = ("gliner", "presidio", "rules"),
+        scan_failed: tuple[str, ...] = (),
+        target: str | None = None,
+        commitless: tuple[str, ...] = (),
         config_yaml: str = "redaction:\n  padding_ms: 50\n",
     ) -> tuple[ProvStore, TriageConfig, Path]:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
@@ -515,7 +523,10 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         store.was_generated_by(recording, pre)
 
         for model_id, sha in ((CRISPERWHISPER_ID, "c" * 40), (QWEN_ID, "d" * 40)):
-            agent = store.agent(agent_type="model", model_id=model_id, commit_sha=sha)
+            if model_id in commitless:
+                agent = store.agent(agent_type="model", model_id=model_id, unresolved_reason="offline load")
+            else:
+                agent = store.agent(agent_type="model", model_id=model_id, commit_sha=sha)
             asr_act = store.activity(node="PREPROCESS", step=f"asr:{model_id}", parameters={"model": model_id})
             store.was_associated_with(asr_act, agent)
             raw_id = store.entity(
@@ -577,9 +588,29 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
             scan_id = store.entity(
                 prov_type="measurement",
                 extent=None,
-                attributes={"name": "pii_scan", "scanned_by": ["gliner", "presidio", "rules"], "failed": []},
+                attributes={"name": "pii_scan", "scanned_by": list(scanned_by), "failed": list(scan_failed)},
             )
             store.was_generated_by(scan_id, pii_act)
+
+        if target is not None:
+            flagged = [
+                f"pii ({category}) in the target speaker's speech"
+                for _extent, category, *rest in findings
+                if (rest[0] if rest else "SPEAKER_00") == target
+            ]
+            verdict_id = store.entity(
+                prov_type="verdict",
+                extent=None,
+                attributes={
+                    "node": "SPEECH",
+                    "outcome": "flag" if flagged else "pass",
+                    "kind": "speech",
+                    "why": "; ".join(flagged) or "words, spans, speakers and quality are in the store",
+                    "target_speaker": target,
+                    "flags": flagged,
+                },
+            )
+            store.was_generated_by(verdict_id, speech_act)
 
         override = tmp_path / "redact-override.yaml"
         override.write_text(config_yaml)
