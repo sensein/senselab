@@ -328,9 +328,7 @@ def test_the_callers_ran_is_used_where_it_disagrees_with_the_store(
     )
     assert supplied.file_verdict.ran["AIRWAY"] is RunState.ERRORED
     assert derived.file_verdict.ran["AIRWAY"] is RunState.SKIPPED
-    assert supplied.file_verdict.ran.keys() == {"ADMIT", "AIRWAY", "SPEECH"}, (
-        "the caller's ran is recorded as given, not widened to the graph"
-    )
+    assert supplied.file_verdict.ran["SPEECH"] is RunState.COMPLETED, "the caller may also add what the store lacks"
     assert _file_verdict_entity(store).attributes["ran"]["AIRWAY"] == RunState.ERRORED.value
 
 
@@ -354,3 +352,94 @@ def test_a_completed_branch_with_no_verdict_reads_differently_from_one_that_neve
     assert completed.file_verdict.triage is skipped.file_verdict.triage is Outcome.FLAG
     assert any("completed without a verdict" in r.why for r in completed.file_verdict.reasons)
     assert any("never ran" in r.why for r in skipped.file_verdict.reasons)
+
+
+def test_a_redact_flag_is_withheld_not_releasable(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """A contested or weakened verification is unresolved, and unresolved is not cleared."""
+    store = make_verdict_store(node_verdicts=[*BASE, ("REDACT", Outcome.FLAG, None)], kinds=KINDS)
+    result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+    assert result.file_verdict.release is Release.WITHHELD, "a non-pass release must never read as cleared"
+    assert result.file_verdict.triage is Outcome.FLAG, "the release mapping does not disturb the triage axis"
+    assert _file_verdict_entity(store).attributes["release"] == Release.WITHHELD.value
+
+
+def test_an_invalidated_node_verdict_does_not_vote(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """An invalidated verdict is not a verdict; the kind it screened is left without an answer."""
+    store = make_verdict_store(
+        node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
+        kinds={"speech": "present"},
+    )
+    speech = next(e for e in store.entities("verdict") if e.attributes["node"] == "SPEECH")
+    store.was_invalidated_by(speech.id, store.activity(node="SPEECH", step="withdraw", parameters={}))
+
+    result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+    assert "SPEECH" not in {r.node for r in result.file_verdict.reasons if r.outcome is not Outcome.FLAG}
+    assert result.file_verdict.triage is Outcome.FLAG, "a present kind whose only verdict was withdrawn has no answer"
+    assert result.file_verdict.ran["SPEECH"] is RunState.SKIPPED
+    assert speech.id not in result.view, "a withdrawn verdict was not folded, so it is not in the view"
+
+
+def test_the_later_redact_verdict_governs_the_release_axis(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """A repaired REDACT run wrote fail then pass; the release axis must read the repair."""
+    store = make_verdict_store(
+        node_verdicts=[*BASE, ("REDACT", Outcome.FAIL, None), ("REDACT", Outcome.PASS, None)], kinds=KINDS
+    )
+    result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+    assert result.file_verdict.release is Release.RELEASABLE
+    assert [r.outcome for r in result.file_verdict.reasons if r.node == "REDACT"] == [Outcome.PASS]
+
+
+def test_a_superseded_verdict_is_replaced_not_added(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """Two verdicts from one node are one contribution, the latest; the earlier is not a second voice."""
+    store = make_verdict_store(
+        node_verdicts=[
+            ("ADMIT", Outcome.PASS, None),
+            ("SPEECH", Outcome.FAIL, "speech"),
+            ("SPEECH", Outcome.PASS, "speech"),
+        ],
+        kinds={"speech": "absent"},
+    )
+    result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+    speech_reasons = [r for r in result.file_verdict.reasons if r.node == "SPEECH" and r.outcome is not Outcome.FLAG]
+    assert len(speech_reasons) == 1, "a superseded verdict must not appear alongside the one that replaced it"
+    assert speech_reasons[0].outcome is Outcome.PASS
+    assert result.file_verdict.kinds["speech"] is KindState.PRESENT
+
+
+def test_a_partial_ran_overrides_without_erasing_what_the_store_proves(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """The caller knows errored; the store knows completed. Neither may delete the other's knowledge."""
+    store = make_verdict_store(
+        node_verdicts=[("ADMIT", Outcome.PASS, None), ("SPEECH", Outcome.PASS, "speech")],
+        kinds={"speech": "present"},
+    )
+    result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"AIRWAY": RunState.ERRORED})
+    assert result.file_verdict.ran["AIRWAY"] is RunState.ERRORED, "the caller's knowledge wins per node"
+    assert result.file_verdict.ran["ADMIT"] is RunState.COMPLETED, "a partial ran does not unlearn a written verdict"
+    assert result.file_verdict.ran["SPEECH"] is RunState.COMPLETED
+    stored = _file_verdict_entity(store).attributes["ran"]
+    assert stored["AIRWAY"] == RunState.ERRORED.value
+    assert {"ADMIT", "SPEECH", "AIRWAY"} <= stored.keys()
+
+
+def test_an_unrecognised_kind_state_names_the_kind_and_the_entity(
+    make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+) -> None:
+    """A state the vocabulary does not know must not be folded, and the error must be findable."""
+    store = make_verdict_store(node_verdicts=[("ADMIT", Outcome.PASS, None)], kinds={"airway": "maybe"})
+    kind_id = store.entities("kind")[0].id
+    with pytest.raises(ValueError) as raised:
+        verdict_module.verdict(store, None, config, run_dir=tmp_path)
+    message = str(raised.value)
+    assert "airway" in message
+    assert "maybe" in message
+    assert kind_id in message
