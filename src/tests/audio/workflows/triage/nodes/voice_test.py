@@ -12,6 +12,8 @@ import yaml  # type: ignore[import-untyped]
 import senselab.audio.workflows.triage.nodes.voice as voice_module
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.phonation import PeriodMark
+from senselab.audio.tasks.phonation import f0_track as real_f0_track
+from senselab.audio.tasks.phonation import hnr_track as real_hnr_track
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
@@ -341,3 +343,34 @@ def test_gate_interval_is_partial_when_exactly_one_interval_is_supplied(
     assert verdict.attributes["gate_interval"] == "partial"
     assert any(flag.startswith("near_gate_edge hnr") for flag in verdict.attributes["flags"])
     assert not any(flag.startswith("near_gate_edge rms") for flag in verdict.attributes["flags"])
+
+
+def test_sub_window_residual_fragments_are_pruned_not_handed_to_praat(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rolling floor fragments the residual; Praat refuses a segment shorter than its window.
+
+    The real tracks run here: a fragment shorter than ``periods_per_window / f0_min_hz`` reaches
+    Praat only if the node fails to prune it, and Praat's refusal is the defect this pins.
+    """
+    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
+    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
+    seed_voice_store(store, energetic=((1.0, 1.02), (2.0, 2.5)))
+    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["short_intervals_n"] == 1, "the 20 ms fragment is pruned and counted"
+    assert all((r.extent or (0.0, 0.0))[0] >= 2.0 for r in _voice_spans(store)), "no run comes from the fragment"
+
+
+def test_a_residual_of_nothing_but_fragments_fails_and_says_so(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every residual interval shorter than the window leaves nothing analysable, which is a fail."""
+    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
+    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
+    seed_voice_store(store, energetic=((1.0, 1.02), (2.0, 2.015)))
+    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert result.verdict.outcome is Outcome.FAIL
+    assert verdict.attributes["short_intervals_n"] == 2
+    assert "shorter than the analysis window" in result.verdict.why
