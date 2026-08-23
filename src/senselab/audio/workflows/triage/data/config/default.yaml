@@ -96,6 +96,15 @@ derivation: |
   confirmation map Cough -> {Cough}, Breathe -> {Breathing, Sigh, Gasp} is branch-airway.md's step 2
   table: which AudioSet labels corroborate each HeAR label. Vocabulary, not thresholds.
 
+  Redaction rules, which are validity checks rather than values. redaction.padding_ms is required to
+  be a non-negative whole number of milliseconds at REDACT's entry: a negative margin narrows every
+  extent instead of widening it, so the audio keeps the name while the verdict and the transcript both
+  report a redaction, and neither verification channel can see the difference. Verification that could
+  re-run fewer than both of PREPROCESS's recognizers at their recorded commits is a flag rather than a
+  pass, and the verdict names the recognizers it did re-run in verify_systems. A consensus word the
+  store places nowhere overlaps no planned extent, so it is released as [UNPLACED] rather than
+  verbatim and counted in unplaced_words_n -- text of unknown location cannot be shown to be safe.
+
   UNSET, and why -- benchmarks/open.md carries each of these:
     phonation.f0_min_hz, phonation.f0_max_hz: no single search range serves both a low adult male
       fundamental and an infant voice -- a range wide enough for one admits period-doubling artefacts
