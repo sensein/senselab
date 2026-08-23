@@ -96,6 +96,8 @@ def fold_file_verdict(
             if predicted in (KindState.PRESENT, KindState.UNDECIDED):
                 if state is RunState.COMPLETED:
                     why = f"contradiction: {kind} was {predicted.value} and {node} completed without a verdict"
+                elif state is RunState.ERRORED:
+                    why = f"contradiction: {kind} was {predicted.value} and {node} errored without a verdict"
                 else:
                     why = f"contradiction: {kind} was {predicted.value} and {node} never ran"
                 contradictions.append(NodeVerdict(node, Outcome.FLAG, kind, why))

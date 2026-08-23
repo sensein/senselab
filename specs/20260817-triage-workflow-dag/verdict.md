@@ -108,11 +108,16 @@ remain in the store — TAXONOMY's assertion and this node's resolution — so t
 than silent.
 
 `ran` comes from two sources and is **merged, the runner's over the store's**: the store derives
-`completed` for every node that wrote a verdict and `skipped` for every other graph node, and the
-runner's mapping then overrides per node. Only the runner can report `errored`, because a node that
-raised wrote no verdict and the store cannot tell it from one never asked to run; and only the store
-can prove `completed`, so a partial mapping from the runner overrides what it names without erasing
-the rest.
+`completed` for a node that wrote a verdict, `errored` for one that wrote an activity and no live
+verdict, and `skipped` for one that wrote neither; the runner's mapping then overrides per node.
+
+The store *can* tell a node that raised from one never asked to run, which an earlier reading denied:
+a node raises after its first activity is written, so an activity with no verdict is exactly that
+signature, and nothing at all is exactly the other. A withdrawn verdict reads as `errored` too, and
+correctly — the activities survive the withdrawal, so the node did run and left nothing standing. The
+runner's mapping still wins where it speaks, because it knows why a node it never called was left out.
+The fold's reason for a present kind with no verdict distinguishes the three: `errored without a
+verdict`, `completed without a verdict`, `never ran`.
 
 Every read of the store here follows the store's shared rule — an invalidated element is never read,
 and of the survivors asserting the same thing the latest write wins, per node for verdicts and per
