@@ -121,7 +121,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         for hear_label, yamnet_labels in config.require("airway.confirmation_map").items()
     }
 
-    spans = [e for e in store.entities("span") if e.attributes.get("k_db") == k_db]
+    spans = [e for e in store.entities("span") if e.attributes.get("k_db") == k_db and not store.is_invalidated(e.id)]
     spans.sort(key=lambda e: e.extent or (0.0, 0.0))
     hint_declares = _hint_declares_airway(hint, labels_of_interest)
     silence = find_measurement(store, "silence")
@@ -306,7 +306,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         store.was_attributed_to(interval_id, software)
         contaminating: list[str] = []
         for word in store.entities("word"):
-            if word.attributes.get("recognizer") != CRISPERWHISPER_ID:
+            if word.attributes.get("recognizer") != CRISPERWHISPER_ID or store.is_invalidated(word.id):
                 continue
             text = str(word.attributes.get("text") or "")
             if text.startswith("[") and text.endswith("]"):

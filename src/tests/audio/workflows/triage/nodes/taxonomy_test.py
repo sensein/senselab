@@ -129,6 +129,27 @@ class TestEligibility:
         speech = _kind(store, "speech")
         assert speech.attributes["families"]["B_lexical"]["state"] == "absent"
 
+    def test_an_invalidated_word_does_not_vote(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_detectors: dict[str, Any],
+    ) -> None:
+        """A withdrawn word is not evidence: the store's shared rule applies to this read like any other."""
+        ids = seed_store(
+            store,
+            yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1})],
+            words=({"text": "hello", "start": 1.0, "end": 1.2},),
+        )
+        [word_id] = ids["words"]
+        store.was_invalidated_by(word_id, store.activity(node="PREPROCESS", step="withdraw", parameters={}))
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        speech = _kind(store, "speech")
+        assert speech.attributes["families"]["B_lexical"]["state"] == "absent"
+        assert speech.attributes["families"]["B_lexical"]["members"]["crisperwhisper"]["n_words"] == 0
+
 
 class TestTheFold:
     """Presence needs agreement, absence needs unanimity, and the unmeasured count stays honest."""

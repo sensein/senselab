@@ -132,6 +132,20 @@ class TestConditioning:
         [recording] = [e for e in store.entities("stream") if e.attributes.get("name") == "recording"]
         assert recording.id in store.derived_from(plain.id)
 
+    def test_an_invalidated_recording_is_not_a_source_of_the_plain_stream(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
+    ) -> None:
+        """A withdrawn recording must not be recorded as what plain derives from."""
+        path = tmp_path / "input.wav"
+        sf.write(str(path), burst_samples().astype(np.float32), 16000)
+        admitted = admit(store, path, config, run_dir=tmp_path)
+        assert admitted.audio is not None
+        [withdrawn] = [e for e in store.entities("stream") if e.attributes.get("name") == "recording"]
+        store.was_invalidated_by(withdrawn.id, store.activity(node="ADMIT", step="withdraw", parameters={}))
+        preprocess(store, admitted.audio, config, run_dir=tmp_path)
+        [plain] = [e for e in store.entities("stream") if e.attributes.get("name") == "plain"]
+        assert withdrawn.id not in store.derived_from(plain.id)
+
     def test_preemphasised_stream_is_the_first_difference(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
     ) -> None:

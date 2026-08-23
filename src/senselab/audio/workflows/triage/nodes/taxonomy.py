@@ -140,7 +140,11 @@ def taxonomy(  # noqa: C901 — one member per detector, one fold per kind
     except Exception as err:  # noqa: BLE001 — same rule as AST
         hear_error = type(err).__name__
 
-    words = [w for w in store.entities("word") if w.attributes.get("recognizer") == CRISPERWHISPER_ID]
+    words = [
+        w
+        for w in store.entities("word")
+        if w.attributes.get("recognizer") == CRISPERWHISPER_ID and not store.is_invalidated(w.id)
+    ]
     crisper_available = find_measurement(store, "asr_crisperwhisper") is not None
 
     def _yamnet_member(kind: str) -> dict[str, Any]:

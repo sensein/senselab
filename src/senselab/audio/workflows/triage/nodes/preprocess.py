@@ -113,7 +113,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
     (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
 
-    recording_ids = [e.id for e in store.entities("stream") if e.attributes.get("name") == "recording"]
+    recording_ids = [
+        e.id
+        for e in store.entities("stream")
+        if e.attributes.get("name") == "recording" and not store.is_invalidated(e.id)
+    ]
     target_hz = int(config.require("resample.target_hz"))
     preemph_enabled = bool(config.require("preemphasis.enabled"))
     coefficient = float(config.require("preemphasis.coefficient"))
