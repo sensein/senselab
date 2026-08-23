@@ -101,8 +101,14 @@ redacted copy.
 
 ```
 artifacts: { audio?, transcript?, figure? }   # each redacted, each independently optional
-verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[], verify_systems[], scan_failed[], unplaced_words_n, audio_check }
+verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[], verify_systems[], scan_failed[], unplaced_words_n, audio_check, artifacts_withheld: bool }
 ```
+
+**Only a pass produces a released pair; a flag withholds exactly like a fail.** The node used to
+write the pair on `flag` too, so the file-level fold — which maps `flag` to withheld — reported a
+recording as unreleased while `released/audio.wav` sat on disk and `run.json` named it. On anything
+but a pass `artifacts` is empty, nothing is written under the release directory, and
+`artifacts_withheld` is `true` with the `why` already carrying the reason.
 
 `survived` is non-empty only on `fail`, and names **categories**, never matched text.
 

@@ -10,8 +10,9 @@ PREPROCESS declared in its own activities, with the word-derived set as the fall
 ``expected_source`` naming which was read. A store whose ``pii_scan`` measurement records a
 failed or absent detector is unchecked rather than clean, and verification over a scan in which no
 detector ran is not a result — such a store withholds without needing any recognizer, since nothing
-has to be verified to refuse a release. Artifacts are written only on verified success, into a directory
-disjoint from the run directory, and carry no store element id.
+has to be verified to refuse a release. Only a pass produces a released pair; a flag withholds
+exactly like a fail, and the verdict's ``artifacts_withheld`` records it. Artifacts are written into
+a directory disjoint from the run directory, and carry no store element id.
 """
 
 from __future__ import annotations
@@ -52,7 +53,8 @@ class RedactResult(NodeResult):
     """What REDACT returns.
 
     Attributes:
-        artifacts: The released paths, ``{"audio": ..., "transcript": ...}``; empty on fail.
+        artifacts: The released paths, ``{"audio": ..., "transcript": ...}``; empty on anything
+            but a pass.
     """
 
     artifacts: dict[str, Path]
@@ -341,7 +343,7 @@ def redact(
 
     Returns:
         The verdict, the view over what this node wrote, and the released artifacts — empty unless
-        verification passed.
+        the outcome is a pass.
 
     Raises:
         ValueError: If ``redaction.padding_ms`` has no usable value (see :func:`_padding_ms`), if
@@ -439,7 +441,6 @@ def redact(
             f"{', '.join(verify_systems)}; {', '.join(unverifiable)} wrote no word at a resolved commit "
             "to re-run at"
         )
-        artifacts = _write_artifacts(redacted, transcript_text, artifacts_dir)
     else:
         outcome = Outcome.PASS
         why = "every finding redacted; the redacted output re-scans clean"
@@ -464,6 +465,7 @@ def redact(
             "scan_failed": scan_failed,
             "unplaced_words_n": unplaced_n,
             "audio_check": "bounded",
+            "artifacts_withheld": not artifacts,
         },
     )
     view.append(verdict_id)
