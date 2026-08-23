@@ -96,3 +96,43 @@ Beyond the descriptors listed below, users can extract additional acoustic repre
 
 
 **Note:** This section is actively under development. Coming updates will address usability, efficiency, clarity, robustness, and overall effectiveness. We welcome any feedback—feel free to reach out via email at [fabiocat@mit.edu](mailto:fabiocat@mit.edu) or open an issue on [GitHub](https://github.com/sensein/senselab/issues).
+
+## SpeechScore (ClearerVoice-Studio)
+
+Eighteen speech-quality metric families, in an isolated subprocess venv. From
+[ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio) (Apache-2.0); it has no pip
+distribution, so it arrives as a sparse git clone at a pinned commit, which is also what pins its
+three MOS predictors' weights.
+
+**Four need no reference** — `DNSMOS`, `NISQA`, `DISTILL_MOS`, `SRMR` — which is what makes this usable
+on a real recording. The other fourteen (`PESQ`, `NB_PESQ`, `STOI`, `SISDR`, `SNR`, `SSNR`,
+`FWSEGSNR`, `LSD`, `LLR`, `CSIG`, `CBAK`, `COVL`, `MCD`, `BSSEval`) compare against a clean signal.
+
+```python
+from senselab.audio.tasks.features_extraction import extract_speechscore_metrics_from_audios
+
+# No reference: the four predictors, on any recording.
+scores = extract_speechscore_metrics_from_audios(audios)
+
+# With a reference: everything, or a named subset.
+scores = extract_speechscore_metrics_from_audios(
+    audios, reference_audios=clean, metrics=["PESQ", "STOI", "DNSMOS"]
+)
+```
+
+One dict per audio, keyed by metric name. `DNSMOS` returns `SIG`/`BAK`/`OVRL`/`P808_MOS`, `NISQA`
+returns `mos_pred` plus four impairment dimensions, `BSSEval` returns `ISR`/`SAR`/`SDR`; the rest are
+scalars. `SPEECHSCORE_METRICS` is the full table, with each metric's sub-fields and whether it needs a
+reference.
+
+**Asking for a reference-requiring metric without a reference raises.** Upstream would compute it
+against a zero-padded copy of the test signal and return a plausible number — the classification is
+senselab's own for that reason, since upstream's `intrusive` attribute is never read by its own code
+and is inverted for three metrics.
+
+`NISQA`, `DNSMOS` and `DISTILL_MOS` are neural and dominate the cost; drop them, or raise `timeout_s`,
+if eighteen metrics over a long recording exceeds the default ceiling. Windowing is not offered:
+upstream's windowed branch raises `NameError`.
+
+Design, the pin, and the two constraints the worker has to satisfy to import it at all:
+`specs/20260819-clearvoice-integration/design.md` §9.

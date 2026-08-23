@@ -72,6 +72,56 @@ commits, the licence history, the venv's dependency set and every measurement be
 in `specs/20260818-083214-driftse-upstream-mit/design.md`.
 
 
+## ClearVoice (FRCRN, MossFormerGAN, MossFormer2)
+
+[ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio) (Alibaba Speech Lab,
+Apache-2.0) contributes three enhancers, in an isolated subprocess venv:
+
+| Model id | Rate | Upstream PESQ (VB-DMD / DNS-2020) |
+|---|---|---|
+| `alibabasglab/FRCRN_SE_16K` | 16 kHz | 3.23 / 3.24 |
+| `alibabasglab/MossFormerGAN_SE_16K` | 16 kHz | 3.47 / 3.57 |
+| `alibabasglab/MossFormer2_SE_48K` | 48 kHz | 3.16 / 2.94 |
+
+```python
+from senselab.audio.tasks.speech_enhancement import enhance_audios
+from senselab.utils.data_structures import HFModel
+
+enhanced = enhance_audios(audios, model=HFModel(path_or_uri="alibabasglab/FRCRN_SE_16K"))
+```
+
+Inputs are resampled to the checkpoint's rate and downmixed to mono; the output has the input's
+sample count at that rate. `parameters={"timeout_s": ...}` is the one knob.
+
+### Choosing between them decides which non-speech element survives
+
+Measured against six human-verified events on a real recording — capability facts that are **not** in
+upstream's documentation, and the reason an enhancer is not a neutral preprocessing step for any
+analysis that treats breaths or coughs as signal:
+
+| | breaths | coughs | input energy kept |
+|---|---|---|---|
+| `FRCRN_SE_16K` | kept (−2.0, −5.5 dB) | kept (−1.0, +0.1 dB) | most |
+| `MossFormer2_SE_48K` | **destroyed** (−37, −40 dB) | kept (−0.6, +0.2 dB) | most |
+| `MossFormerGAN_SE_16K` | **destroyed** (−51 dB) | 2 of 4 removed | ~8% |
+
+So: `FRCRN_SE_16K` when non-speech events matter, `MossFormerGAN_SE_16K` when only speech does, and
+`MossFormer2_SE_48K` when the recording is fullband and breaths are not of interest.
+
+All three **conserve energy**: output never exceeds input (−12.2 to −0.0 dB), in phase at zero lag,
+and clean speech is left essentially untouched — every SepFormer checkpoint tested failed that check.
+Peaks stayed ≤ 0.95, so no clipping exposure was observed. Independently reproduced here on clean
+16 kHz conversational speech: `FRCRN_SE_16K` returned −0.01 dB RMS at r = 1.0000.
+
+`FRCRN_SE_16K` is one of two ClearVoice checkpoints whose input upstream RMS-normalises to −25 dBFS;
+the inverse scalar is applied to the output, and reported in `metadata["clearvoice"]`.
+
+Each returned `Audio` carries `metadata["clearvoice"]` with the model id and the **resolved commit**
+its weights came from — necessary because upstream's loader accepts no revision. How that is pinned,
+and every deviation from upstream's own inference path, is in
+`specs/20260819-clearvoice-integration/design.md`.
+
+
 ## Evaluation
 ### Metrics
 

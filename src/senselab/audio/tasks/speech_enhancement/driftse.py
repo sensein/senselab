@@ -17,7 +17,8 @@ checkpoint file from the Hub. ``SENSELAB_DRIFTSE_CHECKPOINT`` points it at a loc
 ``last.ckpt`` + ``config.json`` instead, and then no Hub access happens at all.
 
 Design, upstream history, the pins and the measurements behind every choice here:
-``specs/20260818-083214-driftse-upstream-mit/design.md``.
+``specs/20260818-083214-driftse-upstream-mit/design.md``. The device hand-off and the derivation of
+the worker's default timeout: ``specs/20260818-235500-driftse-device-timeout/design.md``.
 """
 
 from __future__ import annotations
@@ -38,15 +39,12 @@ from senselab.utils.subprocess_venv import (
     _clean_subprocess_env,
     ensure_venv,
     parse_subprocess_result,
+    stage_portable_audio_io,
     venv_python,
 )
 
 _DRIFTSE_VENV = "driftse"
 _DRIFTSE_PYTHON = "3.11"
-
-# Every WAV this backend hands to or takes back from the worker. soundfile's WAV default is
-# PCM_16, which clips beyond +-1 -- see specs/20260818-071500-unasdiff-device-timeout-pcm16.
-_WAV_SUBTYPE = "FLOAT"
 
 # Upstream's requirements.txt is a *training* set; only what the inference import chain touches is
 # installed. pesq/pystoi are on that chain (util/other.py imports both at module scope) even though
@@ -93,6 +91,49 @@ _DRIFTSE_DEFAULT_VARIANT = "distillhubert_three_layers_with_z"
 # Upstream enhancement.py's own constant for the Gaussian it adds to the model input.
 _DRIFTSE_DEFAULT_SIGMA = 0.01
 
+# Terms of the default worker ceiling: seconds of wall time per second of audio inside one window,
+# a headroom multiplier, and a floor. Measurement and derivation:
+# specs/20260818-235500-driftse-device-timeout/design.md.
+_SECONDS_PER_WINDOW_SECOND = 1.1
+_TIMEOUT_HEADROOM = 4.0
+_TIMEOUT_FLOOR_S = 1800.0
+
+
+def _window_count(n_samples: int, chunk_samples: int, hop_samples: int) -> int:
+    """Return how many windows the worker will evaluate for one input.
+
+    Mirrors the worker's own chunking: fixed-length windows on a regular hop, plus a final window
+    anchored at the end of the signal when the regular ones do not reach it.
+
+    Args:
+        n_samples: Length of the (resampled) input in samples.
+        chunk_samples: Window length in samples.
+        hop_samples: Distance between the starts of adjacent windows, in samples.
+
+    Returns:
+        The number of windows, at least one.
+    """
+    if n_samples <= chunk_samples:
+        return 1
+    starts = list(range(0, n_samples - chunk_samples + 1, hop_samples))
+    if starts[-1] + chunk_samples < n_samples:
+        starts.append(n_samples - chunk_samples)
+    return len(starts)
+
+
+def _default_timeout_s(n_windows: int, chunk_s: float) -> float:
+    """Return the default worker ceiling for ``n_windows`` windows of ``chunk_s`` seconds each.
+
+    Args:
+        n_windows: Total number of windows the worker will enhance, across every input.
+        chunk_s: Window length in seconds.
+
+    Returns:
+        Seconds, never below ``_TIMEOUT_FLOOR_S``.
+    """
+    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _SECONDS_PER_WINDOW_SECOND * n_windows * chunk_s)
+
+
 # Worker script — runs inside the isolated venv. Clones the (non-packaged) upstream repo at a pinned
 # commit on first use and adds it to sys.path, then reuses upstream's own backbone construction and
 # spectral transforms rather than reimplementing them here.
@@ -112,7 +153,9 @@ try:
     seed = int(args["seed"])
     sigma = float(args["sigma"])
     chunk_s, overlap_s = float(args["chunk_s"]), float(args["overlap_s"])
-    wav_subtype = args["wav_subtype"]
+    sys.path.insert(0, args["io_dir"])
+    from portable_audio_io import read_audio, write_audio
+    requested_device = args.get("device")
 
     import fcntl, os, shutil, tempfile as _tempfile
 
@@ -152,7 +195,25 @@ try:
     from util.other import pad_spec, set_torch_cuda_arch_list
 
     set_torch_cuda_arch_list()  # prints and returns when CUDA is absent
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def resolve_device(requested):
+        # The host sends its caller's choice; None means "you decide". A bare "cuda" would take
+        # whatever index torch defaults to, so an index is always chosen.
+        if requested is None:
+            return torch.device("cuda:%d" % torch.cuda.current_device() if torch.cuda.is_available() else "cpu")
+        if not str(requested).startswith("cuda"):
+            return torch.device(requested)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "DriftSE worker: device %r was requested but torch.cuda.is_available() is False "
+                "inside the driftse venv (CUDA_VISIBLE_DEVICES=%r)"
+                % (requested, os.environ.get("CUDA_VISIBLE_DEVICES"))
+            )
+        if ":" in str(requested):
+            return torch.device(requested)
+        return torch.device("cuda:%d" % torch.cuda.current_device())
+
+    device = resolve_device(requested_device)
     torch.manual_seed(seed)
 
     # A local override supplies its own config.json; otherwise the architecture config comes from
@@ -219,7 +280,7 @@ try:
 
     results = []
     for in_path, out_path in zip(in_paths, out_paths):
-        y_np, sr = sf.read(in_path, dtype="float32", always_2d=True)
+        y_np, sr = read_audio(in_path, always_2d=True, channels_first=False)
         y = torch.as_tensor(y_np[:, 0]).to(device)
         assert sr == 16000, "worker expects 16 kHz; the host resamples"
 
@@ -251,9 +312,7 @@ try:
                 wsum[start : start + chunk] += taper
             x_hat = acc / wsum.clamp(min=1e-8)
 
-        # Explicit subtype: soundfile's WAV default is PCM_16, which clips every sample
-        # beyond +-1 on the way back to the host.
-        sf.write(out_path, x_hat.detach().cpu().numpy(), sr, subtype=wav_subtype)
+        write_audio(out_path, x_hat.detach().cpu().numpy(), sr)
         results.append(out_path)
 
     print(json.dumps({"output_paths": results, "seed": seed, "sigma": sigma}))
@@ -278,6 +337,7 @@ def enhance_audios_with_driftse(
     variant: str = _DRIFTSE_DEFAULT_VARIANT,
     chunk_s: float = 20.0,
     overlap_s: float = 2.0,
+    timeout_s: Optional[float] = None,
 ) -> List[Audio]:
     """Enhance each audio with DriftSE, one network evaluation per window.
 
@@ -288,8 +348,12 @@ def enhance_audios_with_driftse(
     Args:
         audios: Inputs. Resampled and downmixed to 16 kHz mono if needed.
         model: ``HFModel`` naming the weights repo and revision (``LIANGXU123/DriftSE``).
-        device: Accepted for signature parity with the other enhancers. The worker selects CUDA
-            when available and CPU otherwise; at 1 NFE, CPU is practical here.
+        device: Device the worker runs on. ``DeviceType.CUDA`` is resolved to an explicit
+            ``"cuda:<index>"`` (the index ``torch.cuda.current_device()`` reports in this process,
+            so under a ``CUDA_VISIBLE_DEVICES`` mask it is the allocated card) and sent to the
+            worker; ``DeviceType.CPU`` is sent as ``"cpu"``. ``None`` leaves the choice to the
+            worker, which takes ``cuda:<current index>`` when CUDA is available and CPU otherwise
+            -- at 1 NFE, CPU is practical here. Only CUDA and CPU are accepted.
         seed: RNG seed for the Gaussian perturbation, which the released checkpoints make part of
             the forward pass. Output is stochastic without it, so it is recorded in the log line.
         sigma: Scale of that Gaussian. Upstream's own default is 0.01; 0 is equivalent within
@@ -300,24 +364,42 @@ def enhance_audios_with_driftse(
         chunk_s: Window length for long inputs. Each window is peak-normalised in and peak-matched
             out on its own, exactly as upstream treats a whole file.
         overlap_s: Overlap between windows, Hann-tapered and overlap-added.
+        timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
+            work -- total windows across every input, times ``chunk_s``, times a per-window-second
+            factor, with a floor covering the first-use venv build, clone and checkpoint load
+            (:func:`_default_timeout_s`). Exceeding it raises ``RuntimeError`` and discards every
+            output, finished or not.
 
     Returns:
         One enhanced ``Audio`` per input, in order.
 
     Raises:
-        ValueError: if ``variant`` is not a known checkpoint.
-        RuntimeError: if the worker fails; the upstream traceback is included.
+        ValueError: if ``variant`` is not a known checkpoint, if ``timeout_s`` is not positive,
+            or if ``device`` is neither CUDA nor CPU.
+        RuntimeError: if the worker fails; the upstream traceback is included. Also if the worker
+            exceeds ``timeout_s`` -- that message names the ceiling, the input, how far the worker
+            had got, and the knob that raises it.
     """
     if variant not in _DRIFTSE_VARIANTS:
         raise ValueError(f"unknown DriftSE variant {variant!r}; known: {sorted(_DRIFTSE_VARIANTS)}")
+    if timeout_s is not None and timeout_s <= 0:
+        raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s}")
 
     if not audios:
         return []
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
-    from senselab.utils.data_structures import _select_device_and_dtype
+    from senselab.utils.data_structures import _select_device_and_dtype, device_run_opt
 
-    _select_device_and_dtype(user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU])
+    # None is forwarded as None rather than resolved here: the host interpreter and the venv have
+    # separate torch builds, and only the venv's torch.cuda.is_available() governs where the worker
+    # can actually run.
+    worker_device: Optional[str] = None
+    if device is not None:
+        selected_device, _ = _select_device_and_dtype(
+            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+        )
+        worker_device = device_run_opt(selected_device)
 
     checkpoint_file, config_rel = _DRIFTSE_VARIANTS[variant]
 
@@ -348,9 +430,15 @@ def enhance_audios_with_driftse(
 
     mono_16k = downmix_audios_to_mono(resample_audios(audios, resample_rate=16000))
 
+    chunk_samples = int(chunk_s * 16000)
+    hop_samples = int((chunk_s - overlap_s) * 16000)
+    total_windows = sum(_window_count(int(a.waveform.shape[-1]), chunk_samples, hop_samples) for a in mono_16k)
+    effective_timeout_s = _default_timeout_s(total_windows, chunk_s) if timeout_s is None else timeout_s
+
     logger.info(
-        f"DriftSE: enhancing {len(mono_16k)} audio(s), variant={variant}, seed={seed}, "
-        f"sigma={sigma}, chunk_s={chunk_s}, overlap_s={overlap_s}"
+        f"DriftSE: enhancing {len(mono_16k)} audio(s) ({total_windows} window(s) total), "
+        f"variant={variant}, seed={seed}, sigma={sigma}, chunk_s={chunk_s}, overlap_s={overlap_s}, "
+        f"device={worker_device or 'worker-selected'}, timeout={effective_timeout_s:.10g}s"
     )
 
     with tempfile.TemporaryDirectory(prefix="senselab-driftse-") as tmpdir:
@@ -359,14 +447,7 @@ def enhance_audios_with_driftse(
         for i, audio in enumerate(mono_16k):
             in_path = str(tmp / f"in_{i}.wav")
             out_path = str(tmp / f"out_{i}.wav")
-            # Not Audio.save_to_file: that writes PCM_16 for a .wav, which clips the input
-            # before the worker ever reads it.
-            sf.write(
-                in_path,
-                audio.waveform.squeeze(0).detach().cpu().numpy(),
-                audio.sampling_rate,
-                subtype=_WAV_SUBTYPE,
-            )
+            audio.save_to_file(in_path)
             in_paths.append(in_path)
             out_paths.append(out_path)
 
@@ -384,18 +465,31 @@ def enhance_audios_with_driftse(
                 "sigma": sigma,
                 "chunk_s": chunk_s,
                 "overlap_s": overlap_s,
-                "wav_subtype": _WAV_SUBTYPE,
+                "io_dir": stage_portable_audio_io(tmp),
+                "device": worker_device,
             }
         )
 
-        result = subprocess.run(
-            [python, "-c", _WORKER_SCRIPT],
-            input=input_json,
-            capture_output=True,
-            text=True,
-            timeout=1800,
-            env=_clean_subprocess_env(),
-        )
+        try:
+            result = subprocess.run(
+                [python, "-c", _WORKER_SCRIPT],
+                input=input_json,
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout_s,
+                env=_clean_subprocess_env(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            completed = sum(1 for path in out_paths if Path(path).is_file())
+            total_input_s = sum(int(a.waveform.shape[-1]) for a in mono_16k) / 16000
+            raise RuntimeError(
+                f"DriftSE worker exceeded its {effective_timeout_s:.10g}s ceiling with "
+                f"{completed}/{len(out_paths)} output(s) written, enhancing {len(mono_16k)} input(s) "
+                f"({total_input_s:.1f}s of audio at 16000 Hz, {total_windows} window(s) of "
+                f"{chunk_s:g}s) with variant={variant!r}, "
+                f"device={worker_device or 'worker-selected'}. The written outputs are discarded "
+                f"with the worker's temporary directory; pass timeout_s to raise the ceiling."
+            ) from exc
         output = parse_subprocess_result(result, venv_label="DriftSE")
 
         # Read outputs back while the temp dir is still alive: Audio(filepath=...) lazy-loads on

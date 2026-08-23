@@ -18,6 +18,15 @@ from typing import Optional
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
+from senselab.utils.clearvoice import (
+    CLEARVOICE_PYTHON,
+    CLEARVOICE_REQUIREMENTS,
+    CLEARVOICE_VENV,
+    SPEECHSCORE_PYTHON,
+    SPEECHSCORE_REQUIREMENTS,
+    SPEECHSCORE_VENV,
+)
+
 
 @dataclass
 class VersionRange:
@@ -90,6 +99,9 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         install_hint="pip install senselab",
     ),
     # ── Audio: Speech Enhancement ──
+    # NOTE: documents the default in-process backend (SpeechBrain) only. enhance_audios also
+    # dispatches by model id to DriftSE and to ClearVoice, both ISOLATED subprocess venvs
+    # (venv_name="driftse" / "clearvoice"). Same flat-schema limitation as the diarization entry.
     "audio.tasks.speech_enhancement.enhance_audios": CompatibilityEntry(
         required_deps=["speechbrain", "torchaudio"],
         dep_versions={"speechbrain": ">=1.0", "torchaudio": ">=2.8"},
@@ -114,6 +126,26 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         required_deps=["transformers"],
         dep_versions={"transformers": ">=5.0"},
         install_hint="pip install senselab",
+    ),
+    # ── Audio: Health Acoustics (ISOLATED — google/hear's TF SavedModels in the "hear" venv) ──
+    # Both entries describe the same venv because both capabilities are one repository staged once:
+    # the encoder is its root SavedModel and the event detector a subdirectory of it. No torch or
+    # torchaudio spec, so ensure_venv skips the CUDA probe and the PyTorch wheel index for this venv.
+    "audio.tasks.health_acoustics.extract_hear_embeddings_from_audios": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name="hear",
+        venv_python="3.11",
+        venv_requirements=["tensorflow>=2.16,<3", "numpy", "soundfile"],
+        install_hint="Automatically provisioned in isolated environment; needs HF access to the gated google/hear",
+    ),
+    "audio.tasks.health_acoustics.detect_health_acoustic_events": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name="hear",
+        venv_python="3.11",
+        venv_requirements=["tensorflow>=2.16,<3", "numpy", "soundfile"],
+        install_hint="Automatically provisioned in isolated environment; needs HF access to the gated google/hear",
     ),
     # ── Audio: Forced Alignment ──
     "audio.tasks.forced_alignment.align_transcriptions": CompatibilityEntry(
@@ -181,6 +213,33 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         required_deps=["torchaudio"],
         dep_versions={"torchaudio": ">=2.8"},
         install_hint="pip install senselab",
+    ),
+    # ── Audio: Features Extraction (SpeechScore — ISOLATED, pinned sparse clone) ──
+    "audio.tasks.features_extraction.extract_speechscore_metrics_from_audios": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name=SPEECHSCORE_VENV,
+        venv_requirements=SPEECHSCORE_REQUIREMENTS,
+        venv_python=SPEECHSCORE_PYTHON,
+        install_hint="Automatically provisioned in isolated environment; git must be on PATH",
+    ),
+    # ── Audio: Speech Super-Resolution (ISOLATED — clearvoice in a subprocess venv) ──
+    "audio.tasks.speech_super_resolution.super_resolve_audios": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name=CLEARVOICE_VENV,
+        venv_requirements=CLEARVOICE_REQUIREMENTS,
+        venv_python=CLEARVOICE_PYTHON,
+        install_hint="Automatically provisioned in isolated environment",
+    ),
+    # ── Audio: Target Speaker Extraction (ISOLATED — clearvoice; needs ffmpeg on PATH) ──
+    "audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos": CompatibilityEntry(
+        required_deps=[],
+        isolated=True,
+        venv_name=CLEARVOICE_VENV,
+        venv_requirements=CLEARVOICE_REQUIREMENTS,
+        venv_python=CLEARVOICE_PYTHON,
+        install_hint="Automatically provisioned in isolated environment; ffmpeg must be on PATH",
     ),
     # ── Video: Pose Estimation ──
     "video.tasks.pose_estimation.estimate_pose": CompatibilityEntry(
@@ -361,10 +420,15 @@ def get_matrix() -> dict[str, CompatibilityEntry]:
     return COMPATIBILITY_MATRIX
 
 
+# Repo-relative path of the document ``generate_matrix_markdown`` produces. The hand-maintained
+# ``docs/compatibility-matrix.md`` is a different document and is not written by any generator.
+GENERATED_DOC = "docs/function-dependencies.md"
+
+
 def generate_matrix_markdown() -> str:
-    """Generate a markdown table from the compatibility matrix."""
+    """Return the per-function dependency table as markdown, for ``GENERATED_DOC``."""
     lines = [
-        "# Senselab Compatibility Matrix",
+        "# Senselab Function Dependencies",
         "",
         "| Function | Required Deps | Dep Versions | GPU | Isolated | Python | Torch |",
         "|----------|--------------|-------------|-----|----------|--------|-------|",

@@ -206,3 +206,32 @@ directly (optionally passing an `HFModel` whose id starts with `sensein/unasdiff
 containment check — there is exactly one backend today). It is not in any default model list and
 `scripts/analyze_audio.py` never reaches it. The licensing position above is the reason: an
 unresolved licence request must not end up load-bearing in a default pipeline.
+
+## ClearVoice MossFormer2_SS_16K
+
+[ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio)'s two-speaker separator
+(Apache-2.0), in an isolated subprocess venv. Upstream's SI-SNRi leads SepFormer on LRS2-2Mix
+(15.5 against 13.5) and matches SPMamba on WHAM! (17.4).
+
+```python
+from senselab.audio.tasks.source_separation import separate_audios
+from senselab.utils.data_structures import HFModel
+
+sources = separate_audios(audios, model=HFModel(path_or_uri="alibabasglab/MossFormer2_SS_16K"))
+```
+
+Two things a caller needs to know, neither in upstream's documentation:
+
+- **It separates speakers, not classes.** Measured on a recording with four verified cough bursts, it
+  assigned each burst to whichever of its two slots was free rather than isolating cough as a class.
+  Nothing downstream should read slot 0 as "speech" and slot 1 as "everything else".
+- **Its sources are not at the input's level.** Upstream RMS-normalises this checkpoint's input to
+  −25 dBFS and then, on the multi-source branch only, never applies the inverse. senselab reproduces
+  that rather than silently correcting it, so numbers agree with upstream's own tool, and reports the
+  scalar: every returned `Audio` carries `metadata["clearvoice"]["input_norm_scalar"]` and
+  `input_norm_applied_to_output: false`. Multiply by the scalar to restore the input's level.
+
+`n_sources` is fixed at 2 by the checkpoint, and `mode` / `source_classes` / `seed` /
+`diffusion_steps` describe unasdiff's priors — passing any of them with this model raises rather than
+being ignored. Each returned `Audio` records the resolved commit its weights came from; see
+`specs/20260819-clearvoice-integration/design.md`.
