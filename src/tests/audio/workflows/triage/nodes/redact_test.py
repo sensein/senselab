@@ -525,3 +525,27 @@ def test_the_store_records_the_three_activities_the_spans_and_every_read(
         store.get_agent(a).model_id for a in store.associated_with(verify_act.id) if store.get_agent(a).model_id
     }
     assert model_agents == {CW, QW}, "verification is answerable to the recognizers it re-ran"
+
+
+def test_a_recognizer_whose_asr_died_in_preprocess_still_degrades_the_check(
+    make_redact_run: MakeRedactRun, tmp_path: Path
+) -> None:
+    """A recognizer that wrote no word must not vanish from the expected set.
+
+    Deriving the expected set from words made a dead recognizer indistinguishable from one that
+    was never declared, so verification on one of two recognizers read as undegraded and released
+    the pair. The expected set is PREPROCESS's declared systems.
+    """
+    store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), wordless=(QW,))
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FLAG, "one of two recognizers is a degraded check, never a pass"
+    assert _verdict(store, result)["verify_systems"] == [CW]
+    assert _verdict(store, result)["expected_source"] == "preprocess"
+    assert QW in result.verdict.why, "the recognizer that could not be re-run is named"
+
+
+def test_the_expected_set_falls_back_to_words_and_says_so(make_redact_run: MakeRedactRun, tmp_path: Path) -> None:
+    """A store carrying no PREPROCESS declaration is read from its words, and the verdict records that."""
+    store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), declared=False)
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert _verdict(store, result)["expected_source"] == "words"

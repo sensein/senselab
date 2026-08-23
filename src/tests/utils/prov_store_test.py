@@ -352,3 +352,17 @@ class TestSpeechStoreAdditions:
         generated = store.generated_by(eid)
         assert generated is not None
         assert store.get_activity(generated).node == "SPEECH"
+
+
+class TestActivityReads:
+    """Activities are readable as a set, the way entities are."""
+
+    def test_activities_return_all_or_one_node(self) -> None:
+        """A reader asking which nodes ran needs the activities without touching a private field."""
+        s = _store()
+        first = s.activity(node="AIRWAY", step="classify", parameters={})
+        second = s.activity(node="AIRWAY", step="confirm", parameters={})
+        third = s.activity(node="SPEECH", step="transcript", parameters={})
+        assert {a.id for a in s.activities()} == {first, second, third}
+        assert {a.id for a in s.activities("AIRWAY")} == {first, second}
+        assert s.activities("VOICE") == []

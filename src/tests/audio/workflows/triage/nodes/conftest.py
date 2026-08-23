@@ -487,7 +487,10 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
     verdict entity carrying ``target_speaker`` and flagging only that speaker's findings, so a
     speaker-scoped reader has something to scope by. Both recognizers' PREPROCESS word entities and
     model agents are always written so verification can name them; ``commitless`` names recognizers
-    whose model agent records no commit. ``config_yaml`` is the production override mechanism,
+    whose model agent records no commit and ``wordless`` names recognizers whose ASR died inside
+    PREPROCESS, leaving the activity and the agent but no word and a PREPROCESS verdict listing the
+    step absent. ``declared`` False writes those activities without the ``model`` parameter, as a
+    store whose declaration cannot be read. ``config_yaml`` is the production override mechanism,
     defaulting to the one unmeasured key every REDACT test needs.
     """
 
@@ -501,6 +504,8 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         scan_failed: tuple[str, ...] = (),
         target: str | None = None,
         commitless: tuple[str, ...] = (),
+        wordless: tuple[str, ...] = (),
+        declared: bool = True,
         config_yaml: str = "redaction:\n  padding_ms: 50\n",
     ) -> tuple[ProvStore, TriageConfig, Path]:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
@@ -527,12 +532,31 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
                 agent = store.agent(agent_type="model", model_id=model_id, unresolved_reason="offline load")
             else:
                 agent = store.agent(agent_type="model", model_id=model_id, commit_sha=sha)
-            asr_act = store.activity(node="PREPROCESS", step=f"asr:{model_id}", parameters={"model": model_id})
+            asr_act = store.activity(
+                node="PREPROCESS", step=f"asr:{model_id}", parameters={"model": model_id} if declared else {}
+            )
             store.was_associated_with(asr_act, agent)
+            if model_id in wordless:
+                continue
             raw_id = store.entity(
                 prov_type="word", extent=(0.2, 0.5), attributes={"text": "hello", "recognizer": model_id}
             )
             store.was_generated_by(raw_id, asr_act)
+
+        if wordless:
+            absent_verdict = store.entity(
+                prov_type="verdict",
+                extent=None,
+                attributes={
+                    "node": "PREPROCESS",
+                    "outcome": "pass",
+                    "kind": None,
+                    "why": "conditioning complete; absent derivatives are listed",
+                    "absent": {f"asr:{model_id}": "RuntimeError" for model_id in wordless},
+                    "derivatives": {},
+                },
+            )
+            store.was_generated_by(absent_verdict, pre)
 
         speech_act = store.activity(node="SPEECH", step="identify", parameters={})
         pii_act = store.activity(node="SPEECH", step="pii", parameters={})

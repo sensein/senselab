@@ -5,7 +5,9 @@ by ``plan_redactions``; the margin is the ``redaction.padding_ms`` config key, w
 ``data/config/default.yaml`` and which must be a non-negative whole number of milliseconds.
 Verification re-runs the recognizers PREPROCESS used, at their recorded commits, plus the PII scan
 over the redacted audio and transcript; the verdict records ``audio_check: "bounded"`` (see
-``specs/20260817-triage-workflow-dag/redact.md``). A store whose ``pii_scan`` measurement records a
+``specs/20260817-triage-workflow-dag/redact.md``). The set it is measured against is the one
+PREPROCESS declared in its own activities, with the word-derived set as the fallback and
+``expected_source`` naming which was read. A store whose ``pii_scan`` measurement records a
 failed or absent detector is unchecked rather than clean, and verification over a scan in which no
 detector ran is not a result. Artifacts are written only on verified success, into a directory
 disjoint from the run directory, and carry no store element id.
@@ -37,6 +39,8 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REDACT"
 
 _PADDING_KEY = "redaction.padding_ms"
+_PREPROCESS_NODE = "PREPROCESS"  # whose activities declare the recognizer set, a node name not a value
+_MODEL_PARAMETER = "model"  # the activity parameter PREPROCESS's recognizer steps name their model in
 _RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not a threshold
 _UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
 
@@ -185,36 +189,65 @@ def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, s
     return _Verification(verified=not survived, survived=survived, scan_ran=True)
 
 
-def _asr_models(store: ProvStore) -> tuple[list[tuple[str, str]], list[str]]:
-    """The recognizers with words in the store, and which of them carry a resolved commit (N14).
+def _declared_recognizers(store: ProvStore) -> list[str]:
+    """The recognizers PREPROCESS declared, read from its own activities rather than from words.
+
+    A PREPROCESS activity naming a model in its parameters and running under that model's agent is
+    a declared recognizer whether or not it went on to write a word.
 
     Args:
         store: The provenance store.
 
     Returns:
-        ``([(model_id, commit_sha), ...], [model_id, ...])`` — the re-runnable pairs and every
-        recognizer PREPROCESS used, both sorted by model id.
+        The declared model ids, sorted; empty when the store carries no such declaration.
+    """
+    declared: set[str] = set()
+    for activity in store.activities(_PREPROCESS_NODE):
+        model_id = activity.parameters.get(_MODEL_PARAMETER)
+        if model_id is None:
+            continue
+        for agent_id in store.associated_with(activity.id):
+            agent = store.get_agent(agent_id)
+            if agent.agent_type == "model" and agent.model_id == str(model_id):
+                declared.add(str(model_id))
+    return sorted(declared)
+
+
+def _asr_models(store: ProvStore) -> tuple[list[tuple[str, str]], list[str], str]:
+    """The re-runnable recognizers and the set they are expected to cover (N14).
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``([(model_id, commit_sha), ...], [model_id, ...], source)`` — the re-runnable pairs, every
+        recognizer verification is expected to cover, and where that expected set came from:
+        ``"preprocess"`` for the node's own declaration, ``"words"`` when the store carries none and
+        only the recognizers that wrote a word can be named.
 
     Raises:
         ValueError: If no word entity leads to a model agent with a resolved commit — verification
             cannot re-run recognizers it cannot name.
     """
     pairs: dict[str, str] = {}
-    recognizers: set[str] = set()
+    wrote_words: set[str] = set()
     for word in store.entities("word"):
         recognizer = word.attributes.get("recognizer")
         activity_id = store.generated_by(word.id)
-        if not recognizer or activity_id is None:
+        if not recognizer or activity_id is None or store.is_invalidated(word.id):
             continue
         for agent_id in store.associated_with(activity_id):
             agent = store.get_agent(agent_id)
             if agent.agent_type == "model" and agent.model_id == recognizer:
-                recognizers.add(str(recognizer))
+                wrote_words.add(str(recognizer))
                 if agent.commit_sha is not None:
                     pairs[str(recognizer)] = agent.commit_sha
     if not pairs:
         raise ValueError("no recognizer model agent with a resolved commit in the store; nothing can re-verify")
-    return sorted(pairs.items()), sorted(recognizers)
+    declared = _declared_recognizers(store)
+    if declared:
+        return sorted(pairs.items()), declared, "preprocess"
+    return sorted(pairs.items()), sorted(wrote_words), "words"
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -330,7 +363,7 @@ def redact(
     findings = _findings(store)
     extents = _extents_from_findings(findings)
     planned = plan_redactions(extents, padding_ms=padding_ms)
-    asr_models, recognizers = _asr_models(store)
+    asr_models, expected_recognizers, expected_source = _asr_models(store)
     stream_id, recording = resolve_stream(store, run_dir, source)
 
     software = software_agent(store)
@@ -377,7 +410,7 @@ def redact(
             model_agent = store.agent(agent_type="model", model_id=model_id, commit_sha=commit_sha)
             store.was_associated_with(verify_act, model_agent)
         checked = _verify(redacted, transcript_text, asr_models)
-    unverifiable = sorted(set(recognizers) - set(verify_systems))
+    unverifiable = sorted(set(expected_recognizers) - set(verify_systems))
 
     artifacts: dict[str, Path] = {}
     if scan_incomplete:
@@ -394,7 +427,8 @@ def redact(
         outcome = Outcome.FLAG
         why = (
             "the redacted output re-scans clean, but verification re-ran only "
-            f"{', '.join(verify_systems)}; {', '.join(unverifiable)} records no commit to re-run at"
+            f"{', '.join(verify_systems)}; {', '.join(unverifiable)} wrote no word at a resolved commit "
+            "to re-run at"
         )
         artifacts = _write_artifacts(redacted, transcript_text, artifacts_dir)
     else:
@@ -416,6 +450,8 @@ def redact(
             "verified": checked.verified,
             "survived": checked.survived,
             "verify_systems": verify_systems,
+            "expected_systems": expected_recognizers,
+            "expected_source": expected_source,
             "scan_failed": scan_failed,
             "unplaced_words_n": unplaced_n,
             "audio_check": "bounded",

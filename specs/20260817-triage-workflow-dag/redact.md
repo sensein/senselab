@@ -46,6 +46,16 @@ PII scan on its own output**, and:
 transcribe a region that still contains intelligible speech, so a clean re-scan is consistent with an
 incomplete redaction. Verification bounds the failure; it does not prove the negative.
 
+**The recognizer set verification is measured against comes from PREPROCESS's declaration, not from
+the words in the store.** Deriving it from words failed open: a recognizer whose ASR raised inside
+PREPROCESS — which is a `pass` there, with the step named in the verdict's `absent` map — wrote no
+word, so it left the expected set entirely, `unverifiable` came out empty, and a check that ran on
+one of two recognizers reported itself undegraded and released the pair. The expected set is instead
+every PREPROCESS activity naming a model in its parameters and running under that model's agent,
+which exists whether or not the recognizer went on to transcribe. A store carrying no such
+declaration falls back to the word-derived set, and the verdict's `expected_source` says which of
+the two was read so a `pass` on the weaker basis is legible rather than silent.
+
 ## Two exfiltration paths that are not the artifact
 
 **An error message is a disclosure path.** `plan_redactions` refuses an invalid extent by raising with
