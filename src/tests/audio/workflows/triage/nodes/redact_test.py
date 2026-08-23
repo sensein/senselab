@@ -407,12 +407,35 @@ def test_one_reverifiable_recognizer_flags_rather_than_passes(make_redact_run: M
     assert QW in result.verdict.why, "the recognizer that could not be re-run is named too"
 
 
+def test_a_flag_withholds_the_pair_exactly_like_a_fail(make_redact_run: MakeRedactRun, tmp_path: Path) -> None:
+    """Only a pass produces a released pair.
+
+    The file-level fold maps FLAG to withheld, but the node wrote released/audio.wav anyway and
+    run.json named it, so six local files carried on disk a pair the graph had declined to clear.
+    """
+    store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), commitless=(QW,))
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FLAG
+    assert result.artifacts == {}, "a flag releases nothing"
+    assert not list((tmp_path / "release").glob("*")), "and writes nothing under the release directory"
+
+
+def test_a_flag_records_the_withholding_in_the_verdict(make_redact_run: MakeRedactRun, tmp_path: Path) -> None:
+    """An empty artifacts mapping is legible only if the verdict says the withholding was deliberate."""
+    store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), commitless=(QW,))
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert _verdict(store, result)["artifacts_withheld"] is True
+    assert QW in _verdict(store, result)["why"], "the why the withholding rests on stays in the verdict"
+
+
 def test_both_reverifiable_recognizers_pass_rather_than_flag(make_redact_run: MakeRedactRun, tmp_path: Path) -> None:
-    """The control for the degraded case: two of two is the undegraded check."""
+    """The control for the degraded case: two of two is the undegraded check, and it releases."""
     store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),))
     result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
     assert result.verdict.outcome is Outcome.PASS
     assert _verdict(store, result)["verify_systems"] == sorted([CW, QW])
+    assert result.artifacts.keys() == {"audio", "transcript"}, "a pass still releases the pair"
+    assert _verdict(store, result)["artifacts_withheld"] is False
 
 
 def test_zero_reverifiable_recognizers_raise_rather_than_release(
