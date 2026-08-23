@@ -4,8 +4,8 @@ The residual is a store fold: contiguous intervals where the envelope exceeds it
 airway-labelled spans, minus SPEECH's spans — an unlabelled span is not excluded. The gate is energy
 AND periodicity; runs are elementary; period marks are a point process per voiced run, absent outside
 runs. The onset is a period and the offset is a criterion, named apart in the span attributes. A
-residual interval shorter than the analysis window is pruned before analysis and counted in the
-verdict's ``short_intervals_n``.
+residual interval shorter than the shortest duration Praat's harmonicity accepts is pruned before
+analysis and counted in the verdict's ``short_intervals_n``.
 """
 
 from __future__ import annotations
@@ -202,6 +202,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     else:
         gate_interval = "partial"
     window_s = params["periods_per_window"] / params["f0_min_hz"]
+    min_analysis_s = (params["periods_per_window"] + 1.0) / params["f0_min_hz"]
 
     envelope_meas = find_measurement(store, "energy_envelope")
     if envelope_meas is None:
@@ -220,6 +221,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
             "rms_floor": params["rms_floor"],
             "hop_s": params["hop_s"],
             "window_s": window_s,
+            "min_analysis_s": min_analysis_s,
             "period_doubling_factor": params["doubling"],
             "gate_interval": gate_interval,
         },
@@ -245,13 +247,13 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     energetic = _contiguous_true(envelope > floor, envelope_rate)
     claimed = [extent for extent, _, _ in labelled] + [span.extent for span in speech if span.extent is not None]
     unclaimed = _subtract_intervals(energetic, claimed)
-    residual = [(start, end) for start, end in unclaimed if end - start >= window_s]
+    residual = [(start, end) for start, end in unclaimed if end - start >= min_analysis_s]
     short_intervals_n = len(unclaimed) - len(residual)
     hint_declares = _hint_declares_voice(hint, params["hint_tags"])
 
     if not residual:
         if unclaimed:
-            why = "every residual interval is shorter than the analysis window"
+            why = "every residual interval is shorter than the minimum analysable duration"
         elif energetic:
             why = "every energetic interval is claimed by another branch"
         else:
