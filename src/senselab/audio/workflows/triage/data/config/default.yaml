@@ -126,6 +126,11 @@ derivation: |
   CrisperWhisper's bracketed non-lexical tokens). Not fitted; overridable. benchmarks/taxonomy.md
   records why no single AudioSet roll-up label exists.
 
+  Taxonomy ast_frame_s 10.24 s -- an architectural constant of AST at 16 kHz, not a tuned value:
+  the model's fixed input is 1024 mel frames at a 10 ms hop, so every file-level score it emits was
+  computed over one 10.24 s analysis frame. Recorded on the AST member -- including an abstained
+  one, whose inference still ran -- so the score it measured names the frame it was measured over.
+
 resample:
   target_hz: 16000
 
@@ -198,6 +203,7 @@ taxonomy:
     yamnet: 0.5
     ast: null
     hear: 0.5
+  ast_frame_s: 10.24
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
   audioset_speech_labels: [Speech]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]

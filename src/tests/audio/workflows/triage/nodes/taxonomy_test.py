@@ -166,6 +166,45 @@ class TestTheFold:
         assert result.kinds["airway"] == "undecided"
         assert result.verdict.outcome is Outcome.FLAG
 
+    def test_two_of_three_present_without_min_families_is_undecided_and_flags(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_detectors: dict[str, Any],
+    ) -> None:
+        """Two families present and one absent is not unanimity, so the unmeasured count stays honest."""
+        mock_detectors["hear"]["Cough"] = 0.9
+        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
+        result = taxonomy(store, "plain", config, run_dir=tmp_path)
+        airway = _kind(store, "airway")
+        assert airway.attributes["families"]["A_audioset"]["state"] == "present"
+        assert airway.attributes["families"]["C_health"]["state"] == "present"
+        assert airway.attributes["families"]["B_lexical"]["state"] == "absent"
+        assert result.kinds["airway"] == "undecided"
+        assert result.verdict.outcome is Outcome.FLAG
+
+    def test_two_family_a_members_agreeing_count_as_one_family(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_detectors: dict[str, Any],
+    ) -> None:
+        """YAMNet and AST both present is one family's vote, so min_families = 2 is not met."""
+        override = tmp_path / "override.yaml"
+        override.write_text("taxonomy:\n  presence_floor:\n    ast: 0.5\n  min_families:\n    airway: 2\n")
+        config = load_triage_config(override)
+        mock_detectors["ast"]["Cough"] = 0.99
+        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
+        result = taxonomy(store, "plain", config, run_dir=tmp_path)
+        family_a = _kind(store, "airway").attributes["families"]["A_audioset"]
+        assert family_a["members"]["yamnet"]["state"] == "present"
+        assert family_a["members"]["ast"]["state"] == "present"
+        assert family_a["state"] == "present"
+        assert result.kinds["airway"] == "undecided"
+
     def test_a_min_families_override_applies_the_design_rule(
         self,
         store: ProvStore,
@@ -250,6 +289,24 @@ class TestMembersAndArguments:
         family_a = _kind(store, "airway").attributes["families"]["A_audioset"]
         assert family_a["members"]["ast"]["state"] == "abstained"
         assert family_a["state"] == "present"  # YAMNet's vote carries the family
+
+    def test_an_abstained_ast_member_still_records_what_it_measured(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_store: Callable[..., dict],
+        mock_detectors: dict[str, Any],
+    ) -> None:
+        """AST's inference ran, so the abstained member carries its score, label and analysis frame."""
+        mock_detectors["ast"]["Cough"] = 0.99
+        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        member = _kind(store, "airway").attributes["families"]["A_audioset"]["members"]["ast"]
+        assert member["state"] == "abstained"
+        assert member["max_score"] == pytest.approx(0.99)
+        assert member["label"] == "Cough"
+        assert member["frame_s"] == config.require("taxonomy.ast_frame_s") == 10.24
 
     def test_model_arguments_are_explicit(
         self,
