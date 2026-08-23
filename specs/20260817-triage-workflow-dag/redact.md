@@ -50,9 +50,19 @@ incomplete redaction. Verification bounds the failure; it does not prove the neg
 before reading the scan evidence, and that resolution raises when nothing can re-verify — so a
 recording with no speech, whose SPEECH run wrote a scan saying nobody scanned, raised instead of
 withholding. That made the empty scan inert on exactly the recordings it exists for. Scan evidence is
-now read first: an incomplete scan (a failed detector, or none that ran) concludes `fail` and
-withholds without naming any recognizer, and the verdict's `expected_source` records
-`not_required`. The zero-recognizer raise stays for a store whose scan *claims* completeness while
+now read first: an incomplete scan (a failed detector, a required detector that was never attempted,
+or none that ran) concludes `fail` and withholds without naming any recognizer, and the verdict's
+`expected_source` records `not_required`.
+
+**A required detector that was never ATTEMPTED must not read as complete.** `failed` only records a
+detector that ran and raised, so a detector nothing asked for left no trace: locally the scan ran
+`[presidio, rules]` with `failed={}` and REDACT released, while on the cluster the same recording
+attempted gliner, recorded its failure and withheld. Completeness is `required ⊆ scanned_by` **and**
+`failed` empty, where `required` is the config key `pii.required_detectors` (derivation in
+`data/config/default.yaml`); a detector in `required` but neither scanned nor failed lands in the
+verdict's `scan_missing`. The node's own re-scan over its output is judged by the same rule, since a
+re-scan that skipped a required detector reports no findings for the same reason a complete one
+would. The zero-recognizer raise stays for a store whose scan *claims* completeness while
 carrying no recognizer agent — that store is incoherent, and is a different thing from a complete
 store with nothing to scan.
 
@@ -101,7 +111,7 @@ redacted copy.
 
 ```
 artifacts: { audio?, transcript?, figure? }   # each redacted, each independently optional
-verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[], verify_systems[], scan_failed[], unplaced_words_n, audio_check, artifacts_withheld: bool }
+verdict:   { redactions_n, by_category{}, padding_ms, verified: bool, survived[], verify_systems[], scan_failed[], scan_missing[], required_detectors[], unplaced_words_n, audio_check, artifacts_withheld: bool }
 ```
 
 **Only a pass produces a released pair; a flag withholds exactly like a fail.** The node used to
@@ -114,7 +124,8 @@ but a pass `artifacts` is empty, nothing is written under the release directory,
 
 `verify_systems` names the recognizers verification actually re-ran; fewer than both of
 PREPROCESS's is a `flag`, never a silent degrade. `scan_failed` names detectors (never their
-messages). `unplaced_words_n` counts words released as `[UNPLACED]` because their extent is
+messages); `scan_missing` names the required detectors nothing attempted, and `required_detectors`
+names the set both were judged against, so a run made under a narrowed set says so. `unplaced_words_n` counts words released as `[UNPLACED]` because their extent is
 unknown — text of unknown location is never released verbatim. `audio_check` is the constant
 `"bounded"` on every path: verification bounds the audio failure, it never proves the negative —
 on the scan-incomplete path where no ASR re-ran, the discriminating facts are `verify_systems: []`

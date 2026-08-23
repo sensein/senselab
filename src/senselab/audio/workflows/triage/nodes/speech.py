@@ -105,6 +105,7 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
         "min_clip_run": int(config.require("disruptions.min_clip_run")),
         "min_dropout_ms": float(config.require("disruptions.min_dropout_ms")),
         "discontinuity_threshold": float(config.require("disruptions.discontinuity_threshold")),
+        "required_detectors": sorted(str(name) for name in config.require("pii.required_detectors")),
     }
     target = hint.target_speaker if hint is not None else None
     if target is not None and _target_refusal(target) is None:
@@ -217,14 +218,36 @@ def _failure_type(failure: str) -> str:
     return head if separator and head.isidentifier() else "type not recorded"
 
 
-def _decide_pii(findings: list[dict[str, Any]], failures: dict[str, str], target_speaker: str | None) -> list[str]:
+def _missing_detectors(required: list[str], scanned_by: set[str], failures: dict[str, str]) -> list[str]:
+    """The required detectors that neither scanned nor recorded a failure, sorted.
+
+    Args:
+        required: The detector set ``pii.required_detectors`` names.
+        scanned_by: The detectors that ran.
+        failures: The detectors that were attempted and failed.
+
+    Returns:
+        The detector names that were never attempted, sorted.
+    """
+    return sorted(set(required) - scanned_by - set(failures))
+
+
+def _decide_pii(
+    findings: list[dict[str, Any]],
+    failures: dict[str, str],
+    missing: list[str],
+    target_speaker: str | None,
+) -> list[str]:
     """This branch's own rule over ``scan_for_pii``'s evidence — not ``decide_pii``'s.
 
     Flags when a finding overlaps the target speaker's words, when no target is known and anything
-    was found, or when any detector failed: could-not-check is not clean. A failure is projected to
-    its detector and exception type; its message may quote the scanned input.
+    was found, when any detector failed, or when a required detector was never attempted:
+    could-not-check is not clean either way. A failure is projected to its detector and exception
+    type; its message may quote the scanned input.
     """
     reasons: list[str] = []
+    for detector in missing:
+        reasons.append(f"required pii detector {detector} was not attempted; the scan could not check for it")
     for detector, failure in sorted(failures.items()):
         reasons.append(f"pii detector {detector} did not run ({_failure_type(failure)})")
     if findings and target_speaker is None:
@@ -301,7 +324,14 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         empty_pii = store.activity(node=NODE, step="pii", parameters={"systems": [CRISPERWHISPER_ID, QWEN_ID]})
         store.was_associated_with(empty_pii, software)
         empty_scan_id = store.entity(
-            prov_type="measurement", extent=None, attributes={"name": "pii_scan", "scanned_by": [], "failed": []}
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "pii_scan",
+                "scanned_by": [],
+                "failed": [],
+                "missing": list(values["required_detectors"]),
+            },
         )
         store.was_generated_by(empty_scan_id, empty_pii)
         store.was_attributed_to(empty_scan_id, software)
@@ -317,7 +347,13 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
                 "speaker_count": 0,
                 "words_n": 0,
                 "speech_s": 0.0,
-                "pii": {"categories": [], "n": 0, "scanned_by": [], "failed": []},
+                "pii": {
+                    "categories": [],
+                    "n": 0,
+                    "scanned_by": [],
+                    "failed": [],
+                    "missing": list(values["required_detectors"]),
+                },
                 "flags": flags,
                 "second_diarizer": "not_consulted",
                 "agreement_flag": "not_evaluated",
@@ -716,11 +752,17 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
                     store.was_derived_from(mark_id, word_ids[i])
                     view.append(mark_id)
             findings.append({"category": finding.category, "speaker": speaker, "resolved": resolved})
-    flags.extend(_decide_pii(findings, failures, target_speaker))
+    missing = _missing_detectors(values["required_detectors"], scanned_by, failures)
+    flags.extend(_decide_pii(findings, failures, missing, target_speaker))
     scan_id = store.entity(
         prov_type="measurement",
         extent=None,
-        attributes={"name": "pii_scan", "scanned_by": sorted(scanned_by), "failed": sorted(failures)},
+        attributes={
+            "name": "pii_scan",
+            "scanned_by": sorted(scanned_by),
+            "failed": sorted(failures),
+            "missing": missing,
+        },
     )
     store.was_generated_by(scan_id, pii_act)
     store.was_attributed_to(scan_id, software)
@@ -778,6 +820,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
             "n": len(findings),
             "scanned_by": sorted(scanned_by),
             "failed": sorted(failures),
+            "missing": missing,
         },
         "flags": flags,
         "second_diarizer": second_record,

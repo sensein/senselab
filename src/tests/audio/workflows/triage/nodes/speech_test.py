@@ -19,7 +19,7 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.nodes import speech as speech_module
 from senselab.audio.workflows.triage.nodes.common import find_measurement
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, flatten_script_line
+from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors, flatten_script_line
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
 
@@ -437,6 +437,63 @@ def test_pii_decision_is_speaker_scoped(seed_speech_store: SeedSpeechStore, monk
     store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
     result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     assert any("gliner" in f for f in _pii_flags(store, result)), "could not check is not clean"
+
+
+def test_a_required_detector_that_never_ran_flags_could_not_check(
+    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A detector neither scanned nor failed is recorded as missing, and the scan is incomplete.
+
+    Locally gliner was never attempted, so ``failed`` was empty and the scan claimed completeness;
+    on the cluster the same recording attempted it and recorded the failure. "Complete" must not
+    depend on which host ran it.
+    """
+    monkeypatch.setattr(
+        speech_module,
+        "scan_for_pii",
+        lambda inputs, **kw: [PiiScan(spans=[], detectors_used=["presidio", "rules"], failures={}) for _ in inputs],
+    )
+    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.FLAG
+    flags = store.get_entity(result.verdict_entity_id).attributes["flags"]
+    assert any("gliner" in flag and "pii" in flag for flag in flags), "never attempted is not clean"
+    scan = find_measurement(store, "pii_scan")
+    assert scan is not None
+    assert scan.attributes["missing"] == ["gliner"]
+    assert scan.attributes["failed"] == [], "never attempted is not the same as attempted and failed"
+
+
+def test_narrowing_the_required_set_makes_the_same_scan_complete(
+    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The required set is a config key, so an operator running two detectors can say so."""
+    monkeypatch.setattr(
+        speech_module,
+        "scan_for_pii",
+        lambda inputs, **kw: [PiiScan(spans=[], detectors_used=["presidio", "rules"], failures={}) for _ in inputs],
+    )
+    store, cfg, run_dir = seed_speech_store(
+        WORDS,
+        WORDS,
+        config_yaml="speech:\n  word_gap_ms: 300\npii:\n  required_detectors: [presidio, rules]\n",
+    )
+    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    assert result.verdict.outcome is Outcome.PASS
+    scan = find_measurement(store, "pii_scan")
+    assert scan is not None
+    assert scan.attributes["missing"] == []
+
+
+def test_the_no_words_path_records_every_required_detector_as_missing(
+    seed_speech_store: SeedSpeechStore,
+) -> None:
+    """Nothing was scanned there, so nothing required was met — the measurement must say so."""
+    store, cfg, run_dir = seed_speech_store([], [])
+    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    scan = find_measurement(store, "pii_scan")
+    assert scan is not None
+    assert scan.attributes["missing"] == default_detectors()
 
 
 def test_pii_entities_and_verdict_never_carry_matched_text(
