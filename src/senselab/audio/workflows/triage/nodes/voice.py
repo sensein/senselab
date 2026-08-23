@@ -21,6 +21,7 @@ from senselab.audio.tasks.phonation import PeriodMark, f0_track, hnr_track, peri
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    clamp_extent,
     find_measurement,
     resolve_stream,
     software_agent,
@@ -302,7 +303,8 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     ambiguous_runs_n = 0
     marks_skipped_short_n = 0
 
-    for interval_start, interval_end in residual:
+    for raw_interval in residual:
+        interval_start, interval_end = clamp_extent(raw_interval, plain)
         i0, i1 = int(interval_start * sr), int(interval_end * sr)
         segment = Audio(waveform=plain.waveform[:, i0:i1], sampling_rate=sr)
         times_rel, hnr_db = hnr_track(

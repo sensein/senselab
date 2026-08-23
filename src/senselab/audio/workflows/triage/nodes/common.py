@@ -82,6 +82,37 @@ def write_verdict(
     return entity_id, NodeVerdict(node=node, outcome=outcome, kind=kind, why=why)
 
 
+def clamp_extent(extent: tuple[float, float], audio: Audio) -> tuple[float, float]:
+    """Bound an extent's end by the decoded audio, when the overshoot is under one sample period.
+
+    The tolerance is one sample period of ``audio``, which is a numerical identity rather than a
+    tunable: an end within one sample of the last sample names that same sample boundary.
+
+    Args:
+        extent: The ``(start, end)`` about to be sliced, in seconds.
+        audio: The audio being sliced; the length it decoded to is the bound.
+
+    Returns:
+        The extent, with ``end`` replaced by the audio's duration when it overshot within tolerance.
+
+    Raises:
+        ValueError: If ``end`` exceeds the duration by more than one sample period. The message
+            carries bounds only, never any text the extent covers.
+    """
+    start, end = float(extent[0]), float(extent[1])
+    sampling_rate = int(audio.sampling_rate)
+    duration = audio.waveform.shape[-1] / sampling_rate
+    if end <= duration:
+        return start, end
+    if (end - duration) * sampling_rate > 1.0:
+        raise ValueError(
+            f"extent ends at {end}s, past the {duration}s this audio decoded to by "
+            f"{(end - duration) * sampling_rate:.3f} samples; more than one sample period outside "
+            "the recording is an inconsistency, not rounding"
+        )
+    return start, duration
+
+
 def find_measurement(store: ProvStore, name: str) -> Entity | None:
     """The latest non-invalidated measurement entity carrying this name, or None.
 

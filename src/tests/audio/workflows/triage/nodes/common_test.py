@@ -6,7 +6,14 @@ from typing import Callable
 import numpy as np
 import pytest
 
-from senselab.audio.workflows.triage.nodes.common import find_measurement, resolve_stream, software_agent, write_verdict
+from senselab.audio.data_structures import Audio
+from senselab.audio.workflows.triage.nodes.common import (
+    clamp_extent,
+    find_measurement,
+    resolve_stream,
+    software_agent,
+    write_verdict,
+)
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
 
@@ -115,3 +122,63 @@ class TestResolveStream:
         store.was_invalidated_by(first, activity_id)
         found_id, _ = resolve_stream(store, tmp_path, "recording")
         assert found_id == second
+
+
+class TestClampExtent:
+    """A slice end past the decoded audio is float noise or an inconsistency, and the two differ."""
+
+    @staticmethod
+    def _audio(sampling_rate: int = 16000, seconds: float = 1.0) -> Audio:
+        """Silence of an exact whole number of samples, so its duration is exactly representable."""
+        samples = np.zeros((1, int(seconds * sampling_rate)), dtype=np.float32)
+        return Audio(waveform=samples, sampling_rate=sampling_rate)
+
+    def test_an_extent_inside_the_audio_is_returned_unchanged(self) -> None:
+        """The common case must not be perturbed by the clamp."""
+        assert clamp_extent((0.25, 0.75), self._audio()) == (0.25, 0.75)
+
+    def test_an_extent_ending_exactly_at_the_duration_is_returned_unchanged(self) -> None:
+        """The boundary itself is inside, so nothing is clamped and nothing is raised."""
+        assert clamp_extent((0.0, 1.0), self._audio()) == (0.0, 1.0)
+
+    def test_half_a_sample_past_the_duration_is_clamped(self) -> None:
+        """A word extent may exceed the decode by a float hair; that is a rounding artefact.
+
+        On the cluster (torch 2.11.0+cu130) this hair made ``extract_segments`` raise on a file
+        that ran clean locally, taking the whole SPEECH branch with it.
+        """
+        audio = self._audio()
+        clamped = clamp_extent((0.5, 1.0 + 0.5 / audio.sampling_rate), audio)
+        assert clamped == (0.5, 1.0)
+
+    def test_a_word_timestamps_own_rounding_step_is_inside_the_tolerance(self) -> None:
+        """``fuse_word_streams`` rounds word bounds to 1e-4 s, so the end it reports can overshoot.
+
+        Worst case is half that step, 5e-5 s, which is 0.8 of a sample at 16 kHz — a tolerance of
+        half a sample would leave exactly this case raising.
+        """
+        assert clamp_extent((0.5, 1.0 + 5e-5), self._audio()) == (0.5, 1.0)
+
+    def test_the_tolerance_follows_the_sampling_rate(self) -> None:
+        """One sample is a different number of seconds at 8 kHz, and the clamp must say so."""
+        overshoot = 0.9 / 8000
+        assert clamp_extent((0.5, 1.0 + overshoot), self._audio(sampling_rate=8000)) == (0.5, 1.0)
+        with pytest.raises(ValueError, match="past the"):
+            clamp_extent((0.5, 1.0 + overshoot), self._audio(sampling_rate=16000))
+
+    def test_more_than_one_sample_past_the_duration_raises(self) -> None:
+        """The tolerance is a boundary, not a direction: just past it is refused."""
+        audio = self._audio()
+        with pytest.raises(ValueError, match="past the"):
+            clamp_extent((0.5, 1.0 + 1.5 / audio.sampling_rate), audio)
+
+    def test_a_tenth_of_a_second_past_the_duration_still_raises(self) -> None:
+        """That far outside the recording is a real inconsistency, not float noise."""
+        with pytest.raises(ValueError, match="past the"):
+            clamp_extent((0.5, 1.1), self._audio())
+
+    def test_the_message_names_no_transcript_text(self) -> None:
+        """The extent's bounds are safe to log; nothing else about it is."""
+        with pytest.raises(ValueError) as raised:
+            clamp_extent((0.5, 1.1), self._audio())
+        assert "1.1" in str(raised.value) and "1.0" in str(raised.value)

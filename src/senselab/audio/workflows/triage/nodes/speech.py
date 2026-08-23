@@ -32,6 +32,7 @@ from senselab.audio.tasks.speech_to_text_ensemble.api import fuse_word_streams
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
+    clamp_extent,
     find_measurement,
     resolve_stream,
     software_agent,
@@ -379,7 +380,8 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
     squim_by_span: list[dict[str, Any]] = []
     span_ids: list[str] = []
     span_extents: list[tuple[float, float]] = []
-    for start, end, members in grouped:
+    for raw_start, raw_end, members in grouped:
+        start, end = clamp_extent((raw_start, raw_end), plain)
         clip = Audio(waveform=plain.waveform[:, int(start * sr) : int(end * sr)], sampling_rate=sr)
         squim: dict[str, Any]
         try:
@@ -423,7 +425,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         view.append(span_id)
 
     # Step 4 — diarize pyannote over [first word start, last word end] only; withdraw, never relabel.
-    interval = (min(float(w["start"]) for w in fused), max(float(w["end"]) for w in fused))
+    interval = clamp_extent((min(float(w["start"]) for w in fused), max(float(w["end"]) for w in fused)), plain)
     diarizer = _diarization_model()
     diarize_act = store.activity(
         node=NODE, step="diarize", parameters={"interval": list(interval), "model": str(diarizer.path_or_uri)}
@@ -605,9 +607,12 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
             labels = sorted({speaker for _, speaker, _ in surviving})
             audios: list[Audio] = []
             for label in labels:
-                slices = [
-                    plain.waveform[:, int(s * sr) : int(e * sr)] for _, speaker, (s, e) in surviving if speaker == label
-                ]
+                slices = []
+                for _, speaker, extent in surviving:
+                    if speaker != label:
+                        continue
+                    s, e = clamp_extent(extent, plain)
+                    slices.append(plain.waveform[:, int(s * sr) : int(e * sr)])
                 audios.append(Audio(waveform=torch.cat(slices, dim=1), sampling_rate=sr))
             embedding_agent = store.agent(
                 agent_type="model", model_id=str(probe.path_or_uri), commit_sha=probe.commit_sha
