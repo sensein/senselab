@@ -268,6 +268,10 @@ class ProvStore:
         """Return entities, optionally of one type."""
         return [e for e in self._entities.values() if prov_type is None or e.prov_type == prov_type]
 
+    def activities(self, node: str | None = None) -> list[Activity]:
+        """Return activities, optionally of one node."""
+        return [a for a in self._activities.values() if node is None or a.node == node]
+
     def _targets(self, relation: RELATION, source: str) -> list[str]:
         return [t for r, s, t in self._relations if r == relation and s == source]
 
