@@ -9,7 +9,8 @@ over the redacted audio and transcript; the verdict records ``audio_check: "boun
 PREPROCESS declared in its own activities, with the word-derived set as the fallback and
 ``expected_source`` naming which was read. A store whose ``pii_scan`` measurement records a
 failed or absent detector is unchecked rather than clean, and verification over a scan in which no
-detector ran is not a result. Artifacts are written only on verified success, into a directory
+detector ran is not a result — such a store withholds without needing any recognizer, since nothing
+has to be verified to refuse a release. Artifacts are written only on verified success, into a directory
 disjoint from the run directory, and carry no store element id.
 """
 
@@ -41,6 +42,7 @@ NODE = "REDACT"
 _PADDING_KEY = "redaction.padding_ms"
 _PREPROCESS_NODE = "PREPROCESS"  # whose activities declare the recognizer set, a node name not a value
 _MODEL_PARAMETER = "model"  # the activity parameter PREPROCESS's recognizer steps name their model in
+_NOT_REQUIRED = "not_required"  # the expected-set source when the scan already withholds the release
 _RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not a threshold
 _UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
 
@@ -344,8 +346,10 @@ def redact(
     Raises:
         ValueError: If ``redaction.padding_ms`` has no usable value (see :func:`_padding_ms`), if
             ``artifacts_dir`` and ``run_dir`` contain one another, if the store carries no PII scan
-            measurement (N15), or if a finding's category is unusable (see
-            :func:`_extents_from_findings`).
+            measurement (N15), if a finding's category is unusable (see
+            :func:`_extents_from_findings`), or if a scan claiming completeness has no re-runnable
+            recognizer (see :func:`_asr_models`) — an incoherent store, as distinct from a complete
+            store with nothing to scan, which concludes.
         LookupError: If no live stream carries ``source``.
     """
     padding_ms = _padding_ms(config)
@@ -363,7 +367,12 @@ def redact(
     findings = _findings(store)
     extents = _extents_from_findings(findings)
     planned = plan_redactions(extents, padding_ms=padding_ms)
-    asr_models, expected_recognizers, expected_source = _asr_models(store)
+    if scan_incomplete:
+        asr_models: list[tuple[str, str]] = []
+        expected_recognizers: list[str] = []
+        expected_source = _NOT_REQUIRED
+    else:
+        asr_models, expected_recognizers, expected_source = _asr_models(store)
     stream_id, recording = resolve_stream(store, run_dir, source)
 
     software = software_agent(store)

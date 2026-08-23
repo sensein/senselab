@@ -563,3 +563,19 @@ def test_the_expected_set_falls_back_to_words_and_says_so(make_redact_run: MakeR
     store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),), declared=False)
     result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
     assert _verdict(store, result)["expected_source"] == "words"
+
+
+def test_speechs_no_words_store_concludes_rather_than_raising(make_redact_run: MakeRedactRun, tmp_path: Path) -> None:
+    """The store a recording with no speech leaves: a scan nobody ran, no words, no recognizer agents.
+
+    Requiring a re-runnable recognizer before reading the scan evidence made SPEECH's empty scan
+    inert — the node raised before it could conclude, on exactly the recordings the empty scan was
+    written for. No verification is needed to refuse a release.
+    """
+    store, cfg, run_dir = make_redact_run(tmp_path, scanned_by=(), recognizers=False)
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FAIL
+    assert result.artifacts == {}
+    assert not (tmp_path / "release").exists(), "nothing verified, so nothing written"
+    assert _verdict(store, result)["expected_source"] == "not_required"
+    assert _verdict(store, result)["verify_systems"] == []

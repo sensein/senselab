@@ -46,6 +46,16 @@ PII scan on its own output**, and:
 transcribe a region that still contains intelligible speech, so a clean re-scan is consistent with an
 incomplete redaction. Verification bounds the failure; it does not prove the negative.
 
+**Refusing a release needs no recognizer.** The node used to resolve its re-runnable recognizers
+before reading the scan evidence, and that resolution raises when nothing can re-verify — so a
+recording with no speech, whose SPEECH run wrote a scan saying nobody scanned, raised instead of
+withholding. That made the empty scan inert on exactly the recordings it exists for. Scan evidence is
+now read first: an incomplete scan (a failed detector, or none that ran) concludes `fail` and
+withholds without naming any recognizer, and the verdict's `expected_source` records
+`not_required`. The zero-recognizer raise stays for a store whose scan *claims* completeness while
+carrying no recognizer agent — that store is incoherent, and is a different thing from a complete
+store with nothing to scan.
+
 **The recognizer set verification is measured against comes from PREPROCESS's declaration, not from
 the words in the store.** Deriving it from words failed open: a recognizer whose ASR raised inside
 PREPROCESS — which is a `pass` there, with the step named in the verdict's `absent` map — wrote no

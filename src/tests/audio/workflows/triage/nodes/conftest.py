@@ -490,7 +490,9 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
     whose model agent records no commit and ``wordless`` names recognizers whose ASR died inside
     PREPROCESS, leaving the activity and the agent but no word and a PREPROCESS verdict listing the
     step absent. ``declared`` False writes those activities without the ``model`` parameter, as a
-    store whose declaration cannot be read. ``config_yaml`` is the production override mechanism,
+    store whose declaration cannot be read. ``recognizers`` False writes no recognizer activity,
+    agent or word at all — the shape a recording with no speech leaves, where SPEECH's no-words path
+    wrote the scan and nothing else. ``config_yaml`` is the production override mechanism,
     defaulting to the one unmeasured key every REDACT test needs.
     """
 
@@ -506,6 +508,7 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         commitless: tuple[str, ...] = (),
         wordless: tuple[str, ...] = (),
         declared: bool = True,
+        recognizers: bool = True,
         config_yaml: str = "redaction:\n  padding_ms: 50\n",
     ) -> tuple[ProvStore, TriageConfig, Path]:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
@@ -527,7 +530,7 @@ def seed_redact_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         )
         store.was_generated_by(recording, pre)
 
-        for model_id, sha in ((CRISPERWHISPER_ID, "c" * 40), (QWEN_ID, "d" * 40)):
+        for model_id, sha in ((CRISPERWHISPER_ID, "c" * 40), (QWEN_ID, "d" * 40)) if recognizers else ():
             if model_id in commitless:
                 agent = store.agent(agent_type="model", model_id=model_id, unresolved_reason="offline load")
             else:
