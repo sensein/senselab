@@ -32,8 +32,6 @@ from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "AIRWAY"
 
-# The recognizer whose word entities carry lexical evidence: PREPROCESS's CrisperWhisper default.
-
 
 @dataclass(frozen=True)
 class AirwayResult(NodeResult):
