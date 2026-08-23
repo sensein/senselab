@@ -65,7 +65,8 @@ Agreement bounds confidence from above and is reported as agreement, never as co
 
 `fail` when neither recognizer returns a word: no speech was detected, so this branch has no subject.
 
-That path still writes the `pii_scan` measurement, with `scanned_by` and `failed` both empty. REDACT
+That path still writes the `pii_scan` measurement, with `scanned_by` and `failed` both empty and
+`missing` naming every required detector — nothing was scanned there, so nothing required was met. REDACT
 refuses a store carrying no scan measurement at all, so omitting it turned a recording that simply
 had no speech into a raise there; an empty scan instead lands on REDACT's existing incomplete-scan
 row, which withholds. The raise stays for a store that no SPEECH run touched.
@@ -141,10 +142,19 @@ evidence to record, not a threshold to apply here.
 | PII overlapping only a **non-target** speaker's spans | no flag |
 | PII when **no target is known** | **`flag`** — there is no speaker to exempt |
 | a detector **failed to run** | **`flag`** — "could not check" is not "clean" |
+| a **required** detector was **never attempted** | **`flag`** — same reason, and it is the silent one |
 
-`PiiScan.failures` exists for that last row and must be honoured: an empty `spans` with a populated
-`failures` means the scan did not happen, and reading it as a clean result is the one outcome worse than
-not scanning.
+`PiiScan.failures` exists for the failed-to-run row and must be honoured: an empty `spans` with a
+populated `failures` means the scan did not happen, and reading it as a clean result is the one outcome
+worse than not scanning.
+
+**The last row is the one that made "complete" depend on the host.** `failures` only records a detector
+that was *attempted*, so a detector that was never asked for, or that a guard skipped, left no trace at
+all: locally the scan ran `[presidio, rules]` with `failed={}` and read as complete, while on the cluster
+the same recording attempted gliner, recorded its failure and withheld. The required set is the config
+key `pii.required_detectors`, whose derivation is in `data/config/default.yaml`; completeness is
+`required ⊆ scanned_by` **and** `failed` empty, and a detector in `required` but neither scanned nor
+failed is recorded in the measurement's `missing` and flags.
 
 ### Three limits on what a clean scan means
 
@@ -214,7 +224,7 @@ same facts that can drift from the first.
 
 ```
 outcome:  fail(reason) | flag(reason, partial) | pass
-verdict:  { speaker_count, target_speaker?, words_n, speech_s, pii{categories[], n, scanned_by[], failed[]}, flags[] }
+verdict:  { speaker_count, target_speaker?, words_n, speech_s, pii{categories[], n, scanned_by[], failed[], missing[]}, flags[] }
 view:     the element ids this branch authored or asserted over
 figure:   one aligned figure per recording          # an artifact, not in the store
 ```

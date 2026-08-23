@@ -177,6 +177,18 @@ derivation: |
   computed over one 10.24 s analysis frame. Recorded on the AST member -- including an abstained
   one, whose inference still ran -- so the score it measured names the frame it was measured over.
 
+  pii.required_detectors [gliner, presidio, rules] -- vocabulary, not fitted: it is the output of
+  the pii_detection module's own default_detectors(), which is the set scan_for_pii runs when the
+  caller names none. Nothing about the list is measured; what it buys is that "the scan is complete"
+  stops depending on the host. A detector that was never ATTEMPTED recorded neither a scan nor a
+  failure, so two hosts disagreed silently about the same recording: one ran [presidio, rules] with
+  failed={} and read as complete, the other attempted gliner, recorded its failure and withheld.
+  Completeness is now required-subset-of-scanned AND failed empty, with a detector in required but
+  neither scanned nor failed recorded as missing. Narrowing the list is how an operator who runs
+  fewer detectors says so; the config_hash then names that choice. The local-LLM detector is
+  deliberately absent for the same reason it is absent from default_detectors(): it is never
+  default-on, so requiring it would make every scan incomplete.
+
   VOICE additions (plan-nodes-2 N21, N22, N25); period_doubling_factor and voice.hint_tags are
   derived in the paragraphs above. UNSET, continued:
     phonation.hnr_floor_interval_db, phonation.rms_floor_interval: the near-edge intervals were
@@ -288,6 +300,9 @@ disruptions:
   min_clip_run: 3
   min_dropout_ms: 10.0
   discontinuity_threshold: 0.5
+
+pii:
+  required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set
 
 redaction:
   padding_ms: null

@@ -7,12 +7,14 @@ Verification re-runs the recognizers PREPROCESS used, at their recorded commits,
 over the redacted audio and transcript; the verdict records ``audio_check: "bounded"`` (see
 ``specs/20260817-triage-workflow-dag/redact.md``). The set it is measured against is the one
 PREPROCESS declared in its own activities, with the word-derived set as the fallback and
-``expected_source`` naming which was read. A store whose ``pii_scan`` measurement records a
-failed or absent detector is unchecked rather than clean, and verification over a scan in which no
-detector ran is not a result — such a store withholds without needing any recognizer, since nothing
-has to be verified to refuse a release. Only a pass produces a released pair; a flag withholds
-exactly like a fail, and the verdict's ``artifacts_withheld`` records it. Artifacts are written into
-a directory disjoint from the run directory, and carry no store element id.
+``expected_source`` naming which was read. A scan is complete only when every detector
+``pii.required_detectors`` names is in ``scanned_by`` and nothing is in ``failed``; a required
+detector that was never attempted is recorded in ``scan_missing``. An incomplete scan is unchecked
+rather than clean, and verification over such a scan is not a result — such a store withholds
+without needing any recognizer, since nothing has to be verified to refuse a release. Only a pass
+produces a released pair; a flag withholds exactly like a fail, and the verdict's
+``artifacts_withheld`` records it. Artifacts are written into a directory disjoint from the run
+directory, and carry no store element id.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REDACT"
 
 _PADDING_KEY = "redaction.padding_ms"
+_REQUIRED_DETECTORS_KEY = "pii.required_detectors"
 _PREPROCESS_NODE = "PREPROCESS"  # whose activities declare the recognizer set, a node name not a value
 _MODEL_PARAMETER = "model"  # the activity parameter PREPROCESS's recognizer steps name their model in
 _NOT_REQUIRED = "not_required"  # the expected-set source when the scan already withholds the release
@@ -102,19 +105,22 @@ def _padding_ms(config: TriageConfig) -> int:
     return value
 
 
-def _scan_evidence(scan: Entity) -> tuple[list[str], list[str]]:
+def _scan_evidence(scan: Entity, required: list[str]) -> tuple[list[str], list[str], list[str]]:
     """What the store's ``pii_scan`` measurement says about its own completeness.
 
     Args:
         scan: The measurement entity.
+        required: The detector set ``pii.required_detectors`` names.
 
     Returns:
-        ``(scanned_by, failed)`` — the detector names that ran and those that did not, sorted. Only
-        names: a failure's message may quote the scanned input.
+        ``(scanned_by, failed, missing)`` — the detector names that ran, those that were attempted
+        and failed, and those required but never attempted, each sorted. Only names: a failure's
+        message may quote the scanned input.
     """
-    scanned_by = scan.attributes.get("scanned_by") or []
-    failed = scan.attributes.get("failed") or []
-    return sorted(str(name) for name in scanned_by), sorted(str(name) for name in failed)
+    scanned_by = sorted(str(name) for name in scan.attributes.get("scanned_by") or [])
+    failed = sorted(str(name) for name in scan.attributes.get("failed") or [])
+    missing = sorted(set(required) - set(scanned_by) - set(failed))
+    return scanned_by, failed, missing
 
 
 def _findings(store: ProvStore) -> list[Entity]:
@@ -169,17 +175,20 @@ def _verification_model(model_id: str, commit_sha: str) -> HFModel:
     return HFModel(path_or_uri=model_id, revision=commit_sha)
 
 
-def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]]) -> _Verification:
+def _verify(
+    redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]], required: list[str]
+) -> _Verification:
     """Re-run the recognizers and the scan on the node's own output.
 
     Args:
         redacted: The redacted audio.
         transcript_text: The redacted transcript.
         asr_models: ``(model_id, commit_sha)`` pairs read from the store's model agents.
+        required: The detector set ``pii.required_detectors`` names.
 
     Returns:
-        What the re-run established. Any finding anywhere fails; a scan with a failed detector or
-        with no detector at all did not run, which is not a clean result.
+        What the re-run established. Any finding anywhere fails; a scan with a failed detector, with
+        no detector at all, or missing a required one did not run, which is not a clean result.
     """
     hypotheses = []
     for model_id, commit_sha in asr_models:
@@ -187,7 +196,10 @@ def _verify(redacted: Audio, transcript_text: str, asr_models: list[tuple[str, s
         hypotheses.append(flatten_script_line(line))
     scans = scan_for_pii([*hypotheses, transcript_text])
     scans = scans if isinstance(scans, list) else [scans]
-    if any(s.failures or not s.detectors_used for s in scans):
+    incomplete = any(
+        s.failures or not s.detectors_used or set(required) - set(s.detectors_used) - set(s.failures) for s in scans
+    )
+    if incomplete:
         return _Verification(verified=False, survived=[], scan_ran=False)
     survived = sorted({span.category for s in scans for span in s.spans})
     return _Verification(verified=not survived, survived=survived, scan_ran=True)
@@ -355,6 +367,7 @@ def redact(
         LookupError: If no live stream carries ``source``.
     """
     padding_ms = _padding_ms(config)
+    required_detectors = sorted(str(name) for name in config.require(_REQUIRED_DETECTORS_KEY))
     run_resolved, release_resolved = run_dir.resolve(), artifacts_dir.resolve()
     if run_resolved.is_relative_to(release_resolved) or release_resolved.is_relative_to(run_resolved):
         raise ValueError(
@@ -364,8 +377,8 @@ def redact(
     scan_measurement = find_measurement(store, "pii_scan")
     if scan_measurement is None:
         raise ValueError("no PII scan measurement in the store (N15); an unscanned recording is unchecked, not clean")
-    scanned_by, scan_failed = _scan_evidence(scan_measurement)
-    scan_incomplete = bool(scan_failed) or not scanned_by
+    scanned_by, scan_failed, scan_missing = _scan_evidence(scan_measurement, required_detectors)
+    scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     extents = _extents_from_findings(findings)
     planned = plan_redactions(extents, padding_ms=padding_ms)
@@ -420,17 +433,29 @@ def redact(
         for model_id, commit_sha in asr_models:
             model_agent = store.agent(agent_type="model", model_id=model_id, commit_sha=commit_sha)
             store.was_associated_with(verify_act, model_agent)
-        checked = _verify(redacted, transcript_text, asr_models)
+        checked = _verify(redacted, transcript_text, asr_models, required_detectors)
     unverifiable = sorted(set(expected_recognizers) - set(verify_systems))
 
     artifacts: dict[str, Path] = {}
     if scan_incomplete:
         outcome = Outcome.FAIL
-        missing = f"detectors failed: {', '.join(scan_failed)}" if scan_failed else "no detector ran"
-        why = f"the store's pii scan is incomplete ({missing}); an unchecked recording is not a clean one (N15)"
+        reasons = []
+        if scan_failed:
+            reasons.append(f"detectors failed: {', '.join(scan_failed)}")
+        if scan_missing:
+            reasons.append(f"required detectors were not attempted: {', '.join(scan_missing)}")
+        if not scanned_by:
+            reasons.append("no detector ran")
+        why = (
+            f"the store's pii scan is incomplete ({'; '.join(reasons)}); "
+            "an unchecked recording is not a clean one (N15)"
+        )
     elif not checked.scan_ran:
         outcome = Outcome.FAIL
-        why = "verification did not run: no pii detector ran over the output; an unverified artifact is withheld (N16)"
+        why = (
+            "verification did not run: the re-scan over the output did not cover every required pii "
+            "detector; an unverified artifact is withheld (N16)"
+        )
     elif checked.survived:
         outcome = Outcome.FAIL
         why = "verification found pii on the redacted output: " + ", ".join(checked.survived)
@@ -463,6 +488,8 @@ def redact(
             "expected_systems": expected_recognizers,
             "expected_source": expected_source,
             "scan_failed": scan_failed,
+            "scan_missing": scan_missing,
+            "required_detectors": required_detectors,
             "unplaced_words_n": unplaced_n,
             "audio_check": "bounded",
             "artifacts_withheld": not artifacts,

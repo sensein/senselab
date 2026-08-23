@@ -10,6 +10,7 @@ import pytest
 import senselab.audio.tasks
 from senselab.audio.tasks.health_acoustics.hear import HEAR_WINDOW_SECONDS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.text.tasks.pii_detection.api import default_detectors
 
 
 class TestMeasuredValues:
@@ -30,6 +31,16 @@ class TestMeasuredValues:
         """``hear.window_s`` reads back equal to ``HEAR_WINDOW_SECONDS``."""
         cfg = load_triage_config()
         assert cfg.require("hear.window_s") == HEAR_WINDOW_SECONDS
+
+    def test_the_required_detectors_are_the_pii_modules_own_inventory(self) -> None:
+        """``pii.required_detectors`` is a vocabulary read off the module, not a fitted subset.
+
+        Drifting from ``default_detectors()`` in either direction is a defect: a detector the scan
+        runs but the config does not require would stop being missed when it silently stops running,
+        and one the config requires but the scan never runs would make every scan incomplete.
+        """
+        cfg = load_triage_config()
+        assert cfg.require("pii.required_detectors") == default_detectors()
 
     def test_identity_travels_with_the_config(self) -> None:
         """The config carries its name, version and hash."""

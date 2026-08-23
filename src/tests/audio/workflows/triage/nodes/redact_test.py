@@ -298,11 +298,13 @@ def test_a_scan_that_never_ran_is_not_read_as_a_clean_scan(
 def test_a_detector_that_ran_and_found_nothing_still_verifies(
     make_redact_run: MakeRedactRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The counterpart of the empty-input case: populated detectors_used, empty spans, is clean."""
+    """The counterpart of the empty-input case: every required detector ran, empty spans, is clean."""
     monkeypatch.setattr(
         redact_module,
         "scan_for_pii",
-        lambda inputs, **kw: [PiiScan(spans=[], detectors_used=["presidio"], failures={}) for _ in inputs],
+        lambda inputs, **kw: [
+            PiiScan(spans=[], detectors_used=["gliner", "presidio", "rules"], failures={}) for _ in inputs
+        ],
     )
     store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),))
     result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
@@ -334,6 +336,62 @@ def test_a_store_scan_with_no_detectors_is_withheld(make_redact_run: MakeRedactR
     assert result.artifacts == {}
     assert _verdict(store, result)["verified"] is False
     assert _verdict(store, result)["scan_failed"] == []
+
+
+def test_a_required_detector_that_was_never_attempted_is_an_incomplete_scan(
+    make_redact_run: MakeRedactRun, tmp_path: Path
+) -> None:
+    """ "Complete" must not depend on the host that ran the scan.
+
+    Locally ``scan_for_pii`` ran [presidio, rules] with ``failed={}`` — gliner was never attempted,
+    so nothing recorded its absence and the scan read as complete; on the cluster the same recording
+    attempted gliner and recorded its failure, which withheld. A required detector that was never
+    attempted is not evidence of anything.
+    """
+    store, cfg, run_dir = make_redact_run(
+        tmp_path, findings=(((1.0, 1.4), "PERSON"),), scanned_by=("presidio", "rules")
+    )
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FAIL
+    assert result.artifacts == {}
+    assert _verdict(store, result)["scan_missing"] == ["gliner"]
+    assert _verdict(store, result)["scan_failed"] == [], "never attempted is not the same as attempted and failed"
+    assert "gliner" in result.verdict.why
+
+
+def test_narrowing_the_required_set_makes_the_same_scan_complete(
+    make_redact_run: MakeRedactRun, tmp_path: Path
+) -> None:
+    """The required set is a config key, so an operator running two detectors can say so."""
+    store, cfg, run_dir = make_redact_run(
+        tmp_path,
+        findings=(((1.0, 1.4), "PERSON"),),
+        scanned_by=("presidio", "rules"),
+        config_yaml="redaction:\n  padding_ms: 50\npii:\n  required_detectors: [presidio, rules]\n",
+    )
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.PASS
+    assert _verdict(store, result)["scan_missing"] == []
+    assert result.artifacts.keys() == {"audio", "transcript"}
+
+
+def test_verification_over_fewer_than_the_required_detectors_is_not_a_result(
+    make_redact_run: MakeRedactRun, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The node's own re-scan is judged by the same rule as the store's.
+
+    A re-scan that omits a required detector reports no findings for the same reason a complete one
+    would, so accepting it as verification is the store-side defect one level down.
+    """
+    monkeypatch.setattr(
+        redact_module,
+        "scan_for_pii",
+        lambda inputs, **kw: [PiiScan(spans=[], detectors_used=["presidio", "rules"], failures={}) for _ in inputs],
+    )
+    store, cfg, run_dir = make_redact_run(tmp_path, findings=(((1.0, 1.4), "PERSON"),))
+    result = redact_module.redact(store, "recording", cfg, run_dir=run_dir, artifacts_dir=tmp_path / "release")
+    assert result.verdict.outcome is Outcome.FAIL
+    assert result.artifacts == {}
 
 
 def test_a_failure_message_from_the_store_scan_never_reaches_the_verdict(
