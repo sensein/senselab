@@ -329,3 +329,26 @@ class TestActivityTimestamps:
         act = s.activity(node="PREPROCESS", step=None, parameters={})
         assert s._activities[act].started is None
         assert s._activities[act].ended is None
+
+
+class TestSpeechStoreAdditions:
+    """The two one-token additions SPEECH forces on the store."""
+
+    def test_target_match_is_a_prov_type(self, tmp_path: Path) -> None:
+        """branch-speech.md's product table names target_match as an element kind."""
+        store = ProvStore(run_id="t")
+        eid = store.entity(prov_type="target_match", extent=None, attributes={"speaker": "SPEAKER_00"})
+        assert store.get_entity(eid).prov_type == "target_match"
+        path = tmp_path / "prov.jsonl"
+        store.write_jsonl(path)
+        assert ProvStore.read_jsonl(path).get_entity(eid).prov_type == "target_match"
+
+    def test_get_activity_returns_what_activity_recorded(self) -> None:
+        """An entity's author node is reachable: generated_by -> get_activity -> .node."""
+        store = ProvStore(run_id="t")
+        act = store.activity(node="SPEECH", step="diarize", parameters={})
+        eid = store.entity(prov_type="speaker", extent=(1.0, 2.0), attributes={})
+        store.was_generated_by(eid, act)
+        generated = store.generated_by(eid)
+        assert generated is not None
+        assert store.get_activity(generated).node == "SPEECH"
