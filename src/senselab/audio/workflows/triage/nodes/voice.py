@@ -193,7 +193,12 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     params = _required(config)
     hnr_interval = config.get("phonation.hnr_floor_interval_db")
     rms_interval = config.get("phonation.rms_floor_interval")
-    gate_interval = "unmeasured" if hnr_interval is None and rms_interval is None else "measured"
+    if hnr_interval is not None and rms_interval is not None:
+        gate_interval = "measured"
+    elif hnr_interval is None and rms_interval is None:
+        gate_interval = "unmeasured"
+    else:
+        gate_interval = "partial"
     window_s = params["periods_per_window"] / params["f0_min_hz"]
 
     envelope_meas = find_measurement(store, "energy_envelope")
@@ -328,6 +333,7 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
                 extent=(span_start, gate_end),
                 attributes={
                     "name": "period_marks",
+                    "signal": source,
                     "n": len(marks),
                     "marks": [{"time_s": m.time_s, "period_s": m.period_s, "amplitude": m.amplitude} for m in marks],
                 },

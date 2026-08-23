@@ -54,9 +54,9 @@ def praat_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(voice_module, "period_marks", _fake_period_marks)
 
 
-def _cfg(tmp_path: Path, **phonation: float) -> TriageConfig:
+def _cfg(tmp_path: Path, **phonation: object) -> TriageConfig:
     """An override supplying the four null phonation floors — fixtures for these tests, not recommendations."""
-    values: dict[str, float] = {"f0_min_hz": 150.0, "f0_max_hz": 400.0, "hnr_floor_db": 5.0, "rms_floor": 0.01}
+    values: dict[str, object] = {"f0_min_hz": 150.0, "f0_max_hz": 400.0, "hnr_floor_db": 5.0, "rms_floor": 0.01}
     values.update(phonation)
     path = tmp_path / "voice-override.yaml"
     path.write_text(yaml.safe_dump({"phonation": values}))
@@ -226,6 +226,7 @@ def test_onset_is_a_period_and_offset_is_a_criterion(
     assert run.attributes["onset_kind"] == "period"
     assert run.attributes["offset_kind"] == "criterion"
     (marks,) = _marks_measurements(store)
+    assert marks.attributes["signal"] == "plain", "a measurement names the stream it was taken on"
     first_mark_time = marks.attributes["marks"][0]["time_s"]
     assert run.extent is not None and run.extent[0] == pytest.approx(first_mark_time)
     assert run.attributes["offset_criterion"] in {"hnr", "rms", "both", "residual_end"}
@@ -295,3 +296,48 @@ def test_tracks_are_sidecars_on_the_hop_and_measurements_carry_used(
     read = {ids["stream"], ids["envelope"], ids["silence"], ids["labels"][0], ids["labelled_spans"][0]}
     read |= {ids["speech_spans"][0]}
     assert read <= used, "every entity read — envelope, spans, labels, silence — carries a used edge"
+
+
+@pytest.mark.parametrize(
+    ("f0_min_hz", "f0_max_hz", "expected"),
+    [
+        pytest.param(150.0, 500.0, True, id="only-the-times-factor-alias-in-range"),
+        pytest.param(100.0, 400.0, True, id="only-the-divided-by-factor-alias-in-range"),
+        pytest.param(100.0, 500.0, True, id="both-aliases-in-range"),
+        pytest.param(150.0, 400.0, False, id="neither-alias-in-range"),
+    ],
+)
+def test_alias_in_range_pins_each_clause(f0_min_hz: float, f0_max_hz: float, expected: bool) -> None:
+    """220 Hz with factor 2.0 aliases to 440 and 110; each clause is pinned alone and together (N21)."""
+    assert voice_module._alias_in_range(220.0, factor=2.0, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz) is expected
+
+
+def test_near_edge_flags_fire_when_both_intervals_are_supplied(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
+) -> None:
+    """Override-supplied [lo, hi] intervals arm the near-edge check (N22).
+
+    A run whose gate values at onset fall inside is flagged per family, and the verdict records
+    gate_interval 'measured'.
+    """
+    seed_voice_store(store, energetic=((1.0, 2.0),))
+    config = _cfg(tmp_path, hnr_floor_interval_db=[0.0, 25.0], rms_floor_interval=[0.0, 1.0])
+    result = voice_module.voice(store, "plain", config, run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["gate_interval"] == "measured"
+    assert any(flag.startswith("near_gate_edge hnr") for flag in verdict.attributes["flags"])
+    assert any(flag.startswith("near_gate_edge rms") for flag in verdict.attributes["flags"])
+    assert result.verdict.outcome is Outcome.FLAG
+
+
+def test_gate_interval_is_partial_when_exactly_one_interval_is_supplied(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
+) -> None:
+    """Exactly one interval supplied -> gate_interval 'partial'; only that family's flag can fire (N22)."""
+    seed_voice_store(store, energetic=((1.0, 2.0),))
+    config = _cfg(tmp_path, hnr_floor_interval_db=[0.0, 25.0])
+    result = voice_module.voice(store, "plain", config, run_dir=tmp_path)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["gate_interval"] == "partial"
+    assert any(flag.startswith("near_gate_edge hnr") for flag in verdict.attributes["flags"])
+    assert not any(flag.startswith("near_gate_edge rms") for flag in verdict.attributes["flags"])
