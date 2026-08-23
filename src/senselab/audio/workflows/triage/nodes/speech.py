@@ -3,8 +3,9 @@
 Speech spans come from ASR word timings, never the envelope; the node runs no ASR — it reads and
 fuses the two hypotheses PREPROCESS wrote. pyannote sees only ``[first word start, last word end]``.
 A diarizer segment overlapping an airway-labelled span is withdrawn, never relabelled. The PII
-decision is this branch's own and is speaker-scoped. Quality is reported, never gating. Every
-parameter's derivation is in ``data/config/default.yaml``.
+decision is this branch's own and is speaker-scoped, and the ``pii_scan`` measurement is written on
+every path, including the one with no words, where it records that nothing was scanned. Quality is
+reported, never gating. Every parameter's derivation is in ``data/config/default.yaml``.
 """
 
 from __future__ import annotations
@@ -296,9 +297,16 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
             outcome = Outcome.FLAG
             why += "; a hint asserts speech not found"
             flags.append(why)
+        empty_pii = store.activity(node=NODE, step="pii", parameters={"systems": [CRISPERWHISPER_ID, QWEN_ID]})
+        store.was_associated_with(empty_pii, software)
+        empty_scan_id = store.entity(
+            prov_type="measurement", extent=None, attributes={"name": "pii_scan", "scanned_by": [], "failed": []}
+        )
+        store.was_generated_by(empty_scan_id, empty_pii)
+        store.was_attributed_to(empty_scan_id, software)
         verdict_id, verdict = write_verdict(
             store,
-            transcript,
+            empty_pii,
             software,
             node=NODE,
             outcome=outcome,
@@ -314,7 +322,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
                 "agreement_flag": "not_evaluated",
             },
         )
-        return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
+        return NodeResult(verdict=verdict, view=(empty_scan_id, verdict_id), verdict_entity_id=verdict_id)
 
     fused = fuse_word_streams({rid: words for rid, words in raw_words.items() if words})
 

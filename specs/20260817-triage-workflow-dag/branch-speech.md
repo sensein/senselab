@@ -65,6 +65,11 @@ Agreement bounds confidence from above and is reported as agreement, never as co
 
 `fail` when neither recognizer returns a word: no speech was detected, so this branch has no subject.
 
+That path still writes the `pii_scan` measurement, with `scanned_by` and `failed` both empty. REDACT
+refuses a store carrying no scan measurement at all, so omitting it turned a recording that simply
+had no speech into a raise there; an empty scan instead lands on REDACT's existing incomplete-scan
+row, which withholds. The raise stays for a store that no SPEECH run touched.
+
 ## 2. Speech spans
 
 Words are grouped into spans by their timings. A span is the extent of a run of words.
