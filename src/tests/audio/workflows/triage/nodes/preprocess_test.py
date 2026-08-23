@@ -270,6 +270,36 @@ class TestModelDerivatives:
         assert payload, "the aligned transcript is serialised to the sidecar"
         assert calls["align"] == [{"n": 1}]
 
+    def test_an_untimed_chunk_is_counted_not_placed_at_zero(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        mock_models: None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A chunk with no timestamp has no extent; coercing None to 0.0 invents one at the file start.
+
+        The word entity is not written, the count is in the measurement, and the text survives in
+        the transcript — the recognizer said it, it just did not say where.
+        """
+
+        def untimed_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
+            chunks = [
+                ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
+                ScriptLine(text="doctor", start=None, end=None, score=0.9),
+            ]
+            return [ScriptLine(text="hello doctor", start=1.50, end=1.66, chunks=chunks, score=0.9)]
+
+        monkeypatch.setattr(node, "transcribe_audios", untimed_transcribe)
+        _run(store, config, tmp_path)
+        words = store.entities("word")
+        assert [w.extent for w in words] == [(1.50, 1.58), (1.50, 1.58)], "one timed word per recognizer, no more"
+        assert all(w.extent != (0.0, 0.0) for w in words)
+        measurement = _measurement(store, "asr_crisperwhisper")
+        assert measurement.attributes["untimed_chunks_n"] == 1
+        assert "doctor" in measurement.attributes["transcript"], "the transcript keeps what the recognizer said"
+
     def test_the_aligner_agent_names_the_model_not_its_whole_spec(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
     ) -> None:
