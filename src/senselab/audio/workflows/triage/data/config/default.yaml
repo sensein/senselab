@@ -87,6 +87,15 @@ derivation: |
   min_clip_run is for. The counts these produce are exact; what has no measured value is the
   tolerance, which is quality.disruption_* below.
 
+  HeAR placement centre -- benchmarks/hear-yamnet.md's whole-span numbers were measured with the
+  span centred in the buffer (benchmarks/scripts/spaninput.py). span_to_hear_buffer implements
+  start and end placements too, but those are different inputs and have not been measured, so the
+  node accepts only centre.
+
+  Airway labels_of_interest {Cough, Breathe} -- branch-airway.md's default, from HeAR's eight. The
+  confirmation map Cough -> {Cough}, Breathe -> {Breathing, Sigh, Gasp} is branch-airway.md's step 2
+  table: which AudioSet labels corroborate each HeAR label. Vocabulary, not thresholds.
+
   UNSET, and why -- benchmarks/open.md carries each of these:
     phonation.f0_min_hz, phonation.f0_max_hz: no single search range serves both a low adult male
       fundamental and an infant voice -- a range wide enough for one admits period-doubling artefacts
@@ -156,11 +165,18 @@ gammatone:
 hear:
   window_s: 2.0
   label_floor: 0.5
+  placement: centre
 
 yamnet:
   silence_threshold: 0.5
   coverage_threshold: 0.5
   top_k: 521
+
+airway:
+  labels_of_interest: [Cough, Breathe]
+  confirmation_map:
+    Cough: [Cough]
+    Breathe: [Breathing, Sigh, Gasp]
 
 phonation:
   f0_min_hz: null
