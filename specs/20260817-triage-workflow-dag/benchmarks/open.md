@@ -45,6 +45,7 @@ stated and its constant unjustified — not silently guessed.
 | **Separated-stream quality routing** | branch-speech.md §8 wants a known target's quality measured on that speaker's separated stream; no source-to-speaker assignment mechanism is specified, so SPEECH measures every span on `plain` and records `stream: plain` honestly. Needs a specified assignment (e.g. embedding match per stream) before the routing can exist |
 | **Duplicate PII text within one span** | the word-labelling locator maps a repeated finding text to its first occurrence only; the second occurrence's words carry no `pii` label — an under-redaction hazard for REDACT. The token-subsequence scheme (N11) does not define the repeat case |
 | **N7's record-similarities-without-deciding reading** | the shipped node refuses at entry when a provenanced target arrives while `speech.target_match_cosine` is null, so no similarities are recorded; N7's prose implies they would be. One of the two must move |
+| **PREPROCESS's recognizer set is declared only per-block** | REDACT derives the expected verification set from the asr activities, which are written just before each transcribe call; a recognizer dying earlier (HFModel construction, offline commit resolution) leaves no activity and silently drops out of the expected set. The durable fix is PREPROCESS declaring its recognizer set unconditionally in the condition activity before any block runs |
 
 ## Retired with the round-based workflow
 
