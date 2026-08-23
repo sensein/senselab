@@ -105,6 +105,7 @@ def taxonomy(  # noqa: C901 — one member per detector, one fold per kind
     }
     hear_labels = {str(label) for label in config.require("taxonomy.hear_airway_labels")}
     lexical_tokens = [str(token).lower() for token in config.require("taxonomy.lexical_airway_tokens")]
+    ast_frame_s = float(config.require("taxonomy.ast_frame_s"))
 
     yamnet_meas = find_measurement(store, "yamnet_windows")
     yamnet_windows: list[dict[str, Any]] | None = None
@@ -153,17 +154,23 @@ def taxonomy(  # noqa: C901 — one member per detector, one fold per kind
         return {"state": state, "max_score": best, "label": best_label}
 
     def _ast_member(kind: str) -> dict[str, Any]:
-        """Family A's second member, file-level over its own 10.24 s frame."""
+        """Family A's second member, file-level over the model's fixed ``taxonomy.ast_frame_s`` frame."""
         if ast_scores is None:
             return {"state": "unavailable", "why": ast_error or "no scores"}
-        if floors["ast"] is None:
-            return {"state": "abstained", "why": "presence floor unmeasured"}
         best, best_label = 0.0, None
         for label, score in ast_scores.items():
             if label in audioset_labels[kind] and score > best:
                 best, best_label = score, label
+        if floors["ast"] is None:
+            return {
+                "state": "abstained",
+                "why": "presence floor unmeasured",
+                "max_score": best,
+                "label": best_label,
+                "frame_s": ast_frame_s,
+            }
         state = "present" if best >= float(floors["ast"]) else "absent"
-        return {"state": state, "max_score": best, "label": best_label}
+        return {"state": state, "max_score": best, "label": best_label, "frame_s": ast_frame_s}
 
     def _lexical_member(kind: str) -> dict[str, Any]:
         """Family B: words for speech, bracketed non-lexical tokens for airway."""
