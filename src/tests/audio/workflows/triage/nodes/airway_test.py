@@ -225,6 +225,31 @@ class TestHearClassification:
         assert store.get_activity(concluding).step == "confirm"
         assert ids["yamnet"] in store.uses_of(concluding)
 
+    def test_an_invalidated_span_is_not_classified_and_an_invalidated_word_does_not_contaminate(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        seed_airway_store: Callable[..., dict],
+        mock_hear: None,
+        hear_scores: dict[str, float],
+    ) -> None:
+        """Both of this node's own reads follow the store's shared rule; a withdrawn element is not evidence."""
+        hear_scores.update({"Cough": 0.9})
+        ids = seed_airway_store(
+            store,
+            spans=((1.5, 1.65, 40.0), (2.5, 2.65, 40.0)),
+            yamnet_windows=[],
+            words=({"text": "hello", "start": 1.5, "end": 1.6},),
+        )
+        withdraw = store.activity(node="PREPROCESS", step="withdraw", parameters={})
+        store.was_invalidated_by(ids["spans"][1], withdraw)
+        store.was_invalidated_by(ids["words"][0], withdraw)
+        result = airway(store, "plain", config, run_dir=tmp_path)
+        verdict = store.get_entity(result.verdict_entity_id)
+        assert verdict.attributes["labelled_n"] == 1, "the withdrawn span is not classified"
+        assert "lexical_contamination" not in verdict.attributes["flags"]
+
     def test_airway_has_no_path_to_yamnet_as_a_model(self) -> None:
         """YAMNet is read from the store's native windows; the module cannot classify with it."""
         assert not hasattr(node, "classify_audios")
