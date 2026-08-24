@@ -3,7 +3,9 @@
 The residual is a store fold: contiguous intervals where the envelope exceeds its local floor, minus
 airway-labelled spans, minus SPEECH's spans — an unlabelled span is not excluded. The gate is energy
 AND periodicity; runs are elementary; period marks are a point process per voiced run, absent outside
-runs. The onset is a period and the offset is a criterion, named apart in the span attributes. A
+runs. The HNR, F0 and RMS tracks are measured once over the whole stream and sliced per residual
+interval by time, each on its own frame grid; only the point process is queried per run.
+The onset is a period and the offset is a criterion, named apart in the span attributes. A
 residual interval shorter than the shortest duration Praat's harmonicity accepts is pruned before
 analysis and counted in the verdict's ``short_intervals_n``; a gate run shorter than the shortest
 duration its point process accepts has no marks measured and is counted in ``marks_skipped_short_n``.
@@ -16,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.phonation import PeriodMark, f0_track, hnr_track, period_marks
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
@@ -288,6 +290,17 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
 
     mono = plain.waveform.mean(dim=0).numpy().astype(np.float64)
+    stream_times, stream_hnr = hnr_track(
+        plain,
+        f0_min_hz=params["f0_min_hz"],
+        hop_s=params["hop_s"],
+        silence_threshold=params["silence_threshold"],
+        periods_per_window=params["periods_per_window"],
+    )
+    stream_rms = _rms_track(mono, sr, stream_times, window_s)
+    stream_f0_times, stream_f0, stream_strength = f0_track(
+        plain, f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"], hop_s=params["hop_s"]
+    )
     track_times: list[np.ndarray] = []
     track_rms: list[np.ndarray] = []
     track_hnr: list[np.ndarray] = []
@@ -305,26 +318,15 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
 
     for raw_interval in residual:
         interval_start, interval_end = clamp_extent(raw_interval, plain)
-        i0, i1 = int(interval_start * sr), int(interval_end * sr)
-        segment = Audio(waveform=plain.waveform[:, i0:i1], sampling_rate=sr)
-        times_rel, hnr_db = hnr_track(
-            segment,
-            f0_min_hz=params["f0_min_hz"],
-            hop_s=params["hop_s"],
-            silence_threshold=params["silence_threshold"],
-            periods_per_window=params["periods_per_window"],
-        )
-        pitch_times_rel, f0_hz, strength = f0_track(
-            segment, f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"], hop_s=params["hop_s"]
-        )
-        rms = _rms_track(mono[i0:i1], sr, times_rel, window_s)
-        times = times_rel + interval_start
+        frames = (stream_times >= interval_start) & (stream_times < interval_end)
+        times, hnr_db, rms = stream_times[frames], stream_hnr[frames], stream_rms[frames]
+        pitch_frames = (stream_f0_times >= interval_start) & (stream_f0_times < interval_end)
         track_times.append(times)
         track_rms.append(rms)
         track_hnr.append(hnr_db)
-        f0_times.append(pitch_times_rel + interval_start)
-        f0_values.append(f0_hz)
-        f0_strengths.append(strength)
+        f0_times.append(stream_f0_times[pitch_frames])
+        f0_values.append(stream_f0[pitch_frames])
+        f0_strengths.append(stream_strength[pitch_frames])
 
         gate_ok = (hnr_db >= params["hnr_floor_db"]) & (rms >= params["rms_floor"])
         for r0, r1 in _runs_of_true(gate_ok):

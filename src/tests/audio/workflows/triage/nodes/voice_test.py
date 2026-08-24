@@ -12,7 +12,9 @@ from typing import Callable
 
 import numpy as np
 import pytest
+import soundfile as sf
 import yaml  # type: ignore[import-untyped]
+from scipy.signal import butter, filtfilt
 
 import senselab.audio.workflows.triage.nodes.voice as voice_module
 from senselab.audio.data_structures import Audio, AudioHints
@@ -187,7 +189,7 @@ def test_runs_are_elementary_never_merged(
             silence_threshold=silence_threshold,
             periods_per_window=periods_per_window,
         )
-        hnr[len(hnr) // 2] = -10.0  # below the floor for exactly one frame mid-interval
+        hnr[int(np.argmin(np.abs(times - 1.5)))] = -10.0  # below the floor for exactly one frame mid-interval
         return times, hnr
 
     monkeypatch.setattr(voice_module, "hnr_track", _dipping_hnr)
@@ -428,10 +430,12 @@ def test_a_fragment_just_over_the_praat_floor_is_analysed(
 
 
 def _gate_on_first_frames(n_frames: int) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
-    """An HNR track passing the gate on exactly the first ``n_frames`` frames of each interval.
+    """A whole-stream HNR track passing the gate on exactly the first ``n_frames`` frames.
 
     The gate is an AND over HNR and RMS, so shaping HNR is how a test builds a run of a chosen frame
-    count. It leaves ``period_marks`` — the function under test here — real.
+    count. The node measures the track once over the whole stream, so the run sits at the stream's
+    own frame origin and the residual interval these tests seed starts there too. It leaves
+    ``period_marks`` — the function under test here — real.
     """
 
     def _track(
@@ -462,7 +466,7 @@ def test_a_gate_run_shorter_than_the_mark_window_skips_marks_instead_of_raising(
     """
     monkeypatch.setattr(voice_module, "period_marks", real_period_marks)
     monkeypatch.setattr(voice_module, "hnr_track", _gate_on_first_frames(n_frames))
-    seed_voice_store(store, energetic=((1.0, 1.3),))
+    seed_voice_store(store, energetic=((0.0, 0.3),))
     result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
     verdict = store.get_entity(result.verdict_entity_id)
     assert verdict.attributes["marks_skipped_short_n"] == 1
@@ -484,9 +488,72 @@ def test_a_gate_run_of_exactly_the_mark_window_is_measured_by_the_real_point_pro
     """
     monkeypatch.setattr(voice_module, "period_marks", real_period_marks)
     monkeypatch.setattr(voice_module, "hnr_track", _gate_on_first_frames(3))
-    seed_voice_store(store, energetic=((1.0, 1.3),))
+    seed_voice_store(store, energetic=((0.0, 0.3),))
     result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
     verdict = store.get_entity(result.verdict_entity_id)
     assert verdict.attributes["marks_skipped_short_n"] == 0
     (marks,) = _marks_measurements(store)
     assert marks.attributes["n"] > 0, "a 220 Hz tone over exactly the mark window has period marks"
+
+
+def _breath_and_phonation(sr: int, duration_s: float) -> np.ndarray:
+    """A quiet band-limited breath at 1-2 s and a loud 220 Hz phonation at 3-4 s.
+
+    The breath's band is 350-450 Hz, where the campaign's per-fragment reference reported its
+    spurious f0. Its amplitude is two orders below the phonation's, which is what puts Praat's
+    silence threshold on opposite sides of it depending on what the analysed Sound's maximum is.
+    """
+    rng = np.random.default_rng(11)
+    x = (rng.standard_normal(int(duration_s * sr)) * 1e-5).astype(np.float32)
+    b, a = butter(4, [350 / (sr / 2), 450 / (sr / 2)], btype="band")
+    i0, i1 = int(1.0 * sr), int(2.0 * sr)
+    breath = filtfilt(b, a, rng.standard_normal(i1 - i0))
+    x[i0:i1] += (breath / np.abs(breath).max() * 0.004).astype(np.float32)
+    j0, j1 = int(3.0 * sr), int(4.0 * sr)
+    t = np.arange(j1 - j0) / sr
+    x[j0:j1] += (0.3 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
+    return x
+
+
+def test_hnr_is_measured_once_on_the_whole_stream_not_renormalised_per_fragment(
+    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Praat's silence threshold is relative to the Sound it is handed, so a fragment renormalises it.
+
+    Handed a quiet breath as its own Sound, the breath becomes that Sound's maximum and nearly every
+    frame is analysed and clears the HNR floor. Handed the whole stream, the same frames sit under
+    the threshold the loud phonation sets and read as silent. The node must report the second.
+    """
+    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
+    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
+    sr, duration_s, floor_db = 16000, 7.0, 5.0
+    seed_voice_store(store, energetic=((1.0, 2.0), (3.0, 4.0)), loud=((3.0, 4.0),), duration_s=duration_s)
+    wav = tmp_path / "streams" / f"plain-{store.run_id}.wav"
+    sf.write(str(wav), _breath_and_phonation(sr, duration_s), sr)
+
+    audio = Audio(filepath=str(wav))
+    praat: dict[str, float] = {
+        "f0_min_hz": 150.0,
+        "hop_s": 0.01,
+        "silence_threshold": 0.1,
+        "periods_per_window": 4.5,
+    }
+    whole_times, whole_hnr = real_hnr_track(audio, **praat)
+    breath_frames = (whole_times >= 1.0) & (whole_times < 2.0)
+    whole_fraction = float(np.mean(whole_hnr[breath_frames] >= floor_db))
+    fragment = Audio(waveform=audio.waveform[:, int(1.0 * sr) : int(2.0 * sr)], sampling_rate=sr)
+    _, fragment_hnr = real_hnr_track(fragment, **praat)
+    fragment_fraction = float(np.mean(fragment_hnr >= floor_db))
+    assert fragment_fraction > 0.9 > whole_fraction, "the fixture must actually exhibit the inflation"
+
+    voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
+    (tracks,) = [e for e in store.entities("measurement") if e.attributes.get("name") == "voice_tracks"]
+    sidecar = np.load(tmp_path / tracks.attributes["path"])
+    reported = sidecar["hnr_db"][(sidecar["times_s"] >= 1.0) & (sidecar["times_s"] < 2.0)]
+    assert reported.size > 0, "the breath interval is in the residual and must carry frames"
+    assert float(np.mean(reported >= floor_db)) == pytest.approx(whole_fraction), (
+        "the node's HNR over the breath must equal the whole-stream measurement, not the fragment's"
+    )
+    assert all((run.extent or (0.0, 0.0))[0] >= 3.0 for run in _voice_spans(store)), (
+        "no voiced run may come out of the breath"
+    )
