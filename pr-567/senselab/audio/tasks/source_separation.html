@@ -56,7 +56,7 @@
                         <div class="docstring"><p>Unsupervised audio source separation.</p>
 
 <p>Wraps unasdiff (https://github.com/RunwuShi/unasdiff), which separates a mixture
-into speech and an FSD50K-conditioned sound source using two independently-trained
+into speech and an FSDKaggle2018-conditioned sound source using two independently-trained
 diffusion priors, without training on mixtures. See
 <code>senselab.audio.tasks.source_separation.unasdiff</code> for the backend's design,
 licensing position, and why it runs in an isolated subprocess venv.</p>
@@ -69,7 +69,7 @@ licensing position, and why it runs in an isolated subprocess venv.</p>
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Unsupervised audio source separation.</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="sd">Wraps unasdiff (https://github.com/RunwuShi/unasdiff), which separates a mixture</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">into speech and an FSD50K-conditioned sound source using two independently-trained</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a><span class="sd">into speech and an FSDKaggle2018-conditioned sound source using two independently-trained</span>
 </span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="sd">diffusion priors, without training on mixtures. See</span>
 </span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a><span class="sd">``senselab.audio.tasks.source_separation.unasdiff`` for the backend&#39;s design,</span>
 </span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a><span class="sd">licensing position, and why it runs in an isolated subprocess venv.</span>
@@ -93,32 +93,32 @@ licensing position, and why it runs in an isolated subprocess venv.</p>
 
     </div>
     <a class="headerlink" href="#resolve_source_classes"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="resolve_source_classes-196"><a href="#resolve_source_classes-196"><span class="linenos">196</span></a><span class="k">def</span><span class="w"> </span><span class="nf">resolve_source_classes</span><span class="p">(</span><span class="n">names</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
-</span><span id="resolve_source_classes-197"><a href="#resolve_source_classes-197"><span class="linenos">197</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve FSD sound-prior class names to their conditioning indices.</span>
-</span><span id="resolve_source_classes-198"><a href="#resolve_source_classes-198"><span class="linenos">198</span></a>
-</span><span id="resolve_source_classes-199"><a href="#resolve_source_classes-199"><span class="linenos">199</span></a><span class="sd">    Args:</span>
-</span><span id="resolve_source_classes-200"><a href="#resolve_source_classes-200"><span class="linenos">200</span></a><span class="sd">        names: Class names as they appear in the FSD class map (e.g.</span>
-</span><span id="resolve_source_classes-201"><a href="#resolve_source_classes-201"><span class="linenos">201</span></a><span class="sd">            ``[&quot;Applause&quot;, &quot;Cello&quot;]``).</span>
-</span><span id="resolve_source_classes-202"><a href="#resolve_source_classes-202"><span class="linenos">202</span></a>
-</span><span id="resolve_source_classes-203"><a href="#resolve_source_classes-203"><span class="linenos">203</span></a><span class="sd">    Returns:</span>
-</span><span id="resolve_source_classes-204"><a href="#resolve_source_classes-204"><span class="linenos">204</span></a><span class="sd">        The conditioning index for each name, in the same order.</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="resolve_source_classes-203"><a href="#resolve_source_classes-203"><span class="linenos">203</span></a><span class="k">def</span><span class="w"> </span><span class="nf">resolve_source_classes</span><span class="p">(</span><span class="n">names</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+</span><span id="resolve_source_classes-204"><a href="#resolve_source_classes-204"><span class="linenos">204</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Resolve FSD sound-prior class names to their conditioning indices.</span>
 </span><span id="resolve_source_classes-205"><a href="#resolve_source_classes-205"><span class="linenos">205</span></a>
-</span><span id="resolve_source_classes-206"><a href="#resolve_source_classes-206"><span class="linenos">206</span></a><span class="sd">    Raises:</span>
-</span><span id="resolve_source_classes-207"><a href="#resolve_source_classes-207"><span class="linenos">207</span></a><span class="sd">        ValueError: If any name is not in the class map. The sound prior&#39;s</span>
-</span><span id="resolve_source_classes-208"><a href="#resolve_source_classes-208"><span class="linenos">208</span></a><span class="sd">            embedding has 50 slots but only 41 were trained (see</span>
-</span><span id="resolve_source_classes-209"><a href="#resolve_source_classes-209"><span class="linenos">209</span></a><span class="sd">            ``data/fsd41_classes.json``&#39;s derivation); silently mapping an</span>
-</span><span id="resolve_source_classes-210"><a href="#resolve_source_classes-210"><span class="linenos">210</span></a><span class="sd">            unknown name to a fallback index would condition the prior on</span>
-</span><span id="resolve_source_classes-211"><a href="#resolve_source_classes-211"><span class="linenos">211</span></a><span class="sd">            whatever class that fallback happens to name, while the caller&#39;s</span>
-</span><span id="resolve_source_classes-212"><a href="#resolve_source_classes-212"><span class="linenos">212</span></a><span class="sd">            requested label -- and the output -- would go on reporting</span>
-</span><span id="resolve_source_classes-213"><a href="#resolve_source_classes-213"><span class="linenos">213</span></a><span class="sd">            something else. The message enumerates the valid names so the</span>
-</span><span id="resolve_source_classes-214"><a href="#resolve_source_classes-214"><span class="linenos">214</span></a><span class="sd">            caller can fix the typo without a second round trip.</span>
-</span><span id="resolve_source_classes-215"><a href="#resolve_source_classes-215"><span class="linenos">215</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="resolve_source_classes-216"><a href="#resolve_source_classes-216"><span class="linenos">216</span></a>    <span class="n">classes</span> <span class="o">=</span> <span class="n">load_fsd_class_map_document</span><span class="p">()[</span><span class="s2">&quot;classes&quot;</span><span class="p">]</span>
-</span><span id="resolve_source_classes-217"><a href="#resolve_source_classes-217"><span class="linenos">217</span></a>    <span class="n">unknown</span> <span class="o">=</span> <span class="p">[</span><span class="n">name</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span> <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">classes</span><span class="p">]</span>
-</span><span id="resolve_source_classes-218"><a href="#resolve_source_classes-218"><span class="linenos">218</span></a>    <span class="k">if</span> <span class="n">unknown</span><span class="p">:</span>
-</span><span id="resolve_source_classes-219"><a href="#resolve_source_classes-219"><span class="linenos">219</span></a>        <span class="n">valid</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">classes</span><span class="p">))</span>
-</span><span id="resolve_source_classes-220"><a href="#resolve_source_classes-220"><span class="linenos">220</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown source class name(s): </span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">unknown</span><span class="p">)</span><span class="si">!r}</span><span class="s2">. Valid classes are: </span><span class="si">{</span><span class="n">valid</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="resolve_source_classes-221"><a href="#resolve_source_classes-221"><span class="linenos">221</span></a>    <span class="k">return</span> <span class="p">[</span><span class="n">classes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">]</span>
+</span><span id="resolve_source_classes-206"><a href="#resolve_source_classes-206"><span class="linenos">206</span></a><span class="sd">    Args:</span>
+</span><span id="resolve_source_classes-207"><a href="#resolve_source_classes-207"><span class="linenos">207</span></a><span class="sd">        names: Class names as they appear in the FSD class map (e.g.</span>
+</span><span id="resolve_source_classes-208"><a href="#resolve_source_classes-208"><span class="linenos">208</span></a><span class="sd">            ``[&quot;Applause&quot;, &quot;Cello&quot;]``).</span>
+</span><span id="resolve_source_classes-209"><a href="#resolve_source_classes-209"><span class="linenos">209</span></a>
+</span><span id="resolve_source_classes-210"><a href="#resolve_source_classes-210"><span class="linenos">210</span></a><span class="sd">    Returns:</span>
+</span><span id="resolve_source_classes-211"><a href="#resolve_source_classes-211"><span class="linenos">211</span></a><span class="sd">        The conditioning index for each name, in the same order.</span>
+</span><span id="resolve_source_classes-212"><a href="#resolve_source_classes-212"><span class="linenos">212</span></a>
+</span><span id="resolve_source_classes-213"><a href="#resolve_source_classes-213"><span class="linenos">213</span></a><span class="sd">    Raises:</span>
+</span><span id="resolve_source_classes-214"><a href="#resolve_source_classes-214"><span class="linenos">214</span></a><span class="sd">        ValueError: If any name is not in the class map. The sound prior&#39;s</span>
+</span><span id="resolve_source_classes-215"><a href="#resolve_source_classes-215"><span class="linenos">215</span></a><span class="sd">            embedding has 51 slots but only 41 were trained (see</span>
+</span><span id="resolve_source_classes-216"><a href="#resolve_source_classes-216"><span class="linenos">216</span></a><span class="sd">            ``data/fsd41_classes.json``&#39;s derivation); silently mapping an</span>
+</span><span id="resolve_source_classes-217"><a href="#resolve_source_classes-217"><span class="linenos">217</span></a><span class="sd">            unknown name to a fallback index would condition the prior on</span>
+</span><span id="resolve_source_classes-218"><a href="#resolve_source_classes-218"><span class="linenos">218</span></a><span class="sd">            whatever class that fallback happens to name, while the caller&#39;s</span>
+</span><span id="resolve_source_classes-219"><a href="#resolve_source_classes-219"><span class="linenos">219</span></a><span class="sd">            requested label -- and the output -- would go on reporting</span>
+</span><span id="resolve_source_classes-220"><a href="#resolve_source_classes-220"><span class="linenos">220</span></a><span class="sd">            something else. The message enumerates the valid names so the</span>
+</span><span id="resolve_source_classes-221"><a href="#resolve_source_classes-221"><span class="linenos">221</span></a><span class="sd">            caller can fix the typo without a second round trip.</span>
+</span><span id="resolve_source_classes-222"><a href="#resolve_source_classes-222"><span class="linenos">222</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="resolve_source_classes-223"><a href="#resolve_source_classes-223"><span class="linenos">223</span></a>    <span class="n">classes</span> <span class="o">=</span> <span class="n">load_fsd_class_map_document</span><span class="p">()[</span><span class="s2">&quot;classes&quot;</span><span class="p">]</span>
+</span><span id="resolve_source_classes-224"><a href="#resolve_source_classes-224"><span class="linenos">224</span></a>    <span class="n">unknown</span> <span class="o">=</span> <span class="p">[</span><span class="n">name</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span> <span class="k">if</span> <span class="n">name</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">classes</span><span class="p">]</span>
+</span><span id="resolve_source_classes-225"><a href="#resolve_source_classes-225"><span class="linenos">225</span></a>    <span class="k">if</span> <span class="n">unknown</span><span class="p">:</span>
+</span><span id="resolve_source_classes-226"><a href="#resolve_source_classes-226"><span class="linenos">226</span></a>        <span class="n">valid</span> <span class="o">=</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">classes</span><span class="p">))</span>
+</span><span id="resolve_source_classes-227"><a href="#resolve_source_classes-227"><span class="linenos">227</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown source class name(s): </span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">unknown</span><span class="p">)</span><span class="si">!r}</span><span class="s2">. Valid classes are: </span><span class="si">{</span><span class="n">valid</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="resolve_source_classes-228"><a href="#resolve_source_classes-228"><span class="linenos">228</span></a>    <span class="k">return</span> <span class="p">[</span><span class="n">classes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">names</span><span class="p">]</span>
 </span></pre></div>
 
 
@@ -141,7 +141,7 @@ licensing position, and why it runs in an isolated subprocess venv.</p>
 
 <ul>
 <li><strong>ValueError:</strong>  If any name is not in the class map. The sound prior's
-embedding has 50 slots but only 41 were trained (see
+embedding has 51 slots but only 41 were trained (see
 <code>data/fsd41_classes.json</code>'s derivation); silently mapping an
 unknown name to a fallback index would condition the prior on
 whatever class that fallback happens to name, while the caller's
@@ -215,28 +215,28 @@ caller can fix the typo without a second round trip.</li>
 </span><span id="separate_audios-90"><a href="#separate_audios-90"><span class="linenos"> 90</span></a><span class="sd">            worker. Forwarded unchanged to</span>
 </span><span id="separate_audios-91"><a href="#separate_audios-91"><span class="linenos"> 91</span></a><span class="sd">            :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.</span>
 </span><span id="separate_audios-92"><a href="#separate_audios-92"><span class="linenos"> 92</span></a><span class="sd">        seed: RNG seed, recorded in the worker&#39;s log line.</span>
-</span><span id="separate_audios-93"><a href="#separate_audios-93"><span class="linenos"> 93</span></a><span class="sd">        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window --</span>
-</span><span id="separate_audios-94"><a href="#separate_audios-94"><span class="linenos"> 94</span></a><span class="sd">            forwarded unchanged to :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.</span>
-</span><span id="separate_audios-95"><a href="#separate_audios-95"><span class="linenos"> 95</span></a><span class="sd">            Defaults to ``200``, upstream&#39;s own quality setting and the only value with any</span>
-</span><span id="separate_audios-96"><a href="#separate_audios-96"><span class="linenos"> 96</span></a><span class="sd">            published basis; lower values trade quality for speed roughly proportionally but are</span>
-</span><span id="separate_audios-97"><a href="#separate_audios-97"><span class="linenos"> 97</span></a><span class="sd">            entirely unmeasured in this repository, so there is no recommended lower setting --</span>
-</span><span id="separate_audios-98"><a href="#separate_audios-98"><span class="linenos"> 98</span></a><span class="sd">            see that function&#39;s docstring for the full derivation.</span>
-</span><span id="separate_audios-99"><a href="#separate_audios-99"><span class="linenos"> 99</span></a><span class="sd">        timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the</span>
-</span><span id="separate_audios-100"><a href="#separate_audios-100"><span class="linenos">100</span></a><span class="sd">            work. Forwarded unchanged to whichever backend runs.</span>
-</span><span id="separate_audios-101"><a href="#separate_audios-101"><span class="linenos">101</span></a><span class="sd">        parameters: Backend-specific parameters, validated against the selected backend&#39;s own</span>
-</span><span id="separate_audios-102"><a href="#separate_audios-102"><span class="linenos">102</span></a><span class="sd">            signature — an unknown key raises rather than being ignored. ClearVoice declares nothing</span>
-</span><span id="separate_audios-103"><a href="#separate_audios-103"><span class="linenos">103</span></a><span class="sd">            beyond ``timeout_s``, which is already an argument above, so today this is accepted only</span>
-</span><span id="separate_audios-104"><a href="#separate_audios-104"><span class="linenos">104</span></a><span class="sd">            to reject a key that would otherwise have been silently dropped.</span>
-</span><span id="separate_audios-105"><a href="#separate_audios-105"><span class="linenos">105</span></a>
-</span><span id="separate_audios-106"><a href="#separate_audios-106"><span class="linenos">106</span></a><span class="sd">    Returns:</span>
-</span><span id="separate_audios-107"><a href="#separate_audios-107"><span class="linenos">107</span></a><span class="sd">        One list of ``n_sources`` ``Audio`` objects per input, in order.</span>
-</span><span id="separate_audios-108"><a href="#separate_audios-108"><span class="linenos">108</span></a>
-</span><span id="separate_audios-109"><a href="#separate_audios-109"><span class="linenos">109</span></a><span class="sd">    Raises:</span>
-</span><span id="separate_audios-110"><a href="#separate_audios-110"><span class="linenos">110</span></a><span class="sd">        ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is</span>
-</span><span id="separate_audios-111"><a href="#separate_audios-111"><span class="linenos">111</span></a><span class="sd">            not one of the three supported modes; if a mode using the sound prior is missing</span>
-</span><span id="separate_audios-112"><a href="#separate_audios-112"><span class="linenos">112</span></a><span class="sd">            ``source_classes``; if ``source_classes`` does not have exactly the number of</span>
-</span><span id="separate_audios-113"><a href="#separate_audios-113"><span class="linenos">113</span></a><span class="sd">            entries that mode&#39;s sound slots require; or if ``diffusion_steps`` or ``timeout_s``</span>
-</span><span id="separate_audios-114"><a href="#separate_audios-114"><span class="linenos">114</span></a><span class="sd">            is not positive.</span>
+</span><span id="separate_audios-93"><a href="#separate_audios-93"><span class="linenos"> 93</span></a><span class="sd">        diffusion_steps: Reverse-diffusion schedule length. The priors are trained at ``T=200``, so</span>
+</span><span id="separate_audios-94"><a href="#separate_audios-94"><span class="linenos"> 94</span></a><span class="sd">            this parameter accepts only its default value today -- see the ``ValueError`` below and</span>
+</span><span id="separate_audios-95"><a href="#separate_audios-95"><span class="linenos"> 95</span></a><span class="sd">            ``unasdiff.py``&#39;s ``doc.md`` for why any other value re-specifies the schedule rather than</span>
+</span><span id="separate_audios-96"><a href="#separate_audios-96"><span class="linenos"> 96</span></a><span class="sd">            subsampling it. Kept as a parameter (rather than dropped) because a future retrained</span>
+</span><span id="separate_audios-97"><a href="#separate_audios-97"><span class="linenos"> 97</span></a><span class="sd">            prior may use a different ``T``.</span>
+</span><span id="separate_audios-98"><a href="#separate_audios-98"><span class="linenos"> 98</span></a><span class="sd">        timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the</span>
+</span><span id="separate_audios-99"><a href="#separate_audios-99"><span class="linenos"> 99</span></a><span class="sd">            work. Forwarded unchanged to whichever backend runs.</span>
+</span><span id="separate_audios-100"><a href="#separate_audios-100"><span class="linenos">100</span></a><span class="sd">        parameters: Backend-specific parameters, validated against the selected backend&#39;s own</span>
+</span><span id="separate_audios-101"><a href="#separate_audios-101"><span class="linenos">101</span></a><span class="sd">            signature — an unknown key raises rather than being ignored. ClearVoice declares nothing</span>
+</span><span id="separate_audios-102"><a href="#separate_audios-102"><span class="linenos">102</span></a><span class="sd">            beyond ``timeout_s``, which is already an argument above, so today this is accepted only</span>
+</span><span id="separate_audios-103"><a href="#separate_audios-103"><span class="linenos">103</span></a><span class="sd">            to reject a key that would otherwise have been silently dropped.</span>
+</span><span id="separate_audios-104"><a href="#separate_audios-104"><span class="linenos">104</span></a>
+</span><span id="separate_audios-105"><a href="#separate_audios-105"><span class="linenos">105</span></a><span class="sd">    Returns:</span>
+</span><span id="separate_audios-106"><a href="#separate_audios-106"><span class="linenos">106</span></a><span class="sd">        One list of ``n_sources`` ``Audio`` objects per input, in order.</span>
+</span><span id="separate_audios-107"><a href="#separate_audios-107"><span class="linenos">107</span></a>
+</span><span id="separate_audios-108"><a href="#separate_audios-108"><span class="linenos">108</span></a><span class="sd">    Raises:</span>
+</span><span id="separate_audios-109"><a href="#separate_audios-109"><span class="linenos">109</span></a><span class="sd">        ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is</span>
+</span><span id="separate_audios-110"><a href="#separate_audios-110"><span class="linenos">110</span></a><span class="sd">            not one of the three supported modes; if a mode using the sound prior is missing</span>
+</span><span id="separate_audios-111"><a href="#separate_audios-111"><span class="linenos">111</span></a><span class="sd">            ``source_classes``; if ``source_classes`` does not have exactly the number of</span>
+</span><span id="separate_audios-112"><a href="#separate_audios-112"><span class="linenos">112</span></a><span class="sd">            entries that mode&#39;s sound slots require; if ``diffusion_steps`` is not ``200``; if</span>
+</span><span id="separate_audios-113"><a href="#separate_audios-113"><span class="linenos">113</span></a><span class="sd">            ``n_sources`` exceeds ``3`` (the paper&#39;s own evaluated range); or if ``timeout_s`` is</span>
+</span><span id="separate_audios-114"><a href="#separate_audios-114"><span class="linenos">114</span></a><span class="sd">            not positive.</span>
 </span><span id="separate_audios-115"><a href="#separate_audios-115"><span class="linenos">115</span></a><span class="sd">    &quot;&quot;&quot;</span>
 </span><span id="separate_audios-116"><a href="#separate_audios-116"><span class="linenos">116</span></a>    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="n">is_clearvoice_model_id</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)):</span>
 </span><span id="separate_audios-117"><a href="#separate_audios-117"><span class="linenos">117</span></a>        <span class="n">spec</span> <span class="o">=</span> <span class="n">clearvoice_model_spec</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">),</span> <span class="n">expected_task</span><span class="o">=</span><span class="n">CLEARVOICE_SEPARATION_TASK</span><span class="p">)</span>
@@ -284,38 +284,45 @@ caller can fix the typo without a second round trip.</li>
 </span><span id="separate_audios-159"><a href="#separate_audios-159"><span class="linenos">159</span></a>            <span class="sa">f</span><span class="s2">&quot;a named argument of separate_audios (</span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">parameters</span><span class="p">))</span><span class="si">}</span><span class="s2"> included). Pass them &quot;</span>
 </span><span id="separate_audios-160"><a href="#separate_audios-160"><span class="linenos">160</span></a>            <span class="s2">&quot;directly, so one value has one source.&quot;</span>
 </span><span id="separate_audios-161"><a href="#separate_audios-161"><span class="linenos">161</span></a>        <span class="p">)</span>
-</span><span id="separate_audios-162"><a href="#separate_audios-162"><span class="linenos">162</span></a>    <span class="k">if</span> <span class="n">mode</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_VALID_MODES</span><span class="p">:</span>
-</span><span id="separate_audios-163"><a href="#separate_audios-163"><span class="linenos">163</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown mode </span><span class="si">{</span><span class="n">mode</span><span class="si">!r}</span><span class="s2">. Valid modes are: </span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">_VALID_MODES</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-</span><span id="separate_audios-164"><a href="#separate_audios-164"><span class="linenos">164</span></a>
-</span><span id="separate_audios-165"><a href="#separate_audios-165"><span class="linenos">165</span></a>    <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="n">_MODE_SPEECH_SPEECH</span><span class="p">:</span>
-</span><span id="separate_audios-166"><a href="#separate_audios-166"><span class="linenos">166</span></a>        <span class="c1"># Both slots are the speech prior; its label space has exactly one member (0), so</span>
-</span><span id="separate_audios-167"><a href="#separate_audios-167"><span class="linenos">167</span></a>        <span class="c1"># there is nothing for a caller to name.</span>
-</span><span id="separate_audios-168"><a href="#separate_audios-168"><span class="linenos">168</span></a>        <span class="n">source_class_indices</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">n_sources</span>
-</span><span id="separate_audios-169"><a href="#separate_audios-169"><span class="linenos">169</span></a>    <span class="k">else</span><span class="p">:</span>
-</span><span id="separate_audios-170"><a href="#separate_audios-170"><span class="linenos">170</span></a>        <span class="n">n_sound_slots</span> <span class="o">=</span> <span class="n">n_sources</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="n">_MODE_SPEECH_SOUND</span> <span class="k">else</span> <span class="n">n_sources</span>
-</span><span id="separate_audios-171"><a href="#separate_audios-171"><span class="linenos">171</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">source_classes</span><span class="p">:</span>
-</span><span id="separate_audios-172"><a href="#separate_audios-172"><span class="linenos">172</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="separate_audios-173"><a href="#separate_audios-173"><span class="linenos">173</span></a>                <span class="sa">f</span><span class="s2">&quot;mode=</span><span class="si">{</span><span class="n">mode</span><span class="si">!r}</span><span class="s2"> conditions on unasdiff&#39;s sound prior, which has no defensible &quot;</span>
-</span><span id="separate_audios-174"><a href="#separate_audios-174"><span class="linenos">174</span></a>                <span class="s2">&quot;default class (index 0 is &#39;Hi-hat&#39;); pass source_classes.&quot;</span>
-</span><span id="separate_audios-175"><a href="#separate_audios-175"><span class="linenos">175</span></a>            <span class="p">)</span>
-</span><span id="separate_audios-176"><a href="#separate_audios-176"><span class="linenos">176</span></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_classes</span><span class="p">)</span> <span class="o">!=</span> <span class="n">n_sound_slots</span><span class="p">:</span>
-</span><span id="separate_audios-177"><a href="#separate_audios-177"><span class="linenos">177</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="separate_audios-178"><a href="#separate_audios-178"><span class="linenos">178</span></a>                <span class="sa">f</span><span class="s2">&quot;source_classes must have exactly </span><span class="si">{</span><span class="n">n_sound_slots</span><span class="si">}</span><span class="s2"> entries for n_sources=&quot;</span>
-</span><span id="separate_audios-179"><a href="#separate_audios-179"><span class="linenos">179</span></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">n_sources</span><span class="si">}</span><span class="s2"> in mode=</span><span class="si">{</span><span class="n">mode</span><span class="si">!r}</span><span class="s2">; got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">source_classes</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
-</span><span id="separate_audios-180"><a href="#separate_audios-180"><span class="linenos">180</span></a>            <span class="p">)</span>
-</span><span id="separate_audios-181"><a href="#separate_audios-181"><span class="linenos">181</span></a>        <span class="n">sound_indices</span> <span class="o">=</span> <span class="n">resolve_source_classes</span><span class="p">(</span><span class="n">source_classes</span><span class="p">)</span>
-</span><span id="separate_audios-182"><a href="#separate_audios-182"><span class="linenos">182</span></a>        <span class="n">source_class_indices</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="o">*</span><span class="n">sound_indices</span><span class="p">]</span> <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="n">_MODE_SPEECH_SOUND</span> <span class="k">else</span> <span class="n">sound_indices</span>
-</span><span id="separate_audios-183"><a href="#separate_audios-183"><span class="linenos">183</span></a>
-</span><span id="separate_audios-184"><a href="#separate_audios-184"><span class="linenos">184</span></a>    <span class="k">return</span> <span class="n">separate_with_unasdiff</span><span class="p">(</span>
-</span><span id="separate_audios-185"><a href="#separate_audios-185"><span class="linenos">185</span></a>        <span class="n">audios</span><span class="p">,</span>
-</span><span id="separate_audios-186"><a href="#separate_audios-186"><span class="linenos">186</span></a>        <span class="n">n_sources</span><span class="p">,</span>
-</span><span id="separate_audios-187"><a href="#separate_audios-187"><span class="linenos">187</span></a>        <span class="n">source_class_indices</span><span class="p">,</span>
-</span><span id="separate_audios-188"><a href="#separate_audios-188"><span class="linenos">188</span></a>        <span class="n">mode</span><span class="o">=</span><span class="n">mode</span><span class="p">,</span>
-</span><span id="separate_audios-189"><a href="#separate_audios-189"><span class="linenos">189</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
-</span><span id="separate_audios-190"><a href="#separate_audios-190"><span class="linenos">190</span></a>        <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">,</span>
-</span><span id="separate_audios-191"><a href="#separate_audios-191"><span class="linenos">191</span></a>        <span class="n">diffusion_steps</span><span class="o">=</span><span class="n">diffusion_steps</span><span class="p">,</span>
-</span><span id="separate_audios-192"><a href="#separate_audios-192"><span class="linenos">192</span></a>        <span class="n">timeout_s</span><span class="o">=</span><span class="n">timeout_s</span><span class="p">,</span>
-</span><span id="separate_audios-193"><a href="#separate_audios-193"><span class="linenos">193</span></a>    <span class="p">)</span>
+</span><span id="separate_audios-162"><a href="#separate_audios-162"><span class="linenos">162</span></a>    <span class="k">if</span> <span class="n">diffusion_steps</span> <span class="o">!=</span> <span class="n">_DIFFUSION_STEPS</span><span class="p">:</span>
+</span><span id="separate_audios-163"><a href="#separate_audios-163"><span class="linenos">163</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="separate_audios-164"><a href="#separate_audios-164"><span class="linenos">164</span></a>            <span class="sa">f</span><span class="s2">&quot;diffusion_steps=</span><span class="si">{</span><span class="n">diffusion_steps</span><span class="si">}</span><span class="s2"> is not supported: unasdiff&#39;s priors are trained at &quot;</span>
+</span><span id="separate_audios-165"><a href="#separate_audios-165"><span class="linenos">165</span></a>            <span class="sa">f</span><span class="s2">&quot;T=</span><span class="si">{</span><span class="n">_DIFFUSION_STEPS</span><span class="si">}</span><span class="s2">, and any other value re-specifies the reverse-diffusion schedule &quot;</span>
+</span><span id="separate_audios-166"><a href="#separate_audios-166"><span class="linenos">166</span></a>            <span class="s2">&quot;rather than subsampling it. See unasdiff.py&#39;s module doc.md for the mechanism.&quot;</span>
+</span><span id="separate_audios-167"><a href="#separate_audios-167"><span class="linenos">167</span></a>        <span class="p">)</span>
+</span><span id="separate_audios-168"><a href="#separate_audios-168"><span class="linenos">168</span></a>    <span class="k">if</span> <span class="n">mode</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_VALID_MODES</span><span class="p">:</span>
+</span><span id="separate_audios-169"><a href="#separate_audios-169"><span class="linenos">169</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Unknown mode </span><span class="si">{</span><span class="n">mode</span><span class="si">!r}</span><span class="s2">. Valid modes are: </span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">_VALID_MODES</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</span><span id="separate_audios-170"><a href="#separate_audios-170"><span class="linenos">170</span></a>
+</span><span id="separate_audios-171"><a href="#separate_audios-171"><span class="linenos">171</span></a>    <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="n">_MODE_SPEECH_SPEECH</span><span class="p">:</span>
+</span><span id="separate_audios-172"><a href="#separate_audios-172"><span class="linenos">172</span></a>        <span class="c1"># Both slots are the speech prior; its label space has exactly one member (0), so</span>
+</span><span id="separate_audios-173"><a href="#separate_audios-173"><span class="linenos">173</span></a>        <span class="c1"># there is nothing for a caller to name.</span>
+</span><span id="separate_audios-174"><a href="#separate_audios-174"><span class="linenos">174</span></a>        <span class="n">source_class_indices</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="n">n_sources</span>
+</span><span id="separate_audios-175"><a href="#separate_audios-175"><span class="linenos">175</span></a>    <span class="k">else</span><span class="p">:</span>
+</span><span id="separate_audios-176"><a href="#separate_audios-176"><span class="linenos">176</span></a>        <span class="n">n_sound_slots</span> <span class="o">=</span> <span class="n">n_sources</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="n">_MODE_SPEECH_SOUND</span> <span class="k">else</span> <span class="n">n_sources</span>
+</span><span id="separate_audios-177"><a href="#separate_audios-177"><span class="linenos">177</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">source_classes</span><span class="p">:</span>
+</span><span id="separate_audios-178"><a href="#separate_audios-178"><span class="linenos">178</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="separate_audios-179"><a href="#separate_audios-179"><span class="linenos">179</span></a>                <span class="sa">f</span><span class="s2">&quot;mode=</span><span class="si">{</span><span class="n">mode</span><span class="si">!r}</span><span class="s2"> conditions on unasdiff&#39;s sound prior, which has no defensible &quot;</span>
+</span><span id="separate_audios-180"><a href="#separate_audios-180"><span class="linenos">180</span></a>                <span class="s2">&quot;default class (index 0 is &#39;Hi-hat&#39;); pass source_classes.&quot;</span>
+</span><span id="separate_audios-181"><a href="#separate_audios-181"><span class="linenos">181</span></a>            <span class="p">)</span>
+</span><span id="separate_audios-182"><a href="#separate_audios-182"><span class="linenos">182</span></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">source_classes</span><span class="p">)</span> <span class="o">!=</span> <span class="n">n_sound_slots</span><span class="p">:</span>
+</span><span id="separate_audios-183"><a href="#separate_audios-183"><span class="linenos">183</span></a>            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+</span><span id="separate_audios-184"><a href="#separate_audios-184"><span class="linenos">184</span></a>                <span class="sa">f</span><span class="s2">&quot;source_classes must have exactly </span><span class="si">{</span><span class="n">n_sound_slots</span><span class="si">}</span><span class="s2"> entries for n_sources=&quot;</span>
+</span><span id="separate_audios-185"><a href="#separate_audios-185"><span class="linenos">185</span></a>                <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">n_sources</span><span class="si">}</span><span class="s2"> in mode=</span><span class="si">{</span><span class="n">mode</span><span class="si">!r}</span><span class="s2">; got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">source_classes</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span>
+</span><span id="separate_audios-186"><a href="#separate_audios-186"><span class="linenos">186</span></a>            <span class="p">)</span>
+</span><span id="separate_audios-187"><a href="#separate_audios-187"><span class="linenos">187</span></a>        <span class="n">sound_indices</span> <span class="o">=</span> <span class="n">resolve_source_classes</span><span class="p">(</span><span class="n">source_classes</span><span class="p">)</span>
+</span><span id="separate_audios-188"><a href="#separate_audios-188"><span class="linenos">188</span></a>        <span class="n">source_class_indices</span> <span class="o">=</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="o">*</span><span class="n">sound_indices</span><span class="p">]</span> <span class="k">if</span> <span class="n">mode</span> <span class="o">==</span> <span class="n">_MODE_SPEECH_SOUND</span> <span class="k">else</span> <span class="n">sound_indices</span>
+</span><span id="separate_audios-189"><a href="#separate_audios-189"><span class="linenos">189</span></a>
+</span><span id="separate_audios-190"><a href="#separate_audios-190"><span class="linenos">190</span></a>    <span class="k">return</span> <span class="n">separate_with_unasdiff</span><span class="p">(</span>
+</span><span id="separate_audios-191"><a href="#separate_audios-191"><span class="linenos">191</span></a>        <span class="n">audios</span><span class="p">,</span>
+</span><span id="separate_audios-192"><a href="#separate_audios-192"><span class="linenos">192</span></a>        <span class="n">n_sources</span><span class="p">,</span>
+</span><span id="separate_audios-193"><a href="#separate_audios-193"><span class="linenos">193</span></a>        <span class="n">source_class_indices</span><span class="p">,</span>
+</span><span id="separate_audios-194"><a href="#separate_audios-194"><span class="linenos">194</span></a>        <span class="n">mode</span><span class="o">=</span><span class="n">mode</span><span class="p">,</span>
+</span><span id="separate_audios-195"><a href="#separate_audios-195"><span class="linenos">195</span></a>        <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">,</span>
+</span><span id="separate_audios-196"><a href="#separate_audios-196"><span class="linenos">196</span></a>        <span class="n">seed</span><span class="o">=</span><span class="n">seed</span><span class="p">,</span>
+</span><span id="separate_audios-197"><a href="#separate_audios-197"><span class="linenos">197</span></a>        <span class="n">diffusion_steps</span><span class="o">=</span><span class="n">diffusion_steps</span><span class="p">,</span>
+</span><span id="separate_audios-198"><a href="#separate_audios-198"><span class="linenos">198</span></a>        <span class="n">timeout_s</span><span class="o">=</span><span class="n">timeout_s</span><span class="p">,</span>
+</span><span id="separate_audios-199"><a href="#separate_audios-199"><span class="linenos">199</span></a>        <span class="n">source_classes</span><span class="o">=</span><span class="n">source_classes</span><span class="p">,</span>
+</span><span id="separate_audios-200"><a href="#separate_audios-200"><span class="linenos">200</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
@@ -363,12 +370,11 @@ task. <code>None</code> (the default) uses the pinned mirror unconditionally.</l
 worker. Forwarded unchanged to
 <code>senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff()</code>.</li>
 <li><strong>seed:</strong>  RNG seed, recorded in the worker's log line.</li>
-<li><strong>diffusion_steps:</strong>  Number of reverse-diffusion steps the sampler runs per window --
-forwarded unchanged to <code>senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff()</code>.
-Defaults to <code>200</code>, upstream's own quality setting and the only value with any
-published basis; lower values trade quality for speed roughly proportionally but are
-entirely unmeasured in this repository, so there is no recommended lower setting --
-see that function's docstring for the full derivation.</li>
+<li><strong>diffusion_steps:</strong>  Reverse-diffusion schedule length. The priors are trained at <code>T=200</code>, so
+this parameter accepts only its default value today -- see the <code>ValueError</code> below and
+<code>unasdiff.py</code>'s <code>doc.md</code> for why any other value re-specifies the schedule rather than
+subsampling it. Kept as a parameter (rather than dropped) because a future retrained
+prior may use a different <code>T</code>.</li>
 <li><strong>timeout_s:</strong>  Ceiling on the worker subprocess, in seconds; <code>None</code> derives one from the
 work. Forwarded unchanged to whichever backend runs.</li>
 <li><strong>parameters:</strong>  Backend-specific parameters, validated against the selected backend's own
@@ -389,8 +395,9 @@ to reject a key that would otherwise have been silently dropped.</li>
 <li><strong>ValueError:</strong>  If <code>model</code> is given and does not name the unasdiff mirror; if <code>mode</code> is
 not one of the three supported modes; if a mode using the sound prior is missing
 <code>source_classes</code>; if <code>source_classes</code> does not have exactly the number of
-entries that mode's sound slots require; or if <code>diffusion_steps</code> or <code>timeout_s</code>
-is not positive.</li>
+entries that mode's sound slots require; if <code>diffusion_steps</code> is not <code>200</code>; if
+<code>n_sources</code> exceeds <code>3</code> (the paper's own evaluated range); or if <code>timeout_s</code> is
+not positive.</li>
 </ul>
 </div>
 
