@@ -27,7 +27,7 @@ the non-EMA weights runs without error but separates measurably worse. The three
 the public `separate_audios` API, and long-form chunking (below) are equally senselab's
 construction; nothing here is a thin wrapper around an upstream CLI.
 
-### Why `p_sample_loop_group(orig_x=...)` is not an oracle
+### Why `orig_x=...` is not an oracle
 
 This is the paragraph to read before trusting the worker script, because the call site looks like
 cheating. `separate_window` in the worker builds
@@ -36,11 +36,12 @@ cheating. `separate_window` in the worker builds
 orig_x = torch.cat([mix] + [torch.zeros_like(mix)] * (n_src - 1), dim=-1)
 ```
 
-and passes it to `gaussian.p_sample_loop_group(..., orig_x=orig_x, ...)` alongside the mixture
-itself as `measurement`. Passing anything named `orig_x` — a name upstream itself uses for its
-benchmark ground truth — reads as handing the sampler an answer key. It is not: upstream's
-`p_sample_loop_group` **ignores** the `measurement` argument at every one of its 200 steps and
-instead recomputes `measurement = degradation(orig_x, n_src)` from `orig_x`, where `degradation`
+and passes it to whichever sampler the mode selects (`gaussian.p_sample_loop_group(...)` for
+`speech_sound`, `gaussian.p_sample_loop(...)` for the other two modes — see "Two samplers, one mode
+dispatch" below) alongside the mixture itself as `measurement`. Passing anything named `orig_x` — a
+name upstream itself uses for its benchmark ground truth — reads as handing the sampler an answer
+key. It is not: both samplers **ignore** the `measurement` argument at every one of their 200 steps
+and instead recompute `measurement = degradation(orig_x, n_src)` from `orig_x`, where `degradation`
 splits its input along time into `n_src` equal chunks and sums them. Because `orig_x` here is
 `[mixture, zeros, ..., zeros]` laid out along that same time axis, `degradation(orig_x, n_src)`
 sums to exactly the mixture — the same signal `measurement` already held. No per-source
@@ -48,7 +49,7 @@ information — no true `orig_x = [source_1, source_2, ...]`, which is what upst
 scripts actually pass when scoring against ground truth — ever reaches the sampler. What looks like
 a ground-truth argument is, at this call site, a mechanism for satisfying the diffusion process's
 internal consistency check with the one signal separation is actually given: the mixture. Verified
-by reading `degradation` and the `p_sample_loop_group` step loop at the pinned commit, not assumed.
+by reading `degradation` and both samplers' step loops at the pinned commit, not assumed.
 
 ### Two label spaces, not one
 
@@ -108,13 +109,42 @@ that one catches a typo in a class *name*, this one catches an out-of-range raw 
   the expected degenerate outcome on a failure, not a bug: the labels choose which priors run, they
   do not reliably steer which slot collects which event.
 
-`p_sample_loop_group` zips one model object against one label per slot, so `n_sources` model
-instances are always constructed, including in `speech_speech` where every slot shares the same
-weights — a separate `deepcopy`'d instance per slot, never one instance reused across slots.
+Only `speech_sound` builds `n_sources` model instances: it needs two different priors in the same
+call, which only upstream's multi-model sampler, `p_sample_loop_group`, supports (it zips one model
+object against one label per slot). `sound_sound` and `speech_speech` use only one prior each and
+now build exactly one model instance, run through upstream's single-model sampler, `p_sample_loop`,
+which batches every slot into that one instance's forward pass instead — see "Two samplers, one
+mode dispatch" below.
 
 **`n_sources` is capped at 3.** Shi et al. (AAAI 2026) evaluate this method at up to three sources;
 `separate_with_unasdiff` raises `ValueError` above that rather than extrapolating into a regime the
 paper never measured.
+
+### Two samplers, one mode dispatch
+
+Upstream ships two reverse-diffusion loops with the same step logic and the same `degradation`/
+`orig_x` mechanism (see above), differing only in how many priors they drive per call:
+
+- `p_sample_loop_group` takes a **list** of model objects and a list of per-slot labels, zips them
+  one-to-one, and runs one forward pass per slot per step — `n_sources` forward passes, and
+  `n_sources` model instances, always.
+- `p_sample_loop` takes a **single** model object and a single label tensor covering every slot,
+  batches all `n_sources` slots into one forward pass per step, and needs only one model instance.
+  This is what upstream's own single-prior benchmark scripts use.
+
+`speech_sound` needs two different priors (speech and sound) in the same call, so it is the one mode
+that must use `p_sample_loop_group`. `sound_sound` and `speech_speech` each use only one prior, so
+the worker builds one model instance and calls `p_sample_loop` — reproducing upstream's own
+single-prior scripts exactly, at `(n_sources - 1)` fewer model instances than the previous
+`p_sample_loop_group`-for-everything shape used. `speech_speech` passes `model_kwargs=None` to
+`p_sample_loop`, matching upstream's own script for that mode: the speech prior has no conditioning
+to give it, and the sampler already tolerates `model_kwargs=None`. `sound_sound` passes the plain
+list of per-slot sound-prior labels.
+
+`test_the_sampler_choice_matches_upstream_per_mode` in `source_separation_test.py` is a structural
+(AST) check on the worker source for this dispatch, not an execution of it: the mocked-subprocess
+tests elsewhere in this file never run the real worker script, so they cannot observe which sampler
+function it calls.
 
 ### Chunking: senselab's construction, not upstream's
 

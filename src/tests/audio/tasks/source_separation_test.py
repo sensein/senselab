@@ -193,6 +193,73 @@ def test_worker_packs_the_mixture_so_degradation_reproduces_it() -> None:
     assert "orig_x" in unasdiff._WORKER_SCRIPT
 
 
+def test_the_sampler_choice_matches_upstream_per_mode() -> None:
+    """speech_sound keeps upstream's multi-model sampler; the other two modes use its single-model one.
+
+    The mocked-subprocess tests elsewhere in this file never execute the real worker script, so
+    they cannot see which upstream sampler function it calls. This is a structural check on the
+    worker source itself: mode == "speech_sound" must select p_sample_loop_group (it needs two
+    different priors in one call, which only that sampler supports); every other mode must select
+    the plain p_sample_loop, matching upstream's own single-prior benchmark scripts.
+    """
+    tree = ast.parse(unasdiff._WORKER_SCRIPT)
+
+    sampler_name_assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "sampler_name"
+        and isinstance(node.value, ast.IfExp)
+    ]
+    assert len(sampler_name_assignments) == 1, "expected exactly one `sampler_name = ... if ... else ...`"
+    if_exp = sampler_name_assignments[0].value
+    assert isinstance(if_exp.test, ast.Compare)
+    assert isinstance(if_exp.test.left, ast.Name) and if_exp.test.left.id == "mode"
+    assert isinstance(if_exp.test.comparators[0], ast.Constant)
+    assert if_exp.test.comparators[0].value == "speech_sound"
+    assert isinstance(if_exp.body, ast.Constant) and if_exp.body.value == "group"
+    assert isinstance(if_exp.orelse, ast.Constant) and if_exp.orelse.value == "single"
+
+    dispatch_ifs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "sampler_name"
+    ]
+    assert len(dispatch_ifs) == 1, "expected exactly one `if sampler_name == ...` dispatch"
+    dispatch = dispatch_ifs[0]
+
+    def _attr_call_names(stmts: list) -> list:
+        names = []
+        for stmt in stmts:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                    names.append(node.func.attr)
+        return names
+
+    assert "p_sample_loop_group" in _attr_call_names(dispatch.body)
+    assert "p_sample_loop" in _attr_call_names(dispatch.orelse)
+    assert "p_sample_loop_group" not in _attr_call_names(dispatch.orelse)
+
+
+def test_single_prior_modes_construct_one_model_instance() -> None:
+    """sound_sound and speech_speech load their one prior once, not n_sources times.
+
+    p_sample_loop processes a batch of n_sources slots through a single model instance and a
+    per-slot label tensor; constructing n_sources separate deepcopy'd instances (the shape
+    p_sample_loop_group needs) would waste (n_sources - 1) instances' worth of memory for a
+    single-prior mode.
+    """
+    assert "sampler_model, diffusion_config = load_prior(sound_config_path, sound_ckpt_path)" in unasdiff._WORKER_SCRIPT
+    assert (
+        "sampler_model, diffusion_config = load_prior(speech_config_path, speech_ckpt_path)" in unasdiff._WORKER_SCRIPT
+    )
+
+
 def test_sound_modes_require_source_classes(mono_audio_sample: Audio) -> None:
     """The sound prior is class-conditioned.
 
