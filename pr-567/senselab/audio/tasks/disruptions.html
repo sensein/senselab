@@ -61,6 +61,9 @@
                         <li>
                                 <a class="variable" href="#Disruptions.dc_offset">dc_offset</a>
                         </li>
+                        <li>
+                                <a class="variable" href="#Disruptions.zero_crossing_rate">zero_crossing_rate</a>
+                        </li>
                 </ul>
 
             </li>
@@ -114,29 +117,31 @@
 
     </div>
     <a class="headerlink" href="#Disruptions"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Disruptions-17"><a href="#Disruptions-17"><span class="linenos">17</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="Disruptions-18"><a href="#Disruptions-18"><span class="linenos">18</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Disruptions</span><span class="p">:</span>
-</span><span id="Disruptions-19"><a href="#Disruptions-19"><span class="linenos">19</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What was found in one span.</span>
-</span><span id="Disruptions-20"><a href="#Disruptions-20"><span class="linenos">20</span></a>
-</span><span id="Disruptions-21"><a href="#Disruptions-21"><span class="linenos">21</span></a><span class="sd">    Attributes:</span>
-</span><span id="Disruptions-22"><a href="#Disruptions-22"><span class="linenos">22</span></a><span class="sd">        start: Span onset in seconds.</span>
-</span><span id="Disruptions-23"><a href="#Disruptions-23"><span class="linenos">23</span></a><span class="sd">        end: Span offset in seconds.</span>
-</span><span id="Disruptions-24"><a href="#Disruptions-24"><span class="linenos">24</span></a><span class="sd">        clipped_runs: Number of runs of consecutive samples at or beyond the headroom.</span>
-</span><span id="Disruptions-25"><a href="#Disruptions-25"><span class="linenos">25</span></a><span class="sd">        clipped_s: Total duration of those runs.</span>
-</span><span id="Disruptions-26"><a href="#Disruptions-26"><span class="linenos">26</span></a><span class="sd">        dropout_runs: Number of runs of exact zeros at least ``min_dropout_ms`` long.</span>
-</span><span id="Disruptions-27"><a href="#Disruptions-27"><span class="linenos">27</span></a><span class="sd">        dropout_s: Total duration of those runs.</span>
-</span><span id="Disruptions-28"><a href="#Disruptions-28"><span class="linenos">28</span></a><span class="sd">        discontinuities: Number of sample-to-sample jumps exceeding the threshold.</span>
-</span><span id="Disruptions-29"><a href="#Disruptions-29"><span class="linenos">29</span></a><span class="sd">        dc_offset: Mean sample value over the span.</span>
-</span><span id="Disruptions-30"><a href="#Disruptions-30"><span class="linenos">30</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="Disruptions-31"><a href="#Disruptions-31"><span class="linenos">31</span></a>
-</span><span id="Disruptions-32"><a href="#Disruptions-32"><span class="linenos">32</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Disruptions-33"><a href="#Disruptions-33"><span class="linenos">33</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Disruptions-34"><a href="#Disruptions-34"><span class="linenos">34</span></a>    <span class="n">clipped_runs</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="Disruptions-35"><a href="#Disruptions-35"><span class="linenos">35</span></a>    <span class="n">clipped_s</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Disruptions-36"><a href="#Disruptions-36"><span class="linenos">36</span></a>    <span class="n">dropout_runs</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="Disruptions-37"><a href="#Disruptions-37"><span class="linenos">37</span></a>    <span class="n">dropout_s</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Disruptions-38"><a href="#Disruptions-38"><span class="linenos">38</span></a>    <span class="n">discontinuities</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="Disruptions-39"><a href="#Disruptions-39"><span class="linenos">39</span></a>    <span class="n">dc_offset</span><span class="p">:</span> <span class="nb">float</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Disruptions-20"><a href="#Disruptions-20"><span class="linenos">20</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="Disruptions-21"><a href="#Disruptions-21"><span class="linenos">21</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Disruptions</span><span class="p">:</span>
+</span><span id="Disruptions-22"><a href="#Disruptions-22"><span class="linenos">22</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;What was found in one span.</span>
+</span><span id="Disruptions-23"><a href="#Disruptions-23"><span class="linenos">23</span></a>
+</span><span id="Disruptions-24"><a href="#Disruptions-24"><span class="linenos">24</span></a><span class="sd">    Attributes:</span>
+</span><span id="Disruptions-25"><a href="#Disruptions-25"><span class="linenos">25</span></a><span class="sd">        start: Span onset in seconds.</span>
+</span><span id="Disruptions-26"><a href="#Disruptions-26"><span class="linenos">26</span></a><span class="sd">        end: Span offset in seconds.</span>
+</span><span id="Disruptions-27"><a href="#Disruptions-27"><span class="linenos">27</span></a><span class="sd">        clipped_runs: Number of runs of consecutive samples at or beyond the headroom.</span>
+</span><span id="Disruptions-28"><a href="#Disruptions-28"><span class="linenos">28</span></a><span class="sd">        clipped_s: Total duration of those runs.</span>
+</span><span id="Disruptions-29"><a href="#Disruptions-29"><span class="linenos">29</span></a><span class="sd">        dropout_runs: Number of runs of exact zeros at least ``min_dropout_ms`` long.</span>
+</span><span id="Disruptions-30"><a href="#Disruptions-30"><span class="linenos">30</span></a><span class="sd">        dropout_s: Total duration of those runs.</span>
+</span><span id="Disruptions-31"><a href="#Disruptions-31"><span class="linenos">31</span></a><span class="sd">        discontinuities: Number of sample-to-sample jumps large against the local variation.</span>
+</span><span id="Disruptions-32"><a href="#Disruptions-32"><span class="linenos">32</span></a><span class="sd">        dc_offset: Mean sample value over the span.</span>
+</span><span id="Disruptions-33"><a href="#Disruptions-33"><span class="linenos">33</span></a><span class="sd">        zero_crossing_rate: Sign changes per second over the span.</span>
+</span><span id="Disruptions-34"><a href="#Disruptions-34"><span class="linenos">34</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="Disruptions-35"><a href="#Disruptions-35"><span class="linenos">35</span></a>
+</span><span id="Disruptions-36"><a href="#Disruptions-36"><span class="linenos">36</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Disruptions-37"><a href="#Disruptions-37"><span class="linenos">37</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Disruptions-38"><a href="#Disruptions-38"><span class="linenos">38</span></a>    <span class="n">clipped_runs</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="Disruptions-39"><a href="#Disruptions-39"><span class="linenos">39</span></a>    <span class="n">clipped_s</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Disruptions-40"><a href="#Disruptions-40"><span class="linenos">40</span></a>    <span class="n">dropout_runs</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="Disruptions-41"><a href="#Disruptions-41"><span class="linenos">41</span></a>    <span class="n">dropout_s</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Disruptions-42"><a href="#Disruptions-42"><span class="linenos">42</span></a>    <span class="n">discontinuities</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="Disruptions-43"><a href="#Disruptions-43"><span class="linenos">43</span></a>    <span class="n">dc_offset</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Disruptions-44"><a href="#Disruptions-44"><span class="linenos">44</span></a>    <span class="n">zero_crossing_rate</span><span class="p">:</span> <span class="nb">float</span>
 </span></pre></div>
 
 
@@ -151,8 +156,9 @@
 <li><strong>clipped_s:</strong>  Total duration of those runs.</li>
 <li><strong>dropout_runs:</strong>  Number of runs of exact zeros at least <code>min_dropout_ms</code> long.</li>
 <li><strong>dropout_s:</strong>  Total duration of those runs.</li>
-<li><strong>discontinuities:</strong>  Number of sample-to-sample jumps exceeding the threshold.</li>
+<li><strong>discontinuities:</strong>  Number of sample-to-sample jumps large against the local variation.</li>
 <li><strong>dc_offset:</strong>  Mean sample value over the span.</li>
+<li><strong>zero_crossing_rate:</strong>  Sign changes per second over the span.</li>
 </ul>
 </div>
 
@@ -160,7 +166,7 @@
                             <div id="Disruptions.__init__" class="classattr">
                                 <div class="attr function">
             
-        <span class="name">Disruptions</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">start</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">end</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">clipped_runs</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">clipped_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">dropout_runs</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">dropout_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">discontinuities</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">dc_offset</span><span class="p">:</span> <span class="nb">float</span></span>)</span>
+        <span class="name">Disruptions</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">start</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">end</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">clipped_runs</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">clipped_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">dropout_runs</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">dropout_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">discontinuities</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">dc_offset</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">zero_crossing_rate</span><span class="p">:</span> <span class="nb">float</span></span>)</span>
 
         
     </div>
@@ -257,69 +263,88 @@
     
 
                             </div>
+                            <div id="Disruptions.zero_crossing_rate" class="classattr">
+                                <div class="attr variable">
+            <span class="name">zero_crossing_rate</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Disruptions.zero_crossing_rate"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="detect_disruptions">
                             <input id="detect_disruptions-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
             
         <span class="def">def</span>
-        <span class="name">detect_disruptions</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="n">start_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">end_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">clip_headroom</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">min_clip_run</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">min_dropout_ms</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">discontinuity_threshold</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="n"><a href="#Disruptions">Disruptions</a></span>:</span></span>
+        <span class="name">detect_disruptions</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="n">start_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">end_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">clip_headroom</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">min_clip_run</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">min_dropout_ms</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">discontinuity_local_factor</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">discontinuity_window_ms</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="n"><a href="#Disruptions">Disruptions</a></span>:</span></span>
 
                 <label class="view-source-button" for="detect_disruptions-view-source"><span>View Source</span></label>
 
     </div>
     <a class="headerlink" href="#detect_disruptions"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_disruptions-68"><a href="#detect_disruptions-68"><span class="linenos"> 68</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_disruptions</span><span class="p">(</span>
-</span><span id="detect_disruptions-69"><a href="#detect_disruptions-69"><span class="linenos"> 69</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="detect_disruptions-70"><a href="#detect_disruptions-70"><span class="linenos"> 70</span></a>    <span class="n">start_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_disruptions-71"><a href="#detect_disruptions-71"><span class="linenos"> 71</span></a>    <span class="n">end_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_disruptions-72"><a href="#detect_disruptions-72"><span class="linenos"> 72</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="detect_disruptions-73"><a href="#detect_disruptions-73"><span class="linenos"> 73</span></a>    <span class="n">clip_headroom</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_disruptions-74"><a href="#detect_disruptions-74"><span class="linenos"> 74</span></a>    <span class="n">min_clip_run</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="detect_disruptions-75"><a href="#detect_disruptions-75"><span class="linenos"> 75</span></a>    <span class="n">min_dropout_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_disruptions-76"><a href="#detect_disruptions-76"><span class="linenos"> 76</span></a>    <span class="n">discontinuity_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_disruptions-77"><a href="#detect_disruptions-77"><span class="linenos"> 77</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Disruptions</span><span class="p">:</span>
-</span><span id="detect_disruptions-78"><a href="#detect_disruptions-78"><span class="linenos"> 78</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Measure disruptions inside one span.</span>
-</span><span id="detect_disruptions-79"><a href="#detect_disruptions-79"><span class="linenos"> 79</span></a>
-</span><span id="detect_disruptions-80"><a href="#detect_disruptions-80"><span class="linenos"> 80</span></a><span class="sd">    A clipped or zero run that touches the span&#39;s start or end counts, measured only by its</span>
-</span><span id="detect_disruptions-81"><a href="#detect_disruptions-81"><span class="linenos"> 81</span></a><span class="sd">    extent inside the span; samples outside the span are never read.</span>
-</span><span id="detect_disruptions-82"><a href="#detect_disruptions-82"><span class="linenos"> 82</span></a>
-</span><span id="detect_disruptions-83"><a href="#detect_disruptions-83"><span class="linenos"> 83</span></a><span class="sd">    Args:</span>
-</span><span id="detect_disruptions-84"><a href="#detect_disruptions-84"><span class="linenos"> 84</span></a><span class="sd">        audio: The recording. A multi-channel input is averaged.</span>
-</span><span id="detect_disruptions-85"><a href="#detect_disruptions-85"><span class="linenos"> 85</span></a><span class="sd">        start_s: Span onset.</span>
-</span><span id="detect_disruptions-86"><a href="#detect_disruptions-86"><span class="linenos"> 86</span></a><span class="sd">        end_s: Span offset.</span>
-</span><span id="detect_disruptions-87"><a href="#detect_disruptions-87"><span class="linenos"> 87</span></a><span class="sd">        clip_headroom: A sample at or beyond this absolute value counts as clipped. Read it from</span>
-</span><span id="detect_disruptions-88"><a href="#detect_disruptions-88"><span class="linenos"> 88</span></a><span class="sd">            ``disruptions.clip_headroom``.</span>
-</span><span id="detect_disruptions-89"><a href="#detect_disruptions-89"><span class="linenos"> 89</span></a><span class="sd">        min_clip_run: Shortest run of clipped samples that counts as a clipping event. Read it from</span>
-</span><span id="detect_disruptions-90"><a href="#detect_disruptions-90"><span class="linenos"> 90</span></a><span class="sd">            ``disruptions.min_clip_run``.</span>
-</span><span id="detect_disruptions-91"><a href="#detect_disruptions-91"><span class="linenos"> 91</span></a><span class="sd">        min_dropout_ms: Shortest run of exact zeros that counts as a dropout. Read it from</span>
-</span><span id="detect_disruptions-92"><a href="#detect_disruptions-92"><span class="linenos"> 92</span></a><span class="sd">            ``disruptions.min_dropout_ms``.</span>
-</span><span id="detect_disruptions-93"><a href="#detect_disruptions-93"><span class="linenos"> 93</span></a><span class="sd">        discontinuity_threshold: Absolute sample-to-sample jump that counts as a discontinuity. Read</span>
-</span><span id="detect_disruptions-94"><a href="#detect_disruptions-94"><span class="linenos"> 94</span></a><span class="sd">            it from ``disruptions.discontinuity_threshold``.</span>
-</span><span id="detect_disruptions-95"><a href="#detect_disruptions-95"><span class="linenos"> 95</span></a>
-</span><span id="detect_disruptions-96"><a href="#detect_disruptions-96"><span class="linenos"> 96</span></a><span class="sd">    Returns:</span>
-</span><span id="detect_disruptions-97"><a href="#detect_disruptions-97"><span class="linenos"> 97</span></a><span class="sd">        The span&#39;s disruptions. Every count is exact; a clean span reports zeros.</span>
-</span><span id="detect_disruptions-98"><a href="#detect_disruptions-98"><span class="linenos"> 98</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="detect_disruptions-99"><a href="#detect_disruptions-99"><span class="linenos"> 99</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="detect_disruptions-100"><a href="#detect_disruptions-100"><span class="linenos">100</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="detect_disruptions-101"><a href="#detect_disruptions-101"><span class="linenos">101</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="detect_disruptions-102"><a href="#detect_disruptions-102"><span class="linenos">102</span></a>    <span class="n">sr</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
-</span><span id="detect_disruptions-103"><a href="#detect_disruptions-103"><span class="linenos">103</span></a>    <span class="n">segment</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">start_s</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))</span> <span class="p">:</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">end_s</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))]</span>
-</span><span id="detect_disruptions-104"><a href="#detect_disruptions-104"><span class="linenos">104</span></a>    <span class="k">if</span> <span class="n">segment</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="detect_disruptions-105"><a href="#detect_disruptions-105"><span class="linenos">105</span></a>        <span class="k">return</span> <span class="n">Disruptions</span><span class="p">(</span><span class="n">start_s</span><span class="p">,</span> <span class="n">end_s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
-</span><span id="detect_disruptions-106"><a href="#detect_disruptions-106"><span class="linenos">106</span></a>    <span class="n">clip_runs</span><span class="p">,</span> <span class="n">clip_n</span> <span class="o">=</span> <span class="n">_runs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">segment</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">clip_headroom</span><span class="p">,</span> <span class="n">min_clip_run</span><span class="p">)</span>
-</span><span id="detect_disruptions-107"><a href="#detect_disruptions-107"><span class="linenos">107</span></a>    <span class="n">drop_runs</span><span class="p">,</span> <span class="n">drop_n</span> <span class="o">=</span> <span class="n">_runs</span><span class="p">(</span><span class="n">segment</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">min_dropout_ms</span> <span class="o">*</span> <span class="n">sr</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)))</span>
-</span><span id="detect_disruptions-108"><a href="#detect_disruptions-108"><span class="linenos">108</span></a>    <span class="n">jumps</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">count_nonzero</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span><span class="n">segment</span><span class="p">))</span> <span class="o">&gt;</span> <span class="n">discontinuity_threshold</span><span class="p">))</span>
-</span><span id="detect_disruptions-109"><a href="#detect_disruptions-109"><span class="linenos">109</span></a>    <span class="k">return</span> <span class="n">Disruptions</span><span class="p">(</span>
-</span><span id="detect_disruptions-110"><a href="#detect_disruptions-110"><span class="linenos">110</span></a>        <span class="n">start</span><span class="o">=</span><span class="n">start_s</span><span class="p">,</span>
-</span><span id="detect_disruptions-111"><a href="#detect_disruptions-111"><span class="linenos">111</span></a>        <span class="n">end</span><span class="o">=</span><span class="n">end_s</span><span class="p">,</span>
-</span><span id="detect_disruptions-112"><a href="#detect_disruptions-112"><span class="linenos">112</span></a>        <span class="n">clipped_runs</span><span class="o">=</span><span class="n">clip_runs</span><span class="p">,</span>
-</span><span id="detect_disruptions-113"><a href="#detect_disruptions-113"><span class="linenos">113</span></a>        <span class="n">clipped_s</span><span class="o">=</span><span class="n">clip_n</span> <span class="o">/</span> <span class="n">sr</span><span class="p">,</span>
-</span><span id="detect_disruptions-114"><a href="#detect_disruptions-114"><span class="linenos">114</span></a>        <span class="n">dropout_runs</span><span class="o">=</span><span class="n">drop_runs</span><span class="p">,</span>
-</span><span id="detect_disruptions-115"><a href="#detect_disruptions-115"><span class="linenos">115</span></a>        <span class="n">dropout_s</span><span class="o">=</span><span class="n">drop_n</span> <span class="o">/</span> <span class="n">sr</span><span class="p">,</span>
-</span><span id="detect_disruptions-116"><a href="#detect_disruptions-116"><span class="linenos">116</span></a>        <span class="n">discontinuities</span><span class="o">=</span><span class="n">jumps</span><span class="p">,</span>
-</span><span id="detect_disruptions-117"><a href="#detect_disruptions-117"><span class="linenos">117</span></a>        <span class="n">dc_offset</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">segment</span><span class="o">.</span><span class="n">mean</span><span class="p">()),</span>
-</span><span id="detect_disruptions-118"><a href="#detect_disruptions-118"><span class="linenos">118</span></a>    <span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_disruptions-102"><a href="#detect_disruptions-102"><span class="linenos">102</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_disruptions</span><span class="p">(</span>
+</span><span id="detect_disruptions-103"><a href="#detect_disruptions-103"><span class="linenos">103</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="detect_disruptions-104"><a href="#detect_disruptions-104"><span class="linenos">104</span></a>    <span class="n">start_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_disruptions-105"><a href="#detect_disruptions-105"><span class="linenos">105</span></a>    <span class="n">end_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_disruptions-106"><a href="#detect_disruptions-106"><span class="linenos">106</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="detect_disruptions-107"><a href="#detect_disruptions-107"><span class="linenos">107</span></a>    <span class="n">clip_headroom</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_disruptions-108"><a href="#detect_disruptions-108"><span class="linenos">108</span></a>    <span class="n">min_clip_run</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="detect_disruptions-109"><a href="#detect_disruptions-109"><span class="linenos">109</span></a>    <span class="n">min_dropout_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_disruptions-110"><a href="#detect_disruptions-110"><span class="linenos">110</span></a>    <span class="n">discontinuity_local_factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_disruptions-111"><a href="#detect_disruptions-111"><span class="linenos">111</span></a>    <span class="n">discontinuity_window_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_disruptions-112"><a href="#detect_disruptions-112"><span class="linenos">112</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Disruptions</span><span class="p">:</span>
+</span><span id="detect_disruptions-113"><a href="#detect_disruptions-113"><span class="linenos">113</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Measure disruptions inside one span.</span>
+</span><span id="detect_disruptions-114"><a href="#detect_disruptions-114"><span class="linenos">114</span></a>
+</span><span id="detect_disruptions-115"><a href="#detect_disruptions-115"><span class="linenos">115</span></a><span class="sd">    A clipped or zero run that touches the span&#39;s start or end counts, measured only by its</span>
+</span><span id="detect_disruptions-116"><a href="#detect_disruptions-116"><span class="linenos">116</span></a><span class="sd">    extent inside the span; samples outside the span are never read.</span>
+</span><span id="detect_disruptions-117"><a href="#detect_disruptions-117"><span class="linenos">117</span></a>
+</span><span id="detect_disruptions-118"><a href="#detect_disruptions-118"><span class="linenos">118</span></a><span class="sd">    Args:</span>
+</span><span id="detect_disruptions-119"><a href="#detect_disruptions-119"><span class="linenos">119</span></a><span class="sd">        audio: The recording. A multi-channel input is averaged.</span>
+</span><span id="detect_disruptions-120"><a href="#detect_disruptions-120"><span class="linenos">120</span></a><span class="sd">        start_s: Span onset.</span>
+</span><span id="detect_disruptions-121"><a href="#detect_disruptions-121"><span class="linenos">121</span></a><span class="sd">        end_s: Span offset.</span>
+</span><span id="detect_disruptions-122"><a href="#detect_disruptions-122"><span class="linenos">122</span></a><span class="sd">        clip_headroom: A sample at or beyond this absolute value counts as clipped. Read it from</span>
+</span><span id="detect_disruptions-123"><a href="#detect_disruptions-123"><span class="linenos">123</span></a><span class="sd">            ``disruptions.clip_headroom``.</span>
+</span><span id="detect_disruptions-124"><a href="#detect_disruptions-124"><span class="linenos">124</span></a><span class="sd">        min_clip_run: Shortest run of clipped samples that counts as a clipping event. Read it from</span>
+</span><span id="detect_disruptions-125"><a href="#detect_disruptions-125"><span class="linenos">125</span></a><span class="sd">            ``disruptions.min_clip_run``.</span>
+</span><span id="detect_disruptions-126"><a href="#detect_disruptions-126"><span class="linenos">126</span></a><span class="sd">        min_dropout_ms: Shortest run of exact zeros that counts as a dropout. Read it from</span>
+</span><span id="detect_disruptions-127"><a href="#detect_disruptions-127"><span class="linenos">127</span></a><span class="sd">            ``disruptions.min_dropout_ms``.</span>
+</span><span id="detect_disruptions-128"><a href="#detect_disruptions-128"><span class="linenos">128</span></a><span class="sd">        discontinuity_local_factor: How many times the local variation a sample-to-sample jump must</span>
+</span><span id="detect_disruptions-129"><a href="#detect_disruptions-129"><span class="linenos">129</span></a><span class="sd">            exceed to count as a discontinuity. Read it from ``disruptions.discontinuity_local_factor``.</span>
+</span><span id="detect_disruptions-130"><a href="#detect_disruptions-130"><span class="linenos">130</span></a><span class="sd">        discontinuity_window_ms: Length of each of the two windows flanking a jump that the local</span>
+</span><span id="detect_disruptions-131"><a href="#detect_disruptions-131"><span class="linenos">131</span></a><span class="sd">            variation is measured over. Read it from ``disruptions.discontinuity_window_ms``.</span>
+</span><span id="detect_disruptions-132"><a href="#detect_disruptions-132"><span class="linenos">132</span></a>
+</span><span id="detect_disruptions-133"><a href="#detect_disruptions-133"><span class="linenos">133</span></a><span class="sd">    Returns:</span>
+</span><span id="detect_disruptions-134"><a href="#detect_disruptions-134"><span class="linenos">134</span></a><span class="sd">        The span&#39;s disruptions, with its DC offset and zero-crossing rate. Every count is exact; a</span>
+</span><span id="detect_disruptions-135"><a href="#detect_disruptions-135"><span class="linenos">135</span></a><span class="sd">        clean span reports zeros.</span>
+</span><span id="detect_disruptions-136"><a href="#detect_disruptions-136"><span class="linenos">136</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="detect_disruptions-137"><a href="#detect_disruptions-137"><span class="linenos">137</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="detect_disruptions-138"><a href="#detect_disruptions-138"><span class="linenos">138</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="detect_disruptions-139"><a href="#detect_disruptions-139"><span class="linenos">139</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="detect_disruptions-140"><a href="#detect_disruptions-140"><span class="linenos">140</span></a>    <span class="n">sr</span> <span class="o">=</span> <span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span>
+</span><span id="detect_disruptions-141"><a href="#detect_disruptions-141"><span class="linenos">141</span></a>    <span class="n">segment</span> <span class="o">=</span> <span class="n">x</span><span class="p">[</span><span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">start_s</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))</span> <span class="p">:</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">),</span> <span class="nb">int</span><span class="p">(</span><span class="n">end_s</span> <span class="o">*</span> <span class="n">sr</span><span class="p">))]</span>
+</span><span id="detect_disruptions-142"><a href="#detect_disruptions-142"><span class="linenos">142</span></a>    <span class="k">if</span> <span class="n">segment</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="detect_disruptions-143"><a href="#detect_disruptions-143"><span class="linenos">143</span></a>        <span class="k">return</span> <span class="n">Disruptions</span><span class="p">(</span><span class="n">start_s</span><span class="p">,</span> <span class="n">end_s</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">)</span>
+</span><span id="detect_disruptions-144"><a href="#detect_disruptions-144"><span class="linenos">144</span></a>    <span class="n">clip_runs</span><span class="p">,</span> <span class="n">clip_n</span> <span class="o">=</span> <span class="n">_runs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">segment</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">clip_headroom</span><span class="p">,</span> <span class="n">min_clip_run</span><span class="p">)</span>
+</span><span id="detect_disruptions-145"><a href="#detect_disruptions-145"><span class="linenos">145</span></a>    <span class="n">drop_runs</span><span class="p">,</span> <span class="n">drop_n</span> <span class="o">=</span> <span class="n">_runs</span><span class="p">(</span><span class="n">segment</span> <span class="o">==</span> <span class="mf">0.0</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">min_dropout_ms</span> <span class="o">*</span> <span class="n">sr</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)))</span>
+</span><span id="detect_disruptions-146"><a href="#detect_disruptions-146"><span class="linenos">146</span></a>    <span class="n">window</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">discontinuity_window_ms</span> <span class="o">*</span> <span class="n">sr</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">))</span>
+</span><span id="detect_disruptions-147"><a href="#detect_disruptions-147"><span class="linenos">147</span></a>    <span class="n">reference</span> <span class="o">=</span> <span class="n">_local_variation</span><span class="p">(</span><span class="n">segment</span><span class="p">,</span> <span class="n">window</span><span class="p">)</span> <span class="k">if</span> <span class="n">segment</span><span class="o">.</span><span class="n">size</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">empty</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="detect_disruptions-148"><a href="#detect_disruptions-148"><span class="linenos">148</span></a>    <span class="n">jumps</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">count_nonzero</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span><span class="n">segment</span><span class="p">))</span> <span class="o">&gt;</span> <span class="n">discontinuity_local_factor</span> <span class="o">*</span> <span class="n">reference</span><span class="p">))</span>
+</span><span id="detect_disruptions-149"><a href="#detect_disruptions-149"><span class="linenos">149</span></a>    <span class="n">crossings</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">count_nonzero</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">diff</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">signbit</span><span class="p">(</span><span class="n">segment</span><span class="p">))))</span>
+</span><span id="detect_disruptions-150"><a href="#detect_disruptions-150"><span class="linenos">150</span></a>    <span class="k">return</span> <span class="n">Disruptions</span><span class="p">(</span>
+</span><span id="detect_disruptions-151"><a href="#detect_disruptions-151"><span class="linenos">151</span></a>        <span class="n">start</span><span class="o">=</span><span class="n">start_s</span><span class="p">,</span>
+</span><span id="detect_disruptions-152"><a href="#detect_disruptions-152"><span class="linenos">152</span></a>        <span class="n">end</span><span class="o">=</span><span class="n">end_s</span><span class="p">,</span>
+</span><span id="detect_disruptions-153"><a href="#detect_disruptions-153"><span class="linenos">153</span></a>        <span class="n">clipped_runs</span><span class="o">=</span><span class="n">clip_runs</span><span class="p">,</span>
+</span><span id="detect_disruptions-154"><a href="#detect_disruptions-154"><span class="linenos">154</span></a>        <span class="n">clipped_s</span><span class="o">=</span><span class="n">clip_n</span> <span class="o">/</span> <span class="n">sr</span><span class="p">,</span>
+</span><span id="detect_disruptions-155"><a href="#detect_disruptions-155"><span class="linenos">155</span></a>        <span class="n">dropout_runs</span><span class="o">=</span><span class="n">drop_runs</span><span class="p">,</span>
+</span><span id="detect_disruptions-156"><a href="#detect_disruptions-156"><span class="linenos">156</span></a>        <span class="n">dropout_s</span><span class="o">=</span><span class="n">drop_n</span> <span class="o">/</span> <span class="n">sr</span><span class="p">,</span>
+</span><span id="detect_disruptions-157"><a href="#detect_disruptions-157"><span class="linenos">157</span></a>        <span class="n">discontinuities</span><span class="o">=</span><span class="n">jumps</span><span class="p">,</span>
+</span><span id="detect_disruptions-158"><a href="#detect_disruptions-158"><span class="linenos">158</span></a>        <span class="n">dc_offset</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">segment</span><span class="o">.</span><span class="n">mean</span><span class="p">()),</span>
+</span><span id="detect_disruptions-159"><a href="#detect_disruptions-159"><span class="linenos">159</span></a>        <span class="n">zero_crossing_rate</span><span class="o">=</span><span class="n">crossings</span> <span class="o">*</span> <span class="n">sr</span> <span class="o">/</span> <span class="n">segment</span><span class="o">.</span><span class="n">size</span><span class="p">,</span>
+</span><span id="detect_disruptions-160"><a href="#detect_disruptions-160"><span class="linenos">160</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
@@ -340,14 +365,17 @@ extent inside the span; samples outside the span are never read.</p>
 <code>disruptions.min_clip_run</code>.</li>
 <li><strong>min_dropout_ms:</strong>  Shortest run of exact zeros that counts as a dropout. Read it from
 <code>disruptions.min_dropout_ms</code>.</li>
-<li><strong>discontinuity_threshold:</strong>  Absolute sample-to-sample jump that counts as a discontinuity. Read
-it from <code>disruptions.discontinuity_threshold</code>.</li>
+<li><strong>discontinuity_local_factor:</strong>  How many times the local variation a sample-to-sample jump must
+exceed to count as a discontinuity. Read it from <code>disruptions.discontinuity_local_factor</code>.</li>
+<li><strong>discontinuity_window_ms:</strong>  Length of each of the two windows flanking a jump that the local
+variation is measured over. Read it from <code>disruptions.discontinuity_window_ms</code>.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>The span's disruptions. Every count is exact; a clean span reports zeros.</p>
+  <p>The span's disruptions, with its DC offset and zero-crossing rate. Every count is exact; a
+  clean span reports zeros.</p>
 </blockquote>
 </div>
 
