@@ -22,6 +22,7 @@ events. These justify the *shape* of a rule. Every constant needs more files.
 | [`preprocess-params.md`](preprocess-params.md) | pre-emphasis, the two spectrograms, the envelope filter, the sample rate |
 | [`taxonomy.md`](taxonomy.md) | the screening set: what each detector contributes, and what it is barred from |
 | [`voice.md`](voice.md) | the phonation gate's interval, why the product is periods, the two boundary facts |
+| [`disruptions.md`](disruptions.md) | what stream disruptions are measured on, and the local discontinuity reference |
 
 Scripts that produced these live in [`scripts/`](scripts/). They read the labels through
 `../../labels.py`, so ground truth has exactly one owner in this repository.

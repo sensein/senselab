@@ -29,7 +29,8 @@ def _detect(audio: Audio, start_s: float, end_s: float) -> Disruptions:
         clip_headroom=0.999,
         min_clip_run=3,
         min_dropout_ms=10.0,
-        discontinuity_threshold=0.5,
+        discontinuity_local_factor=10.0,
+        discontinuity_window_ms=20.0,
     )
 
 
@@ -74,7 +75,7 @@ class TestDropouts:
 
 
 class TestDiscontinuities:
-    """A discontinuity is a sample-to-sample jump beyond the threshold."""
+    """A discontinuity is a jump large against the signal's own local variation, not against a fixed number."""
 
     def test_a_step_is_a_discontinuity(self) -> None:
         """A 0.9 step in an otherwise smooth tone is counted."""
@@ -85,6 +86,41 @@ class TestDiscontinuities:
     def test_a_smooth_tone_has_none(self) -> None:
         """A continuous tone produces zero discontinuities."""
         assert _detect(_audio(_tone()), 0.0, 1.0).discontinuities == 0
+
+    def test_a_loud_high_frequency_tone_is_not_a_field_of_discontinuities(self) -> None:
+        """An absolute jump threshold measures high-frequency energy; the local reference does not.
+
+        A full-scale 3 kHz tone at 16 kHz steps 1.18 between neighbouring samples at every zero
+        crossing, so an absolute 0.5 rule calls almost every such sample a defect. Nothing about the
+        tone is discontinuous: each jump is ordinary against the local variation that produced it.
+        """
+        x = 1.0 * np.sin(2 * np.pi * 3000.0 * np.arange(SR) / SR)
+        absolute = int(np.count_nonzero(np.abs(np.diff(x)) > 0.5))
+        assert absolute > 10_000, "the fixture must actually defeat the absolute rule"
+        assert _detect(_audio(x), 0.0, 1.0).discontinuities == 0
+
+    def test_the_reference_is_local_so_the_same_jump_reads_differently_by_context(self) -> None:
+        """One 0.9 jump against a quiet neighbourhood counts; the same jump against a loud one does not."""
+        quiet = _tone(amp=0.05)
+        quiet[8000:] += 0.9
+        assert _detect(_audio(quiet), 0.0, 1.0).discontinuities == 1
+        loud = _tone(amp=0.9)
+        loud[8000:] += 0.9
+        assert _detect(_audio(loud), 0.0, 1.0).discontinuities == 0
+
+
+class TestZeroCrossingRate:
+    """Zero-crossing rate is a plain reading of the span, in crossings per second."""
+
+    def test_a_tone_reports_twice_its_frequency(self) -> None:
+        """A 200 Hz tone crosses zero 400 times a second."""
+        assert _detect(_audio(_tone(freq=200.0)), 0.0, 1.0).zero_crossing_rate == pytest.approx(400.0, abs=2.0)
+
+    def test_a_higher_tone_reports_a_higher_rate(self) -> None:
+        """The reading tracks the signal, not the sample rate."""
+        low = _detect(_audio(_tone(freq=200.0)), 0.0, 1.0).zero_crossing_rate
+        high = _detect(_audio(_tone(freq=800.0)), 0.0, 1.0).zero_crossing_rate
+        assert high == pytest.approx(4 * low, rel=0.02)
 
 
 class TestDcOffset:
