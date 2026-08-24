@@ -2,7 +2,8 @@
 
 Speech spans come from ASR word timings, never the envelope; the node runs no ASR — it reads and
 fuses the two hypotheses PREPROCESS wrote. pyannote sees only ``[first word start, last word end]``.
-A diarizer segment overlapping an airway-labelled span is withdrawn, never relabelled. The PII
+Diarization is about speech, so a diarizer segment is never withdrawn for overlapping an airway
+event and the speaker count is the live segment count. The PII
 decision is this branch's own and is speaker-scoped, and the ``pii_scan`` measurement is written on
 every path, including the one with no words, where it records that nothing was scanned. Quality is
 reported, never gating. Every parameter's derivation is in ``data/config/default.yaml``.
@@ -145,25 +146,6 @@ def _group_words_into_spans(words: list[dict[str, Any]], gap_ms: float) -> list[
         else:
             spans.append((float(word["start"]), float(word["end"]), [i]))
     return spans
-
-
-def _airway_labelled_extents(store: ProvStore) -> list[tuple[str, str, tuple[float, float]]]:
-    """Spans carrying a non-invalidated ``label`` assertion authored by an AIRWAY activity (N19).
-
-    Returns:
-        ``(assertion_id, span_id, span_extent)`` per labelled span.
-    """
-    out: list[tuple[str, str, tuple[float, float]]] = []
-    for assertion in store.entities("assertion"):
-        if assertion.attributes.get("verb") != "label" or store.is_invalidated(assertion.id):
-            continue
-        if _author_node(store, assertion.id) != "AIRWAY":
-            continue
-        for source_id in store.derived_from(assertion.id):
-            source = store.get_entity(source_id)
-            if source.prov_type == "span" and source.extent is not None:
-                out.append((assertion.id, source.id, source.extent))
-    return out
 
 
 def _speech_coverage(windows: list[dict[str, Any]], extent: tuple[float, float], threshold: float) -> float:
@@ -460,7 +442,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         span_extents.append((start, end))
         view.append(span_id)
 
-    # Step 4 — diarize pyannote over [first word start, last word end] only; withdraw, never relabel.
+    # Step 4 — diarize pyannote over [first word start, last word end] only; every segment counts.
     interval = clamp_extent((min(float(w["start"]) for w in fused), max(float(w["end"]) for w in fused)), plain)
     diarizer = _diarization_model()
     diarize_act = store.activity(
@@ -481,13 +463,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         for s in segments
     ]
 
-    airway_labels = _airway_labelled_extents(store)
-    for assertion_id, span_id_a, _ in airway_labels:
-        store.used(diarize_act, assertion_id)
-        store.used(diarize_act, span_id_a)
-
-    surviving: list[tuple[str, str, tuple[float, float]]] = []  # (entity_id, speaker, extent)
-    withdrawn: list[tuple[str, str, tuple[float, float]]] = []
+    speaker_segments: list[tuple[str, str, tuple[float, float]]] = []  # (entity_id, speaker, extent)
     for seg_line in shifted:
         extent = (float(seg_line.start or 0.0), float(seg_line.end or 0.0))
         speaker_id = store.entity(
@@ -498,31 +474,9 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         store.was_generated_by(speaker_id, diarize_act)
         store.was_attributed_to(speaker_id, diarizer_agent)
         view.append(speaker_id)
-        contested = next(
-            (entry for entry in airway_labels if _overlaps(extent, entry[2])),
-            None,
-        )
-        if contested is not None:
-            assertion_id, airway_span_id, airway_extent = contested
-            withdraw = store.activity(
-                node=NODE,
-                step="withdraw",
-                parameters={
-                    "speaker": seg_line.speaker,
-                    "segment": list(extent),
-                    "airway_span": airway_span_id,
-                    "airway_extent": list(airway_extent),
-                },
-            )
-            store.was_associated_with(withdraw, software)
-            store.used(withdraw, assertion_id)
-            store.used(withdraw, airway_span_id)
-            store.was_invalidated_by(speaker_id, withdraw)
-            withdrawn.append((speaker_id, str(seg_line.speaker), extent))
-        else:
-            surviving.append((speaker_id, str(seg_line.speaker), extent))
+        speaker_segments.append((speaker_id, str(seg_line.speaker), extent))
 
-    count = len({speaker for _, speaker, _ in surviving})
+    count = len({speaker for _, speaker, _ in speaker_segments})
     second = config.get("speech.second_diarizer")
     second_record: Any = "not_consulted"
     if count != 1:
@@ -584,23 +538,20 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
             stream_ids.append(stream_id)
             view.append(stream_id)
 
-    # Step 6 — identify: words to speakers by timing; straddlers and withdrawn are marked, not assigned.
+    # Step 6 — identify: words to speakers by timing; straddlers are marked, not assigned.
     identify = store.activity(node=NODE, step="identify", parameters={})
     store.was_associated_with(identify, software)
     assignments: list[tuple[str | None, str | None]] = []
     word_ids: list[str] = []
     for word in fused:
         extent = (float(word["start"]), float(word["end"]))
-        in_surviving = [entry for entry in surviving if _overlaps(extent, entry[2])]
-        in_withdrawn = [entry for entry in withdrawn if _overlaps(extent, entry[2])]
+        overlapping = [entry for entry in speaker_segments if _overlaps(extent, entry[2])]
         speaker: str | None
         note: str | None
-        if len(in_surviving) > 1:
+        if len(overlapping) > 1:
             speaker, note = None, "straddles"
-        elif in_withdrawn and not in_surviving:
-            speaker, note = None, "in_withdrawn"
-        elif len(in_surviving) == 1:
-            speaker, note = in_surviving[0][1], None
+        elif len(overlapping) == 1:
+            speaker, note = overlapping[0][1], None
         else:
             speaker, note = None, "unassigned"
         assignments.append((speaker, note))
@@ -638,13 +589,13 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         refusal = _target_refusal(target)
         if refusal is not None:
             flags.append(refusal)
-        elif surviving:
+        elif speaker_segments:
             probe = _embedding_model()
-            labels = sorted({speaker for _, speaker, _ in surviving})
+            labels = sorted({speaker for _, speaker, _ in speaker_segments})
             audios: list[Audio] = []
             for label in labels:
                 slices = []
-                for _, speaker, extent in surviving:
+                for _, speaker, extent in speaker_segments:
                     if speaker != label:
                         continue
                     s, e = clamp_extent(extent, plain)
