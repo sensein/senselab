@@ -61,16 +61,16 @@ def _stub_worker(monkeypatch: pytest.MonkeyPatch, captured: dict) -> types.Modul
     return u
 
 
-def test_class_map_has_41_classes_in_50_slots() -> None:
-    """The prior's 50-wide embedding has only 41 trained rows.
+def test_class_map_has_41_classes_in_51_slots() -> None:
+    """The prior's 51-row embedding (num_class=50 plus an untrained CFG null row) has 41 trained rows.
 
-    Passing an index in 41..49 would condition on an untrained embedding row and
-    produce plausible-looking noise rather than an error.
+    Passing an index in 41..49 (untrained headroom) or 50 (the untrained CFG null) would condition
+    on an untrained embedding row and produce plausible-looking noise rather than an error.
     """
     doc = unasdiff.load_fsd_class_map_document()
     assert len(doc["classes"]) == 41
     assert max(doc["classes"].values()) == 40
-    assert doc["num_embedding_slots"] == 50
+    assert doc["num_embedding_slots"] == 51
 
 
 def test_resolve_source_classes_maps_names_to_indices() -> None:

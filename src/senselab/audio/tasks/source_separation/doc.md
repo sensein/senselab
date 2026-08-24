@@ -2,8 +2,9 @@
 
 ## unasdiff (unsupervised separation via diffusion priors)
 
-[unasdiff](https://github.com/RunwuShi/unasdiff) (Shi, Runwu et al., *Unsupervised Audio Source
-Separation using Diffusion Priors*, AAAI 2026) separates a mixture into its component sources
+[unasdiff](https://github.com/RunwuShi/unasdiff) (Shi, Runwu et al., *Unsupervised Single-Channel
+Audio Separation with Diffusion Source Priors*, AAAI 2026, [arXiv:2512.07226](https://arxiv.org/abs/2512.07226))
+separates a mixture into its component sources
 without ever training on mixtures. It factors the mixture likelihood into two independently
 trained *unconditional* diffusion priors — a speech prior and a sound prior, each trained only on
 single-source audio — and runs posterior sampling at inference time to pull each source back out
@@ -14,14 +15,14 @@ train priors on separately.
 
 ### senselab writes the driver
 
-Upstream ships training code and the two benchmark scripts its paper's numbers came from
-(`benchmark_musdb.py`, `benchmark_urmp.py`); it has no installable package and no inference-only
-entry point. Its three `test_*.py` scripts (`test_speech_sound.py`, `test_soundevent.py`,
-`test_speech_speech.py`) call `torch.cuda.set_device(0)` at module import and abort outright on a
-CPU host, so they are not usable as a library either. The worker script in
-[`unasdiff.py`](unasdiff.py) is therefore senselab's own driver: it reuses upstream's model
-construction (`models.py`) and diffusion sampler (`diffusion.py`) directly, and reimplements only
-the benchmark scripts' `load_model` — whose EMA-vs-raw distinction is load-bearing, since loading
+Upstream ships training code and the three benchmark scripts its paper's numbers came from
+(`test_speech_sound.py`, `test_soundevent.py`, `test_speech_speech.py`); it has no installable
+package and no inference-only entry point. Those same three scripts call
+`torch.cuda.set_device(0)` at module import and abort outright on a CPU host, so they are not
+usable as a library either. The worker script in [`unasdiff.py`](unasdiff.py) is therefore
+senselab's own driver: it reuses upstream's model construction (`models/atten_unet.py`) and
+diffusion sampler (`diffusion/gaussian_diffusion.py`) directly, and reimplements only the
+benchmark scripts' `load_model` — whose EMA-vs-raw distinction is load-bearing, since loading
 the non-EMA weights runs without error but separates measurably worse. The three separation modes,
 the public `separate_audios` API, and long-form chunking (below) are equally senselab's
 construction; nothing here is a thin wrapper around an upstream CLI.
@@ -51,13 +52,19 @@ by reading `degradation` and the `p_sample_loop_group` step loop at the pinned c
 
 ### Two label spaces, not one
 
-The sound prior's conditioning embedding has 50 slots (`num_class=50` in
-`config/atten_unet_fsd/config.toml`), of which 41 were populated by training on FSD50K subset
-labels. `senselab.audio.tasks.source_separation.unasdiff.load_fsd_class_map_document` loads this
-map from `data/fsd41_classes.json`, and `api.resolve_source_classes` resolves a caller's class
-names against it, raising (and enumerating the 41 valid names) rather than silently falling back to
-index 0 on a typo — index 0 is `"Hi-hat"`, a real class, so a fallback there would condition on the
-wrong sound silently.
+The sound prior's conditioning embedding has 51 slots. `config/atten_unet_fsd/config.toml` sets
+`num_class=50`, and `models/atten_unet.py`'s `LabelEmbedder` allocates `num_classes +
+use_cfg_embedding` rows; `use_cfg_embedding` is `True` because `dropout_prob=0.1 > 0`. Row 50 is
+therefore an untrained classifier-free-guidance null token (`token_drop`'s fallback when a label is
+dropped for CFG training) — never a class, and never reachable, since upstream's own inference path
+has no reachable CFG call (see "No configuration surface" below). Rows 0-40 were populated by
+training on FSDKaggle2018 subset labels; rows 41-49 are untrained headroom. The model holds five
+independent copies of this table (`y_embedder_1`..`y_embedder_5`), each initialised independently
+and none trained past row 40. `senselab.audio.tasks.source_separation.unasdiff.load_fsd_class_map_document`
+loads the 41 trained names from `data/fsd41_classes.json`, and `api.resolve_source_classes`
+resolves a caller's class names against it, raising (and enumerating the 41 valid names) rather
+than silently falling back to index 0 on a typo — index 0 is `"Hi-hat"`, a real class, so a
+fallback there would condition on the wrong sound silently.
 
 The speech prior's conditioning label space is disjoint from the sound prior's and has exactly one
 member: unconditional speech, index 0. The two label spaces sharing the integer 0 for unrelated
@@ -89,6 +96,18 @@ that one catches a typo in a class *name*, this one catches an out-of-range raw 
   limitation by measurement rather than by reading this line. Nothing downstream should treat its
   output as a reliable decomposition of two overlapping speakers.
 
+  **`sound_sound` carries the same caveat, for a different reason.** Label conditioning here is an
+  unamplified embedding lookup: there is no guidance-scale knob (nothing exposes one, and upstream's
+  own classifier-free-guidance path is dead code reachable through no code path this backend calls
+  — the null row it would condition on, row 50, was never trained; see "Two label spaces, not one"
+  above). Both sound slots start the reverse process from the *identical* noised mixture (the
+  augmented-mixture init both samplers build is one tensor, tiled across slots), so the per-slot
+  class embedding is the entire deterministic difference between what the two slots produce. The
+  paper reports 11.5% failure on two-sound mixtures. Two sources summing to approximately the
+  mixture with an arbitrary — not necessarily label-matched — assignment of content to slots is
+  the expected degenerate outcome on a failure, not a bug: the labels choose which priors run, they
+  do not reliably steer which slot collects which event.
+
 `p_sample_loop_group` zips one model object against one label per slot, so `n_sources` model
 instances are always constructed, including in `speech_speech` where every slot shares the same
 weights — a separate `deepcopy`'d instance per slot, never one instance reused across slots.
@@ -99,8 +118,10 @@ paper never measured.
 
 ### Chunking: senselab's construction, not upstream's
 
-unasdiff was trained and benchmarked on fixed 4 s clips (`_WINDOW_S = 4.0`, the config's own
-diffusion window — not a tunable). Upstream has no path for longer inputs at all. senselab's
+unasdiff was trained and benchmarked on fixed 4 s clips (`_WINDOW_S = 4.0`, the paper's training
+clip length and the fixed length upstream's `test_speech_sound.py`/`test_soundevent.py`/
+`test_speech_speech.py` all hard-code as `tgt_len_sec` -- not a config field, and not a tunable).
+Upstream has no path for longer inputs at all. senselab's
 `separate_with_unasdiff` splits anything longer into 4 s windows at 50% overlap (`_OVERLAP_S =
 2.0`), separates each window independently, and stitches the results back with a Hann-tapered
 overlap-add.
@@ -132,6 +153,15 @@ not to a wrapper whose job is to invoke the sampler and hand back what it produc
 `separate_with_unasdiff` reports every window boundary's margin in
 `metadata["unasdiff_alignment_margins"]` as **data**, and a caller who wants to distinguish a
 confident alignment from a coin flip reads that list and sets its own bar.
+
+**Alignment is chained, so one ambiguous boundary corrupts everything after it.** Each window is
+aligned onto the *previous aligned* window's slot order, not onto window 0's — a single boundary
+whose margin lands in the ambiguous band (`~1e-6`, not the confident band's `~2.0`) commits to
+whichever permutation happens to score marginally higher there, and every later window inherits
+that choice: there is no mechanism that revisits or corrects it once made. The margins list is how
+a reader detects this after the fact — a run of confident margins followed by one near-zero value
+and then more confident-looking values downstream is the signature of a flip that was never
+undone, not evidence the flip did not happen.
 
 Keeping the two apart is what makes the tool's parameters legible: `mode`, `n_sources`,
 `source_class_indices`, `seed` and `diffusion_steps` all say *how to run unasdiff*, and nothing in
@@ -174,6 +204,18 @@ For contrast, DriftSE (`speech_enhancement/driftse.py`) reaches the clean-speech
 single step, and SGMSE+ takes 30 — 200 is a lot, by the standard of the other diffusion-based
 backends in this repository.
 
+### No configuration surface for the scheduler, solver, or guidance
+
+The beta schedule (linear, `1e-4..0.02`), the sampler (`p_sample_loop`/`p_sample_loop_group`), and
+the DPS-style guidance term (`CorrectorVPConditional.update_fn_recons`, gated `i < 200`) are all
+literals in upstream's `diffusion/gaussian_diffusion.py` at the pinned commit — not config fields,
+not constructor arguments with a default, nothing `GaussianDiffusion(steps=...)` exposes a way to
+override. Exposing any of them as a senselab-level knob would mean vendoring and patching that file,
+and the licensing position below is exactly why this backend vendors nothing: upstream ships no
+`LICENSE` and an unanswered clarification request, so patching and redistributing its sampler is not
+available as a design option today. This is the same fact `diffusion_steps` runs into above — it is
+not a scheduler knob, and there being no path to a real one is why it stays fixed at `200`.
+
 ### flash-attn is opt-in, not unconditional
 
 flash-attn is absent from the venv's requirements by default (see the module docstring's "Why a
@@ -205,24 +247,29 @@ per-window-step cost (`_SECONDS_PER_WINDOW_STEP_CUDA = 0.4`, the A100 figure abo
 `_CPU_TIMEOUT_MULTIPLIER = 45` whenever `device` names CPU or MPS: the review that produced this
 fix measured a roughly 45x CPU/A100 wall-time ratio on this workload, and a ceiling sized for CUDA
 killed every CPU run before its first window landed, discarding whatever had already completed
-(`separate_with_unasdiff` has no salvage path — see the timeout section above). `device=None`
+(`separate_with_unasdiff` has no salvage path — completed windows are counted in the error message
+but not preserved; see `specs/20260818-071500-unasdiff-device-timeout-pcm16/design.md`, D-2).
+`device=None`
 (the worker chooses) keeps the CUDA figure, matching the ceiling's pre-existing behaviour for the
 common case where the worker is expected to find a GPU. An explicit `timeout_s` still overrides
 this derivation outright.
 
 ### Measured runtime
 
-Not yet measured in this repository: every prior task in this plan, and this one, ran on a host
-with no CUDA device (`torch.cuda.is_available()` is `False` here), so the skip-gated end-to-end
-test (`test_unasdiff_separates_a_mixture_into_n_sources` in `source_separation_test.py`) has only
-ever been exercised as a skip. "Impractical on CPU" therefore remains an inference from the
-sampler's shape rather than a measured number: 200 diffusion steps, each evaluating `n_sources`
-model instances and backpropagating through the corresponding prior (the DPS-style guidance term
-`p_sample_loop_group` computes needs a gradient through the network, not just a forward pass) —
-a cost more like `n_sources` training-time backward passes per step than a single inference forward
-pass. The runtime number a CUDA host produces for one 4 s, two-source `speech_sound` separation,
-and the hardware it was measured on, belongs here as soon as that host exists; do not read the
-number above as having already been supplied.
+The skip-gated end-to-end test (`test_unasdiff_separates_a_mixture_into_n_sources` in
+`source_separation_test.py`) has been exercised as a skip on every host this plan has run on so
+far (`torch.cuda.is_available()` is `False` here) — that test alone remains unmeasured. A separate
+measurement exists, though: an exclusive A100 node ran 200 diffusion steps over 14.027 s of audio
+(7 windows) in 560.71 s, i.e. `560.71 / (7 x 200) = 0.4 s` per window-step, RTF ≈ 40x
+(`specs/20260818-071500-unasdiff-device-timeout-pcm16/design.md`, D-2). That measurement is the
+`_SECONDS_PER_WINDOW_STEP_CUDA` this module's default timeout is built on. CPU is unmeasured
+directly, but a separate review measured roughly 45x that A100 wall-time on this workload (see
+"The default timeout scales with the device" above) — 200 diffusion steps, each evaluating
+`n_sources` model instances and backpropagating through the corresponding prior (the DPS-style
+guidance term `p_sample_loop_group`/`p_sample_loop` computes needs a gradient through the network,
+not just a forward pass), is a cost more like `n_sources` training-time backward passes per step
+than a single inference forward pass, which is consistent with CPU being far slower still than the
+A100 figure above.
 
 ### Provenance metadata
 

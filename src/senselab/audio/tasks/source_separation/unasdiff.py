@@ -1,8 +1,9 @@
 """unasdiff unsupervised source separation via isolated subprocess venv.
 
-unasdiff (Shi, Runwu et al., *Unsupervised Audio Source Separation using Diffusion
-Priors*, https://github.com/RunwuShi/unasdiff) separates a mixture into speech and
-one FSD50K-conditioned sound source without ever training on mixtures: it factors
+unasdiff (Shi, Runwu et al., *Unsupervised Single-Channel Audio Separation with
+Diffusion Source Priors*, AAAI 2026, arXiv:2512.07226,
+https://github.com/RunwuShi/unasdiff) separates a mixture into speech and
+one FSDKaggle2018-conditioned sound source without ever training on mixtures: it factors
 the mixture likelihood into two independently-trained unconditional diffusion
 priors (a speech prior and a sound prior) and runs posterior sampling at inference
 time. This is what makes it usable for the off-target-speaker-detection problem
@@ -11,9 +12,9 @@ project's notes) -- there is no dataset of "target speech + arbitrary intruder"
 mixtures to train a supervised separator on, but there are large unconditional
 speech and sound corpora to train priors on separately.
 
-Upstream ships training code and the two benchmark scripts its paper's numbers
-came from (``benchmark_musdb.py``, ``benchmark_urmp.py``); it has no installable
-package, no inference-only entry point, and no long-form chunking (the paper's
+Upstream ships training code and the three benchmark scripts its paper's numbers
+came from (``test_speech_sound.py``, ``test_soundevent.py``, ``test_speech_speech.py``); it has no
+installable package, no inference-only entry point, and no long-form chunking (the paper's
 mixtures are short benchmark clips). The worker driver, the three separation
 modes, and chunking for arbitrary-length recordings are therefore this
 repository's own code reusing upstream's model construction, not a thin wrapper
@@ -22,9 +23,11 @@ API, and long-form chunking.
 
 Two label spaces, not one
 --------------------------
-The sound prior's conditioning embedding has 50 slots (``num_class=50`` in
-``config/atten_unet_fsd/config.toml``), of which 41 were populated by training on
-FSD50K subset labels -- see ``data/fsd41_classes.json`` and
+The sound prior's conditioning embedding has 51 slots: ``config/atten_unet_fsd/config.toml`` sets
+``num_class=50``, and ``models/atten_unet.py``'s ``LabelEmbedder`` allocates
+``num_classes + use_cfg_embedding`` rows, where ``use_cfg_embedding`` is ``True`` because
+``dropout_prob=0.1 > 0``. Of those 51, 41 (rows 0-40) were populated by training on FSDKaggle2018
+subset labels -- see ``data/fsd41_classes.json`` and
 :func:`load_fsd_class_map_document`. The speech prior's conditioning label space is
 disjoint and has exactly one member (unconditional speech). Passing a sound-prior
 index to the speech prior, or an index above 40 to the sound prior, is a caller
@@ -157,10 +160,11 @@ _UNASDIFF_REQUIREMENTS = [
     # H100: uv finds no wheel for av==14.4.0 on this interpreter and falls back to a source
     # build, which fails with "You are REQUIRED to use ffmpeg 7" and pkg-config unable to
     # find avformat/avcodec/... -- so the whole venv build dies. Checked upstream at the
-    # pinned commit: neither inference.py, utils.py nor dataloader.py imports av, so it is a
-    # training/data-pipeline dependency the inference path never touches. Same reasoning as
-    # flash-attn above, and the opposite of DriftSE's pesq, which looked training-only but
-    # was imported at module scope -- which is why this one was verified rather than assumed.
+    # pinned commit: nothing this worker imports (models/, diffusion/, utils.py) imports av
+    # anywhere -- it is a training/data-pipeline dependency the inference path never touches.
+    # Same reasoning as flash-attn above, and the opposite of DriftSE's pesq, which looked
+    # training-only but was imported at module scope -- which is why this one was verified
+    # rather than assumed.
     "soundfile",
 ]
 
