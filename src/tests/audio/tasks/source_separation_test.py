@@ -728,6 +728,41 @@ def test_the_default_timeout_scales_with_windows_and_steps() -> None:
     assert more_steps == pytest.approx(2 * big)
 
 
+def test_the_default_timeout_is_device_aware() -> None:
+    """A CPU (or MPS) ceiling is the CUDA one scaled by the measured CPU/A100 wall-time ratio.
+
+    _SECONDS_PER_WINDOW_STEP_CUDA (0.4) is an A100 measurement; the review's own measurement put
+    CPU at roughly 45x that on this workload (see doc.md), so an explicit CPU device must derive a
+    ceiling roughly 45x the CUDA one for identical work, not the same number for every device.
+    """
+    cuda = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS, device=DeviceType.CUDA)
+    cpu = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS, device=DeviceType.CPU)
+    mps = unasdiff._default_timeout_s(200, unasdiff._DIFFUSION_STEPS, device=DeviceType.MPS)
+    assert cpu == pytest.approx(45 * cuda)
+    assert mps == pytest.approx(45 * cuda)
+
+
+def test_the_derived_ceiling_is_device_aware_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The device the caller passes reaches the derived timeout, not just the worker payload."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+        checkpoint_dir="/tmp/fake-unasdiff-checkpoints",
+        diffusion_steps=9000,
+        device=DeviceType.CPU,
+    )
+    expected = u._default_timeout_s(2, 9000, device=DeviceType.CPU)
+    assert captured["timeout"] == expected
+    assert captured["timeout"] == pytest.approx(45 * u._default_timeout_s(2, 9000, device=DeviceType.CUDA))
+
+
 def test_the_derived_ceiling_reaches_subprocess_run(monkeypatch: pytest.MonkeyPatch) -> None:
     """The timeout ``subprocess.run`` receives is the derived one, not a hardcoded constant."""
     captured: dict = {}

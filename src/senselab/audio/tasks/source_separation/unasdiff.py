@@ -235,24 +235,43 @@ _DIFFUSION_STEPS = 200
 # Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
 # Derivation and the measurement behind both numbers:
 # specs/20260818-071500-unasdiff-device-timeout-pcm16.
-_SECONDS_PER_WINDOW_STEP = 0.4
+_SECONDS_PER_WINDOW_STEP_CUDA = 0.4
+# CPU/MPS multiplier on the CUDA figure -- derivation in doc.md.
+_CPU_TIMEOUT_MULTIPLIER = 45.0
 _TIMEOUT_HEADROOM = 4.0
 _TIMEOUT_FLOOR_S = 1800.0
 
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
 
 
-def _default_timeout_s(n_windows: int, diffusion_steps: int) -> float:
+def _seconds_per_window_step(device: Optional[DeviceType]) -> float:
+    """Return the per-(window x diffusion-step) cost, in seconds, for ``device``.
+
+    Args:
+        device: The device the worker will run on. ``None`` (the caller has left the choice to
+            the worker) and ``DeviceType.CUDA`` both use the measured CUDA figure; any other
+            device is scaled by ``_CPU_TIMEOUT_MULTIPLIER``.
+
+    Returns:
+        Seconds per window-step.
+    """
+    if device is None or device == DeviceType.CUDA:
+        return _SECONDS_PER_WINDOW_STEP_CUDA
+    return _SECONDS_PER_WINDOW_STEP_CUDA * _CPU_TIMEOUT_MULTIPLIER
+
+
+def _default_timeout_s(n_windows: int, diffusion_steps: int, device: Optional[DeviceType] = None) -> float:
     """Return the default worker ceiling for ``n_windows`` windows at ``diffusion_steps`` steps.
 
     Args:
         n_windows: Total number of 4 s windows the worker will separate, across every input.
         diffusion_steps: Reverse-diffusion steps per window.
+        device: The device the worker will run on; see :func:`_seconds_per_window_step`.
 
     Returns:
         Seconds, never below ``_TIMEOUT_FLOOR_S``.
     """
-    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _SECONDS_PER_WINDOW_STEP * n_windows * diffusion_steps)
+    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _seconds_per_window_step(device) * n_windows * diffusion_steps)
 
 
 @functools.lru_cache(maxsize=1)
@@ -675,9 +694,10 @@ def separate_with_unasdiff(
             any published or measured basis against the checkpoints this backend ships today.
         timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
             work -- total windows across every input, times ``diffusion_steps``, times a
-            per-window-step factor, with a floor covering the first-use clone and the checkpoint
-            load (:func:`_default_timeout_s`). Exceeding it raises ``RuntimeError`` and discards
-            every window, completed or not.
+            per-window-step factor that itself depends on ``device`` (CPU and MPS scale the
+            measured CUDA figure -- see :func:`_seconds_per_window_step`), with a floor covering
+            the first-use clone and the checkpoint load (:func:`_default_timeout_s`). Exceeding it
+            raises ``RuntimeError`` and discards every window, completed or not.
 
     Returns:
         One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
@@ -730,7 +750,9 @@ def separate_with_unasdiff(
     ]
 
     total_windows = sum(len(w) for w in windows_per_audio)
-    effective_timeout_s = _default_timeout_s(total_windows, diffusion_steps) if timeout_s is None else timeout_s
+    effective_timeout_s = (
+        _default_timeout_s(total_windows, diffusion_steps, device=device) if timeout_s is None else timeout_s
+    )
 
     speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
 
