@@ -226,6 +226,9 @@ _MODE_SPEECH_SOUND = "speech_sound"
 _MODE_SOUND_SOUND = "sound_sound"
 _MODE_SPEECH_SPEECH = "speech_speech"
 
+# The paper evaluated at most this many sources; see doc.md for the citation.
+_MAX_SOURCES = 3
+
 _TARGET_SR = 16000
 _WINDOW_S = 4.0  # upstream's trained window; not a tunable
 _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
@@ -759,8 +762,9 @@ def separate_with_unasdiff(
         threshold).
 
     Raises:
-        ValueError: if ``len(source_class_indices) != n_sources``, if ``diffusion_steps`` is
-            not positive, if ``timeout_s`` is not positive, if any slot's label is out of range
+        ValueError: if ``n_sources`` exceeds ``_MAX_SOURCES`` (the paper's own evaluated range --
+            see ``doc.md``), if ``len(source_class_indices) != n_sources``, if ``diffusion_steps``
+            is not positive, if ``timeout_s`` is not positive, if any slot's label is out of range
             for the prior it loads (see :func:`_validate_source_class_indices`), or if ``device``
             is neither CUDA nor CPU (or names a device this host does not have).
         RuntimeError: if the worker fails; the upstream traceback is included. Also if the
@@ -769,6 +773,11 @@ def separate_with_unasdiff(
     """
     if not audios:
         return []
+    if n_sources > _MAX_SOURCES:
+        raise ValueError(
+            f"n_sources={n_sources} exceeds {_MAX_SOURCES}: the paper this backend implements "
+            f"evaluated at most {_MAX_SOURCES} sources. See doc.md."
+        )
     if len(source_class_indices) != n_sources:
         raise ValueError(
             f"source_class_indices must have exactly n_sources={n_sources} entries, got {len(source_class_indices)}"

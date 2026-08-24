@@ -108,8 +108,9 @@ def separate_audios(
         ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is
             not one of the three supported modes; if a mode using the sound prior is missing
             ``source_classes``; if ``source_classes`` does not have exactly the number of
-            entries that mode's sound slots require; if ``diffusion_steps`` is not ``200``; or if
-            ``timeout_s`` is not positive.
+            entries that mode's sound slots require; if ``diffusion_steps`` is not ``200``; if
+            ``n_sources`` exceeds ``3`` (the paper's own evaluated range); or if ``timeout_s`` is
+            not positive.
     """
     if isinstance(model, HFModel) and is_clearvoice_model_id(str(model.path_or_uri)):
         spec = clearvoice_model_spec(str(model.path_or_uri), expected_task=CLEARVOICE_SEPARATION_TASK)
