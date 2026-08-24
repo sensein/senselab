@@ -188,6 +188,18 @@ incremental change, the next time this backend runs. A failed opt-in build fails
 person who set the env var, which is the point: they are the one who can supply a working `nvcc` or
 turn the flag back off.
 
+### The default timeout scales with the device
+
+`separate_with_unasdiff`'s derived ceiling (`_default_timeout_s`) multiplies the measured CUDA
+per-window-step cost (`_SECONDS_PER_WINDOW_STEP_CUDA = 0.4`, the A100 figure above) by
+`_CPU_TIMEOUT_MULTIPLIER = 45` whenever `device` names CPU or MPS: the review that produced this
+fix measured a roughly 45x CPU/A100 wall-time ratio on this workload, and a ceiling sized for CUDA
+killed every CPU run before its first window landed, discarding whatever had already completed
+(`separate_with_unasdiff` has no salvage path — see the timeout section above). `device=None`
+(the worker chooses) keeps the CUDA figure, matching the ceiling's pre-existing behaviour for the
+common case where the worker is expected to find a GPU. An explicit `timeout_s` still overrides
+this derivation outright.
+
 ### Measured runtime
 
 Not yet measured in this repository: every prior task in this plan, and this one, ran on a host
