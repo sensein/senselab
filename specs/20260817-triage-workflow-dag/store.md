@@ -78,29 +78,43 @@ choice. PROV changes the vocabulary, not that property.
 
 ## Ordering is declared by what a node reads
 
-Read-anything does not mean read-anytime. A node that reads another node's assertions **depends on that
-node**, and the dependency is real whether or not it appears in a port table:
+**Ordering is declared by reads, not by a runner's sequence.** A node that reads another node's
+assertions **depends on that node**, and that dependency — the `used` relation — is the only thing
+that orders the graph. A node whose reads are all satisfied may run; two nodes neither of which reads
+the other may run concurrently.
 
 ```
-ADMIT → PREPROCESS → TAXONOMY → AIRWAY → SPEECH → ┬─→ REDACT ─┬→ VERDICT
-                                             └──→ VOICE ──┘
+ADMIT → PREPROCESS → TAXONOMY → routing ─┬─→ AIRWAY?             ─┐
+                                         ├─→ SPEECH? → REDACT?   ─┼→ VERDICT → REPORT
+                                         └─→ VOICE?              ─┘
 ```
 
-**The branches are not concurrent, and the store is why.** SPEECH withdraws diarizer segments that
-overlap AIRWAY's labelled spans, and VOICE's residual subtracts both AIRWAY's and SPEECH's claims. Only
-`REDACT ∥ VOICE` survives. An earlier description of this graph as a three-way fan-out was wrong: the
-store converted undeclared reads into declared ordering, which is a cost of the store and not a free
-gain.
+`?` marks a **conditional** node. [`routing.md`](routing.md) writes one `branch_decision` element per
+branch before any branch runs, and a branch runs only if its decision says so; [`REDACT`](redact.md)
+is a step of SPEECH and runs only when SPEECH's PII scan found something.
 
-SPEECH's read of AIRWAY is optional — it withdraws segments if airway spans exist — so a caller may run
-the two concurrently and accept that no withdrawal happens. VOICE's read is not optional: without both
-prior branches' claims there is no residual to compute.
+**The branches are concurrent.** None reads another: SPEECH withdraws nothing for AIRWAY's labels
+([`branch-speech.md`](branch-speech.md) step 4), and VOICE measures PREPROCESS's phonation spans
+rather than a residual of the other branches' claims ([`branch-voice.md`](branch-voice.md)). Every
+branch reads PREPROCESS and its own `branch_decision`, and nothing else the graph produced.
 
-## The last fold
+The real edges are therefore: everything ← PREPROCESS; TAXONOMY ← PREPROCESS; routing ← TAXONOMY;
+each branch ← routing; REDACT ← SPEECH; VERDICT ← every verdict and every branch decision; REPORT ←
+VERDICT and the whole store.
+
+`PREPROCESS → TAXONOMY → routing` is one unit over one input stream, and every element it writes names
+that stream, so a second pass over a suppressed-foreground stream is expressible. The current target
+runs the unit once, on the original recording.
+
+## The last fold, and the rendering after it
 
 [`verdict.md`](verdict.md) folds every node's verdict into a file-level one. It is a reader of the store
-like any other node, with two properties worth stating here: it reads *verdicts* rather than elements,
-and where two nodes contradict each other it records both and flags rather than choosing.
+like any other node, with two properties worth stating here: it reads *verdicts* and `branch_decision`
+elements rather than raw measurements, and where two nodes contradict each other it records both and
+flags rather than choosing.
+
+[`report.md`](report.md) runs after it and reads the whole store. It **writes no elements**: a
+rendering is not evidence, and nothing downstream reads it to learn a fact the store does not hold.
 
 ## What this replaces
 
