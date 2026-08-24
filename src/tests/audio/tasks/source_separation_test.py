@@ -883,6 +883,93 @@ def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: 
     assert captured["device"] is DeviceType.CPU
 
 
+# ── Label-range validation ────────────────────────────────────────────
+
+
+def test_a_sound_label_in_the_speech_slot_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """speech_sound's slot 0 always loads the speech prior, whose only valid label is 0.
+
+    The module docstring promises this catch; api.resolve_source_classes only catches a typo in a
+    class *name*, so a caller going through unasdiff.separate_with_unasdiff directly with a raw
+    index bypasses it entirely without this check.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 0") as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[14, 0],
+            mode="speech_sound",
+        )
+    assert "speech" in str(exc.value)
+    assert "14" in str(exc.value)
+    assert not captured, "the worker subprocess must never run once validation has failed"
+
+
+def test_a_sound_label_above_40_in_a_sound_slot_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sound prior's embedding has 41 trained rows (0..40); above that is untrained headroom."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 1") as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 41],
+            mode="speech_sound",
+        )
+    assert "sound" in str(exc.value)
+    assert "41" in str(exc.value)
+    assert not captured
+
+
+def test_a_negative_label_in_a_sound_slot_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A negative index is also out of the sound prior's valid range, not just anything above 40."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 0"):
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[-1, 0],
+            mode="sound_sound",
+        )
+    assert not captured
+
+
+def test_a_nonzero_label_in_speech_speech_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both slots load the speech prior in speech_speech; its only valid label is 0."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="slot 1") as exc:
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=2,
+            source_class_indices=[0, 3],
+            mode="speech_speech",
+        )
+    assert "speech" in str(exc.value)
+    assert not captured
+
+
+def test_valid_labels_reach_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """In-range labels for every slot must not be rejected."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 40],
+        mode="speech_sound",
+    )
+    assert captured["payload"]["labels"] == [0, 40]
+
+
 # ── Provenance metadata ───────────────────────────────────────────────
 
 
