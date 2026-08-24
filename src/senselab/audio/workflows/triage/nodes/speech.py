@@ -6,7 +6,9 @@ Diarization is about speech, so a diarizer segment is never withdrawn for overla
 event and the speaker count is the live segment count. The PII
 decision is this branch's own and is speaker-scoped, and the ``pii_scan`` measurement is written on
 every path, including the one with no words, where it records that nothing was scanned. Quality is
-reported, never gating. Every parameter's derivation is in ``data/config/default.yaml``.
+reported, never gating; SQUIM reads ``plain`` while the disruption counts and the zero-crossing rate
+read the original ``recording``, since normalising and resampling destroy the defects they look for.
+Every parameter's derivation is in ``data/config/default.yaml``.
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "SPEECH"
 EMBEDDING_ID = "speechbrain/spkrec-ecapa-voxceleb"
+ORIGINAL = "recording"  # the stream disruptions are measured on: as captured, unnormalised, unresampled
 
 
 def _diarization_model() -> PyannoteAudioModel:
@@ -105,7 +108,8 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
         "clip_headroom": float(config.require("disruptions.clip_headroom")),
         "min_clip_run": int(config.require("disruptions.min_clip_run")),
         "min_dropout_ms": float(config.require("disruptions.min_dropout_ms")),
-        "discontinuity_threshold": float(config.require("disruptions.discontinuity_threshold")),
+        "discontinuity_local_factor": float(config.require("disruptions.discontinuity_local_factor")),
+        "discontinuity_window_ms": float(config.require("disruptions.discontinuity_window_ms")),
         "required_detectors": sorted(str(name) for name in config.require("pii.required_detectors")),
     }
     target = hint.target_speaker if hint is not None else None
@@ -264,10 +268,14 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
 
     Returns:
         The verdict, and the view over every element this branch authored or asserted over.
+
+    Raises:
+        LookupError: If either the named stream or the original ``recording`` stream is absent.
     """
     values = _required(config, hint)
     software = software_agent(store)
     plain_id, plain = resolve_stream(store, run_dir, source)
+    recording_id, recording = resolve_stream(store, run_dir, ORIGINAL)
     sr = int(plain.sampling_rate)
     view: list[str] = []
     flags: list[str] = []
@@ -719,7 +727,7 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
     store.was_attributed_to(scan_id, software)
     view.append(scan_id)
 
-    # Step 8 — quality: SQUIM and disruption counts per span, reported and never gating.
+    # Step 8 — quality: SQUIM on plain, disruptions on the original recording; reported, never gating.
     quality = store.activity(
         node=NODE,
         step="quality",
@@ -727,11 +735,13 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
             "clip_headroom": values["clip_headroom"],
             "min_clip_run": values["min_clip_run"],
             "min_dropout_ms": values["min_dropout_ms"],
-            "discontinuity_threshold": values["discontinuity_threshold"],
+            "discontinuity_local_factor": values["discontinuity_local_factor"],
+            "discontinuity_window_ms": values["discontinuity_window_ms"],
         },
     )
     store.was_associated_with(quality, software)
     store.used(quality, plain_id)
+    store.used(quality, recording_id)
     for span_id, extent, squim in zip(span_ids, span_extents, squim_by_span):
         squim_id = store.entity(
             prov_type="measurement",
@@ -741,20 +751,22 @@ def speech(  # noqa: C901 — the branch's eight steps, in design order
         store.was_generated_by(squim_id, quality)
         store.was_derived_from(squim_id, span_id)
         view.append(squim_id)
+        original_extent = clamp_extent(extent, recording)
         disruptions = detect_disruptions(
-            plain,
-            extent[0],
-            extent[1],
+            recording,
+            original_extent[0],
+            original_extent[1],
             clip_headroom=values["clip_headroom"],
             min_clip_run=values["min_clip_run"],
             min_dropout_ms=values["min_dropout_ms"],
-            discontinuity_threshold=values["discontinuity_threshold"],
+            discontinuity_local_factor=values["discontinuity_local_factor"],
+            discontinuity_window_ms=values["discontinuity_window_ms"],
         )
         counts = {k: v for k, v in asdict(disruptions).items() if k not in ("start", "end")}
         disruption_id = store.entity(
             prov_type="measurement",
             extent=extent,
-            attributes={"name": "disruptions", "stream": plain_id, **counts},
+            attributes={"name": "disruptions", "stream": recording_id, **counts},
         )
         store.was_generated_by(disruption_id, quality)
         store.was_derived_from(disruption_id, span_id)

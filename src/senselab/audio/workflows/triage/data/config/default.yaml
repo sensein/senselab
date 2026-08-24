@@ -98,9 +98,29 @@ derivation: |
   defaults windowed top_k to 5 and Silence is not always in the top 5 (capability-map 4.2), so a
   truncated read silently reports zero for a label the model actually emitted.
 
-  Disruption parameters -- conventional. A single sample at full scale is not clipping, which is what
-  min_clip_run is for. The counts these produce are exact; what has no measured value is the
-  tolerance, which is quality.disruption_* below.
+  Disruption parameters -- clip_headroom, min_clip_run and min_dropout_ms are conventional. A single
+  sample at full scale is not clipping, which is what min_clip_run is for. The counts these produce
+  are exact; what has no measured value is the tolerance, which is quality.disruption_* below.
+  All of them are measured on the ORIGINAL recording rather than on the plain stream:
+  peak-normalisation and resampling between them destroy the flat plateaus clipping consists of, and
+  clipped_runs read 0 on every campaign file including four whose originals peak at exactly
+  0.0 dBFS. A resampled copy is the wrong instrument for a defect of the recording.
+
+  disruptions.discontinuity_local_factor 10.0 and discontinuity_window_ms 20.0 --
+  benchmarks/disruptions.md. The criterion this replaces was an absolute 0.5 sample-to-sample jump,
+  which measures high-frequency energy rather than defects: a full-scale 3 kHz tone at 16 kHz steps
+  1.18 between neighbouring samples at every zero crossing, and the rule called 11999 of them
+  discontinuities in one second, 800 on one campaign recording of loud speech. A jump is now
+  referenced to the signal's own local variation -- the larger standard deviation of the two
+  20 ms windows flanking it, neither containing the jump, and a standard deviation rather than an
+  RMS so a constant offset is not read as variation. Measured over 806142 samples of peak-normalised
+  clean speech from three recordings at 16, 24 and 48 kHz: the largest ratio observed was 9.64 and
+  the 99.9th percentile 3.90, so a factor of 10 flags none of them, against 376 flagged by the
+  absolute rule on the same audio. The 20 ms window is the conventional short-term analysis frame,
+  the same length spectrogram.narrowband_window_ms uses, and is not separately fitted.
+
+  disruptions ZCR -- zero_crossing_rate is a plain reading of each span in crossings per second,
+  reported and never gated. It has no threshold because nobody has derived one.
 
   HeAR placement centre -- benchmarks/hear-yamnet.md's whole-span numbers were measured with the
   span centred in the buffer (benchmarks/scripts/spaninput.py). span_to_hear_buffer implements
@@ -299,7 +319,8 @@ disruptions:
   clip_headroom: 0.999
   min_clip_run: 3
   min_dropout_ms: 10.0
-  discontinuity_threshold: 0.5
+  discontinuity_local_factor: 10.0    # benchmarks/disruptions.md -- a jump against its own local variation
+  discontinuity_window_ms: 20.0       # the conventional short-term frame; not separately fitted
 
 pii:
   required_detectors: [gliner, presidio, rules]   # the pii_detection module's own detector set

@@ -649,6 +649,54 @@ def test_quality_is_reported_never_gating(seed_speech_store: SeedSpeechStore, mo
     assert result.verdict.outcome is Outcome.PASS
     dis = [m for m in store.entities("measurement") if m.attributes.get("name") == "disruptions"]
     assert dis and all("clipped_runs" in m.attributes for m in dis), "counts and extents, not a score"
+    assert all("zero_crossing_rate" in m.attributes for m in dis), "the ZCR reading rides along, ungated"
+
+
+def test_disruptions_are_measured_on_the_original_recording_not_the_normalised_copy(
+    seed_speech_store: SeedSpeechStore,
+) -> None:
+    """Clipping is a property of the recording, and normalise-then-resample destroys the evidence.
+
+    The campaign read clipped_runs == 0 on every file, four of which peak at exactly 0.0 dBFS. The
+    discriminating pair is here: one original carrying a flat plateau at full scale, and the plain
+    stream PREPROCESS derived from it, in which the plateau no longer exists. The node must report
+    the first, and must name the stream it measured.
+    """
+    import soundfile as sf
+
+    from senselab.audio.tasks.disruptions import detect_disruptions
+
+    duration_s = 6.0
+    store, cfg, run_dir = seed_speech_store(WORDS, WORDS, duration_s=duration_s)
+    original = np.zeros(int(duration_s * SR), dtype=np.float32)
+    original[int(0.9 * SR) : int(1.8 * SR)] = 1.0  # a flat plateau at full scale across the words
+    sf.write(str(run_dir / "streams" / "recording.wav"), original, SR)
+    pre = store.activity(node="PREPROCESS", step="capture", parameters={})
+    recording_id = store.entity(
+        prov_type="stream",
+        extent=(0.0, duration_s),
+        attributes={"name": "recording", "path": "streams/recording.wav", "sampling_rate": SR, "channels": 1},
+    )
+    store.was_generated_by(recording_id, pre)
+
+    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    dis = [m for m in store.entities("measurement") if m.attributes.get("name") == "disruptions"]
+    assert dis, "every span carries a disruptions measurement"
+    assert any(m.attributes["clipped_runs"] > 0 for m in dis), "the plateau in the original is clipping"
+    assert all(m.attributes["stream"] == recording_id for m in dis), "a measurement names the stream it read"
+
+    plain_audio = Audio(filepath=str(run_dir / "streams" / "plain.wav"))
+    invisible = detect_disruptions(
+        plain_audio,
+        1.0,
+        1.7,
+        clip_headroom=float(cfg.require("disruptions.clip_headroom")),
+        min_clip_run=int(cfg.require("disruptions.min_clip_run")),
+        min_dropout_ms=float(cfg.require("disruptions.min_dropout_ms")),
+        discontinuity_local_factor=float(cfg.require("disruptions.discontinuity_local_factor")),
+        discontinuity_window_ms=float(cfg.require("disruptions.discontinuity_window_ms")),
+    )
+    assert invisible.clipped_runs == 0, "the same clipping is invisible on the derived copy"
 
 
 def test_squim_vote_is_inert_while_thresholds_are_null(
