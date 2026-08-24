@@ -214,6 +214,17 @@ pass. The runtime number a CUDA host produces for one 4 s, two-source `speech_so
 and the hardware it was measured on, belongs here as soon as that host exists; do not read the
 number above as having already been supplied.
 
+### Provenance metadata
+
+Every returned `Audio` carries `metadata["unasdiff"]`: `mode`, `source_classes` (names, not indices
+-- `None` for `speech_speech`), `n_sources`, `diffusion_steps`, `upstream_commit` (the pinned clone
+commit), `checkpoint_revision`, and `device`. `checkpoint_revision` is the resolved 40-hex commit of
+the checkpoint mirror -- `resolve_model` returns `(sha, path)`, and it used to be discarded, so
+nothing downstream could tell which commit of the mirror actually produced a given separation, only
+which ref was requested. It is `None` when the caller supplied checkpoints directly
+(`checkpoint_dir` or `SENSELAB_UNASDIFF_CHECKPOINTS`) rather than through the pinned mirror -- there
+is no commit to attribute those to. Same pattern as ClearVoice's `metadata["clearvoice"]` below.
+
 ### Licensing
 
 The upstream repository carries no `LICENSE` file and no license statement in its README. A licence
