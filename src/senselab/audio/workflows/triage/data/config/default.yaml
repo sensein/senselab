@@ -84,9 +84,10 @@ derivation: |
   HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
   length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
 
-  HeAR label_floor 0.5 -- benchmarks/hear-yamnet.md. Given a whole span, the winning label scores
-  0.940-0.996 while the runner-up scores 0.02-0.41, so 0.5 sits in a wide empty interval rather than
-  being tuned to either side.
+  HeAR label_floor 0.5 -- UNMEASURED on any real corpus. The original empty-interval derivation is
+  retracted (benchmarks/hear-yamnet.md): the b2ai-28 campaign's 170 spans produced winners 0.501-0.821
+  with two within 0.005 of the floor, and both dedicated cough recordings labelled nothing. 0.5 stands
+  only until the ROC in benchmarks/open.md is run.
 
   YAMNet silence_threshold and coverage_threshold, both 0.5 -- benchmarks/hear-yamnet.md and
   taxonomy.md. Silence is bimodal across the reference recording's 29 windows: every score is <=0.36
