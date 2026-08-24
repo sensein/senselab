@@ -65,6 +65,12 @@ meanings ("Hi-hat" vs. "unconditional speech") is precisely why `separate_with_u
 `mode` as an explicit, required argument rather than inferring which prior a slot should load from
 `source_class_indices` alone — the index alone is ambiguous.
 
+`separate_with_unasdiff` validates every slot's label against the prior `mode` says that slot
+loads before the worker ever starts (`_validate_source_class_indices`): a speech slot accepts only
+`0`, a sound slot only `0..40`. This is a second, lower check than `api.resolve_source_classes` —
+that one catches a typo in a class *name*, this one catches an out-of-range raw index reaching
+`separate_with_unasdiff` directly, which bypasses the name lookup entirely.
+
 ### Three modes, and the speech–speech caveat
 
 `separate_audios` exposes three modes, matching which of the two priors each slot loads:

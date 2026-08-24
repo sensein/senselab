@@ -29,7 +29,11 @@ FSD50K subset labels -- see ``data/fsd41_classes.json`` and
 disjoint and has exactly one member (unconditional speech). Passing a sound-prior
 index to the speech prior, or an index above 40 to the sound prior, is a caller
 error this module is built to catch rather than silently accept -- see
-:func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`.
+:func:`_validate_source_class_indices`, which runs in :func:`separate_with_unasdiff`
+before the worker ever starts, and
+:func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`, which
+catches the same error one layer up, at the point a caller's class *name* resolves
+to an index.
 
 Why a subprocess venv
 ----------------------
@@ -649,6 +653,38 @@ def _resolve_checkpoint_paths(
     )
 
 
+def _validate_source_class_indices(mode: str, source_class_indices: List[int]) -> None:
+    """Raise if any slot's label is out of range for the prior that slot loads.
+
+    Speech and sound are two disjoint label spaces sharing the integer 0 for unrelated meanings
+    (see this module's docstring) -- an index valid for one prior is not merely unchecked for the
+    other, it silently selects a real (wrong) meaning there. This is the catch the module docstring
+    promises at this layer; :func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`
+    only catches a typo in a class *name* and is bypassed entirely by a caller passing raw indices
+    to this function directly.
+
+    Args:
+        mode: One of ``"speech_sound"``, ``"sound_sound"``, ``"speech_speech"``.
+        source_class_indices: One label per slot.
+
+    Raises:
+        ValueError: Naming the offending slot, which prior it loads, and the index it was given.
+    """
+    max_sound_index = max(load_fsd_class_map_document()["classes"].values())
+    for slot, index in enumerate(source_class_indices):
+        slot_is_speech = mode == _MODE_SPEECH_SPEECH or (mode == _MODE_SPEECH_SOUND and slot == 0)
+        if slot_is_speech:
+            if index != 0:
+                raise ValueError(
+                    f"slot {slot} loads the speech prior in mode={mode!r}, whose only valid label is 0; got {index}"
+                )
+        elif not (0 <= index <= max_sound_index):
+            raise ValueError(
+                f"slot {slot} loads the sound prior in mode={mode!r}, whose valid labels are "
+                f"0..{max_sound_index}; got {index}"
+            )
+
+
 def separate_with_unasdiff(
     audios: List[Audio],
     n_sources: int,
@@ -724,8 +760,9 @@ def separate_with_unasdiff(
 
     Raises:
         ValueError: if ``len(source_class_indices) != n_sources``, if ``diffusion_steps`` is
-            not positive, if ``timeout_s`` is not positive, or if ``device`` is neither CUDA
-            nor CPU (or names a device this host does not have).
+            not positive, if ``timeout_s`` is not positive, if any slot's label is out of range
+            for the prior it loads (see :func:`_validate_source_class_indices`), or if ``device``
+            is neither CUDA nor CPU (or names a device this host does not have).
         RuntimeError: if the worker fails; the upstream traceback is included. Also if the
             worker exceeds ``timeout_s`` -- that message names the ceiling, the inputs, and how
             many windows had been written when it fired.
@@ -740,6 +777,7 @@ def separate_with_unasdiff(
         raise ValueError(f"diffusion_steps must be a positive integer, got {diffusion_steps}")
     if timeout_s is not None and timeout_s <= 0:
         raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s}")
+    _validate_source_class_indices(mode, source_class_indices)
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
     from senselab.utils.data_structures.device import _select_device_and_dtype, device_run_opt
