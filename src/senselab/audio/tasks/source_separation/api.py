@@ -194,6 +194,7 @@ def separate_audios(
         seed=seed,
         diffusion_steps=diffusion_steps,
         timeout_s=timeout_s,
+        source_classes=source_classes,
     )
 
 

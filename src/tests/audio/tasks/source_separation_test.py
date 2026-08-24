@@ -883,6 +883,82 @@ def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: 
     assert captured["device"] is DeviceType.CPU
 
 
+# ── Provenance metadata ───────────────────────────────────────────────
+
+
+def test_provenance_metadata_carries_the_resolved_checkpoint_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every returned Audio records the resolved commit, not just the pinned ref.
+
+    resolve_model returns (sha, path); the host used to discard the sha, so nothing downstream
+    could tell which commit of the mirror actually produced a given separation.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    fake_sha = "a" * 40
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model",
+        lambda *a, **k: (fake_sha, Path("/tmp/fake-unasdiff-checkpoints")),
+    )
+
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    result = u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[3, 7],
+        mode="sound_sound",
+        source_classes=["Applause", "Cello"],
+    )
+
+    meta = result[0][0].metadata["unasdiff"]
+    assert meta["checkpoint_revision"] == fake_sha
+    assert len(meta["checkpoint_revision"]) == 40
+    assert all(c in "0123456789abcdef" for c in meta["checkpoint_revision"])
+    assert meta["mode"] == "sound_sound"
+    assert meta["source_classes"] == ["Applause", "Cello"]
+    assert meta["n_sources"] == 2
+    assert meta["diffusion_steps"] == u._DIFFUSION_STEPS
+    assert meta["upstream_commit"] == u._UNASDIFF_COMMIT
+    assert "device" in meta
+    # Every slot -- not just the first -- carries the record.
+    for source in result[0]:
+        assert source.metadata["unasdiff"] == meta
+
+
+def test_provenance_metadata_reaches_every_stitched_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A multi-window (stitched) output also carries the provenance record, not only the short path."""
+    u = _stub_worker(monkeypatch, {})
+    monkeypatch.setattr(
+        "senselab.utils.dependencies.resolve_model",
+        lambda *a, **k: ("b" * 40, Path("/tmp/fake-unasdiff-checkpoints")),
+    )
+
+    n_samples = int(6.0 * u._TARGET_SR)  # two windows
+    audio = Audio(waveform=torch.randn(1, n_samples), sampling_rate=u._TARGET_SR)
+    result = u.separate_with_unasdiff(
+        [audio],
+        n_sources=2,
+        source_class_indices=[0, 0],
+        mode="speech_speech",
+    )
+    for source in result[0]:
+        assert source.metadata["unasdiff"]["checkpoint_revision"] == "b" * 40
+
+
+def test_separate_audios_forwards_source_classes_into_the_provenance_call(
+    mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """api.separate_audios threads source_classes through so it can be recorded as provenance."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["source_classes"] = kwargs["source_classes"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_sound", n_sources=2, source_classes=["Applause"])
+    assert captured["source_classes"] == ["Applause"]
+
+
 # ── WAV intermediates ─────────────────────────────────────────────────
 
 

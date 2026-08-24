@@ -608,7 +608,9 @@ def _window_starts(n_samples: int, window_samples: int, hop_samples: int) -> Lis
     return starts
 
 
-def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tuple[Path, Path, Path, Path]:
+def _resolve_checkpoint_paths(
+    checkpoint_dir: Optional[Union[str, Path]],
+) -> tuple[Path, Path, Path, Path, Optional[str]]:
     """Resolve the four files unasdiff's two priors need: two checkpoints, two configs.
 
     Resolution order mirrors DriftSE's (``speech_enhancement/driftse.py``): an explicit
@@ -622,8 +624,12 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
         checkpoint_dir: Explicit override directory, if any.
 
     Returns:
-        ``(speech_ckpt, speech_config, sound_ckpt, sound_config)`` paths.
+        ``(speech_ckpt, speech_config, sound_ckpt, sound_config, checkpoint_revision)``.
+        ``checkpoint_revision`` is the resolved 40-hex commit SHA when the pinned HF mirror was
+        the source, ``None`` when the caller supplied their own checkpoints (``checkpoint_dir`` or
+        ``SENSELAB_UNASDIFF_CHECKPOINTS``) -- there is no commit to attribute those to.
     """
+    checkpoint_revision: Optional[str] = None
     if checkpoint_dir is not None:
         base = Path(checkpoint_dir)
     else:
@@ -633,12 +639,13 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
         else:
             from senselab.utils.dependencies import resolve_model
 
-            _, base = resolve_model(_UNASDIFF_HF_REPO, _UNASDIFF_HF_REVISION)
+            checkpoint_revision, base = resolve_model(_UNASDIFF_HF_REPO, _UNASDIFF_HF_REVISION)
     return (
         base / _UNASDIFF_SPEECH_CKPT,
         base / _UNASDIFF_SPEECH_CONFIG,
         base / _UNASDIFF_SOUND_CKPT,
         base / _UNASDIFF_SOUND_CONFIG,
+        checkpoint_revision,
     )
 
 
@@ -652,6 +659,7 @@ def separate_with_unasdiff(
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
     timeout_s: Optional[float] = None,
+    source_classes: Optional[List[str]] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -698,11 +706,18 @@ def separate_with_unasdiff(
             measured CUDA figure -- see :func:`_seconds_per_window_step`), with a floor covering
             the first-use clone and the checkpoint load (:func:`_default_timeout_s`). Exceeding it
             raises ``RuntimeError`` and discards every window, completed or not.
+        source_classes: Class names, one per sound slot, purely for the ``metadata["unasdiff"]``
+            provenance record below -- conditioning itself uses ``source_class_indices``. ``None``
+            for a mode with no class names (``"speech_speech"``).
 
     Returns:
-        One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
-        input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]`` carries one
-        ``best_score - second_best_score`` float per window boundary (see
+        One list of ``n_sources`` ``Audio`` objects per input, in order. Every returned ``Audio``
+        carries ``metadata["unasdiff"]``: ``mode``, ``source_classes``, ``n_sources``,
+        ``diffusion_steps``, ``upstream_commit`` (the pinned clone commit), ``checkpoint_revision``
+        (the resolved 40-hex commit of the checkpoint mirror, or ``None`` when the caller supplied
+        checkpoints directly rather than through the pinned mirror), and ``device``. For a
+        multi-window input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]``
+        also carries one ``best_score - second_best_score`` float per window boundary (see
         ``data/permutation_alignment.json`` for the measurement behind reading this number,
         which the profile does not gate on since the measurement did not support a fitted
         threshold).
@@ -754,7 +769,18 @@ def separate_with_unasdiff(
         _default_timeout_s(total_windows, diffusion_steps, device=device) if timeout_s is None else timeout_s
     )
 
-    speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
+    speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path, checkpoint_revision = (
+        _resolve_checkpoint_paths(checkpoint_dir)
+    )
+    provenance = {
+        "mode": mode,
+        "source_classes": source_classes,
+        "n_sources": n_sources,
+        "diffusion_steps": diffusion_steps,
+        "upstream_commit": _UNASDIFF_COMMIT,
+        "checkpoint_revision": checkpoint_revision,
+        "device": worker_device or "worker-selected",
+    }
 
     venv_dir = ensure_venv(
         _UNASDIFF_VENV,
@@ -858,6 +884,7 @@ def separate_with_unasdiff(
                     source_audio = Audio(filepath=p)
                     _ = source_audio.waveform
                     source_audio.metadata = dict(audio.metadata)
+                    source_audio.metadata["unasdiff"] = provenance
                     sources.append(source_audio)
                 separated.append(sources)
                 continue
@@ -908,6 +935,7 @@ def separate_with_unasdiff(
                 stitched_audio = Audio(waveform=(acc[s] / weight_sum).unsqueeze(0), sampling_rate=_TARGET_SR)
                 stitched_audio.metadata = dict(audio.metadata)
                 stitched_audio.metadata["unasdiff_alignment_margins"] = margins
+                stitched_audio.metadata["unasdiff"] = provenance
                 sources.append(stitched_audio)
             separated.append(sources)
 
