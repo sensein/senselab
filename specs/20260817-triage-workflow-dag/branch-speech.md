@@ -123,6 +123,10 @@ word end]`**.
   withdrawal rule N10; the codomain is the counts pyannote can return, and 0 is one of them.
 - Overlap is not a product of this step: pyannote's exclusive view caps per-instant speaker count at
   1 by construction, and the branch reports the count rather than an overlap track.
+- **The count is not compared against a declared count.** `hint.targeted_speaker_count` is the
+  acquisition protocol's intent, and no corpus this graph runs on establishes where that number came
+  from. It is not read here, and a measured count that differs from a declared one is not evidence of
+  anything until the declaration's provenance is known.
 
 ## 5. Separation — to extract the foreground
 
