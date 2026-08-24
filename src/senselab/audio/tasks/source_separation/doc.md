@@ -127,22 +127,42 @@ Keeping the two apart is what makes the tool's parameters legible: `mode`, `n_so
 `source_class_indices`, `seed` and `diffusion_steps` all say *how to run unasdiff*, and nothing in
 this module says *what to conclude* from what comes back.
 
-### The diffusion-step count is a parameter, not a constant
+### `diffusion_steps` re-specifies the schedule; it does not subsample it
 
-`separate_with_unasdiff` and `separate_audios` both take `diffusion_steps` (default `200`). Each
-step is one network evaluation per slot, so this is the backend's dominant cost: 200 steps is what
-produces the RTF ~22-26x measured on an H100. For contrast, DriftSE (`speech_enhancement/driftse.py`)
-reaches the clean-speech distribution in a single step, and SGMSE+ takes 30 — 200 is a lot, by the
-standard of the other diffusion-based backends in this repository.
+Both released priors were trained at a fixed reverse-diffusion schedule length, `T=200`, with a
+linear beta schedule from `1e-4` to `0.02` (`config/*/config.toml`). `diffusion_steps` is passed
+straight through to `diffusion.GaussianDiffusion(steps=diffusion_steps, ...)` as that schedule's
+*length*, not as a subsampling stride the way DDIM's step count is — so a value other than `200`
+does not run the trained process faster or slower, it constructs a *different* process the priors
+were never trained against. Concretely, at the pinned commit:
 
-200 stays the default because it is upstream's own `config/*/config.toml: diffusion_step` value —
-the quality setting, and the only value with any published basis. Lowering it trades quality for
-speed roughly proportionally, but **no lower value has been measured in this repository**. There is
-no fitted threshold or "recommended" lower setting to offer instead (per this repository's standing
-rule against literals that were never fitted, see the top-level `CLAUDE.md`): a caller who passes
-`diffusion_steps < 200` is making their own unmeasured quality/speed trade, not following a validated
-recipe. `diffusion_steps <= 0` raises `ValueError` rather than being handed to the sampler, which
-would otherwise fail deep inside the worker with a less legible error.
+- **`steps <= 50` wraps silently.** `p_sample_loop`/`p_sample_loop_group` seed the augmented-mixture
+  init at `t = t_last - 50` where `t_last = steps - 1`. For `steps <= 50` this index is negative,
+  and indexing the precomputed alpha/beta arrays with a negative index does not raise — it wraps to
+  the tail of the schedule and silently seeds from the wrong point.
+- **`steps == 51` collapses the same init to `t = 0`** — one step above the wrap, so the
+  augmented-mixture initialisation that is supposed to seed the reverse process partway through
+  degenerates to (near) no noise at all.
+- **`steps > 200` disables guidance for the first `steps - 200` iterations.** The DPS-style
+  corrector both samplers call is gated `if i < 200 and i >= 0:`, a literal upstream hardcodes
+  against its own `T=200` training value, not derived from `steps`. Reverse diffusion counts `i`
+  down from `steps - 1` to `0`, so every iteration with `i >= 200` — the first `steps - 200` of
+  them — runs with no measurement guidance at all.
+
+None of this is a knob senselab can safely expose without vendoring and patching upstream's
+sampler, which the licensing position (below) forbids. `api.separate_audios` therefore accepts only
+`diffusion_steps=200` and raises `ValueError` naming the parameter for anything else.
+`unasdiff.separate_with_unasdiff` is the one exception: it keeps accepting any positive integer,
+because it is the layer a future retrained prior (trained at a different `T`) would use directly —
+but today, against the checkpoints this backend ships, `200` is the only value with any published
+or measured basis, and every other value hits one of the three mechanisms above.
+
+Each of the 200 steps is one network evaluation per slot, and is this backend's dominant cost: on an
+exclusive A100, 14.027 s of audio (7 windows) measured 560.71 s end to end, i.e. `560.71 / (7 x 200)
+= 0.4 s` per window-step (see `specs/20260818-071500-unasdiff-device-timeout-pcm16/design.md`, D-2).
+For contrast, DriftSE (`speech_enhancement/driftse.py`) reaches the clean-speech distribution in a
+single step, and SGMSE+ takes 30 — 200 is a lot, by the standard of the other diffusion-based
+backends in this repository.
 
 ### flash-attn is opt-in, not unconditional
 
