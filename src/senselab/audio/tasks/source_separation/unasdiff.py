@@ -87,13 +87,19 @@ reason: an unresolved license request must not end up load-bearing in a default 
 
 Two priors, one mode dispatch
 ------------------------------
-``p_sample_loop_group`` (upstream's multi-model sampler) zips one model object against one label
-per slot, so ``n_sources`` model instances are always constructed -- even when two slots share
-weights. Which prior a slot loads is **not** recoverable from ``source_class_indices`` alone: index
-``0`` is simultaneously "unconditional speech" in the speech prior's one-label space and "Hi-hat" in
-the sound prior's, so :func:`separate_with_unasdiff` takes ``mode`` explicitly rather than inferring
-it, and the worker payload carries all four checkpoint/config paths so the worker can build whichever
+Which prior a slot loads is **not** recoverable from ``source_class_indices`` alone: index ``0`` is
+simultaneously "unconditional speech" in the speech prior's one-label space and "Hi-hat" in the
+sound prior's, so :func:`separate_with_unasdiff` takes ``mode`` explicitly rather than inferring it,
+and the worker payload carries all four checkpoint/config paths so the worker can build whichever
 slots the mode calls for.
+
+``speech_sound`` needs two different priors in the same reverse-diffusion call, which only
+upstream's multi-model sampler, ``p_sample_loop_group``, supports: it zips one model object against
+one label per slot, so ``n_sources`` model instances are always constructed there. ``sound_sound``
+and ``speech_speech`` use only one prior each, so they use upstream's single-model sampler,
+``p_sample_loop``, instead -- a single model instance processes every slot in one batched forward
+per step, with a per-slot label tensor, matching upstream's own single-prior benchmark scripts
+exactly and building one model instance rather than ``n_sources``.
 """
 
 from __future__ import annotations
@@ -436,52 +442,64 @@ try:
         # split-and-sum.
         return sum(torch.split(x, x.shape[-1] // n_src, dim=-1))
 
-    def separate_window(models_list, gaussian, mixture, n_src, labels):
+    def separate_window(sampler_model, sampler_name, sampler_labels, gaussian, mixture, n_src):
         # One 4 s window. Returns a list of n_src waveforms.
         #
-        # p_sample_loop_group ignores the measurement argument it is handed and recomputes
-        # measurement = degradation(orig_x, n_src) on every step. Packing orig_x as
-        # [mixture, zeros, ..., zeros] makes that sum equal the mixture exactly, so the sampler
-        # sees precisely what it saw in the benchmark and no per-source information enters.
-        # This looks like an oracle from the call site; it is not.
+        # Both p_sample_loop_group and p_sample_loop ignore the measurement argument they are
+        # handed and recompute measurement = degradation(orig_x, n_src) on every step. Packing
+        # orig_x as [mixture, zeros, ..., zeros] makes that sum equal the mixture exactly, so the
+        # sampler sees precisely what it saw in the benchmark and no per-source information
+        # enters. This looks like an oracle from the call site; it is not.
         T = mixture.shape[-1]
         mix = mixture.reshape(1, 1, -1)
         orig_x = torch.cat([mix] + [torch.zeros_like(mix)] * (n_src - 1), dim=-1)
         shape = (1, 1, n_src * T)
-        gen = gaussian.p_sample_loop_group(
-            models_list,
+        sampler_kwargs = dict(
             shape=shape,
             measurement=mix,
             orig_x=orig_x,
             n_src=n_src,
             clip_denoised=True,
             degradation=degradation,
-            model_kwargs=labels,
+            model_kwargs=sampler_labels,
         )
+        # speech_sound needs two different priors in one call, which only p_sample_loop_group
+        # supports (it zips one model object against one label per slot, so n_sources model
+        # instances are always constructed there). sound_sound and speech_speech use only one
+        # prior each, so they use upstream's own p_sample_loop instead: a single model instance
+        # processes every slot in one batched forward per step, with a per-slot label tensor --
+        # matching upstream's own single-prior benchmark scripts exactly (not named here
+        # literally, same reason as load_prior above), at the cost of n_sources - 1 fewer model
+        # instances than p_sample_loop_group would build.
+        if sampler_name == "group":
+            gen = gaussian.p_sample_loop_group(sampler_model, **sampler_kwargs)
+        else:
+            gen = gaussian.p_sample_loop(sampler_model, **sampler_kwargs)
         out = None
         for out in gen:
             pass
         est = out["sample"].reshape(1, 1, -1)
         return [seg.reshape(-1) for seg in torch.split(est, T, dim=-1)]
 
-    # Model list + diffusion process for this mode. p_sample_loop_group zips `model` against
-    # `model_kwargs` one-to-one, so every slot needs its own model object -- even
-    # speech-speech, where both slots share the same weights: a separate deepcopy'd instance
-    # per slot, not one instance reused twice.
+    # Which sampler this mode uses, and the model(s)/labels it is given -- see separate_window
+    # for why speech_sound alone needs the "group" sampler.
+    sampler_name = "group" if mode == "speech_sound" else "single"
     if mode == "speech_sound":
         speech_model, speech_cfg = load_prior(speech_config_path, speech_ckpt_path)
-        models_list = [speech_model] + [
+        sampler_model = [speech_model] + [
             load_prior(sound_config_path, sound_ckpt_path)[0] for _ in range(n_sources - 1)
         ]
+        sampler_labels = labels
         diffusion_config = speech_cfg
     elif mode == "sound_sound":
-        loaded = [load_prior(sound_config_path, sound_ckpt_path) for _ in range(n_sources)]
-        models_list = [m for m, _ in loaded]
-        diffusion_config = loaded[0][1]
+        sampler_model, diffusion_config = load_prior(sound_config_path, sound_ckpt_path)
+        sampler_labels = labels
     elif mode == "speech_speech":
-        loaded = [load_prior(speech_config_path, speech_ckpt_path) for _ in range(n_sources)]
-        models_list = [m for m, _ in loaded]
-        diffusion_config = loaded[0][1]
+        sampler_model, diffusion_config = load_prior(speech_config_path, speech_ckpt_path)
+        # Upstream's own speech-speech benchmark script passes model_kwargs=None here (not
+        # named here literally, same reason as load_prior above): the speech prior has no
+        # conditioning to give it, and p_sample already tolerates model_kwargs=None.
+        sampler_labels = None
     else:
         raise ValueError("unknown mode: " + str(mode))
 
@@ -508,7 +526,7 @@ try:
         peak = y.abs().amax().clamp(min=1e-8)
         y_norm = y / peak * 0.95
 
-        sources = separate_window(models_list, gaussian, y_norm, n_sources, labels)
+        sources = separate_window(sampler_model, sampler_name, sampler_labels, gaussian, y_norm, n_sources)
 
         for src_wave, out_path in zip(sources, out_path_list):
             src_wave = src_wave / 0.95 * peak
