@@ -248,29 +248,32 @@ def test_pyannote_sees_only_the_word_interval_and_segments_are_offset_back(
     assert seg.extent == pytest.approx((2.0, 2.8)), "offset added back onto the returned segment"
 
 
-def test_a_segment_overlapping_an_airway_label_is_withdrawn_not_relabelled(
+def test_a_segment_overlapping_an_airway_label_survives_because_diarization_is_speech_only(
     seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """wasInvalidatedBy, entity retained, excluded from the count."""
-    words = [("one", 1.0, 1.4), ("two", 4.4, 4.8)]  # interval spans the airway label at 4.5-5.0
+    """A diarizer segment is never withdrawn for overlapping an airway event.
+
+    The Story-recall shape: one narrator, words across the whole interval, one Breathe label inside
+    it. The one diarizer segment covers the narration and overlaps the label, so under the withdrawal
+    rule the file's speaker count read 0 — measured on 10 of the campaign's 28 files — every word went
+    unattributed and the unattributed words cascaded into false PII withholds. Diarization is about
+    speech, so an airway label carries no authority over a diarizer segment.
+    """
+    words = [("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 4.4, 4.8)]
     store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
 
     def fake_diarize(audios: list[Audio], **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        return [
-            [
-                ScriptLine(speaker="SPEAKER_00", start=0.0, end=2.0),
-                ScriptLine(speaker="SPEAKER_01", start=3.4, end=3.8),  # 2nd overlaps label after offset
-            ]
-        ]
+        return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=3.8)]]  # (1.0, 4.8) after the offset
 
     monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
     result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    speakers = store.entities("speaker")
-    withdrawn = [s for s in speakers if store.is_invalidated(s.id)]
-    assert len(speakers) == 2 and len(withdrawn) == 1
-    assert withdrawn[0].attributes["speaker"] == "SPEAKER_01", "withdrawn, never relabelled"
+    (speaker,) = store.entities("speaker")
+    assert not store.is_invalidated(speaker.id), "the airway label does not withdraw the segment"
     verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["speaker_count"] == 1, "the count reads un-withdrawn segments only"
+    assert verdict.attributes["speaker_count"] == 1, "the count is the live segment count"
+    spoken = store.entities("word")
+    assert spoken and all(w.attributes["speaker"] == "SPEAKER_00" for w in spoken if "recognizer" not in w.attributes)
+    assert not any("speaker_note" in w.attributes for w in spoken), "no word is left unattributed"
 
 
 def test_count_two_separates_and_measurements_record_their_stream(
@@ -733,10 +736,14 @@ def test_straddling_word_is_marked_not_assigned(
     assert word.attributes["speaker_note"] == "straddles"
 
 
-def test_flag_view_includes_contested_assertions(
+def test_flag_view_includes_every_segment_the_count_was_taken_over(
     seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Partial is a view, not a payload: the flagged result's view carries the contested entities."""
+    """Partial is a view, not a payload: the flagged result's view carries the contested entities.
+
+    The flag here is a speaker count of three, and what is contested is the segments that produced
+    it — including the one overlapping the airway label, which now counts like any other.
+    """
     words = [("one", 1.0, 1.4), ("two", 4.4, 4.8)]
     store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
 
@@ -753,12 +760,18 @@ def test_flag_view_includes_contested_assertions(
     monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
     result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
     assert result.verdict.outcome is Outcome.FLAG
-    withdrawn = [s.id for s in store.entities("speaker") if store.is_invalidated(s.id)]
-    assert withdrawn and all(entity_id in result.view for entity_id in withdrawn)
+    verdict = store.get_entity(result.verdict_entity_id)
+    assert verdict.attributes["speaker_count"] == 3, "the label-overlapping segment counts too"
+    speakers = [s.id for s in store.entities("speaker")]
+    assert len(speakers) == 3 and all(entity_id in result.view for entity_id in speakers)
+    assert not any(store.is_invalidated(entity_id) for entity_id in speakers)
 
 
 def test_every_read_is_recorded_with_used(seed_speech_store: SeedSpeechStore) -> None:
-    """The SPEECH activities' used targets include the word, envelope, span and label entities read."""
+    """The SPEECH activities' used targets include the word, envelope and span entities read.
+
+    Not the airway label: diarization is speech-only, so nothing in this branch reads one.
+    """
     words = [("one", 1.0, 1.2), ("two", 1.25, 1.5)]
     store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
     pre_act = store.activity(node="PREPROCESS", step="spans", parameters={})
@@ -779,7 +792,7 @@ def test_every_read_is_recorded_with_used(seed_speech_store: SeedSpeechStore) ->
     assert set(source_words) <= used
     assert envelope in used
     assert pre_span in used
-    assert label in used
+    assert label not in used, "SPEECH reads no airway label; the span it hangs on is read as a span"
 
 
 def test_a_word_ending_a_hair_past_the_decode_is_clamped_not_a_crash(
