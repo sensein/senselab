@@ -3,7 +3,6 @@
   "may_contain": [
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.diadochokinesis.v2",
    "speech_type": "non-lexical",
@@ -14,7 +13,6 @@
   "may_contain": [
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.diadochokinesis.v2",
    "speech_type": "non-lexical",
@@ -25,7 +23,6 @@
   "may_contain": [
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.diadochokinesis.v2",
    "speech_type": "non-lexical",
@@ -36,7 +33,6 @@
   "may_contain": [
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.diadochokinesis.v2",
    "speech_type": "non-lexical",
@@ -48,7 +44,6 @@
    "speech",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.diadochokinesis.v2",
    "speech_type": "non-lexical",
@@ -59,7 +54,6 @@
   "may_contain": [
    "speech"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.free-speech.v2",
    "speech_type": "elicited",
@@ -70,7 +64,6 @@
   "may_contain": [
    "speech"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.free-speech.v2",
    "speech_type": "elicited",
@@ -81,7 +74,6 @@
   "may_contain": [
    "speech"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.free-speech.v2",
    "speech_type": "elicited",
@@ -93,7 +85,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.glides",
    "speech_type": "non-lexical",
@@ -105,7 +96,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.glides",
    "speech_type": "non-lexical",
@@ -117,7 +107,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.loudness.v2",
    "speech_type": "non-lexical",
@@ -130,7 +119,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.maximum-phonation-time.v2",
    "speech_type": "non-lexical",
@@ -143,7 +131,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.maximum-phonation-time.v2",
    "speech_type": "non-lexical",
@@ -156,7 +143,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.maximum-phonation-time.v2",
    "speech_type": "non-lexical",
@@ -167,7 +153,6 @@
   "may_contain": [
    "speech"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.picture-description",
    "speech_type": "elicited",
@@ -180,7 +165,6 @@
    "phonation",
    "voice"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.prolonged-vowel",
    "speech_type": "non-lexical",
@@ -192,7 +176,6 @@
    "read-speech",
    "speech"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.rainbow-passage",
    "speech_type": "read",
@@ -204,7 +187,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -216,7 +198,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -228,7 +209,6 @@
    "cough",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -240,7 +220,6 @@
    "cough",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -252,7 +231,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -264,7 +242,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -276,7 +253,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -288,7 +264,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -300,7 +275,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -312,7 +286,6 @@
    "breathe",
    "airway"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.respiration-and-cough.v2",
    "speech_type": "non-lexical",
@@ -323,7 +296,6 @@
   "may_contain": [
    "speech"
   ],
-  "targeted_speaker_count": 1,
   "metadata": {
    "task_id": "adult.story-recall.v2",
    "speech_type": "recall",
