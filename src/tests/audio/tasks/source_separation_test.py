@@ -883,6 +883,38 @@ def test_separate_audios_forwards_device(mono_audio_sample: Audio, monkeypatch: 
     assert captured["device"] is DeviceType.CPU
 
 
+# ── n_sources bound ───────────────────────────────────────────────────
+
+
+def test_more_than_three_sources_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The paper evaluated at most three sources; this backend does not extrapolate past that."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    with pytest.raises(ValueError, match="n_sources"):
+        u.separate_with_unasdiff(
+            [audio],
+            n_sources=4,
+            source_class_indices=[0, 0, 0, 0],
+            mode="speech_speech",
+        )
+    assert not captured, "the worker subprocess must never run once validation has failed"
+
+
+def test_three_sources_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Three sources -- the paper's own upper bound -- must not be rejected."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    audio = Audio(waveform=torch.randn(1, int(u._WINDOW_S * u._TARGET_SR)), sampling_rate=u._TARGET_SR)
+    u.separate_with_unasdiff(
+        [audio],
+        n_sources=3,
+        source_class_indices=[0, 0, 0],
+        mode="speech_speech",
+    )
+    assert len(captured["payload"]["out_paths"][0]) == 3
+
+
 # ── Label-range validation ────────────────────────────────────────────
 
 

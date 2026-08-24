@@ -93,6 +93,10 @@ that one catches a typo in a class *name*, this one catches an out-of-range raw 
 instances are always constructed, including in `speech_speech` where every slot shares the same
 weights — a separate `deepcopy`'d instance per slot, never one instance reused across slots.
 
+**`n_sources` is capped at 3.** Shi et al. (AAAI 2026) evaluate this method at up to three sources;
+`separate_with_unasdiff` raises `ValueError` above that rather than extrapolating into a regime the
+paper never measured.
+
 ### Chunking: senselab's construction, not upstream's
 
 unasdiff was trained and benchmarked on fixed 4 s clips (`_WINDOW_S = 4.0`, the config's own
