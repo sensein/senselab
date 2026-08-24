@@ -225,12 +225,11 @@ _MODE_SPEECH_SPEECH = "speech_speech"
 _TARGET_SR = 16000
 _WINDOW_S = 4.0  # upstream's trained window; not a tunable
 _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
-# config/*/config.toml: diffusion_step. Upstream's own quality default -- the only value with
-# any published basis -- so it stays the default for separate_with_unasdiff's diffusion_steps
-# parameter. 200 network evaluations per window is the dominant cost of this backend (measured
-# RTF ~22-26x on an H100, vs. DriftSE's 1 step and SGMSE+'s 30 in this same repository), so a
-# caller who wants to trade quality for speed can lower it -- see that parameter's docstring for
-# why no lower value is recommended here.
+# config/*/config.toml: diffusion_step -- the reverse-diffusion schedule length the priors were
+# trained at (T=200). api.separate_audios accepts no other value for this parameter: changing it
+# re-specifies the schedule rather than subsampling it. This lower-level function still accepts
+# other positive values, since a future retrained prior may use a different T; see doc.md for the
+# mechanism and the measured per-step cost.
 _DIFFUSION_STEPS = 200
 
 # Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
@@ -668,16 +667,12 @@ def separate_with_unasdiff(
             the worker, which takes ``cuda:<current index>`` when CUDA is available and CPU
             otherwise. Only CUDA and CPU are accepted.
         seed: RNG seed, recorded in the log line.
-        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window. Each
-            step is a network evaluation, so this is the backend's dominant cost -- 200 steps
-            measure at RTF ~22-26x on an H100, versus DriftSE's 1 step and SGMSE+'s 30 in this
-            same repository. The default, ``200``, is upstream's own ``config/*/config.toml:
-            diffusion_step`` value and is kept as the quality default: it is the only value
-            with any published basis. Lowering it trades quality for speed roughly
-            proportionally, but **no lower value has been measured in this repository** -- there
-            is no fitted threshold or "recommended" lower setting to fall back on (see this
-            module's ``CLAUDE.md``-derived convention against unfitted thresholds), so any value
-            below 200 is the caller's own unmeasured quality/speed trade.
+        diffusion_steps: Reverse-diffusion schedule length passed to the sampler, not a step count
+            to subsample -- see ``doc.md`` for the mechanism. The priors are trained at ``T=200``,
+            which is why :func:`senselab.audio.tasks.source_separation.api.separate_audios` accepts
+            no other value; this lower-level function still accepts any positive integer, since a
+            future retrained prior may use a different ``T``, but no value other than ``200`` has
+            any published or measured basis against the checkpoints this backend ships today.
         timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
             work -- total windows across every input, times ``diffusion_steps``, times a
             per-window-step factor, with a floor covering the first-use clone and the checkpoint

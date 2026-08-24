@@ -89,12 +89,11 @@ def separate_audios(
             worker. Forwarded unchanged to
             :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
         seed: RNG seed, recorded in the worker's log line.
-        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window --
-            forwarded unchanged to :func:`senselab.audio.tasks.source_separation.unasdiff.separate_with_unasdiff`.
-            Defaults to ``200``, upstream's own quality setting and the only value with any
-            published basis; lower values trade quality for speed roughly proportionally but are
-            entirely unmeasured in this repository, so there is no recommended lower setting --
-            see that function's docstring for the full derivation.
+        diffusion_steps: Reverse-diffusion schedule length. The priors are trained at ``T=200``, so
+            this parameter accepts only its default value today -- see the ``ValueError`` below and
+            ``unasdiff.py``'s ``doc.md`` for why any other value re-specifies the schedule rather than
+            subsampling it. Kept as a parameter (rather than dropped) because a future retrained
+            prior may use a different ``T``.
         timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the
             work. Forwarded unchanged to whichever backend runs.
         parameters: Backend-specific parameters, validated against the selected backend's own
@@ -109,8 +108,8 @@ def separate_audios(
         ValueError: If ``model`` is given and does not name the unasdiff mirror; if ``mode`` is
             not one of the three supported modes; if a mode using the sound prior is missing
             ``source_classes``; if ``source_classes`` does not have exactly the number of
-            entries that mode's sound slots require; or if ``diffusion_steps`` or ``timeout_s``
-            is not positive.
+            entries that mode's sound slots require; if ``diffusion_steps`` is not ``200``; or if
+            ``timeout_s`` is not positive.
     """
     if isinstance(model, HFModel) and is_clearvoice_model_id(str(model.path_or_uri)):
         spec = clearvoice_model_spec(str(model.path_or_uri), expected_task=CLEARVOICE_SEPARATION_TASK)
@@ -157,6 +156,12 @@ def separate_audios(
             "unasdiff takes no parameters through this mapping: every parameter it declares is already "
             f"a named argument of separate_audios ({', '.join(sorted(parameters))} included). Pass them "
             "directly, so one value has one source."
+        )
+    if diffusion_steps != _DIFFUSION_STEPS:
+        raise ValueError(
+            f"diffusion_steps={diffusion_steps} is not supported: unasdiff's priors are trained at "
+            f"T={_DIFFUSION_STEPS}, and any other value re-specifies the reverse-diffusion schedule "
+            "rather than subsampling it. See unasdiff.py's module doc.md for the mechanism."
         )
     if mode not in _VALID_MODES:
         raise ValueError(f"Unknown mode {mode!r}. Valid modes are: {', '.join(_VALID_MODES)}")

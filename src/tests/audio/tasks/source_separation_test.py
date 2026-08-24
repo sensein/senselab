@@ -503,7 +503,7 @@ def test_diffusion_steps_reaches_the_worker_payload(monkeypatch: pytest.MonkeyPa
 
 
 def test_separate_audios_forwards_diffusion_steps(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
-    """api.separate_audios threads diffusion_steps through to separate_with_unasdiff unchanged."""
+    """api.separate_audios threads the default diffusion_steps through unchanged."""
     captured = {}
 
     def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
@@ -511,8 +511,32 @@ def test_separate_audios_forwards_diffusion_steps(mono_audio_sample: Audio, monk
         return [[audios[0]] * n_sources]
 
     monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
-    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=42)
-    assert captured["diffusion_steps"] == 42
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=unasdiff._DIFFUSION_STEPS)
+    assert captured["diffusion_steps"] == unasdiff._DIFFUSION_STEPS
+
+
+def test_a_non_default_diffusion_steps_is_rejected_at_the_api_boundary(mono_audio_sample: Audio) -> None:
+    """The priors are trained at a fixed schedule length; other values re-specify it, not subsample it.
+
+    ``separate_with_unasdiff`` itself still accepts any positive value (a future retrained prior
+    may use a different schedule), but ``separate_audios`` is the boundary a caller who has not
+    read unasdiff's internals reaches first, and 100 there does not mean "half the steps".
+    """
+    with pytest.raises(ValueError, match="diffusion_steps"):
+        separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=100)
+
+
+def test_the_default_diffusion_steps_is_accepted(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The only value separate_audios accepts today is unasdiff._DIFFUSION_STEPS itself."""
+    captured = {}
+
+    def fake(audios: list, n_sources: int, source_class_indices: list, **kwargs: object) -> list:
+        captured["diffusion_steps"] = kwargs["diffusion_steps"]
+        return [[audios[0]] * n_sources]
+
+    monkeypatch.setattr("senselab.audio.tasks.source_separation.api.separate_with_unasdiff", fake)
+    separate_audios([mono_audio_sample], mode="speech_speech", n_sources=2, diffusion_steps=200)
+    assert captured["diffusion_steps"] == 200
 
 
 @pytest.mark.skipif(
