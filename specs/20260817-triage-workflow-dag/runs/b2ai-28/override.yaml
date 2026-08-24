@@ -8,9 +8,12 @@
 # GUESS speech.word_gap_ms 500: a pause longer than half a second splits word runs into separate
 #   speech spans. Chosen as a round conversational-pause figure; nothing was fitted.
 # GUESS phonation.f0_min_hz 75 / f0_max_hz 500: Praat's default adult analysis range; covers low
-#   male through high female phonation. Nothing about this corpus was measured. NOTE: any range
-#   wider than one octave makes the period-doubling alias check fire on clean phonation, so
-#   ambiguous_runs_n carries no information under this guess -- expected, accepted for screening.
+#   male through high female phonation. Nothing about this corpus was measured. NOTE: a run is
+#   flagged ambiguous when f0*2 <= f0_max OR f0/2 >= f0_min, so the band that is NOT flagged is
+#   (f0_max/2, 2*f0_min), which is non-empty iff f0_max < 4*f0_min -- a range narrower than TWO
+#   octaves, not one. At 75/500 the range is 6.67x, the unflagged band (250, 150) is empty, and
+#   100% of clean phonation flags: ambiguous_runs_n carries no information under this guess --
+#   expected, accepted for screening.
 # GUESS phonation.hnr_floor_db 5: ordinary voiced speech measured a median 8.12 dB harmonicity on
 #   the reference recording (CLAUDE.md); 5 dB sits below that median so ordinary voicing passes.
 #   Not fitted to any verdict set.
