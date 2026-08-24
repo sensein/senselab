@@ -25,6 +25,21 @@ A range wide enough for a low adult male fundamental (~88 Hz here) admits period
 range narrow enough to exclude them cuts off infant and high-F0 voices. No single range serves both, so a
 run whose F0 sits where the range is ambiguous is flagged rather than resolved.
 
+### The vacuity boundary is two octaves, not one
+
+A run is flagged ambiguous when `f0 * factor <= f0_max` **or** `f0 / factor >= f0_min`. With
+`factor` 2.0 the band that is *not* flagged is therefore `(f0_max / 2, 2 * f0_min)`, which is
+non-empty iff
+
+    f0_max < 4 * f0_min
+
+— a range narrower than **two** octaves. The b2ai-28 override's comment said one octave, which is
+wrong in the safe direction only by accident: it understates how wide the check goes vacuous. At the
+override's 75–500 Hz the range is 6.67x, the unflagged band `(250, 150)` is empty, and **100% of
+clean phonation flags**, so `ambiguous_runs_n` carries no information at all under that range. Any
+range at or beyond 4x makes the flag unconditional; the check only says something when the caller
+declares a range under two octaves.
+
 ## Why the product is periods and not a contour
 
 At 87.4 Hz one glottal period is **11.44 ms**. A fixed-hop contour has already committed to a resolution
