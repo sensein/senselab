@@ -43,9 +43,21 @@ across a short run, so trajectory shape cannot separate them and the residual's 
 airway-labelled spans is doing the work instead. This is why the branch reads the other branches'
 assertions rather than re-detecting.
 
-**Breath is unvoiced, the gate rejects it, and that is correct.** Exhalations carry energy without
-periodicity, so the energy-and-periodicity conjunction excludes them. A gate on energy alone would admit
-every breath in the recording.
+**RETRACTED — "Breath is unvoiced, the gate rejects it, and that is correct."** The claim was that
+exhalations carry energy without periodicity, so the energy-and-periodicity conjunction excludes them.
+The campaign measured the opposite. Under the per-fragment reference — one `hnr_track`/`f0_track` call
+per residual interval, each interval handed to Praat as its own `Sound` — the dedicated breathing files
+passed **3.4-5.4 s of "voiced" runs per file**, at a reported f0 of **397-412 Hz**. On a breathing file
+**39.4% of frames** read at or above a 5 dB HNR floor against **3.1%** when the same file is measured
+whole; real phonation moved by only ~1.1x under the same comparison. The mechanism is Praat's
+`silence_threshold`, which is relative to the maximum of the `Sound` it is handed: a quiet breath given
+its own `Sound` becomes that `Sound`'s maximum, so frames that read as silent against the recording's
+loud phonation are analysed instead and inherit whatever periodicity band-limited breath noise has.
+
+**Whole-stream computation is therefore required.** `hnr_track` and `f0_track` are measured once over
+the plain stream and their returned arrays sliced per residual interval by time, each track on its own
+`times` array because the two frame counts differ. `period_marks` already ran whole-stream. What the
+gate rejects on breath is now a property of the recording, not of how the residual happened to be cut.
 
 ## The residual had no producer before the store
 
