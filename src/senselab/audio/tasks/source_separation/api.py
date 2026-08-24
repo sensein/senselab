@@ -211,7 +211,7 @@ def resolve_source_classes(names: list[str]) -> list[int]:
 
     Raises:
         ValueError: If any name is not in the class map. The sound prior's
-            embedding has 50 slots but only 41 were trained (see
+            embedding has 51 slots but only 41 were trained (see
             ``data/fsd41_classes.json``'s derivation); silently mapping an
             unknown name to a fallback index would condition the prior on
             whatever class that fallback happens to name, while the caller's
