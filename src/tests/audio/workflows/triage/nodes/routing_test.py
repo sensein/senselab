@@ -63,6 +63,20 @@ class TestTheRule:
         assert set(result.skipped) == {"SPEECH", "VOICE"}
 
 
+    def test_a_state_this_node_cannot_read_runs_the_branch(self, store: ProvStore, tmp_path: Path) -> None:
+        """A state nobody can read is not evidence of absence, so only ``absent`` withholds a branch.
+
+        The same rule TAXONOMY applies to a missing derivative. Reading the rule the other way round
+        — run only on the states this node knows — would make an unreadable classification silently
+        skip the instrument that would have settled it.
+        """
+        _kinds(store, speech="wobbly", airway="absent", voice="absent")
+        result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        assert result.runs == ("SPEECH",)
+        decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
+        assert decision.attributes["kind_state"] == "wobbly"
+
+
 class TestHintsForceAndNothingElse:
     """A hint adds a branch. It never rewrites a classification and never removes a branch."""
 
@@ -96,6 +110,25 @@ class TestHintsForceAndNothingElse:
         decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
         assert decision.attributes["kind_state"] == "absent"
         assert decision.attributes["forced_by_hint"] is True
+
+    def test_a_hint_naming_a_present_kind_forces_nothing_and_is_still_recorded(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Forcing means the hint changed the outcome, not merely that it named the kind.
+
+        A branch the classification was already running is not forced, so ``forced_by_hint`` stays
+        equivalent to "this branch runs against an absent classification" — the mismatch verdict.md
+        detects. The tags are recorded against the branch all the same: a hint that agreed with a
+        running branch is a fact about the hint, not silence.
+        """
+        _kinds(store, speech="present", airway="absent", voice="absent")
+        result = routing(store, None, _map(tmp_path), AudioHints(may_contain=["speech"]), run_dir=tmp_path)
+        assert result.runs == ("SPEECH",)
+        assert result.forced == ()
+        decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
+        assert decision.attributes["forced_by_hint"] is False
+        assert decision.attributes["hint_tags"] == ["speech"]
+        assert decision.attributes["why"] == "kind_present"
 
     def test_forcing_never_removes_a_branch(self, store: ProvStore, tmp_path: Path) -> None:
         """A hint naming only cough leaves a present speech kind's branch running."""
@@ -172,6 +205,26 @@ class TestTheStoreContract:
         routing(store, None, _map(tmp_path), run_dir=tmp_path)
         branches = {e.attributes["branch"] for e in live_entities(store, "branch_decision")}
         assert branches == set(BRANCH_FOR_KIND.values()) == {"AIRWAY", "SPEECH", "VOICE"}
+
+    def test_each_decision_names_its_kind_and_the_stream_it_was_taken_over(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """``kind`` is the key T8 joins branch verdicts to decisions on; ``stream`` is V14."""
+        _kinds(store, speech="present", airway="present", voice="present")
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        by_branch = {e.attributes["branch"]: e for e in live_entities(store, "branch_decision")}
+        assert {branch: e.attributes["kind"] for branch, e in by_branch.items()} == {
+            branch: kind for kind, branch in BRANCH_FOR_KIND.items()
+        }
+        assert {e.attributes["stream"] for e in by_branch.values()} == {"plain"}
+
+    def test_a_second_pass_over_another_stream_records_that_streams_name(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The unit is encapsulated over one input stream, and the decision says which one."""
+        _kinds(store, speech="present", airway="absent", voice="absent")
+        routing(store, "suppressed_foreground", _map(tmp_path), run_dir=tmp_path)
+        assert {e.attributes["stream"] for e in live_entities(store, "branch_decision")} == {"suppressed_foreground"}
 
     def test_each_decision_is_derived_from_its_kind_element(self, store: ProvStore, tmp_path: Path) -> None:
         """``wasDerivedFrom`` ties the decision to the classification, and used records the read."""
