@@ -206,7 +206,11 @@ exclude = [
   "dist",
   "node_modules",
   "venv",
-  "scripts"
+  "scripts",
+  # One-off reproduction scripts for the analyze_audio audit's findings, kept beside the register
+  # entry each reproduces. They are evidence, not source: each is meant to read as the code under
+  # audit reads, and re-styling one would change what it demonstrates.
+  "specs/20260815-215106-analyze-audio-audit/repro"
 ]
 line-length = 120
 indent-width = 4
