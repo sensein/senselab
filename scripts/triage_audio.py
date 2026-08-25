@@ -64,6 +64,7 @@ from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenanc
 from senselab.audio.workflows.triage.config import load_triage_config
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.run import run_triage
+from senselab.audio.workflows.triage.vocabulary import RunState
 
 DEFAULT_OUT_DIR = Path("artifacts/triage")
 
@@ -198,7 +199,11 @@ def main(argv: list[str] | None = None) -> int:
         argv: The command line, or None to read ``sys.argv``.
 
     Returns:
-        0 when the graph ran, 2 when the arguments could not be resolved.
+        0 when VERDICT concluded and no node raised, 1 when a node raised or VERDICT never
+        concluded — the verdict is still written and the run directory still holds everything the
+        graph reached — and 2 when the arguments could not be resolved and nothing was measured.
+        The code reports whether the graph ran, never what it concluded: a ``discard`` is a
+        successful run.
     """
     args = build_parser().parse_args(argv)
 
@@ -236,14 +241,19 @@ def main(argv: list[str] | None = None) -> int:
     for node, outcome in result.nodes.items():
         detail = outcome.verdict.outcome.value if outcome.verdict is not None else (outcome.error or "-")
         print(f"  {node:<11} {outcome.state.value:<10} {detail}")
-    if result.file_verdict is None:
+
+    if result.file_verdict is not None:
+        print(f"Triage:  {result.file_verdict.triage.value}")
+        print(f"Release: {result.file_verdict.release.value}")
+        for name, released in result.released.items():
+            print(f"  {name}: {released}")
+    else:
         print("Verdict: VERDICT itself did not run; see run.json", file=sys.stderr)
-        return 0
-    print(f"Triage:  {result.file_verdict.triage.value}")
-    print(f"Release: {result.file_verdict.release.value}")
-    for name, released in result.released.items():
-        print(f"  {name}: {released}")
-    return 0
+
+    errored = [node for node, outcome in result.nodes.items() if outcome.state is RunState.ERRORED]
+    for node in errored:
+        print(f"ERROR: {node} raised: {result.nodes[node].error}", file=sys.stderr)
+    return 1 if errored or result.file_verdict is None else 0
 
 
 if __name__ == "__main__":

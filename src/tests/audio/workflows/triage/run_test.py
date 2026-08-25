@@ -29,13 +29,22 @@ from senselab.audio.workflows.triage.nodes.report import ReportRenderError
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
 from senselab.audio.workflows.triage.run import run_triage
-from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Release, RunState, Triage
+from senselab.audio.workflows.triage.vocabulary import (
+    FileVerdict,
+    NodeVerdict,
+    Outcome,
+    Release,
+    RunState,
+    Triage,
+)
 from senselab.utils.prov_store import ProvStore
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 
 GRAPH = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+
+_MISSING = object()
 
 
 @pytest.fixture
@@ -546,13 +555,19 @@ def _cli() -> types.ModuleType:
 
 @pytest.fixture
 def fake_result(tmp_path: Path) -> Callable[..., Any]:
-    """A ``TriageRunResult`` standing in for a graph run, so the CLI can be driven without one."""
+    """A ``TriageRunResult`` standing in for a graph run, so the CLI can be driven without one.
 
-    def _make(file_verdict: Any = None, nodes: Any = None) -> Any:  # noqa: ANN401
+    It defaults to the clean run — VERDICT concluded and nothing errored — so a test that cares
+    about a failure states it.
+    """
+
+    def _make(file_verdict: Any = _MISSING, nodes: Any = None) -> Any:  # noqa: ANN401
         run_dir = tmp_path / "run"
         run_dir.mkdir(exist_ok=True)
         return run_module.TriageRunResult(
-            file_verdict=file_verdict,
+            file_verdict=FileVerdict(triage=Triage.PASS, release=Release.NOT_ASSESSED)
+            if file_verdict is _MISSING
+            else file_verdict,
             nodes=nodes or {},
             run_dir=run_dir,
             artifacts_dir=tmp_path / "released",
@@ -584,7 +599,7 @@ class TestCli:
             run_dir = tmp_path / "run"
             run_dir.mkdir(exist_ok=True)
             return run_module.TriageRunResult(
-                file_verdict=None,
+                file_verdict=FileVerdict(triage=Triage.PASS, release=Release.NOT_ASSESSED),
                 nodes={},
                 run_dir=run_dir,
                 artifacts_dir=tmp_path / "released",
@@ -614,7 +629,7 @@ class TestCli:
             run_dir = tmp_path / "run"
             run_dir.mkdir(exist_ok=True)
             return run_module.TriageRunResult(
-                file_verdict=None,
+                file_verdict=FileVerdict(triage=Triage.PASS, release=Release.NOT_ASSESSED),
                 nodes={},
                 run_dir=run_dir,
                 artifacts_dir=tmp_path / "released",
@@ -787,3 +802,71 @@ class TestTheEnrollmentDriver:
 
         monkeypatch.setattr(cli, "run_triage", _never)
         assert cli.main([str(source), "--enrollment", str(path)]) == 2
+
+
+class TestTheExitCodeSaysWhetherTheGraphRanClean:
+    """0 was returned unconditionally, so a scheduler could not tell a clean run from a broken one."""
+
+    def _drive(
+        self,
+        cli: types.ModuleType,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        result: Any,  # noqa: ANN401
+    ) -> int:
+        """Run the CLI over a canned result."""
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        monkeypatch.setattr(cli, "run_triage", lambda *a, **k: result)
+        return int(cli.main([str(source)]))
+
+    def test_a_clean_run_is_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """VERDICT concluded and every node completed."""
+        nodes = {node: run_module.NodeOutcome(node=node, state=RunState.COMPLETED) for node in GRAPH}
+        assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(nodes=nodes)) == 0
+
+    def test_a_skipped_node_is_still_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """A branch ROUTING declined is the graph working, not the graph failing."""
+        nodes = {node: run_module.NodeOutcome(node=node, state=RunState.COMPLETED) for node in GRAPH}
+        nodes["VOICE"] = run_module.NodeOutcome(node="VOICE", state=RunState.SKIPPED)
+        assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(nodes=nodes)) == 0
+
+    def test_an_errored_node_is_one_even_though_the_verdict_was_written(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """The run produced a verdict over a graph that did not fully run; the caller must be told."""
+        nodes = {node: run_module.NodeOutcome(node=node, state=RunState.COMPLETED) for node in GRAPH}
+        nodes["VOICE"] = run_module.NodeOutcome(
+            node="VOICE", state=RunState.ERRORED, error="RuntimeError: VOICE could not run"
+        )
+        assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(nodes=nodes)) == 1
+
+    def test_verdict_itself_not_running_is_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """There is no file verdict at all, which is the one outcome that cannot read as success."""
+        assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(file_verdict=None)) == 1
+
+    def test_a_discard_verdict_is_still_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """The exit code reports whether the graph ran, never what it concluded about the recording."""
+        nodes = {node: run_module.NodeOutcome(node=node, state=RunState.COMPLETED) for node in GRAPH}
+        discarded = FileVerdict(triage=Triage.DISCARD, release=Release.WITHHELD, discard_ground="acoustically_empty")
+        assert self._drive(_cli(), monkeypatch, tmp_path, fake_result(file_verdict=discarded, nodes=nodes)) == 0
+
+    def test_the_errored_node_is_named_on_stderr(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fake_result: Callable[..., Any],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """An exit code nobody can act on is half a signal; the node and its error go with it."""
+        nodes = {"VOICE": run_module.NodeOutcome(node="VOICE", state=RunState.ERRORED, error="RuntimeError: boom")}
+        self._drive(_cli(), monkeypatch, tmp_path, fake_result(nodes=nodes))
+        assert "VOICE" in capsys.readouterr().err
