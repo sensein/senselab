@@ -790,8 +790,9 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
     Returns:
         The lines, in report.md's order: the file and its provenance, what ran, the branch decisions
         with each branch's conclusion, flags and measurements, TAXONOMY's classification beside the
-        resolved kinds, the top categories, the spans, what was NOT drawn and why, the transcript,
-        and the verdict — with REDACT's outcome shown whatever the triage axis says.
+        resolved kinds and the hint reading for each, the top categories, the spans, what was NOT
+        drawn and why, the transcript, and the verdict — with REDACT's outcome shown whatever the
+        triage axis says.
     """
     steps = _steps(store)
     verdict = _verdict(store)
@@ -829,12 +830,13 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
     screened = verdict.get("screened") or (steps.get("TAXONOMY", {}).get("kinds") or {})
     resolved = verdict.get("kinds") or {}
     agreement = verdict.get("agreement") or {}
+    hints = verdict.get("hints") or {}
     if not screened:
         lines.append("  TAXONOMY did not classify this recording")
     for kind in sorted(screened):
         lines.append(
             f"  {kind}: screened={screened[kind]} resolved={_shown(resolved.get(kind))} "
-            f"agreement={_shown(agreement.get(kind))}"
+            f"agreement={_shown(agreement.get(kind))} hint={_shown(hints.get(kind))}"
         )
 
     lines.append("")
