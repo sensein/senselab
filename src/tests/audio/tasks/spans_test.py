@@ -91,3 +91,30 @@ class TestSpanCarriesItsContrast:
         assert isinstance(out, list)
         (span,) = out
         assert span.peak_over_floor_db == pytest.approx(35.0, abs=0.5)
+
+
+class TestTheMergeRate:
+    """A span records how many proposals it absorbed, so several events in one span are legible."""
+
+    def test_an_unmerged_span_absorbed_one_proposal(self) -> None:
+        """One proposal in, one span out: the count is 1, not 0 — a span is its own proposal."""
+        env = _envelope([(2.0, 2.5, -20.0)])
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        (span,) = out
+        assert span.merged_proposals == 1
+
+    def test_two_overlapping_proposals_report_two(self) -> None:
+        """Two peaks over one shoulder propose two spans covering it; the survivor says so."""
+        env = _envelope([(2.0, 2.2, -20.0), (2.2, 2.4, -25.0), (2.4, 2.6, -20.0)])
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        assert len(out) == 1
+        assert out[0].merged_proposals == 2
+
+    def test_two_separated_proposals_each_report_one(self) -> None:
+        """Nothing was absorbed, and neither span claims otherwise."""
+        env = _envelope([(2.0, 2.5, -20.0), (8.0, 8.5, -20.0)])
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        assert [span.merged_proposals for span in out] == [1, 1]

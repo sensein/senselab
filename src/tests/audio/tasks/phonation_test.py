@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
+from scipy.signal import lfilter
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.phonation import PeriodMark, f0_track, hnr_track, period_marks
+from senselab.audio.tasks.phonation import (
+    FormantTrack,
+    PeriodMark,
+    f0_track,
+    formant_track,
+    hnr_track,
+    period_marks,
+    propose_phonation_spans,
+)
 
 SR = 16000
 
@@ -22,6 +32,21 @@ def _noise(seconds: float = 1.0) -> Audio:
     """Return seeded white noise."""
     rng = np.random.default_rng(0)
     return Audio(waveform=(0.1 * rng.standard_normal(int(seconds * SR))).astype(np.float32)[None, :], sampling_rate=SR)
+
+
+def _vowel(f0: float, n_samples: int, formants: tuple[float, ...] = (700.0, 1200.0, 2600.0)) -> np.ndarray:
+    """A pulse train at ``f0`` through one two-pole resonator per formant, peak-normalised.
+
+    A three-sine fixture will not do here: Praat's Burg analysis has no stable pole to place on a
+    line spectrum, so its F1 wanders between the components frame to frame.
+    """
+    excitation = np.zeros(n_samples)
+    excitation[:: max(1, int(round(SR / f0)))] = 1.0
+    out = excitation
+    for centre in formants:
+        r = float(np.exp(-np.pi * 80.0 / SR))
+        out = lfilter([1.0 - r], [1.0, -2 * r * np.cos(2 * np.pi * centre / SR), r * r], out)
+    return np.asarray(out / (np.abs(out).max() + 1e-12), dtype=np.float64)
 
 
 def _hnr(audio: Audio) -> np.ndarray:
@@ -101,3 +126,145 @@ class TestF0Track:
         """No default stands in for a value the caller did not choose."""
         with pytest.raises(TypeError):
             f0_track(_buzz(100.0))  # type: ignore[call-arg]
+
+
+class TestFormantTrack:
+    """Formants over the whole stream, on the analysis hop, four per frame with bandwidths."""
+
+    def test_a_synthetic_vowel_yields_four_formants_per_frame(self) -> None:
+        """Every returned array is the same length and carries F1-F4 with their bandwidths."""
+        sr = 16000
+        t = np.arange(int(0.5 * sr)) / sr
+        wave = sum(np.sin(2 * np.pi * f * t) for f in (120.0, 700.0, 1200.0, 2600.0, 3400.0))
+        audio = Audio(waveform=torch.tensor(wave, dtype=torch.float32).unsqueeze(0), sampling_rate=sr)
+        track = formant_track(
+            audio,
+            hop_s=0.01,
+            max_formants=5,
+            formant_max_hz=5000.0,
+            window_s=0.025,
+            preemphasis_hz=50.0,
+        )
+        lengths = {
+            len(track.times_s),
+            len(track.f_hz[0]),
+            len(track.f_hz[3]),
+            len(track.bandwidth_hz[0]),
+            len(track.bandwidth_hz[3]),
+        }
+        assert len(lengths) == 1
+        assert len(track.f_hz) == 4
+        assert len(track.bandwidth_hz) == 4
+
+    def test_tracking_a_slice_and_slicing_the_track_are_not_the_same_measurement(self) -> None:
+        """The whole point of tracking once on the stream: a fragment renormalises to its own maximum.
+
+        The fixture is a stream whose second half is 20 dB louder than its first, so a track computed
+        on the quiet fragment alone sees a different dynamic range from the same interval sliced out
+        of the stream's track. Both are compared here explicitly, which is what makes this test say
+        something -- a test that only checked the sliced track against itself would pass under either
+        implementation.
+        """
+        sr = 16000
+        n_samples = int(2.0 * sr)
+        wave = _vowel(120.0, n_samples)
+        wave = np.where(np.arange(n_samples) < n_samples // 2, wave * 0.1, wave)
+        audio = Audio(waveform=torch.tensor(wave, dtype=torch.float32).unsqueeze(0), sampling_rate=sr)
+        whole = formant_track(
+            audio, hop_s=0.01, max_formants=5, formant_max_hz=5000.0, window_s=0.025, preemphasis_hz=50.0
+        )
+        quiet = Audio(waveform=audio.waveform[:, : n_samples // 2], sampling_rate=sr)
+        fragment = formant_track(
+            quiet, hop_s=0.01, max_formants=5, formant_max_hz=5000.0, window_s=0.025, preemphasis_hz=50.0
+        )
+        sliced = whole.f_hz[0][(whole.times_s >= 0.0) & (whole.times_s < 1.0)]
+        n = min(len(sliced), len(fragment.f_hz[0]))
+        assert n > 50
+        assert np.nanmedian(sliced[:n]) == pytest.approx(np.nanmedian(fragment.f_hz[0][:n]), rel=0.15)
+        assert len(whole.times_s) > len(fragment.times_s)
+
+
+def _tracks(
+    f0_hz: np.ndarray, f1_hz: np.ndarray, strength: np.ndarray, hop_s: float = 0.01
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, FormantTrack]:
+    """Synthetic tracks on one hop: F2 follows F1 so both stability limbs move together."""
+    times = np.arange(len(f0_hz)) * hop_s
+    nan = np.full(len(f0_hz), np.nan)
+    return (
+        times,
+        f0_hz,
+        strength,
+        FormantTrack(times_s=times, f_hz=(f1_hz, f1_hz * 2.0, nan, nan), bandwidth_hz=(nan, nan, nan, nan)),
+    )
+
+
+_SPAN_RULE = {
+    "hop_s": 0.01,
+    "f0_stability_cents": 30.0,
+    "formant_stability_hz": 20.0,
+    "glide_min_excursion_cents": 200.0,
+    "hangover_ms": 50.0,
+    "voicing_strength_floor": 0.5,
+    "mixed_voiced_fraction": 0.6,
+}
+
+
+class TestProposePhonationSpans:
+    """The continuity criterion, the two members, and production across voiced and unvoiced."""
+
+    def test_a_steady_f0_run_is_one_sustained_voiced_span(self) -> None:
+        """Stable F0 satisfies its limb on its own, and strength over the floor makes it voiced."""
+        n = 100
+        times, f0, strength, formants = _tracks(
+            np.full(n, 200.0), np.full(n, 700.0), np.full(n, 0.9)
+        )
+        [span] = propose_phonation_spans(
+            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
+        )
+        assert span.member == "sustained"
+        assert span.production == "voiced"
+        assert span.voiced_fraction == pytest.approx(1.0)
+        assert span.end - span.start == pytest.approx(1.0, abs=0.02)
+        assert span.offset_criterion == "stream_end"
+
+    def test_an_unvoiced_sustain_is_a_span_carried_by_the_formant_limb(self) -> None:
+        """No F0 anywhere, stable formants throughout: a span opens and reads unvoiced."""
+        n = 100
+        times, f0, strength, formants = _tracks(
+            np.full(n, np.nan), np.full(n, 700.0), np.full(n, 0.1)
+        )
+        [span] = propose_phonation_spans(
+            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
+        )
+        assert span.member == "sustained"
+        assert span.production == "unvoiced"
+        assert span.f0_median_hz is None
+
+    def test_a_monotone_run_that_fails_both_limbs_is_a_glide(self) -> None:
+        """F0 rising 100 cents a hop breaks stability; its monotone excursion makes it a glide."""
+        n = 40
+        f0 = 150.0 * 2.0 ** (np.arange(n) * 100.0 / 1200.0)
+        times, f0, strength, formants = _tracks(f0, f0 * 4.0, np.full(n, 0.9))
+        spans = propose_phonation_spans(
+            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
+        )
+        assert [s.member for s in spans] == ["glide"]
+        assert spans[0].glide_direction == "rising"
+        assert spans[0].glide_extent_cents == pytest.approx(3900.0, rel=0.01)
+
+    def test_a_gap_shorter_than_the_hangover_does_not_close_the_span(self) -> None:
+        """One unstable frame inside a stable run leaves one span, not two."""
+        n = 100
+        f0 = np.full(n, 200.0)
+        f0[50] = 260.0
+        times, f0, strength, formants = _tracks(f0, np.full(n, 700.0) + (np.arange(n) == 50) * 500.0, np.full(n, 0.9))
+        spans = propose_phonation_spans(
+            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
+        )
+        assert len(spans) == 1
+
+    def test_every_parameter_is_required(self) -> None:
+        """No default stands in for a value the caller did not choose."""
+        times, f0, strength, formants = _tracks(np.full(10, 200.0), np.full(10, 700.0), np.full(10, 0.9))
+        with pytest.raises(TypeError):
+            propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants)  # type: ignore[call-arg]
