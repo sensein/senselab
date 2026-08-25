@@ -84,11 +84,6 @@ derivation: |
   HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
   length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
 
-  HeAR label_floor 0.5 -- UNMEASURED on any real corpus. The original empty-interval derivation is
-  retracted (benchmarks/hear-yamnet.md): the b2ai-28 campaign's 170 spans produced winners 0.501-0.821
-  with two within 0.005 of the floor, and both dedicated cough recordings labelled nothing. 0.5 stands
-  only until the ROC in benchmarks/open.md is run.
-
   YAMNet silence_threshold and coverage_threshold, both 0.5 -- benchmarks/hear-yamnet.md and
   taxonomy.md. Silence is bimodal across the reference recording's 29 windows: every score is <=0.36
   or >=0.62. The labels that matter leave the same kind of gap containing 0.5 -- Cough jumps
@@ -123,11 +118,6 @@ derivation: |
   disruptions ZCR -- zero_crossing_rate is a plain reading of each span in crossings per second,
   reported and never gated. It has no threshold because nobody has derived one.
 
-  HeAR placement centre -- benchmarks/hear-yamnet.md's whole-span numbers were measured with the
-  span centred in the buffer (benchmarks/scripts/spaninput.py). span_to_hear_buffer implements
-  start and end placements too, but those are different inputs and have not been measured, so the
-  node accepts only centre.
-
   Airway labels_of_interest {Cough, Breathe} -- branch-airway.md's default, from HeAR's eight. The
   confirmation map Cough -> {Cough}, Breathe -> {Breathing, Sigh, Gasp} is branch-airway.md's step 2
   table: which AudioSet labels corroborate each HeAR label. Vocabulary, not thresholds.
@@ -142,9 +132,6 @@ derivation: |
   verbatim and counted in unplaced_words_n -- text of unknown location cannot be shown to be safe.
 
   UNSET, and why -- benchmarks/open.md carries each of these:
-    phonation.f0_min_hz, phonation.f0_max_hz: no single search range serves both a low adult male
-      fundamental and an infant voice -- a range wide enough for one admits period-doubling artefacts
-      in the other -- so the caller must state which population it is measuring.
     phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
       autocorrelation, (0.44, 0.933) and (0.0007, 0.0161) on one recording, and the implementation now
       uses Praat harmonicity in dB. The units differ, so the interval does not transfer and neither
@@ -158,8 +145,6 @@ derivation: |
       not-1 records second_diarizer "not_consulted" and still flags.
     speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target
       embedding under this null is refused rather than answered with an invented cut.
-    speech.agreement_flag_floor: "the recognizers disagree beyond threshold" has no measured
-      threshold; while null the flag row is inert and the verdict records "not_evaluated".
     speech.speech_test_stoi_floor, speech.speech_test_si_sdr_floor: SQUIM thresholds over speech
       spans are unmeasured; while null each span's corroboration records squim_vote "not_evaluated"
       and YAMNet coverage alone decides. Distinct from quality.stoi_floor/pesq_floor: these gate
@@ -167,8 +152,6 @@ derivation: |
     phonation.hnr_floor_interval_db, phonation.rms_floor_interval: benchmarks/voice.md measured a
       near-edge interval in normalised-autocorrelation units, which do not transfer to the Praat-dB
       implementation; while null the near-edge row is inert and the verdict records "unmeasured".
-    taxonomy.min_families.*: the asymmetry is known -- airway has three eligible families, speech two
-      -- but neither count has a derived value.
     quality.stoi_floor, quality.pesq_floor, quality.disruption_*: no labelled quality verdicts exist,
       so SPEECH's quality fail is unreachable by design until they do. Reserved: read by nothing yet;
       SPEECH step 8 reports without gating until these are measured AND wired.
@@ -181,22 +164,10 @@ derivation: |
   than a threshold: a run is ambiguous when its median F0 times or divided by this factor also
   lies inside the caller's declared range.
 
-  Taxonomy presence floors -- yamnet 0.5 from the bimodal gaps benchmarks/hear-yamnet.md records
-  (Cough 0.84 -> 0.27, Speech 0.92 -> 0.14, Breathing 0.59 -> 0.36: a threshold inside an empty
-  interval); hear 0.5 from the same file's whole-span winner/runner-up gap (0.940-0.996 against
-  0.02-0.41), a transfer from whole-span inputs to sliding windows that has not been separately
-  measured. ast is null: AST's sigmoid scores have never been measured on the reference recording,
-  so its member abstains and is recorded until someone measures a floor.
-
   Taxonomy label vocabularies -- semantic mappings, not thresholds: which of each detector's labels
   can express each kind, read off the label inventories (AudioSet's 521, HEAR_EVENT_LABELS' eight,
   CrisperWhisper's bracketed non-lexical tokens). Not fitted; overridable. benchmarks/taxonomy.md
   records why no single AudioSet roll-up label exists.
-
-  Taxonomy ast_frame_s 10.24 s -- an architectural constant of AST at 16 kHz, not a tuned value:
-  the model's fixed input is 1024 mel frames at a 10 ms hop, so every file-level score it emits was
-  computed over one 10.24 s analysis frame. Recorded on the AST member -- including an abstained
-  one, whose inference still ran -- so the score it measured names the frame it was measured over.
 
   pii.required_detectors [gliner, presidio, rules] -- vocabulary, not fitted: it is the output of
   the pii_detection module's own default_detectors(), which is the set scan_for_pii runs when the
@@ -218,6 +189,115 @@ derivation: |
     While null the near-edge flag is inert. gate_interval is three-valued: "measured" iff both
     intervals are supplied, "partial" when exactly one is, "unmeasured" when neither -- each
     family's near-edge check arms independently with its own interval.
+
+  v2 window classifications -- preprocess.md's "sets, not accumulators" rule. A window's product is the
+  set of labels each clearing ITS OWN threshold, and the file-level product is the set-union with the
+  windows retained per label. The thresholds are windows.<classifier>.default_threshold with a
+  per-label override map; all six are null because no ROC over this corpus exists. The v1
+  taxonomy.presence_floor.{yamnet,ast,hear} 0.5 values are RETRACTED and deleted rather than carried
+  over: they were read off bimodal gaps in one reference recording's whole-file scores, and a
+  whole-file gap is not a per-window threshold. YAMNet's grid is not a key at all -- classify_audios
+  ignores win_length/hop_length for YAMNet and returns its own 0.96 s / 0.48 s frames, so the grid is
+  recorded as a fact on the pooled measurement.
+
+  windows.ast.win_length_s 0.96 -- NOT 10.24. The "native frame: 1024 mel frames at 10 ms" reasoning
+  is RETRACTED in this repository, and the retraction is quoted here because a plan that reintroduced
+  the value would be reintroducing a defect this codebase already measured and removed. From
+  audio_analysis/data/run_config/default.yaml: "That conflates the model's required input size with
+  its temporal precision. 1024 frames is a fixed input shape, not an analysis resolution: a shorter
+  window is zero-padded to 1024 frames by ASTFeatureExtractor -- rectangular padding, no taper -- so
+  the content is unattenuated and AST can be slid at any hop." Measured there on a 21.48 s
+  conversation clip: 10.24 s / 10.24 s gave 3 windows scoring 0.473, 0.449 and 0.195 on speech, while
+  0.96 s / 0.48 s gave 45 windows scoring 0.75-0.92 -- confidence ROSE, because a 10.24 s window of a
+  conversation spreads its softmax mass over speech plus silence plus everything else while a 0.96 s
+  window of speech is unambiguous. And on a 4.9 s recording the coarse window exceeded the whole clip,
+  so AST returned one flat value for every bucket while carrying the largest weight on its axis. The
+  "kaldi-fbank refuses chunks below ~1 s" constraint is real and does not bind: 0.96 s is ~96 mel
+  frames. 0.96 s also puts AST on YAMNet's grid, which is what lets the acoustic evidence line count
+  windows from either classifier without reconciling two frame rates. A coarser window -- the owner's
+  10 s figure among them -- remains reachable as an override, and a run that takes it declares it in
+  config_hash. windows.ast.hop_s stays null because the v2 spec owes it a fit; 0.48 is the value the
+  retraction above measured at, and is what an override should start from.
+
+  windows.ast.top_k 527 -- the full AudioSet label space AST was fine-tuned on. A SIZE, not a
+  threshold, and the same reason yamnet.top_k is 521: classify_audios does `top_k=top_k or 5` on its
+  windowed path (classification/api.py:135), so passing None does not mean "keep everything", it means
+  "keep five". Five of 527 is a RANKING over the vocabulary, which is the one operation
+  preprocess.md's set rule forbids -- it would make "the set of labels over threshold" silently mean
+  "the set of the top five labels that are also over threshold", and a label the model emitted at 0.9
+  in a busy window would vanish. HeAR is unaffected: detect_health_acoustic_events takes a different
+  path on which top_k=None does keep all eight labels.
+
+  HeAR's 2 s window is model-imposed and already lives at hear.window_s; only its hop is a key, and it
+  is owed a fit on spans HeAR's input does not have to be padded to fill. hear.placement and
+  hear.label_floor are DELETED with the code that read them: placement was only ever an argument to
+  span_to_hear_buffer, which branch-airway.md removes from the graph by confining HeAR to PREPROCESS,
+  and label_floor is replaced by windows.hear.default_threshold. speech.agreement_flag_floor is
+  deleted likewise: branch-speech.md replaces the aggregate-agreement flag with per-word recognizer
+  membership, so there is no aggregate for a floor to gate.
+
+  phonation_spans -- preprocess.md's sustained-phonation and glide detector. Every parameter is null.
+  f0_stability_cents and formant_stability_hz are the two limbs of the continuity criterion (a frame
+  continues a sustain when F0 moves less than the first across one hop, OR F1 and F2 both move less
+  than the second); glide_min_excursion_cents is the monotone excursion separating a glide from drift;
+  hangover_ms is how long the criterion must fail continuously before the span closes.
+  voicing_strength_floor is the Praat pitch strength above which a frame counts as voiced, and
+  mixed_voiced_fraction is the voiced-frame fraction separating voiced from mixed from unvoiced -- both
+  are needed because a disordered voice sustains with little or no periodicity and a detector that
+  required a periodicity floor would measure exactly the voices least in need of measurement.
+  formant_max_hz 5000.0, max_formants 5, formant_window_s 0.025 and formant_preemphasis_hz 50.0 are
+  praat_parselmouth.py:813's own to_formant_burg defaults -- conventional, not fitted here. hop_s 0.01
+  is Praat's documented time_step default, the same value phonation.hop_s already carries.
+
+  voice.f0_range_hz replaces phonation.f0_min_hz and phonation.f0_max_hz. One range, as [min, max],
+  read by both PREPROCESS's phonation pass and the VOICE branch, so the two cannot hold ranges that
+  drift. It is null for the reason the two scalars were: no single search range serves both a low adult
+  male fundamental and an infant voice, so the caller must state which population it is measuring.
+
+  words.onomatopoeic_tokens -- the vocabulary of cough- and breath-like renderings a recognizer emits
+  as ordinary words ("khh", "ahem", "uh-huh-huh"). Null: it is owed the corpus it was drawn from, and
+  seeding it from three remembered examples would be a vocabulary nobody fitted. While null, only
+  already-bracketed tokens become events, and an onomatopoeic rendering is counted as a word -- which
+  is the honest state, not a safe default.
+
+  taxonomy v2 -- taxonomy.md. TAXONOMY runs no models and folds stored evidence only, so the v1
+  min_families committee and its per-detector floors are deleted rather than re-derived. Each kind now
+  has named evidence LINES with their own floors: speech has acoustic (window count) and lexical (word
+  count); airway has health_acoustic (HeAR window count) and acoustic (AudioSet window count); voice has
+  neither, being classified from phonation-span duration alone. presence_floor values are counts, not
+  scores, and all four are null. voice_min_duration_s and voice_uncertain_duration_s are the two
+  duration cutoffs, both null, both owed a fit across voiced, unvoiced and mixed production.
+  taxonomy.speech_labels replaces audioset_speech_labels and is null because the v2 spec owes it the
+  AudioSet speech FAMILY and the v1 list carried one member. lexical_airway_tokens is deleted: airway's
+  lexical evidence line no longer exists, because a bracketed event is not a word and carries no
+  lexical evidence at all.
+
+  routing.hint_kind_map -- which may_contain tags and which metadata.speech_type values force which
+  kind's branch. A vocabulary, null, owed the corpus it was drawn from. A tag matching no entry forces
+  nothing and is recorded as unmapped; forcing only ever ADDS a branch.
+
+  airway v2 -- branch-airway.md. airway.k_db and airway.k_db_by_task override spans.k_db for this
+  branch and are null: an airway event is level-limited and one value fitted on coughs does not serve
+  quiet breaths, so the 18.0 dB spans.k_db.airway value is retained as the shared default while the
+  branch's own override waits for a fit that represents both. airway.k_margin_db is how close to the
+  gate a labelled span must sit to flag, null. airway.contest_labels is the declared set of YAMNet
+  labels that may contest a HeAR label; it is null and, when supplied, is refused at load if it
+  intersects taxonomy.audioset_airway_labels -- a label cannot be both airway evidence and a contest of
+  airway evidence.
+
+  speech v2 -- branch-speech.md. speech.enrollment_model names the speaker-embedding model AND its
+  revision that enrollment is estimated with; null, and while null an enrollment is refused rather than
+  compared. speech.separation_backend chooses between unasdiff in speech_sound mode and
+  MossFormer2_SS_16K; null until the two are ranked on this corpus, and while null separation does not
+  run. speech.separation_sound_class is the FSD class name unasdiff's sound slot is conditioned on.
+  It is null for a DIFFERENT reason from every other null here, and the distinction matters: nobody
+  needs to measure anything for it. branch-speech.md says the slot stands for any background and
+  should not be conditioned on a class, and separate_audios refuses speech_sound without one ("index 0
+  is 'Hi-hat'"), so THE CAPABILITY IS ABSENT UPSTREAM. It is settled by adding an unconditioned sound
+  slot to unasdiff, or by someone naming a defensible class and saying why -- not by a ROC, a corpus
+  or a fit. Until then the unasdiff option cannot run. speech.nontarget.{level_db,tilt_db_per_octave,d_to_r_db} are the proximity
+  leg's three thresholds, each null; until all three exist the legs are measured and reported per span
+  and nontarget_speech_s is written as null rather than zero.
 
 resample:
   target_hz: 16000
@@ -257,23 +337,57 @@ gammatone:
 
 hear:
   window_s: 2.0
-  label_floor: 0.5
-  placement: centre
 
 yamnet:
   silence_threshold: 0.5
   coverage_threshold: 0.5
   top_k: 521
 
+windows:
+  yamnet:
+    default_threshold: null
+    label_thresholds: null
+  ast:
+    default_threshold: null
+    label_thresholds: null
+    win_length_s: 0.96      # NOT 10.24 -- the "native frame" reasoning is retracted; see the derivation
+    hop_s: null             # owed a fit; the retraction measured at 0.48
+    top_k: 527              # AudioSet's full label space; a size, not a threshold (classify_audios: top_k or 5)
+  hear:
+    default_threshold: null
+    label_thresholds: null
+    hop_s: null
+
+phonation_spans:
+  hop_s: 0.01
+  f0_stability_cents: null
+  formant_stability_hz: null
+  glide_min_excursion_cents: null
+  hangover_ms: null
+  voicing_strength_floor: null
+  mixed_voiced_fraction: null
+  formant_max_hz: 5000.0
+  max_formants: 5
+  formant_window_s: 0.025
+  formant_preemphasis_hz: 50.0
+
+words:
+  onomatopoeic_tokens: null
+
+routing:
+  hint_kind_map: null
+
 airway:
   labels_of_interest: [Cough, Breathe]
   confirmation_map:
     Cough: [Cough]
     Breathe: [Breathing, Sigh, Gasp]
+  k_db: null
+  k_db_by_task: null
+  k_margin_db: null
+  contest_labels: null
 
 phonation:
-  f0_min_hz: null
-  f0_max_hz: null
   hnr_floor_db: null
   rms_floor: null
   hop_s: 0.01
@@ -285,30 +399,37 @@ phonation:
 
 voice:
   hint_tags: [phonation, humming, sustained-vowel, voice]   # N25 -- vocabulary, not fitted
+  f0_range_hz: null
 
 speech:
   word_gap_ms: null
   second_diarizer: null              # no measured ranking of second diarizers exists -- benchmarks/open.md
   target_match_cosine: null          # benchmarks/open.md: no similarity threshold has been derived
-  agreement_flag_floor: null         # benchmarks/open.md: no measured disagreement threshold
   speech_test_stoi_floor: null       # benchmarks/open.md: SQUIM thresholds over speech spans
   speech_test_si_sdr_floor: null     # benchmarks/open.md: SQUIM thresholds over speech spans
   hint_tags: [speech, read-speech]   # vocabulary from the design docs, not fitted
+  enrollment_model: null
+  separation_backend: null
+  separation_sound_class: null
+  nontarget:
+    level_db: null
+    tilt_db_per_octave: null
+    d_to_r_db: null
 
 
 taxonomy:
-  min_families:
-    airway: null
-    speech: null
   presence_floor:
-    yamnet: 0.5
-    ast: null
-    hear: 0.5
-  ast_frame_s: 10.24
+    speech:
+      acoustic: null
+      lexical: null
+    airway:
+      health_acoustic: null
+      acoustic: null
+  voice_min_duration_s: null
+  voice_uncertain_duration_s: null
+  speech_labels: null
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
-  audioset_speech_labels: [Speech]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
-  lexical_airway_tokens: [cough, breath, breathe, throat, sniff, snore, sneeze, wheeze, gasp, sigh]
 
 quality:
   stoi_floor: null

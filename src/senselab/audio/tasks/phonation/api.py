@@ -49,7 +49,7 @@ def hnr_track(
 
     Args:
         audio: The recording. ``get_sound`` handles channel merging and resampling.
-        f0_min_hz: Lowest F0 the analysis considers. Read it from ``phonation.f0_min_hz``.
+        f0_min_hz: Lowest F0 the analysis considers. Read it from ``voice.f0_range_hz``.
         hop_s: Praat's ``time_step``. Read it from ``phonation.hop_s``.
         silence_threshold: Praat's silence threshold. Read it from ``phonation.silence_threshold``.
         periods_per_window: Praat's analysis window length, in periods of ``f0_min_hz``. Read it
@@ -89,8 +89,8 @@ def period_marks(
         audio: The recording.
         start_s: Span onset.
         end_s: Span offset.
-        f0_min_hz: Lowest F0 to search. Read it from ``phonation.f0_min_hz``.
-        f0_max_hz: Highest F0 to search. Read it from ``phonation.f0_max_hz``.
+        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.
+        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.
 
     Returns:
         One mark per pair of consecutive pulses whose gap is a plausible period — within
@@ -135,8 +135,8 @@ def f0_track(
 
     Args:
         audio: The recording. ``get_sound`` handles channel merging and resampling.
-        f0_min_hz: Lowest F0 to search. Read it from ``phonation.f0_min_hz``.
-        f0_max_hz: Highest F0 to search. Read it from ``phonation.f0_max_hz``.
+        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.
+        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.
         hop_s: Praat's ``time_step``. Read it from ``phonation.hop_s``.
 
     Returns:

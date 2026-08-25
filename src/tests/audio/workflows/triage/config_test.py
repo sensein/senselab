@@ -86,7 +86,7 @@ class TestUnsetValues:
             "redaction.padding_ms",
             "speech.word_gap_ms",
             "quality.stoi_floor",
-            "taxonomy.min_families.airway",
+            "taxonomy.voice_min_duration_s",
         ):
             node: object = cfg.values
             for part in path.split("."):
@@ -156,3 +156,80 @@ class TestDocstringKeysResolve:
                         f"{name}/api.py names `{key}` but it does not resolve in default.yaml"
                     )
                     node = node[part]
+
+
+class TestTheV2OpenKeys:
+    """Every key the v2 specs owe a measurement exists and is null."""
+
+    OPEN_KEYS = (
+        "windows.yamnet.default_threshold",
+        "windows.yamnet.label_thresholds",
+        "windows.ast.default_threshold",
+        "windows.ast.label_thresholds",
+        "windows.ast.hop_s",
+        "windows.hear.default_threshold",
+        "windows.hear.label_thresholds",
+        "windows.hear.hop_s",
+        "phonation_spans.f0_stability_cents",
+        "phonation_spans.formant_stability_hz",
+        "phonation_spans.glide_min_excursion_cents",
+        "phonation_spans.hangover_ms",
+        "phonation_spans.voicing_strength_floor",
+        "phonation_spans.mixed_voiced_fraction",
+        "words.onomatopoeic_tokens",
+        "taxonomy.presence_floor.speech.acoustic",
+        "taxonomy.presence_floor.speech.lexical",
+        "taxonomy.presence_floor.airway.health_acoustic",
+        "taxonomy.presence_floor.airway.acoustic",
+        "taxonomy.voice_min_duration_s",
+        "taxonomy.voice_uncertain_duration_s",
+        "taxonomy.speech_labels",
+        "routing.hint_kind_map",
+        "airway.k_db",
+        "airway.k_db_by_task",
+        "airway.k_margin_db",
+        "airway.contest_labels",
+        "speech.enrollment_model",
+        "speech.separation_backend",
+        "speech.separation_sound_class",
+        "speech.nontarget.level_db",
+        "speech.nontarget.tilt_db_per_octave",
+        "speech.nontarget.d_to_r_db",
+    )
+
+    def test_every_open_key_exists_and_is_null(self) -> None:
+        """A key that does not exist is a typo; a key with a value is an unmeasured decision shipped.
+
+        Both halves are checked through the public API: ``require`` distinguishes the two failures by
+        message — "unknown configuration key" for a typo, "has no value" for a null — so asserting on
+        which message fires is what tells "the key is missing" from "the key is null".
+        """
+        config = load_triage_config()
+        for path in self.OPEN_KEYS:
+            with pytest.raises(ValueError, match="has no value") as raised:
+                config.require(path)
+            assert "unknown configuration key" not in str(raised.value), path
+            assert config.get(path, "SENTINEL") == "SENTINEL", path
+
+    def test_the_v1_keys_the_v2_specs_replaced_are_gone(self) -> None:
+        """Pre-alpha: a replaced key is deleted, not left beside its replacement."""
+        config = load_triage_config()
+        for path in (
+            "phonation.f0_min_hz",
+            "phonation.f0_max_hz",
+            "taxonomy.audioset_speech_labels",
+            "taxonomy.min_families",
+            "taxonomy.ast_frame_s",
+            "taxonomy.lexical_airway_tokens",
+            "taxonomy.presence_floor.yamnet",
+            "hear.label_floor",
+        ):
+            with pytest.raises(ValueError, match="unknown configuration key"):
+                config.require(path)
+
+    def test_the_f0_range_replaces_the_two_scalar_keys(self) -> None:
+        """One range, read by PREPROCESS and VOICE alike, so the two cannot drift."""
+        config = load_triage_config()
+        with pytest.raises(ValueError, match="has no value"):
+            config.require("voice.f0_range_hz")
+        assert config.get("voice.f0_range_hz", "SENTINEL") == "SENTINEL"
