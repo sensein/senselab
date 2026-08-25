@@ -70,11 +70,14 @@ def _ends_with_cough(token: str) -> bool:
         token: The task token, e.g. ``Respiration-and-cough-Cough-1``.
 
     Returns:
-        True for ``...-Cough`` and ``...-Cough-2``, False for ``Respiration-and-cough-Breath-1``.
-        This is the whole reason the rule is a trailing match: every respiration file carries
-        "cough" in the protocol's own name, so a substring test tags five breath files as coughs.
+        True for ``...-Cough``, ``...-Cough-2`` and ``...-HardCough``, False for
+        ``Respiration-and-cough-Breath-1``. This is the whole reason the rule is a trailing match:
+        every respiration file carries "cough" in the protocol's own name, so a substring test tags
+        five breath files as coughs. The capital C is what preserves that discrimination -- the
+        final hyphen-segment must END in ``Cough``, so ``HardCough`` is claimed while the lowercase
+        ``cough`` inside the protocol prefix never is.
     """
-    return re.search(r"(?:^|-)Cough(?:-\d+)?$", token) is not None
+    return re.search(r"(?:^|-)[A-Za-z]*Cough(?:-\d+)?$", token) is not None
 
 
 def _contains_breath(token: str) -> bool:
@@ -159,17 +162,19 @@ RULES: tuple[Rule, ...] = (
         "adult.maximum-phonation-time.v2",
     ),
     Rule("glides", _starts("Glides"), ("phonation", "voice"), "non-lexical", "adult.glides"),
-    Rule("loudness", _is("Loudness"), ("phonation", "voice"), "non-lexical", "adult.loudness.v2"),
+    Rule("loudness", _starts("Loudness"), ("phonation", "voice"), "non-lexical", "adult.loudness.v2"),
     # Read tasks. `Passage` covers Rainbow and any other passage the protocol carries; the explicit
     # tokens are here so a passage that is not named "-Passage" still resolves.
     Rule("rainbow passage", _is("Rainbow-Passage"), ("read-speech", "speech"), "read", "adult.rainbow-passage"),
     Rule("passage (read)", _contains("Passage"), ("read-speech", "speech"), "read", None),
     Rule("reading (read)", _starts("Reading"), ("read-speech", "speech"), "read", None),
+    Rule("harvard sentences (read)", _starts("Harvard-Sentences"), ("read-speech", "speech"), "read", None),
+    Rule("cape-v sentences (read)", _starts("Cape-V-sentences"), ("read-speech", "speech"), "read", None),
     # Elicited and recalled connected speech. Every one of these is [speech] and nothing else: the
     # v1 table gives them no voice tag, and adding one would force VOICE on connected speech.
     Rule("free speech", _starts("Free-speech"), ("speech",), "elicited", "adult.free-speech.v2"),
-    Rule("picture description", _is("Picture-description"), ("speech",), "elicited", "adult.picture-description"),
-    Rule("story recall", _is("Story-recall"), ("speech",), "recall", "adult.story-recall.v2"),
+    Rule("picture description", _starts("Picture-description"), ("speech",), "elicited", "adult.picture-description"),
+    Rule("story recall", _starts("Story-recall"), ("speech",), "recall", "adult.story-recall.v2"),
     Rule("cinderella story", _starts("Cinderella-Story"), ("speech",), "recall", None),
     Rule("productive vocabulary", _starts("Productive-Vocabulary"), ("speech",), "elicited", None),
     Rule("random item generation", _starts("Random-Item-Generation"), ("speech",), "elicited", None),
@@ -238,6 +243,77 @@ B2AI_28: dict[str, tuple[tuple[str, ...], str, str]] = {
 
 Kept inline so ``--selftest`` can prove :data:`RULES` reproduces the campaign that already ran, and
 so the 28-file set can be regenerated without reaching the cluster.
+"""
+
+V2_47: dict[str, tuple[tuple[str, ...], str]] = {
+    "Cape-V-sentences-(v2)-1": (("read-speech", "speech"), "read"),
+    "Cape-V-sentences-(v2)-2": (("read-speech", "speech"), "read"),
+    "Cape-V-sentences-(v2)-3": (("read-speech", "speech"), "read"),
+    "Cape-V-sentences-(v2)-4": (("read-speech", "speech"), "read"),
+    "Cape-V-sentences-(v2)-5": (("read-speech", "speech"), "read"),
+    "Cape-V-sentences-(v2)-6": (("read-speech", "speech"), "read"),
+    "Caterpillar-Passage": (("read-speech", "speech"), "read"),
+    "Diadochokinesis-(v2)-buttercup": (("speech", "voice"), "non-lexical"),
+    "Diadochokinesis-(v2)-kuh": (("voice",), "non-lexical"),
+    "Diadochokinesis-(v2)-puh": (("voice",), "non-lexical"),
+    "Diadochokinesis-(v2)-puhtuhkuh": (("voice",), "non-lexical"),
+    "Diadochokinesis-(v2)-tuh": (("voice",), "non-lexical"),
+    "Free-speech-(v2)-1": (("speech",), "elicited"),
+    "Free-speech-(v2)-2": (("speech",), "elicited"),
+    "Free-speech-(v2)-3": (("speech",), "elicited"),
+    "Glides-High-to-Low": (("phonation", "voice"), "non-lexical"),
+    "Glides-Low-to-High": (("phonation", "voice"), "non-lexical"),
+    "Harvard-Sentences-List-49-1": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-10": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-2": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-3": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-4": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-5": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-6": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-7": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-8": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-49-9": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-1": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-10": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-2": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-3": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-4": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-5": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-6": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-7": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-8": (("read-speech", "speech"), "read"),
+    "Harvard-Sentences-List-52-9": (("read-speech", "speech"), "read"),
+    "Loudness-(v2)": (("phonation", "voice"), "non-lexical"),
+    "Maximum-phonation-time-(v2)-1": (("sustained-vowel", "phonation", "voice"), "non-lexical"),
+    "Picture-description-option2": (("speech",), "elicited"),
+    "Prolonged-vowel": (("sustained-vowel", "phonation", "voice"), "non-lexical"),
+    "Respiration-and-cough-(v2)-Breath": (("breathe", "airway"), "non-lexical"),
+    "Respiration-and-cough-(v2)-HardCough": (("cough", "airway"), "non-lexical"),
+    "Respiration-and-cough-(v2)-ThreeBreaths": (("breathe", "airway"), "non-lexical"),
+    "Respiration-and-cough-(v2)-ThreeBreathsMouth": (("breathe", "airway"), "non-lexical"),
+    "Respiration-and-cough-(v2)-ThreeBreathsNose": (("breathe", "airway"), "non-lexical"),
+    "Story-recall-(v2)": (("speech",), "recall"),
+}
+"""Subject ``1f4ea26f``'s 47 task tokens: the (v2) protocol's own vocabulary, token to (tags,
+speech_type). Unlike :data:`B2AI_28` this is not a transcription of a table that ran -- it is the
+ruling made when the (v2) session was first screened, pinned here so a later edit to RULES cannot
+silently reclassify a file. No task_id: the v2 registry strings were not recorded.
+"""
+
+COUGH_DISCRIMINATION: tuple[tuple[str, bool], ...] = (
+    ("Respiration-and-cough-Cough-1", True),
+    ("Respiration-and-cough-Cough-2", True),
+    ("Respiration-and-cough-(v2)-HardCough", True),
+    ("Respiration-and-cough-Breath-1", False),
+    ("Respiration-and-cough-(v2)-Breath", False),
+    ("Respiration-and-cough-(v2)-ThreeBreathsMouth", False),
+    ("Respiration-and-cough-FiveBreaths-3", False),
+    ("Respiration-and-cough", False),
+)
+"""The cough matcher's boundary, both directions. The trailing segment must END in capital-C
+``Cough`` -- so ``HardCough`` is a cough, while the lowercase ``cough`` every respiration file
+carries in the protocol's own name is not. Both limbs are pinned: a substring test would tag every
+breath file as a cough, and a bare ``-Cough$`` test would miss ``HardCough``.
 """
 
 B2AI_28_SUBJECT = "sub-17cee767-1864-457a-b2ec-446a058a81f8"
@@ -395,7 +471,10 @@ def _filenames(args: argparse.Namespace) -> list[str]:
 
 
 def selftest() -> int:
-    """Check that :data:`RULES` reproduces the v1 hint table for all 28 files.
+    """Check that :data:`RULES` reproduces the v1 hint table and the (v2) rulings.
+
+    Covers three things: the 28 v1 rows verbatim, subject ``1f4ea26f``'s 47 (v2) tokens, and the
+    cough matcher's boundary in both directions.
 
     Returns:
         0 when every token's tags, speech_type and task_id match, 1 otherwise.
@@ -412,6 +491,24 @@ def selftest() -> int:
             check_tags(hint_for(token, resolve(token)), kind_map, token)
         except ValueError as error:
             failures.append(f"  {error}")
+    for token, (tags, speech_type) in V2_47.items():
+        try:
+            rule = resolve(token)
+        except ValueError as error:
+            failures.append(f"  {error}")
+            continue
+        if (rule.tags, rule.speech_type) != (tags, speech_type):
+            failures.append(
+                f"  {token}: rule {rule.name!r} gave {(rule.tags, rule.speech_type)}, ruled {(tags, speech_type)}"
+            )
+        else:
+            try:
+                check_tags(hint_for(token, rule), kind_map, token)
+            except ValueError as error:
+                failures.append(f"  {error}")
+    for token, expected in COUGH_DISCRIMINATION:
+        if _ends_with_cough(token) is not expected:
+            failures.append(f"  cough matcher: {token!r} gave {not expected}, expected {expected}")
     for rule in RULES:
         for tag in rule.tags:
             if tag.casefold() not in kind_map:
@@ -420,7 +517,10 @@ def selftest() -> int:
         print(f"selftest FAILED ({len(failures)}):", file=sys.stderr)
         print("\n".join(failures), file=sys.stderr)
         return 1
-    print(f"selftest ok: {len(B2AI_28)} v1 rows reproduced; every rule tag is a hint_kind_map key")
+    print(
+        f"selftest ok: {len(B2AI_28)} v1 rows reproduced; {len(V2_47)} (v2) tokens match their ruling; "
+        f"{len(COUGH_DISCRIMINATION)} cough-boundary cases pinned; every rule tag is a hint_kind_map key"
+    )
     return 0
 
 
