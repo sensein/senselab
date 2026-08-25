@@ -2,9 +2,9 @@
 
 It measures nothing and classifies nothing: it reads TAXONOMY's ``kind`` elements and the caller's
 hints, and writes one ``branch_decision`` per branch. A hint forces a branch to run; it never
-rewrites the classification, never removes a branch and never relaxes a threshold. There is no
-``fail`` here — a file every branch declines is a ``flag``, and what an empty execution set means for
-the file is VERDICT's decision.
+rewrites the classification, never removes a branch and never relaxes a threshold. Its verdict is
+always a ``pass``: this node reaches no conclusion about the recording, and an empty execution set is
+recorded on the decisions for VERDICT to read rather than flagged here.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def _classifications(store: ProvStore) -> dict[str, Entity]:
     return latest
 
 
-def _declared_tags(hint: AudioHints | None) -> list[str]:
+def declared_tags(hint: AudioHints | None) -> list[str]:
     """Every tag the caller declared, from ``may_contain`` and the task's ``speech_type``.
 
     Args:
@@ -87,7 +87,7 @@ def _declared_tags(hint: AudioHints | None) -> list[str]:
     return list(seen)
 
 
-def _map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
+def map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
     """Sort the declared tags into the kinds they name, the ones that name nothing, and the typos.
 
     Args:
@@ -157,7 +157,7 @@ def routing(
         The branches that run, those that do not, those a hint forced, and whether the set is empty.
     """
     stream = source or _STREAM
-    tags_by_kind, unmapped, bad_values = _map_tags(_declared_tags(hint), config.get("routing.hint_kind_map") or {})
+    tags_by_kind, unmapped, bad_values = map_tags(declared_tags(hint), config.get("routing.hint_kind_map") or {})
     classified = _classifications(store)
 
     software = software_agent(store)
@@ -219,16 +219,16 @@ def routing(
 
     empty_set = not runs
     if empty_set:
-        outcome, why = Outcome.FLAG, "no branch runs; " + ", ".join(declined)
+        why = "no branch runs; " + ", ".join(declined)
     else:
-        outcome, why = Outcome.PASS, "runs: " + ", ".join(runs)
+        why = "runs: " + ", ".join(runs)
 
     verdict_id, verdict = write_verdict(
         store,
         activity,
         software,
         node=NODE,
-        outcome=outcome,
+        outcome=Outcome.PASS,
         kind=None,
         why=why,
         detail={"runs": list(runs), "skipped": list(skipped), "forced": list(forced), "empty_set": empty_set},

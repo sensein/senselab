@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome
+from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 
@@ -45,7 +45,7 @@ def write_verdict(
     agent_id: str,
     *,
     node: str,
-    outcome: Outcome,
+    outcome: Outcome | Triage,
     kind: str | None,
     why: str,
     detail: dict[str, Any],
@@ -57,7 +57,7 @@ def write_verdict(
         activity_id: The activity that concluded.
         agent_id: The agent answerable for the verdict.
         node: The node's name.
-        outcome: What it concluded.
+        outcome: What it concluded — an ``Outcome`` for every node, a ``Triage`` for the file fold.
         kind: The kind the node screens, or None.
         why: The reason, in controlled vocabulary — never transcript text.
         detail: The node's design-named verdict fields.

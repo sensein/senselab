@@ -190,19 +190,20 @@ class TestHintsForceAndNothingElse:
         _kinds(store, speech="absent", airway="absent", voice="absent")
         result = routing(store, None, config, AudioHints(may_contain=["cough"]), run_dir=tmp_path)
         assert result.runs == ()
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.empty_set is True
 
 
 class TestTheEmptyExecutionSet:
-    """A file that enters no branch is flagged, not failed and not discarded."""
+    """A file that enters no branch is recorded, not judged: the fold decides what it means."""
 
-    def test_no_branch_flags(self, store: ProvStore, tmp_path: Path) -> None:
-        """ROUTING has no fail; whether an empty set discards the file is the fold's decision."""
+    def test_no_branch_is_recorded_without_a_flag(self, store: ProvStore, tmp_path: Path) -> None:
+        """A flag here preempts VERDICT's acoustically-empty discard, which would be unreachable."""
         _kinds(store, speech="absent", airway="absent", voice="absent")
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.verdict.outcome is Outcome.PASS
         assert result.empty_set is True
         assert "absent" in result.verdict.why
+        assert all(d.attributes["will_run"] is False for d in live_entities(store, "branch_decision"))
 
     def test_any_branch_running_passes(self, store: ProvStore, tmp_path: Path) -> None:
         """A non-empty execution set is a pass; nothing here is a judgement about the recording."""
