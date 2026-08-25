@@ -712,6 +712,39 @@ class TestTheAbsentLanesAreOnThePage:
         assert "unavailable (a derivative it reads is absent): silence [LookupError]" in blocks
         assert "errored: alignment [AttributeError]" in blocks
 
+    def test_the_recorded_message_is_rendered_beside_the_reading(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """PREPROCESS records which key was null; a page that showed only the class would drop it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            absent={"phonation_spans": "ValueError: phonation_spans.silence_floor_db is null"},
+        )
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "unfitted (a config key it reads is null)" in blocks
+        assert "phonation_spans [ValueError: phonation_spans.silence_floor_db is null]" in blocks
+
+    def test_a_lane_absence_carries_the_message_too(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lane line is where a reader looks first, so the attribution must reach it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            absent={"yamnet_windows": "ValueError: yamnet.window_s is null"},
+            classifiers=(),
+        )
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — yamnet labels: PREPROCESS/yamnet_windows unfitted" in blocks
+        assert "yamnet.window_s is null" in blocks
+
     def test_a_lane_the_page_did_not_draw_is_named_with_its_reason(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -19,7 +19,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
-from senselab.audio.workflows.triage.nodes.common import NodeResult
+from senselab.audio.workflows.triage.nodes.common import NodeResult, describe_exception
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.redact import redact
 from senselab.audio.workflows.triage.nodes.report import report
@@ -180,7 +180,7 @@ def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]
     try:
         result = call()
     except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
-        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=f"{type(error).__name__}: {error}")
+        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=describe_exception(error))
         return None
     outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED, verdict=result.verdict)
     return result
@@ -275,7 +275,7 @@ def _attempt_artifacts(
     try:
         artifacts = call()
     except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
-        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=f"{type(error).__name__}: {error}")
+        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=describe_exception(error))
         salvaged = getattr(error, "artifacts", None)
         return dict(salvaged) if isinstance(salvaged, dict) else {}
     outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED)

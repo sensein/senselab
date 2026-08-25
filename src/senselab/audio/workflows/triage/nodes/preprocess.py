@@ -40,7 +40,12 @@ from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.common import (
+    NodeResult,
+    describe_exception,
+    software_agent,
+    write_verdict,
+)
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import HFModel, Language, ScriptLine
 from senselab.utils.prov_store import ProvStore
@@ -950,7 +955,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         try:
             block()
         except Exception as err:  # noqa: BLE001 — an uncomputable derivative is absent, not an error
-            absent[name] = type(err).__name__
+            absent[name] = describe_exception(err)
 
     verdict_id, verdict = write_verdict(
         store,

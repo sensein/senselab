@@ -645,21 +645,21 @@ def _shown(value: Any) -> str:  # noqa: ANN401 — anything a store attribute ca
 def _absences(store: ProvStore) -> dict[str, tuple[str, str]]:
     """Why each PREPROCESS derivative is missing, keyed by the derivative's name.
 
-    PREPROCESS records only the exception's class, so the reading is by class: ``config.require``
-    raises ``ValueError`` for a key nobody has measured, and a block whose input is missing raises
-    ``LookupError``. Anything else is a genuine failure. Attribution by class is coarser than
-    attribution by message and is upstream's to improve; recording nothing would be worse.
+    PREPROCESS records ``"Class: first line"``. The reading is by class — ``config.require`` raises
+    ``ValueError`` for a key nobody has measured, a block whose input is missing raises
+    ``LookupError``, anything else is a genuine failure — and the message is what names *which* key
+    or *which* input, so it is carried through to the page rather than dropped at the colon.
 
     Args:
         store: The provenance store.
 
     Returns:
-        ``{derivative: (reading, exception class)}``. Empty when PREPROCESS never concluded.
+        ``{derivative: (reading, what PREPROCESS recorded)}``. Empty when PREPROCESS never concluded.
     """
     verdict_entity = _verdict_entities(store).get("PREPROCESS")
     absent = (verdict_entity.attributes.get("absent") or {}) if verdict_entity is not None else {}
     return {
-        str(name): (_ABSENCE_BY_CLASS.get(str(raised), _ABSENCE_ERRORED), str(raised))
+        str(name): (_ABSENCE_BY_CLASS.get(str(raised).split(":", 1)[0], _ABSENCE_ERRORED), str(raised))
         for name, raised in sorted(absent.items())
     }
 

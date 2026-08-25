@@ -11,6 +11,31 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Triage
 from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
+MESSAGE_CAP = 200
+"""How much of an exception's message is recorded. The bound on what a message can leak."""
+
+
+def describe_exception(error: BaseException) -> str:
+    """An exception as ``"Class: first line"``, bounded, for a record a reader can act on.
+
+    Args:
+        error: The exception.
+
+    Returns:
+        The class name alone when the exception carries no message, else the class name and the
+        message's first line truncated to :data:`MESSAGE_CAP` characters with an ellipsis. Only the
+        first line is kept: a multi-line message is a traceback or a dump, and neither belongs in a
+        one-line record.
+    """
+    name = type(error).__name__
+    message = str(error).strip().splitlines()
+    if not message or not message[0]:
+        return name
+    first = message[0]
+    if len(first) > MESSAGE_CAP:
+        first = first[: MESSAGE_CAP - 3] + "..."
+    return f"{name}: {first}"
+
 
 @dataclass(frozen=True)
 class NodeResult:

@@ -576,6 +576,80 @@ class TestPhonationSpans:
         assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
 
 
+class TestAnAbsenceIsAttributedNotJustClassified:
+    """A class name says which of three kinds of failure; it never says which key or which input."""
+
+    def _absent(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> dict[str, str]:
+        """Run PREPROCESS and return the verdict's ``absent`` mapping."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        entity = next(
+            e
+            for e in store.entities("verdict")
+            if e.attributes["node"] == "PREPROCESS" and not store.is_invalidated(e.id)
+        )
+        return dict(entity.attributes["absent"])
+
+    def test_a_raising_block_records_the_class_and_its_first_line(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A bare class name leaves a reader unable to tell which of eleven null keys was read."""
+        monkeypatch.setattr(
+            preprocess_module,
+            "detect_disruptions",
+            lambda *a, **k: (_ for _ in ()).throw(ValueError("disruptions.clip_headroom is null\nsecond line")),
+        )
+        absent = self._absent(store, config, tmp_path, wav_writer, monkeypatch)
+        assert absent["disruptions_file"] == "ValueError: disruptions.clip_headroom is null"
+
+    def test_a_message_free_exception_records_the_class_alone(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A bare raise must not record a dangling colon."""
+        monkeypatch.setattr(
+            preprocess_module, "detect_disruptions", lambda *a, **k: (_ for _ in ()).throw(LookupError())
+        )
+        absent = self._absent(store, config, tmp_path, wav_writer, monkeypatch)
+        assert absent["disruptions_file"] == "LookupError"
+
+    def test_a_long_message_is_capped(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The cap is what bounds how much of an audio-derived string a message can carry."""
+        monkeypatch.setattr(
+            preprocess_module,
+            "detect_disruptions",
+            lambda *a, **k: (_ for _ in ()).throw(ValueError("x" * 500)),
+        )
+        absent = self._absent(store, config, tmp_path, wav_writer, monkeypatch)
+        recorded = absent["disruptions_file"]
+        assert len(recorded) <= len("ValueError: ") + 200
+        assert recorded.endswith("...")
+
+
 class TestTheConsensusTranscript:
     """fuse_consensus_words is called, and its output is what every text consumer reads."""
 
