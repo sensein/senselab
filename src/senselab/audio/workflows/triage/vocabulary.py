@@ -68,6 +68,9 @@ NO_CLAIM = "no_claim"
 _ADMIT = "ADMIT"
 _REDACT = "REDACT"
 _VERDICT = "VERDICT"
+_ROUTING = "routing"
+
+BAD_MAP_VALUES = "routing.hint_kind_map names a kind this graph does not screen"
 
 UNREAD_DECLARATION = (
     "a declaration was supplied and no branch decision survived to read it against; "
@@ -105,6 +108,9 @@ class BranchDecision:
         forced_by_hint: Whether a hint added it.
         hint_tags: The declared tags naming this branch's kind. Non-empty is a claim, whether or not
             it changed the outcome.
+        bad_map_values: ``routing.hint_kind_map`` entries whose value is not a kind, as
+            ``{tag: value}``. A property of the configuration, so all three decisions carry the same
+            one.
     """
 
     branch: str
@@ -113,6 +119,7 @@ class BranchDecision:
     kind_state: str
     forced_by_hint: bool
     hint_tags: tuple[str, ...] = ()
+    bad_map_values: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -132,6 +139,9 @@ class FileVerdict:
         reasons: Every contributing verdict, in order — not only the deciding one.
         ran: Whether each node ran.
         branches: The routing decision joined to the branch verdict.
+        bad_map_values: ``routing.hint_kind_map`` entries whose value is not a kind. A one-character
+            typo under-claims every file in a run, so it is named here rather than left in the
+            decisions for a reader to notice.
     """
 
     triage: Triage
@@ -144,6 +154,7 @@ class FileVerdict:
     reasons: list[NodeVerdict] = field(default_factory=list)
     ran: dict[str, RunState] = field(default_factory=dict)
     branches: dict[str, dict[str, Any]] = field(default_factory=dict)
+    bad_map_values: dict[str, str] = field(default_factory=dict)
 
 
 def _resolved(outcome: Outcome | Triage) -> str:
@@ -282,7 +293,14 @@ def fold_file_verdict(
         }
     )
 
+    bad_map_values: dict[str, str] = {}
+    for recorded in branch_decisions.values():
+        bad_map_values.update(recorded.bad_map_values)
+
     reasons = list(node_verdicts)
+    if bad_map_values:
+        named = ", ".join(f"{tag}: {value}" for tag, value in sorted(bad_map_values.items()))
+        reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_MAP_VALUES}: {named}"))
     if hint_claims is None:
         reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     for kind in kinds_seen:
@@ -338,4 +356,5 @@ def fold_file_verdict(
         reasons=reasons,
         ran=dict(ran),
         branches=branches,
+        bad_map_values=bad_map_values,
     )

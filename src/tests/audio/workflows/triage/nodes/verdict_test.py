@@ -223,9 +223,9 @@ class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
 
         result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
         assert result.file_verdict.triage is Triage.FLAG
-        assert any(
-            "SPEECH" in reason.why and "'discard'" in reason.why for reason in result.file_verdict.reasons
-        ), "the offending node and the value it wrote are both named"
+        assert any("SPEECH" in reason.why and "'discard'" in reason.why for reason in result.file_verdict.reasons), (
+            "the offending node and the value it wrote are both named"
+        )
 
     def test_the_unreadable_verdict_resolves_no_kind_and_the_fold_still_completes(
         self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
@@ -408,6 +408,27 @@ class TestHintsAreReadThroughRoutingsMap:
         assert result.file_verdict.hints["airway"] == "found_unclaimed"
         assert result.file_verdict.triage is Triage.PASS
 
+    def test_a_map_typo_flags_the_file_it_would_otherwise_have_discarded(
+        self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
+    ) -> None:
+        """ROUTING recorded the typo on every decision; the fold must not discard over it."""
+        path = tmp_path / "typo.yaml"
+        path.write_text("routing:\n  hint_kind_map:\n    cough: airwy\n")
+        typo_config = load_triage_config(path)
+        hint = AudioHints(may_contain=["cough"])
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None)],
+            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            config=typo_config,
+            hint=hint,
+        )
+        result = verdict_module.verdict(store, None, typo_config, hint, run_dir=tmp_path)
+        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.discard_ground is None
+        assert result.file_verdict.bad_map_values == {"cough": "airwy"}
+        assert any("airwy" in reason.why for reason in result.file_verdict.reasons)
+        assert _file_verdict_entity(store).attributes["bad_map_values"] == {"cough": "airwy"}
+
     def test_a_declaration_prevents_the_empty_discard(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
@@ -490,6 +511,7 @@ class TestWhatTheStoreRecords:
             "screened",
             "agreement",
             "hints",
+            "bad_map_values",
         } <= attributes.keys()
         assert attributes["kinds"] == result.file_verdict.kinds
         assert attributes["screened"] == result.file_verdict.screened
