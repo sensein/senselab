@@ -358,7 +358,23 @@ def test_preprocess_segments() -> None:
 def test_can_align_segment(dummy_segment: "SingleSegment") -> None:
     """Test if a segment can be aligned."""
     model_dictionary = {"t": 0, "e": 1, "s": 2}
-    assert _can_align_segment(dummy_segment, model_dictionary, 0.0, 10.0)
+    assert _can_align_segment(dummy_segment, model_dictionary, 0.0, 1.0, 10.0)
+
+
+def test_a_segment_selecting_no_audio_is_skipped_not_aligned(dummy_segment: "SingleSegment") -> None:
+    """A zero-width word selects no samples, and `extract_segments` now refuses that outright.
+
+    A recognizer emitting `start == end` is real: the b2ai `Glides-Low-to-High` run has Qwen's
+    bundled aligner placing a word at `[0.72, 0.72]`. Before the refusal landed in
+    `extract_segments`, `_align_single_segment` was handed a `(1, 0)` waveform and `pad_audios`
+    padded it up to the minimum, so the segment aligned against silence. Skipping is what the
+    caller already does for every other unalignable segment; raising out of
+    `align_transcriptions` is not.
+    """
+    model_dictionary = {"t": 0, "e": 1, "s": 2}
+    assert not _can_align_segment(dummy_segment, model_dictionary, 0.72, 0.72, 10.0)
+    assert not _can_align_segment(dummy_segment, model_dictionary, 0.9, 0.5, 10.0)
+    assert _can_align_segment(dummy_segment, model_dictionary, 0.72, 0.73, 10.0)
 
 
 def test_merge_repeats() -> None:
