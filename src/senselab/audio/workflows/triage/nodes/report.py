@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
+from matplotlib.figure import Figure
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.plotting.plotting import (
@@ -53,6 +54,7 @@ _ABSENCE_BY_CLASS = {
     "LookupError": "unavailable (a derivative it reads is absent)",
 }
 _ABSENCE_ERRORED = "errored"
+_NO_AXIS = "no time axis: the store holds no readable stream, so there is no shared axis to draw over"
 
 _LANE_SOURCE = {
     "envelope": "energy_envelope",
@@ -1038,7 +1040,7 @@ def report(
     title = _title(store.run_id, verdict)
     summary_path = summary_dir / f"{SUMMARY_STEM}.{fmt}"
     try:
-        _render(store, marks, resolved_run_dir, config, provenance, title, summary_path)
+        _render(store, marks, resolved_run_dir, config, provenance, title, summary_path, fmt)
     except Exception as error:  # noqa: BLE001 — any drawing failure keeps the product already written
         raise ReportRenderError(
             f"the summary could not be drawn ({type(error).__name__}: {error}); the JSON was written",
@@ -1055,8 +1057,9 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     provenance: dict[str, Any],
     title: str,
     path: Path,
+    fmt: str,
 ) -> None:
-    """Draw the summary, on the shared time axis when there is a stream and on prose alone when not.
+    """Draw the summary in the declared form, over the shared time axis when there is a stream.
 
     A file ADMIT refused has no conditioned stream, so there is no axis to share; the blocks are the
     whole product, and they say so — including which lanes are missing and why.
@@ -1069,25 +1072,53 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
         provenance: :func:`_provenance`'s mapping, summarised onto the page's second line.
         title: The figure's title, carrying the decision.
         path: Where the rendered summary goes.
+        fmt: ``pdf`` for two pages — the panels, then the blocks — or ``png`` for one image
+            carrying both.
     """
     from matplotlib import pyplot
+    from matplotlib.backends.backend_pdf import PdfPages
 
     audio = _stream(store, run_dir)
     panels = [] if audio is None else _panels(store, marks, run_dir, config)
     drawn = {str(panel["name"]) for panel in panels if "name" in panel}
     blocks = _blocks(store, marks, drawn, provenance)
+
+    if fmt == "pdf":
+        lanes = _text_figure([_NO_AXIS], title) if audio is None else plot_aligned_panels(audio, panels, title=title)
+        with PdfPages(path) as pages:
+            for figure in (lanes, _text_figure(blocks, title)):
+                pages.savefig(figure, bbox_inches="tight")
+                pyplot.close(figure)
+        return
+
     if audio is None:
-        height = max(MIN_FIGURE_HEIGHT_IN, TEXT_PANEL_INCHES_PER_LINE * len(blocks))
-        figure = pyplot.figure(figsize=(14.0, height))
-        axis = figure.add_subplot(111)
-        axis.axis("off")
-        axis.text(0.01, 0.98, "\n".join(blocks), va="top", ha="left", family="monospace", fontsize=8)
-        figure.suptitle(title)
+        figure = _text_figure(blocks, title)
     else:
         panels.append({"type": "text", "lines": blocks})
         figure = plot_aligned_panels(audio, panels, title=title)
     figure.savefig(path, bbox_inches="tight")
     pyplot.close(figure)
+
+
+def _text_figure(lines: list[str], title: str) -> Figure:
+    """One text-only figure, tall enough for every line it carries.
+
+    Args:
+        lines: The lines, drawn monospaced from the top left.
+        title: The figure's title.
+
+    Returns:
+        The figure, not yet saved and not yet closed.
+    """
+    from matplotlib import pyplot
+
+    height = max(MIN_FIGURE_HEIGHT_IN, TEXT_PANEL_INCHES_PER_LINE * len(lines))
+    figure = pyplot.figure(figsize=(14.0, height))
+    axis = figure.add_subplot(111)
+    axis.axis("off")
+    axis.text(0.01, 0.98, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=8)
+    figure.suptitle(title)
+    return figure
 
 
 def _stream(store: ProvStore, run_dir: Path) -> Audio | None:

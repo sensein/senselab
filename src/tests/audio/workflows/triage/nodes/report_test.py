@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -470,7 +471,7 @@ class TestBothProductsAlways:
         """The one unconditional product must be reachable with no override at all (I4)."""
         _seed_report_store(store, tmp_path, full=True)
         artifacts = report(store, tmp_path / "summary", config)
-        assert artifacts["summary"].suffix == ".png"
+        assert artifacts["summary"].suffix == ".pdf"
         assert artifacts["json"].exists()
 
     def test_an_unknown_format_refuses(self, store: ProvStore, tmp_path: Path) -> None:
@@ -479,12 +480,11 @@ class TestBothProductsAlways:
         with pytest.raises(ValueError, match="report.format"):
             report(store, tmp_path / "summary", _override(tmp_path, "report:\n  format: jpeg\n"))
 
-    def test_pdf_is_reachable_by_config(self, store: ProvStore, tmp_path: Path) -> None:
+    def test_png_is_reachable_by_config(self, store: ProvStore, tmp_path: Path) -> None:
         """The two forms carry the same claims; the choice does not change the content."""
         _seed_report_store(store, tmp_path, full=True)
-        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
-        artifacts = report(store, tmp_path / "summary", pdf_config)
-        assert artifacts["summary"].suffix == ".pdf"
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert artifacts["summary"].suffix == ".png"
 
     def test_the_two_forms_carry_the_same_json(self, store: ProvStore, tmp_path: Path) -> None:
         """``report.format`` is a presentation choice and changes no claim."""
@@ -1055,3 +1055,71 @@ class TestTheTitleIsShort:
         from senselab.audio.workflows.triage.nodes.report import _wrapped
 
         assert _wrapped(["BRANCHES", "", "TAXONOMY"]) == ["BRANCHES", "", "TAXONOMY"]
+
+
+def _pdf_pages(path: Path) -> int:
+    """How many pages a rendered PDF carries, counted from its own page objects."""
+    return len(re.findall(rb"/Type\s*/Page[^s]", path.read_bytes()))
+
+
+class TestThePdfIsTwoPages:
+    """One 32-inch image was the objection; the pdf answers it with panels then prose."""
+
+    def test_the_packaged_format_is_the_pdf(self, config: TriageConfig) -> None:
+        """The form the packaged config ships is the two-page document, not the tall image."""
+        assert config.require("report.format") == "pdf"
+
+    def test_a_full_run_renders_exactly_two_pages(self, store: ProvStore, tmp_path: Path) -> None:
+        """Page one is the aligned panels; page two is every block."""
+        _seed_report_store(store, tmp_path, full=True)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        assert artifacts["summary"].suffix == ".pdf"
+        assert _pdf_pages(artifacts["summary"]) == 2
+
+    def test_a_refusal_renders_exactly_two_pages_too(self, store: ProvStore, tmp_path: Path) -> None:
+        """A file with no readable stream has no axis to draw, and still owes both pages."""
+        _seed_report_store(store, tmp_path, admit_failed=True)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        assert _pdf_pages(artifacts["summary"]) == 2
+
+    def test_the_first_page_carries_no_text_block(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The blocks are page two; leaving them on page one is what made the image 32 inches tall."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        report(store, tmp_path / "summary", pdf_config)
+        assert "text" not in [panel["type"] for panel in panels[0]]
+
+    def test_the_second_page_carries_every_block(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Nothing the single image said may be lost on the way to two pages."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[list[str]] = []
+        real = report_module._text_figure
+
+        def _spy(lines: list[str], title: str) -> Any:  # noqa: ANN401
+            drawn.append(list(lines))
+            return real(lines, title)
+
+        monkeypatch.setattr(report_module, "_text_figure", _spy)
+        _seed_report_store(store, tmp_path, full=True, words=["hello", "world"])
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        report(store, tmp_path / "summary", pdf_config)
+        blocks = "\n".join(drawn[-1])
+        assert "VERDICT" in blocks and "TAXONOMY" in blocks and "hello world" in blocks
+
+    def test_the_png_stays_one_image_with_the_blocks_on_it(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The image form is unchanged: one uncut canvas, blocks included."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert artifacts["summary"].suffix == ".png"
+        assert panels[0][-1]["type"] == "text"
