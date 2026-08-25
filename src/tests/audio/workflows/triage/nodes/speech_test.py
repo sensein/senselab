@@ -1,125 +1,575 @@
 """SPEECH node tests. Every model call is faked at the node module; DSP and the store run real."""
 
-import json
+import math
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 import pytest
 import torch
+import yaml
 
 from senselab.audio.data_structures import (
     Audio,
     AudioHints,
-    ExpectedSpeech,
     SpeakerEmbeddingProvenance,
     TargetSpeakerEmbedding,
 )
+from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes import speech as speech_module
-from senselab.audio.workflows.triage.nodes.common import find_measurement
+from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
+from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors, flatten_script_line
+from senselab.text.tasks.pii_detection.api import PiiScan, PiiSpan, default_detectors
 from senselab.utils.data_structures import ScriptLine
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 
 SR = 16000
-WORDS = [("one", 1.0, 1.3), ("two", 1.4, 1.7)]
-WORDS_WITH_EMAIL = [("contact", 1.0, 1.2), ("jane.doe@example.com", 1.25, 1.6)]
+ENROLLMENT_MODEL = "speechbrain/spkrec-ecapa-voxceleb"
+ENROLLMENT_SHA = "a" * 40
 
-SeedSpeechStore = Callable[..., tuple[ProvStore, TriageConfig, Path]]
+_SEEDER: Optional[Callable[..., None]] = None
 
 
 class _FakeModel:
     """A model spec stub carrying exactly what the node reads: path_or_uri and commit_sha."""
 
-    def __init__(self, path_or_uri: str) -> None:
-        """Stub a resolved model."""
+    def __init__(self, path_or_uri: str, revision: str = "main") -> None:
+        """Stub a resolved model.
+
+        Args:
+            path_or_uri: The model id.
+            revision: What was asked for.
+        """
         self.path_or_uri = path_or_uri
-        self.commit_sha = "a" * 40
+        self.revision = revision
+        self.commit_sha = "c" * 40
 
 
-def _clean_scan() -> PiiScan:
-    """A scan in which every default detector ran and found nothing."""
-    return PiiScan(spans=[], detectors_used=["presidio", "gliner", "rules"], failures={})
+# --------------------------------------------------------------------------------------
+# Config builders. Not fixtures: a test that needs a variant builds one inline.
+# --------------------------------------------------------------------------------------
 
 
-def _scan_finding(secret: str, category: str) -> Callable[..., list[PiiScan]]:
-    """A scan fake reporting one finding wherever the secret appears in the scanned line."""
+def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Merge ``overlay`` into ``base``, recursing into mappings.
 
-    def _scan(inputs: list[ScriptLine], **kw: Any) -> list[PiiScan]:  # noqa: ANN401
-        scans: list[PiiScan] = []
-        for line in inputs:
-            if secret.lower() in flatten_script_line(line).lower():
-                scans.append(
-                    PiiScan(
-                        spans=[PiiSpan(text=secret, category=category, source="presidio", asr_model="0")],
-                        detectors_used=["presidio", "gliner", "rules"],
-                        failures={},
-                    )
-                )
-            else:
-                scans.append(_clean_scan())
-        return scans
+    Args:
+        base: The mapping written into.
+        overlay: The mapping layered over it.
 
-    return _scan
+    Returns:
+        ``base``, merged.
+    """
+    for key, value in overlay.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
 
 
-def _two_speaker_fake(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-    """Two speakers splitting the diarized window in half, on the cropped clock."""
-    dur = audios[0].waveform.shape[-1] / audios[0].sampling_rate
-    half = dur / 2.0
-    return [
-        [
-            ScriptLine(speaker="SPEAKER_00", start=0.0, end=half),
-            ScriptLine(speaker="SPEAKER_01", start=half, end=dur),
-        ]
-    ]
+def _override(tmp_path: Path, yaml_text: str = "") -> TriageConfig:
+    """The packaged config with ``speech.word_gap_ms`` supplied and ``yaml_text`` layered over it.
+
+    Args:
+        tmp_path: Where the override file is written.
+        yaml_text: A partial config, in the production override shape.
+
+    Returns:
+        The resolved configuration.
+    """
+    values: dict[str, Any] = {"speech": {"word_gap_ms": 500}}
+    _deep_merge(values, yaml.safe_load(yaml_text) or {})
+    path = tmp_path / f"override-{abs(hash(yaml_text)) % 10**10}.yaml"
+    path.write_text(yaml.safe_dump(values))
+    return load_triage_config(path)
 
 
-def _three_speaker_fake(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-    """Three speakers splitting the diarized window in thirds, on the cropped clock."""
-    dur = audios[0].waveform.shape[-1] / audios[0].sampling_rate
-    third = dur / 3.0
-    return [[ScriptLine(speaker=f"SPEAKER_0{i}", start=i * third, end=(i + 1) * third) for i in range(3)]]
+def _speech_config(tmp_path: Path) -> TriageConfig:
+    """``speech.word_gap_ms`` and nothing else.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _override(tmp_path)
 
 
-def _author(store: ProvStore, entity_id: str) -> str | None:
-    """The node that generated an entity, or None when nothing did."""
-    activity_id = store.generated_by(entity_id)
-    return store.get_activity(activity_id).node if activity_id else None
+def _second_diarizer_config(tmp_path: Path) -> TriageConfig:
+    """That, plus a ranked second diarizer.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _override(tmp_path, "speech:\n  second_diarizer: pyannote/speaker-diarization-3.1\n")
 
 
-def _speech_spans(store: ProvStore) -> list:
-    """The span entities SPEECH authored."""
-    return [e for e in store.entities("span") if _author(store, e.id) == "SPEECH"]
+def _enrollment_config(tmp_path: Path) -> TriageConfig:
+    """That, plus the enrollment probe and the match cut.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _override(
+        tmp_path,
+        "speech:\n"
+        "  second_diarizer: pyannote/speaker-diarization-3.1\n"
+        "  enrollment_model:\n"
+        f"    model_id: {ENROLLMENT_MODEL}\n"
+        f"    revision: {ENROLLMENT_SHA}\n"
+        "  target_match_cosine: 0.5\n",
+    )
 
 
-def _consensus_words(store: ProvStore) -> list:
-    """The word entities SPEECH authored."""
-    return [e for e in store.entities("word") if _author(store, e.id) == "SPEECH"]
+@pytest.fixture
+def speech_config(tmp_path: Path) -> TriageConfig:
+    """The base configuration, as a parameter.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _speech_config(tmp_path)
+
+
+@pytest.fixture
+def second_diarizer_config(tmp_path: Path) -> TriageConfig:
+    """The second-diarizer configuration, as a parameter.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _second_diarizer_config(tmp_path)
+
+
+@pytest.fixture
+def enrollment_config(tmp_path: Path) -> TriageConfig:
+    """The enrollment configuration, as a parameter.
+
+    Args:
+        tmp_path: Where the override file is written.
+
+    Returns:
+        The configuration.
+    """
+    return _enrollment_config(tmp_path)
+
+
+# --------------------------------------------------------------------------------------
+# The store this branch's predecessors leave behind.
+# --------------------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def quiet_models(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One speaker, plausible SQUIM, no PII, no separation call, no Hub-resolving constructor."""
+def _bind_shared_seeder(seed_preprocess_store: Callable[..., None]) -> Iterator[None]:
+    """Bind T1's shared seeder for the duration of one test.
 
-    def fake_diarize(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        dur = audios[0].waveform.shape[-1] / audios[0].sampling_rate
-        return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=dur)]]
+    ``_seed_speech_store`` layers SPEECH's own predecessors over it, and is called positionally
+    rather than requested as a fixture, so the shared seeder is bound here instead.
 
+    Args:
+        seed_preprocess_store: The shared seeder.
+
+    Yields:
+        Nothing.
+    """
+    global _SEEDER
+    _SEEDER = seed_preprocess_store
+    yield
+    _SEEDER = None
+
+
+def _place(words: list[str], speakers: int, duration_s: float) -> list[tuple[str, tuple[float, float]]]:
+    """Lay the words out in ``speakers`` contiguous groups, one group per diarizer segment.
+
+    Args:
+        words: The word texts, in order.
+        speakers: How many equal parts of the word interval the words are split across.
+        duration_s: The stream's duration, which bounds the layout.
+
+    Returns:
+        ``[(text, (start, end)), ...]``.
+    """
+    if not words:
+        return []
+    first = 0.5
+    last = min(duration_s - 0.2, first + 0.4 * len(words) + 0.2)
+    total = last - first
+    placed: list[tuple[str, tuple[float, float]]] = []
+    per_group = [len(range(index, len(words), speakers)) for index in range(speakers)]
+    bounds: list[list[int]] = []
+    cursor = 0
+    for size in per_group:
+        bounds.append(list(range(cursor, cursor + size)))
+        cursor += size
+    slots: dict[int, tuple[float, float]] = {}
+    for group, members in enumerate(bounds):
+        low = first + total * group / speakers
+        high = first + total * (group + 1) / speakers
+        slot = (high - low) / max(len(members), 1)
+        for offset, index in enumerate(members):
+            start = low + offset * slot + slot * 0.05
+            slots[index] = (round(start, 4), round(low + (offset + 1) * slot - slot * 0.05, 4))
+    for index, text in enumerate(words):
+        placed.append((text, slots[index]))
+    return placed
+
+
+def _seed_speech_store(
+    store: ProvStore,
+    tmp_path: Path,
+    *,
+    words: Optional[list[str]] = None,
+    word_extents: Optional[list[tuple[float, float]]] = None,
+    events: Optional[list[str]] = None,
+    speakers: int = 1,
+    airway_labelled: Optional[list[tuple[float, float]]] = None,
+    disruptions_file: bool = False,
+    duration_s: float = 5.0,
+) -> None:
+    """Write what SPEECH's predecessors would have left, over T1's shared seeder.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory the streams and sidecars go under.
+        words: The consensus word texts.
+        word_extents: Extents overriding the layout ``speakers`` would have produced.
+        events: Bracketed or onomatopoeic non-words.
+        speakers: How many equal parts of the word interval the words are laid out across, so a
+            diarizer splitting the interval into that many segments attributes each word to one.
+        airway_labelled: Extents AIRWAY labelled, each with the PREPROCESS span it hangs off.
+        disruptions_file: Whether PREPROCESS's file-level disruption reading is present.
+        duration_s: The streams' duration.
+    """
+    assert _SEEDER is not None, "the shared seeder is bound by the autouse fixture"
+    placed: Optional[list[Any]] = None
+    if words is not None:
+        placed = (
+            [(text, extent) for text, extent in zip(words, word_extents)]
+            if word_extents is not None
+            else list(_place(words, speakers, duration_s))
+        )
+    _SEEDER(
+        store,
+        duration_s=duration_s,
+        words=placed,
+        events=list(events) if events is not None else None,
+        disruptions_file=disruptions_file,
+    )
+    _seed_level(store, tmp_path)
+    for extent in airway_labelled or []:
+        span_id = store.entity(
+            prov_type="span",
+            extent=extent,
+            attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised", "merged_proposals": 1},
+        )
+        airway_act = store.activity(node="AIRWAY", step="classify", parameters={})
+        label_id = store.entity(
+            prov_type="assertion",
+            extent=extent,
+            attributes={"verb": "label", "label": "Cough", "score": 0.97},
+        )
+        store.was_generated_by(label_id, airway_act)
+        store.was_derived_from(label_id, span_id)
+
+
+def _seed_level(store: ProvStore, tmp_path: Path) -> None:
+    """Write PREPROCESS's file-level reading, which the proximity leg measures each span against.
+
+    The shared seeder writes no ``level``, and without one every span's level sits over nothing.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory the plain stream lives under.
+    """
+    plain = [e for e in live_entities(store, "stream") if e.attributes.get("name") == "plain"][-1]
+    samples = Audio(filepath=str(tmp_path / plain.attributes["path"])).waveform.squeeze(0).numpy()
+    rate = int(plain.attributes["sampling_rate"])
+    activity = store.activity(node="PREPROCESS", step="level", parameters={})
+    entity_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={
+            "name": "level",
+            "signal": "plain",
+            "peak_dbfs": float(20.0 * np.log10(max(float(np.abs(samples).max()), 1e-12))),
+            "rms_dbfs": float(20.0 * np.log10(max(float(np.sqrt(np.mean(samples**2))), 1e-12))),
+            "lufs": float(integrated_lufs(samples, rate)),
+        },
+    )
+    store.was_generated_by(entity_id, activity)
+
+
+# --------------------------------------------------------------------------------------
+# Store readers.
+# --------------------------------------------------------------------------------------
+
+
+def _verdict_entity(store: ProvStore, node: str) -> Entity:
+    """The latest live verdict entity one node wrote.
+
+    Args:
+        store: The provenance store.
+        node: The node's name.
+
+    Returns:
+        The verdict entity.
+    """
+    found = [e for e in live_entities(store, "verdict") if e.attributes.get("node") == node]
+    assert found, f"no {node} verdict in the store"
+    return found[-1]
+
+
+def _stream_id(store: ProvStore, name: str) -> str:
+    """The latest live stream entity's id, by name.
+
+    Args:
+        store: The provenance store.
+        name: The stream's name.
+
+    Returns:
+        The entity id.
+    """
+    found = [e for e in live_entities(store, "stream") if e.attributes.get("name") == name]
+    assert found, f"no stream named {name!r}"
+    return found[-1].id
+
+
+# --------------------------------------------------------------------------------------
+# Model stubs. Every one records what production asked for.
+# --------------------------------------------------------------------------------------
+
+
+def _segments(count: int, duration_s: float) -> list[ScriptLine]:
+    """``count`` speakers splitting a cropped window into equal turns.
+
+    Args:
+        count: How many speakers.
+        duration_s: The cropped window's duration.
+
+    Returns:
+        The segments, on the cropped clock.
+    """
+    if count <= 0:
+        return []
+    step = duration_s / count
+    return [
+        ScriptLine(speaker=f"SPEAKER_{index:02d}", start=index * step, end=(index + 1) * step) for index in range(count)
+    ]
+
+
+def _stub_diarizers(monkeypatch: pytest.MonkeyPatch, *, primary_speakers: int, second_speakers: int) -> list[str]:
+    """Fake both diarizers and return the log of which was consulted.
+
+    Args:
+        monkeypatch: The patcher.
+        primary_speakers: pyannote's count.
+        second_speakers: the configured second diarizer's count.
+
+    Returns:
+        The mutable call log, ``["primary", "second"]`` in call order.
+    """
+    calls: list[str] = []
+
+    def _fake(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
+        duration_s = audios[0].waveform.shape[-1] / audios[0].sampling_rate
+        which = "primary" if "community-1" in str(getattr(model, "path_or_uri", "")) else "second"
+        calls.append(which)
+        return [_segments(primary_speakers if which == "primary" else second_speakers, duration_s)]
+
+    monkeypatch.setattr(speech_module, "diarize_audios", _fake)
+    return calls
+
+
+def _stub_embedder(
+    monkeypatch: pytest.MonkeyPatch, *, similarity: float = 0.99, target_label: str = "SPEAKER_00"
+) -> list[dict[str, Any]]:
+    """Fake the speaker embedder and return the log of what it was asked to embed.
+
+    The enrollment vector is ``[1, 0]``, so ``target_label``'s probe is placed at ``similarity``
+    from it and every other speaker's is placed orthogonal to it.
+
+    Args:
+        monkeypatch: The patcher.
+        similarity: The cosine the target speaker's probe reaches.
+        target_label: Which diarized speaker is the target.
+
+    Returns:
+        The mutable call log.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def _fake(audios: list[Audio], model: Any = None, device: Any = None) -> list[torch.Tensor]:  # noqa: ANN401
+        calls.append({"n": len(audios), "model": str(getattr(model, "path_or_uri", ""))})
+        target_index = int(target_label.rsplit("_", 1)[-1])
+        orthogonal = math.sqrt(max(0.0, 1.0 - similarity**2))
+        return [
+            torch.tensor([similarity, orthogonal]) if index == target_index else torch.tensor([0.0, 1.0])
+            for index in range(len(audios))
+        ]
+
+    monkeypatch.setattr(speech_module, "extract_speaker_embeddings_from_audios", _fake)
+    return calls
+
+
+def _stub_separator(monkeypatch: pytest.MonkeyPatch, *, sources: int = 0) -> list[dict[str, Any]]:
+    """Fake source separation and return the log of what it was asked for.
+
+    Args:
+        monkeypatch: The patcher.
+        sources: How many streams the fake returns.
+
+    Returns:
+        The mutable call log.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def _fake(
+        audios: list[Audio],
+        model: Any = None,  # noqa: ANN401
+        n_sources: int = 2,
+        mode: str = "speech_sound",
+        source_classes: Optional[list[str]] = None,
+        **kw: Any,  # noqa: ANN401
+    ) -> list[list[Audio]]:
+        calls.append(
+            {
+                "model": None if model is None else str(model.path_or_uri),
+                "n_sources": n_sources,
+                "mode": mode,
+                "source_classes": source_classes,
+            }
+        )
+        out: list[Audio] = []
+        for index in range(sources):
+            separated = Audio(waveform=audios[0].waveform.clone(), sampling_rate=audios[0].sampling_rate)
+            separated.metadata["clearvoice"] = {
+                "model": "alibabasglab/MossFormer2_SS_16K",
+                "commit": "b" * 40,
+                "source_index": index,
+                "n_sources": sources,
+                "input_norm_scalar": 0.31,
+            }
+            out.append(separated)
+        return [out]
+
+    monkeypatch.setattr(speech_module, "separate_audios", _fake)
+    return calls
+
+
+def _stub_pii(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    findings: list[tuple[str, str]],
+    detectors_used: Optional[list[str]] = None,
+) -> list[str]:
+    """Fake the PII scan and return the list of texts it was handed.
+
+    Args:
+        monkeypatch: The patcher.
+        findings: ``[(category, text), ...]`` the scan reports for every input.
+        detectors_used: Which detectors ran; the module's default set when None.
+
+    Returns:
+        The mutable log of scanned texts.
+    """
+    scanned: list[str] = []
+    used = list(detectors_used) if detectors_used is not None else default_detectors()
+
+    def _fake(inputs: Any, detectors: Any = None, **kw: Any) -> list[PiiScan]:  # noqa: ANN401
+        texts = [inputs] if isinstance(inputs, str) else list(inputs)
+        scanned.extend(str(text) for text in texts)
+        return [
+            PiiScan(
+                spans=[
+                    PiiSpan(text=text, category=category, source="presidio", asr_model="consensus_transcript")
+                    for category, text in findings
+                ],
+                detectors_used=list(used),
+                failures={},
+            )
+            for _ in texts
+        ]
+
+    monkeypatch.setattr(speech_module, "scan_for_pii", _fake)
+    return scanned
+
+
+def _enrollment(*, commit: Optional[str] = ENROLLMENT_SHA, model: str = ENROLLMENT_MODEL) -> Enrollment:
+    """One subject's enrollment, comparable unless a field is knocked out.
+
+    Args:
+        commit: The resolved commit, or None for an enrollment that cannot be compared.
+        model: The embedding model behind the vector.
+
+    Returns:
+        The enrollment.
+    """
+    return Enrollment(
+        subject_id="sub-01",
+        vector=[1.0, 0.0],
+        provenance=SpeakerEmbeddingProvenance(
+            model_id=model,
+            model_commit_sha=commit,
+            unresolved_reason=None if commit is not None else "the estimator recorded none",
+            source_files=["a.wav", "b.wav"],
+            n_windows_used=12,
+            n_windows_dropped=1,
+        ),
+    )
+
+
+def _target_speaker_embedding() -> TargetSpeakerEmbedding:
+    """The per-file target hint this branch no longer reads.
+
+    Returns:
+        A well-formed target embedding.
+    """
+    return TargetSpeakerEmbedding(
+        vector=[1.0, 0.0],
+        provenance=SpeakerEmbeddingProvenance(model_id=ENROLLMENT_MODEL, model_commit_sha=ENROLLMENT_SHA),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_model_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One speaker, plausible SQUIM, no PII, and no constructor that would resolve against the Hub.
+
+    Args:
+        monkeypatch: The patcher.
+    """
+
+    def _one_speaker(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
+        return [_segments(1, audios[0].waveform.shape[-1] / audios[0].sampling_rate)]
+
+    monkeypatch.setattr(speech_module, "diarize_audios", _one_speaker)
     monkeypatch.setattr(
         speech_module,
         "extract_objective_quality_features_from_audios",
         lambda audios, device=None: [{"stoi": 0.9, "pesq": 3.0, "si_sdr": 18.0} for _ in audios],
     )
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
     monkeypatch.setattr(
         speech_module, "_diarization_model", lambda: _FakeModel("pyannote/speaker-diarization-community-1")
     )
-    monkeypatch.setattr(speech_module, "_separation_model", lambda: _FakeModel("alibabasglab/MossFormer2_SS_16K"))
-    monkeypatch.setattr(speech_module, "_embedding_model", lambda: _FakeModel("speechbrain/spkrec-ecapa-voxceleb"))
     monkeypatch.setattr(speech_module, "_second_diarizer_model", lambda model_id: _FakeModel(model_id))
+    monkeypatch.setattr(speech_module, "_clearvoice_model", lambda model_id: _FakeModel(model_id))
+    monkeypatch.setattr(speech_module, "_embedding_model", lambda model_id, revision: _FakeModel(model_id, revision))
     monkeypatch.setattr(
         speech_module,
         "separate_audios",
@@ -130,754 +580,453 @@ def quiet_models(monkeypatch: pytest.MonkeyPatch) -> None:
         "extract_speaker_embeddings_from_audios",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("embedding must not run")),
     )
-    monkeypatch.setattr(speech_module, "scan_for_pii", lambda inputs, **kw: [_clean_scan() for _ in inputs])
-
-
-class TestConfigKeys:
-    """The Task 5 config additions: present, overridable, and refusing while unmeasured."""
-
-    def test_new_speech_keys_exist_and_the_unmeasured_ones_raise(self) -> None:
-        """Null keys are present (overridable) and refuse to be read as values."""
-        cfg = load_triage_config()
-        assert cfg.get("yamnet.top_k") == 521
-        for key in (
-            "speech.word_gap_ms",
-            "speech.second_diarizer",
-            "speech.target_match_cosine",
-            "speech.agreement_flag_floor",
-            "speech.speech_test_stoi_floor",
-        ):
-            with pytest.raises(ValueError, match="benchmarks/open.md|no value"):
-                cfg.require(key)
-
-
-def test_packaged_config_refuses_and_the_store_is_untouched(seed_speech_store: SeedSpeechStore) -> None:
-    """word_gap_ms is null by design; the node raises at entry, before any store write."""
-    store, _, run_dir = seed_speech_store([("hi", 1.0, 1.3)], [("hi", 1.0, 1.3)])
-    before = store.fingerprint()
-    with pytest.raises(ValueError, match="speech.word_gap_ms"):
-        speech_module.speech(store, "plain", load_triage_config(), run_dir=run_dir)
-    assert store.fingerprint() == before, "an unmeasured key must leave the store untouched"
-
-
-def test_no_words_from_either_recognizer_is_a_normal_fail(seed_speech_store: SeedSpeechStore) -> None:
-    """Fail means this branch has no subject — a cough recording is not an error."""
-    store, cfg, run_dir = seed_speech_store([], [])
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FAIL
-    assert store.entities("verdict"), "the verdict entity is written even on fail"
-
-
-def test_the_verdict_is_generated_by_the_step_that_concluded(seed_speech_store: SeedSpeechStore) -> None:
-    """Walking generated_by from the verdict reaches the last step, not the transcript step.
-
-    Attributing it to ``transcript`` said the conclusion was reached before diarization, PII and
-    quality had run, each of which can turn a pass into a flag.
-    """
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    concluding = store.generated_by(result.verdict_entity_id)
-    assert concluding is not None
-    assert store.get_activity(concluding).step == "quality"
-
-
-def test_the_no_words_path_still_writes_the_scan_redact_reads(seed_speech_store: SeedSpeechStore) -> None:
-    """REDACT refuses a store with no scan measurement, so a branch with no subject must not leave none.
-
-    An empty scan is what REDACT's incomplete-scan row already reads as withheld, which is the right
-    conclusion; absence of the measurement instead made REDACT raise on a recording that simply had
-    no speech.
-    """
-    store, cfg, run_dir = seed_speech_store([], [])
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    scan = find_measurement(store, "pii_scan")
-    assert scan is not None, "the measurement is written even when nothing was scanned"
-    assert scan.attributes["scanned_by"] == []
-    assert scan.attributes["failed"] == []
-    assert result.verdict.outcome is Outcome.FAIL
-
-
-def test_hint_asserting_speech_not_found_flags(seed_speech_store: SeedSpeechStore) -> None:
-    """A hint asserting speech turns the no-words fail into a flag — the contradiction outranks it."""
-    store, cfg, run_dir = seed_speech_store([], [])
-    hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow passage")])
-    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-
-
-def test_spans_come_from_word_timings_and_refine_preprocess_spans(seed_speech_store: SeedSpeechStore) -> None:
-    """Two word runs over word_gap_ms apart are two spans.
-
-    An overlapping PREPROCESS span is refined (wasDerivedFrom); one with no words is left alone.
-    """
-    words = [("one", 1.0, 1.2), ("two", 1.25, 1.5), ("three", 3.0, 3.4)]
-    store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
-    pre_act = store.activity(node="PREPROCESS", step="spans", parameters={})
-    pre_span = store.entity(
-        prov_type="span",
-        extent=(0.9, 1.6),
-        attributes={"peak_over_floor_db": 20.0, "k_db": 18.0, "signal": "preemphasised"},
-    )
-    store.was_generated_by(pre_span, pre_act)
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    speech_spans = _speech_spans(store)
-    assert [
-        tuple(round(x, 2) for x in (s.extent or (0.0, 0.0)))
-        for s in sorted(speech_spans, key=lambda s: s.extent or (0.0, 0.0))
-    ] == [(1.0, 1.5), (3.0, 3.4)]
-    refined = [s for s in speech_spans if pre_span in store.derived_from(s.id)]
-    assert len(refined) == 1, "any temporal intersection > 0 refines (N10); the airway span is untouched"
-
-
-def test_pyannote_sees_only_the_word_interval_and_segments_are_offset_back(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The diarizer gets [first word start, last word end]; its clock is shifted back to the recording's."""
-    seen: dict[str, float] = {}
-
-    def fake_diarize(audios: list[Audio], **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        seen["dur"] = audios[0].waveform.shape[-1] / audios[0].sampling_rate
-        return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=seen["dur"])]]
-
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    words = [("one", 2.0, 2.3), ("two", 2.4, 2.8)]
-    store, cfg, run_dir = seed_speech_store(words, words)
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert seen["dur"] == pytest.approx(0.8, abs=1 / SR), "cropped to the interval, not the file"
-    seg = store.entities("speaker")[0]
-    assert seg.extent == pytest.approx((2.0, 2.8)), "offset added back onto the returned segment"
-
-
-def test_a_segment_overlapping_an_airway_label_survives_because_diarization_is_speech_only(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A diarizer segment is never withdrawn for overlapping an airway event.
-
-    The Story-recall shape: one narrator, words across the whole interval, one Breathe label inside
-    it. The one diarizer segment covers the narration and overlaps the label, so under the withdrawal
-    rule the file's speaker count read 0 — measured on 10 of the campaign's 28 files — every word went
-    unattributed and the unattributed words cascaded into false PII withholds. Diarization is about
-    speech, so an airway label carries no authority over a diarizer segment.
-    """
-    words = [("one", 1.0, 1.4), ("two", 1.6, 2.0), ("three", 4.4, 4.8)]
-    store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
-
-    def fake_diarize(audios: list[Audio], **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        return [[ScriptLine(speaker="SPEAKER_00", start=0.0, end=3.8)]]  # (1.0, 4.8) after the offset
-
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    (speaker,) = store.entities("speaker")
-    assert not store.is_invalidated(speaker.id), "the airway label does not withdraw the segment"
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["speaker_count"] == 1, "the count is the live segment count"
-    spoken = store.entities("word")
-    assert spoken and all(w.attributes["speaker"] == "SPEAKER_00" for w in spoken if "recognizer" not in w.attributes)
-    assert not any("speaker_note" in w.attributes for w in spoken), "no word is left unattributed"
-
-
-def test_count_two_separates_and_measurements_record_their_stream(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """MossFormer runs at n_sources=2 with no unasdiff arguments; streams become entities."""
-    calls: dict[str, Any] = {}
-
-    def fake_separate(
-        audios: list[Audio],
-        model: Any = None,  # noqa: ANN401
-        n_sources: int = 2,
-        device: Any = None,  # noqa: ANN401
-        timeout_s: float | None = None,
-        **kw: Any,  # noqa: ANN401
-    ) -> list[list[Audio]]:
-        calls["n_sources"] = n_sources
-        calls["unasdiff_args"] = {
-            k: v for k, v in kw.items() if k in ("mode", "source_classes", "seed", "diffusion_steps")
-        }
-        out = []
-        for i in range(2):
-            a = Audio(waveform=audios[0].waveform, sampling_rate=SR)
-            a.metadata["clearvoice"] = {  # the real record's shape, tasks/clearvoice.py:103-112
-                "model": "alibabasglab/MossFormer2_SS_16K",
-                "commit": "b" * 40,
-                "capability": "separation",
-                "sampling_rate": SR,
-                "source_index": i,
-                "n_sources": 2,
-                "input_norm_scalar": 0.31,
-                "input_norm_applied_to_output": False,
-            }
-            out.append(a)
-        return [out]
-
-    monkeypatch.setattr(speech_module, "separate_audios", fake_separate)
-    monkeypatch.setattr(speech_module, "diarize_audios", _two_speaker_fake)
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert calls["n_sources"] == 2
-    assert calls["unasdiff_args"] == {}, "mode/source_classes/seed/diffusion_steps are unasdiff's; the API refuses them"
-    streams = [e for e in store.entities("stream") if "source_index" in e.attributes]
-    assert {s.attributes["source_index"] for s in streams} == {0, 1}
-    assert all("input_norm_scalar" in s.attributes for s in streams), (
-        "level died at the worker's normalisation; the un-applied scalar is the record (N28)"
-    )
-    squims = [
-        m
-        for m in store.entities("measurement")
-        if m.attributes.get("name") == "squim" and _author(store, m.id) == "SPEECH"
-    ]
-    assert squims and all("stream" in m.attributes for m in squims), "every measurement records its stream (N28)"
-    assert result.verdict.outcome is Outcome.FLAG, "count != 1 flags"
-
-
-def test_count_three_reports_rather_than_separating_wrong(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The checkpoint separates exactly two; >= 3 is reported, separate_audios is never called."""
-    monkeypatch.setattr(speech_module, "diarize_audios", _three_speaker_fake)
-    # the autouse fake for separate_audios raises AssertionError if called
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert any("separation" in f for f in verdict.attributes["flags"])
-
-
-def test_second_diarizer_null_records_not_consulted(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """While speech.second_diarizer is null, count != 1 records not_consulted and still flags (N6)."""
-    monkeypatch.setattr(speech_module, "diarize_audios", _two_speaker_fake)
-    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["second_diarizer"] == "not_consulted"
-    assert result.verdict.outcome is Outcome.FLAG
-
-
-def test_second_diarizer_consulted_when_configured(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A configured second diarizer is consulted on count != 1 and its disagreement is reported."""
-
-    def fake_diarize(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        if model is not None and "diarizen" in str(model.path_or_uri):
-            return _three_speaker_fake(audios)
-        return _two_speaker_fake(audios)
-
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
-    store, cfg, run_dir = seed_speech_store(
-        WORDS,
-        WORDS,
-        config_yaml="speech:\n  word_gap_ms: 300\n  second_diarizer: BUT-FIT/diarizen-wavlm-large-s80-md\n",
-    )
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["second_diarizer"]["count"] == 3
-    assert verdict.attributes["second_diarizer"]["agrees"] is False
-    assert result.verdict.outcome is Outcome.FLAG
-
-
-def test_pii_decision_is_speaker_scoped(seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Target-speaker finding flags; non-target-only does not; no target flags; failure flags."""
-    words = [("alice", 1.0, 1.3), ("bob", 2.0, 2.3)]
-    target_yaml = "speech:\n  word_gap_ms: 300\n  target_match_cosine: 0.5\n"
-    hint = AudioHints(
-        target_speaker=TargetSpeakerEmbedding(
-            vector=[1.0, 0.0],
-            provenance=SpeakerEmbeddingProvenance(
-                model_id="speechbrain/spkrec-ecapa-voxceleb", model_commit_sha="a" * 40
-            ),
-        )
-    )
-
-    def fake_diarize(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        return [
-            [
-                ScriptLine(speaker="SPEAKER_00", start=0.0, end=0.4),
-                ScriptLine(speaker="SPEAKER_01", start=0.9, end=1.3),
-            ]
-        ]
-
-    def fake_embed(audios: list[Audio], model: Any = None, device: Any = None) -> list[torch.Tensor]:  # noqa: ANN401
-        return [torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0])][: len(audios)]
-
-    def _pii_flags(store: ProvStore, result: Any) -> list[str]:  # noqa: ANN401
-        return [f for f in store.get_entity(result.verdict_entity_id).attributes["flags"] if "pii" in f]
-
-    # (a) finding on the target speaker's words -> flag
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    monkeypatch.setattr(speech_module, "extract_speaker_embeddings_from_audios", fake_embed)
-    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
-    monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding("alice", "PERSON"))
-    store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
-    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    assert store.get_entity(result.verdict_entity_id).attributes.get("target_speaker") == "SPEAKER_00"
-    assert _pii_flags(store, result), "a target-speaker finding flags"
-
-    # (b) same finding, attributed to the non-target speaker, target known -> no flag from PII
-    monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding("bob", "PERSON"))
-    store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
-    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    assert not _pii_flags(store, result), "a non-target finding with a known target does not flag"
-
-    # (c) same finding, no hint at all -> flag ("no speaker to exempt")
-    monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding("alice", "PERSON"))
-    store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert _pii_flags(store, result), "pii with no known target flags"
-
-    # (d) clean spans but failures={"gliner": ...} -> flag ("could not check")
     monkeypatch.setattr(
         speech_module,
         "scan_for_pii",
         lambda inputs, **kw: [
-            PiiScan(spans=[], detectors_used=["presidio", "rules"], failures={"gliner": "load failed"}) for _ in inputs
+            PiiScan(spans=[], detectors_used=default_detectors(), failures={})
+            for _ in ([inputs] if isinstance(inputs, str) else list(inputs))
         ],
     )
-    store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert any("gliner" in f for f in _pii_flags(store, result)), "could not check is not clean"
 
 
-def test_a_required_detector_that_never_ran_flags_could_not_check(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A detector neither scanned nor failed is recorded as missing, and the scan is incomplete.
+class TestItReadsTheConsensusAndReFusesNothing:
+    """PREPROCESS produced the consensus; this branch reads it."""
 
-    Locally gliner was never attempted, so ``failed`` was empty and the scan claimed completeness;
-    on the cluster the same recording attempted it and recorded the failure. "Complete" must not
-    depend on which host ran it.
-    """
-    monkeypatch.setattr(
-        speech_module,
-        "scan_for_pii",
-        lambda inputs, **kw: [PiiScan(spans=[], detectors_used=["presidio", "rules"], failures={}) for _ in inputs],
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    flags = store.get_entity(result.verdict_entity_id).attributes["flags"]
-    assert any("gliner" in flag and "pii" in flag for flag in flags), "never attempted is not clean"
-    scan = find_measurement(store, "pii_scan")
-    assert scan is not None
-    assert scan.attributes["missing"] == ["gliner"]
-    assert scan.attributes["failed"] == [], "never attempted is not the same as attempted and failed"
+    def test_the_words_come_from_the_consensus_transcript(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """words_n is the count of consensus word entities, not a re-fusion of the hypotheses."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert result.verdict.node == "SPEECH"
+        verdict = _verdict_entity(store, "SPEECH")
+        assert verdict.attributes["words_n"] == 2
 
+    def test_the_module_cannot_re_fuse(self) -> None:
+        """A fusion function reachable from this module is the v1 behaviour the spec deleted."""
+        assert not hasattr(speech_module, "fuse_word_streams")
+        assert not hasattr(speech_module, "fuse_consensus_words")
 
-def test_narrowing_the_required_set_makes_the_same_scan_complete(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The required set is a config key, so an operator running two detectors can say so."""
-    monkeypatch.setattr(
-        speech_module,
-        "scan_for_pii",
-        lambda inputs, **kw: [PiiScan(spans=[], detectors_used=["presidio", "rules"], failures={}) for _ in inputs],
-    )
-    store, cfg, run_dir = seed_speech_store(
-        WORDS,
-        WORDS,
-        config_yaml="speech:\n  word_gap_ms: 300\npii:\n  required_detectors: [presidio, rules]\n",
-    )
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.PASS
-    scan = find_measurement(store, "pii_scan")
-    assert scan is not None
-    assert scan.attributes["missing"] == []
+    def test_an_event_is_not_a_word(self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path) -> None:
+        """Bracketed and onomatopoeic events count toward no word total and no span extent."""
+        _seed_speech_store(store, tmp_path, words=["hello"], events=["[COUGH]", "[BREATH]"])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert _verdict_entity(store, "SPEECH").attributes["words_n"] == 1
+
+    def test_no_consensus_word_fails_and_writes_no_pii_scan(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """redact.md: a wordless recording has no PII scan, no REDACT verdict and no withheld release."""
+        _seed_speech_store(store, tmp_path, words=[])
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert result.verdict.outcome is Outcome.FAIL
+        assert find_measurement(store, "pii_scan") is None
 
 
-def test_the_no_words_path_records_every_required_detector_as_missing(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """Nothing was scanned there, so nothing required was met — the measurement must say so."""
-    store, cfg, run_dir = seed_speech_store([], [])
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    scan = find_measurement(store, "pii_scan")
-    assert scan is not None
-    assert scan.attributes["missing"] == default_detectors()
+class TestTheSecondDiarizerIsConditional:
+    """One speaker is the count; anything else consults a second diarizer and reports disagreement."""
+
+    def test_a_count_of_one_consults_nobody(
+        self,
+        store: ProvStore,
+        second_diarizer_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """branch-speech.md: 'No second diarizer runs'."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=2)
+        speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
+        assert calls == ["primary"]
+        assert _verdict_entity(store, "SPEECH").attributes["second_diarizer"] == "not_consulted"
+
+    def test_a_count_of_two_consults_the_second(
+        self,
+        store: ProvStore,
+        second_diarizer_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The disagreement is reported; it does not replace pyannote's count."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        calls = _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=3)
+        speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
+        assert calls == ["primary", "second"]
+        record = _verdict_entity(store, "SPEECH").attributes["second_diarizer"]
+        assert record["count"] == 3 and record["agrees"] is False
+        assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 2
+
+    def test_a_count_of_zero_consults_the_second_too(
+        self,
+        store: ProvStore,
+        second_diarizer_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """branch-speech.md: 'the codomain is the counts pyannote can return, and 0 is one of them'."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        calls = _stub_diarizers(monkeypatch, primary_speakers=0, second_speakers=1)
+        speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
+        assert calls == ["primary", "second"]
+
+    def test_a_declared_count_is_not_read(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """hint.targeted_speaker_count is the protocol's intent, of unknown provenance; not evidence."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        hint = AudioHints(targeted_speaker_count=4)
+        result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert "4" not in result.verdict.why
 
 
-def test_pii_entities_and_verdict_never_carry_matched_text(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Projection, not filtering: no store entity, verdict value or exception carries the match."""
-    secret = "jane.doe@example.com"
-    monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding(secret, "EMAIL_ADDRESS"))
-    store, cfg, run_dir = seed_speech_store(WORDS_WITH_EMAIL, WORDS_WITH_EMAIL)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    dumped = json.dumps([(e.prov_type, e.attributes) for e in store.entities() if e.prov_type != "word"], default=str)
-    assert secret not in dumped, "pii/measurement/verdict entities are projections"
-    assert secret not in json.dumps(store.get_entity(result.verdict_entity_id).attributes, default=str)
-    pii = store.entities("pii")
-    assert pii and pii[0].attributes["category"] == "EMAIL_ADDRESS" and pii[0].extent is not None
+class TestTheDegenerateIntervalIsAFindingNotACrash:
+    """C3: a consensus placing every word at one instant selects no samples to diarize."""
+
+    def test_a_zero_length_interval_is_not_diarized(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The Glides-Low-to-High shape: one word at [0.72, 0.72], and pyannote is never reached."""
+        _seed_speech_store(store, tmp_path, words=["Ee"], word_extents=[(0.72, 0.72)])
+        calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert calls == [], "the crop refuses before any model sees a (1, 0) tensor"
+        verdict = _verdict_entity(store, "SPEECH")
+        assert verdict.attributes["diarization"] == "interval_selects_no_samples"
+        assert verdict.attributes["speaker_count"] is None
+        assert result.verdict.outcome is Outcome.FLAG
+
+    def test_the_branch_still_writes_the_scan_redact_would_read(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The cluster run lost its PII scan to the crash; a finding costs the branch nothing."""
+        _seed_speech_store(store, tmp_path, words=["Ee"], word_extents=[(0.72, 0.72)])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert find_measurement(store, "pii_scan") is not None
 
 
-def test_target_without_commit_is_refused_and_flagged_without_an_embedding_call(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """Embeddings from different models are not comparable; unprovenanced targets are refused."""
-    hint = AudioHints(
-        target_speaker=TargetSpeakerEmbedding(
-            vector=[1.0, 0.0],
-            provenance=SpeakerEmbeddingProvenance(
-                model_id="speechbrain/spkrec-ecapa-voxceleb",
-                model_commit_sha=None,
-                unresolved_reason="enrollment vector of unknown commit",
-            ),
+class TestEnrollment:
+    """The target is enrolled. An enrollment without provenance is refused rather than compared."""
+
+    def test_no_enrollment_claims_no_identity(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Speakers stay SPEAKER_*, and nothing is called a target."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert "target_speaker" not in _verdict_entity(store, "SPEECH").attributes
+
+    def test_an_enrollment_without_a_commit_is_refused(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No embedder runs; the branch flags with the refusal."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        embedder = _stub_embedder(monkeypatch)
+        result = speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment(commit=None))
+        assert embedder == []
+        assert result.verdict.outcome is Outcome.FLAG
+        assert "resolved model commit" in result.verdict.why
+
+    def test_an_enrollment_from_another_model_is_refused(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A similarity between two models' spaces is not a similarity."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(
+            store,
+            "plain",
+            enrollment_config,
+            run_dir=tmp_path,
+            enrollment=_enrollment(model="pyannote/embedding"),
         )
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    # the autouse fake for extract_speaker_embeddings_from_audios raises AssertionError if called
-    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert any("commit" in f for f in verdict.attributes["flags"]), "refused, with the reason recorded"
-    assert not store.entities("target_match"), "no comparison happened"
+        assert "not the probe" in result.verdict.why
+
+    def test_a_null_enrollment_model_key_refuses_before_any_store_write(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """speech.enrollment_model is null on the packaged config; nothing invents a probe."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=_enrollment())
+        assert result.verdict.outcome is Outcome.FLAG
+        assert "speech.enrollment_model" in result.verdict.why
+
+    def test_the_enrollment_element_names_every_source(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The store carries the enrollment, so a file's own contribution to its target is visible."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_embedder(monkeypatch, similarity=0.99)
+        speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
+        element = live_entities(store, "enrollment")[0]
+        assert element.attributes["subject_id"] == "sub-01"
+        assert element.attributes["sources"] == ["a.wav", "b.wav"]
+        assert element.attributes["model_commit_sha"] == "a" * 40
+
+    def test_the_probe_is_loaded_at_the_enrolled_commit(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A match recorded against an unpinned probe is provenance that is confidently wrong."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_embedder(monkeypatch, similarity=0.99)
+        speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
+        (match,) = live_entities(store, "target_match")
+        assert match.attributes["probe_model"] == ENROLLMENT_MODEL
+        assert match.attributes["probe_revision"] == ENROLLMENT_SHA
+        assert match.attributes["enrollment_commit"] == ENROLLMENT_SHA
+
+    def test_a_hint_target_speaker_is_not_read_and_says_so(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The ignore is never silent (V15)."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        hint = AudioHints(target_speaker=_target_speaker_embedding())
+        result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
+        assert "identifies the target by enrollment" in result.verdict.why
 
 
-def test_target_with_provenance_requires_the_null_cosine_key(seed_speech_store: SeedSpeechStore) -> None:
-    """A hint carrying a target under a null speech.target_match_cosine raises at entry (N7)."""
-    hint = AudioHints(
-        target_speaker=TargetSpeakerEmbedding(
-            vector=[1.0, 0.0],
-            provenance=SpeakerEmbeddingProvenance(
-                model_id="speechbrain/spkrec-ecapa-voxceleb", model_commit_sha="a" * 40
-            ),
-        )
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    before = store.fingerprint()
-    with pytest.raises(ValueError, match="target_match_cosine"):
-        speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    assert store.fingerprint() == before, "the refusal precedes any store write"
+class TestSeparationIsMeasurementGated:
+    """Neither backend is selected by default, and the choice is a config key."""
+
+    def test_a_null_backend_does_not_separate(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A count of 2 with no ranked backend records the absence rather than picking one."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        separator = _stub_separator(monkeypatch)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert separator == []
+        assert _verdict_entity(store, "SPEECH").attributes["separation"] == "not_selected"
+
+    def test_mossformer_is_reachable_by_config(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The alternative runs when named, at n_sources 2, and writes one stream per source."""
+        config = _override(tmp_path, "speech:\n  separation_backend: MossFormer2_SS_16K\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        separator = _stub_separator(monkeypatch, sources=2)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert separator[0]["model"] == "alibabasglab/MossFormer2_SS_16K"
+        assert separator[0]["n_sources"] == 2
+        assert len([e for e in live_entities(store, "stream") if e.attributes["name"].startswith("separated")]) == 2
+
+    def test_unasdiff_speech_sound_needs_a_sound_class(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """V17: the spec wants an unconditioned sound slot; the API refuses one. The branch says so."""
+        config = _override(tmp_path, "speech:\n  separation_backend: unasdiff\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        separator = _stub_separator(monkeypatch)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert separator == []
+        assert _verdict_entity(store, "SPEECH").attributes["separation"] == "unconditioned_sound_slot_unavailable"
+
+    def test_unasdiff_runs_in_speech_sound_mode_when_a_class_is_named(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Slot 0 is the speech prior; the sound slot carries the configured class."""
+        config = _override(tmp_path, "speech:\n  separation_backend: unasdiff\n  separation_sound_class: Applause\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        separator = _stub_separator(monkeypatch, sources=2)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert separator[0]["mode"] == "speech_sound"
+        assert separator[0]["source_classes"] == ["Applause"]
+
+    def test_three_speakers_are_reported_not_separated(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MossFormer fixes n_sources at 2, so a count of 3 is a report, not a wrong decomposition."""
+        config = _override(tmp_path, "speech:\n  separation_backend: MossFormer2_SS_16K\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=3, second_speakers=3)
+        separator = _stub_separator(monkeypatch)
+        result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert separator == []
+        assert "cannot serve 3" in result.verdict.why
 
 
-def test_provenanced_target_from_another_model_is_refused_like_a_commitless_one(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """Comparability gates the cut, not provenance alone: a wrong-model target is refused, never read."""
-    hint = AudioHints(
-        target_speaker=TargetSpeakerEmbedding(
-            vector=[1.0, 0.0],
-            provenance=SpeakerEmbeddingProvenance(model_id="pyannote/embedding", model_commit_sha="b" * 40),
-        )
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)  # target_match_cosine is null here
-    # the autouse fake for extract_speaker_embeddings_from_audios raises AssertionError if called
-    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert any("not comparable" in f for f in verdict.attributes["flags"]), "refused, with the reason recorded"
-    assert not store.entities("target_match"), "no comparison happened"
+class TestPiiOnTheConsensus:
+    """One scan, one text, and the decision is speaker-scoped while the redaction is not."""
 
+    def test_the_scan_reads_the_consensus_transcript_only(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Exactly one text is scanned, and it is the consensus text PREPROCESS wrote."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert scanned == ["my name is alice"]
 
-def test_pii_whose_speaker_is_unresolved_flags_when_a_target_is_known(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """N12: a finding on a word straddling two segments is treated as the target's and flags."""
-    words = [("alice", 1.0, 1.3), ("bob", 2.0, 2.3)]
-    target_yaml = "speech:\n  word_gap_ms: 300\n  target_match_cosine: 0.5\n"
-    hint = AudioHints(
-        target_speaker=TargetSpeakerEmbedding(
-            vector=[1.0, 0.0],
-            provenance=SpeakerEmbeddingProvenance(
-                model_id="speechbrain/spkrec-ecapa-voxceleb", model_commit_sha="a" * 40
-            ),
-        )
-    )
+    def test_a_finding_carries_category_and_extent_never_text(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The verdict and the element both refuse to carry the matched text."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        finding = live_entities(store, "pii")[0]
+        assert finding.attributes["category"] == "PERSON"
+        assert finding.extent is not None
+        assert "alice" not in str(finding.attributes)
+        assert "alice" not in result.verdict.why
 
-    def fake_diarize(audios: list[Audio], model: Any = None, **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        # On the cropped clock the boundary falls inside "alice", so that word straddles both segments.
-        return [
-            [
-                ScriptLine(speaker="SPEAKER_00", start=0.0, end=0.15),
-                ScriptLine(speaker="SPEAKER_01", start=0.15, end=1.3),
-            ]
+    def test_a_finding_names_the_recognizers_behind_the_words_it_rests_on(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A finding resting on one recognizer alone must be legible as such."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        finding = live_entities(store, "pii")[0]
+        assert len(finding.attributes["recognizers"]) == 2
+
+    def test_a_finding_marks_the_word_elements(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The store now holds PII, and every artifact must respect the marking."""
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        marks = [
+            e
+            for e in live_entities(store, "assertion")
+            if e.attributes.get("verb") == "label" and e.attributes.get("label") == "pii"
         ]
+        assert marks and all("alice" not in str(mark.attributes) for mark in marks)
 
-    def fake_embed(audios: list[Audio], model: Any = None, device: Any = None) -> list[torch.Tensor]:  # noqa: ANN401
-        return [torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0])][: len(audios)]
+    def test_a_missing_required_detector_flags(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A detector never attempted is the silent one, and could-not-check is not clean."""
+        _seed_speech_store(store, tmp_path, words=["hello"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[], detectors_used=["rules"])
+        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert result.verdict.outcome is Outcome.FLAG
+        scan = find_measurement(store, "pii_scan")
+        assert scan is not None and scan.attributes["missing"] == ["gliner", "presidio"]
 
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    monkeypatch.setattr(speech_module, "extract_speaker_embeddings_from_audios", fake_embed)
-    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
-    monkeypatch.setattr(speech_module, "scan_for_pii", _scan_finding("alice", "PERSON"))
-    store, cfg, run_dir = seed_speech_store(words, words, config_yaml=target_yaml)
-    result = speech_module.speech(store, "plain", cfg, hint, run_dir=run_dir)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes.get("target_speaker") == "SPEAKER_00", "a target is known"
-    (straddler,) = [w for w in _consensus_words(store) if w.attributes["text"] == "alice"]
-    assert straddler.attributes["speaker"] is None and straddler.attributes["speaker_note"] == "straddles"
-    assert result.verdict.outcome is Outcome.FLAG
-    assert any("cannot be resolved" in f for f in verdict.attributes["flags"]), "treated as the target's"
+    def test_a_non_target_finding_does_not_flag_but_is_still_a_finding(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Flagging asks whether a human is needed; the finding still reaches REDACT.
 
-
-def test_a_detector_failure_message_never_reaches_the_store_or_the_verdict(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A failure message can quote the scanned text; only the detector and the exception type escape."""
-    sentinel = "LEAKED-PII-TEXT"
-    monkeypatch.setattr(
-        speech_module,
-        "scan_for_pii",
-        lambda inputs, **kw: [
-            PiiScan(spans=[], detectors_used=["presidio"], failures={"gliner": f"ValueError: {sentinel}"})
-            for _ in inputs
-        ],
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    dumped = json.dumps([(e.prov_type, e.attributes) for e in store.entities()], default=str)
-    assert sentinel not in dumped, "no entity carries a detector's failure message"
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert sentinel not in json.dumps(verdict.attributes, default=str)
-    assert sentinel not in result.verdict.why
-    assert any("gliner" in f and "ValueError" in f for f in verdict.attributes["flags"]), "detector and type remain"
+        The layout puts the first two words in SPEAKER_00's half of the interval and the last two,
+        'alice' among them, in SPEAKER_01's — and SPEAKER_00 is the speaker the enrollment matches.
+        """
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"], speakers=2)
+        _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
+        _stub_embedder(monkeypatch, similarity=0.99, target_label="SPEAKER_00")
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
+        verdict = _verdict_entity(store, "SPEECH")
+        assert verdict.attributes["pii"]["n"] == 1
+        assert not [flag for flag in verdict.attributes["flags"] if "target speaker's speech" in flag]
 
 
-def test_quality_is_reported_never_gating(seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Terrible SQUIM numbers and real disruptions leave a pass a pass."""
-    monkeypatch.setattr(
-        speech_module,
-        "extract_objective_quality_features_from_audios",
-        lambda audios, device=None: [{"stoi": 0.1, "pesq": 1.0, "si_sdr": -10.0} for _ in audios],
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.PASS
-    dis = [m for m in store.entities("measurement") if m.attributes.get("name") == "disruptions"]
-    assert dis and all("clipped_runs" in m.attributes for m in dis), "counts and extents, not a score"
-    assert all("zero_crossing_rate" in m.attributes for m in dis), "the ZCR reading rides along, ungated"
+class TestTheNonTargetAxis:
+    """Measured and reported per span; null, not zero, while the thresholds are unmeasured."""
+
+    def test_the_three_legs_are_measured_per_span(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Level, spectral tilt and direct-to-reverberant, on every speech span."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        proximity = find_measurements(store, "proximity")
+        assert proximity
+        for measurement in proximity:
+            assert {"rms_dbfs", "peak_dbfs", "tilt_db_per_octave", "d_to_r_db"} <= set(measurement.attributes)
+
+    def test_nontarget_speech_s_is_null_while_a_threshold_is_unmeasured(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A product that says zero when nobody measured is the failure this row exists to prevent."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert _verdict_entity(store, "SPEECH").attributes["nontarget_speech_s"] is None
+
+    def test_the_product_appears_once_every_threshold_is_supplied(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The null is a gate, not a hard-coded None: supplying the three cuts folds the legs."""
+        config = _override(
+            tmp_path,
+            "speech:\n  nontarget:\n    level_db: 0.0\n    tilt_db_per_octave: 0.0\n    d_to_r_db: 0.0\n",
+        )
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert isinstance(_verdict_entity(store, "SPEECH").attributes["nontarget_speech_s"], float)
+
+    def test_no_span_is_excluded_on_this_evidence(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """This branch marks; it removes nothing."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert not [e for e in store.entities("span") if store.is_invalidated(e.id)]
 
 
-def test_disruptions_are_measured_on_the_original_recording_not_the_normalised_copy(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """Clipping is a property of the recording, and normalise-then-resample destroys the evidence.
+class TestQualityAndTheStreamsItNames:
+    """SQUIM on plain, disruptions on the original, and every reading names its stream (V19)."""
 
-    The campaign read clipped_runs == 0 on every file, four of which peak at exactly 0.0 dBFS. The
-    discriminating pair is here: one original carrying a flat plateau at full scale, and the plain
-    stream PREPROCESS derived from it, in which the plateau no longer exists. The node must report
-    the first, and must name the stream it measured.
-    """
-    import soundfile as sf
+    def test_disruptions_read_the_original_recording(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Peak normalisation and resampling destroy the plateaus and the crossing rate."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        recording_id = _stream_id(store, "recording")
+        readings = find_measurements(store, "disruptions")
+        assert readings
+        for measurement in readings:
+            assert measurement.attributes["stream"] == recording_id
 
-    from senselab.audio.tasks.disruptions import detect_disruptions
-
-    duration_s = 6.0
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS, duration_s=duration_s)
-    original = np.zeros(int(duration_s * SR), dtype=np.float32)
-    original[int(0.9 * SR) : int(1.8 * SR)] = 1.0  # a flat plateau at full scale across the words
-    sf.write(str(run_dir / "streams" / "recording.wav"), original, SR)
-    pre = store.activity(node="PREPROCESS", step="capture", parameters={})
-    recording_id = store.entity(
-        prov_type="stream",
-        extent=(0.0, duration_s),
-        attributes={"name": "recording", "path": "streams/recording.wav", "sampling_rate": SR, "channels": 1},
-    )
-    store.was_generated_by(recording_id, pre)
-
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    dis = [m for m in store.entities("measurement") if m.attributes.get("name") == "disruptions"]
-    assert dis, "every span carries a disruptions measurement"
-    assert any(m.attributes["clipped_runs"] > 0 for m in dis), "the plateau in the original is clipping"
-    assert all(m.attributes["stream"] == recording_id for m in dis), "a measurement names the stream it read"
-
-    plain_audio = Audio(filepath=str(run_dir / "streams" / "plain.wav"))
-    invisible = detect_disruptions(
-        plain_audio,
-        1.0,
-        1.7,
-        clip_headroom=float(cfg.require("disruptions.clip_headroom")),
-        min_clip_run=int(cfg.require("disruptions.min_clip_run")),
-        min_dropout_ms=float(cfg.require("disruptions.min_dropout_ms")),
-        discontinuity_local_factor=float(cfg.require("disruptions.discontinuity_local_factor")),
-        discontinuity_window_ms=float(cfg.require("disruptions.discontinuity_window_ms")),
-    )
-    assert invisible.clipped_runs == 0, "the same clipping is invisible on the derived copy"
+    def test_a_wordless_file_has_no_per_span_reading_and_that_is_correct(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A span nobody measured must not report zero; the file-level reading is PREPROCESS's."""
+        _seed_speech_store(store, tmp_path, words=[], disruptions_file=True)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert find_measurements(store, "disruptions") == []
+        assert find_measurement(store, "disruptions_file") is not None
 
 
-def test_squim_vote_is_inert_while_thresholds_are_null(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """squim_vote records not_evaluated and no flag fires on awful SQUIM while the floors are null (N4)."""
-    monkeypatch.setattr(
-        speech_module,
-        "extract_objective_quality_features_from_audios",
-        lambda audios, device=None: [{"stoi": 0.05, "pesq": 1.0, "si_sdr": -20.0} for _ in audios],
-    )
-    store, cfg, run_dir = seed_speech_store(WORDS, WORDS)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.PASS
-    spans = _speech_spans(store)
-    assert spans and all(s.attributes["squim_vote"] == "not_evaluated" for s in spans)
+class TestItDoesNotReadAirway:
+    """Diarization is a speech-only instrument."""
 
+    def test_an_airway_label_withdraws_no_segment(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The same store with and without AIRWAY's labels yields the same speaker count."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], airway_labelled=[(0.4, 0.6)])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 1
+        assert not [e for e in store.entities("speaker") if store.is_invalidated(e.id)]
 
-def test_fusion_runs_real_and_confidence_is_agreement_not_correctness(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """Two hypotheses disagreeing on one word leave that consensus word less confident than the agreed one."""
-    store, cfg, run_dir = seed_speech_store(
-        [("one", 1.0, 1.2), ("cat", 1.5, 1.7)], [("one", 1.0, 1.2), ("hat", 1.5, 1.7)]
-    )
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    words = sorted(_consensus_words(store), key=lambda w: w.extent or (0.0, 0.0))
-    assert len(words) == 2
-    agreed, disputed = words[0].attributes, words[1].attributes
-    assert agreed["confidence"] is not None and disputed["confidence"] is not None
-    assert disputed["confidence"] < agreed["confidence"], "agreement bounds confidence from above"
-
-
-def test_a_word_over_no_energy_is_a_fabrication_candidate_and_flags(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """A word whose extent never clears the local floor gets a fabrication_candidate label and flags (N9)."""
-    words = [*WORDS, ("ghost", 5.5, 5.7)]
-    store, cfg, run_dir = seed_speech_store(words, words)
-    sidecar = run_dir / "derivatives" / "energy_envelope.npz"
-    data = np.load(sidecar)
-    env = data["envelope_dbfs"].copy()
-    env[int(5.5 * SR) : int(5.7 * SR)] = -80.0
-    np.savez(sidecar, envelope_dbfs=env, floor_dbfs=data["floor_dbfs"])
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert any("fabrication" in f for f in verdict.attributes["flags"])
-    labels = [a for a in store.entities("assertion") if a.attributes.get("label") == "fabrication_candidate"]
-    assert len(labels) == 1
-    assert labels[0].extent == pytest.approx((5.5, 5.7))
-    (word_id,) = store.derived_from(labels[0].id)
-    assert store.get_entity(word_id).prov_type == "word", "the label hangs off the offending word"
-
-
-def test_yamnet_disconfirmation_flags(seed_speech_store: SeedSpeechStore) -> None:
-    """Speech coverage below the threshold over one span flags, and the span carries the coverage."""
-    words = [("one", 1.0, 1.3), ("far", 4.0, 4.3)]
-    store, cfg, run_dir = seed_speech_store(words, words)
-    sidecar = run_dir / "derivatives" / "yamnet_windows.json"
-    windows = json.loads(sidecar.read_text())
-    for window in windows:
-        if float(window["start"]) < 4.3 and float(window["end"]) > 4.0:
-            window["label_scores"] = [{"Speech": 0.1}]
-    sidecar.write_text(json.dumps(windows))
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert any("yamnet" in f for f in verdict.attributes["flags"])
-    doubted = [s for s in _speech_spans(store) if (s.extent or (0.0, 0.0))[0] == pytest.approx(4.0)]
-    assert doubted and doubted[0].attributes["yamnet_coverage"] < 0.5
-    assert doubted[0].attributes["yamnet_vote"] == "disconfirm"
-
-
-def test_straddling_word_is_marked_not_assigned(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A word overlapping two diarizer segments is marked, never assigned to either."""
-    monkeypatch.setattr(speech_module, "diarize_audios", _two_speaker_fake)
-    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
-    store, cfg, run_dir = seed_speech_store([("one", 1.0, 1.4)], [("one", 1.0, 1.4)])
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    (word,) = _consensus_words(store)
-    assert word.attributes["speaker"] is None
-    assert word.attributes["speaker_note"] == "straddles"
-
-
-def test_flag_view_includes_every_segment_the_count_was_taken_over(
-    seed_speech_store: SeedSpeechStore, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Partial is a view, not a payload: the flagged result's view carries the contested entities.
-
-    The flag here is a speaker count of three, and what is contested is the segments that produced
-    it — including the one overlapping the airway label, which now counts like any other.
-    """
-    words = [("one", 1.0, 1.4), ("two", 4.4, 4.8)]
-    store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
-
-    def fake_diarize(audios: list[Audio], **kw: Any) -> list[list[ScriptLine]]:  # noqa: ANN401
-        return [
-            [
-                ScriptLine(speaker="SPEAKER_00", start=0.0, end=1.5),
-                ScriptLine(speaker="SPEAKER_01", start=2.0, end=3.0),
-                ScriptLine(speaker="SPEAKER_02", start=3.4, end=3.8),  # overlaps the label after offset
-            ]
-        ]
-
-    monkeypatch.setattr(speech_module, "diarize_audios", fake_diarize)
-    monkeypatch.setattr(speech_module, "separate_audios", lambda *a, **k: [[]])
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome is Outcome.FLAG
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["speaker_count"] == 3, "the label-overlapping segment counts too"
-    speakers = [s.id for s in store.entities("speaker")]
-    assert len(speakers) == 3 and all(entity_id in result.view for entity_id in speakers)
-    assert not any(store.is_invalidated(entity_id) for entity_id in speakers)
-
-
-def test_every_read_is_recorded_with_used(seed_speech_store: SeedSpeechStore) -> None:
-    """The SPEECH activities' used targets include the word, envelope and span entities read.
-
-    Not the airway label: diarization is speech-only, so nothing in this branch reads one.
-    """
-    words = [("one", 1.0, 1.2), ("two", 1.25, 1.5)]
-    store, cfg, run_dir = seed_speech_store(words, words, airway_label_extent=(4.5, 5.0))
-    pre_act = store.activity(node="PREPROCESS", step="spans", parameters={})
-    pre_span = store.entity(
-        prov_type="span",
-        extent=(0.9, 1.6),
-        attributes={"peak_over_floor_db": 20.0, "k_db": 18.0, "signal": "preemphasised"},
-    )
-    store.was_generated_by(pre_span, pre_act)
-    source_words = [w.id for w in store.entities("word")]
-    envelope = next(e.id for e in store.entities("measurement") if e.attributes.get("name") == "energy_envelope")
-    label = next(a.id for a in store.entities("assertion") if a.attributes.get("verb") == "label")
-    speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    used: set[str] = set()
-    for activity in store._activities.values():
-        if activity.node == "SPEECH":
-            used.update(store.uses_of(activity.id))
-    assert set(source_words) <= used
-    assert envelope in used
-    assert pre_span in used
-    assert label not in used, "SPEECH reads no airway label; the span it hangs on is read as a span"
-
-
-def test_a_word_ending_a_hair_past_the_decode_is_clamped_not_a_crash(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """The diarization interval is bounded by the decode, so a float hair cannot end the branch.
-
-    The duration here is the cluster's own — 92137 samples at 16 kHz — where a last word ending at
-    the recording's end is reported by ``fuse_word_streams``, which rounds to 1e-4 s, as 5.7586.
-    That is 0.6 of a sample past the decode, and ``extract_segments`` raised "End must be <=
-    duration of the audio (5.7585625 sec)" on it while the same file ran clean on the Mac.
-    """
-    duration_s = 92137 / SR
-    words = [("one", 1.0, 1.3), ("two", 5.0, round(duration_s, 4))]
-    assert words[1][2] > duration_s, "the fixture must reproduce the overshoot, not merely resemble it"
-    store, cfg, run_dir = seed_speech_store(words, words, duration_s=duration_s)
-    result = speech_module.speech(store, "plain", cfg, run_dir=run_dir)
-    assert result.verdict.outcome in (Outcome.PASS, Outcome.FLAG)
-    interval = next(e for e in store.entities("interval") if e.attributes.get("name") == "diarization_interval")
-    assert interval.extent is not None
-    assert interval.extent[1] == duration_s, "the interval the store records is the one that was diarized"
-
-
-def test_a_word_ending_a_tenth_of_a_second_past_the_decode_still_raises(
-    seed_speech_store: SeedSpeechStore,
-) -> None:
-    """An extent that far outside the recording is an inconsistency, and must not be silently trimmed."""
-    words = [("one", 1.0, 1.3), ("two", 5.0, 5.5)]
-    store, cfg, run_dir = seed_speech_store(words, words, duration_s=6.0)
-    stray = store.activity(node="PREPROCESS", step="asr:stray", parameters={})
-    from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID
-
-    word_id = store.entity(
-        prov_type="word",
-        extent=(5.9, 6.1),
-        attributes={"text": "three", "score": 0.9, "recognizer": CRISPERWHISPER_ID, "timestamp_source": "native"},
-    )
-    store.was_generated_by(word_id, stray)
-    with pytest.raises(ValueError, match="past the"):
-        speech_module.speech(store, "plain", cfg, run_dir=run_dir)
+    def test_the_module_reads_no_airway_activity(self) -> None:
+        """Verifying what commit 8537a83f already removed, so a regression is caught here."""
+        source = Path(speech_module.__file__).read_text()
+        assert "AIRWAY" not in source

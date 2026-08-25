@@ -29,7 +29,7 @@ class TestTheShape:
     """subject_id, vector, provenance, sources — every recording behind the vector is named."""
 
     def test_an_enrollment_names_every_recording_behind_it(self) -> None:
-        """sources is what makes an enrollment reproducible and a file's own contribution visible."""
+        """``sources`` is what makes an enrollment reproducible and a file's own contribution visible."""
         enrollment = Enrollment(subject_id="sub-01", vector=[0.6, 0.8], provenance=_provenance())
         assert enrollment.sources == ["a.wav", "b.wav"]
 

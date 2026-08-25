@@ -16,6 +16,7 @@ from typing import Any, Callable, TypeVar
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.common import NodeResult
@@ -185,7 +186,7 @@ def _drive_branches(
     run_dir: Path,
     artifacts_dir: Path,
     outcomes: dict[str, NodeOutcome],
-    enrollment: Any | None,  # noqa: ANN401
+    enrollment: Enrollment | None,
 ) -> dict[str, Path]:
     """Run PREPROCESS, TAXONOMY and routing, then exactly the branches routing selected.
 
@@ -213,10 +214,7 @@ def _drive_branches(
     selected = set(routed.runs) if routed is not None else set(_BRANCHES)
     branches: dict[str, Callable[[], NodeResult]] = {
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
-        # ``enrollment`` is sibling T4's addition to speech; the call leads it.
-        "SPEECH": lambda: speech(  # type: ignore[call-arg]
-            store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment
-        ),
+        "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
         "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
     }
     for branch in _BRANCHES:
@@ -264,7 +262,7 @@ def run_triage(
     out_dir: Path,
     config: TriageConfig,
     hint: AudioHints | None = None,
-    enrollment: Any | None = None,  # noqa: ANN401
+    enrollment: Enrollment | None = None,
 ) -> TriageRunResult:
     """Triage one recording: the whole graph, one store, one fresh run directory.
 
