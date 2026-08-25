@@ -55,6 +55,7 @@ _ABSENCE_BY_CLASS = {
 }
 _ABSENCE_ERRORED = "errored"
 _NO_AXIS = "no time axis: the store holds no readable stream, so there is no shared axis to draw over"
+_ENVELOPE_AXIS = "envelope dBFS"
 
 _LANE_SOURCE = {
     "envelope": "energy_envelope",
@@ -332,9 +333,40 @@ def _label_counts(store: ProvStore, classifier: str) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _envelope_curves(
+    store: ProvStore, run_dir: Path, config: TriageConfig
+) -> list[tuple[np.ndarray, np.ndarray, str, str]] | None:
+    """PREPROCESS's energy envelope and its rolling floor, decimated to the spectrogram's hop.
+
+    Args:
+        store: The provenance store.
+        run_dir: Where the envelope's sidecar path resolves against.
+        config: The triage configuration, read for the decimation stride only.
+
+    Returns:
+        ``[(times, values, label, colour), ...]`` for the two curves, or None when the derivative is
+        absent from the store or its sidecar has been moved away.
+    """
+    envelope = find_measurement(store, "energy_envelope")
+    if envelope is None:
+        return None
+    path = Path(str(envelope.attributes.get("path") or ""))
+    path = path if path.is_absolute() else run_dir / path
+    if not path.is_file():
+        return None
+    loaded = np.load(path)
+    rate = float(envelope.attributes.get("sampling_rate") or 1.0)
+    stride = max(1, int(rate * float(config.require("spectrogram.hop_ms")) / 1000.0))
+    times = np.arange(0, len(loaded["envelope_dbfs"]), stride) / rate
+    return [
+        (times, loaded["envelope_dbfs"][::stride], "envelope dBFS", "steelblue"),
+        (times, loaded["floor_dbfs"][::stride], "floor dBFS", "firebrick"),
+    ]
+
+
 def _panels(
     store: ProvStore, marks: dict[str, list[Entity]], run_dir: Path, config: TriageConfig
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], set[str]]:
     """The summary's layers on one shared time axis, drawn from whatever the store holds.
 
     A layer whose derivative is absent is omitted; nothing raises for want of one, because
@@ -349,31 +381,19 @@ def _panels(
         config: The triage configuration, read for the envelope decimation stride only.
 
     Returns:
-        Panel specifications for ``plot_aligned_panels``. Every lane carries a ``name``.
+        The panel specifications for ``plot_aligned_panels``, and the names of the declared lanes
+        they drew. The two are not the same set: the envelope shares the waveform's row and is
+        named by that row's right-hand scale rather than by a panel ``name`` of its own.
     """
-    panels: list[dict[str, Any]] = [{"type": "waveform"}]
+    waveform: dict[str, Any] = {"type": "waveform"}
+    panels: list[dict[str, Any]] = [waveform]
+    drawn: set[str] = set()
     scanned, _ = _scan_state(store)
 
-    envelope = find_measurement(store, "energy_envelope")
+    envelope = _envelope_curves(store, run_dir, config)
     if envelope is not None:
-        path = Path(str(envelope.attributes.get("path") or ""))
-        path = path if path.is_absolute() else run_dir / path
-        if path.is_file():
-            loaded = np.load(path)
-            rate = float(envelope.attributes.get("sampling_rate") or 1.0)
-            stride = max(1, int(rate * float(config.require("spectrogram.hop_ms")) / 1000.0))
-            times = np.arange(0, len(loaded["envelope_dbfs"]), stride) / rate
-            panels.append(
-                {
-                    "type": "features",
-                    "name": "envelope",
-                    "style": "line",
-                    "data": [
-                        (times, loaded["envelope_dbfs"][::stride], "envelope dBFS", "steelblue"),
-                        (times, loaded["floor_dbfs"][::stride], "floor dBFS", "firebrick"),
-                    ],
-                }
-            )
+        waveform["twin"] = {"name": _ENVELOPE_AXIS, "data": envelope}
+        drawn.add("envelope")
 
     spans = _envelope_spans(store)
     panels += _lane(
@@ -439,7 +459,7 @@ def _panels(
         ),
     )
     panels.append({"type": "spectrogram"})
-    return panels
+    return panels, drawn | {str(panel["name"]) for panel in panels if "name" in panel}
 
 
 def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
@@ -1079,8 +1099,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     from matplotlib.backends.backend_pdf import PdfPages
 
     audio = _stream(store, run_dir)
-    panels = [] if audio is None else _panels(store, marks, run_dir, config)
-    drawn = {str(panel["name"]) for panel in panels if "name" in panel}
+    panels, drawn = ([], set[str]()) if audio is None else _panels(store, marks, run_dir, config)
     blocks = _blocks(store, marks, drawn, provenance)
 
     if fmt == "pdf":

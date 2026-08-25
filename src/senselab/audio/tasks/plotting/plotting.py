@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib import rc_context
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
@@ -133,6 +134,29 @@ def _power_to_db(spectrogram: np.ndarray, ref: float = 1.0, amin: float = 1e-10,
         log_spec = np.maximum(log_spec, log_spec.max() - top_db)
 
     return log_spec
+
+
+def _as_numpy(values: Any) -> np.ndarray:  # noqa: ANN401 — a tensor, a sequence or an array
+    """One curve's x or y values as an array, whatever the caller handed in."""
+    return values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
+
+
+def _draw_waveform_twin(ax: Axes, panel: Dict[str, Any]) -> None:
+    """Draw a waveform panel's twin-axis curves against a right-hand scale.
+
+    Args:
+        ax: The waveform panel's own axis, carrying amplitude on the left.
+        panel: The panel specification, read for its optional ``twin`` block.
+    """
+    spec = panel.get("twin")
+    if not spec:
+        return
+    twin = ax.twinx()
+    for times, values, label, color in spec.get("data", []):
+        twin.plot(_as_numpy(times), _as_numpy(values), color=color, label=label, linewidth=0.9, alpha=0.9)
+    twin.set_ylabel(spec.get("name") or "Value")
+    if spec.get("data"):
+        twin.legend(loc="upper right", fontsize=7)
 
 
 # ---------------------------
@@ -500,7 +524,10 @@ def plot_aligned_panels(
 
     Each panel shares the same time axis. Supported panel types:
 
-    - ``{"type": "waveform"}`` -- waveform amplitude.
+    - ``{"type": "waveform", "twin": {"name": str, "data": [(times, values, label, color), ...]}}`` --
+      waveform amplitude on the left y-axis, with the optional ``twin`` block's curves drawn against
+      a right-hand scale of their own and ``twin["name"]`` as that scale's y-label. A row carrying a
+      twin is drawn twice as tall, since two scales share it.
     - ``{"type": "spectrogram", "mel": True/False}`` -- linear or mel spectrogram.
     - ``{"type": "features", "data": [(times, values, label, color), ...], "name": str}`` --
       scatter/line overlay of feature curves (e.g., pitch, formants). ``name`` becomes the
@@ -554,12 +581,17 @@ def plot_aligned_panels(
         "segments": 1,
         "overlay_on_spectrogram": 2,
     }
-    height_ratios = [
-        max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(p.get("lines", []))) / _INCHES_PER_RATIO
-        if p.get("type") == "text"
-        else ratio_map.get(p.get("type", "waveform"), 1)
-        for p in panels
-    ]
+
+    def _ratio(panel: Dict[str, Any]) -> float:
+        """One panel's share of the figure's height."""
+        ptype = panel.get("type", "waveform")
+        if ptype == "text":
+            return max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(panel.get("lines", []))) / _INCHES_PER_RATIO
+        if ptype == "waveform" and (panel.get("twin") or panel.get("spans")):
+            return 2.0
+        return float(ratio_map.get(ptype, 1))
+
+    height_ratios = [_ratio(p) for p in panels]
 
     scale = _resolve_scale(context)
     rc = _rc_for_scale(scale)
@@ -609,9 +641,10 @@ def plot_aligned_panels(
             ptype = panel.get("type", "waveform")
 
             if ptype == "waveform":
-                ax.plot(time_wav, waveform_np, linewidth=0.3, color="steelblue")
+                ax.plot(time_wav, waveform_np, linewidth=0.3, color="0.45")
                 ax.set_ylabel("Amplitude")
                 ax.grid(True, alpha=0.2)
+                _draw_waveform_twin(ax, panel)
 
             elif ptype == "spectrogram":
                 mel = panel.get("mel", False)
