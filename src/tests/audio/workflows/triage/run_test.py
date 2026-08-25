@@ -321,11 +321,18 @@ class TestConditionalExecution:
     def test_an_empty_execution_set_still_reaches_verdict(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The file reaches the fold with no branch conclusions, which is what routing.md requires."""
+        """The file reaches the fold with no branch conclusions, and the fold discards it as empty.
+
+        End to end over the real ROUTING and the real VERDICT: this is the whole point of routing
+        recording the empty set rather than flagging it, and only the runner exercises both nodes.
+        """
         calls = graph(kinds={"speech": "absent", "airway": "absent", "voice": "absent"})
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["VERDICT"] is RunState.COMPLETED
         assert {"AIRWAY", "SPEECH", "VOICE"}.isdisjoint(calls)
+        assert result.file_verdict is not None
+        assert result.file_verdict.triage is Triage.DISCARD
+        assert result.file_verdict.discard_ground == "acoustically_empty"
 
     def test_a_raising_routing_runs_every_branch_and_is_recorded_errored(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
