@@ -29,6 +29,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
@@ -231,37 +232,53 @@ def _consensus_words(store: ProvStore) -> list[Entity]:
     return sorted(live_entities(store, "word"), key=lambda w: w.extent or (-1.0, -1.0))
 
 
-def _pii_marked_words(store: ProvStore) -> dict[str, set[str]]:
-    """Which PII categories the store's live label assertions place on each word.
+def _pii_marking_assertions(store: ProvStore) -> list[Entity]:
+    """Every live ``label``/``pii`` assertion, which is the whole of what the marking read consults.
 
     Args:
         store: The provenance store.
 
     Returns:
-        A mapping from word entity id to the categories marked on it. A word nothing marks is
-        absent rather than mapped to an empty set.
+        The assertion entities, oldest first.
     """
-    marked: dict[str, set[str]] = {}
-    for assertion in live_entities(store, "assertion"):
-        attributes = assertion.attributes
-        if attributes.get("verb") != _LABEL_VERB or attributes.get("label") != _PII_LABEL:
-            continue
-        category = str(attributes.get("category") or "")
+    return [
+        assertion
+        for assertion in live_entities(store, "assertion")
+        if assertion.attributes.get("verb") == _LABEL_VERB and assertion.attributes.get("label") == _PII_LABEL
+    ]
+
+
+def _pii_marked_words(store: ProvStore) -> dict[str, dict[str, str]]:
+    """Which PII categories the store's live label assertions place on each word, and by which one.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        A mapping from word entity id to ``{category: assertion id}``. A word nothing marks is
+        absent rather than mapped to an empty mapping. The assertion id is kept so a span the
+        re-plan widened can be derived from the marking that caused it; where two assertions place
+        the same category on one word the earlier is retained, which is the store's write order.
+    """
+    marked: dict[str, dict[str, str]] = {}
+    for assertion in _pii_marking_assertions(store):
+        category = str(assertion.attributes.get("category") or "")
         if not category:
             continue
         for source_id in store.derived_from(assertion.id):
-            marked.setdefault(source_id, set()).add(category)
+            marked.setdefault(source_id, {}).setdefault(category, assertion.id)
     return marked
 
 
-def _matches_surviving(word: Entity, category: str, planned: list[RedactionExtent], marked: set[str]) -> bool:
+def _matches_surviving(word: Entity, category: str, planned: list[RedactionExtent], marked: Mapping[str, str]) -> bool:
     """Whether this word carries a surviving category that no planned extent already covers.
 
     Args:
         word: A live consensus ``word`` entity.
         category: A category the verification re-scan still saw.
         planned: The padded, merged extents the failing pass produced.
-        marked: The PII categories the store's label assertions place on this word.
+        marked: The PII categories the store's label assertions place on this word, each mapped to
+            the assertion that placed it.
 
     Returns:
         True when the re-plan should widen to this word. A word a planned extent already covers is
@@ -373,6 +390,8 @@ def redact(
     findings = _findings(store)
     extents = _extents_from_findings(findings)
     words = _consensus_words(store)
+    consensus = find_measurement(store, "consensus_transcript")
+    consulted = _pii_marking_assertions(store)
     marked = _pii_marked_words(store)
 
     planned = plan_redactions(extents, padding_ms=padding_ms)
@@ -384,14 +403,16 @@ def redact(
     )
     replanned_n = 0
     unremediable: list[str] = []
+    widened: list[tuple[tuple[float, float], str]] = []
     if checked.scan_ran and checked.survived:
         replanned_n = 1
-        extents = extents + [
-            RedactionExtent(start=word.extent[0], end=word.extent[1], category=category)
-            for category in checked.survived
-            for word in words
-            if word.extent is not None and _matches_surviving(word, category, planned, marked.get(word.id, set()))
-        ]
+        for category in checked.survived:
+            for word in words:
+                marks = marked.get(word.id, {})
+                if word.extent is None or not _matches_surviving(word, category, planned, marks):
+                    continue
+                extents.append(RedactionExtent(start=word.extent[0], end=word.extent[1], category=category))
+                widened.append((word.extent, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
         transcript_text, unplaced_n = _transcript(words, planned)
         checked = _verify(transcript_text, required_detectors)
@@ -408,6 +429,8 @@ def redact(
     store.used(plan_act, scan_measurement.id)
     for finding in findings:
         store.used(plan_act, finding.id)
+    for assertion in consulted:
+        store.used(plan_act, assertion.id)
     span_ids: list[str] = []
     for extent in planned:
         span_id = store.entity(
@@ -420,6 +443,9 @@ def redact(
         for finding in findings:
             if finding.extent is not None and _overlaps(finding.extent, (extent.start, extent.end)):
                 store.was_derived_from(span_id, finding.id)
+        for bounds, assertion_id in widened:
+            if _overlaps(bounds, (extent.start, extent.end)):
+                store.was_derived_from(span_id, assertion_id)
         span_ids.append(span_id)
         view.append(span_id)
 
@@ -433,6 +459,12 @@ def redact(
 
     verify_act = store.activity(node=NODE, step="verify", parameters={"required_detectors": required_detectors})
     store.was_associated_with(verify_act, software)
+    if consensus is not None:
+        store.used(verify_act, consensus.id)
+    for word in words:
+        store.used(verify_act, word.id)
+    for span_id in span_ids:
+        store.used(verify_act, span_id)
 
     artifacts: dict[str, Path] = {}
     if scan_incomplete:
