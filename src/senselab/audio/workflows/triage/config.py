@@ -3,6 +3,20 @@
 Every number the triage workflow uses lives in ``data/config/default.yaml`` beside the measurement that
 produced it. A value nobody has measured is ``null`` there, and reading it raises rather than returning a
 number nobody chose.
+
+An override may not introduce a key, because a key the packaged file does not have is a typo and
+ignoring it would run the packaged value while the caller believed otherwise. Two kinds of mapping
+live in that file, though, and the rule applies to one of them:
+
+* A **schema** mapping's keys are names the code reads — ``spans.onset_drop_db``,
+  ``taxonomy.voice_min_duration_s``. A key the code never reads does nothing, so a new one is refused.
+* A **data** mapping's keys are values the caller supplies — a HeAR label, a hint tag, a vocal task,
+  a kind. Refusing a new one refuses the configuration's whole purpose: a campaign screening for
+  sneezes could not add ``airway.confirmation_map.Sneeze`` without editing the installed package.
+
+The data mappings are named explicitly in :data:`DATA_MAP_PATHS` rather than detected by shape. A
+structural rule — "a dict whose values are not dicts" — matches almost every leaf section in the
+packaged file, so it would exempt the schema along with the data and refuse nothing at all.
 """
 
 from __future__ import annotations
@@ -19,6 +33,26 @@ import yaml  # type: ignore[import-untyped]
 _DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
 _OPEN_QUESTIONS = "specs/20260817-triage-workflow-dag/benchmarks/open.md"
 _ABSENT = object()
+
+DATA_MAP_PATHS = frozenset(
+    {
+        "airway.confirmation_map",
+        "airway.k_db_by_task",
+        "routing.hint_kind_map",
+        "spans.k_db",
+        "voice.f0_range_by_population",
+        "voice.task_duration_ranges",
+        "windows.ast.label_thresholds",
+        "windows.hear.label_thresholds",
+        "windows.yamnet.label_thresholds",
+    }
+)
+"""Dotted paths whose mapping is keyed by data, so an override may add entries to it.
+
+Every other mapping is schema and an override may only change keys it already has. Renaming one of
+these paths without updating this set silently returns it to the schema rule; ``config_test`` pins
+each path's existence against the packaged file.
+"""
 
 
 @dataclass(frozen=True)
@@ -87,11 +121,28 @@ class TriageConfig:
 
 
 def _merge(base: dict[str, Any], over: dict[str, Any], trail: str = "") -> dict[str, Any]:
+    """Deep-merge one override mapping over the packaged one.
+
+    Args:
+        base: The packaged mapping at this level.
+        over: The override mapping at this level.
+        trail: The dotted path of this level, for the message and for the data-map lookup.
+
+    Returns:
+        The merged mapping.
+
+    Raises:
+        ValueError: If the override names a key the packaged mapping does not have, outside a path
+            in :data:`DATA_MAP_PATHS`.
+    """
     out = deepcopy(base)
     for key, value in over.items():
         where = f"{trail}.{key}" if trail else key
         if key not in out:
             raise ValueError(f"unknown configuration key {where!r}; overrides may not introduce keys")
+        if where in DATA_MAP_PATHS and isinstance(value, dict):
+            out[key] = {**out[key], **deepcopy(value)} if isinstance(out[key], dict) else deepcopy(value)
+            continue
         if isinstance(value, dict) and isinstance(out[key], dict):
             out[key] = _merge(out[key], value, where)
         else:
@@ -104,13 +155,15 @@ def load_triage_config(override: str | Path | None = None) -> TriageConfig:
 
     Args:
         override: Path to a partial YAML. Its keys must already exist in the packaged file — a typo
-            is refused rather than silently ignored.
+            is refused rather than silently ignored — except inside a mapping named in
+            :data:`DATA_MAP_PATHS`, whose keys are data and where an override may add entries.
 
     Returns:
         The resolved configuration, carrying the hash of the merged mapping.
 
     Raises:
-        ValueError: If the override introduces a key the packaged file does not have.
+        ValueError: If the override introduces a key the packaged file does not have, outside a
+            data mapping.
     """
     values = yaml.safe_load(_DEFAULT.read_text())
     if override is not None:

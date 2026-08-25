@@ -9,7 +9,7 @@ import pytest
 
 import senselab.audio.tasks
 from senselab.audio.tasks.health_acoustics.hear import HEAR_WINDOW_SECONDS
-from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
 from senselab.text.tasks.pii_detection.api import default_detectors
 
 
@@ -122,6 +122,68 @@ class TestOverrides:
         override.write_text("spans:\n  onset_drpo_db: 12.0\n")
         with pytest.raises(ValueError, match="onset_drpo_db"):
             load_triage_config(override)
+
+
+class TestOverridesMayExtendADataMap:
+    """A schema key is a name the code reads; a data-map key is a value the data supplies."""
+
+    def test_a_new_confirmation_map_entry_is_accepted(self, tmp_path: Path) -> None:
+        """A campaign screening for sneezes must be able to say so without editing the package."""
+        override = tmp_path / "o.yaml"
+        override.write_text("airway:\n  confirmation_map:\n    Sneeze: [Sneeze]\n")
+        cfg = load_triage_config(override)
+        assert cfg.require("airway.confirmation_map")["Sneeze"] == ["Sneeze"]
+
+    def test_the_packaged_entries_survive_the_addition(self, tmp_path: Path) -> None:
+        """An additive override that silently dropped Cough would disable the branch it extended."""
+        override = tmp_path / "o.yaml"
+        override.write_text("airway:\n  confirmation_map:\n    Sneeze: [Sneeze]\n")
+        confirmation = load_triage_config(override).require("airway.confirmation_map")
+        assert confirmation["Cough"] == ["Cough"]
+        assert confirmation["Breathe"] == ["Breathing", "Sigh", "Gasp"]
+
+    def test_an_existing_entry_is_replaced_not_merged(self, tmp_path: Path) -> None:
+        """The value under a data-map key is data; two lists do not deep-merge into one."""
+        override = tmp_path / "o.yaml"
+        override.write_text("airway:\n  confirmation_map:\n    Breathe: [Breathing]\n")
+        assert load_triage_config(override).require("airway.confirmation_map")["Breathe"] == ["Breathing"]
+
+    def test_a_new_span_gate_kind_is_accepted(self, tmp_path: Path) -> None:
+        """``spans.k_db`` is keyed by kind, and a kind is data the caller supplies."""
+        override = tmp_path / "o.yaml"
+        override.write_text("spans:\n  k_db:\n    speech: 12.0\n")
+        cfg = load_triage_config(override)
+        assert cfg.require("spans.k_db") == {"airway": 18.0, "speech": 12.0}
+
+    def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
+        """The control: the paths that ship null must keep accepting the mapping that fills them."""
+        override = tmp_path / "o.yaml"
+        override.write_text("routing:\n  hint_kind_map:\n    cough: airway\n")
+        assert load_triage_config(override).require("routing.hint_kind_map") == {"cough": "airway"}
+
+    def test_a_schema_key_is_still_refused(self, tmp_path: Path) -> None:
+        """The whole point of the refusal: a section the code reads by name cannot grow a key."""
+        override = tmp_path / "o.yaml"
+        override.write_text("taxonomy:\n  nonsense: 1\n")
+        with pytest.raises(ValueError, match="nonsense"):
+            load_triage_config(override)
+
+    def test_a_schema_key_inside_a_section_holding_a_data_map_is_still_refused(self, tmp_path: Path) -> None:
+        """The exemption is the map, not the section it sits in."""
+        override = tmp_path / "o.yaml"
+        override.write_text("airway:\n  confirmatoin_map:\n    Sneeze: [Sneeze]\n")
+        with pytest.raises(ValueError, match="confirmatoin_map"):
+            load_triage_config(override)
+
+    def test_every_declared_data_map_path_exists_in_the_packaged_file(self) -> None:
+        """A path that has been renamed away would exempt nothing and refuse silently."""
+        cfg = load_triage_config()
+        for path in DATA_MAP_PATHS:
+            node: object = cfg.values
+            for part in path.split("."):
+                assert isinstance(node, dict) and part in node, f"{path} is not in the packaged config"
+                node = node[part]
+            assert node is None or isinstance(node, dict), f"{path} is neither null nor a mapping"
 
 
 _KEY_PATTERN = re.compile(r"`+([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)`+")
