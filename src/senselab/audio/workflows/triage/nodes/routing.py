@@ -83,8 +83,8 @@ def _declared_tags(hint: AudioHints | None) -> list[str]:
     return list(seen)
 
 
-def _map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list[str]], list[str]]:
-    """Sort the declared tags into the kinds they name and the ones that name nothing.
+def _map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
+    """Sort the declared tags into the kinds they name, the ones that name nothing, and the typos.
 
     Args:
         tags: The declared tags.
@@ -92,18 +92,23 @@ def _map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list
             ``casefold()``ed on both sides.
 
     Returns:
-        The tags per kind, and the tags with no entry in the map.
+        The tags per kind; the tags that reached no kind this graph screens, whether because the map
+        has no entry for them or because the entry names a kind that does not exist; and the map
+        entries whose value is not a kind, as ``{tag: value}``.
     """
     folded = {str(tag).casefold(): str(kind) for tag, kind in kind_map.items()}
     by_kind: dict[str, list[str]] = {}
     unmapped: list[str] = []
+    bad_values: dict[str, str] = {}
     for tag in tags:
         kind = folded.get(tag.casefold())
-        if kind is None:
-            unmapped.append(tag)
-        else:
-            by_kind.setdefault(kind, []).append(tag)
-    return by_kind, unmapped
+        if kind in BRANCH_FOR_KIND:
+            by_kind.setdefault(str(kind), []).append(tag)
+            continue
+        unmapped.append(tag)
+        if kind is not None:
+            bad_values[tag] = kind
+    return by_kind, unmapped, bad_values
 
 
 def _why(state: str, forced_by_hint: bool) -> str:
@@ -145,7 +150,9 @@ def routing(
         The branches that run, those that do not, those a hint forced, and whether the set is empty.
     """
     stream = source or _STREAM
-    tags_by_kind, unmapped = _map_tags(_declared_tags(hint), config.get("routing.hint_kind_map") or {})
+    tags_by_kind, unmapped, bad_values = _map_tags(
+        _declared_tags(hint), config.get("routing.hint_kind_map") or {}
+    )
     classified = _classifications(store)
 
     software = software_agent(store)
@@ -181,6 +188,7 @@ def routing(
                 "forced_by_hint": forced_by_hint,
                 "hint_tags": hint_tags,
                 "unmapped_tags": unmapped,
+                "bad_map_values": bad_values,
                 "why": _why(state, forced_by_hint),
                 "stream": stream,
             },
