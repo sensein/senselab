@@ -192,7 +192,7 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | key | what is owed |
 | --- | --- |
 | `windows.yamnet.default_threshold`, `.label_thresholds` | the score at which a YAMNet label is confident enough to enter a window's set; **null** until fitted |
-| `windows.ast.default_threshold`, `.label_thresholds`, `.hop_s` | the same for AST, and the hop between its frames; **null** until fitted. `.win_length_s` is **not** open: it ships 10.24 s by the owner's 10 s directive (analyze_audio's window notes do not govern triage). A recording shorter than the window yields one zero-padded window covering the whole file |
-| `windows.hear.default_threshold`, `.label_thresholds`, `.hop_s` | the same for HeAR; **null** until fitted on spans HeAR's 2 s input does not have to be padded to fill |
+| `windows.ast.default_threshold`, `.label_thresholds` | the same for AST; **null** until fitted. `.win_length_s` and `.hop_s` are **not** open: `.win_length_s` ships 10.24 s by the owner's 10 s directive (analyze_audio's window notes do not govern triage), and `.hop_s` ships 10.24 s, non-overlapping, because a null hop stopped AST running at all. A recording shorter than the window yields one zero-padded window covering the whole file |
+| `windows.hear.default_threshold`, `.label_thresholds` | the same for HeAR; **null** until fitted on spans HeAR's 2 s input does not have to be padded to fill. `.hop_s` is **not** open: it ships 2.0 s, non-overlapping, by the same ruling as AST's, and a fit on unpadded spans lands as an override |
 | `phonation_spans.*` continuity criterion and hangover | what opens and closes a sustained-phonation or glide span for voiced, unvoiced and mixed production; **null** until fitted |
 | `words.onomatopoeic_tokens` | the token set normalised into bracketed non-words; a vocabulary, owed a corpus it was drawn from |

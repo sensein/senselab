@@ -244,7 +244,9 @@ derivation: |
   deleted likewise: branch-speech.md replaces the aggregate-agreement flag with per-word recognizer
   membership, so there is no aggregate for a floor to gate.
 
-  phonation_spans -- preprocess.md's sustained-phonation and glide detector. Every parameter is null.
+  phonation_spans -- preprocess.md's sustained-phonation and glide detector. Its six criterion
+  parameters are null; the five described at the end of this paragraph -- hop_s, formant_max_hz,
+  max_formants, formant_window_s and formant_preemphasis_hz -- ship declared defaults.
   f0_stability_cents and formant_stability_hz are the two limbs of the continuity criterion (a frame
   continues a sustain when F0 moves less than the first across one hop, OR F1 and F2 both move less
   than the second); glide_min_excursion_cents is the monotone excursion separating a glide from drift;
