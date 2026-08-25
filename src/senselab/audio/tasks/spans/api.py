@@ -10,17 +10,21 @@ from scipy.signal import find_peaks
 
 @dataclass(frozen=True)
 class Span:
-    """A proposed span, carrying no label.
+    """One proposed span.
 
     Attributes:
         start: Onset in seconds.
         end: Offset in seconds.
-        peak_over_floor_db: How far the span's peak stood above the local floor.
+        peak_over_floor_db: The span's peak, referenced to the local floor.
+        merged_proposals: How many proposals this span absorbed. One for a span the merge rule left
+            alone — a span is its own proposal — so zero is never a valid value, and a span covering
+            several events is legible as one rather than indistinguishable from a single event.
     """
 
     start: float
     end: float
     peak_over_floor_db: float
+    merged_proposals: int = 1
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,7 @@ def propose_spans(
                 start=last.start,
                 end=max(last.end, span.end),
                 peak_over_floor_db=max(last.peak_over_floor_db, span.peak_over_floor_db),
+                merged_proposals=last.merged_proposals + span.merged_proposals,
             )
         else:
             merged.append(span)
