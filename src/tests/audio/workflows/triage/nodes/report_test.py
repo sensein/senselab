@@ -59,6 +59,21 @@ def _capture_panels(monkeypatch: pytest.MonkeyPatch) -> list[list[dict[str, Any]
     return captured
 
 
+def _capture_titles(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Record the title every aligned render is handed, without changing what it draws."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[str] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        captured.append(str(kwargs.get("title") or ""))
+        return real(audio, panels, **kwargs)
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
 def _stub_the_drawing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the aligned-panel render with a bare figure, to time the store-reading path alone."""
     from matplotlib import pyplot
@@ -981,3 +996,62 @@ class TestAnUnscannedTranscriptIsNotACleanOne:
         assert "[PERSON]" in text
         assert "alice" not in text
         assert "[unscanned]" not in text
+
+
+class TestTheTitleIsShort:
+    """The title carries the decision at a glance; the run id is provenance and belongs in the block."""
+
+    _RUN_ID = "sub-1f4ea26f_ses-D987B8B0_task-Respiration-and-cough-(v2)-Breath_20260825-123640"
+
+    def test_it_names_the_task_token_the_date_and_the_decision(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The four things a reader needs before anything else, and nothing else."""
+        titles = _capture_titles(monkeypatch)
+        store = ProvStore(run_id=self._RUN_ID)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert titles[0].startswith("task-Respiration-and-cough-(v2)-Breath · 2026-08-25")
+        assert "triage:" in titles[0] and "release:" in titles[0]
+
+    def test_the_full_run_id_is_not_in_the_title(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An unwrapped 70-character id across the top of the page is the objection this answers."""
+        titles = _capture_titles(monkeypatch)
+        store = ProvStore(run_id=self._RUN_ID)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert self._RUN_ID not in titles[0]
+
+    def test_the_full_run_id_and_the_path_are_in_the_block(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Dropping the id from the title must not drop it from the page."""
+        panels = _capture_panels(monkeypatch)
+        store = ProvStore(run_id=self._RUN_ID)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert self._RUN_ID in blocks
+        assert "file: streams/plain.wav" in blocks
+
+    def test_a_run_id_with_no_task_token_still_titles(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Not every corpus is BIDS-named; the title falls back to the stem rather than to nothing."""
+        titles = _capture_titles(monkeypatch)
+        store = ProvStore(run_id="recording-42_20260825-123640")
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert titles[0].startswith("recording-42 · 2026-08-25")
+
+    def test_a_long_line_is_wrapped_rather_than_run_off_the_page(self, tmp_path: Path) -> None:
+        """A path wider than the block is text nobody can read; every block line is wrapped."""
+        from senselab.audio.workflows.triage.nodes.report import _BLOCK_COLUMNS, _wrapped
+
+        wrapped = _wrapped(["  file: " + "x" * 400])
+        assert len(wrapped) > 1
+        assert max(len(line) for line in wrapped) <= _BLOCK_COLUMNS
+
+    def test_wrapping_keeps_the_blank_lines_that_separate_the_blocks(self) -> None:
+        """An empty string wraps to nothing, and the blocks would run together if the pass let it."""
+        from senselab.audio.workflows.triage.nodes.report import _wrapped
+
+        assert _wrapped(["BRANCHES", "", "TAXONOMY"]) == ["BRANCHES", "", "TAXONOMY"]

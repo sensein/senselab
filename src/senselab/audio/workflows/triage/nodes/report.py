@@ -10,6 +10,7 @@ store, so they sit beside it and never under the release tree. The design is in
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -40,8 +41,12 @@ _UNKNOWN = "—"
 _UNSCANNED = "[unscanned]"
 _SHA_LENGTH = 40
 _BLOCK_COLUMNS = 168
+_TITLE_COLUMNS = 96
 _SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
+_TITLE_SEPARATOR = " · "
+_TASK_PREFIX = "task-"
+_RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
 
 _ABSENCE_BY_CLASS = {
     "ValueError": "unfitted (a config key it reads is null)",
@@ -757,6 +762,71 @@ def _provenance_line(provenance: dict[str, Any]) -> str:
     )
 
 
+def _run_label(run_id: str) -> str:
+    """The run's short label: the task token it names and the date it was made on.
+
+    The runner mints a run id as ``<file stem>_<utc stamp>``, and a corpus stem is BIDS-shaped often
+    enough to carry a ``task-`` entity. Neither is guaranteed, so each part is taken when it is there
+    and dropped when it is not.
+
+    Args:
+        run_id: The store's run id.
+
+    Returns:
+        ``"<task token> · <YYYY-MM-DD>"``, falling back to the stem when no ``task-`` entity is in it
+        and to the whole run id when no stamp is either.
+    """
+    tokens = run_id.split("_")
+    stamped = _RUN_STAMP.match(tokens[-1]) if tokens else None
+    stem = tokens[:-1] if stamped is not None else tokens
+    task = next((token for token in stem if token.startswith(_TASK_PREFIX)), None)
+    parts = [task or "_".join(stem) or run_id]
+    if stamped is not None:
+        parts.append("-".join(stamped.group(1, 2, 3)))
+    return _TITLE_SEPARATOR.join(parts)
+
+
+def _title(run_id: str, verdict: dict[str, Any]) -> str:
+    """The page's title: what was recorded, when, and what the graph decided about it.
+
+    Args:
+        run_id: The store's run id, read for its task token and its date.
+        verdict: :func:`_verdict`'s mapping.
+
+    Returns:
+        The title, wrapped over as many lines as it needs.
+    """
+    line = _TITLE_SEPARATOR.join(
+        (_run_label(run_id), f"triage: {_shown(verdict['triage'])}", f"release: {_shown(verdict['release'])}")
+    )
+    return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
+
+
+def _wrapped(lines: Iterable[str]) -> list[str]:
+    """Every block line folded to the block width, keeping its indent and its blank separators.
+
+    Args:
+        lines: The block lines.
+
+    Returns:
+        The folded lines. A line that is blank, or already inside the width, is returned unchanged.
+    """
+    out: list[str] = []
+    for line in lines:
+        if not line.strip() or len(line) <= _BLOCK_COLUMNS:
+            out.append(line)
+            continue
+        indent = " " * (len(line) - len(line.lstrip(" ")) + 2)
+        out += textwrap.wrap(
+            line,
+            width=_BLOCK_COLUMNS,
+            subsequent_indent=indent,
+            break_long_words=True,
+            break_on_hyphens=False,
+        )
+    return out
+
+
 def _ran_line(verdict: dict[str, Any]) -> str:
     """One line saying what each node did, so a node that raised is not read as one never asked.
 
@@ -788,7 +858,8 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
         provenance: :func:`_provenance`'s mapping, summarised onto one line.
 
     Returns:
-        The lines, in report.md's order: the file and its provenance, what ran, the branch decisions
+        The lines, folded to the block width, in report.md's order: the run id, the file and its
+        provenance, what ran, the branch decisions
         with each branch's conclusion, flags and measurements, TAXONOMY's classification beside the
         resolved kinds and the hint reading for each, the top categories, the spans, what was NOT
         drawn and why, the transcript, and the verdict — with REDACT's outcome shown whatever the
@@ -799,8 +870,10 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
     lines: list[str] = []
 
     described = _file(store)
+    lines.append(f"run: {_shown(provenance['run_id'])}")
+    lines.append(f"file: {_shown(described['path'])}")
     lines.append(
-        f"file: {_shown(described['path'])}  duration: {_shown(described['duration_s'])} s  "
+        f"duration: {_shown(described['duration_s'])} s  "
         f"rate: {_shown(described['sample_rate'])} Hz  channels: {_shown(described['channels'])}"
     )
     lines.append(_provenance_line(provenance))
@@ -912,7 +985,7 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
         )
     if not (verdict.get("reasons") or []):
         lines.append("  no node contributed a reason")
-    return lines
+    return _wrapped(lines)
 
 
 def report(
@@ -962,7 +1035,7 @@ def report(
     json_path = summary_dir / f"{SUMMARY_STEM}.json"
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
-    title = f"triage: {_shown(verdict['triage'])}   ·   release: {_shown(verdict['release'])}   ·   run {store.run_id}"
+    title = _title(store.run_id, verdict)
     summary_path = summary_dir / f"{SUMMARY_STEM}.{fmt}"
     try:
         _render(store, marks, resolved_run_dir, config, provenance, title, summary_path)
