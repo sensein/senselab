@@ -21,6 +21,7 @@ from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.common import NodeResult
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.redact import redact
+from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.nodes.verdict import verdict
@@ -28,7 +29,9 @@ from senselab.audio.workflows.triage.nodes.voice import voice
 from senselab.audio.workflows.triage.vocabulary import FileVerdict, NodeVerdict, Outcome, RunState
 from senselab.utils.prov_store import ProvStore
 
-GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+
+_BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 
 STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
@@ -161,6 +164,18 @@ def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]
     return result
 
 
+def _speech_found_pii(store: ProvStore) -> bool:
+    """Whether SPEECH's scan over the consensus transcript found anything.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        True when at least one live ``pii`` entity is in the store.
+    """
+    return bool([finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)])
+
+
 def _drive_branches(
     store: ProvStore,
     audio: Audio,
@@ -170,12 +185,14 @@ def _drive_branches(
     run_dir: Path,
     artifacts_dir: Path,
     outcomes: dict[str, NodeOutcome],
+    enrollment: Any | None,  # noqa: ANN401
 ) -> dict[str, Path]:
-    """Run everything ADMIT admitted, in graph order, over one store.
+    """Run PREPROCESS, TAXONOMY and routing, then exactly the branches routing selected.
 
-    Every node reads the store rather than a predecessor's return value, so a node that raised does
-    not skip its successors: they see the absence and say so. REDACT runs after SPEECH has concluded,
-    whatever it concluded, and VOICE runs regardless of what SPEECH did.
+    A branch routing declined is recorded ``SKIPPED`` and never called, which is what lets VERDICT
+    tell a branch that found nothing from a branch that never looked. A branch that raises is still
+    recorded ``ERRORED`` and its siblings still run: none of them reads another's output. REDACT is a
+    step of SPEECH and runs only when SPEECH ran and its scan found PII.
 
     Args:
         store: The provenance store, already holding ADMIT's ``recording`` stream.
@@ -185,21 +202,37 @@ def _drive_branches(
         run_dir: The run directory sidecar paths are relative to.
         artifacts_dir: The release directory handed to REDACT.
         outcomes: The per-node record each call is added to.
+        enrollment: The target speaker's enrollment, when the caller supplied one.
 
     Returns:
         REDACT's released pair, empty unless it cleared one.
     """
     _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
-    _attempt(outcomes, "AIRWAY", lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
-    _attempt(outcomes, "SPEECH", lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
-    _attempt(outcomes, "VOICE", lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
-    redacted = _attempt(
-        outcomes,
-        "REDACT",
-        lambda: redact(store, _SOURCE_STREAM, config, hint, run_dir=run_dir, artifacts_dir=artifacts_dir),
-    )
-    return dict(redacted.artifacts) if redacted is not None else {}
+    routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
+    selected = set(routed.runs) if routed is not None else set(_BRANCHES)
+    branches: dict[str, Callable[[], NodeResult]] = {
+        "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+        # ``enrollment`` is sibling T4's addition to speech; the call leads it.
+        "SPEECH": lambda: speech(  # type: ignore[call-arg]
+            store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment
+        ),
+        "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
+    }
+    for branch in _BRANCHES:
+        if branch in selected:
+            _attempt(outcomes, branch, branches[branch])
+        else:
+            outcomes[branch] = NodeOutcome(node=branch, state=RunState.SKIPPED)
+    if "SPEECH" in selected and _speech_found_pii(store):
+        redacted = _attempt(
+            outcomes,
+            "REDACT",
+            lambda: redact(store, _SOURCE_STREAM, config, hint, run_dir=run_dir, artifacts_dir=artifacts_dir),
+        )
+        return dict(redacted.artifacts) if redacted is not None else {}
+    outcomes["REDACT"] = NodeOutcome(node="REDACT", state=RunState.SKIPPED)
+    return {}
 
 
 def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRunResult) -> None:
@@ -231,6 +264,7 @@ def run_triage(
     out_dir: Path,
     config: TriageConfig,
     hint: AudioHints | None = None,
+    enrollment: Any | None = None,  # noqa: ANN401
 ) -> TriageRunResult:
     """Triage one recording: the whole graph, one store, one fresh run directory.
 
@@ -245,6 +279,7 @@ def run_triage(
         out_dir: Where the run root is created.
         config: The triage configuration.
         hint: What the recording was declared to contain, if anything.
+        enrollment: The target speaker's enrollment, handed to SPEECH when the caller supplied one.
 
     Returns:
         The file verdict, the per-node outcomes and errors, the run's paths and REDACT's released
@@ -268,6 +303,7 @@ def run_triage(
             run_dir=layout.run_dir,
             artifacts_dir=layout.artifacts_dir,
             outcomes=outcomes,
+            enrollment=enrollment,
         )
     else:
         for node in GRAPH_ORDER[1:-1]:
