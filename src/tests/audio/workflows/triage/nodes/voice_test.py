@@ -121,7 +121,9 @@ def _seed_voice_store(
     """
     declared_hop_s = load_triage_config().require("phonation_spans.hop_s")
     if hop_s != declared_hop_s:
-        raise ValueError(f"hop_s {hop_s} is not phonation_spans.hop_s {declared_hop_s}; the store would be inconsistent")
+        raise ValueError(
+            f"hop_s {hop_s} is not phonation_spans.hop_s {declared_hop_s}; the store would be inconsistent"
+        )
     seed_preprocess_store.__wrapped__(tmp_path)(store, duration_s=_SEED_DURATION_S, phonation=phonation)
 
     agent = store.agent(agent_type="software", version="senselab test-seed")
@@ -160,9 +162,7 @@ def _stub_period_marks(monkeypatch: pytest.MonkeyPatch, *, marks: int) -> list[t
     """
     calls: list[tuple[float, float]] = []
 
-    def _marks(
-        audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float
-    ) -> list[PeriodMark]:
+    def _marks(audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float) -> list[PeriodMark]:
         calls.append((start_s, end_s))
         period = 1.0 / FAKE_F0
         return [PeriodMark(time_s=start_s + k * period, period_s=period, amplitude=0.1) for k in range(marks)]
@@ -197,9 +197,7 @@ class TestTheSubjectIsPreprocessesSpans:
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 2
 
-    def test_a_speech_span_removes_nothing(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
+    def test_a_speech_span_removes_nothing(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
         """branch-voice.md: 'Nothing another branch claimed is removed from this branch's subject'."""
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], speech_spans=[(0.0, 1.5)])
         voice(store, "plain", voice_config, run_dir=tmp_path)
@@ -242,9 +240,7 @@ class TestTheSubjectIsPreprocessesSpans:
 class TestProductionModes:
     """Voiced, unvoiced and mixed are all measured; an unvoiced span is not a failure."""
 
-    def test_an_unvoiced_span_is_measured(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
+    def test_an_unvoiced_span_is_measured(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
         """A disordered voice sustaining without periodicity is exactly what must be measured."""
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
         result = voice(store, "plain", voice_config, run_dir=tmp_path)
@@ -293,9 +289,7 @@ class TestMptRecoverableProducts:
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["longest_span_criterion"] == "f0_stability"
 
-    def test_phonation_s_totals_every_span(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
+    def test_phonation_s_totals_every_span(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
         """The total is over the spans, whatever their production mode."""
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 2.5, "unvoiced")])
         voice(store, "plain", voice_config, run_dir=tmp_path)
@@ -356,9 +350,7 @@ class TestTheHalfFrameTolerance:
         """The tolerance is one hop, not an open-ended slack."""
         hop_s = 0.01
         min_marks_s = 3.0 / 75.0
-        _seed_voice_store(
-            store, tmp_path, phonation=[(1.0, 1.0 + min_marks_s - 2 * hop_s, "voiced")], hop_s=hop_s
-        )
+        _seed_voice_store(store, tmp_path, phonation=[(1.0, 1.0 + min_marks_s - 2 * hop_s, "voiced")], hop_s=hop_s)
         calls = _stub_period_marks(monkeypatch, marks=4)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert calls == []
@@ -390,9 +382,7 @@ class TestTheF0RangeServesAPopulation:
         analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
         assert list(analyze.parameters["f0_range_hz"]) == [60.0, 250.0]
 
-    def test_a_vacuous_ratio_is_refused_before_the_store_is_touched(
-        self, store: ProvStore, tmp_path: Path
-    ) -> None:
+    def test_a_vacuous_ratio_is_refused_before_the_store_is_touched(self, store: ProvStore, tmp_path: Path) -> None:
         """A check that flags everything reports nothing, so it is refused rather than run and flagged."""
         config = _override(tmp_path, "voice:\n  f0_range_hz: [50, 800]\n  f0_range_ratio_max: 4.0\n")
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
@@ -401,9 +391,7 @@ class TestTheF0RangeServesAPopulation:
             voice(store, "plain", config, run_dir=tmp_path)
         assert len(store.entities()) == before
 
-    def test_a_null_ratio_refuses_nothing(
-        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
-    ) -> None:
+    def test_a_null_ratio_refuses_nothing(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
         """Nobody fixed the bound, so no configuration exceeds it."""
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is not Outcome.FAIL
