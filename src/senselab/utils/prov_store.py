@@ -275,6 +275,31 @@ class ProvStore:
         """Return activities, optionally of one node."""
         return [a for a in self._activities.values() if node is None or a.node == node]
 
+    def agents(self, agent_type: AGENT_TYPE | None = None) -> list[Agent]:
+        """Return agents, optionally of one type.
+
+        Args:
+            agent_type: ``"model"`` or ``"software"``, or None for every agent.
+
+        Returns:
+            The agents, in write order.
+        """
+        return [g for g in self._agents.values() if agent_type is None or g.agent_type == agent_type]
+
+    def associations_of(self, agent_id: str) -> list[str]:
+        """Return the activities an agent was associated with.
+
+        The inverse of :meth:`associated_with`, for a reader asking what one agent did rather than
+        who ran one activity.
+
+        Args:
+            agent_id: The agent's id.
+
+        Returns:
+            The activity ids, in the order the relations were recorded.
+        """
+        return [s for r, s, t in self._relations if r == "wasAssociatedWith" and t == agent_id]
+
     def _targets(self, relation: RELATION, source: str) -> list[str]:
         return [t for r, s, t in self._relations if r == relation and s == source]
 

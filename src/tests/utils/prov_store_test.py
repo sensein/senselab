@@ -137,6 +137,32 @@ class TestAgents:
         s.was_associated_with(act, a)
         assert s.associated_with(act) == [a]
 
+    def test_every_agent_is_enumerable_by_type(self) -> None:
+        """A reader collecting a run's model provenance must not have to know the ids in advance."""
+        s = _store()
+        model = s.agent(agent_type="model", model_id="google/hear", unresolved_reason="hub 503")
+        software = s.agent(agent_type="software", version="0.1.0")
+        assert [g.id for g in s.agents("model")] == [model]
+        assert [g.id for g in s.agents("software")] == [software]
+        assert {g.id for g in s.agents()} == {model, software}
+
+    def test_an_agent_names_the_activities_it_ran(self) -> None:
+        """The inverse of associated_with: what one agent did, rather than who ran one activity."""
+        s = _store()
+        a = s.agent(agent_type="model", model_id="google/hear", unresolved_reason="hub 503")
+        first = s.activity(node="PREPROCESS", step="hear", parameters={})
+        second = s.activity(node="PREPROCESS", step="hear_windows", parameters={})
+        s.was_associated_with(first, a)
+        s.was_associated_with(second, a)
+        assert s.associations_of(a) == [first, second]
+
+    def test_an_agent_that_ran_nothing_names_no_activity(self) -> None:
+        """An agent recorded but never associated reports no work, rather than every activity."""
+        s = _store()
+        a = s.agent(agent_type="software", version="0.1.0")
+        s.activity(node="PREPROCESS", step=None, parameters={})
+        assert s.associations_of(a) == []
+
 
 class TestInvalidation:
     """Withdrawal keeps the entity."""

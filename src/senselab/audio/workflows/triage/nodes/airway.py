@@ -6,7 +6,6 @@ than finding one, a contest must be co-located in the same HeAR window, and the 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -25,17 +24,6 @@ from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "AIRWAY"
-
-
-@dataclass(frozen=True)
-class AirwayResult(NodeResult):
-    """AIRWAY's result.
-
-    Attributes:
-        figure_path: Always None. REPORT renders the graph's figures; this branch draws none.
-    """
-
-    figure_path: Path | None
 
 
 def _hint_declares_airway(hint: AudioHints | None, labels_of_interest: list[str]) -> bool:
@@ -172,7 +160,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
     hint: AudioHints | None = None,
     *,
     run_dir: Path,
-) -> AirwayResult:
+) -> NodeResult:
     """Label, confirm and contest the spans PREPROCESS proposed at the airway K.
 
     Args:
@@ -238,7 +226,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
                 "flags": [why] if outcome is Outcome.FLAG else [],
             },
         )
-        return AirwayResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id, figure_path=None)
+        return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
 
     # Step 1 — HeAR confirms a span: the label is the labels_of_interest member the span's stored
     # windows carry. A span overlapping consensus words is transcribed content and is not offered.
@@ -437,4 +425,4 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         + ([flag_id] if flag_id else [])
         + [verdict_id]
     )
-    return AirwayResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id, figure_path=None)
+    return NodeResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id)

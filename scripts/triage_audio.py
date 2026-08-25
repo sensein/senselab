@@ -25,8 +25,11 @@ Layout under ``--out/<stem>_<utc-timestamp>/``:
     run/store.jsonl        the append-only provenance store: every node's measurements and verdicts
     run/streams/           the conditioned streams
     run/derivatives/       the sidecars measurements point at
-    run/figures/           the aligned figures
     run/run.json           the runner's own record: per-node run state, and any node that raised
+    summary/              REPORT's two products, on every file and every outcome: one page a reviewer
+                          reads and one JSON a consumer does. A sibling of ``run/`` and never inside
+                          ``released/``: both carry element ids, so both inherit the store's
+                          sensitivity
     released/             REDACT's released pair, when it cleared one — a sibling of ``run/``, never
                           inside it, so the store and the release directory cannot be swept by one
                           publish step
@@ -148,6 +151,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Run:    {result.run_dir}")
     print(f"Store:  {result.store_path}")
+    for name, product in result.summary.items():
+        print(f"Summary ({name}): {product}")
     for node, outcome in result.nodes.items():
         detail = outcome.verdict.outcome.value if outcome.verdict is not None else (outcome.error or "-")
         print(f"  {node:<11} {outcome.state.value:<10} {detail}")
