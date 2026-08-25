@@ -143,17 +143,27 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         duration_s: The streams' duration.
         yamnet_labels: One label list per YAMNet window, on a 0.96 s / 0.48 s grid. ``None`` writes no
             YAMNet measurement at all.
-        ast_labels: The same on a 0.96 s / 0.48 s grid, for AST.
-        hear_labels: The same on a 2 s / 1 s grid, for HeAR.
+        ast_labels: The same on the owner-directed 10.24 s / 10.24 s grid, for AST.
+        hear_labels: The same on a 2 s / 2 s grid, for HeAR.
+        scores_only: Classifiers for which only the ``<classifier>_scores`` record is written and the
+            threshold fold is left absent -- the state the **packaged config actually produces**,
+            where every threshold is null so the model ran but no label set exists. Without this a
+            test could not seed the shipped configuration's own store.
         words: The consensus words, as ``[text, ...]`` or ``[(text, (start, end)), ...]``. **An empty
             list still writes a ``consensus_transcript`` measurement carrying no words** — PREPROCESS
             fusing to nothing is not PREPROCESS never having run, and TAXONOMY's lexical line reads
             ``absent`` in the first case and ``unavailable`` in the second. ``None`` writes neither.
-        events: Bracketed or onomatopoeic non-words, same shapes as ``words``.
-        phonation: ``[(start, end, production), ...]`` phonation spans, plus the
+        events: Bracketed or onomatopoeic non-words, same shapes as ``words``. ``[]`` writes the
+            ``PREPROCESS``/``consensus`` activity and no event, so a reader can tell "the consensus
+            ran and produced no event" from "no consensus ran"; ``None`` writes neither.
+        phonation: ``[(start, end, production), ...]`` or ``[(start, end, production, member), ...]``
+            phonation spans -- ``member`` is ``"sustained"`` by default and ``"glide"`` gives the span
+            a direction and an excursion, which T5 and T6 both need. Written with the
             ``PREPROCESS``/``phonation_spans`` activity that says the pass ran. ``[]`` writes the
             activity and no spans; ``None`` writes neither, which is the ``unavailable`` case.
-        spans: ``[(start, end, peak_over_floor_db), ...]`` envelope spans at ``span_k_db``.
+        spans: ``[(start, end, peak_over_floor_db), ...]`` envelope spans at ``span_k_db``. ``[]``
+            writes the ``PREPROCESS``/``spans`` activity and no span -- the spans pass ran and
+            proposed nothing -- while ``None`` writes neither.
         span_k_db: The ``k_db`` those spans were proposed at.
         span_merged: The ``merged_proposals`` count every seeded envelope span carries.
         disruptions_file: Whether to write the file-level disruption measurement.
@@ -171,9 +181,10 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         yamnet_labels: list[list[str]] | None = None,
         ast_labels: list[list[str]] | None = None,
         hear_labels: list[list[str]] | None = None,
+        scores_only: tuple[str, ...] = (),
         words: list[Any] | None = None,
         events: list[Any] | None = None,
-        phonation: list[tuple[float, float, str]] | None = None,
+        phonation: list[tuple[Any, ...]] | None = None,
         spans: list[tuple[float, float, float]] | None = None,
         span_k_db: float = 18.0,
         span_merged: int = 1,
@@ -211,10 +222,25 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
 
         for classifier, labels, win_s, hop_s in (
             ("yamnet", yamnet_labels, 0.96, 0.48),
-            ("ast", ast_labels, 0.96, 0.48),
-            ("hear", hear_labels, 2.0, 1.0),
+            ("ast", ast_labels, 10.24, 10.24),
+            ("hear", hear_labels, 2.0, 2.0),
         ):
             if labels is None:
+                continue
+            _write(
+                "measurement",
+                None,
+                {
+                    "name": f"{classifier}_scores",
+                    "classifier": classifier,
+                    "signal": "plain",
+                    "path": f"derivatives/{classifier}_scores.json",
+                    "n_windows": len(labels),
+                    "win_length_s": win_s if labels else None,
+                    "hop_s": hop_s if labels else None,
+                },
+            )
+            if classifier in scores_only:
                 continue
             windows_by_label: dict[str, list[str]] = {}
             for start, end, members in _grid(labels, win_s, hop_s):
@@ -248,8 +274,10 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
                 },
             )
 
+        if words is not None or events is not None:
+            store.was_associated_with(store.activity(node="PREPROCESS", step="consensus", parameters={}), agent)
         event_ids: list[str] = []
-        for text, extent in _timed(list(events or []), duration_s):
+        for text, extent in _timed(list(events if events is not None else []), duration_s):
             event_ids.append(
                 _write(
                     "event",
@@ -306,28 +334,32 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
 
         if phonation is not None:
             store.was_associated_with(store.activity(node="PREPROCESS", step="phonation_spans", parameters={}), agent)
-            for start, end, production in phonation:
+            for entry in phonation:
+                start, end, production = entry[0], entry[1], entry[2]
+                member = entry[3] if len(entry) > 3 else "sustained"
                 _write(
                     "span",
                     (start, end),
                     {
                         "family": "phonation",
-                        "member": "sustained",
+                        "member": member,
                         "duration_s": end - start,
                         "production": production,
                         "voiced_fraction": 1.0 if production == "voiced" else 0.0,
                         "f0_median_hz": 200.0 if production == "voiced" else None,
                         "f0_start_hz": 200.0 if production == "voiced" else None,
                         "f0_end_hz": 200.0 if production == "voiced" else None,
-                        "glide_direction": None,
-                        "glide_extent_cents": None,
-                        "offset_criterion": "f0_stability",
+                        "glide_direction": "rising" if member == "glide" else None,
+                        "glide_extent_cents": 900.0 if member == "glide" else None,
+                        "offset_criterion": "monotonicity" if member == "glide" else "f0_stability",
                         "signal": "preemphasised",
                         "hop_s": 0.01,
                     },
                 )
 
-        for start, end, peak in spans or []:
+        if spans is not None:
+            store.was_associated_with(store.activity(node="PREPROCESS", step="spans", parameters={}), agent)
+        for start, end, peak in spans if spans is not None else []:
             _write(
                 "span",
                 (start, end),
