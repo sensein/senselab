@@ -238,6 +238,7 @@ def _seed_speech_store(
     words: Optional[list[str]] = None,
     word_extents: Optional[list[tuple[float, float]]] = None,
     events: Optional[list[str]] = None,
+    yamnet_labels: Optional[list[list[str]]] = None,
     speakers: int = 1,
     airway_labelled: Optional[list[tuple[float, float]]] = None,
     disruptions_file: bool = False,
@@ -251,6 +252,8 @@ def _seed_speech_store(
         words: The consensus word texts.
         word_extents: Extents overriding the layout ``speakers`` would have produced.
         events: Bracketed or onomatopoeic non-words.
+        yamnet_labels: One retained label set per YAMNet window, on the shared seeder's grid.
+            ``None`` writes no classification at all.
         speakers: How many equal parts of the word interval the words are laid out across, so a
             diarizer splitting the interval into that many segments attributes each word to one.
         airway_labelled: Extents AIRWAY labelled, each with the PREPROCESS span it hangs off.
@@ -270,6 +273,7 @@ def _seed_speech_store(
         duration_s=duration_s,
         words=placed,
         events=list(events) if events is not None else None,
+        yamnet_labels=yamnet_labels,
         disruptions_file=disruptions_file,
     )
     _seed_level(store, tmp_path)
@@ -622,6 +626,71 @@ class TestItReadsTheConsensusAndReFusesNothing:
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert result.verdict.outcome is Outcome.FAIL
         assert find_measurement(store, "pii_scan") is None
+
+
+class TestTheSpeechFamilyIsAConfigKey:
+    """F4: ``taxonomy.speech_labels`` is null and owed the AudioSet speech FAMILY, not one member."""
+
+    def test_a_null_family_makes_the_vote_inert_and_records_that_it_is(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """No family is not a family of one: nothing can be disconfirmed against an unmeasured set."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Music"]] * 11)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert spans and all(span.attributes["yamnet_vote"] == "unavailable" for span in spans)
+        assert all(span.attributes["yamnet_coverage"] is None for span in spans)
+        flags = _verdict_entity(store, "SPEECH").attributes["flags"]
+        assert not [flag for flag in flags if "disconfirm" in flag], "an unmeasured family disconfirms nothing"
+
+    def test_the_family_the_config_names_is_the_family_that_votes(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A window carrying any member of the configured family confirms the span."""
+        config = _override(tmp_path, "taxonomy:\n  speech_labels: [Speech, 'Narration, monologue']\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Narration, monologue"]] * 11)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert spans and all(span.attributes["yamnet_vote"] == "confirm" for span in spans)
+        assert all(span.attributes["yamnet_coverage"] == 1.0 for span in spans)
+
+    def test_a_window_outside_the_family_disconfirms_and_flags(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other half: coverage below the threshold is a flag carrying the measure (F8l)."""
+        config = _override(tmp_path, "taxonomy:\n  speech_labels: [Speech, 'Narration, monologue']\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Music"]] * 11)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert spans and all(span.attributes["yamnet_vote"] == "disconfirm" for span in spans)
+        assert all(span.attributes["yamnet_coverage"] == 0.0 for span in spans)
+        assert result.verdict.outcome is Outcome.FLAG
+        assert [flag for flag in _verdict_entity(store, "SPEECH").attributes["flags"] if "speech coverage" in flag]
+
+    def test_a_span_no_window_overlaps_is_not_evaluated_rather_than_disconfirmed(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A family exists and the classifier saw nothing here; that is not evidence against."""
+        config = _override(tmp_path, "taxonomy:\n  speech_labels: [Speech]\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "speech"]
+        assert spans and all(span.attributes["yamnet_vote"] == "not_evaluated" for span in spans)
+
+    def test_the_activity_records_the_family_it_voted_with(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A vote whose label set is not recorded cannot be re-read against a later family."""
+        config = _override(tmp_path, "taxonomy:\n  speech_labels: [Speech, 'Narration, monologue']\n")
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], yamnet_labels=[["Speech"]] * 11)
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
+        (corroborate,) = [a for a in store.activities("SPEECH") if a.step == "corroborate"]
+        assert corroborate.parameters["speech_labels"] == ["Narration, monologue", "Speech"]
 
 
 class TestTheSecondDiarizerIsConditional:

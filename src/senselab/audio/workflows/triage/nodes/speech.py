@@ -51,7 +51,6 @@ ORIGINAL = "recording"  # the stream disruptions are measured on: as captured, u
 DIARIZER_ID = "pyannote/speaker-diarization-community-1"
 CLEARVOICE_ORG = "alibabasglab"
 UNASDIFF_BACKEND = "unasdiff"
-SPEECH_LABEL = "Speech"
 SEPARABLE_SOURCES = 2
 NONTARGET_LEGS = ("level_db", "tilt_db_per_octave", "d_to_r_db")
 
@@ -197,13 +196,14 @@ def _group_words_into_spans(words: list[Entity], gap_ms: float) -> list[tuple[fl
     return spans
 
 
-def _speech_coverage(windows: list[Entity], extent: tuple[float, float]) -> float | None:
-    """The fraction of overlapping classifier windows whose label set carries ``Speech`` (V3).
+def _speech_coverage(windows: list[Entity], extent: tuple[float, float], family: set[str]) -> float | None:
+    """The fraction of overlapping classifier windows whose label set meets the speech family (V3).
 
     Args:
         windows: The live ``yamnet_window`` measurements, each carrying the label set the
             threshold fold retained.
         extent: The span.
+        family: The AudioSet speech family from ``taxonomy.speech_labels``.
 
     Returns:
         The fraction, or None when no window overlaps the span.
@@ -211,7 +211,7 @@ def _speech_coverage(windows: list[Entity], extent: tuple[float, float]) -> floa
     overlapping = [w for w in windows if w.extent is not None and _overlaps(extent, w.extent)]
     if not overlapping:
         return None
-    carried = sum(1 for window in overlapping if SPEECH_LABEL in (window.attributes.get("labels") or []))
+    carried = sum(1 for window in overlapping if family & {str(label) for label in (window.attributes.get("labels") or [])})
     return carried / len(overlapping)
 
 
@@ -557,10 +557,15 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             for e in store.entities("measurement")
             if e.attributes.get("name") == "yamnet_window" and not store.is_invalidated(e.id)
         ]
+    speech_family = {str(label) for label in (config.get("taxonomy.speech_labels") or [])}
     corroborate = store.activity(
         node=NODE,
         step="corroborate",
-        parameters={"word_gap_ms": values["word_gap_ms"], "coverage_threshold": values["coverage_threshold"]},
+        parameters={
+            "word_gap_ms": values["word_gap_ms"],
+            "coverage_threshold": values["coverage_threshold"],
+            "speech_labels": sorted(speech_family) or None,
+        },
     )
     store.was_associated_with(corroborate, software)
     if fold is not None:
@@ -585,19 +590,21 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             squim = {"unmeasured": type(err).__name__}
         squim_by_span.append(squim)
 
-        coverage = _speech_coverage(classifier_windows, (start, end))
-        if coverage is None:
+        coverage = None if not speech_family else _speech_coverage(classifier_windows, (start, end), speech_family)
+        if not speech_family:
+            yamnet_vote = "unavailable"
+        elif coverage is None:
             yamnet_vote = "not_evaluated"
         else:
             yamnet_vote = "confirm" if coverage >= values["coverage_threshold"] else "disconfirm"
             if yamnet_vote == "disconfirm":
-                flags.append(f"the classifier disconfirms span {start:.2f}-{end:.2f}s (Speech coverage {coverage:.2f})")
+                flags.append(f"the classifier disconfirms span {start:.2f}-{end:.2f}s (speech coverage {coverage:.2f})")
         if stoi_floor is None or si_sdr_floor is None or "unmeasured" in squim:
             squim_vote = "not_evaluated"
         else:
             squim_ok = squim["stoi"] >= float(stoi_floor) and squim["si_sdr"] >= float(si_sdr_floor)
             squim_vote = "confirm" if squim_ok else "disconfirm"
-        if "not_evaluated" not in (yamnet_vote, squim_vote) and squim_vote != yamnet_vote:
+        if {yamnet_vote, squim_vote} <= {"confirm", "disconfirm"} and squim_vote != yamnet_vote:
             flags.append(
                 f"instruments disagree on span {start:.2f}-{end:.2f}s: classifier {yamnet_vote}, squim {squim_vote}"
             )
