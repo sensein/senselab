@@ -301,16 +301,23 @@ class TestMptRecoverableProducts:
     def test_a_declared_task_outside_its_range_flags_with_the_range_named(
         self, store: ProvStore, tmp_path: Path
     ) -> None:
-        """The task conditions how a duration is reported, never whether a span exists."""
+        """The task conditions how a duration is reported, never whether a span exists.
+
+        The range is ``voice_config``'s, not a wide one: at ratio 6.67 the 100 Hz fake is also
+        period-doubling ambiguous, and the flag it raises would satisfy an outcome assertion that
+        the task check never caused.
+        """
         config = _override(
             tmp_path,
-            "voice:\n  f0_range_hz: [75, 500]\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
+            "voice:\n  f0_range_hz: [75.0, 190.0]\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
         )
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
         hint = AudioHints(metadata={"task": "maximum_phonation_time"})
         result = voice(store, "plain", config, hint, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FLAG
         assert "10.0" in result.verdict.why and "40.0" in result.verdict.why
+        assert "period_doubling_alias" not in result.verdict.why
+        assert _verdict_entity(store, "VOICE").attributes["flags"] == [result.verdict.why]
 
     def test_a_null_task_range_leaves_the_row_inert(
         self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
