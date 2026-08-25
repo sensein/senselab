@@ -1,5 +1,21 @@
 # The triage DAG as a Nextflow workflow
 
+> **SUPERSEDED — kept as a record of what was executed, not as a description of the graph.**
+>
+> This prototype implements the **v1** design, including the residual fold that the v2 specs
+> retired: VOICE's subject here is what is left after SPEECH's spans and AIRWAY's labelled
+> intervals are subtracted, and its outcome table raises an absence to a `flag` when a hint
+> declares the kind. Neither is the graph any more — [`branch-voice.md`](../branch-voice.md)
+> makes PREPROCESS's phonation spans the subject and opens no span in the branch, and
+> [`verdict.md`](../verdict.md) puts the hint mismatch in VERDICT's fold, because a branch that
+> flags resolves its kind `present` and a branch with no subject may not do that.
+>
+> The **v2 specs in [`../`](..) govern**. What survives here is the measurement: Nextflow 26.04.6
+> was installed and the graph below was run, so the resumability, invalidation and stub-mode
+> figures in "What was actually verified" are real numbers about a real execution. The design
+> tensions section records what that execution taught, which is why the prototype is kept rather
+> than rewritten: re-running it against v2 would cost the very thing it is retained for.
+
 An executable expression of the design in [`../`](..) — nine processes over an append-only element
 store, with `-resume`, a stub mode that runs the whole graph without a model, and a hard separation
 between the sensitive store and the releasable derivative.
