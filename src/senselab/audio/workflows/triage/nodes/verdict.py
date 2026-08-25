@@ -14,7 +14,6 @@ from typing import Callable, Mapping, Sequence
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
-from senselab.audio.workflows.triage.nodes.routing import BRANCH_FOR_KIND, declared_tags, map_tags
 from senselab.audio.workflows.triage.vocabulary import (
     BranchDecision,
     FileVerdict,
@@ -28,8 +27,6 @@ from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 NODE = "VERDICT"
 
 _GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT")
-
-_HINT_KIND_MAP = "routing.hint_kind_map"
 
 
 @dataclass(frozen=True)
@@ -144,24 +141,32 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
             will_run=bool(entity.attributes["will_run"]),
             kind_state=str(entity.attributes["kind_state"]),
             forced_by_hint=bool(entity.attributes["forced_by_hint"]),
+            hint_tags=tuple(str(tag) for tag in entity.attributes.get("hint_tags") or ()),
         )
         ids.append(entity.id)
     return decisions, ids
 
 
-def _hint_claims(config: TriageConfig, hint: AudioHints | None) -> dict[str, bool]:
-    """Which kinds the caller's declaration claimed, read through ROUTING's own map.
+def _hint_claims(decisions: Mapping[str, BranchDecision], hint: AudioHints | None) -> dict[str, bool] | None:
+    """Which kinds the caller's declaration claimed, read off ROUTING's own record of reading it.
+
+    ROUTING resolved the declaration against ``routing.hint_kind_map`` and wrote the tags naming each
+    branch's kind onto that branch's decision. Reading them back is what makes the tag that forced a
+    branch the same tag that names a mismatch: a second resolution here could disagree with the first
+    whenever the config or the hint handed to the two nodes differ.
 
     Args:
-        config: The triage configuration, read for ``routing.hint_kind_map``.
+        decisions: ROUTING's decisions, as read from the store.
         hint: What the recording was declared to contain, if anything.
 
     Returns:
-        True per claimed kind; a kind no declared tag reaches is simply absent from the mapping, and
-        the fold reads a missing kind as unclaimed.
+        True per claimed kind; a kind no declared tag reached is simply absent. None when a
+        declaration was supplied and no decision survived to say what ROUTING made of it — the claims
+        are then unknown, which is not the same as no claim.
     """
-    tags_by_kind, _, _ = map_tags(declared_tags(hint), config.get(_HINT_KIND_MAP) or {})
-    return {kind: True for kind in BRANCH_FOR_KIND if tags_by_kind.get(kind)}
+    if hint is not None and not decisions:
+        return None
+    return {decision.kind: True for decision in decisions.values() if decision.hint_tags}
 
 
 def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
@@ -199,8 +204,9 @@ def verdict(
             ``branch_decision`` entities and TAXONOMY's ``kind`` entities. This node reads nothing
             else.
         source: Accepted for the shared node shape; not read.
-        config: The triage configuration, named in the activity by its hash and read for
-            ``routing.hint_kind_map``. VERDICT has no thresholds.
+        config: The triage configuration, named in the activity by its hash. VERDICT has no
+            thresholds and reads no key: the hint was already resolved by ROUTING, and this node
+            reads that resolution rather than repeating it.
         hint: What the recording was declared to contain. Read for branch mismatch only: a hint never
             resolves a kind and never turns a flag into a pass.
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
@@ -224,7 +230,7 @@ def verdict(
         screened=screened,
         branch_decisions=decisions,
         ran=resolved_ran,
-        hint_claims=_hint_claims(config, hint),
+        hint_claims=_hint_claims(decisions, hint),
     )
 
     software = software_agent(store)

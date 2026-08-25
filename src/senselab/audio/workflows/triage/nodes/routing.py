@@ -66,7 +66,7 @@ def _classifications(store: ProvStore) -> dict[str, Entity]:
     return latest
 
 
-def declared_tags(hint: AudioHints | None) -> list[str]:
+def _declared_tags(hint: AudioHints | None) -> list[str]:
     """Every tag the caller declared, from ``may_contain`` and the task's ``speech_type``.
 
     Args:
@@ -87,7 +87,7 @@ def declared_tags(hint: AudioHints | None) -> list[str]:
     return list(seen)
 
 
-def map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
+def _map_tags(tags: list[str], kind_map: dict[str, Any]) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
     """Sort the declared tags into the kinds they name, the ones that name nothing, and the typos.
 
     Args:
@@ -157,7 +157,7 @@ def routing(
         The branches that run, those that do not, those a hint forced, and whether the set is empty.
     """
     stream = source or _STREAM
-    tags_by_kind, unmapped, bad_values = map_tags(declared_tags(hint), config.get("routing.hint_kind_map") or {})
+    tags_by_kind, unmapped, bad_values = _map_tags(_declared_tags(hint), config.get("routing.hint_kind_map") or {})
     classified = _classifications(store)
 
     software = software_agent(store)

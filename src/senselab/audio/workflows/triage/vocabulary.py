@@ -67,6 +67,12 @@ NO_CLAIM = "no_claim"
 
 _ADMIT = "ADMIT"
 _REDACT = "REDACT"
+_VERDICT = "VERDICT"
+
+UNREAD_DECLARATION = (
+    "a declaration was supplied and no branch decision survived to read it against; "
+    "what it claimed is unknown, not empty"
+)
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,8 @@ class BranchDecision:
         will_run: Whether routing selected it.
         kind_state: What TAXONOMY classified, verbatim.
         forced_by_hint: Whether a hint added it.
+        hint_tags: The declared tags naming this branch's kind. Non-empty is a claim, whether or not
+            it changed the outcome.
     """
 
     branch: str
@@ -104,6 +112,7 @@ class BranchDecision:
     will_run: bool
     kind_state: str
     forced_by_hint: bool
+    hint_tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -227,7 +236,7 @@ def fold_file_verdict(
     screened: Mapping[str, str],
     branch_decisions: Mapping[str, BranchDecision],
     ran: Mapping[str, RunState],
-    hint_claims: Mapping[str, bool],
+    hint_claims: Mapping[str, bool] | None,
 ) -> FileVerdict:
     """Combine every node's verdict, the routing decisions and the classification into one file verdict.
 
@@ -241,7 +250,9 @@ def fold_file_verdict(
             ``uncertain``, which is the reading ROUTING already applies to a missing element.
         branch_decisions: What ROUTING decided per branch, keyed by branch name.
         ran: Whether each node ran, keyed by node name.
-        hint_claims: Which kinds the caller's declaration claimed, keyed by kind.
+        hint_claims: Which kinds the caller's declaration claimed, keyed by kind, or None when a
+            declaration was supplied and nothing in the store can say what it claimed. None
+            empties ``hints`` and flags, rather than reporting an unread declaration as no claim.
 
     Returns:
         The file verdict on both axes, carrying every contributing reason rather than only the
@@ -249,7 +260,8 @@ def fold_file_verdict(
     """
     by_kind = {verdict.kind: verdict for verdict in node_verdicts if verdict.kind is not None}
     decision_for_kind = {decision.kind: decision for decision in branch_decisions.values()}
-    kinds_seen = list(dict.fromkeys([*decision_for_kind, *screened, *by_kind, *hint_claims]))
+    claims = hint_claims or {}
+    kinds_seen = list(dict.fromkeys([*decision_for_kind, *screened, *by_kind, *claims]))
 
     classified: dict[str, str] = {}
     for kind in kinds_seen:
@@ -261,12 +273,18 @@ def fold_file_verdict(
             classified[kind] = KindState.UNCERTAIN.value
     resolved = {kind: _resolved(by_kind[kind].outcome) if kind in by_kind else classified[kind] for kind in kinds_seen}
     agreement = {kind: _agreement(classified[kind], by_kind.get(kind), resolved[kind]) for kind in kinds_seen}
-    hints = {
-        kind: _hint_reading(bool(hint_claims.get(kind, False)), resolved[kind] == KindState.PRESENT.value)
-        for kind in kinds_seen
-    }
+    hints = (
+        {}
+        if hint_claims is None
+        else {
+            kind: _hint_reading(bool(claims.get(kind, False)), resolved[kind] == KindState.PRESENT.value)
+            for kind in kinds_seen
+        }
+    )
 
     reasons = list(node_verdicts)
+    if hint_claims is None:
+        reasons.append(NodeVerdict(_VERDICT, Outcome.FLAG, None, UNREAD_DECLARATION))
     for kind in kinds_seen:
         decision = decision_for_kind.get(kind)
         verdict = by_kind.get(kind)
@@ -280,7 +298,7 @@ def fold_file_verdict(
             reasons.append(
                 NodeVerdict(node, Outcome.FLAG, kind, f"{node} was asked to run and {_silence(ran.get(node))}")
             )
-        if hints[kind] == CLAIMED_NOT_FOUND:
+        if hints.get(kind) == CLAIMED_NOT_FOUND:
             reasons.append(
                 NodeVerdict(node, Outcome.FLAG, kind, f"hint mismatch: {kind} was declared and {node} did not find it")
             )
