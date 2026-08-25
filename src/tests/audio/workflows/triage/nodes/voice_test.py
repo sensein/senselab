@@ -1,38 +1,40 @@
-"""VOICE — the residual fold, the two-condition gate, marks not contours. All else real.
+"""VOICE — the phonation spans PREPROCESS detected, measured. There is no residual.
 
-Praat is faked by default, for speed and platform independence; the boundary tests that pin where its
-own refusals lie put the real hnr_track, f0_track or period_marks back, since a fake cannot say where
-Praat draws that line.
+Praat is faked here: this module's subject is what VOICE does with a span it was handed, and the
+phonation task's own tests own where Praat's refusals lie. The spans are seeded directly, so no test
+here depends on ``propose_phonation_spans`` classifying anything.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Any
 
 import numpy as np
 import pytest
-import soundfile as sf
-import yaml  # type: ignore[import-untyped]
-from scipy.signal import butter, filtfilt
 
 import senselab.audio.workflows.triage.nodes.voice as voice_module
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.phonation import PeriodMark
-from senselab.audio.tasks.phonation import f0_track as real_f0_track
-from senselab.audio.tasks.phonation import hnr_track as real_hnr_track
-from senselab.audio.tasks.phonation import period_marks as real_period_marks
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes.common import find_measurements
+from senselab.audio.workflows.triage.nodes.voice import voice
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
+from tests.audio.workflows.triage.nodes.conftest import seed_preprocess_store
 
-FAKE_F0 = 220.0
+FAKE_F0 = 100.0
+"""The fake point process's rate. Chosen against ``voice_config``'s range so neither doubling alias
+lands inside it: 200 Hz is above its maximum and 50 Hz is below its minimum, which leaves the
+period-doubling row inert unless a test asks for a range that makes it fire."""
+
+_SEED_DURATION_S = 8.0
 
 
 def _fake_hnr_track(
     audio: Audio, *, f0_min_hz: float, hop_s: float, silence_threshold: float, periods_per_window: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """A constant 20 dB HNR track on the hop grid, spanning the sliced audio."""
+    """A constant 20 dB HNR track on the hop grid, spanning the audio."""
     n = int(round(audio.waveform.shape[-1] / audio.sampling_rate / hop_s))
     times = (np.arange(n) + 0.5) * hop_s
     return times, np.full(n, 20.0)
@@ -41,7 +43,7 @@ def _fake_hnr_track(
 def _fake_f0_track(
     audio: Audio, *, f0_min_hz: float, f0_max_hz: float, hop_s: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """A constant 220 Hz F0 track with constant strength, on the same hop grid."""
+    """A constant ``FAKE_F0`` track with constant strength, on the same hop grid."""
     n = int(round(audio.waveform.shape[-1] / audio.sampling_rate / hop_s))
     times = (np.arange(n) + 0.5) * hop_s
     return times, np.full(n, FAKE_F0), np.full(n, 0.9)
@@ -50,7 +52,7 @@ def _fake_f0_track(
 def _fake_period_marks(
     audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float
 ) -> list[PeriodMark]:
-    """Marks every 1/220 s inside the queried extent."""
+    """Marks every ``1 / FAKE_F0`` seconds inside the queried extent."""
     period = 1.0 / FAKE_F0
     times = np.arange(start_s, end_s - period, period)
     return [PeriodMark(time_s=float(t), period_s=period, amplitude=0.1) for t in times]
@@ -58,502 +60,394 @@ def _fake_period_marks(
 
 @pytest.fixture(autouse=True)
 def praat_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Praat is deterministic but slow and platform-sensitive; the phonation tests own the real calls.
-
-    The boundary tests below substitute the real functions back, because a fake cannot be the oracle
-    for where Praat's own refusal lies.
-    """
+    """Praat is deterministic but slow; the phonation task's tests own the real calls."""
     monkeypatch.setattr(voice_module, "hnr_track", _fake_hnr_track)
     monkeypatch.setattr(voice_module, "f0_track", _fake_f0_track)
     monkeypatch.setattr(voice_module, "period_marks", _fake_period_marks)
 
 
-def _cfg(tmp_path: Path, **phonation: object) -> TriageConfig:
-    """An override supplying the four null phonation floors — fixtures for these tests, not recommendations."""
-    values: dict[str, object] = {"f0_min_hz": 150.0, "f0_max_hz": 400.0, "hnr_floor_db": 5.0, "rms_floor": 0.01}
-    values.update(phonation)
+@pytest.fixture
+def voice_config(tmp_path: Path) -> TriageConfig:
+    """The packaged configuration with one declared F0 range. A fixture, not a fit.
+
+    The packaged ``voice.f0_range_hz`` is null because no single range serves both a low adult male
+    fundamental and an infant voice; this states one so the branch can run.
+    """
+    return _override(tmp_path, "voice:\n  f0_range_hz: [75.0, 190.0]\n")
+
+
+def _override(tmp_path: Path, text: str) -> TriageConfig:
+    """The packaged configuration with one partial YAML deep-merged over it.
+
+    Args:
+        tmp_path: Where the override file is written.
+        text: The partial YAML.
+
+    Returns:
+        The merged configuration.
+    """
     path = tmp_path / "voice-override.yaml"
-    path.write_text(yaml.safe_dump({"phonation": values}))
+    path.write_text(text)
     return load_triage_config(path)
 
 
-def _voice_spans(store: ProvStore) -> list[Entity]:
-    """The voiced-run spans VOICE wrote, in time order."""
-    spans = [e for e in store.entities("span") if voice_module._generating_node(store, e.id) == "VOICE"]
-    return sorted(spans, key=lambda e: e.extent or (0.0, 0.0))
-
-
-def _marks_measurements(store: ProvStore) -> list[Entity]:
-    """VOICE's per-run period_marks measurements, in time order."""
-    found = [e for e in store.entities("measurement") if e.attributes.get("name") == "period_marks"]
-    return sorted(found, key=lambda e: e.extent or (0.0, 0.0))
-
-
-def test_packaged_config_refuses_and_the_store_is_untouched(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
+def _seed_voice_store(
+    store: ProvStore,
+    tmp_path: Path,
+    *,
+    phonation: list[tuple[Any, ...]],
+    speech_spans: list[tuple[float, float]] | None = None,
+    airway_labelled: list[tuple[float, float]] | None = None,
+    hop_s: float = 0.01,
 ) -> None:
-    """The gate cannot run ungated: the four phonation.* floors are null by design (N2)."""
-    seed_voice_store(store, energetic=((1.0, 2.0),))
-    before = store.fingerprint()
-    with pytest.raises(ValueError, match="phonation\\."):
-        voice_module.voice(store, "plain", load_triage_config(), run_dir=tmp_path)
-    assert store.fingerprint() == before
+    """Seed the store VOICE reads: PREPROCESS's streams and phonation spans, plus other branches' work.
 
+    The phonation spans go through the shared ``seed_preprocess_store``, so this module reads the one
+    span schema PREPROCESS actually writes rather than a private copy of it.
 
-def test_residual_subtracts_labelled_and_speech_but_not_unlabelled_spans(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """Energy minus airway-labelled minus speech; an unlabelled span is NOT excluded."""
-    seed_voice_store(
-        store,
-        energetic=((1.0, 2.0), (3.0, 4.0), (5.0, 6.0)),
-        airway_labelled=((1.0, 2.0),),
-        speech_spans=((3.0, 4.0),),
-        unlabelled_spans=((5.0, 6.0),),
-    )
-    voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    runs = _voice_spans(store)
-    assert runs, "the unlabelled region must yield a voiced run"
-    assert all(5.0 <= s <= 6.0 for r in runs for s in r.extent or ()), (
-        "only the unlabelled region survives the fold; unclaimed activity is exactly what VOICE is for"
-    )
+    Args:
+        store: The store to seed.
+        tmp_path: Where the seeded stream and sidecars are written.
+        phonation: ``[(start, end, production), ...]`` or ``[(start, end, production, member), ...]``.
+        speech_spans: SPEECH's spans, written by a ``SPEECH`` activity. Present only so a test can
+            show that they remove nothing.
+        airway_labelled: Spans AIRWAY labelled, each with its ``label`` assertion. Same purpose.
+        hop_s: The analysis grid PREPROCESS stated these spans on. VOICE reads the same grid from
+            ``phonation_spans.hop_s``, so a value the packaged configuration does not declare would
+            describe a store the configuration contradicts.
 
-
-def test_empty_residual_is_a_normal_fail(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """Every energetic interval belongs to another branch -> fail, with the verdict written."""
-    seed_voice_store(store, energetic=((1.0, 2.0),), airway_labelled=((1.0, 2.0),))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.FAIL
-    assert store.entities("verdict")
-
-
-def test_the_gate_is_an_and_from_both_sides(
-    seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """High HNR under the RMS floor is periodic room tone; high RMS under the HNR floor is noise.
-
-    Neither passes alone. The fixtures hold one condition and starve the other.
+    Raises:
+        ValueError: If ``hop_s`` is not the grid ``phonation_spans.hop_s`` declares.
     """
-    # Periodic room tone: the HNR fake reads 20 dB but the wav is quiet, so RMS starves.
-    quiet = ProvStore(run_id="gate-quiet")
-    seed_voice_store(quiet, energetic=((1.0, 2.0),), loud=())
-    result = voice_module.voice(quiet, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.FAIL
-    assert quiet.get_entity(result.verdict_entity_id).attributes["runs_n"] == 0
+    declared_hop_s = load_triage_config().require("phonation_spans.hop_s")
+    if hop_s != declared_hop_s:
+        raise ValueError(f"hop_s {hop_s} is not phonation_spans.hop_s {declared_hop_s}; the store would be inconsistent")
+    seed_preprocess_store.__wrapped__(tmp_path)(store, duration_s=_SEED_DURATION_S, phonation=phonation)
 
-    # Broadband noise: the wav is loud but the HNR fake reads below the floor.
-    noisy = ProvStore(run_id="gate-noisy")
-    seed_voice_store(noisy, energetic=((1.0, 2.0),))
-
-    def _noise_hnr(
-        audio: Audio, *, f0_min_hz: float, hop_s: float, silence_threshold: float, periods_per_window: float
-    ) -> tuple[np.ndarray, np.ndarray]:
-        times, hnr = _fake_hnr_track(
-            audio,
-            f0_min_hz=f0_min_hz,
-            hop_s=hop_s,
-            silence_threshold=silence_threshold,
-            periods_per_window=periods_per_window,
-        )
-        return times, np.full_like(hnr, -10.0)
-
-    monkeypatch.setattr(voice_module, "hnr_track", _noise_hnr)
-    result = voice_module.voice(noisy, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.FAIL
-    assert noisy.get_entity(result.verdict_entity_id).attributes["runs_n"] == 0
-
-    # Both held: the gate opens.
-    both = ProvStore(run_id="gate-both")
-    seed_voice_store(both, energetic=((1.0, 2.0),))
-    monkeypatch.setattr(voice_module, "hnr_track", _fake_hnr_track)
-    result = voice_module.voice(both, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.PASS
-    assert both.get_entity(result.verdict_entity_id).attributes["runs_n"] == 1
+    agent = store.agent(agent_type="software", version="senselab test-seed")
+    if speech_spans:
+        speech = store.activity(node="SPEECH", step="seed-voice", parameters={})
+        store.was_associated_with(speech, agent)
+        for start, end in speech_spans:
+            span_id = store.entity(prov_type="span", extent=(start, end), attributes={"source": "words"})
+            store.was_generated_by(span_id, speech)
+    if airway_labelled:
+        airway = store.activity(node="AIRWAY", step="seed-voice", parameters={})
+        store.was_associated_with(airway, agent)
+        for start, end in airway_labelled:
+            span_id = store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised", "merged_proposals": 1},
+            )
+            store.was_generated_by(span_id, airway)
+            label_id = store.entity(
+                prov_type="assertion", extent=(start, end), attributes={"verb": "label", "label": "Cough"}
+            )
+            store.was_generated_by(label_id, airway)
+            store.was_derived_from(label_id, span_id)
 
 
-def test_runs_are_elementary_never_merged(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A one-frame unvoiced gap yields two runs; nothing merges them."""
-    seed_voice_store(store, energetic=((1.0, 2.0),))
+def _stub_period_marks(monkeypatch: pytest.MonkeyPatch, *, marks: int) -> list[tuple[float, float]]:
+    """Replace the point process with a recorder returning a fixed number of marks.
 
-    def _dipping_hnr(
-        audio: Audio, *, f0_min_hz: float, hop_s: float, silence_threshold: float, periods_per_window: float
-    ) -> tuple[np.ndarray, np.ndarray]:
-        times, hnr = _fake_hnr_track(
-            audio,
-            f0_min_hz=f0_min_hz,
-            hop_s=hop_s,
-            silence_threshold=silence_threshold,
-            periods_per_window=periods_per_window,
-        )
-        hnr[int(np.argmin(np.abs(times - 1.5)))] = -10.0  # below the floor for exactly one frame mid-interval
-        return times, hnr
+    Args:
+        monkeypatch: The test's patcher.
+        marks: How many marks each call returns.
 
-    monkeypatch.setattr(voice_module, "hnr_track", _dipping_hnr)
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    assert store.get_entity(result.verdict_entity_id).attributes["runs_n"] == 2
-    first, second = _voice_spans(store)
-    assert first.attributes["offset_criterion"] == "hnr", "the first run stopped because HNR fell"
-    assert second.attributes["offset_criterion"] == "residual_end"
-
-
-def test_marks_are_absent_outside_runs_and_absent_is_not_zero(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """period_marks is queried per run only; absent is not zero (N23).
-
-    A markless gate-passing run records marks_n=0 with onset_kind='criterion', distinct from a run
-    nobody measured.
+    Returns:
+        The list the recorder appends each call's ``(start_s, end_s)`` to.
     """
-    seed_voice_store(store, energetic=((1.0, 2.0),))
     calls: list[tuple[float, float]] = []
 
-    def _markless(
+    def _marks(
         audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float
     ) -> list[PeriodMark]:
         calls.append((start_s, end_s))
-        return []
+        period = 1.0 / FAKE_F0
+        return [PeriodMark(time_s=start_s + k * period, period_s=period, amplitude=0.1) for k in range(marks)]
 
-    monkeypatch.setattr(voice_module, "period_marks", _markless)
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    (run,) = _voice_spans(store)
-    assert run.attributes["marks_n"] == 0
-    assert run.attributes["onset_kind"] == "criterion"
-    assert len(calls) == 1, "queried once per voiced run, never outside one"
-    start_s, end_s = calls[0]
-    assert 1.0 <= start_s < end_s <= 2.0, "queried only inside the residual interval"
-    (marks,) = _marks_measurements(store)
-    assert marks.attributes["marks"] == [], "measured and empty — absent, not zero, not unmeasured"
-    assert "f0_median_hz" not in store.get_entity(result.verdict_entity_id).attributes
+    monkeypatch.setattr(voice_module, "period_marks", _marks)
+    return calls
 
 
-def test_onset_is_a_period_and_offset_is_a_criterion(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """A marked run's span starts at its first mark; both edge kinds are named in the attributes."""
-    seed_voice_store(store, energetic=((1.0, 2.0),))
-    voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    (run,) = _voice_spans(store)
-    assert run.attributes["onset_kind"] == "period"
-    assert run.attributes["offset_kind"] == "criterion"
-    (marks,) = _marks_measurements(store)
-    assert marks.attributes["signal"] == "plain", "a measurement names the stream it was taken on"
-    first_mark_time = marks.attributes["marks"][0]["time_s"]
-    assert run.extent is not None and run.extent[0] == pytest.approx(first_mark_time)
-    assert run.attributes["offset_criterion"] in {"hnr", "rms", "both", "residual_end"}
-    assert run.attributes["offset_criterion"] == "residual_end", "this run ran into the interval's edge"
+def _verdict_entity(store: ProvStore, node: str) -> Entity:
+    """The verdict entity one node wrote."""
+    return next(e for e in store.entities("verdict") if e.attributes.get("node") == node)
 
 
-def test_period_doubling_alias_inside_the_range_flags(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """Median F0 * factor (or / factor) inside [f0_min, f0_max] -> ambiguous run, flagged (N21)."""
-    seed_voice_store(store, energetic=((1.0, 2.0),))
-    config = _cfg(tmp_path, f0_min_hz=100.0, f0_max_hz=500.0)  # marks at 220 Hz -> 440 also in range
-    result = voice_module.voice(store, "plain", config, run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.FLAG
-    assert store.get_entity(result.verdict_entity_id).attributes["ambiguous_runs_n"] == 1
+def _voice_spans(store: ProvStore) -> list[Entity]:
+    """The spans VOICE itself wrote, in time order — told from PREPROCESS's by generating activity."""
+    out = []
+    for entity in store.entities("span"):
+        activity_id = store.generated_by(entity.id)
+        if activity_id is not None and store.get_activity(activity_id).node == "VOICE":
+            out.append(entity)
+    return sorted(out, key=lambda entity: entity.extent or (0.0, 0.0))
 
 
-def test_gate_interval_flag_is_inert_while_unmeasured(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """phonation.*_interval keys are null: no near-edge flag fires; gate_interval: 'unmeasured' (N22)."""
-    seed_voice_store(store, energetic=((1.0, 2.0),))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["gate_interval"] == "unmeasured"
-    assert verdict.attributes["flags"] == []
-    assert result.verdict.outcome is Outcome.PASS
+class TestTheSubjectIsPreprocessesSpans:
+    """VOICE measures what PREPROCESS detected. Nothing is subtracted from anything."""
+
+    def test_the_spans_are_preprocesses_phonation_spans(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """spans_n is the count of phonation spans in the store, not of a residual."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced"), (2.0, 2.8, "voiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 2
+
+    def test_a_speech_span_removes_nothing(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """branch-voice.md: 'Nothing another branch claimed is removed from this branch's subject'."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], speech_spans=[(0.0, 1.5)])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 1
+
+    def test_an_airway_label_removes_nothing(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Nothing this branch measures is conditioned on what another branch concluded."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], airway_labelled=[(0.0, 1.5)])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 1
+
+    def test_the_module_computes_no_residual(self) -> None:
+        """The three residual helpers are deleted, not left unreachable."""
+        for name in ("_subtract_intervals", "_airway_labelled", "_speech_spans"):
+            assert not hasattr(voice_module, name)
+
+    def test_no_phonation_span_fails(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
+        """This path is reached only when a hint forced the branch, which routing gates on the same fact."""
+        _seed_voice_store(store, tmp_path, phonation=[])
+        assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is Outcome.FAIL
+
+    def test_the_kind_is_voice(self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path) -> None:
+        """voice_no_words is gone; VERDICT joins branch to kind on this string."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.kind == "voice"
+
+    def test_the_packaged_config_refuses_before_the_store_is_touched(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """No range is declared by default, and the branch does not invent a population to serve."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        before = len(store.entities())
+        with pytest.raises(ValueError, match="voice.f0_range_hz"):
+            voice(store, "plain", config, run_dir=tmp_path)
+        assert len(store.entities()) == before
 
 
-def test_hint_asserting_phonation_not_found_flags(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """hint.may_contain includes a voice.hint_tags tag and no run passes -> flag, not fail (N25)."""
-    seed_voice_store(store, energetic=((1.0, 2.0),), loud=())  # RMS starves: no run passes the gate
-    hint = AudioHints(may_contain=["phonation"])
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), hint, run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.FLAG
+class TestProductionModes:
+    """Voiced, unvoiced and mixed are all measured; an unvoiced span is not a failure."""
 
-    empty = ProvStore(run_id="hint-empty-residual")
-    seed_voice_store(empty, energetic=((1.0, 2.0),), airway_labelled=((1.0, 2.0),))
-    result = voice_module.voice(empty, "plain", _cfg(tmp_path), hint, run_dir=tmp_path)
-    assert result.verdict.outcome is Outcome.FLAG, "an empty residual under the hint is also a flag"
+    def test_an_unvoiced_span_is_measured(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A disordered voice sustaining without periodicity is exactly what must be measured."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        result = voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert result.verdict.outcome is not Outcome.FAIL
+        assert _verdict_entity(store, "VOICE").attributes["production"]["unvoiced"] == 1
 
+    def test_an_unvoiced_span_carries_no_period_marks(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Absent, not zero and not interpolated: its duration, formants and level are its measurement."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        marks = find_measurements(store, "period_marks")
+        assert marks and "n" not in marks[0].attributes
+        assert marks[0].attributes["unmeasured"] == "unvoiced_span"
 
-def test_tracks_are_sidecars_on_the_hop_and_measurements_carry_used(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """voice_tracks npz exists with hop_s recorded; the activity records what it read."""
-    ids = seed_voice_store(
-        store,
-        energetic=((1.0, 2.0),),
-        airway_labelled=((3.0, 3.5),),
-        speech_spans=((4.0, 4.5),),
-        silence_windows=[{"start": 0.0, "end": 7.0, "is_silence": False}],
-    )
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    (tracks,) = [e for e in store.entities("measurement") if e.attributes.get("name") == "voice_tracks"]
-    assert tracks.attributes["hop_s"] == 0.01
-    sidecar = np.load(tmp_path / tracks.attributes["path"])
-    assert {"times_s", "rms", "hnr_db", "f0_times_s", "f0_hz", "f0_strength"} <= set(sidecar.files)
-    assert len(sidecar["times_s"]) == len(sidecar["rms"]) == len(sidecar["hnr_db"])
-    assert np.allclose(np.diff(sidecar["times_s"]), 0.01), "the three tracks share the analysis hop"
-
-    activity_id = store.generated_by(result.verdict_entity_id)
-    assert activity_id is not None
-    used = set(store.uses_of(activity_id))
-    read = {ids["stream"], ids["envelope"], ids["silence"], ids["labels"][0], ids["labelled_spans"][0]}
-    read |= {ids["speech_spans"][0]}
-    assert read <= used, "every entity read — envelope, spans, labels, silence — carries a used edge"
+    def test_the_production_counts_are_reported(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The verdict's production block is a count per mode, as branch-voice.md's product names it."""
+        _seed_voice_store(
+            store,
+            tmp_path,
+            phonation=[(0.0, 1.0, "voiced"), (2.0, 3.0, "unvoiced"), (4.0, 5.0, "mixed")],
+        )
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["production"] == {"voiced": 1, "unvoiced": 1, "mixed": 1}
 
 
-@pytest.mark.parametrize(
-    ("f0_min_hz", "f0_max_hz", "expected"),
-    [
-        pytest.param(150.0, 500.0, True, id="only-the-times-factor-alias-in-range"),
-        pytest.param(100.0, 400.0, True, id="only-the-divided-by-factor-alias-in-range"),
-        pytest.param(100.0, 500.0, True, id="both-aliases-in-range"),
-        pytest.param(150.0, 400.0, False, id="neither-alias-in-range"),
-    ],
-)
-def test_alias_in_range_pins_each_clause(f0_min_hz: float, f0_max_hz: float, expected: bool) -> None:
-    """220 Hz with factor 2.0 aliases to 440 and 110; each clause is pinned alone and together (N21)."""
-    assert voice_module._alias_in_range(220.0, factor=2.0, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz) is expected
+class TestMptRecoverableProducts:
+    """longest_span_s and its criterion, so a task measurement is not reassembled from fragments."""
+
+    def test_longest_span_s_is_a_first_class_product(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The longest span's duration, reported directly."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 5.5, "voiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["longest_span_s"] == pytest.approx(3.5)
+
+    def test_the_criterion_that_closed_it_travels_with_it(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A duration without its offset criterion is not a maximum phonation time."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["longest_span_criterion"] == "f0_stability"
+
+    def test_phonation_s_totals_every_span(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The total is over the spans, whatever their production mode."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 2.5, "unvoiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "VOICE").attributes["phonation_s"] == pytest.approx(1.5)
+
+    def test_a_declared_task_outside_its_range_flags_with_the_range_named(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The task conditions how a duration is reported, never whether a span exists."""
+        config = _override(
+            tmp_path,
+            "voice:\n  f0_range_hz: [75, 500]\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
+        )
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
+        hint = AudioHints(metadata={"task": "maximum_phonation_time"})
+        result = voice(store, "plain", config, hint, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+        assert "10.0" in result.verdict.why and "40.0" in result.verdict.why
+
+    def test_a_null_task_range_leaves_the_row_inert(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Nobody derived a range, so no span is out of one."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
+        hint = AudioHints(metadata={"task": "maximum_phonation_time"})
+        result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
+        assert result.verdict.outcome is not Outcome.FLAG
+        assert _verdict_entity(store, "VOICE").attributes["task_range"] == "not_evaluated"
 
 
-def test_near_edge_flags_fire_when_both_intervals_are_supplied(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """Override-supplied [lo, hi] intervals arm the near-edge check (N22).
+class TestTheHalfFrameTolerance:
+    """A frame stands for a hop-wide interval centred on its time (V20)."""
 
-    A run whose gate values at onset fall inside is flagged per family, and the verdict records
-    gate_interval 'measured'.
-    """
-    seed_voice_store(store, energetic=((1.0, 2.0),))
-    config = _cfg(tmp_path, hnr_floor_interval_db=[0.0, 25.0], rms_floor_interval=[0.0, 1.0])
-    result = voice_module.voice(store, "plain", config, run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["gate_interval"] == "measured"
-    assert any(flag.startswith("near_gate_edge hnr") for flag in verdict.attributes["flags"])
-    assert any(flag.startswith("near_gate_edge rms") for flag in verdict.attributes["flags"])
-    assert result.verdict.outcome is Outcome.FLAG
+    def test_a_span_of_exactly_min_marks_s_is_measured(
+        self,
+        store: ProvStore,
+        voice_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without the tolerance this span reads one hop short and its marks are skipped."""
+        hop_s = 0.01
+        min_marks_s = 3.0 / 75.0
+        start, end = 1.0, 1.0 + min_marks_s - hop_s
+        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
+        calls = _stub_period_marks(monkeypatch, marks=4)
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert calls, "the frame-edge tolerance is one hop; this span reaches min_marks_s with it"
+        assert _verdict_entity(store, "VOICE").attributes["marks_skipped_short_n"] == 0
 
+    def test_a_span_one_hop_shorter_still_is_skipped(
+        self,
+        store: ProvStore,
+        voice_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The tolerance is one hop, not an open-ended slack."""
+        hop_s = 0.01
+        min_marks_s = 3.0 / 75.0
+        _seed_voice_store(
+            store, tmp_path, phonation=[(1.0, 1.0 + min_marks_s - 2 * hop_s, "voiced")], hop_s=hop_s
+        )
+        calls = _stub_period_marks(monkeypatch, marks=4)
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert calls == []
+        marks = find_measurements(store, "period_marks")
+        assert marks[0].attributes["unmeasured"] == "shorter_than_mark_window"
 
-def test_gate_interval_is_partial_when_exactly_one_interval_is_supplied(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path
-) -> None:
-    """Exactly one interval supplied -> gate_interval 'partial'; only that family's flag can fire (N22)."""
-    seed_voice_store(store, energetic=((1.0, 2.0),))
-    config = _cfg(tmp_path, hnr_floor_interval_db=[0.0, 25.0])
-    result = voice_module.voice(store, "plain", config, run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["gate_interval"] == "partial"
-    assert any(flag.startswith("near_gate_edge hnr") for flag in verdict.attributes["flags"])
-    assert not any(flag.startswith("near_gate_edge rms") for flag in verdict.attributes["flags"])
-
-
-def test_sub_window_residual_fragments_are_pruned_not_handed_to_praat(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The rolling floor fragments the residual; Praat refuses a segment shorter than its window.
-
-    The real tracks run here: a fragment shorter than ``periods_per_window / f0_min_hz`` reaches
-    Praat only if the node fails to prune it, and Praat's refusal is the defect this pins.
-    """
-    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
-    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
-    seed_voice_store(store, energetic=((1.0, 1.02), (2.0, 2.5)))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["short_intervals_n"] == 1, "the 20 ms fragment is pruned and counted"
-    assert all((r.extent or (0.0, 0.0))[0] >= 2.0 for r in _voice_spans(store)), "no run comes from the fragment"
-
-
-def test_a_residual_of_nothing_but_fragments_fails_and_says_so(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Every residual interval shorter than the window leaves nothing analysable, which is a fail."""
-    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
-    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
-    seed_voice_store(store, energetic=((1.0, 1.02), (2.0, 2.015)))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert result.verdict.outcome is Outcome.FAIL
-    assert verdict.attributes["short_intervals_n"] == 2
-    assert "shorter than the minimum analysable duration" in result.verdict.why
+    def test_the_tolerance_is_recorded_as_the_hop_not_a_constant(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The activity's parameters must show where the tolerance came from."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], hop_s=0.01)
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
+        assert analyze.parameters["frame_edge_tolerance_s"] == pytest.approx(0.01)
 
 
-@pytest.mark.parametrize("duration_ms", [30, 33, 36])
-def test_a_fragment_in_the_unguarded_band_is_pruned(
-    store: ProvStore,
-    seed_voice_store: Callable[..., dict],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    duration_ms: int,
-) -> None:
-    """Praat's harmonicity needs (periods_per_window + 1) / f0_min, not periods_per_window / f0_min.
+class TestTheF0RangeServesAPopulation:
+    """The range is declared, overridable per population, and a vacuous ratio is refused at load."""
 
-    At f0_min 150 Hz and 4.5 periods per window the two differ by a factor of 1.2222, and every
-    duration in [30 ms, 36.67 ms) sat inside that gap: long enough to survive a floor set at the
-    window, short enough for Praat to refuse. Real hnr_track and f0_track run, so the refusal is the
-    oracle rather than a fake standing in for it.
-    """
-    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
-    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
-    seed_voice_store(store, energetic=((1.0, 1.0 + duration_ms / 1000.0),))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["short_intervals_n"] == 1
-    assert _voice_spans(store) == []
-    assert result.verdict.outcome is Outcome.FAIL
+    def test_a_population_override_replaces_the_range(self, store: ProvStore, tmp_path: Path) -> None:
+        """Age and sex move the range; the hint names which population."""
+        config = _override(
+            tmp_path,
+            "voice:\n  f0_range_hz: [75, 500]\n  f0_range_by_population: {adult_male: [60, 250]}\n",
+        )
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        hint = AudioHints(metadata={"population": "adult_male"})
+        voice(store, "plain", config, hint, run_dir=tmp_path)
+        analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
+        assert list(analyze.parameters["f0_range_hz"]) == [60.0, 250.0]
 
+    def test_a_vacuous_ratio_is_refused_before_the_store_is_touched(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A check that flags everything reports nothing, so it is refused rather than run and flagged."""
+        config = _override(tmp_path, "voice:\n  f0_range_hz: [50, 800]\n  f0_range_ratio_max: 4.0\n")
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        before = len(store.entities())
+        with pytest.raises(ValueError, match="f0_range_ratio_max"):
+            voice(store, "plain", config, run_dir=tmp_path)
+        assert len(store.entities()) == before
 
-def test_a_fragment_just_over_the_praat_floor_is_analysed(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The other side of the boundary: 37 ms clears (periods_per_window + 1) / f0_min and is measured.
-
-    Without this the pruning could be tightened arbitrarily and still look correct.
-    """
-    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
-    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
-    seed_voice_store(store, energetic=((1.0, 1.037),))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["short_intervals_n"] == 0, "37 ms is above the floor and must be analysed"
-    assert verdict.attributes["runs_n"] >= 1, "a 220 Hz tone over the floor passes the gate"
+    def test_a_null_ratio_refuses_nothing(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Nobody fixed the bound, so no configuration exceeds it."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is not Outcome.FAIL
 
 
-def _gate_on_first_frames(n_frames: int) -> Callable[..., tuple[np.ndarray, np.ndarray]]:
-    """A whole-stream HNR track passing the gate on exactly the first ``n_frames`` frames.
+class TestEdgesAreNamedApart:
+    """The onset is a period where one exists; the offset is always a criterion."""
 
-    The gate is an AND over HNR and RMS, so shaping HNR is how a test builds a run of a chosen frame
-    count. The node measures the track once over the whole stream, so the run sits at the stream's
-    own frame origin and the residual interval these tests seed starts there too. It leaves
-    ``period_marks`` — the function under test here — real.
-    """
+    def test_a_span_with_marks_has_a_period_onset(
+        self,
+        store: ProvStore,
+        voice_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An observed event, named as one."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _stub_period_marks(monkeypatch, marks=6)
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        span = _voice_spans(store)[0]
+        assert span.attributes["onset_kind"] == "period"
+        assert span.attributes["offset_kind"] == "criterion"
 
-    def _track(
-        audio: Audio, *, f0_min_hz: float, hop_s: float, silence_threshold: float, periods_per_window: float
-    ) -> tuple[np.ndarray, np.ndarray]:
-        n = int(round(audio.waveform.shape[-1] / audio.sampling_rate / hop_s))
-        times = (np.arange(n) + 0.5) * hop_s
-        values = np.full(n, -100.0)
-        values[:n_frames] = 20.0
-        return times, values
+    def test_a_marked_span_reports_both_f0_keys(
+        self,
+        store: ProvStore,
+        voice_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two F0 values from two streams are two measurements, so the stream travels with the value."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _stub_period_marks(monkeypatch, marks=6)
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        detail = _verdict_entity(store, "VOICE").attributes
+        assert detail["f0_median_hz"] > 0.0
+        assert detail["f0_stream"] == "plain"
 
-    return _track
-
-
-@pytest.mark.parametrize("n_frames", [1, 2])
-def test_a_gate_run_shorter_than_the_mark_window_skips_marks_instead_of_raising(
-    store: ProvStore,
-    seed_voice_store: Callable[..., dict],
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    n_frames: int,
-) -> None:
-    """Praat's point process refuses a run shorter than 3 / f0_min; a gate run is frames, so short ones are ordinary.
-
-    A one-frame run spans zero seconds and a two-frame run one hop, both under the 20 ms the process
-    needs at f0_min 150 Hz. Real period_marks runs, because only it can say where its refusal is. A
-    skipped run records the skip, never a count of zero, which would claim a measurement nobody took.
-    """
-    monkeypatch.setattr(voice_module, "period_marks", real_period_marks)
-    monkeypatch.setattr(voice_module, "hnr_track", _gate_on_first_frames(n_frames))
-    seed_voice_store(store, energetic=((0.0, 0.3),))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["marks_skipped_short_n"] == 1
-    assert verdict.attributes["runs_n"] == 1, "the run is still a run; only its marks are unmeasured"
-    (run,) = _voice_spans(store)
-    assert run.attributes["marks_n"] is None, "not counted is not counted zero"
-    assert run.attributes["onset_kind"] == "criterion"
-    (marks,) = _marks_measurements(store)
-    assert marks.attributes["unmeasured"] == "shorter_than_mark_window"
-    assert "marks" not in marks.attributes, "no empty list to be mistaken for a measured absence"
-
-
-def test_a_gate_run_of_exactly_the_mark_window_is_measured_by_the_real_point_process(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The other side of the boundary: three frames span 20 ms, exactly 3 / f0_min, and are measured.
-
-    Without this the guard could be widened arbitrarily and still look correct.
-    """
-    monkeypatch.setattr(voice_module, "period_marks", real_period_marks)
-    monkeypatch.setattr(voice_module, "hnr_track", _gate_on_first_frames(3))
-    seed_voice_store(store, energetic=((0.0, 0.3),))
-    result = voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    verdict = store.get_entity(result.verdict_entity_id)
-    assert verdict.attributes["marks_skipped_short_n"] == 0
-    (marks,) = _marks_measurements(store)
-    assert marks.attributes["n"] > 0, "a 220 Hz tone over exactly the mark window has period marks"
-
-
-def _breath_and_phonation(sr: int, duration_s: float) -> np.ndarray:
-    """A quiet band-limited breath at 1-2 s and a loud 220 Hz phonation at 3-4 s.
-
-    The breath's band is 350-450 Hz, where the campaign's per-fragment reference reported its
-    spurious f0. Its amplitude is two orders below the phonation's, which is what puts Praat's
-    silence threshold on opposite sides of it depending on what the analysed Sound's maximum is.
-    """
-    rng = np.random.default_rng(11)
-    x = (rng.standard_normal(int(duration_s * sr)) * 1e-5).astype(np.float32)
-    b, a = butter(4, [350 / (sr / 2), 450 / (sr / 2)], btype="band")
-    i0, i1 = int(1.0 * sr), int(2.0 * sr)
-    breath = filtfilt(b, a, rng.standard_normal(i1 - i0))
-    x[i0:i1] += (breath / np.abs(breath).max() * 0.004).astype(np.float32)
-    j0, j1 = int(3.0 * sr), int(4.0 * sr)
-    t = np.arange(j1 - j0) / sr
-    x[j0:j1] += (0.3 * np.sin(2 * np.pi * 220.0 * t)).astype(np.float32)
-    return x
-
-
-def test_hnr_is_measured_once_on_the_whole_stream_not_renormalised_per_fragment(
-    store: ProvStore, seed_voice_store: Callable[..., dict], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Praat's silence threshold is relative to the Sound it is handed, so a fragment renormalises it.
-
-    Handed a quiet breath as its own Sound, the breath becomes that Sound's maximum and nearly every
-    frame is analysed and clears the HNR floor. Handed the whole stream, the same frames sit under
-    the threshold the loud phonation sets and read as silent. The node must report the second.
-    """
-    monkeypatch.setattr(voice_module, "hnr_track", real_hnr_track)
-    monkeypatch.setattr(voice_module, "f0_track", real_f0_track)
-    sr, duration_s, floor_db = 16000, 7.0, 5.0
-    seed_voice_store(store, energetic=((1.0, 2.0), (3.0, 4.0)), loud=((3.0, 4.0),), duration_s=duration_s)
-    wav = tmp_path / "streams" / f"plain-{store.run_id}.wav"
-    sf.write(str(wav), _breath_and_phonation(sr, duration_s), sr)
-
-    audio = Audio(filepath=str(wav))
-    praat: dict[str, float] = {
-        "f0_min_hz": 150.0,
-        "hop_s": 0.01,
-        "silence_threshold": 0.1,
-        "periods_per_window": 4.5,
-    }
-    whole_times, whole_hnr = real_hnr_track(audio, **praat)
-    breath_frames = (whole_times >= 1.0) & (whole_times < 2.0)
-    whole_fraction = float(np.mean(whole_hnr[breath_frames] >= floor_db))
-    fragment = Audio(waveform=audio.waveform[:, int(1.0 * sr) : int(2.0 * sr)], sampling_rate=sr)
-    _, fragment_hnr = real_hnr_track(fragment, **praat)
-    fragment_fraction = float(np.mean(fragment_hnr >= floor_db))
-    assert fragment_fraction > 0.9 > whole_fraction, "the fixture must actually exhibit the inflation"
-
-    voice_module.voice(store, "plain", _cfg(tmp_path), run_dir=tmp_path)
-    (tracks,) = [e for e in store.entities("measurement") if e.attributes.get("name") == "voice_tracks"]
-    sidecar = np.load(tmp_path / tracks.attributes["path"])
-    reported = sidecar["hnr_db"][(sidecar["times_s"] >= 1.0) & (sidecar["times_s"] < 2.0)]
-    assert reported.size > 0, "the breath interval is in the residual and must carry frames"
-    assert float(np.mean(reported >= floor_db)) == pytest.approx(whole_fraction), (
-        "the node's HNR over the breath must equal the whole-stream measurement, not the fragment's"
-    )
-    assert all((run.extent or (0.0, 0.0))[0] >= 3.0 for run in _voice_spans(store)), (
-        "no voiced run may come out of the breath"
-    )
+    def test_an_unmarked_span_reports_neither(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Absent for a span with no period marks, rather than estimated from one."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        detail = _verdict_entity(store, "VOICE").attributes
+        assert "f0_median_hz" not in detail
+        assert "f0_stream" not in detail
