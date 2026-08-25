@@ -41,11 +41,13 @@ class Enrollment(BaseModel):
         """
         return list(self.provenance.source_files)
 
-    def refusal_against(self, probe_model_id: str) -> str | None:
-        """Why this enrollment cannot be compared with a probe from ``probe_model_id``.
+    def refusal_against(self, probe_model_id: str, probe_commit: str | None) -> str | None:
+        """Why this enrollment cannot be compared with the probe named by model and commit.
 
         Args:
             probe_model_id: The embedding model the branch will run over the diarized speakers.
+            probe_commit: The resolved commit that model will be loaded at. A ref, or None, is
+                not a commit and is refused like a mismatched one.
 
         Returns:
             The refusal, in controlled vocabulary, or None when the enrollment is comparable.
@@ -56,6 +58,16 @@ class Enrollment(BaseModel):
             return (
                 f"the enrollment's model {self.provenance.model_id} is not the probe {probe_model_id}; "
                 "embeddings from different models are not comparable"
+            )
+        if probe_commit is None:
+            return (
+                f"the probe {probe_model_id} carries no resolved model commit; refused rather than "
+                "compared against an enrollment that names one"
+            )
+        if self.provenance.model_commit_sha != probe_commit:
+            return (
+                f"the enrollment was estimated at commit {self.provenance.model_commit_sha} and the "
+                f"probe resolves to {probe_commit}; two commits of one model are not comparable"
             )
         return None
 
