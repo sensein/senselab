@@ -770,6 +770,7 @@ class TestThePageCarriesItsOwnProvenanceAndRunState:
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "speaker_count=1" in blocks
+        assert "phonation_s=0.8" in blocks and "0.79999" not in blocks
         assert "words_n=5" in blocks
         assert "labelled_n=1" in blocks
         assert "redactions_n=1" in blocks

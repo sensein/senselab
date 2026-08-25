@@ -40,6 +40,7 @@ _UNKNOWN = "—"
 _UNSCANNED = "[unscanned]"
 _SHA_LENGTH = 40
 _BLOCK_COLUMNS = 168
+_SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
 
 _ABSENCE_BY_CLASS = {
@@ -624,14 +625,21 @@ def _file(store: ProvStore) -> dict[str, Any]:
 def _shown(value: Any) -> str:  # noqa: ANN401 — anything a store attribute can hold
     """One value as the page shows it: an em dash where the store holds nothing.
 
+    Only the rendering is rounded. Every figure the page shows is in the JSON at full precision, and
+    the JSON is what a consumer reads; "phonation_s: 11.979999999999999" on a page is a binary
+    float's repr leaking into a document a human is meant to judge the run by.
+
     Args:
         value: The value.
 
     Returns:
-        Its text, or ``"—"`` when it is None. A page reading "duration: None" is a Python repr
-        leaking into a document a reviewer is meant to judge the run by.
+        Its text, ``"—"`` when it is None, and a float rounded to four decimals.
     """
-    return _UNKNOWN if value is None else str(value)
+    if value is None:
+        return _UNKNOWN
+    if isinstance(value, float):
+        return str(round(value, _SHOWN_DECIMALS))
+    return str(value)
 
 
 def _absences(store: ProvStore) -> dict[str, tuple[str, str]]:
