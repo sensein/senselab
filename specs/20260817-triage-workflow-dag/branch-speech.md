@@ -332,6 +332,7 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | `speech.enrollment_model` | which speaker-embedding model and revision enrollment is estimated with; **null** until chosen against a measurement |
 | `speech.target_match_cosine` | the similarity at which a diarized speaker is the enrolled target; **null** |
 | `speech.separation_backend` | `unasdiff` in `speech_sound` mode or `MossFormer2_SS_16K`; **null** until the two are ranked on this corpus |
+| `speech.separation_sound_class` | **not owed a measurement — owed a capability.** `separate_audios` refuses `speech_sound` without a conditioning class for its sound slot ("index 0 is 'Hi-hat'"), so the unconditioned background this section describes is not expressible today. Settled by an unconditioned sound slot upstream, or by naming a defensible FSD class and saying why; **null** meanwhile, and the `unasdiff` option cannot run |
 | `speech.speech_test_stoi_floor`, `speech.speech_test_si_sdr_floor` | SQUIM floors estimated across speech-containing spans; **null** |
 | `speech.nontarget.level_db`, `.tilt_db_per_octave`, `.d_to_r_db` | the proximity leg's thresholds; **null** each, and `nontarget_speech_s` is null until all three exist |
 | `speech.word_gap_ms` | the gap that ends a speech span; **null** |
