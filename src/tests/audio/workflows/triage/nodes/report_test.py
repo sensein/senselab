@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError, report
@@ -744,6 +745,65 @@ class TestTheAbsentLanesAreOnThePage:
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "lane not drawn — yamnet labels: PREPROCESS/yamnet_windows unfitted" in blocks
         assert "yamnet.window_s is null" in blocks
+
+
+class TestTheHintReadingIsOnThePage:
+    """``verdict.hints`` reached the JSON and not the page, so a reader saw the flag and not its cause."""
+
+    def test_an_unclaimed_kind_reads_found_unclaimed(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With nothing declared, every kind the graph found is found and unclaimed, and says so."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "airway: screened=present resolved=present agreement=agree hint=found_unclaimed" in blocks
+
+    def test_a_declared_kind_no_branch_found_reads_claimed_not_found(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The reason line names the mismatch; the kind line must agree with it rather than omit it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        software = software_agent(store)
+        supersede = store.activity(node="routing", step="declare", parameters={})
+        store.was_associated_with(supersede, software)
+        decision = store.entity(
+            prov_type="branch_decision",
+            extent=None,
+            attributes={
+                "branch": "AIRWAY",
+                "kind": "airway",
+                "will_run": True,
+                "kind_state": "present",
+                "raw_state": "present",
+                "forced_by_hint": False,
+                "hint_tags": ["cough"],
+                "unmapped_tags": [],
+                "bad_map_values": {},
+                "why": "kind_present",
+                "stream": "plain",
+            },
+        )
+        store.was_generated_by(decision, supersede)
+        refuted = store.activity(node="AIRWAY", step="reclassify", parameters={})
+        store.was_associated_with(refuted, software)
+        write_verdict(
+            store,
+            refuted,
+            software,
+            node="AIRWAY",
+            outcome=Outcome.FAIL,
+            kind="airway",
+            why="spans exist but none carries a label of interest",
+            detail={},
+        )
+        fold_verdict(store, None, load_triage_config(), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "airway: screened=present resolved=absent agreement=mismatch hint=claimed_not_found" in blocks
 
     def test_a_lane_the_page_did_not_draw_is_named_with_its_reason(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -43,7 +43,8 @@ Beside the axis, one block per step:
 - **which branches ran, which were skipped, and which a hint forced** — the `branch_decision`
   elements;
 - **each branch's conclusion and its flags**;
-- **TAXONOMY's classification beside the resolved kinds**, with the per-kind agreement or mismatch;
+- **TAXONOMY's classification beside the resolved kinds**, with the per-kind agreement or mismatch
+  and the per-kind hint reading — the row of verdict.md's hint table this kind fell on;
 - **the verdict**: `triage`, `release`, and every reason, with a REDACT non-pass shown whatever the
   triage axis says.
 
