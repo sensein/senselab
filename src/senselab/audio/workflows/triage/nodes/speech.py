@@ -227,24 +227,34 @@ def _norm_token(token: str) -> str:
     return token.casefold().strip(".,;:!?\"'()[]{}")
 
 
-def _locate(finding_text: str, words: list[Entity]) -> tuple[int, int] | None:
-    """The consensus words the finding's tokens match, as a contiguous subsequence (N11).
+def _locate(finding_text: str, words: list[Entity]) -> list[tuple[int, int]]:
+    """Every place the finding's tokens match the consensus words, as contiguous runs (N11).
+
+    Every occurrence, not the first: the scan dedupes by ``(category, text, source)``, so a name
+    said twice arrives as one finding, and locating only its first match leaves the second
+    occurrence unmarked and therefore unredacted.
 
     Args:
         finding_text: The detector's matched text.
         words: The consensus word entities, in transcript order.
 
     Returns:
-        ``(first index, last index)`` into ``words``, or None when nothing matches.
+        ``[(first index, last index), ...]``, non-overlapping and in transcript order. Empty when
+        nothing matches.
     """
     tokens = [_norm_token(token) for token in finding_text.split()]
     haystack = [_norm_token(str(word.attributes.get("text") or "")) for word in words]
     if not tokens or not haystack or len(tokens) > len(haystack):
-        return None
-    for start in range(len(haystack) - len(tokens) + 1):
+        return []
+    matches: list[tuple[int, int]] = []
+    start = 0
+    while start <= len(haystack) - len(tokens):
         if haystack[start : start + len(tokens)] == tokens:
-            return start, start + len(tokens) - 1
-    return None
+            matches.append((start, start + len(tokens) - 1))
+            start += len(tokens)
+        else:
+            start += 1
+    return matches
 
 
 def _cosine(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -882,54 +892,63 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         failures.update(scan.failures)
         scanned_by.update(scan.detectors_used)
         for finding in scan.spans:
+            # One occurrence, one finding: the scan dedupes by (category, text, source), so a name
+            # said twice arrives here once and must still be marked at both places it was said.
             located = _locate(str(finding.text or ""), words)
-            if located is None:
+            if not located:
                 flags.append(f"pii_unlocated ({finding.category})")
-                covered = list(range(len(words)))
-                extent = (span_extents[0][0], span_extents[-1][1])
+                occurrences = [(0, len(words) - 1)]
             else:
-                covered = list(range(located[0], located[1] + 1))
+                occurrences = located
+            for first, last in occurrences:
+                covered = list(range(first, last + 1))
                 extent = (
-                    float((words[located[0]].extent or (0.0, 0.0))[0]),
-                    float((words[located[1]].extent or (0.0, 0.0))[1]),
+                    (span_extents[0][0], span_extents[-1][1])
+                    if not located
+                    else (
+                        float((words[first].extent or (0.0, 0.0))[0]),
+                        float((words[last].extent or (0.0, 0.0))[1]),
+                    )
                 )
-            recognizers = sorted(
-                {str(name) for index in covered for name in (words[index].attributes.get("recognizers") or [])}
-            )
-            speakers = {word_speakers[index] for index in covered}
-            resolved = len(speakers) == 1 and None not in speakers
-            pii_id = store.entity(
-                prov_type="pii",
-                extent=extent,
-                attributes={
-                    "category": finding.category,
-                    "source": finding.source,
-                    "recognizers": recognizers,
-                    "detectors_used": sorted(scan.detectors_used),
-                    "detectors_failed": sorted(scan.failures),
-                },
-            )
-            store.was_generated_by(pii_id, pii_act)
-            store.was_attributed_to(pii_id, software)
-            store.was_derived_from(pii_id, consensus.id)
-            view.append(pii_id)
-            for index in covered:
-                mark_id = store.entity(
-                    prov_type="assertion",
-                    extent=words[index].extent,
-                    attributes={"verb": "label", "label": "pii", "category": finding.category},
+                recognizers = sorted(
+                    {str(name) for index in covered for name in (words[index].attributes.get("recognizers") or [])}
                 )
-                store.was_generated_by(mark_id, pii_act)
-                store.was_attributed_to(mark_id, software)
-                store.was_derived_from(mark_id, words[index].id)
-                view.append(mark_id)
-            findings.append(
-                {
-                    "category": finding.category,
-                    "speaker": next(iter(speakers)) if resolved else None,
-                    "resolved": resolved,
-                }
-            )
+                speakers = {word_speakers[index] for index in covered}
+                resolved = len(speakers) == 1 and None not in speakers
+                pii_id = store.entity(
+                    prov_type="pii",
+                    extent=extent,
+                    attributes={
+                        "category": finding.category,
+                        "source": finding.source,
+                        "recognizers": recognizers,
+                        "occurrence": occurrences.index((first, last)),
+                        "occurrences_n": len(occurrences),
+                        "detectors_used": sorted(scan.detectors_used),
+                        "detectors_failed": sorted(scan.failures),
+                    },
+                )
+                store.was_generated_by(pii_id, pii_act)
+                store.was_attributed_to(pii_id, software)
+                store.was_derived_from(pii_id, consensus.id)
+                view.append(pii_id)
+                for index in covered:
+                    mark_id = store.entity(
+                        prov_type="assertion",
+                        extent=words[index].extent,
+                        attributes={"verb": "label", "label": "pii", "category": finding.category},
+                    )
+                    store.was_generated_by(mark_id, pii_act)
+                    store.was_attributed_to(mark_id, software)
+                    store.was_derived_from(mark_id, words[index].id)
+                    view.append(mark_id)
+                findings.append(
+                    {
+                        "category": finding.category,
+                        "speaker": next(iter(speakers)) if resolved else None,
+                        "resolved": resolved,
+                    }
+                )
     missing = _missing_detectors(values["required_detectors"], scanned_by, failures)
     flags.extend(_decide_pii(findings, failures, missing, target_speaker))
     scan_id = store.entity(

@@ -994,6 +994,42 @@ class TestPiiOnTheConsensus:
         ]
         assert marks and all("alice" not in str(mark.attributes) for mark in marks)
 
+    def test_a_name_said_twice_is_found_twice_and_marked_twice(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scan dedupes by (category, text, source), so one finding can cover two occurrences.
+
+        Locating only the first left the second occurrence unmarked, and REDACT plans off the
+        marking: it would have withheld the release unremediably, having found in its own re-scan a
+        name no plan covered.
+        """
+        _seed_speech_store(store, tmp_path, words=["hi", "alice", "bye", "alice"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert _verdict_entity(store, "SPEECH").attributes["pii"]["n"] == 2
+        assert len(live_entities(store, "pii")) == 2
+        marked = [
+            store.derived_from(e.id)[0]
+            for e in live_entities(store, "assertion")
+            if e.attributes.get("label") == "pii"
+        ]
+        texts = sorted(str(store.get_entity(word_id).attributes["text"]) for word_id in marked)
+        assert texts == ["alice", "alice"], "both occurrences carry the marking"
+        assert len({e.extent for e in live_entities(store, "pii")}) == 2, "two distinct extents"
+
+    def test_a_multi_word_finding_said_twice_is_located_at_both_runs(
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The runs do not overlap, so a two-word name is four marked words, not three."""
+        _seed_speech_store(store, tmp_path, words=["hi", "ada", "lovelace", "and", "ada", "lovelace"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _stub_pii(monkeypatch, findings=[("PERSON", "ada lovelace")])
+        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
+        assert _verdict_entity(store, "SPEECH").attributes["pii"]["n"] == 2
+        marks = [e for e in live_entities(store, "assertion") if e.attributes.get("label") == "pii"]
+        assert len(marks) == 4
+
     def test_a_missing_required_detector_flags(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
