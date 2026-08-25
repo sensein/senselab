@@ -25,6 +25,8 @@ from senselab.utils.data_structures import logger
 
 _Context = Union[str, float]  # "auto" | "small" | "medium" | "large" | float scale
 _INCHES_PER_RATIO = 1.8  # what one unit of plot_aligned_panels' height_ratios is worth
+TEXT_PANEL_INCHES_PER_LINE = 0.18  # 8 pt at 1.2 line spacing is 0.133 in; the rest is headroom
+MIN_FIGURE_HEIGHT_IN = 4.0  # the floor plot_aligned_panels puts under a short panel stack
 
 
 def _detect_screen_resolution() -> Tuple[int, int]:
@@ -500,8 +502,9 @@ def plot_aligned_panels(
 
     - ``{"type": "waveform"}`` -- waveform amplitude.
     - ``{"type": "spectrogram", "mel": True/False}`` -- linear or mel spectrogram.
-    - ``{"type": "features", "data": [(times, values, label, color), ...]}`` --
-      scatter/line overlay of feature curves (e.g., pitch, formants).
+    - ``{"type": "features", "data": [(times, values, label, color), ...], "name": str}`` --
+      scatter/line overlay of feature curves (e.g., pitch, formants). ``name`` becomes the
+      panel's y-label.
     - ``{"type": "segments", "segments": [{"label": str, "start": float, "end": float}, ...],
       "name": str}`` -- colored horizontal bars for phoneme/word segments. ``name`` becomes the
       panel's y-label, so a figure stacking several lanes says which is which.
@@ -510,7 +513,7 @@ def plot_aligned_panels(
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
     - ``{"type": "text", "lines": [str, ...], "fontsize": int}`` -- monospaced prose on an
       axis with no time scale, for blocks that accompany the shared axis rather than share it.
-      Its height is ``max(1.0, 0.18 * len(lines))`` inches, so a long block grows the figure
+      Its height is ``max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(lines))`` inches, so a long block grows the figure
       rather than overflowing its own axis.
 
     Args:
@@ -552,7 +555,7 @@ def plot_aligned_panels(
         "overlay_on_spectrogram": 2,
     }
     height_ratios = [
-        max(1.0, 0.18 * len(p.get("lines", []))) / _INCHES_PER_RATIO
+        max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(p.get("lines", []))) / _INCHES_PER_RATIO
         if p.get("type") == "text"
         else ratio_map.get(p.get("type", "waveform"), 1)
         for p in panels
@@ -562,7 +565,7 @@ def plot_aligned_panels(
     rc = _rc_for_scale(scale)
     if figsize is None:
         base_h = float(sum(height_ratios)) * _INCHES_PER_RATIO
-        base = (14.0, max(base_h, 4.0))
+        base = (14.0, max(base_h, MIN_FIGURE_HEIGHT_IN))
     else:
         base = figsize
     scaled_size = (base[0] * scale, base[1] * scale)
@@ -632,7 +635,7 @@ def plot_aligned_panels(
                         ax.plot(t_np, v_np, color=color, label=label, linewidth=0.8, alpha=0.8)
                     else:
                         ax.scatter(t_np, v_np, s=3, c=color, label=label, alpha=0.7)
-                ax.set_ylabel("Value")
+                ax.set_ylabel(panel.get("name") or "Value")
                 ax.legend(loc="upper right", fontsize=7)
                 ax.grid(True, alpha=0.3)
 
