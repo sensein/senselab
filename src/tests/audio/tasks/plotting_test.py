@@ -92,6 +92,41 @@ class TestTheTextPanel:
         assert figure.axes[1].get_ylabel() == "envelope dBFS"
         assert figure.axes[1].yaxis.get_label_position() == "right"
 
+    def test_a_waveform_panel_can_carry_a_span_overlay(self) -> None:
+        """A lane of bars over the signal it was measured from beats a lane of bars beneath it."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "waveform",
+                    "spans": {
+                        "name": "spans (dB over floor)",
+                        "segments": [{"label": "18 dB", "start": 0.1, "end": 0.3}],
+                    },
+                }
+            ],
+        )
+        assert len(figure.axes[0].patches) == 1
+        assert any("18 dB" in text.get_text() for text in figure.axes[0].texts)
+
+    def test_the_overlay_names_itself_on_the_right_hand_scale(self) -> None:
+        """A translucent bar with no label is decoration; the scale must say what it is."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "waveform",
+                    "twin": {"name": "envelope dBFS", "data": [([0.1], [-40.0], "envelope dBFS", "steelblue")]},
+                    "spans": {
+                        "name": "spans (dB over floor)",
+                        "segments": [{"label": "18 dB", "start": 0.1, "end": 0.3}],
+                    },
+                }
+            ],
+        )
+        label = figure.axes[1].get_ylabel()
+        assert "envelope dBFS" in label and "spans (dB over floor)" in label
+
     def test_a_waveform_panel_with_no_twin_draws_one_axis(self) -> None:
         """The twin is opt-in; a bare waveform panel must not sprout an empty right-hand scale."""
         figure = plot_aligned_panels(_tone(), [{"type": "waveform"}])

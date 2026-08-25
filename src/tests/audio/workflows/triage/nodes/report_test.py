@@ -1170,3 +1170,56 @@ class TestTheWaveformAndTheEnvelopeShareOneRow:
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "lane not drawn — envelope" not in blocks
+
+
+class TestTheSpansAreAnOverlayNotALane:
+    """A span is a stretch of the waveform; it belongs over the waveform, not in a row beneath it."""
+
+    def test_the_spans_row_is_gone(self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """One row fewer, and the one it merged into is the one it was measured from."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert [panel for panel in panels[0] if panel.get("name") == "spans (dB over floor)"] == []
+
+    def test_the_waveform_row_carries_the_spans_and_their_decibels(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The dB over floor is the number the span exists to report; it must survive the move."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        overlay = panels[0][0]["spans"]
+        assert overlay["name"] == "spans (dB over floor)"
+        assert overlay["segments"]
+        assert all(segment["label"].endswith(" dB") for segment in overlay["segments"])
+
+    def test_the_drawn_figure_names_the_overlay_on_its_right_hand_scale(self, store: ProvStore, tmp_path: Path) -> None:
+        """Whatever the panel dict says, the reader sees the axis; the axis must name the overlay."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[Any] = []
+        real = report_module.plot_aligned_panels
+
+        def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+            figure = real(audio, panels, **kwargs)
+            drawn.append(figure)
+            return figure
+
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(report_module, "plot_aligned_panels", _spy)
+            _seed_report_store(store, tmp_path, full=True)
+            report(store, tmp_path / "summary", _png(tmp_path))
+        labels = [axis.get_ylabel() for axis in drawn[0].axes]
+        assert any("spans (dB over floor)" in label for label in labels)
+
+    def test_the_spans_lane_still_reads_as_drawn(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Becoming an overlay is not becoming absent."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — spans (dB over floor)" not in blocks
+        assert "every declared lane was drawn" in blocks

@@ -141,21 +141,38 @@ def _as_numpy(values: Any) -> np.ndarray:  # noqa: ANN401 — a tensor, a sequen
     return values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
 
 
-def _draw_waveform_twin(ax: Axes, panel: Dict[str, Any]) -> None:
-    """Draw a waveform panel's twin-axis curves against a right-hand scale.
+def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any]) -> None:
+    """Draw a waveform panel's span overlay and its twin-axis curves.
+
+    The spans go on the waveform's own axis, behind everything, so the twin's curves stay on top of
+    them; the twin's y-label names both, since the overlay has no scale of its own to be labelled by.
 
     Args:
         ax: The waveform panel's own axis, carrying amplitude on the left.
-        panel: The panel specification, read for its optional ``twin`` block.
+        panel: The panel specification, read for its optional ``spans`` and ``twin`` blocks.
     """
-    spec = panel.get("twin")
-    if not spec:
+    spans = panel.get("spans") or {}
+    twin_spec = panel.get("twin") or {}
+    if not spans and not twin_spec:
         return
+    for segment in spans.get("segments", []):
+        ax.axvspan(segment["start"], segment["end"], color="darkorange", alpha=0.18, linewidth=0, zorder=0)
+        ax.annotate(
+            str(segment["label"]),
+            xy=((float(segment["start"]) + float(segment["end"])) / 2.0, 0.99),
+            xycoords=("data", "axes fraction"),
+            ha="center",
+            va="top",
+            rotation=90,
+            fontsize=6,
+            color="saddlebrown",
+        )
     twin = ax.twinx()
-    for times, values, label, color in spec.get("data", []):
+    for times, values, label, color in twin_spec.get("data", []):
         twin.plot(_as_numpy(times), _as_numpy(values), color=color, label=label, linewidth=0.9, alpha=0.9)
-    twin.set_ylabel(spec.get("name") or "Value")
-    if spec.get("data"):
+    names = [str(name) for name in (twin_spec.get("name"), spans.get("name")) if name]
+    twin.set_ylabel(" · ".join(names) or "Value")
+    if twin_spec.get("data"):
         twin.legend(loc="upper right", fontsize=7)
 
 
@@ -524,10 +541,12 @@ def plot_aligned_panels(
 
     Each panel shares the same time axis. Supported panel types:
 
-    - ``{"type": "waveform", "twin": {"name": str, "data": [(times, values, label, color), ...]}}`` --
-      waveform amplitude on the left y-axis, with the optional ``twin`` block's curves drawn against
-      a right-hand scale of their own and ``twin["name"]`` as that scale's y-label. A row carrying a
-      twin is drawn twice as tall, since two scales share it.
+    - ``{"type": "waveform", "twin": {"name": str, "data": [(times, values, label, color), ...]},
+      "spans": {"name": str, "segments": [{"label": str, "start": float, "end": float}, ...]}}`` --
+      waveform amplitude on the left y-axis; the optional ``twin`` block's curves against a
+      right-hand scale of their own; the optional ``spans`` block as translucent bars behind both,
+      each annotated with its label. The right-hand y-label names whichever of the two are present.
+      A row carrying either is drawn twice as tall, since more than one reading shares it.
     - ``{"type": "spectrogram", "mel": True/False}`` -- linear or mel spectrogram.
     - ``{"type": "features", "data": [(times, values, label, color), ...], "name": str}`` --
       scatter/line overlay of feature curves (e.g., pitch, formants). ``name`` becomes the
@@ -644,7 +663,7 @@ def plot_aligned_panels(
                 ax.plot(time_wav, waveform_np, linewidth=0.3, color="0.45")
                 ax.set_ylabel("Amplitude")
                 ax.grid(True, alpha=0.2)
-                _draw_waveform_twin(ax, panel)
+                _draw_waveform_overlays(ax, panel)
 
             elif ptype == "spectrogram":
                 mel = panel.get("mel", False)
