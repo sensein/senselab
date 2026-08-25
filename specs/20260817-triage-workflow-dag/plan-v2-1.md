@@ -97,7 +97,7 @@ introduce keys" rule accepts every test override on day one.
 | `windows.yamnet.label_thresholds` | preprocess | the same, per label, overriding the default |
 | `windows.ast.default_threshold` | preprocess | the same for AST |
 | `windows.ast.label_thresholds` | preprocess | the same for AST, per label |
-| `windows.ast.hop_s` | preprocess | the hop between AST's 10.24 s frames |
+| `windows.ast.hop_s` | preprocess | the hop between AST's frames (see C1: the window itself is **not** open — it ships 0.96 s) |
 | `windows.hear.default_threshold` | preprocess | the same for HeAR |
 | `windows.hear.label_thresholds` | preprocess | the same for HeAR, per label |
 | `windows.hear.hop_s` | preprocess | the hop, fitted on spans HeAR's 2 s input does not have to be padded to fill |
@@ -127,12 +127,31 @@ introduce keys" rule accepts every test override on day one.
 | `speech.nontarget.tilt_db_per_octave` | branch-speech | the proximity leg's spectral-tilt threshold |
 | `speech.nontarget.d_to_r_db` | branch-speech | the proximity leg's direct-to-reverberant threshold |
 
-Seven further keys the v2 specs list are **already `null` on this branch** and are not re-created:
-`speech.word_gap_ms`, `speech.target_match_cosine`, `speech.speech_test_stoi_floor`,
-`speech.speech_test_si_sdr_floor`, `phonation.hnr_floor_db`, `phonation.rms_floor`,
-`redaction.padding_ms`. Six more are created by sibling tasks against shapes fixed here:
-`voice.f0_range_hz`, `voice.f0_range_by_population`, `voice.f0_range_ratio_max`,
-`voice.task_duration_ranges` (T5), `redaction.fill` (T7), `report.format` (T9).
+**The rest of the ledger, stated once so the two plan files cannot disagree about it (I8).**
+
+*Already `null` on this branch, kept as-is, re-created by nobody* — `speech.word_gap_ms`,
+`speech.target_match_cosine`, `speech.speech_test_stoi_floor`, `speech.speech_test_si_sdr_floor`,
+`phonation.hnr_floor_db`, `phonation.rms_floor`, `redaction.padding_ms`.
+
+*Created `null` by **T1**, beside the 33 above, because T1 owns the one config edit that renames the
+two scalar F0 keys away* — **`voice.f0_range_hz`**. It is not in the 33 because it is a *rename*, not
+a new open key: `phonation.f0_min_hz` and `phonation.f0_max_hz` were already null and it replaces
+both. Sibling T5 **reads** it and does not create it.
+
+*Created `null` by sibling tasks, against shapes fixed here* — `voice.f0_range_by_population`,
+`voice.f0_range_ratio_max`, `voice.task_duration_ranges` (T5); `redaction.fill` (T7);
+`report.format` — **which ships a declared default `"png"`, not null**, per the ruling in the sibling
+plan's I4 row (T9).
+
+*Created with a **measured or conventional value**, not null, and therefore in no open ledger* —
+`windows.ast.win_length_s` = 0.96 and `windows.ast.top_k` = 527 (T1, this task);
+`phonation_spans.{hop_s, formant_max_hz, max_formants, formant_window_s, formant_preemphasis_hz}`
+(T1); `redaction.bleep_hz` = 1000.0 (T7).
+
+*Deleted outright with the code that read them* — `hear.label_floor`, `hear.placement`,
+`speech.agreement_flag_floor`, `taxonomy.min_families`, `taxonomy.ast_frame_s`,
+`taxonomy.audioset_speech_labels`, `taxonomy.lexical_airway_tokens`,
+`taxonomy.presence_floor.{yamnet,ast,hear}`, `phonation.f0_min_hz`, `phonation.f0_max_hz`.
 
 **Consequence, stated loudly:** with the packaged config unmodified, `windows.*.default_threshold` is
 null, so **no classifier's label sets can be folded**, every TAXONOMY line reads `unavailable`, every
@@ -192,8 +211,10 @@ retained** — `labels` is the union and `windows_by_label` is the index a consu
 window whose set is empty is still written**, because a window nobody's threshold cleared and a window
 that was never classified are different facts and the store must be able to say which.
 
-**`span` entities** (PREPROCESS, envelope family): unchanged — `extent`,
-`{peak_over_floor_db, k_db, signal}`, never a `label` key.
+**`span` entities** (PREPROCESS, envelope family): `extent`, `{peak_over_floor_db, k_db, signal,
+merged_proposals}`, never a `label` key. `merged_proposals` is new in v2 and is written by
+`propose_spans` (T1 step 9b), **not** by the node: sibling T6 reports the merge rate and must read
+what production writes, not what a fixture supplies.
 
 **`phonation_span` — the T1→T5 contract.** Written as `span` entities carrying a `family` attribute, so
 a reader can tell them from envelope spans without consulting the generating activity:
@@ -284,7 +305,8 @@ sibling plan. An implementer must not silently re-decide one.
 | # | point | decision |
 | --- | --- | --- |
 | V1 | `preprocess.md` says "each window is written as an element" but a 10-minute file yields ~1250 YAMNet windows | every window is written, including one whose label set is empty. The absence-vs-zero distinction this design keeps making is exactly what an unwritten empty window would destroy, and JSONL absorbs the volume |
-| V2 | YAMNet's hop is not a config key in the spec's table | correct, and deliberate: `classify_audios(model="yamnet")` ignores `win_length`/`hop_length` and returns its own 0.96 s / 0.48 s grid. There is no `windows.yamnet.hop_s`; the grid is recorded on the pooled measurement as a fact, not read from config |
+| V2 | `preprocess.md`'s window table gives AST "10.24 s (its native frame)" | **that value is retracted in this repository and the plan does not implement it.** `audio_analysis/data/run_config/default.yaml` retracts the "native frame: 1024 mel frames at 10 ms" reasoning by name: 1024 frames is a fixed *input shape*, not an *analysis resolution* — `ASTFeatureExtractor` zero-pads a shorter window with rectangular padding and no taper, so AST slides at any hop. Measured there on a 21.48 s clip, 10.24 s / 10.24 s gave 3 windows scoring 0.473 / 0.449 / 0.195 on speech while 0.96 s / 0.48 s gave 45 windows scoring 0.75–0.92, and on a 4.9 s recording the coarse window exceeded the clip and returned one flat value for every bucket. AST's window is therefore the config key **`windows.ast.win_length_s`, defaulting to 0.96**, with the retraction quoted in its derivation; the owner's 10 s figure is reachable as an override and named as such. **There is no `AST_FRAME_S` literal.** YAMNet's hop remains absent from config for a different reason: `classify_audios(model="yamnet")` ignores `win_length`/`hop_length` entirely and returns its own grid, which is recorded on the pooled measurement as a fact |
+| V2b | `classify_audios` does `top_k=top_k or 5` on the windowed path (`classification/api.py:135`), so `top_k=None` silently truncates every window to its top five labels | that is a **ranking over a vocabulary**, which `preprocess.md` forbids in the same paragraph that defines the set rule, and it would have made "the set of labels over threshold" mean "the set of the top five labels that are also over threshold". Every windowed classifier passes its vocabulary size explicitly: YAMNet `yamnet.top_k` = 521, AST `windows.ast.top_k` = 527. HeAR reaches `detect_health_acoustic_events` on a different path where `top_k=None` does keep all eight, and is left as `None` |
 | V3 | a null threshold would lose the model output too | the classifier is **two steps**: `<name>_scores` runs the model and writes the raw windows (no threshold read), `<name>_windows` folds the thresholds and writes the label sets (raises while they are null). The expensive output survives a null; the fold is honestly absent |
 | V4 | `preprocess.md` gives no F0 search range for the Praat pass | it is `voice.f0_range_hz`, the range the VOICE branch declares per population. `phonation.f0_min_hz` / `phonation.f0_max_hz` are **renamed away** into it (pre-alpha), so PREPROCESS and VOICE cannot hold two ranges that drift |
 | V5 | the phonation continuity criterion is "a stable F0 / stable formant interval" with no operational form | a frame satisfies the criterion when `abs(dF0)` across one hop is under `phonation_spans.f0_stability_cents` **or** both `abs(dF1)` and `abs(dF2)` are under `phonation_spans.formant_stability_hz`. A maximal run of satisfying frames, closed by `phonation_spans.hangover_ms` of continuous failure, is a **sustained** span. A run that fails stability but whose F0 (or F1 where F0 is absent) is monotone with a total excursion over `phonation_spans.glide_min_excursion_cents` is a **glide** span. No periodicity floor opens or closes a span |
@@ -309,8 +331,13 @@ sibling plan. An implementer must not silently re-decide one.
   §"The 33 open keys" plus the non-open keys T1 needs; rename `phonation.f0_min_hz`/`f0_max_hz` into
   `voice.f0_range_hz`; rename `taxonomy.audioset_speech_labels` into `taxonomy.speech_labels`; delete
   `taxonomy.presence_floor.{yamnet,ast,hear}`, `taxonomy.min_families`, `taxonomy.ast_frame_s`,
-  `taxonomy.lexical_airway_tokens`, `hear.label_floor`, `yamnet.silence_threshold` is **kept**.
-- `src/senselab/audio/tasks/phonation/api.py` — add `formant_track`.
+  `taxonomy.lexical_airway_tokens`, `hear.label_floor`, `hear.placement` and
+  `speech.agreement_flag_floor` (M3: deleted outright with the code that read them — `hear.placement`
+  is read only by `airway.py`'s `span_to_hear_buffer` call, which sibling T6 deletes, and
+  `agreement_flag_floor` only by `speech.py`'s aggregate-agreement row, which sibling T4 deletes).
+  `yamnet.silence_threshold` and `hear.window_s` are **kept**.
+- `src/senselab/audio/tasks/phonation/api.py` — add `formant_track` and `propose_phonation_spans`.
+- `src/senselab/audio/tasks/spans/api.py` — add `merged_proposals` to `Span` (C4).
 - `src/senselab/audio/workflows/triage/nodes/common.py` — add `find_measurements` and `live_entities`.
 - `src/senselab/audio/workflows/triage/nodes/preprocess.py` — the node.
 - Tests: `src/tests/audio/workflows/triage/nodes/preprocess_test.py` (rewritten),
@@ -324,8 +351,9 @@ sibling plan. An implementer must not silently re-decide one.
   here. No later node re-runs one. TAXONOMY and the branches read the stored windows.
 - **A window's product is a SET of labels over per-label thresholds, not a winner.** Set-union pooling,
   windows retained. Nothing counts windows into a score or takes an argmax over a vocabulary.
-- **YAMNet on its native 0.96 s / 0.48 s grid; AST on its native 10.24 s frame; HeAR on its fixed 2 s
-  window.** Only AST's and HeAR's hops are config; YAMNet's grid is model-imposed (V2).
+- **YAMNet on its native 0.96 s / 0.48 s grid; AST on a configured window defaulting to 0.96 s; HeAR on
+  its fixed 2 s window.** YAMNet's grid is model-imposed; AST's window **and** hop are config keys;
+  HeAR's window is model-imposed and only its hop is config. **AST's window is not 10.24 s** — see V2.
 - **Phonation spans admit voiced, unvoiced and mixed production.** A detector that required periodicity
   would measure exactly the voices least in need of measurement. `duration_s` is the primary feature.
 - **Tracks are computed once on the stream and then sliced.** No criterion is ever renormalised to a
@@ -411,12 +439,18 @@ class TestTheV2OpenKeys:
     )
 
     def test_every_open_key_exists_and_is_null(self) -> None:
-        """A key that does not exist is a typo; a key with a value is an unmeasured decision shipped."""
+        """A key that does not exist is a typo; a key with a value is an unmeasured decision shipped.
+
+        Both halves are checked through the public API: ``require`` distinguishes the two failures by
+        message — "unknown configuration key" for a typo, "has no value" for a null — so asserting on
+        which message fires is what tells "the key is missing" from "the key is null".
+        """
         config = load_triage_config()
         for path in self.OPEN_KEYS:
-            assert config.get(path, "MISSING") != "MISSING" or config._lookup(path) is None, path
-            with pytest.raises(ValueError, match="has no value"):
+            with pytest.raises(ValueError, match="has no value") as raised:
                 config.require(path)
+            assert "unknown configuration key" not in str(raised.value), path
+            assert config.get(path, "SENTINEL") == "SENTINEL", path
 
     def test_the_v1_keys_the_v2_specs_replaced_are_gone(self) -> None:
         """Pre-alpha: a replaced key is deleted, not left beside its replacement."""
@@ -437,9 +471,9 @@ class TestTheV2OpenKeys:
     def test_the_f0_range_replaces_the_two_scalar_keys(self) -> None:
         """One range, read by PREPROCESS and VOICE alike, so the two cannot drift."""
         config = load_triage_config()
-        assert config._lookup("voice.f0_range_hz") is None
         with pytest.raises(ValueError, match="has no value"):
             config.require("voice.f0_range_hz")
+        assert config.get("voice.f0_range_hz", "SENTINEL") == "SENTINEL"
 ```
 
 - [ ] **Step 3 — run it; expect FAIL** (`unknown configuration key 'windows.yamnet.default_threshold'`).
@@ -464,10 +498,43 @@ Add to `derivation:`:
   over: they were read off bimodal gaps in one reference recording's whole-file scores, and a
   whole-file gap is not a per-window threshold. YAMNet's grid is not a key at all -- classify_audios
   ignores win_length/hop_length for YAMNet and returns its own 0.96 s / 0.48 s frames, so the grid is
-  recorded as a fact on the pooled measurement. AST's 10.24 s frame is likewise architectural (1024 mel
-  frames at a 10 ms hop) and is passed as win_length rather than configured; only its hop is a key.
+  recorded as a fact on the pooled measurement.
+
+  windows.ast.win_length_s 0.96 -- NOT 10.24. The "native frame: 1024 mel frames at 10 ms" reasoning
+  is RETRACTED in this repository, and the retraction is quoted here because a plan that reintroduced
+  the value would be reintroducing a defect this codebase already measured and removed. From
+  audio_analysis/data/run_config/default.yaml: "That conflates the model's required input size with
+  its temporal precision. 1024 frames is a fixed input shape, not an analysis resolution: a shorter
+  window is zero-padded to 1024 frames by ASTFeatureExtractor -- rectangular padding, no taper -- so
+  the content is unattenuated and AST can be slid at any hop." Measured there on a 21.48 s
+  conversation clip: 10.24 s / 10.24 s gave 3 windows scoring 0.473, 0.449 and 0.195 on speech, while
+  0.96 s / 0.48 s gave 45 windows scoring 0.75-0.92 -- confidence ROSE, because a 10.24 s window of a
+  conversation spreads its softmax mass over speech plus silence plus everything else while a 0.96 s
+  window of speech is unambiguous. And on a 4.9 s recording the coarse window exceeded the whole clip,
+  so AST returned one flat value for every bucket while carrying the largest weight on its axis. The
+  "kaldi-fbank refuses chunks below ~1 s" constraint is real and does not bind: 0.96 s is ~96 mel
+  frames. 0.96 s also puts AST on YAMNet's grid, which is what lets the acoustic evidence line count
+  windows from either classifier without reconciling two frame rates. A coarser window -- the owner's
+  10 s figure among them -- remains reachable as an override, and a run that takes it declares it in
+  config_hash. windows.ast.hop_s stays null because the v2 spec owes it a fit; 0.48 is the value the
+  retraction above measured at, and is what an override should start from.
+
+  windows.ast.top_k 527 -- the full AudioSet label space AST was fine-tuned on. A SIZE, not a
+  threshold, and the same reason yamnet.top_k is 521: classify_audios does `top_k=top_k or 5` on its
+  windowed path (classification/api.py:135), so passing None does not mean "keep everything", it means
+  "keep five". Five of 527 is a RANKING over the vocabulary, which is the one operation
+  preprocess.md's set rule forbids -- it would make "the set of labels over threshold" silently mean
+  "the set of the top five labels that are also over threshold", and a label the model emitted at 0.9
+  in a busy window would vanish. HeAR is unaffected: detect_health_acoustic_events takes a different
+  path on which top_k=None does keep all eight labels.
+
   HeAR's 2 s window is model-imposed and already lives at hear.window_s; only its hop is a key, and it
-  is owed a fit on spans HeAR's input does not have to be padded to fill.
+  is owed a fit on spans HeAR's input does not have to be padded to fill. hear.placement and
+  hear.label_floor are DELETED with the code that read them: placement was only ever an argument to
+  span_to_hear_buffer, which branch-airway.md removes from the graph by confining HeAR to PREPROCESS,
+  and label_floor is replaced by windows.hear.default_threshold. speech.agreement_flag_floor is
+  deleted likewise: branch-speech.md replaces the aggregate-agreement flag with per-word recognizer
+  membership, so there is no aggregate for a floor to gate.
 
   phonation_spans -- preprocess.md's sustained-phonation and glide detector. Every parameter is null.
   f0_stability_cents and formant_stability_hz are the two limbs of the continuity criterion (a frame
@@ -541,7 +608,9 @@ windows:
   ast:
     default_threshold: null
     label_thresholds: null
-    hop_s: null
+    win_length_s: 0.96      # NOT 10.24 -- the "native frame" reasoning is retracted; see the derivation
+    hop_s: null             # owed a fit; the retraction measured at 0.48
+    top_k: 527              # AudioSet's full label space; a size, not a threshold (classify_audios: top_k or 5)
   hear:
     default_threshold: null
     label_thresholds: null
@@ -654,18 +723,32 @@ class TestFormantTrack:
         assert len(track.f_hz) == 4
         assert len(track.bandwidth_hz) == 4
 
-    def test_the_track_is_computed_on_the_stream_not_on_a_slice(self) -> None:
-        """Slicing the stream's track and tracking the slice must agree where they overlap."""
+    def test_tracking_a_slice_and_slicing_the_track_are_not_the_same_measurement(self) -> None:
+        """The whole point of tracking once on the stream: a fragment renormalises to its own maximum.
+
+        The fixture is a stream whose second half is 20 dB louder than its first, so a track computed
+        on the quiet fragment alone sees a different dynamic range from the same interval sliced out
+        of the stream's track. Both are compared here explicitly, which is what makes this test say
+        something — a test that only checked the sliced track against itself would pass under either
+        implementation.
+        """
         sr = 16000
-        t = np.arange(int(1.0 * sr)) / sr
+        t = np.arange(int(2.0 * sr)) / sr
         wave = sum(np.sin(2 * np.pi * f * t) for f in (120.0, 700.0, 1200.0))
+        wave = np.where(t < 1.0, wave * 0.1, wave)
         audio = Audio(waveform=torch.tensor(wave, dtype=torch.float32).unsqueeze(0), sampling_rate=sr)
-        whole = formant_track(
-            audio, hop_s=0.01, max_formants=5, formant_max_hz=5000.0, window_s=0.025, preemphasis_hz=50.0
-        )
-        inside = (whole.times_s >= 0.3) & (whole.times_s < 0.7)
-        assert inside.sum() > 0
-        assert np.nanmedian(whole.f_hz[0][inside]) == pytest.approx(np.nanmedian(whole.f_hz[0]), rel=0.25)
+        params = {
+            "hop_s": 0.01, "max_formants": 5, "formant_max_hz": 5000.0,
+            "window_s": 0.025, "preemphasis_hz": 50.0,
+        }
+        whole = formant_track(audio, **params)
+        quiet = Audio(waveform=audio.waveform[:, : int(1.0 * sr)], sampling_rate=sr)
+        fragment = formant_track(quiet, **params)
+        sliced = whole.f_hz[0][(whole.times_s >= 0.0) & (whole.times_s < 1.0)]
+        n = min(len(sliced), len(fragment.f_hz[0]))
+        assert n > 50
+        assert np.nanmedian(sliced[:n]) == pytest.approx(np.nanmedian(fragment.f_hz[0][:n]), rel=0.15)
+        assert len(whole.times_s) > len(fragment.times_s)
 ```
 
 - [ ] **Step 7 — run it; expect FAIL** (`ImportError: cannot import name 'formant_track'`).
@@ -758,6 +841,83 @@ both the import and `__all__`.
 - [ ] **Step 9 — run it; expect PASS.**
   `uv run pytest src/tests/audio/tasks/phonation/api_test.py -x -q`
 
+- [ ] **Step 9b — make `propose_spans` count what it merged (C4).**
+
+`branch-airway.md` requires "the merge rate is reported… so a span covering several events is legible
+as one", and nothing in the tree records it: `propose_spans` merges overlapping proposals
+(`spans/api.py:97-108`) and discards how many it absorbed. A plan whose test seeded the count from a
+fixture would pass while production never wrote it, so the count gets a real owner here.
+
+Failing test first, appended to `src/tests/audio/tasks/spans/api_test.py`:
+
+```python
+class TestTheMergeRate:
+    """A span records how many proposals it absorbed, so several events in one span are legible."""
+
+    def test_an_unmerged_span_absorbed_one_proposal(self) -> None:
+        """One proposal in, one span out: the count is 1, not 0 — a span is its own proposal."""
+        envelope, floor, rate = _one_burst()
+        [span] = propose_spans(envelope, floor, rate, **_SPAN_PARAMS)
+        assert span.merged_proposals == 1
+
+    def test_two_overlapping_proposals_report_two(self) -> None:
+        """The offset rule merged them; the survivor says so."""
+        envelope, floor, rate = _two_overlapping_bursts()
+        spans = propose_spans(envelope, floor, rate, **_SPAN_PARAMS)
+        assert len(spans) == 1
+        assert spans[0].merged_proposals == 2
+
+    def test_two_separated_proposals_each_report_one(self) -> None:
+        """Nothing was absorbed, and neither span claims otherwise."""
+        envelope, floor, rate = _two_separated_bursts()
+        spans = propose_spans(envelope, floor, rate, **_SPAN_PARAMS)
+        assert [span.merged_proposals for span in spans] == [1, 1]
+```
+
+Run it; expect `AttributeError: 'Span' object has no attribute 'merged_proposals'`.
+
+Then `Span` gains the field and the merge loop accumulates it:
+
+```python
+@dataclass(frozen=True)
+class Span:
+    """One proposed span.
+
+    Attributes:
+        start: Onset in seconds.
+        end: Offset in seconds.
+        peak_over_floor_db: The span's peak, referenced to the local floor.
+        merged_proposals: How many proposals this span absorbed. One for a span the merge rule left
+            alone — a span is its own proposal — so zero is never a valid value, and a span covering
+            several events is legible as one rather than indistinguishable from a single event.
+    """
+
+    start: float
+    end: float
+    peak_over_floor_db: float
+    merged_proposals: int = 1
+```
+
+```python
+    merged: list[Span] = []
+    for span in found:
+        if merged and span.start <= merged[-1].end:
+            last = merged[-1]
+            merged[-1] = Span(
+                start=last.start,
+                end=max(last.end, span.end),
+                peak_over_floor_db=max(last.peak_over_floor_db, span.peak_over_floor_db),
+                merged_proposals=last.merged_proposals + span.merged_proposals,
+            )
+        else:
+            merged.append(span)
+    return merged
+```
+
+Run it; expect PASS. PREPROCESS's `_spans` block then writes `"merged_proposals": span.merged_proposals`
+into each `span` entity's attributes, beside `peak_over_floor_db`, and sibling T6 reads **that**
+rather than a fixture value.
+
 - [ ] **Step 10 — add the two store-read helpers.**
 
 Append to `src/senselab/audio/workflows/triage/nodes/common.py`:
@@ -818,7 +978,7 @@ def windows_config(tmp_path: Path) -> TriageConfig:
         "  ast:\n"
         "    default_threshold: 0.3\n"
         "    label_thresholds: {}\n"
-        "    hop_s: 5.0\n"
+        "    hop_s: 0.48\n"
         "  hear:\n"
         "    default_threshold: 0.5\n"
         "    label_thresholds: {}\n"
@@ -939,18 +1099,40 @@ class TestWindowClassificationsAreSets:
         assert find_measurement(store, "yamnet_windows") is None
         assert "yamnet_windows" in result.absent
 
-    def test_ast_runs_on_its_native_frame_at_the_configured_hop(
+    def test_ast_runs_at_the_configured_window_not_at_10_24_s(
         self, store: ProvStore, windows_config: TriageConfig, tmp_path: Path,
         wav_writer: Callable[..., Path], monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """AST's 10.24 s frame is architectural and is passed as win_length; only its hop is config."""
+        """The 'native frame' reasoning is retracted in this repo; the window is a key defaulting to 0.96."""
         seen: dict[str, Any] = {}
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch, ast=[window(0.0, 10.24, {"Speech": 0.9})], record=seen)
+        _stub_models(monkeypatch, ast=[window(0.0, 0.96, {"Speech": 0.9})], record=seen)
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
-        assert seen["ast"]["win_length"] == pytest.approx(10.24)
-        assert seen["ast"]["hop_length"] == pytest.approx(5.0)
-        assert seen["ast"]["top_k"] is None
+        assert seen["ast"]["win_length"] == pytest.approx(0.96)
+        assert seen["ast"]["hop_length"] == pytest.approx(0.48)
+
+    def test_ast_is_asked_for_its_whole_vocabulary(
+        self, store: ProvStore, windows_config: TriageConfig, tmp_path: Path,
+        wav_writer: Callable[..., Path], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """classify_audios does `top_k or 5`, so None would rank 527 labels down to five (C2)."""
+        seen: dict[str, Any] = {}
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, ast=[window(0.0, 0.96, {"Speech": 0.9})], record=seen)
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        assert seen["ast"]["top_k"] == 527
+
+    def test_a_truncating_top_k_would_lose_a_confident_label(
+        self, store: ProvStore, windows_config: TriageConfig, tmp_path: Path,
+        wav_writer: Callable[..., Path], monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A window carrying six labels over threshold keeps all six; a top-5 rank would drop one."""
+        _seed_admit(store, tmp_path, wav_writer)
+        scores = {f"L{i}": 0.9 - i * 0.01 for i in range(6)}
+        _stub_models(monkeypatch, ast=[window(0.0, 0.96, scores)])
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        ast_window = find_measurements(store, "ast_window")[0]
+        assert len(ast_window.attributes["labels"]) == 6
 
     def test_hear_runs_on_its_fixed_window_at_the_configured_hop(
         self, store: ProvStore, windows_config: TriageConfig, tmp_path: Path,
@@ -1157,12 +1339,63 @@ class TestDisruptionsAreMeasuredOnTheOriginal:
 ```
 
 `_seed_admit`, `_audio`, `_line`, `_stub_models`, `_steady_vowel`, `_steady_noise` and `_rising_glide`
-are module-private helpers in the same file; `_stub_models` monkeypatches, **on
+are module-private helpers in **this test file**; `_stub_models` monkeypatches, **on
 `preprocess_module`**, `classify_audios`, `detect_health_acoustic_events`, `transcribe_audios`,
 `align_transcriptions`, `extract_objective_quality_features_from_audios`, `_crisperwhisper_model`,
 `_qwen_model` and `_ast_model`, recording each call's kwargs into `record` when one is given.
-`phonation_config` is a `conftest.py` fixture layering an override that supplies
-`voice.f0_range_hz: [75, 500]` and every `phonation_spans.*` null.
+`windows_config` and `phonation_config` are `conftest.py` fixtures layering overrides — the first
+supplying every window threshold and hop, the second `voice.f0_range_hz: [75, 500]` and every
+`phonation_spans.*` null.
+
+**The fixture ownership rule (I1), binding on both plan files.** Six tasks need a seeded store, and a
+single `seeded_store` fixture taking a different `words=` type per task would be three incompatible
+contracts wearing one name. Following the tree's existing pattern, **each task owns its own seeder,
+and `conftest.py` carries exactly one shared one**, defined here:
+
+```python
+@pytest.fixture
+def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
+    """Write the entities PREPROCESS would have left behind, for a node test downstream of it.
+
+    Every argument defaults to ``None``, which writes **nothing** for that derivative — that is how a
+    test sets up an ``unavailable`` line, and it is a different state from passing an empty list,
+    which writes the derivative and records that it found nothing.
+
+    Args:
+        store: The store to seed.
+        stream_hz: The ``plain`` stream's rate. A silent mono WAV of ``duration_s`` is written under
+            ``tmp_path`` and both the ``recording`` and ``plain`` stream entities point at it.
+        duration_s: The streams' duration.
+        yamnet_labels: One label list per YAMNet window, on a 0.96 s / 0.48 s grid. ``None`` writes no
+            YAMNet measurement at all.
+        ast_labels: The same on a 0.96 s / 0.48 s grid, for AST.
+        hear_labels: The same on a 2 s / 1 s grid, for HeAR.
+        words: The consensus words, as ``[text, ...]`` or ``[(text, (start, end)), ...]``. **An empty
+            list still writes a ``consensus_transcript`` measurement carrying no words** — PREPROCESS
+            fusing to nothing is not PREPROCESS never having run, and TAXONOMY's lexical line reads
+            ``absent`` in the first case and ``unavailable`` in the second. ``None`` writes neither.
+        events: Bracketed or onomatopoeic non-words, same shapes as ``words``.
+        phonation: ``[(start, end, production), ...]`` phonation spans, plus the
+            ``PREPROCESS``/``phonation_spans`` activity that says the pass ran. ``[]`` writes the
+            activity and no spans; ``None`` writes neither, which is the ``unavailable`` case.
+        spans: ``[(start, end, peak_over_floor_db), ...]`` envelope spans at ``span_k_db``.
+        span_k_db: The ``k_db`` those spans were proposed at.
+        disruptions_file: Whether to write the file-level disruption measurement.
+
+    Returns:
+        A callable taking ``(store, **the above)`` and writing them. It returns None; a test reads
+        what it needs back out of the store, which is what makes these tests behavioural.
+    """
+```
+
+Every other task's seeder is **module-private in that task's own test file**, built by calling
+`seed_preprocess_store` first and then writing that branch's own predecessors:
+`_seed_speech_store` (T4: adds diarizer segments, `pii` findings, a target speaker),
+`_seed_voice_store` (T5: adds speech spans and airway labels, to prove neither is subtracted),
+`_seed_airway_store` (T6: adds per-window `hear_window`/`yamnet_window` entities and merge counts),
+`_seed_redact_store` (T7: adds `pii` entities and the `pii_scan` measurement),
+`_seed_report_store` (T9: adds every branch's verdict). **No task after T1 edits `conftest.py`**, so
+T4–T7 can be dispatched in parallel without colliding on one file.
 
 - [ ] **Step 12 — run them; expect FAIL** (`KeyError: 'yamnet_window'` / `AssertionError`).
   `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -x -q`
@@ -1177,7 +1410,6 @@ changes are:
 
 ```python
 AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
-AST_FRAME_S = 10.24  # 1024 mel frames at a 10 ms hop: AST's architecture, not a tuned value
 YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
 
 
@@ -1307,52 +1539,51 @@ def _confident_labels(
         view.extend(window_ids)
 ```
 
-The three `_scores` invocations, each with its own agent:
+The three classifier blocks, each a **named closure** so the `blocks` list at the end of this step
+names it rather than repeating it — the two listings are one listing, and an implementer who finds
+them disagreeing has found a plan defect, not a choice:
 
 ```python
-        (
+    def _yamnet_scores() -> None:
+        """YAMNet on its own native grid; `win_length`/`hop_length` are ignored by this backend."""
+        _scores(
             "yamnet_scores",
-            lambda: _scores(
-                "yamnet_scores",
-                store.agent(
-                    agent_type="model",
-                    model_id=YAMNET_MODEL_URI,
-                    unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
-                ),
-                "yamnet",
-                lambda: classify_audios([plain], model="yamnet", top_k=int(config.require("yamnet.top_k")))[0],
+            store.agent(
+                agent_type="model",
+                model_id=YAMNET_MODEL_URI,
+                unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
             ),
-        ),
-        ("yamnet_windows", lambda: _windows("yamnet")),
-        (
+            "yamnet",
+            lambda: classify_audios([plain], model="yamnet", top_k=int(config.require("yamnet.top_k")))[0],
+        )
+
+    def _ast_scores() -> None:
+        """AST at the configured window and hop, over its whole label space (C1, C2)."""
+        model = _ast_model()
+        _scores(
             "ast_scores",
-            lambda: _scores(
-                "ast_scores",
-                _model_agent(_ast_model()),
-                "ast",
-                lambda: classify_audios(
-                    [plain],
-                    model=_ast_model(),
-                    win_length=AST_FRAME_S,
-                    hop_length=float(config.require("windows.ast.hop_s")),
-                    top_k=None,
-                    function_to_apply="sigmoid",
-                )[0],
-            ),
-        ),
-        ("ast_windows", lambda: _windows("ast")),
-        (
+            store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha),
+            "ast",
+            lambda: classify_audios(
+                [plain],
+                model=model,
+                win_length=float(config.require("windows.ast.win_length_s")),
+                hop_length=float(config.require("windows.ast.hop_s")),
+                top_k=int(config.require("windows.ast.top_k")),
+                function_to_apply="sigmoid",
+            )[0],
+        )
+
+    def _hear_scores() -> None:
+        """HeAR at its model-imposed 2 s window and the configured hop; `top_k=None` keeps all eight."""
+        _scores(
             "hear_scores",
-            lambda: _scores(
-                "hear_scores",
-                store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION),
-                "hear",
-                lambda: detect_health_acoustic_events(
-                    [plain], hop_length=float(config.require("windows.hear.hop_s")), top_k=None
-                )[0],
-            ),
-        ),
-        ("hear_windows", lambda: _windows("hear")),
+            store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION),
+            "hear",
+            lambda: detect_health_acoustic_events(
+                [plain], hop_length=float(config.require("windows.hear.hop_s")), top_k=None
+            )[0],
+        )
 ```
 
 **`silence` reads the stored YAMNet scores**, unchanged in behaviour, but from `state["yamnet_scores"]`
@@ -1467,7 +1698,13 @@ F1 where none is defined) are monotone with `abs(1200*log2(last/first))` at or o
 `glide_min_excursion_cents` is a `"glide"` span. `voiced_fraction` is the fraction of the span's frames
 whose `strength` clears `voicing_strength_floor`; `production` is `"voiced"` above
 `mixed_voiced_fraction`, `"unvoiced"` below `1 - mixed_voiced_fraction`, `"mixed"` between.
-`offset_criterion` names which limb stopped holding at the frame after the span, or `"stream_end"`.
+`offset_criterion` names what closed the span, and the assignment is total: `"f0_stability"` when the
+F0 limb was the one holding and stopped, `"formant_stability"` when the formant limb was, `"both"`
+when both limbs held and both stopped in the same frame, **`"monotonicity"` for every glide span** —
+a glide is opened and closed by its monotone run, so the criterion that ends it is the frame where
+monotonicity fails, never a stability limb — and `"stream_end"` when the span runs to the end of the
+stream. Sibling T5 reports this string verbatim as `longest_span_criterion`, so a value outside those
+five is a defect in this block, not in that one.
 
 **`_consensus`** replaces `_agreement`:
 
@@ -1485,6 +1722,12 @@ whose `strength` clears `voicing_strength_floor`; `production` is `"voiced"` abo
         fused, provenance = fuse_consensus_words(
             {CRISPERWHISPER_ID: state["asr_crisperwhisper"], QWEN_ID: state["asr_qwen"]}
         )
+        # ``fuse_consensus_words`` returns ``([], {})`` when no recognizer produced a readable word,
+        # so ``provenance`` is empty on the wordless path and every later read of a named key would
+        # raise. The measurement is still written — a fold that ran and found nothing is a fact —
+        # with the operator recorded so a reader can tell it from a fold that never ran.
+        if not provenance:
+            provenance = {"operator": "consensus_words/resample", "sources": [], "n_words": 0}
         onomatopoeic = {
             _norm_token(str(token)) for token in (config.get("words.onomatopoeic_tokens") or [])
         }
@@ -1657,13 +1900,38 @@ which is what `fuse_consensus_words` consumes.
 - [ ] **Step 14 — run the PREPROCESS tests; expect PASS.**
   `uv run pytest src/tests/audio/workflows/triage/nodes/preprocess_test.py -x -q`
 
-- [ ] **Step 15 — lint, type-check, and run the whole triage + phonation suite.**
-  `uv run ruff format src/senselab/audio/workflows/triage src/senselab/audio/tasks/phonation src/tests/audio/workflows/triage src/tests/audio/tasks/phonation`
-  `uv run ruff check src/senselab/audio/workflows/triage src/senselab/audio/tasks/phonation src/tests/audio/workflows/triage src/tests/audio/tasks/phonation`
-  `uv run mypy src/senselab/audio/workflows/triage src/senselab/audio/tasks/phonation`
-  `uv run pytest src/tests/audio/tasks/phonation src/tests/audio/workflows/triage -q`
-  T2 and T3 repair the TAXONOMY, AIRWAY, SPEECH, VOICE, REDACT and run tests this step breaks; record
-  which fail here and hand the list forward rather than patching them in this task.
+- [ ] **Step 15 — lint, type-check, and run the suites this task owns.**
+  `uv run ruff format src/senselab/audio/workflows/triage src/senselab/audio/tasks/phonation src/senselab/audio/tasks/spans src/tests/audio/workflows/triage src/tests/audio/tasks/phonation src/tests/audio/tasks/spans`
+  `uv run ruff check` and `uv run mypy` over the same production paths.
+  `uv run pytest src/tests/audio/tasks/phonation src/tests/audio/tasks/spans src/tests/audio/workflows/triage/nodes/preprocess_test.py src/tests/audio/workflows/triage/config_test.py -q`
+
+  **The rest of the triage suite is red after this task, and stays red until T4–T7.** T1 changes the
+  store schema every other node reads, so `taxonomy_test.py`, `airway_test.py`, `speech_test.py`,
+  `voice_test.py`, `redact_test.py`, `verdict_test.py` and `run_test.py` all fail here. **T2 repairs
+  TAXONOMY and T3 repairs routing + `run.py`; AIRWAY, SPEECH, VOICE and REDACT are repaired by T6, T4,
+  T5 and T7 in the sibling plan, and VERDICT by T8.** Record the failing list at the end of this step
+  and hand it forward; do not patch another task's module here.
+
+**Dispatch order for both plan files** — stated once, here, because a fresh subagent taking a task in
+isolation needs it:
+
+```
+T1  (foundation)                 ── must land first; everything reads its store schema
+ └─ T2  (TAXONOMY)               ── sequential after T1
+     └─ T3  (routing + run.py)   ── sequential after T2
+         ├─ T4  (SPEECH)   ─┐
+         ├─ T5  (VOICE)     │    ── parallel after T3; each owns its own test file and
+         ├─ T6  (AIRWAY)    │       seeder, and none edits conftest.py, so they do not collide
+         └─ T7  (REDACT)   ─┘
+             └─ T8  (VERDICT)    ── after T3 and all of T4-T7 (it folds their verdicts)
+                 └─ T9  (REPORT) ── after T8
+
+T10 (CrisperWhisper diagnostic)  ── independent of every task above; any time
+```
+
+T4–T7 may also run sequentially; the parallelism is available, not required. What is **not** available
+is running any of them before T3, because `run.py` calls `speech(..., enrollment=...)` only after T3
+threads the parameter.
 
 - [ ] **Step 16 — commit.**
   `git commit -m "feat(triage/preprocess): every whole-file model here, as label sets over per-label thresholds"`
@@ -1683,7 +1951,32 @@ which is what `fuse_consensus_words` consumes.
 - Store: `yamnet_scores`/`ast_scores`/`hear_scores`, `yamnet_windows`/`ast_windows`/`hear_windows` and their per-window `*_window` measurements, `phonation` `span` entities with `formant_tracks`, `consensus_transcript` with `word` and `event` entities, `disruptions_file` — all exactly as §"The v2 store contract" states.
 - `senselab.audio.tasks.phonation.formant_track`, `FormantTrack`, `propose_phonation_spans`, `PhonationSpan`.
 - `senselab.audio.workflows.triage.nodes.common.find_measurements`, `live_entities`.
-- `preprocess.AST_ID`, `AST_FRAME_S`, `YAMNET_MODEL_URI`, `CRISPERWHISPER_ID`, `QWEN_ID` — the sanctioned cross-node constants.
+- **The one shared test fixture, `seed_preprocess_store`** — the single signature every downstream
+  task's own seeder builds on, and the only fixture any task after T1 may assume exists in
+  `conftest.py`:
+
+  ```python
+  seed_preprocess_store(
+      store: ProvStore,
+      *,
+      stream_hz: int = 16000,
+      duration_s: float = 5.0,
+      yamnet_labels: list[list[str]] | None = None,
+      ast_labels: list[list[str]] | None = None,
+      hear_labels: list[list[str]] | None = None,
+      words: list[str] | list[tuple[str, tuple[float, float]]] | None = None,
+      events: list[str] | list[tuple[str, tuple[float, float]]] | None = None,
+      phonation: list[tuple[float, float, str]] | None = None,
+      spans: list[tuple[float, float, float]] | None = None,
+      span_k_db: float = 18.0,
+      span_merged: int = 1,
+      disruptions_file: bool = False,
+  ) -> None
+  ```
+
+  `None` writes nothing for that derivative; `[]` writes the derivative and records that it found
+  nothing. `words=[]` still writes a `consensus_transcript` measurement (I7).
+- `preprocess.AST_ID`, `YAMNET_MODEL_URI`, `CRISPERWHISPER_ID`, `QWEN_ID` — the sanctioned cross-node constants. **There is no `AST_FRAME_S`**; AST's window is `windows.ast.win_length_s`.
 
 **Superseded tests, deleted with the ruling that justifies each:**
 
@@ -1767,10 +2060,10 @@ class TestItRunsNoModels:
             assert not hasattr(taxonomy_module, name)
 
     def test_it_writes_no_activity_that_names_a_model(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """The only activity is the fold."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], words=2)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], words=2)
         taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert [a.step for a in store.activities("TAXONOMY")] == ["fold"]
         assert not [
@@ -1785,91 +2078,91 @@ class TestTheThreeKinds:
     """speech, airway and voice, each with its own rule and its own evidence."""
 
     def test_speech_needs_both_lines(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """Acoustic windows and lexical words both clearing their floors makes speech present."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], words=3)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], words=3)
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "present"
 
     def test_speech_with_windows_but_no_words_is_uncertain(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """One line present and one absent is disagreement, which is uncertain, not present."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], words=0)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], words=0)
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "uncertain"
 
     def test_speech_with_neither_line_is_absent(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """Both lines below their floors is absence."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Music"]], words=0)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Music"]], words=0)
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "absent"
 
     def test_a_bracketed_event_carries_no_lexical_evidence(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """PREPROCESS wrote it as an event, so nothing here counts it toward the word floor."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], words=0, events=3)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], words=0, events=3)
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "uncertain"
 
     def test_airway_needs_hear_and_audioset(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """The health-acoustic and acoustic lines both carrying evidence makes airway present."""
-        seeded_store(store, tmp_path, hear_labels=[["Cough"]], yamnet_labels=[["Cough"]])
+        seed_preprocess_store(store, tmp_path, hear_labels=[["Cough"]], yamnet_labels=[["Cough"]])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["airway"] == "present"
 
     def test_ast_windows_serve_the_acoustic_line_beside_yamnet(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """The acoustic line reads either grid; a label on AST alone is still acoustic evidence."""
-        seeded_store(store, tmp_path, hear_labels=[["Cough"]], ast_labels=[["Cough"]])
+        seed_preprocess_store(store, tmp_path, hear_labels=[["Cough"]], ast_labels=[["Cough"]])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["airway"] == "present"
 
     def test_voice_is_classified_from_phonation_span_duration_alone(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """A 2 s sustain makes voice present, whatever else is in the recording."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 2.0, "voiced")])
+        seed_preprocess_store(store, tmp_path, phonation=[(0.0, 2.0, "voiced")])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["voice"] == "present"
 
     def test_an_unvoiced_sustain_makes_voice_present_too(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """A disordered voice sustaining without periodicity is phonation."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 2.0, "unvoiced")])
+        seed_preprocess_store(store, tmp_path, phonation=[(0.0, 2.0, "unvoiced")])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["voice"] == "present"
 
     def test_a_short_span_is_uncertain_and_a_shorter_one_is_absent(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """Between the two floors is uncertain; below the shorter floor there is nothing to be sure of."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 0.5, "voiced")])
+        seed_preprocess_store(store, tmp_path, phonation=[(0.0, 0.5, "voiced")])
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
         other = ProvStore(run_id="short")
-        seeded_store(other, tmp_path, phonation=[(0.0, 0.1, "voiced")])
+        seed_preprocess_store(other, tmp_path, phonation=[(0.0, 0.1, "voiced")])
         assert taxonomy(other, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "absent"
 
     def test_no_phonation_span_is_absent(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """The pass ran and found nothing, which is absence."""
-        seeded_store(store, tmp_path, phonation=[])
+        seed_preprocess_store(store, tmp_path, phonation=[])
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "absent"
 
     def test_no_phonation_pass_at_all_is_uncertain(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """A pass that did not run leaves the line unavailable; that is not evidence of absence."""
-        seeded_store(store, tmp_path, phonation=None)
+        seed_preprocess_store(store, tmp_path, phonation=None)
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
 
 
@@ -1877,19 +2170,19 @@ class TestAMissingDerivativeIsNotAbsence:
     """A line whose derivative never reached the store is unavailable, and unavailable is uncertain."""
 
     def test_a_null_threshold_leaves_every_kind_uncertain(
-        self, store: ProvStore, config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, config: TriageConfig, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """The packaged config folds no windows, so nothing can be absent."""
-        seeded_store(store, tmp_path, yamnet_labels=None, hear_labels=None, ast_labels=None, phonation=None)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=None, hear_labels=None, ast_labels=None, phonation=None)
         result = taxonomy(store, "plain", config, run_dir=tmp_path)
         assert set(result.kinds.values()) == {"uncertain"}
         assert result.verdict.outcome is Outcome.FLAG
 
     def test_the_unavailable_line_says_so_on_the_kind_element(
-        self, store: ProvStore, config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, config: TriageConfig, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """A reader must see why a kind is uncertain, not only that it is."""
-        seeded_store(store, tmp_path, yamnet_labels=None, hear_labels=None, ast_labels=None, phonation=None)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=None, hear_labels=None, ast_labels=None, phonation=None)
         taxonomy(store, "plain", config, run_dir=tmp_path)
         speech = next(e for e in live_entities(store, "kind") if e.attributes["kind"] == "speech")
         assert speech.attributes["lines"]["acoustic"]["state"] == "unavailable"
@@ -1899,13 +2192,13 @@ class TestHintsAreNotAnInput:
     """A classification that reads the declaration cannot disagree with it."""
 
     def test_a_hint_declaring_speech_does_not_move_the_classification(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """The same store classifies the same way with and without a hint."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Music"]], words=0)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Music"]], words=0)
         hinted = taxonomy(store, "plain", _floors(tmp_path), AudioHints(may_contain=["speech"]), run_dir=tmp_path)
         other = ProvStore(run_id="unhinted")
-        seeded_store(other, tmp_path, yamnet_labels=[["Music"]], words=0)
+        seed_preprocess_store(other, tmp_path, yamnet_labels=[["Music"]], words=0)
         plain = taxonomy(other, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert hinted.kinds == plain.kinds
 
@@ -1914,21 +2207,21 @@ class TestTheOutcome:
     """fail on all-absent, flag on any-uncertain, pass otherwise."""
 
     def test_all_absent_fails(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """Nothing is classified present."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Music"]], hear_labels=[[]], ast_labels=[[]], words=0, phonation=[])
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Music"]], hear_labels=[[]], ast_labels=[[]], words=0, phonation=[])
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FAIL
 
     def test_any_uncertain_flags(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """One kind the lines disagree about is enough."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], hear_labels=[[]], ast_labels=[[]], words=0, phonation=[])
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], hear_labels=[[]], ast_labels=[[]], words=0, phonation=[])
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FLAG
 
     def test_present_and_absent_together_pass(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """Speech present, airway and voice absent, nothing uncertain."""
         seeded_store(
@@ -1937,31 +2230,33 @@ class TestTheOutcome:
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.PASS
 
     def test_exactly_three_kind_elements_and_no_residual(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """voice_no_words and not_screened are gone; nothing is a kind by virtue of the others."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], words=3)
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], words=3)
         taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         kinds = {e.attributes["kind"] for e in live_entities(store, "kind")}
         assert kinds == set(SCREENED_KINDS) == {"airway", "speech", "voice"}
         assert not [e for e in live_entities(store, "kind") if e.attributes["state"] == "not_screened"]
 
     def test_it_localises_nothing(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """No span, no interval, no extent-bearing element is authored by this node."""
-        seeded_store(store, tmp_path, yamnet_labels=[["Speech"]], words=3, phonation=[(0.0, 2.0, "voiced")])
+        seed_preprocess_store(store, tmp_path, yamnet_labels=[["Speech"]], words=3, phonation=[(0.0, 2.0, "voiced")])
         before = {e.id for e in live_entities(store, "span")}
         taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert {e.id for e in live_entities(store, "span")} == before
         assert not live_entities(store, "interval")
 ```
 
-`seeded_store` is a new `conftest.py` fixture: a callable writing a `plain` stream plus, when each
-argument is not `None`, the pooled/per-window measurements for each classifier (`yamnet_labels`,
-`ast_labels`, `hear_labels` each a list of per-window label lists), `words` consensus `word` entities,
-`events` `event` entities, and `phonation` `span` entities from `(start, end, production)` triples.
-Passing `None` for an argument writes nothing for it, which is how the "unavailable" rows are set up.
+`seed_preprocess_store` is the shared fixture T1 defined; this task **adds nothing to
+`conftest.py`**. Every `seed_preprocess_store(store, tmp_path, ...)` call above is
+`seed_preprocess_store(store, ...)`, and the two behaviours these tests hinge on are the ones its
+docstring states: passing `None` writes nothing for that derivative (the `unavailable` rows), and
+passing `words=[]` still writes a `consensus_transcript` measurement carrying no words (I7), so
+`test_speech_with_windows_but_no_words_is_uncertain` reads a lexical line that is `absent` rather than
+`unavailable`. A test that got those backwards would pass for the wrong reason.
 
 - [ ] **Step 2 — run them; expect FAIL** (`ImportError` on `SCREENED_KINDS` shape / `KeyError: 'voice'`).
   `uv run pytest src/tests/audio/workflows/triage/nodes/taxonomy_test.py -x -q`
@@ -2484,245 +2779,77 @@ class TestTheStoreContract:
         assert airway.attributes["kind_state"] == "uncertain"
 ```
 
-Append to `src/tests/audio/workflows/triage/run_test.py`:
+Append to `src/tests/audio/workflows/triage/run_test.py`. **These use that file's own existing
+helpers** — the `graph` fixture, `_fakes` and `_tone` — and **not** `nodes/conftest.py`'s `wav_writer`,
+which is one directory down and does not apply here. `_fakes` gains two keyword arguments (`kinds`,
+which the fake TAXONOMY writes as `kind` entities, and `routing_outcome`) and one more fake, `_routing`,
+which calls the real `routing` node over the store the fake TAXONOMY seeded — so these tests exercise
+the real gate against fake branches, which is the behaviour under test:
 
 ```python
 class TestConditionalExecution:
-    """run.py runs the branches routing said to run, and records the rest as skipped."""
+    """run.py runs the branches routing selected, and records the rest as skipped."""
 
     def test_a_skipped_branch_is_not_called_and_is_recorded_skipped(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wav_writer: Callable[..., Path]
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """A branch with will_run false never runs, and RunState.SKIPPED says so."""
-        calls: list[str] = []
-        _stub_graph(monkeypatch, calls, kinds={"speech": "present", "airway": "absent", "voice": "absent"})
-        result = run_triage(wav_writer("s.wav", _sine()), tmp_path, load_triage_config())
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "AIRWAY" not in calls
         assert result.ran["AIRWAY"] is RunState.SKIPPED
         assert result.ran["SPEECH"] is RunState.COMPLETED
 
     def test_redact_runs_only_when_speech_ran_and_found_pii(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wav_writer: Callable[..., Path]
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """REDACT is a step of SPEECH; no speech branch means no REDACT verdict at all."""
-        calls: list[str] = []
-        _stub_graph(monkeypatch, calls, kinds={"speech": "absent", "airway": "present", "voice": "absent"})
-        result = run_triage(wav_writer("s.wav", _sine()), tmp_path, load_triage_config())
+        calls = graph(kinds={"speech": "absent", "airway": "present", "voice": "absent"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert "REDACT" not in calls
         assert result.ran["REDACT"] is RunState.SKIPPED
 
+    def test_speech_running_without_a_finding_still_skips_redact(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """redact.md: SPEECH ran and found no PII, so the release axis reads not_assessed."""
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"}, pii=False)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "SPEECH" in calls and "REDACT" not in calls
+        assert result.file_verdict is not None
+        assert result.file_verdict.release is Release.NOT_ASSESSED
+
+    def test_speech_running_with_a_finding_reaches_redact(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """One live pii entity is the whole gate."""
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"}, pii=True)
+        run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "REDACT" in calls
+
     def test_an_empty_execution_set_still_reaches_verdict(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wav_writer: Callable[..., Path]
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """The file reaches the fold with no branch conclusions, which is what routing.md requires."""
-        calls: list[str] = []
-        _stub_graph(monkeypatch, calls, kinds={"speech": "absent", "airway": "absent", "voice": "absent"})
-        result = run_triage(wav_writer("s.wav", _sine()), tmp_path, load_triage_config())
+        calls = graph(kinds={"speech": "absent", "airway": "absent", "voice": "absent"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.ran["VERDICT"] is RunState.COMPLETED
         assert {"AIRWAY", "SPEECH", "VOICE"}.isdisjoint(calls)
+
+    def test_a_raising_routing_runs_every_branch_and_is_recorded_errored(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The degradation is designed, not a default: the fold sees a node that was asked and was silent."""
+        calls = graph(routing_outcome="raise")
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert {"AIRWAY", "SPEECH", "VOICE"} <= set(calls)
+        assert result.ran["routing"] is RunState.ERRORED
 ```
 
-- [ ] **Step 2 — run them; expect FAIL** (`ModuleNotFoundError: ...nodes.routing`).
-  `uv run pytest src/tests/audio/workflows/triage/nodes/routing_test.py src/tests/audio/workflows/triage/run_test.py -x -q`
-
-- [ ] **Step 3 — write `routing.py`.**
-
-```python
-"""ROUTING — the branch gate between TAXONOMY and the branches.
-
-It measures nothing and classifies nothing: it reads ``kind`` elements and the hint, and writes one
-``branch_decision`` element per branch **before any branch runs**. Present and uncertain both run;
-absent does not, unless a hint forces it. Forcing adds a branch and never rewrites a classification.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
-from senselab.audio.data_structures import AudioHints
-from senselab.audio.workflows.triage.config import TriageConfig
-from senselab.audio.workflows.triage.nodes.common import NodeResult, live_entities, software_agent, write_verdict
-from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import Entity, ProvStore
-
-NODE = "routing"
-
-BRANCH_FOR_KIND = {"airway": "AIRWAY", "speech": "SPEECH", "voice": "VOICE"}
-
-PRESENT = "present"
-ABSENT = "absent"
-UNCERTAIN = "uncertain"
-
-_SPEECH_TYPE_KEY = "speech_type"
-
-
-@dataclass(frozen=True)
-class RoutingResult(NodeResult):
-    """ROUTING's result.
-
-    Attributes:
-        runs: The branches that will run, in ``BRANCH_FOR_KIND`` order.
-        skipped: The branches that will not.
-        forced: The branches a hint forced, a subset of ``runs``.
-        empty_set: Whether no branch will run at all.
-    """
-
-    runs: tuple[str, ...]
-    skipped: tuple[str, ...]
-    forced: tuple[str, ...]
-    empty_set: bool
-
-
-def _hint_tokens(hint: AudioHints | None) -> list[str]:
-    """Every token a hint offers the map: its ``may_contain`` tags and its ``speech_type``.
-
-    Args:
-        hint: The caller's hint, or None.
-
-    Returns:
-        The tokens, casefolded, in first-seen order and deduplicated.
-    """
-    if hint is None:
-        return []
-    tokens = [str(tag) for tag in hint.may_contain]
-    speech_type = hint.metadata.get(_SPEECH_TYPE_KEY)
-    if speech_type is not None:
-        tokens.append(str(speech_type))
-    seen: dict[str, None] = {}
-    for token in tokens:
-        seen.setdefault(token.casefold(), None)
-    return list(seen)
-
-
-def _latest_kinds(store: ProvStore) -> dict[str, Entity]:
-    """The live ``kind`` element per kind, latest write wins — the store's shared read rule."""
-    latest: dict[str, Entity] = {}
-    for entity in live_entities(store, "kind"):
-        latest[str(entity.attributes["kind"])] = entity
-    return latest
-
-
-def routing(
-    store: ProvStore,
-    source: None,
-    config: TriageConfig,
-    hint: AudioHints | None = None,
-    *,
-    run_dir: Path,
-) -> RoutingResult:
-    """Turn TAXONOMY's classification, plus the hints, into an execution set.
-
-    Args:
-        store: The provenance store, holding TAXONOMY's ``kind`` elements.
-        source: Accepted for the shared node shape; not read.
-        config: The triage configuration. Only ``routing.hint_kind_map`` is read, and it is optional:
-            while it is null nothing is mapped and nothing is forced.
-        hint: What the recording was declared to contain. Its ``may_contain`` tags and its
-            ``metadata["speech_type"]`` are the forcing inputs.
-        run_dir: Accepted for the shared node shape; this node writes no sidecars.
-
-    Returns:
-        The verdict, the three ``branch_decision`` element ids as the view, and the execution set.
-    """
-    software = software_agent(store)
-    hint_map = {
-        str(token).casefold(): str(kind) for token, kind in (config.get("routing.hint_kind_map") or {}).items()
-    }
-    tokens = _hint_tokens(hint)
-    forced_kinds: dict[str, list[str]] = {}
-    unmapped: list[str] = []
-    for token in tokens:
-        kind = hint_map.get(token)
-        if kind is None:
-            unmapped.append(token)
-        else:
-            forced_kinds.setdefault(kind, []).append(token)
-
-    kinds = _latest_kinds(store)
-    decide = store.activity(
-        node=NODE,
-        step="decide",
-        parameters={"hint_tokens": tokens, "mapped": sorted(forced_kinds), "unmapped": unmapped},
-    )
-    store.was_associated_with(decide, software)
-    for entity in kinds.values():
-        store.used(decide, entity.id)
-
-    runs: list[str] = []
-    skipped: list[str] = []
-    forced: list[str] = []
-    view: list[str] = []
-    for kind, branch in BRANCH_FOR_KIND.items():
-        entity = kinds.get(kind)
-        state = str(entity.attributes["state"]) if entity is not None else UNCERTAIN
-        forced_by_hint = kind in forced_kinds
-        will_run = state in (PRESENT, UNCERTAIN) or forced_by_hint
-        if entity is None:
-            why = f"{kind} has no classification in the store; an absent classification is not absence"
-        elif will_run and forced_by_hint and state == ABSENT:
-            why = f"{kind} classified absent; a hint forces the branch and the disagreement is recorded"
-        elif will_run:
-            why = f"{kind} classified {state}"
-        else:
-            why = f"{kind} classified absent and no hint forces it"
-        attributes: dict[str, Any] = {
-            "branch": branch,
-            "kind": kind,
-            "will_run": will_run,
-            "kind_state": state,
-            "forced_by_hint": forced_by_hint,
-            "hint_tags": forced_kinds.get(kind, []),
-            "unmapped_tags": unmapped,
-            "why": why,
-            "stream": "plain",
-        }
-        decision_id = store.entity(prov_type="branch_decision", extent=None, attributes=attributes)
-        store.was_generated_by(decision_id, decide)
-        store.was_attributed_to(decision_id, software)
-        if entity is not None:
-            store.was_derived_from(decision_id, entity.id)
-        view.append(decision_id)
-        (runs if will_run else skipped).append(branch)
-        if forced_by_hint:
-            forced.append(branch)
-
-    empty_set = not runs
-    if empty_set:
-        outcome = Outcome.FLAG
-        why = "every kind is absent and no hint forces a branch; the execution set is empty"
-    else:
-        outcome = Outcome.PASS
-        why = "branches selected: " + ", ".join(runs)
-
-    verdict_id, verdict = write_verdict(
-        store,
-        decide,
-        software,
-        node=NODE,
-        outcome=outcome,
-        kind=None,
-        why=why,
-        detail={
-            "runs": runs,
-            "skipped": skipped,
-            "forced": forced,
-            "empty_set": empty_set,
-            "unmapped_tags": unmapped,
-        },
-    )
-    view.append(verdict_id)
-    return RoutingResult(
-        verdict=verdict,
-        view=tuple(view),
-        verdict_entity_id=verdict_id,
-        runs=tuple(runs),
-        skipped=tuple(skipped),
-        forced=tuple(forced),
-        empty_set=empty_set,
-    )
-```
+`GRAPH`, the module-level tuple `run_test.py` asserts graph order against, gains `"routing"` between
+`"TAXONOMY"` and `"AIRWAY"`, and `TestHappyPath::test_calls_all_eight_nodes_in_graph_order` is renamed
+to `test_calls_all_nine_nodes_in_graph_order` — its body is unchanged, since it compares against
+`GRAPH`.
 
 - [ ] **Step 4 — make `run.py` honour the decisions.**
 
@@ -2822,8 +2949,11 @@ ADMIT-fail branch marks `GRAPH_ORDER[1:-1]` skipped as before — which now incl
 `RunState.ERRORED`, so VERDICT sees a node that was asked and left no answer and flags. That is the
 designed degradation; it is not a default.
 
-- [ ] **Step 5 — run them; expect PASS.**
-  `uv run pytest src/tests/audio/workflows/triage/nodes/routing_test.py src/tests/audio/workflows/triage/run_test.py -x -q`
+- [ ] **Step 5 — run them; expect PASS — over routing, taxonomy and the runner only.**
+  `uv run pytest src/tests/audio/workflows/triage/nodes/routing_test.py src/tests/audio/workflows/triage/nodes/taxonomy_test.py src/tests/audio/workflows/triage/run_test.py -x -q`
+  `airway_test.py`, `speech_test.py`, `voice_test.py`, `redact_test.py` and `verdict_test.py` are
+  **still red** at the end of the foundation half and are repaired by T6, T4, T5, T7 and T8. Do not
+  run the whole triage directory here and do not repair another task's module.
 
 - [ ] **Step 6 — lint, type-check.**
   `uv run ruff format src/senselab/audio/workflows/triage src/tests/audio/workflows/triage`
@@ -2848,6 +2978,10 @@ store's vocabulary and are pinned by `routing_test.py` and `taxonomy_test.py` to
 - Three `branch_decision` entities, exactly as §"The v2 store contract" states, each
   `wasDerivedFrom` its `kind` element where one exists.
 - `run.GRAPH_ORDER` including `"routing"`; `run._BRANCHES`; `run_triage(..., enrollment=None)`.
+- `run_test.py`'s `_fakes` gains `kinds`, `pii` and `routing_outcome` keyword arguments and a
+  `_routing` entry that calls the **real** `routing` node over the store the fake TAXONOMY seeded, so
+  the gate is exercised against fake branches. `GRAPH` gains `"routing"`. Sibling T9 extends the same
+  `_fakes`, and is the only other task that touches `run_test.py`.
 
 **Superseded tests, deleted with the ruling that justifies each:**
 
