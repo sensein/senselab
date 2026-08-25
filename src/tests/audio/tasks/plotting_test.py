@@ -10,9 +10,46 @@ from matplotlib.text import Text
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.plotting.plotting import (
     play_audio,
+    plot_aligned_panels,
     plot_specgram,
     plot_waveform,
 )
+
+
+def _tone() -> Audio:
+    """A short mono waveform, enough for a shared time axis."""
+    return Audio(waveform=torch.linspace(-0.5, 0.5, 16000).unsqueeze(0), sampling_rate=16000)
+
+
+class TestTheTextPanel:
+    """A panel that carries prose beside the shared time axis, for a report's per-step blocks."""
+
+    def test_a_text_panel_renders_its_lines(self) -> None:
+        """The lines reach the axis; a blank panel is the failure this type exists to prevent."""
+        figure = plot_aligned_panels(
+            _tone(), [{"type": "waveform"}, {"type": "text", "lines": ["triage: pass", "release: withheld"]}]
+        )
+        texts = [t.get_text() for ax in figure.axes for t in ax.texts]
+        assert any("triage: pass" in text for text in texts)
+        assert any("release: withheld" in text for text in texts)
+
+    def test_a_text_panel_has_no_time_axis(self) -> None:
+        """It carries no data over time, so it must not claim a shared x-scale it does not use."""
+        figure = plot_aligned_panels(_tone(), [{"type": "waveform"}, {"type": "text", "lines": ["a"]}])
+        assert not figure.axes[-1].axison
+
+    def test_a_long_block_grows_the_figure(self) -> None:
+        """A verdict block with many reasons must grow the page, not overflow its own axis."""
+        short = plot_aligned_panels(_tone(), [{"type": "waveform"}, {"type": "text", "lines": ["a"]}])
+        tall = plot_aligned_panels(
+            _tone(), [{"type": "waveform"}, {"type": "text", "lines": [f"line {i}" for i in range(60)]}]
+        )
+        assert tall.get_size_inches()[1] > short.get_size_inches()[1]
+
+    def test_an_unknown_panel_type_now_raises(self) -> None:
+        """A typo used to yield a blank axis and a report that looked finished."""
+        with pytest.raises(ValueError, match="unknown panel type"):
+            plot_aligned_panels(_tone(), [{"type": "sepctrogram"}])
 
 
 class TestPlotWaveform:
