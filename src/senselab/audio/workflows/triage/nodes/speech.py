@@ -211,7 +211,9 @@ def _speech_coverage(windows: list[Entity], extent: tuple[float, float], family:
     overlapping = [w for w in windows if w.extent is not None and _overlaps(extent, w.extent)]
     if not overlapping:
         return None
-    carried = sum(1 for window in overlapping if family & {str(label) for label in (window.attributes.get("labels") or [])})
+    carried = sum(
+        1 for window in overlapping if family & {str(label) for label in (window.attributes.get("labels") or [])}
+    )
     return carried / len(overlapping)
 
 
