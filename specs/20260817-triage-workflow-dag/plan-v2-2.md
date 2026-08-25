@@ -35,11 +35,17 @@ Copied verbatim from `plan-v2-1.md`; every one is binding here too.
   exemption: `20·log10`, full scale `1.0`, `1e-12` floor clamps, `1000.0` ms-per-second, `1200.0`
   cents-per-octave, and a *vocabulary token* that is a controlled string the store must round-trip
   (`"not_evaluated"`, `"bounded"`, `"unavailable"`, `"not_assessed"`).
-- **A value nobody has measured is `null` in the config, and reading it raises.** Sibling T1 creates all
-  33 open keys; this file's T5, T7 and T9 create six more (`voice.f0_range_by_population`,
-  `voice.f0_range_ratio_max`, `voice.task_duration_ranges`, `redaction.fill`, `redaction.bleep_hz`,
-  `report.format`). **Supplying a value for any open key is wrong.** Tests exercise them through
-  explicit YAML overrides, which is the intended production mechanism too.
+- **A value nobody has measured is `null` in the config, and reading it raises.** Sibling T1 creates
+  all 33 open keys **and** `voice.f0_range_hz` (a rename, not a new open key — see that plan's
+  ledger). This file creates **four more nulls** — `voice.f0_range_by_population`,
+  `voice.f0_range_ratio_max`, `voice.task_duration_ranges` (T5) and `redaction.fill` (T7) — and **two
+  keys that are not null and are in no open ledger**: `redaction.bleep_hz` = 1000.0, the conventional
+  broadcast censor tone (T7), and `report.format` = `"png"`, a declared presentation choice (T9, and
+  see I4's reasoning: a null there would make the one product `report.md` requires on every file
+  unreachable under the packaged config). **Supplying a value for any *open* key is wrong.** Tests
+  exercise them through explicit YAML overrides, which is the intended production mechanism too.
+  **Sibling `plan-v2-1.md`'s §"The 33 open keys" and its ledger paragraphs are the single source of
+  truth for which key belongs to which category; this paragraph must not diverge from it.**
 - **Append-only `ProvStore`.** Nothing is modified or deleted; a superseded claim is
   `wasInvalidatedBy`, a refined one `wasDerivedFrom`. Every read of the store goes through
   `nodes/common.py`'s helpers (`find_measurement`, `find_measurements`, `live_entities`,
@@ -78,11 +84,11 @@ Continuing `plan-v2-1.md`'s `V1..V14`.
 | --- | --- | --- |
 | V15 | `branch-speech.md` gives `enrollment` its own shape but the tree has `AudioHints.target_speaker` | a new pydantic model `Enrollment` in `src/senselab/audio/workflows/triage/enrollment.py`, passed to `run_triage` and to `speech()` as a keyword argument. `hint.target_speaker` is **no longer read by triage**; when it is set and no enrollment is given, SPEECH flags with `"a target embedding was supplied on the hint; triage identifies the target by enrollment and did not read it"`, so the ignore is never silent |
 | V16 | the spec's `provenance: {model_id, revision, task}` versus the tree's `SpeakerEmbeddingProvenance` | `Enrollment.provenance` **is** `SpeakerEmbeddingProvenance` — it already carries `model_id`, a validated 40-hex `model_commit_sha`, `source_files` and `unresolved_reason`. `revision` is `model_commit_sha`; `task` is a new `Enrollment.task: str \| None`. Reusing it means `estimate_speaker_embedding_from_audios` produces an enrollment directly |
-| V17 | `branch-speech.md` says unasdiff's sound slot "stands for any background, so the mode is used without conditioning the background on a class" — but `separate_audios` **refuses** `speech_sound` without a `source_classes` entry ("index 0 is 'Hi-hat'") | a real spec/API conflict. `speech.separation_sound_class` is created **null** and named in the derivation. While it is null the unasdiff option cannot run: SPEECH records `separation: "unconditioned_sound_slot_unavailable"` and flags. **Flagged to the owner** — resolving it needs either a defensible FSD class or an unconditioned sound slot in unasdiff |
-| V18 | the Glides `ValueError: 'waveform' must be provided as a (channel, time) torch Tensor` | pyannote's `Audio.validate_file` refuses a waveform where `shape[0] > shape[1]` (`pyannote/audio/core/io.py:173`). On a Glides file the consensus collapses to a degenerate `[first word start, last word end]`, `extract_segments` slices `[s:e]` with `s == e`, and a `(1, 0)` tensor trips exactly that guard. The fix is at the source: an interval shorter than one analysis frame is **not diarized**, the branch records `speaker_count: null` with `diarization: "interval_shorter_than_one_frame"` and flags. See T4 step 5 |
+| V17 | `branch-speech.md` says unasdiff's sound slot "stands for any background, so the mode is used without conditioning the background on a class" — but `separate_audios` **refuses** `speech_sound` without a `source_classes` entry ("index 0 is 'Hi-hat'") | a real spec/API conflict, and **not an unmeasured threshold: the capability the spec asks for is absent upstream** (M1). `speech.separation_sound_class` is created `null` and its derivation says exactly that — nobody has to measure anything for it, someone has to add an unconditioned sound slot to unasdiff or name a defensible FSD class. While it is null the unasdiff option cannot run: SPEECH records the runtime token `separation: "unconditioned_sound_slot_unavailable"` and flags, and the token stays as it is. **Flagged to the owner.** The row is added to `branch-speech.md`'s own Open-derivations table so the spec carries the gap rather than only the plan |
+| V18 | the Glides `ValueError: 'waveform' must be provided as a (channel, time) torch Tensor` | **the observation is real and the mechanism is not yet established.** The failure is recorded on the cluster, not in this repository: run `1f4ea26f`, file `Glides-Low-to-High`, errored `SPEECH -> ValueError: 'waveform' must be provided as a (channel, time) torch Tensor` in **both** campaigns (`/orcd/scratch/orcd/013/satra/triage_b2ai_more/1f4ea26f/out*/summary.md`). An earlier draft of this plan asserted a mechanism — a consensus collapsing to a degenerate `[first word start, last word end]`, yielding a `(1, 0)` crop that trips pyannote's `shape[0] > shape[1]` guard (`pyannote/audio/core/io.py:173`) — **and that was inference, which the recorded b2ai-28 Glides runs contradict**: those runs reached diarization and produced verdicts, so the interval was not degenerate there. T4 therefore **diagnoses before it fixes** (step 5a), and carries one fix that is correct under every mechanism: `extract_segments` gains the `start >= end` guard its sibling `chunk_audios` already has (`preprocessing.py:187,199-201`), so a caller can never be handed a zero-length `Audio` to pass on to a model. Any caller-side floor that survives the diagnosis is a **config key with a derivation**, not a literal |
 | V19 | the disruptions-absence anomaly on wordless files | it is **not** in SPEECH's span scoping: a span nobody measured must not report zero, so per-span absence on a wordless file is correct. The missing half is the file-level reading, which sibling T1 adds as `disruptions_file`. T4 verifies the span scoping and adds nothing — see T4 step 6 |
 | V20 | `branch-voice.md`'s "half-frame tolerance" for `min_marks_s` is not in the spec at all; the owner's ruling is | a frame stands for a hop-wide interval **centred on its time**, so a run's duration is `times[last] - times[first] + hop_s`, not `times[last] - times[first]`. The tolerance is one hop — half a hop at each edge — and is an identity of the analysis grid, derived from `phonation_spans.hop_s`, not a magic number |
-| V21 | `branch-airway.md`'s "both fall inside the same window" does not say **whose** window | the **HeAR** window, because the HeAR label is what is being contested. A YAMNet label contests only when its window's extent lies inside the extent of a HeAR window whose label set contains the span's label |
+| V21 | `branch-airway.md`'s "both fall inside the same window" does not say **whose** window | the **HeAR** window, because the HeAR label is what is being contested. A YAMNet label contests only when its window's extent lies inside the extent of a HeAR window whose label set contains the span's label. **What this buys is weaker than "the same event", and the plan says so rather than overclaiming (M4):** HeAR's window is a 2 s box-car, so "co-located" means "within the same 2 s neighbourhood", which at YAMNet's 0.48 s hop admits roughly four YAMNet windows either side of the one carrying the event. The rule is kept, because the alternative it replaces — any contest label anywhere in the file — is very much worse, and because a 2 s neighbourhood is the finest grain HeAR's own output supports; a tighter rule would be a precision the evidence does not have. Every `contest` assertion records the HeAR window it was found in, so a reader sees the neighbourhood's extent rather than inferring it |
 | V22 | `redact.md`'s `noise` fill ("speech-shaped noise at the extent's own level") has no measured shaping | `redaction.fill` accepts `"silence"` and `"bleep"`, both implemented. `"noise"` raises `NotImplementedError` naming the measurement it is owed — which fill is least damaging to downstream measurement — rather than shipping an unmeasured spectral shape. `redaction.bleep_hz` is `1000.0` with the derivation "the conventional broadcast censor tone; a presentation choice, not fitted" |
 | V23 | `verdict.md`'s `triage` axis is `pass \| flag \| discard`, but the tree folds `Outcome` (`pass \| flag \| fail`) | a new `Triage` enum replaces `Outcome` on the **file** axis. Node verdicts keep `Outcome`. `FileVerdict.triage: Triage`, and `fold_file_verdict` is rewritten around branch authority rather than the v1 contradiction table |
 | V24 | `report.md` requires both products on every outcome including an ADMIT refusal, where the store holds one verdict and one stream | REPORT reads whatever is there. On an ADMIT `fail` the summary is one page carrying the file block, the verdict block and the words "nothing was measured"; the JSON carries `verdict`, `provenance` and empty `branches`/`steps`. It never raises for want of a derivative |
@@ -92,6 +98,9 @@ Continuing `plan-v2-1.md`'s `V1..V14`.
 ### Task 4: SPEECH v2 — enrollment, a conditional second diarizer, PII on the consensus, and the Glides fix
 
 **Scope:** `src/senselab/audio/workflows/triage/enrollment.py` (new);
+`src/senselab/audio/tasks/preprocessing/preprocessing.py` (the `extract_segments` guard, C3);
+`src/tests/audio/tasks/preprocessing/preprocessing_test.py` (that guard's tests);
+`specs/20260817-triage-workflow-dag/benchmarks/glides-diarization.md` (new, the diagnosis);
 `src/senselab/audio/workflows/triage/nodes/speech.py` (heavily edited);
 `src/senselab/audio/workflows/triage/run.py` (forward `enrollment`);
 `src/senselab/audio/workflows/triage/__init__.py` (export `Enrollment`);
@@ -119,6 +128,10 @@ Continuing `plan-v2-1.md`'s `V1..V14`.
 - **The non-target axis is measured and reported per span, and `nontarget_speech_s` is null** until all
   three proximity thresholds exist. No span is excluded on this evidence.
 - **This branch marks; it removes nothing.**
+- **The Glides failure is diagnosed before it is fixed.** The observation is real and recorded on the
+  cluster; the mechanism is not established, and the mechanism an earlier draft asserted is
+  contradicted by the b2ai-28 runs. Step 5a reads the failing run; step 5b adds the one guard that is
+  correct whatever it finds.
 
 **Steps:**
 
@@ -277,7 +290,91 @@ Export it from `src/senselab/audio/workflows/triage/__init__.py` (import and `__
 - [ ] **Step 4 — run it; expect PASS.**
   `uv run pytest src/tests/audio/workflows/triage/enrollment_test.py -x -q`
 
-- [ ] **Step 5 — write the failing SPEECH tests, including the Glides reproduction.**
+- [ ] **Step 5a — diagnose the Glides failure before writing any fix for it (C3).**
+
+The failure is recorded, the mechanism is not. **This step establishes the mechanism from the actual
+failing run and writes it down; no code is written until it does.**
+
+What is known: run `1f4ea26f`, file `Glides-Low-to-High`, errored
+`SPEECH -> ValueError: 'waveform' must be provided as a (channel, time) torch Tensor` in **both**
+campaigns. Summaries at
+`/orcd/scratch/orcd/013/satra/triage_b2ai_more/1f4ea26f/out*/summary.md`.
+
+What is **not** known, and must not be assumed: an earlier draft of this plan asserted that the
+consensus collapses to a single instant, giving `extract_segments` a `[s:e]` with `s == e` and a
+`(1, 0)` tensor. **The b2ai-28 Glides runs contradict that** — both Glides files reached diarization
+there and produced verdicts, so on those runs the interval was not degenerate. The mechanism on
+`1f4ea26f` may be different, and the diagnosis has to say which.
+
+Read the evidence, in this order, stopping at the first that answers it:
+
+1. **The run's own store.** `store.jsonl` beside the summary holds every `word` entity SPEECH read
+   and every activity it opened. Read the SPEECH activities' parameters — the `diarize` step records
+   `interval` — and the consensus words' extents:
+
+   ```bash
+   ssh orcd-login 'python3 - <<PY
+   import json
+   path = "/orcd/scratch/orcd/013/satra/triage_b2ai_more/1f4ea26f/out/<glides-run>/run/store.jsonl"
+   words, acts = [], []
+   for line in open(path):
+       rec = json.loads(line)
+       if rec.get("prov_type") == "word":
+           words.append(rec["extent"])
+       if rec.get("node") == "SPEECH":
+           acts.append((rec.get("step"), rec.get("parameters")))
+   print("n_words:", len(words))
+   print("extent span:", (min(w[0] for w in words), max(w[1] for w in words)) if words else None)
+   print("degenerate words:", sum(1 for w in words if w[1] <= w[0]))
+   for step, params in acts:
+       print(step, params)
+   PY'
+   ```
+
+   **`n_words: 0`, or a min-start equal to a max-end, confirms the degenerate-interval mechanism.**
+   A healthy multi-second interval refutes it and the cause is elsewhere in the branch — read which
+   SPEECH step opened last, since the error came from whichever call followed it.
+
+2. **The run's log.** `run.json` beside the store carries the error string with its traceback frame.
+   The frame names the call site directly, which settles it in one read if the store is ambiguous.
+
+3. **Reproduce locally**, only if 1 and 2 leave it open: fetch that one file, run
+   `uv run python scripts/... ` over it with the same config hash the summary records, and read the
+   traceback.
+
+Write the mechanism into
+`specs/20260817-triage-workflow-dag/benchmarks/glides-diarization.md`: the file, the run, the observed
+interval, the call that raised, and which of the two candidate mechanisms the evidence supports. **A
+diagnosis that cannot reach the cluster is still a result** — say so in that file, name what would
+settle it, and proceed to step 5b, which is correct either way.
+
+- [ ] **Step 5b — the guard that is correct under every mechanism.**
+
+Whatever step 5a found, `extract_segments` must not return a zero-length `Audio`. Its sibling
+`chunk_audios` has refused `start >= end` since it was written (`preprocessing.py:187,199-201`);
+`extract_segments` checks `start < 0` and `end > duration` and **not** the degenerate case
+(`preprocessing.py:262-268`), so it silently returns `Audio(waveform=<shape (1, 0)>)` and every
+model-facing caller downstream inherits the problem. Add the missing guard:
+
+```python
+        for start, end in timestamps:
+            if start < 0:
+                raise ValueError("Start time must be >= 0.")
+            if start >= end:
+                raise ValueError(f"Start time must be < end; got start={start}, end={end}.")
+            if end > dur:
+                raise ValueError(f"End must be <= duration of the audio ({dur} sec).")
+```
+
+`TestExtractSegmentsRefusesAnEmptySegment` in step 5's test list is the red-first test for this, and
+it lives at `src/tests/audio/tasks/preprocessing/preprocessing_test.py`, not in the triage tree.
+
+**If step 5a established that a short-but-nonempty interval is the cause**, the floor that follows is
+a config key with a derivation — `speech.min_diarization_interval_s`, shipped `null`, added to the
+open-key ledger, and read through `config.get` so a null leaves the row inert. **Do not add it
+speculatively.**
+
+- [ ] **Step 5 — write the failing SPEECH tests, including the extract_segments guard.**
 
 Replace `src/tests/audio/workflows/triage/nodes/speech_test.py`. The new classes, in full:
 
@@ -286,10 +383,10 @@ class TestItReadsTheConsensusAndReFusesNothing:
     """PREPROCESS produced the consensus; this branch reads it."""
 
     def test_the_words_come_from_the_consensus_transcript(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
         """words_n is the count of consensus word entities, not a re-fusion of the hypotheses."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert result.verdict.node == "SPEECH"
         verdict = _verdict_entity(store, "SPEECH")
@@ -301,18 +398,18 @@ class TestItReadsTheConsensusAndReFusesNothing:
         assert not hasattr(speech_module, "fuse_consensus_words")
 
     def test_an_event_is_not_a_word(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Bracketed and onomatopoeic events count toward no word total and no span extent."""
-        seeded_store(store, tmp_path, words=["hello"], events=["[COUGH]", "[BREATH]"])
+        _seed_speech_store(store, tmp_path, words=["hello"], events=["[COUGH]", "[BREATH]"])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert _verdict_entity(store, "SPEECH").attributes["words_n"] == 1
 
     def test_no_consensus_word_fails_and_writes_no_pii_scan(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
         """redact.md: a wordless recording has no PII scan, no REDACT verdict and no withheld release."""
-        seeded_store(store, tmp_path, words=[])
+        _seed_speech_store(store, tmp_path, words=[])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert result.verdict.outcome is Outcome.FAIL
         assert find_measurement(store, "pii_scan") is None
@@ -322,22 +419,22 @@ class TestTheSecondDiarizerIsConditional:
     """One speaker is the count; anything else consults a second diarizer and reports disagreement."""
 
     def test_a_count_of_one_consults_nobody(
-        self, store: ProvStore, second_diarizer_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, second_diarizer_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """branch-speech.md: 'No second diarizer runs'."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=2)
         speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
         assert calls == ["primary"]
         assert _verdict_entity(store, "SPEECH").attributes["second_diarizer"] == "not_consulted"
 
     def test_a_count_of_two_consults_the_second(
-        self, store: ProvStore, second_diarizer_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, second_diarizer_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The disagreement is reported; it does not replace pyannote's count."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         calls = _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=3)
         speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
         assert calls == ["primary", "second"]
@@ -346,79 +443,75 @@ class TestTheSecondDiarizerIsConditional:
         assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 2
 
     def test_a_count_of_zero_consults_the_second_too(
-        self, store: ProvStore, second_diarizer_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, second_diarizer_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """branch-speech.md: 'the codomain is the counts pyannote can return, and 0 is one of them'."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         calls = _stub_diarizers(monkeypatch, primary_speakers=0, second_speakers=1)
         speech(store, "plain", second_diarizer_config, run_dir=tmp_path, enrollment=None)
         assert calls == ["primary", "second"]
 
     def test_a_declared_count_is_not_read(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """hint.targeted_speaker_count is the protocol's intent, of unknown provenance; not evidence."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         hint = AudioHints(targeted_speaker_count=4)
         result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
         assert "4" not in result.verdict.why
 
 
-class TestTheDegenerateDiarizationInterval:
-    """The Glides failure: a (1, 0) crop trips pyannote's (channel, time) guard (V18)."""
+class TestExtractSegmentsRefusesAnEmptySegment:
+    """The one fix that is correct under every mechanism (C3b)."""
 
-    def test_a_zero_length_interval_is_not_diarized(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One word whose start equals its end collapses the interval; the branch must not call out."""
-        seeded_store(store, tmp_path, words=["aaaa"], word_extents=[(1.0, 1.0)])
-        calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert calls == []
-        verdict = _verdict_entity(store, "SPEECH")
-        assert verdict.attributes["speaker_count"] is None
-        assert verdict.attributes["diarization"] == "interval_shorter_than_one_frame"
-        assert result.verdict.outcome is Outcome.FLAG
+    def test_a_zero_length_request_raises_like_its_sibling_does(self) -> None:
+        """chunk_audios has refused start >= end since it was written; extract_segments did not."""
+        audio = _tone(1.0)
+        with pytest.raises(ValueError, match="Start time must be < end"):
+            extract_segments([(audio, [(1.0, 1.0)])])
 
-    def test_the_real_pyannote_guard_is_what_this_avoids(self) -> None:
-        """A (1, 0) waveform is exactly what pyannote refuses; this pins the mechanism, not the fix."""
-        waveform = torch.zeros(1, 0)
-        assert waveform.shape[0] > waveform.shape[1]
+    def test_a_reversed_request_raises_too(self) -> None:
+        """An end before its start selects nothing and is a caller error, not an empty result."""
+        with pytest.raises(ValueError, match="Start time must be < end"):
+            extract_segments([(_tone(1.0), [(0.5, 0.2)])])
 
-    def test_a_sub_frame_interval_is_not_diarized_either(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One sample is not zero samples, and is still not a diarizable interval."""
-        seeded_store(store, tmp_path, words=["aaaa"], word_extents=[(1.0, 1.0 + 1 / 16000)])
-        calls = _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
-        speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
-        assert calls == []
+    def test_an_ordinary_segment_is_unaffected(self) -> None:
+        """The guard is a refusal at the degenerate boundary, not a new minimum length."""
+        [[segment]] = extract_segments([(_tone(1.0), [(0.2, 0.4)])])
+        assert segment.waveform.shape[-1] > 0
+
+    def test_the_guard_is_what_keeps_a_1_by_0_tensor_out_of_a_model(self) -> None:
+        """Before the guard, a degenerate request returned Audio(waveform=(1, 0)), which every
+        model-facing caller then passed on: pyannote refuses it with the exact message the cluster
+        recorded, and nothing before that point had said anything was wrong.
+        """
+        audio = _tone(1.0)
+        with pytest.raises(ValueError):
+            extract_segments([(audio, [(0.5, 0.5)])])
 
 
 class TestEnrollment:
     """The target is enrolled. An enrollment without provenance is refused rather than compared."""
 
     def test_no_enrollment_claims_no_identity(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Speakers stay SPEAKER_*, and nothing is called a target."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert "target_speaker" not in _verdict_entity(store, "SPEECH").attributes
 
     def test_an_enrollment_without_a_commit_is_refused(
-        self, store: ProvStore, enrollment_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, enrollment_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """No embedder runs; the branch flags with the refusal."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         embedder = _stub_embedder(monkeypatch)
         result = speech(
@@ -429,11 +522,11 @@ class TestEnrollment:
         assert "resolved model commit" in result.verdict.why
 
     def test_an_enrollment_from_another_model_is_refused(
-        self, store: ProvStore, enrollment_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, enrollment_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A similarity between two models' spaces is not a similarity."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(
             store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment(model="pyannote/embedding")
@@ -441,22 +534,22 @@ class TestEnrollment:
         assert "not the probe" in result.verdict.why
 
     def test_a_null_enrollment_model_key_refuses_before_any_store_write(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """speech.enrollment_model is null on the packaged config; nothing invents a probe."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=_enrollment())
         assert result.verdict.outcome is Outcome.FLAG
         assert "speech.enrollment_model" in result.verdict.why
 
     def test_the_enrollment_element_names_every_source(
-        self, store: ProvStore, enrollment_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, enrollment_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The store carries the enrollment, so a file's own contribution to its target is visible."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_embedder(monkeypatch, similarity=0.99)
         speech(store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment())
@@ -466,11 +559,11 @@ class TestEnrollment:
         assert element.attributes["model_commit_sha"] == "a" * 40
 
     def test_a_hint_target_speaker_is_not_read_and_says_so(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The ignore is never silent (V15)."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         hint = AudioHints(target_speaker=_target_speaker_embedding())
         result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
@@ -481,11 +574,11 @@ class TestSeparationIsMeasurementGated:
     """Neither backend is selected by default, and the choice is a config key."""
 
     def test_a_null_backend_does_not_separate(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A count of 2 with no ranked backend records the absence rather than picking one."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         separator = _stub_separator(monkeypatch)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
@@ -493,12 +586,12 @@ class TestSeparationIsMeasurementGated:
         assert _verdict_entity(store, "SPEECH").attributes["separation"] == "not_selected"
 
     def test_mossformer_is_reachable_by_config(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The alternative runs when named, at n_sources 2, and writes one stream per source."""
         config = _override(tmp_path, "speech:\n  separation_backend: MossFormer2_SS_16K\n")
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         separator = _stub_separator(monkeypatch, sources=2)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
@@ -507,12 +600,12 @@ class TestSeparationIsMeasurementGated:
         assert len([e for e in live_entities(store, "stream") if e.attributes["name"].startswith("separated")]) == 2
 
     def test_unasdiff_speech_sound_needs_a_sound_class(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """V17: the spec wants an unconditioned sound slot; the API refuses one. The branch says so."""
         config = _override(tmp_path, "speech:\n  separation_backend: unasdiff\n")
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         separator = _stub_separator(monkeypatch)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
@@ -523,14 +616,14 @@ class TestSeparationIsMeasurementGated:
         )
 
     def test_unasdiff_runs_in_speech_sound_mode_when_a_class_is_named(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Slot 0 is the speech prior; the sound slot carries the configured class."""
         config = _override(
             tmp_path, "speech:\n  separation_backend: unasdiff\n  separation_sound_class: Applause\n"
         )
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         separator = _stub_separator(monkeypatch, sources=2)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
@@ -538,12 +631,12 @@ class TestSeparationIsMeasurementGated:
         assert separator[0]["source_classes"] == ["Applause"]
 
     def test_three_speakers_are_reported_not_separated(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """MossFormer fixes n_sources at 2, so a count of 3 is a report, not a wrong decomposition."""
         config = _override(tmp_path, "speech:\n  separation_backend: MossFormer2_SS_16K\n")
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=3, second_speakers=3)
         separator = _stub_separator(monkeypatch)
         result = speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
@@ -555,22 +648,22 @@ class TestPiiOnTheConsensus:
     """One scan, one text, and the decision is speaker-scoped while the redaction is not."""
 
     def test_the_scan_reads_the_consensus_transcript_only(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Exactly one text is scanned, and it is the consensus text PREPROCESS wrote."""
-        seeded_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         scanned = _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert scanned == ["my name is alice"]
 
     def test_a_finding_carries_category_and_extent_never_text(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The verdict and the element both refuse to carry the matched text."""
-        seeded_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
@@ -581,11 +674,11 @@ class TestPiiOnTheConsensus:
         assert "alice" not in result.verdict.why
 
     def test_a_finding_marks_the_word_elements(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The store now holds PII, and every artifact must respect the marking."""
-        seeded_store(store, tmp_path, words=["my", "name", "is", "alice"])
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")])
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
@@ -597,11 +690,11 @@ class TestPiiOnTheConsensus:
         assert marks and all("alice" not in str(m.attributes) for m in marks)
 
     def test_a_missing_required_detector_flags(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A detector never attempted is the silent one, and could-not-check is not clean."""
-        seeded_store(store, tmp_path, words=["hello"])
+        _seed_speech_store(store, tmp_path, words=["hello"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         _stub_pii(monkeypatch, findings=[], detectors_used=["rules"])
         result = speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
@@ -609,11 +702,11 @@ class TestPiiOnTheConsensus:
         assert find_measurement(store, "pii_scan").attributes["missing"] == ["gliner", "presidio"]
 
     def test_a_non_target_finding_does_not_flag_but_is_still_a_finding(
-        self, store: ProvStore, enrollment_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, enrollment_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Flagging asks whether a human is needed; the finding still reaches REDACT."""
-        seeded_store(store, tmp_path, words=["my", "name", "is", "alice"], speakers=2)
+        _seed_speech_store(store, tmp_path, words=["my", "name", "is", "alice"], speakers=2)
         _stub_diarizers(monkeypatch, primary_speakers=2, second_speakers=2)
         _stub_embedder(monkeypatch, similarity=0.99, target_label="SPEAKER_00")
         _stub_pii(monkeypatch, findings=[("PERSON", "alice")], at_speaker="SPEAKER_01")
@@ -627,11 +720,11 @@ class TestTheNonTargetAxis:
     """Measured and reported per span; null, not zero, while the thresholds are unmeasured."""
 
     def test_the_three_legs_are_measured_per_span(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Level, spectral tilt and direct-to-reverberant, on every speech span."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         proximity = find_measurements(store, "proximity")
@@ -640,21 +733,21 @@ class TestTheNonTargetAxis:
             assert {"rms_dbfs", "peak_dbfs", "tilt_db_per_octave", "d_to_r_db"} <= set(measurement.attributes)
 
     def test_nontarget_speech_s_is_null_while_a_threshold_is_unmeasured(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A product that says zero when nobody measured is the failure this row exists to prevent."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert _verdict_entity(store, "SPEECH").attributes["nontarget_speech_s"] is None
 
     def test_no_span_is_excluded_on_this_evidence(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """This branch marks; it removes nothing."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert not [e for e in store.entities("span") if store.is_invalidated(e.id)]
@@ -664,11 +757,11 @@ class TestQualityAndTheStreamsItNames:
     """SQUIM on plain, disruptions on the original, and every reading names its stream (V19)."""
 
     def test_disruptions_read_the_original_recording(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Peak normalisation and resampling destroy the plateaus and the crossing rate."""
-        seeded_store(store, tmp_path, words=["hello", "world"])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         recording_id = _stream_id(store, "recording")
@@ -676,10 +769,10 @@ class TestQualityAndTheStreamsItNames:
             assert measurement.attributes["stream"] == recording_id
 
     def test_a_wordless_file_has_no_per_span_reading_and_that_is_correct(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
         """A span nobody measured must not report zero; the file-level reading is PREPROCESS's."""
-        seeded_store(store, tmp_path, words=[], disruptions_file=True)
+        _seed_speech_store(store, tmp_path, words=[], disruptions_file=True)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert find_measurements(store, "disruptions") == []
         assert find_measurement(store, "disruptions_file") is not None
@@ -689,11 +782,11 @@ class TestItDoesNotReadAirway:
     """Diarization is a speech-only instrument."""
 
     def test_an_airway_label_withdraws_no_segment(
-        self, store: ProvStore, speech_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, speech_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The same store with and without AIRWAY's labels yields the same speaker count."""
-        seeded_store(store, tmp_path, words=["hello", "world"], airway_labelled=[(0.4, 0.6)])
+        _seed_speech_store(store, tmp_path, words=["hello", "world"], airway_labelled=[(0.4, 0.6)])
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", speech_config, run_dir=tmp_path, enrollment=None)
         assert _verdict_entity(store, "SPEECH").attributes["speaker_count"] == 1
@@ -705,16 +798,25 @@ class TestItDoesNotReadAirway:
         assert "AIRWAY" not in source
 ```
 
-The helpers `_verdict_entity`, `_stream_id`, `_override`, `_enrollment`,
-`_target_speaker_embedding`, `_stub_diarizers`, `_stub_embedder`, `_stub_separator` and `_stub_pii` are
-module-private in the same file. `_stub_diarizers` patches `speech_module.diarize_audios` and returns
-the mutable call log the assertions read; `_stub_pii` patches `speech_module.scan_for_pii` and returns
-the list of texts it was handed. `speech_config`, `second_diarizer_config` and `enrollment_config` are
-`conftest.py` fixtures layering, respectively, `speech.word_gap_ms: 500`; that plus
+**Every helper named above is module-private in this test file, and this task adds nothing to
+`conftest.py` (I1).** `_seed_speech_store(store, tmp_path, **kw)` calls the shared
+`seed_preprocess_store` — whose one signature is stated in sibling T1's Interfaces block — and then
+writes what SPEECH's own predecessors would have left: `word_extents` overriding the shared seeder's
+default word timings, `speakers` diarizer segments, `airway_labelled` spans, `target_speaker`, and
+`disruptions_file`. `_verdict_entity`, `_stream_id`, `_override`, `_enrollment`,
+`_target_speaker_embedding`, `_stub_diarizers`, `_stub_embedder`, `_stub_separator` and `_stub_pii`
+are module-private likewise. `_stub_diarizers` patches `speech_module.diarize_audios` and returns the
+mutable call log the assertions read; `_stub_embedder` patches **`speech_module._embedding_model`**
+and `speech_module.extract_speaker_embeddings_from_audios`, so no `SpeechBrainModel` is ever
+constructed (I3); `_stub_pii` patches `speech_module.scan_for_pii` and returns the list of texts it
+was handed. `_tone` is this file's own, as in the other node tests.
+
+`speech_config`, `second_diarizer_config` and `enrollment_config` are **module-private config
+builders in this file**, not fixtures, layering respectively `speech.word_gap_ms: 500`; that plus
 `speech.second_diarizer: pyannote/speaker-diarization-3.1`; and that plus
-`speech.enrollment_model: {model_id: speechbrain/spkrec-ecapa-voxceleb, revision: aaaa...}` and
-`speech.target_match_cosine: 0.5`. `seeded_store` extends sibling T2's fixture with `word_extents`,
-`speakers`, `airway_labelled` and `disruptions_file`.
+`speech.enrollment_model: {model_id: speechbrain/spkrec-ecapa-voxceleb, revision: <40 hex a's>}` and
+`speech.target_match_cosine: 0.5`. They take `tmp_path` and return a `TriageConfig`; every test above
+that names one as a parameter takes it as such via a thin local fixture defined in this file.
 
 - [ ] **Step 6 — run them; expect FAIL.**
   `uv run pytest src/tests/audio/workflows/triage/nodes/speech_test.py -x -q`
@@ -773,39 +875,49 @@ spec's "A word carried by one recognizer alone is not a consensus word":
         flags.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
 ```
 
-**Step 4 (diarization) — the V18 fix.** After computing `interval`:
+**Step 4 (diarization) — the guard, and only the guard.** After computing `interval`, the call is
+unchanged **except** that `extract_segments` may now raise, which is the point: a caller cannot be
+handed a zero-length `Audio` and pass it on to a model. Wrap the crop so the refusal becomes a
+finding about the recording rather than an uncaught error:
 
 ```python
-    frame_samples = 1
-    interval_samples = int(round((interval[1] - interval[0]) * sr))
-    if interval_samples <= frame_samples:
-        count: int | None = None
-        diarization_state = "interval_shorter_than_one_frame"
-        speaker_segments = []
-        flags.append(
-            "the consensus places every word inside one analysis frame; "
-            "the diarization interval is not a diarizable signal"
-        )
-    else:
+    try:
         (cropped,) = extract_segments([(plain, [interval])])[0]
+    except ValueError as error:
+        # The consensus placed every word at one instant, so there is no interval to diarize. This
+        # is a fact about the transcript, not a crash: the branch says so and carries on.
+        count: int | None = None
+        diarization_state = "interval_selects_no_samples"
+        speaker_segments = []
+        flags.append(f"the diarization interval selects no samples: {error}")
+    else:
         [segments] = diarize_audios([cropped], model=diarizer)
         ...
         diarization_state = "diarized"
 ```
 
-`frame_samples = 1` is definitional, not a threshold: it is the smallest waveform pyannote's own guard
-(`shape[0] > shape[1]`, `pyannote/audio/core/io.py:173`) accepts for a mono input, so the boundary is
-the library's, not a value this plan chose. Every downstream read of `count` handles `None`: the
-second diarizer is not consulted, separation does not run, `speaker_count` is written as `None`, and
+Every downstream read of `count` handles `None`: the second diarizer is not consulted, separation does
+not run (`separation_state` is its own token — see M5), `speaker_count` is written as `None`, and
 attribution marks every word `unassigned`.
+
+**There is no `frame_samples = 1` and no caller-side length floor.** An earlier draft introduced one
+and called it "definitional"; it was neither definitional nor established, because the mechanism it
+guarded against is not the mechanism step 5a is going to find. **If** step 5a establishes that a
+short-but-nonempty interval is the real cause, the floor that follows is a **config key with a
+derivation** naming the measurement behind it — `speech.min_diarization_interval_s`, shipped `null`
+and added to the open-key ledger — not a literal, and not a value chosen in this plan.
 
 **Step 5 (separation).** The `_separation_model()` hard-coded MossFormer is replaced:
 
 ```python
     backend = config.get("speech.separation_backend")
     sound_class = config.get("speech.separation_sound_class")
-    if count is None or count < 2:
-        separation_state: Any = "not_needed"
+    if count is None:
+        # Its own token, not "not_needed": nobody counted, and a reader must not take that for a
+        # measured count of one (M5).
+        separation_state: Any = "no_speaker_count"
+    elif count < 2:
+        separation_state = "not_needed"
     elif backend is None:
         separation_state = "not_selected"
     elif count >= 3:
@@ -830,8 +942,29 @@ attribution marks every word `unassigned`.
 
 **Step 6 (identification).** The `hint.target_speaker` block is deleted in full. Replaced by an
 enrollment block that (a) writes the `enrollment` element, (b) refuses on
-`enrollment.refusal_against(values["enrollment_model_id"])`, (c) embeds each diarized speaker with
-`SpeechBrainModel(path_or_uri=values["enrollment_model_id"], revision=values["enrollment_revision"])`,
+`enrollment.refusal_against(values["enrollment_model_id"])`, (c) embeds each diarized speaker through a **module-level factory**, replacing the existing
+no-argument `_embedding_model()` and its `EMBEDDING_ID` constant (I3):
+
+```python
+def _embedding_model(model_id: str, revision: str) -> SpeechBrainModel:
+    """The probe's model spec, at the commit the enrollment was estimated with.
+
+    A module-level factory rather than an inline constructor, mirroring PREPROCESS's
+    ``_crisperwhisper_model``: ``SpeechBrainModel``'s constructor validates the id, so a test that
+    reached it would make a network call — and on the fake 40-hex sha these tests use, a failing one.
+    Tests monkeypatch this name on the node module and never construct the spec.
+
+    Args:
+        model_id: From ``speech.enrollment_model.model_id``.
+        revision: The resolved 40-hex commit from ``speech.enrollment_model.revision``.
+
+    Returns:
+        The model spec.
+    """
+    return SpeechBrainModel(path_or_uri=model_id, revision=revision)
+```
+
+called as `_embedding_model(values["enrollment_model_id"], values["enrollment_revision"])`, and
 (d) writes one `target_match` per speaker naming both embeddings' model and revision, and (e) marks
 each speech span `attributed_to` and, where the speaker is not the target, `nontarget`. **No span is
 invalidated.**
@@ -1024,28 +1157,28 @@ class TestTheSubjectIsPreprocessesSpans:
     """VOICE measures what PREPROCESS detected. Nothing is subtracted from anything."""
 
     def test_the_spans_are_preprocesses_phonation_spans(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """spans_n is the count of phonation spans in the store, not of a residual."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced"), (2.0, 2.8, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced"), (2.0, 2.8, "voiced")])
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 2
 
     def test_a_speech_span_removes_nothing(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """branch-voice.md: 'Nothing another branch claimed is removed from this branch's subject'."""
-        seeded_store(
+        _seed_voice_store(
             store, tmp_path, phonation=[(0.0, 1.5, "voiced")], speech_spans=[(0.0, 1.5)]
         )
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["spans_n"] == 1
 
     def test_an_airway_label_removes_nothing(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Nothing this branch measures is conditioned on what another branch concluded."""
-        seeded_store(
+        _seed_voice_store(
             store, tmp_path, phonation=[(0.0, 1.5, "voiced")], airway_labelled=[(0.0, 1.5)]
         )
         voice(store, "plain", voice_config, run_dir=tmp_path)
@@ -1057,17 +1190,17 @@ class TestTheSubjectIsPreprocessesSpans:
             assert not hasattr(voice_module, name)
 
     def test_no_phonation_span_fails(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """This path is reached only when a hint forced the branch, which routing gates on the same fact."""
-        seeded_store(store, tmp_path, phonation=[])
+        _seed_voice_store(store, tmp_path, phonation=[])
         assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is Outcome.FAIL
 
     def test_the_kind_is_voice(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """voice_no_words is gone; VERDICT joins branch to kind on this string."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.kind == "voice"
 
 
@@ -1075,29 +1208,29 @@ class TestProductionModes:
     """Voiced, unvoiced and mixed are all measured; an unvoiced span is not a failure."""
 
     def test_an_unvoiced_span_is_measured(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """A disordered voice sustaining without periodicity is exactly what must be measured."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
         result = voice(store, "plain", voice_config, run_dir=tmp_path)
         assert result.verdict.outcome is not Outcome.FAIL
         assert _verdict_entity(store, "VOICE").attributes["production"]["unvoiced"] == 1
 
     def test_an_unvoiced_span_carries_no_period_marks(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Absent, not zero and not interpolated: its duration, formants and level are its measurement."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
         voice(store, "plain", voice_config, run_dir=tmp_path)
         marks = find_measurements(store, "period_marks")
         assert marks and "n" not in marks[0].attributes
         assert marks[0].attributes["unmeasured"] == "unvoiced_span"
 
     def test_the_production_counts_are_reported(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The verdict's production block is a count per mode, as branch-voice.md's product names it."""
-        seeded_store(
+        _seed_voice_store(
             store, tmp_path,
             phonation=[(0.0, 1.0, "voiced"), (2.0, 3.0, "unvoiced"), (4.0, 5.0, "mixed")],
         )
@@ -1111,48 +1244,48 @@ class TestMptRecoverableProducts:
     """longest_span_s and its criterion, so a task measurement is not reassembled from fragments."""
 
     def test_longest_span_s_is_a_first_class_product(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The longest span's duration, reported directly."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 5.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 5.5, "voiced")])
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["longest_span_s"] == pytest.approx(3.5)
 
     def test_the_criterion_that_closed_it_travels_with_it(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """A duration without its offset criterion is not a maximum phonation time."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["longest_span_criterion"] == "f0_stability"
 
     def test_phonation_s_totals_every_span(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The total is over the spans, whatever their production mode."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 2.5, "unvoiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.0, "voiced"), (2.0, 2.5, "unvoiced")])
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["phonation_s"] == pytest.approx(1.5)
 
     def test_a_declared_task_outside_its_range_flags_with_the_range_named(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """The task conditions how a duration is reported, never whether a span exists."""
         config = _override(
             tmp_path,
             "voice:\n  f0_range_hz: [75, 500]\n  task_duration_ranges: {maximum_phonation_time: [10.0, 40.0]}\n",
         )
-        seeded_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
         hint = AudioHints(metadata={"task": "maximum_phonation_time"})
         result = voice(store, "plain", config, hint, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FLAG
         assert "10.0" in result.verdict.why and "40.0" in result.verdict.why
 
     def test_a_null_task_range_leaves_the_row_inert(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Nobody derived a range, so no span is out of one."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 3.5, "voiced")])
         hint = AudioHints(metadata={"task": "maximum_phonation_time"})
         result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
         assert result.verdict.outcome is not Outcome.FLAG
@@ -1163,27 +1296,27 @@ class TestTheHalfFrameTolerance:
     """A frame stands for a hop-wide interval centred on its time (V20)."""
 
     def test_a_span_of_exactly_min_marks_s_is_measured(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, voice_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Without the tolerance this span reads one hop short and its marks are skipped."""
         hop_s = 0.01
         min_marks_s = 3.0 / 75.0
         start, end = 1.0, 1.0 + min_marks_s - hop_s
-        seeded_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
+        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
         calls = _stub_period_marks(monkeypatch, marks=4)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert calls, "the frame-edge tolerance is one hop; this span reaches min_marks_s with it"
         assert _verdict_entity(store, "VOICE").attributes["marks_skipped_short_n"] == 0
 
     def test_a_span_one_hop_shorter_still_is_skipped(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, voice_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The tolerance is one hop, not an open-ended slack."""
         hop_s = 0.01
         min_marks_s = 3.0 / 75.0
-        seeded_store(store, tmp_path, phonation=[(1.0, 1.0 + min_marks_s - 2 * hop_s, "voiced")], hop_s=hop_s)
+        _seed_voice_store(store, tmp_path, phonation=[(1.0, 1.0 + min_marks_s - 2 * hop_s, "voiced")], hop_s=hop_s)
         calls = _stub_period_marks(monkeypatch, marks=4)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert calls == []
@@ -1191,10 +1324,10 @@ class TestTheHalfFrameTolerance:
         assert marks[0].attributes["unmeasured"] == "shorter_than_mark_window"
 
     def test_the_tolerance_is_recorded_as_the_hop_not_a_constant(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The activity's parameters must show where the tolerance came from."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], hop_s=0.01)
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], hop_s=0.01)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
         assert analyze.parameters["frame_edge_tolerance_s"] == pytest.approx(0.01)
@@ -1204,35 +1337,35 @@ class TestTheF0RangeServesAPopulation:
     """The range is declared, overridable per population, and a vacuous ratio is refused at load."""
 
     def test_a_population_override_replaces_the_range(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """Age and sex move the range; the hint names which population."""
         config = _override(
             tmp_path,
             "voice:\n  f0_range_hz: [75, 500]\n  f0_range_by_population: {adult_male: [60, 250]}\n",
         )
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         hint = AudioHints(metadata={"population": "adult_male"})
         voice(store, "plain", config, hint, run_dir=tmp_path)
         analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
-        assert analyze.parameters["f0_range_hz"] == [60.0, 250.0]
+        assert list(analyze.parameters["f0_range_hz"]) == [60.0, 250.0]
 
     def test_a_vacuous_ratio_is_refused_before_the_store_is_touched(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """A check that flags everything reports nothing, so it is refused rather than run and flagged."""
         config = _override(tmp_path, "voice:\n  f0_range_hz: [50, 800]\n  f0_range_ratio_max: 4.0\n")
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         before = len(store.entities())
         with pytest.raises(ValueError, match="f0_range_ratio_max"):
             voice(store, "plain", config, run_dir=tmp_path)
         assert len(store.entities()) == before
 
     def test_a_null_ratio_refuses_nothing(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Nobody fixed the bound, so no configuration exceeds it."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         assert voice(store, "plain", voice_config, run_dir=tmp_path).verdict.outcome is not Outcome.FAIL
 
 
@@ -1240,27 +1373,38 @@ class TestEdgesAreNamedApart:
     """The onset is a period where one exists; the offset is always a criterion."""
 
     def test_a_span_with_marks_has_a_period_onset(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, voice_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An observed event, named as one."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         _stub_period_marks(monkeypatch, marks=6)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         span = _voice_spans(store)[0]
         assert span.attributes["onset_kind"] == "period"
         assert span.attributes["offset_kind"] == "criterion"
 
-    def test_f0_median_is_reported_only_with_its_stream(
-        self, store: ProvStore, voice_config: TriageConfig, seeded_store: Callable[..., None],
+    def test_a_marked_span_reports_both_f0_keys(
+        self, store: ProvStore, voice_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Two F0 values from two streams are two measurements, never one."""
-        seeded_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        """Two F0 values from two streams are two measurements, so the stream travels with the value."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
         _stub_period_marks(monkeypatch, marks=6)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         detail = _verdict_entity(store, "VOICE").attributes
-        assert ("f0_median_hz" in detail) == ("f0_stream" in detail)
+        assert detail["f0_median_hz"] > 0.0
+        assert detail["f0_stream"] == "plain"
+
+    def test_an_unmarked_span_reports_neither(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Absent for a span with no period marks, rather than estimated from one."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        voice(store, "plain", voice_config, run_dir=tmp_path)
+        detail = _verdict_entity(store, "VOICE").attributes
+        assert "f0_median_hz" not in detail
+        assert "f0_stream" not in detail
 ```
 
 - [ ] **Step 3 — run them; expect FAIL.**
@@ -1296,6 +1440,8 @@ def _f0_range(config: TriageConfig, hint: AudioHints | None) -> tuple[float, flo
     raw = by_population.get(population) if population is not None else None
     if raw is None:
         raw = config.require("voice.f0_range_hz")
+    # YAML gives a list and an override may give a tuple; both index the same, and the return is a
+    # tuple so a caller cannot mutate the range it was handed.
     f0_min_hz, f0_max_hz = float(raw[0]), float(raw[1])
     ratio_max = config.get("voice.f0_range_ratio_max")
     if ratio_max is not None and f0_max_hz / f0_min_hz > float(ratio_max):
@@ -1462,10 +1608,10 @@ class TestItRunsNoClassifier:
             assert not hasattr(airway_module, name)
 
     def test_it_writes_no_activity_naming_a_model_agent_it_ran(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The HeAR and YAMNet agents it associates with are the ones PREPROCESS's windows carry."""
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert {a.step for a in store.activities("AIRWAY")} <= {"classify", "confirm", "lexical"}
 
@@ -1474,27 +1620,27 @@ class TestHearConfirmsRatherThanFinds:
     """The candidate is the span; HeAR says whether that extent carries cough or breath."""
 
     def test_a_span_whose_windows_carry_the_label_is_labelled(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Membership in the window's set is the evidence; no score is compared here."""
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _verdict_entity(store, "AIRWAY").attributes["by_label"] == {"Cough": 1}
 
     def test_a_hear_window_without_a_span_labels_nothing(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """HeAR does not find a span; with no candidate there is nothing to confirm."""
-        seeded_store(store, tmp_path, spans=[], hear_windows=[((0.0, 2.0), ["Cough"])])
+        _seed_airway_store(store, tmp_path, spans=[], hear_windows=[((0.0, 2.0), ["Cough"])])
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
         assert _verdict_entity(store, "AIRWAY").attributes["labelled_n"] == 0
 
     def test_a_transcribed_span_is_not_offered_to_hear(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """A span overlapping consensus words is transcribed content, not an airway candidate."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])],
             words=[("hello", (1.0, 1.2))],
         )
@@ -1502,10 +1648,10 @@ class TestHearConfirmsRatherThanFinds:
         assert _verdict_entity(store, "AIRWAY").attributes["labelled_n"] == 0
 
     def test_a_span_carrying_only_events_stays_eligible(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Bracketed and onomatopoeic events are exactly what this branch is looking for."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])],
             events=[("[COUGH]", (1.0, 1.2))],
         )
@@ -1513,10 +1659,10 @@ class TestHearConfirmsRatherThanFinds:
         assert _verdict_entity(store, "AIRWAY").attributes["labelled_n"] == 1
 
     def test_a_span_whose_windows_carry_no_member_of_interest_is_unlabelled(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """A span without a label is simply a span without a label assertion."""
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Laugh"])])
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Laugh"])])
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert not [
             e for e in live_entities(store, "assertion") if e.attributes.get("verb") == "label"
@@ -1527,10 +1673,10 @@ class TestContestRequiresColocation:
     """A label a window away is a different event, not a disagreement about this one (V21)."""
 
     def test_a_contest_label_in_the_same_hear_window_contests(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Both inside the HeAR window whose set carried the label."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])],
             yamnet_windows=[((0.96, 1.92), ["Speech"])],
         )
@@ -1539,10 +1685,10 @@ class TestContestRequiresColocation:
         assert result.verdict.outcome is Outcome.FLAG
 
     def test_a_contest_label_outside_that_window_does_not(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The YAMNet window is outside the HeAR window, so it describes a different event."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])],
             yamnet_windows=[((2.88, 3.84), ["Speech"])],
         )
@@ -1550,10 +1696,10 @@ class TestContestRequiresColocation:
         assert _verdict_entity(store, "AIRWAY").attributes["contested_n"] == 0
 
     def test_a_label_outside_contest_labels_does_not_contest(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """The eligible set is declared, not all 521."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])],
             yamnet_windows=[((0.96, 1.92), ["Rain"])],
         )
@@ -1561,10 +1707,10 @@ class TestContestRequiresColocation:
         assert _verdict_entity(store, "AIRWAY").attributes["contested_n"] == 0
 
     def test_a_contest_never_relabels(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Flag the span; the label stands and the assertion is not invalidated."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])],
             yamnet_windows=[((0.96, 1.92), ["Speech"])],
         )
@@ -1573,11 +1719,11 @@ class TestContestRequiresColocation:
         assert label.attributes["label"] == "Cough"
 
     def test_intersecting_label_sets_are_refused_at_load(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """A label cannot both support and contest the same conclusion."""
         config = _override(tmp_path, "airway:\n  contest_labels: [Speech, Cough]\n  k_db: 18.0\n")
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)])
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)])
         before = len(store.entities())
         with pytest.raises(ValueError, match="disjoint"):
             airway(store, "plain", config, run_dir=tmp_path)
@@ -1588,32 +1734,32 @@ class TestTheGateIsAdjustableAndItsEdgeFlags:
     """K is per task, and a span that only just cleared it is a decision a human should see."""
 
     def test_airway_k_db_overrides_the_shared_gate(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """An airway event is level-limited; one value fitted on coughs does not serve quiet breaths."""
         config = _override(tmp_path, "airway:\n  k_db: 12.0\n  k_margin_db: 2.0\n  contest_labels: [Speech]\n")
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], span_k_db=12.0)
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], span_k_db=12.0)
         airway(store, "plain", config, run_dir=tmp_path)
         assert _verdict_entity(store, "AIRWAY").attributes["k_db"] == 12.0
 
     def test_a_declared_task_overrides_it_again(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """airway.k_db_by_task is the per-task gate."""
         config = _override(
             tmp_path,
             "airway:\n  k_db: 18.0\n  k_db_by_task: {breath: 8.0}\n  k_margin_db: 2.0\n  contest_labels: [Speech]\n",
         )
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], span_k_db=8.0)
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], span_k_db=8.0)
         hint = AudioHints(metadata={"task": "breath"})
         airway(store, "plain", config, hint, run_dir=tmp_path)
         assert _verdict_entity(store, "AIRWAY").attributes["k_db"] == 8.0
 
     def test_a_span_inside_the_margin_flags_with_its_margin(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """Any span the gate would have kept out under a slightly different setting is visible."""
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 19.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 19.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert _verdict_entity(store, "AIRWAY").attributes["near_gate_n"] == 1
         assert result.verdict.outcome is Outcome.FLAG
@@ -1621,19 +1767,19 @@ class TestTheGateIsAdjustableAndItsEdgeFlags:
         assert label.attributes["margin_over_k_db"] == pytest.approx(1.0)
 
     def test_a_null_margin_leaves_the_band_inert(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """Nobody derived how close is too close, so no span is near the gate."""
         config = _override(tmp_path, "airway:\n  k_db: 18.0\n  contest_labels: [Speech]\n")
-        seeded_store(store, tmp_path, spans=[(1.0, 1.3, 19.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 19.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
         airway(store, "plain", config, run_dir=tmp_path)
         assert _verdict_entity(store, "AIRWAY").attributes["near_gate_n"] == 0
 
     def test_the_merge_rate_is_reported(
-        self, store: ProvStore, airway_config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
         """A span covering several events must be legible as one."""
-        seeded_store(
+        _seed_airway_store(
             store, tmp_path, spans=[(1.0, 1.9, 30.0)], span_merged=3,
             hear_windows=[((0.0, 2.0), ["Cough"])],
         )
@@ -1914,7 +2060,7 @@ def apply_redactions(
     audio: Audio,
     extents: Sequence[RedactionExtent],
     *,
-    fill: str = "silence",
+    fill: str,
     bleep_hz: float | None = None,
 ) -> Audio:
     """Mask every extent with the named fill, preserving duration.
@@ -1923,7 +2069,9 @@ def apply_redactions(
         audio: The recording.
         extents: Regions to mask. Pass the output of :func:`plan_redactions`, not raw findings.
         fill: ``"silence"`` writes zeros; ``"bleep"`` writes a sine at ``bleep_hz`` scaled to the
-            extent's own peak. Read it from ``redaction.fill``.
+            extent's own peak. **Required, with no default**: which fill is least damaging to
+            downstream measurement is unmeasured, so a caller that does not say gets no answer rather
+            than silently getting silence. Read it from ``redaction.fill``.
         bleep_hz: The bleep's frequency. Required when ``fill`` is ``"bleep"``. Read it from
             ``redaction.bleep_hz``.
 
@@ -1983,40 +2131,40 @@ class TestVerificationDoesNotReTranscribe:
         assert not hasattr(redact_module, "transcribe_audios")
 
     def test_verification_re_scans_the_redacted_text(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Exactly one text is re-scanned, and it is the transcript the plan produced."""
-        seeded_store(store, tmp_path, words=["my", "name", "is", "alice"], findings=[("PERSON", (3.0, 4.0))])
+        _seed_redact_store(store, tmp_path, words=["my", "name", "is", "alice"], findings=[("PERSON", (3.0, 4.0))])
         scanned = _stub_pii(monkeypatch, findings=[])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
         assert scanned == ["my name is [PERSON]"]
 
     def test_the_verify_activity_names_no_model_agent(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Nothing here runs at a commit, because nothing here runs a model."""
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii(monkeypatch, findings=[])
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         verify = next(a for a in store.activities("REDACT") if a.step == "verify")
         assert not [
             agent for agent in store.associated_with(verify.id) if store.get_agent(agent).agent_type == "model"
         ]
 
     def test_the_audio_claim_is_bounded_on_every_path(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A text re-scan cannot answer whether intelligible speech survives outside the extent."""
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         for survivors in ([], [("PERSON", "alice")]):
             other = ProvStore(run_id="bounded")
-            seeded_store(other, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+            _seed_redact_store(other, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
             _stub_pii(monkeypatch, findings=survivors)
-            redact(other, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+            redact(other, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
             assert _verdict_entity(other, "REDACT").attributes["audio_check"] == "bounded"
 
 
@@ -2024,24 +2172,39 @@ class TestRemediationHappensExactlyOnce:
     """A finding the planner placed and the verifier still sees gets one re-planning pass."""
 
     def test_a_survivor_triggers_one_replan(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The verifier's extent is fed back once, and a clean second scan passes."""
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii_sequence(monkeypatch, [[("PERSON", "alice")], []])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.PASS
         assert _verdict_entity(store, "REDACT").attributes["replanned_n"] == 1
 
+    def test_a_failed_and_a_missing_verify_detector_are_reported_apart(
+        self, store: ProvStore, redact_config: TriageConfig, tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """'It broke' and 'nobody ran it' are different findings; the second is the silent one (M6)."""
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _stub_pii(monkeypatch, findings=[], detectors_used=["presidio"], failures={"gliner": "OSError: x"})
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        assert result.verdict.outcome is Outcome.FLAG
+        detail = _verdict_entity(store, "REDACT").attributes
+        assert detail["verify_failed"] == ["gliner"]
+        assert detail["verify_missing"] == ["rules"]
+        assert detail["scan_failed"] == [] and detail["scan_missing"] == []
+        assert "OSError: x" not in str(detail)
+
     def test_a_survivor_of_the_replan_is_unremediable(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """An operator must be able to tell this from an ordinary withhold."""
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii_sequence(monkeypatch, [[("PERSON", "alice")], [("PERSON", "alice")]])
-        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert result.verdict.outcome is Outcome.FAIL
         detail = _verdict_entity(store, "REDACT").attributes
         assert detail["unremediable"] == ["PERSON"]
@@ -2053,34 +2216,34 @@ class TestTheFillIsDeclared:
     """A run declares the fill it used, and the verdict records it."""
 
     def test_a_null_fill_refuses_before_any_store_write(
-        self, store: ProvStore, config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path
     ) -> None:
         """The key ships with no default; two artifacts under different fills are not comparable."""
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         before = len(store.entities())
         with pytest.raises(ValueError, match="redaction.fill"):
-            redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+            redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert len(store.entities()) == before
 
     def test_the_verdict_records_the_fill(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """So two artifacts made under different fills are never compared as one."""
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii(monkeypatch, findings=[])
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["fill"] == "silence"
 
     def test_bleep_is_reachable_by_config(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Both implemented fills are selectable; neither is a default."""
         config = _override(tmp_path, "redaction:\n  padding_ms: 100\n  fill: bleep\n")
-        seeded_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
+        _seed_redact_store(store, tmp_path, words=["hello", "alice"], findings=[("PERSON", (1.0, 2.0))])
         _stub_pii(monkeypatch, findings=[])
-        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        redact(store, "recording", config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["fill"] == "bleep"
 
 
@@ -2088,16 +2251,16 @@ class TestItRedactsEverySpeaker:
     """SPEECH flags target-speaker PII; redaction is about whether an artifact is releasable."""
 
     def test_a_non_target_finding_is_redacted(
-        self, store: ProvStore, redact_config: TriageConfig, seeded_store: Callable[..., None],
+        self, store: ProvStore, redact_config: TriageConfig,
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A non-target speaker naming the participant is exactly as unsafe."""
-        seeded_store(
+        _seed_redact_store(
             store, tmp_path, words=["hello", "alice"],
             findings=[("PERSON", (1.0, 2.0), "SPEAKER_01")], target_speaker="SPEAKER_00",
         )
         _stub_pii(monkeypatch, findings=[])
-        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=tmp_path / "rel")
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
         assert _verdict_entity(store, "REDACT").attributes["redactions_n"] == 1
 ```
 
@@ -2128,13 +2291,26 @@ def _verify(transcript_text: str, required: list[str]) -> _Verification:
     scan = scan_for_pii(transcript_text)
     scan = scan[0] if isinstance(scan, list) else scan
     missing = sorted(set(required) - set(scan.detectors_used) - set(scan.failures))
-    if scan.failures or not scan.detectors_used or missing:
-        return _Verification(verified=False, survived=[], scan_ran=False, missing=missing)
+    failed = sorted(scan.failures)
+    if failed or not scan.detectors_used or missing:
+        return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing)
     survived = sorted({span.category for span in scan.spans})
-    return _Verification(verified=not survived, survived=survived, scan_ran=True, missing=[])
+    return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[])
 ```
 
-`_Verification` gains a `missing: list[str]` field.
+`_Verification` gains two fields, and their docstring entries (M6):
+
+```python
+        failed: Detectors the **verification** re-scan attempted and that raised. Names only; a
+            failure's message may quote the scanned input.
+        missing: Detectors ``pii.required_detectors`` names that the verification re-scan never
+            attempted. Kept apart from ``failed`` for the reason the planning scan keeps them apart:
+            "it broke" and "nobody ran it" are different findings, and the second is the silent one.
+            Both are reported in the verdict separately from the planning scan's own ``scan_failed``
+            and ``scan_missing``, because a store whose planning scan was complete and whose
+            verification was not is a different state from the reverse, and an operator reading one
+            pair of keys for both could not tell which half failed.
+```
 
 `_consensus_words` now reads **PREPROCESS's** words, since sibling T1 made PREPROCESS the only author:
 
@@ -2161,7 +2337,7 @@ re-plan:
     planned = plan_redactions(extents, padding_ms=padding_ms)
     transcript_text, unplaced_n = _transcript(words, planned)
     checked = _verify(transcript_text, required_detectors) if not scan_incomplete else _Verification(
-        verified=False, survived=[], scan_ran=False, missing=scan_missing
+        verified=False, survived=[], scan_ran=False, failed=[], missing=[]
     )
     replanned_n = 0
     unremediable: list[str] = []
@@ -2193,9 +2369,16 @@ gains the incomplete-re-scan row:
         outcome, why = Outcome.FAIL, "..."          # unchanged
     elif not checked.scan_ran:
         outcome = Outcome.FLAG
+        parts = []
+        if checked.failed:
+            parts.append(f"detectors failed: {', '.join(checked.failed)}")
+        if checked.missing:
+            parts.append(f"required detectors were not attempted: {', '.join(checked.missing)}")
+        if not parts:
+            parts.append("no detector ran")
         why = (
-            "the re-scan over the redacted text did not cover every required pii detector "
-            f"({', '.join(checked.missing) or 'a detector failed'}); an unverified artifact is withheld"
+            f"the re-scan over the redacted text is incomplete ({'; '.join(parts)}); "
+            "an unverified artifact is withheld"
         )
     elif checked.survived:
         outcome = Outcome.FAIL
@@ -2225,6 +2408,8 @@ The verdict detail becomes exactly `redact.md`'s product:
             "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,
+            "verify_failed": checked.failed,
+            "verify_missing": checked.missing,
             "required_detectors": required_detectors,
             "unplaced_words_n": unplaced_n,
             "audio_check": "bounded",
@@ -2752,7 +2937,9 @@ sibling T3's `branch_decision` entities and `BRANCH_FOR_KIND`; `routing.hint_kin
 
 ### Task 9: REPORT — a per-file summary and a summary JSON, on every file and every outcome
 
-**Scope:** `src/senselab/audio/workflows/triage/nodes/report.py` (new);
+**Scope:** `src/senselab/audio/tasks/plotting/plotting.py` (a `text` panel type and an `else` that
+raises, I5); `src/tests/audio/tasks/plotting/plotting_test.py`;
+`src/senselab/audio/workflows/triage/nodes/report.py` (new);
 `src/senselab/audio/workflows/triage/run.py` (call it last, and place `summary/` under the run root);
 `src/senselab/audio/workflows/triage/data/config/default.yaml` (`report.format`);
 `src/tests/audio/workflows/triage/nodes/report_test.py` (new).
@@ -2778,14 +2965,18 @@ sibling T3's `branch_decision` entities and `BRANCH_FOR_KIND`; `routing.hint_kin
 Add to `derivation:`:
 
 ```
-  report.format -- pdf or png. report.md calls it a presentation choice owed no measurement, but one
-  that "must be declared rather than defaulted silently", so the key ships null and REPORT requires it.
-  The two forms carry the same claims; the image form exists for a file whose summary fits on one page.
+  report.format png. report.md calls it a presentation choice owed no measurement, but one that "must
+  be declared rather than defaulted silently". Declaring it here IS the declaration: a null would make
+  the one product report.md requires on EVERY file and EVERY outcome unreachable under the packaged
+  config, which is a worse failure than a defaulted presentation choice -- the run would emit nothing
+  for the file it most needs to emit something for, the one ADMIT refused. png rather than pdf because
+  the image form is the one report.md describes for a summary that fits on one page, which is what
+  this summary is. The two forms carry the same claims, and pdf is one override away.
 ```
 
 ```yaml
 report:
-  format: null
+  format: png
 ```
 
 - [ ] **Step 2 — write the failing tests.**
@@ -2817,38 +3008,45 @@ class TestBothProductsAlways:
     """One summary and one JSON per file, whatever the graph concluded."""
 
     def test_a_full_run_emits_both(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """The ordinary path."""
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         assert artifacts["summary"].exists() and artifacts["summary"].suffix == ".png"
         assert artifacts["json"].exists()
 
     def test_an_admit_refusal_emits_both_and_says_nothing_was_measured(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """A file ADMIT refused gets a report that says that, not an exception (V24)."""
-        seeded_store(store, tmp_path, admit_failed=True)
+        _seed_report_store(store, tmp_path, admit_failed=True)
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         payload = json.loads(artifacts["json"].read_text())
         assert payload["verdict"]["triage"] == "discard"
         assert payload["branches"] == {}
         assert artifacts["summary"].exists()
 
-    def test_a_null_format_refuses(
-        self, store: ProvStore, config: TriageConfig, seeded_store: Callable[..., None], tmp_path: Path
+    def test_the_packaged_config_emits_a_report(
+        self, store: ProvStore, config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A presentation choice owed no measurement is still owed a declaration."""
-        seeded_store(store, tmp_path, full=True)
+        """The one unconditional product must be reachable with no override at all (I4)."""
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", config)
+        assert artifacts["summary"].suffix == ".png"
+        assert artifacts["json"].exists()
+
+    def test_an_unknown_format_refuses(self, store: ProvStore, tmp_path: Path) -> None:
+        """A typo must not fall through to a silent default."""
+        _seed_report_store(store, tmp_path, full=True)
         with pytest.raises(ValueError, match="report.format"):
-            report(store, tmp_path / "summary", config)
+            report(store, tmp_path / "summary", _override(tmp_path, "report:\n  format: jpeg\n"))
 
     def test_pdf_is_reachable_by_config(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """The two forms carry the same claims; the choice does not change the content."""
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         artifacts = report(store, tmp_path / "summary", pdf_config)
         assert artifacts["summary"].suffix == ".pdf"
@@ -2858,10 +3056,10 @@ class TestItWritesNoElements:
     """A rendering is not evidence."""
 
     def test_the_store_is_unchanged(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """No entity, no activity, no agent, no relation."""
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         before = store.fingerprint()
         report(store, tmp_path / "summary", _png(tmp_path))
         assert store.fingerprint() == before
@@ -2871,20 +3069,20 @@ class TestItRespectsThePiiMarking:
     """No matched text appears anywhere in either product."""
 
     def test_a_marked_word_is_rendered_redacted_in_the_json(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """The store holds PII by design; every artifact must respect the marking."""
-        seeded_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         text = artifacts["json"].read_text()
         assert "alice" not in text
         assert "[PERSON]" in text
 
     def test_an_unmarked_word_is_rendered_verbatim(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """The marking is what redacts, not a blanket refusal to render words."""
-        seeded_store(store, tmp_path, full=True, words=["hello"], marked_words=[])
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[])
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         assert "hello" in artifacts["json"].read_text()
 
@@ -2893,11 +3091,16 @@ class TestPlacement:
     """summary/ sits beside the store, never under released/."""
 
     def test_the_summary_is_not_under_the_release_directory(
-        self, tmp_path: Path, wav_writer: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+        self, graph: Callable[..., list[str]], tmp_path: Path
     ) -> None:
-        """It carries element ids and marked words' extents, so it inherits the store's sensitivity."""
-        _stub_graph(monkeypatch)
-        result = run_triage(wav_writer("s.wav", _sine()), tmp_path, _png(tmp_path))
+        """It carries element ids and marked words' extents, so it inherits the store's sensitivity.
+
+        This one lives in ``run_test.py`` rather than in ``nodes/report_test.py``, because placement
+        is the runner's decision; it uses that file's own ``graph`` fixture, which ``_fakes`` extends
+        with a ``_report`` entry (I2).
+        """
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", _png(tmp_path))
         assert result.summary_dir.parent == result.run_dir.parent
         assert not result.summary_dir.is_relative_to(result.artifacts_dir)
 
@@ -2906,29 +3109,29 @@ class TestTheProvenanceIsEmbedded:
     """A hash identifies a run; the mapping is what makes it readable without the repository."""
 
     def test_the_config_hash_and_the_mapping_both_appear(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """Both, always."""
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         assert payload["provenance"]["config_hash"]
         assert payload["provenance"]["config"]["name"] == "senselab-triage/default"
 
     def test_every_model_carries_its_resolved_commit_or_a_reason(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """An agent whose commit could not be resolved appears with its reason, never with a bare ref."""
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         for model in payload["provenance"]["models"]:
             assert model["revision"] is not None or model["unresolved_reason"] is not None
             assert model["revision"] != "main"
 
     def test_every_step_names_the_elements_behind_it(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path
+        self, store: ProvStore, tmp_path: Path
     ) -> None:
         """This is what makes the JSON a view of the store rather than a second copy of it."""
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
         assert payload["steps"]
         for entry in payload["steps"].values():
@@ -2939,24 +3142,24 @@ class TestTheSummaryLayers:
     """One shared time axis, drawn from the store."""
 
     def test_the_shared_axis_carries_every_layer_the_store_holds(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Waveform, envelope with floor, spans, phonation spans, the three label lanes, and the branches."""
         panels = _capture_panels(monkeypatch)
-        seeded_store(store, tmp_path, full=True)
+        _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         kinds = [panel["type"] for panel in panels[0]]
         assert kinds.count("segments") >= 5
         assert "waveform" in kinds and "features" in kinds
 
     def test_labelled_and_unlabelled_spans_are_distinguishable(
-        self, store: ProvStore, seeded_store: Callable[..., None], tmp_path: Path,
+        self, store: ProvStore, tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """branch-airway.md requires it on the shared axis."""
         panels = _capture_panels(monkeypatch)
-        seeded_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
+        _seed_report_store(store, tmp_path, full=True, airway_labelled=[(1.0, 1.3)], airway_unlabelled=[(2.0, 2.3)])
         report(store, tmp_path / "summary", _png(tmp_path))
         labels = {
             segment["label"]
@@ -2969,6 +3172,80 @@ class TestTheSummaryLayers:
 
 - [ ] **Step 3 — run them; expect FAIL** (`ModuleNotFoundError: ...nodes.report`).
   `uv run pytest src/tests/audio/workflows/triage/nodes/report_test.py -x -q`
+
+- [ ] **Step 3b — give `plot_aligned_panels` a `text` panel type (I5).**
+
+`report.md` requires blocks "beside the axis", and `plot_aligned_panels` cannot place them: it
+supports exactly five panel types — `waveform`, `spectrogram`, `features`, `segments`,
+`overlay_on_spectrogram` — dispatched by an `if/elif` chain with **no `else`**
+(`plotting.py:592-637`), so an unrecognised type silently yields a blank axis and a report built on
+one would look finished and say nothing. Of the two ways out — a new panel type, or composing two
+images — this plan takes the **panel type**, because the alternative would put the report's text on a
+second canvas with its own DPI and width and no guarantee the two ever line up.
+
+The blocks go **below** the shared axis rather than beside it, on their own full-width panel. Beside
+would need a two-column figure, which is a layout change to a function five other call sites use;
+below is the same change in one dimension and reads the same on a page.
+
+Failing test first, in `src/tests/audio/tasks/plotting/plotting_test.py`:
+
+```python
+class TestTheTextPanel:
+    """A panel that carries prose beside the shared time axis, for a report's per-step blocks."""
+
+    def test_a_text_panel_renders_its_lines(self) -> None:
+        """The lines reach the axis; a blank panel is the failure this type exists to prevent."""
+        figure = plot_aligned_panels(
+            _tone(), [{"type": "waveform"}, {"type": "text", "lines": ["triage: pass", "release: withheld"]}]
+        )
+        texts = [t.get_text() for ax in figure.axes for t in ax.texts]
+        assert any("triage: pass" in text for text in texts)
+        assert any("release: withheld" in text for text in texts)
+
+    def test_a_text_panel_has_no_time_axis(self) -> None:
+        """It carries no data over time, so it must not claim a shared x-scale it does not use."""
+        figure = plot_aligned_panels(_tone(), [{"type": "waveform"}, {"type": "text", "lines": ["a"]}])
+        assert not figure.axes[-1].axison
+
+    def test_an_unknown_panel_type_now_raises(self) -> None:
+        """A typo used to yield a blank axis and a report that looked finished."""
+        with pytest.raises(ValueError, match="unknown panel type"):
+            plot_aligned_panels(_tone(), [{"type": "sepctrogram"}])
+```
+
+Run it; expect FAIL on all three.
+
+Then, in `plot_aligned_panels`'s dispatch chain, after the `overlay_on_spectrogram` branch:
+
+```python
+            elif ptype == "text":
+                ax.axis("off")
+                lines = [str(line) for line in panel.get("lines", [])]
+                ax.text(
+                    0.01,
+                    0.98,
+                    "\n".join(lines),
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    family="monospace",
+                    fontsize=panel.get("fontsize", 8),
+                )
+            else:
+                raise ValueError(
+                    f"unknown panel type {ptype!r}; plot_aligned_panels supports "
+                    "waveform, spectrogram, features, segments, overlay_on_spectrogram and text"
+                )
+```
+
+The `else` is added in the same edit and is load-bearing beyond this task: a mistyped panel type in
+any of the function's callers has until now produced a blank axis rather than an error.
+
+The panel's height contribution is `max(1.0, 0.18 * len(lines))` inches, added to the existing
+per-type height table, so a long verdict block grows the figure rather than overflowing its axis.
+`plot_aligned_panels`'s docstring gains the `text` row.
+
+Run it; expect PASS.
 
 - [ ] **Step 4 — write `report.py`.**
 
@@ -3045,10 +3322,12 @@ segment per non-empty window, labelled by its joined label set), SPEECH's spans 
 `_render_figure` helper is **deleted** and its AIRWAY-only figure with it: one shared axis per file
 replaces one figure per branch, which is what `report.md` asks for.
 
-The side blocks beside the axis are rendered as a text panel carrying, in order: the branch decisions
-(`will_run`, `forced_by_hint`, `kind_state`), each branch's conclusion and flags, TAXONOMY's
-`screened` beside the resolved `kinds` with the per-kind `agreement`, and the verdict's `triage`,
-`release` and every reason — **with REDACT's outcome shown whatever the triage axis says**.
+The blocks are one `{"type": "text", "lines": [...]}` panel, last, built by `_blocks(store)` and
+carrying, in order: the branch decisions (`will_run`, `forced_by_hint`, `kind_state`, `why`), each
+branch's conclusion and flags, TAXONOMY's `screened` beside the resolved `kinds` with the per-kind
+`agreement`, and the verdict's `triage`, `release` and every reason — **with REDACT's outcome shown
+whatever the triage axis says**. Every line goes through `_redacted_text`'s rule: no matched text, in
+the blocks any more than in the lanes.
 
 `run.py` gains, after `verdict`:
 
@@ -3082,10 +3361,18 @@ and does not change the verdict — the store was already written.
 
 **Superseded code, deleted with the ruling that justifies it:**
 
-| deleted | ruling |
-| --- | --- |
-| `airway._render_figure` and `AirwayResult.figure_path` | report.md: one summary per file on one shared axis, drawn after the verdict — a per-branch figure drawn mid-branch cannot carry the branch decisions or the fold |
-| `airway_test.py`'s figure assertions | same |
+| deleted | ruling | where |
+| --- | --- | --- |
+| `airway._render_figure`, its call site, and `AirwayResult.figure_path` | report.md: one summary per file on one shared axis, drawn after the verdict — a per-branch figure drawn mid-branch cannot carry the branch decisions or the fold | **T6**, which is already rewriting that module and is its last toucher |
+| `airway_test.py`'s figure assertions | same | **T6**, in the same edit, so `airway_test.py` is never left referring to a removed attribute |
+| the `matplotlib` and `plot_aligned_panels` imports in `airway.py` | nothing else in that module draws | **T6** |
+
+**The ordering is explicit because both tasks touch the subject.** T6 removes the per-branch figure
+(it owns `airway.py` and runs before T9); T9 adds the per-file one (it owns `report.py` and
+`plotting.py`). Between the two, no triage run emits a figure at all — which is correct: the v1
+figure was AIRWAY-only and could not carry what `report.md` requires. T9's Scope does **not** list
+`airway.py`, and T6's commit body says the figure moves to REPORT so a reviewer reading either commit
+alone sees the whole move.
 
 ---
 
@@ -3237,7 +3524,7 @@ changes the triage graph**, and no other task in either plan file depends on it.
 - Multi-file orchestration, which lives in `specs/20260817-triage-workflow-dag/nextflow/`.
 - Any second pass over a suppressed-foreground stream.
 
-## Self-review
+## Self-review (second pass, after the review fixes)
 
 ### Spec coverage — every v2 spec section this file owns maps to a task
 
@@ -3364,3 +3651,51 @@ Two inconsistencies found and fixed while writing:
    now pins both rows separately, and T7's outcome ladder was changed from `fail` to `flag` on an
    incomplete re-scan to match `redact.md`'s own words — a behaviour change from v1, called out in
    T7 step 8 rather than made silently.
+
+### Second-pass results, after the review
+
+**Spec coverage — the delta.** No task changed hands. Four rows now cover more:
+
+| spec section | change | task |
+| --- | --- | --- |
+| branch-speech.md §4 Diarization | the Glides failure is **diagnosed before it is fixed**. The asserted mechanism is withdrawn — the b2ai-28 Glides runs contradict it — and replaced by a step that reads the actual failing store on the cluster and writes the mechanism into `benchmarks/glides-diarization.md`. The one fix that holds under every mechanism, the `extract_segments` guard, is separate and unconditional | T4 steps 5a, 5b |
+| branch-speech.md §6 | the probe reaches `SpeechBrainModel` through a patchable module-level factory, so no test constructs one and validates a fake sha over the network | T4 (I3) |
+| branch-airway.md §2 | the co-location rule now states what it buys — a 2 s neighbourhood, because HeAR's window is a box-car — rather than implying "the same event" | T6 (M4) |
+| report.md §Two products, §The summary | `plot_aligned_panels` gains a `text` panel type and an `else` that raises, so the blocks `report.md` requires have somewhere to go and a mistyped panel stops yielding a blank axis; `report.format` ships `"png"` so the one unconditional product is reachable under the packaged config | T9 (I5, I4) |
+
+**One spec table amended**, the only one this file touches: `branch-speech.md`'s Open-derivations
+table gains `speech.separation_sound_class`, worded as **owed a capability, not a measurement** —
+`separate_audios` refuses `speech_sound` without a conditioning class, so no ROC settles it.
+**Flagged for the owner.**
+
+**Placeholder scan — re-run.** `TBD`/`TODO`/`FIXME`/`XXX`: none. The four "describes rather than
+shows" places the first pass flagged are now **three**: T9's `_panels` list is unchanged, T4's
+`_proximity` and T7's `_matches_surviving` are unchanged, and T4's enrollment block lost its
+hand-waved `SpeechBrainModel` construction in favour of a full factory definition (I3). T10's
+`<snapshot-dir>` / `<wav>` shell placeholders are unchanged and remain deliberate: they are values
+its own step 2 produces.
+
+**Type-consistency scan — re-run, with five new rows.**
+
+| type | fixed in | every reader agrees |
+| --- | --- | --- |
+| `speech.separation_backend` tokens | `"unasdiff"` / `"MossFormer2_SS_16K"` / `null` | T4's ladder; the config's derivation |
+| `separation_state` | now four tokens, not three: `"no_speaker_count"` (M5), `"not_needed"`, `"not_selected"`, `"unconditioned_sound_slot_unavailable"`, plus `"count_N_exceeds_backend"` and the success mapping | T4 writes; T9 renders. **`None` count no longer collapses into `"not_needed"`** — nobody counted is not a measured count of one |
+| `diarization` | `"diarized"` / `"interval_selects_no_samples"` — **no `"interval_shorter_than_one_frame"`**, which named a floor this plan no longer asserts | T4 writes; T9 renders |
+| `_Verification.failed` / `.missing` | `list[str]`, names only, reported as `verify_failed` / `verify_missing` **beside** the planning scan's `scan_failed` / `scan_missing` | T7 writes; T8 reads only the outcome; T9 renders (M6) |
+| `apply_redactions(fill=...)` | **required keyword, no default** | T7's call site reads `redaction.fill` and passes it; a caller that does not say gets a `TypeError`, not silence (M7) |
+| `report.format` | `str` = `"png"` by default, `"pdf"` by override, anything else refused | T9; `run.TriageRunResult.summary` |
+| `plot_aligned_panels` panel types | six now: the five that existed plus `"text"`, with an `else` that raises | T9 owns the change; the function's five other call sites are unaffected except that a typo in them now errors |
+
+**Three defects the second pass found and fixed**, beyond the reviewed list:
+
+1. The `_Verification` constructed on the `scan_incomplete` path passed `missing=scan_missing`,
+   copying the *planning* scan's missing detectors into the *verification*'s field. The verdict would
+   then have reported the same detectors twice under two names and implied a verification that never
+   ran. It now passes empty lists, and the planning scan's own keys carry that half.
+2. T7's tests built the release directory as `tmp_path / "rel"` in nine places, which is inside
+   `run_dir` in the one test that passes `tmp_path` as `run_dir` too — and REDACT raises when the two
+   contain one another. They now go through one `_release(tmp_path)` helper.
+3. `test_f0_median_is_reported_only_with_its_stream` asserted `("f0_median_hz" in detail) == ("f0_stream" in detail)`,
+   which is satisfied by an implementation that reports *neither* on a span that has both. It is now
+   two tests: a marked span reports both keys with real values, an unvoiced span reports neither.

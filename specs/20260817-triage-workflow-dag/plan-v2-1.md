@@ -122,7 +122,7 @@ introduce keys" rule accepts every test override on day one.
 | `airway.contest_labels` | branch-airway | the declared YAMNet labels that may contest a HeAR label, disjoint from the airway evidence labels |
 | `speech.enrollment_model` | branch-speech | which speaker-embedding model and revision enrollment is estimated with |
 | `speech.separation_backend` | branch-speech | `unasdiff` or `MossFormer2_SS_16K`, once the two are ranked on this corpus |
-| `speech.separation_sound_class` | branch-speech | which FSD class stands for "any background" in unasdiff's `speech_sound` mode — see V17 in the sibling plan |
+| `speech.separation_sound_class` | branch-speech | **not a measurement**: `speech_sound` refuses to run without a conditioning class, so this is owed either an unconditioned sound slot upstream or a defensible FSD class — see V17 in the sibling plan |
 | `speech.nontarget.level_db` | branch-speech | the proximity leg's level threshold |
 | `speech.nontarget.tilt_db_per_octave` | branch-speech | the proximity leg's spectral-tilt threshold |
 | `speech.nontarget.d_to_r_db` | branch-speech | the proximity leg's direct-to-reverberant threshold |
@@ -589,11 +589,13 @@ Add to `derivation:`:
   revision that enrollment is estimated with; null, and while null an enrollment is refused rather than
   compared. speech.separation_backend chooses between unasdiff in speech_sound mode and
   MossFormer2_SS_16K; null until the two are ranked on this corpus, and while null separation does not
-  run. speech.separation_sound_class is the FSD class name unasdiff's sound slot is conditioned on;
-  branch-speech.md says the slot stands for any background and should not be conditioned on a class,
-  but separate_audios refuses speech_sound without one ("index 0 is 'Hi-hat'"), so the key is null and
-  the unasdiff option cannot run until either a defensible class is named or unasdiff gains an
-  unconditioned sound slot. speech.nontarget.{level_db,tilt_db_per_octave,d_to_r_db} are the proximity
+  run. speech.separation_sound_class is the FSD class name unasdiff's sound slot is conditioned on.
+  It is null for a DIFFERENT reason from every other null here, and the distinction matters: nobody
+  needs to measure anything for it. branch-speech.md says the slot stands for any background and
+  should not be conditioned on a class, and separate_audios refuses speech_sound without one ("index 0
+  is 'Hi-hat'"), so THE CAPABILITY IS ABSENT UPSTREAM. It is settled by adding an unconditioned sound
+  slot to unasdiff, or by someone naming a defensible class and saying why -- not by a ROC, a corpus
+  or a fit. Until then the unasdiff option cannot run. speech.nontarget.{level_db,tilt_db_per_octave,d_to_r_db} are the proximity
   leg's three thresholds, each null; until all three exist the legs are measured and reported per span
   and nontarget_speech_s is written as null rather than zero.
 ```
@@ -2224,7 +2226,7 @@ class TestTheOutcome:
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
         """Speech present, airway and voice absent, nothing uncertain."""
-        seeded_store(
+        seed_preprocess_store(
             store, tmp_path, yamnet_labels=[["Speech"]], hear_labels=[[]], ast_labels=[["Speech"]], words=3, phonation=[]
         )
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.PASS
@@ -3001,7 +3003,7 @@ store's vocabulary and are pinned by `routing_test.py` and `taxonomy_test.py` to
   `specs/20260817-triage-workflow-dag/nextflow/`.
 - Any value for any of the 33 open keys.
 
-## Self-review
+## Self-review (second pass, after the review fixes)
 
 ### Spec coverage — every v2 spec section this file owns maps to a task
 
@@ -3076,3 +3078,47 @@ both "no pass ran" and "the pass found nothing", which would have made a missing
 absence — the exact failure `taxonomy.md` §States forbids. It now returns `None` for the first case,
 distinguished by the presence of the `PREPROCESS`/`phonation_spans` activity, and
 `test_no_phonation_pass_at_all_is_uncertain` pins the distinction.
+
+### Second-pass results, after the review
+
+**Spec coverage — the delta.** No task changed hands and no spec section became unassigned. Three
+rows in the coverage table above now cover more than they did:
+
+| spec section | change | task |
+| --- | --- | --- |
+| preprocess.md §Window classifications | AST's window is now a config key defaulting to 0.96 s, not a 10.24 s literal, and every windowed classifier passes its own vocabulary size so no window is silently ranked to its top five | T1 (C1, C2) |
+| preprocess.md §`spans` | `merged_proposals` now has a producer — `propose_spans` counts what it absorbed — where the plan previously reported a rate nothing computed | T1 step 9b (C4) |
+| preprocess.md §`phonation_spans` | the glide's offset criterion is assigned (`"monotonicity"`) and the assignment is total over five values, closing the one resolution hole | T1 |
+
+**One spec line amended**, which the plan is otherwise not permitted to touch:
+`preprocess.md`'s window table said "AST | 10.24 s (its native frame)". That figure is retracted in
+this repository by measurement, so the row now names `windows.ast.win_length_s` (default 0.96 s) and
+the Open-derivations row says why. **Flagged for the owner**: this is a spec edit, not a plan edit,
+and it is the only one in this file.
+
+**Placeholder scan — re-run.** `TBD`/`TODO`/`FIXME`/`XXX`: none (the two matches are in this scan's
+own text). `...` still appears only in store-schema illustrations and, in one code block, marking
+unchanged surrounding lines. The forward dependency the first pass flagged —
+`propose_phonation_spans` described rather than shown — is unchanged and still flagged; it is now the
+**only** such place in this file, because the two listings of PREPROCESS's `blocks` were merged into
+one listing of named closures (M8) and the fixture contract was written out in full rather than
+gestured at (I1).
+
+**Type-consistency scan — re-run, with three new rows.**
+
+| type | fixed in | every reader agrees |
+| --- | --- | --- |
+| `windows.ast.win_length_s` | `float`, seconds, default 0.96 | T1's config, T1's `_ast_scores`, T1's tests. **No `AST_FRAME_S` exists**, so a stale 10.24 cannot survive anywhere |
+| `windows.ast.top_k` | `int` = 527, passed explicitly | T1's `_ast_scores`. YAMNet's 521 is `yamnet.top_k`, unchanged; HeAR keeps `top_k=None` because its path does not apply `or 5` |
+| `Span.merged_proposals` | `int`, ≥ 1, defaulted to 1 on the dataclass | `propose_spans` (T1 step 9b) → the `span` entity's attributes (T1's `_spans`) → sibling T6's `merged_n`. **Zero is never valid**: a span is its own proposal |
+| `seed_preprocess_store` | one signature, stated in T1's Interfaces | the only fixture any task may assume; every branch task's seeder is private to its own test file, so the three incompatible `words=` contracts the review found cannot recur |
+
+**Two defects the second pass found and fixed**, beyond the reviewed list:
+
+1. `windows_config`'s AST hop was 5.0 s, left over from the 10.24 s window. Against a 0.96 s window
+   that is a hop five times the window — the classifier would have skipped four fifths of the file
+   while the test asserted only that *a* hop reached it. It is now 0.48, the value the retraction
+   measured at.
+2. The `_scores`/`blocks` split named `_yamnet_scores` in one listing and inlined a lambda in the
+   other. An implementer following the second would have written a `blocks` entry calling a function
+   the first listing never defined. Both are now one listing of three named closures.
