@@ -121,6 +121,17 @@ def _default_samples() -> np.ndarray:
     return samples
 
 
+def _merging_bursts() -> np.ndarray:
+    """Three tone bursts close enough that the offset rule merges all three into one span."""
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
+    for start, stop, amplitude in ((1.0, 1.15, 0.5), (1.25, 1.4, 0.3), (1.5, 1.65, 0.5)):
+        i0, i1 = int(start * SR), int(stop * SR)
+        grid = np.arange(i1 - i0) / SR
+        samples[i0:i1] += (amplitude * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    return samples
+
+
 def _audio(tmp_path: Path) -> Audio:
     """The fixture recording, as ADMIT returned it."""
     return Audio(filepath=str(tmp_path / "input.wav"))
@@ -335,6 +346,47 @@ class TestWindowClassificationsAreSets:
         pooled = find_measurement(store, "hear_windows")
         assert pooled is not None
         assert pooled.attributes["labels"] == ["Cough"]
+
+
+class TestSpansCarryTheirMergeRate:
+    """A span covering several events says so, and the count comes from production."""
+
+    def test_a_merged_span_reports_every_proposal_it_absorbed(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Three bursts, one span, and the stored entity names all three.
+
+        The count is written by ``propose_spans`` and copied onto the entity by the node, so this is
+        the assertion that keeps sibling T6's merge-rate report reading production rather than a
+        fixture. Asserting the exact three is what makes it discriminating: a node that hard-coded
+        the field, or a fixture that supplied it, would read one.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_merging_bursts())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert len(spans) == 1
+        assert spans[0].attributes["merged_proposals"] == 3
+
+    def test_an_unmerged_span_reports_one(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The contrast the merged case needs: one burst absorbs one proposal, never zero."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert [e.attributes["merged_proposals"] for e in spans] == [1]
 
 
 class TestThePackagedConfigStillRunsEveryClassifier:
