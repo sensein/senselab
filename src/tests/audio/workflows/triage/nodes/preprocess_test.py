@@ -629,7 +629,6 @@ class TestTheConsensusTranscript:
             assert measurement is not None
             assert len(measurement.attributes["words"]) == 2
 
-
     def test_a_wordless_run_still_writes_the_consensus_with_a_filled_provenance(
         self,
         store: ProvStore,
