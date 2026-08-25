@@ -252,6 +252,17 @@ derivation: |
   drift. It is null for the reason the two scalars were: no single search range serves both a low adult
   male fundamental and an infant voice, so the caller must state which population it is measuring.
 
+  voice v2 -- branch-voice.md. voice.f0_range_by_population overrides voice.f0_range_hz per declared
+  age and sex; null, owed a fit per population, and a range spanning too wide an interval makes any
+  period-doubling test on it vacuous. voice.f0_range_ratio_max is the f0_max / f0_min above which the
+  period-doubling check reports nothing because it flags everything; it is null, and a configuration
+  exceeding it is REFUSED AT LOAD rather than run and flagged -- a check that fires on every file
+  transports no information, and running it anyway would put that non-information into every verdict.
+  While the ratio is null no configuration is refused, which is the honest state: nobody has fixed the
+  bound. voice.task_duration_ranges is the expected duration range per declared task, against which a
+  span outside it flags with the declared range named; null, because no corpus here establishes what a
+  maximum-phonation-time task should produce.
+
   words.onomatopoeic_tokens -- the vocabulary of cough- and breath-like renderings a recognizer emits
   as ordinary words ("khh", "ahem", "uh-huh-huh"). Null: it is owed the corpus it was drawn from, and
   seeding it from three remembered examples would be a vocabulary nobody fitted. While null, only
@@ -398,6 +409,9 @@ phonation:
 voice:
   hint_tags: [phonation, humming, sustained-vowel, voice]   # N25 -- vocabulary, not fitted
   f0_range_hz: null
+  f0_range_by_population: null
+  f0_range_ratio_max: null
+  task_duration_ranges: null
 
 speech:
   word_gap_ms: null
