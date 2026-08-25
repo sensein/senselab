@@ -33,7 +33,7 @@ cough recording has no speech, so SPEECH failing is the expected outcome.
 | ground | condition |
 | --- | --- |
 | **unmeasurable** | ADMIT failed. Nothing ran and nothing is claimed about the recording |
-| **acoustically empty** | every kind classified `absent`, no branch ran or every branch that ran found nothing, **and no hint claims otherwise** |
+| **acoustically empty** | every kind resolved `absent` after branch authority — the classification where no branch concluded, the branch's own conclusion where one did — **and no hint claims otherwise** |
 
 **A hint that claims otherwise turns the second ground into a `flag`, never a `discard`.** A file the
 graph found nothing in, on which the declaration says there should have been something, is exactly the
