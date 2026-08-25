@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from senselab.audio.workflows.triage.vocabulary import (
+    UNREAD_DECLARATION,
     BranchDecision,
     FileVerdict,
     NodeVerdict,
@@ -540,6 +541,19 @@ class TestHintsForMismatchOnly:
             hint_claims={"speech": True},
         )
         assert folded.kinds["speech"] == "absent"
+
+    def test_a_declaration_nothing_could_read_empties_the_hints_and_flags(self) -> None:
+        """Unknown claims are not no claims: reporting them as ``no_claim`` would clear the file quietly."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            screened={"speech": "absent", "airway": "absent", "voice": "absent"},
+            branch_decisions={},
+            ran={},
+            hint_claims=None,
+        )
+        assert folded.hints == {}
+        assert folded.triage is Triage.FLAG
+        assert any(reason.why == UNREAD_DECLARATION for reason in folded.reasons)
 
 
 class TestTheReleaseAxis:

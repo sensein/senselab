@@ -14,7 +14,7 @@ from senselab.audio.workflows.triage.nodes import verdict as verdict_module
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.run import GRAPH_ORDER
-from senselab.audio.workflows.triage.vocabulary import Outcome, Release, RunState, Triage
+from senselab.audio.workflows.triage.vocabulary import UNREAD_DECLARATION, Outcome, Release, RunState, Triage
 from senselab.utils.prov_store import Entity, ProvStore
 
 BASE: tuple[tuple[str, Outcome, str | None], ...] = (
@@ -308,6 +308,55 @@ class TestHintsAreReadThroughRoutingsMap:
         assert result.file_verdict.hints["airway"] == "found_unclaimed"
         assert result.file_verdict.triage is Triage.PASS
 
+    def test_the_claim_is_read_off_the_decision_not_re_derived_from_the_config(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """ROUTING read the declaration with a map; VERDICT is handed one without it and must agree.
+
+        The two nodes resolving the same tag independently is the divergence this reading removes:
+        the claim is ROUTING's record of what it made of the hint, not a second opinion about it.
+        """
+        hint = AudioHints(may_contain=["cough"])
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.FAIL, "airway")],
+            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            config=_hint_config(tmp_path),
+            hint=hint,
+        )
+        result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
+        assert result.file_verdict.hints["airway"] == "claimed_not_found"
+        assert result.file_verdict.triage is Triage.FLAG
+
+    def test_a_declaration_no_decision_survived_to_read_is_named_not_dropped(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """ROUTING errored, so what the declaration claimed is unknown; reading it as no claim is silent."""
+        hint = AudioHints(may_contain=["cough"])
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None)],
+            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            route=False,
+            hint=hint,
+        )
+        result = verdict_module.verdict(store, None, config, hint, run_dir=tmp_path)
+        assert result.file_verdict.hints == {}
+        assert result.file_verdict.triage is Triage.FLAG
+        assert any(reason.why == UNREAD_DECLARATION for reason in result.file_verdict.reasons)
+        assert _file_verdict_entity(store).attributes["hints"] == {}
+
+    def test_no_declaration_and_no_decision_claims_nothing_without_flagging(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """With no hint there is nothing to have lost, so the empty claim map is the honest one."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
+            kinds={"airway": "present", "speech": "absent", "voice": "absent"},
+            route=False,
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.hints["airway"] == "found_unclaimed"
+        assert result.file_verdict.triage is Triage.PASS
+
     def test_a_declaration_prevents_the_empty_discard(
         self, make_verdict_store: Callable[..., ProvStore], tmp_path: Path
     ) -> None:
@@ -565,3 +614,8 @@ class TestTheFoldIsWiredNotReimplemented:
         assert "fold_file_verdict(" in source
         assert "_BRANCH_FOR_KIND" not in source
         assert "_is_gated" not in source
+
+    def test_no_sibling_node_is_imported(self) -> None:
+        """A node calling into another node's module couples two nodes outside the store."""
+        source = inspect.getsource(verdict_module)
+        assert "workflows.triage.nodes.routing" not in source
