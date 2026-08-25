@@ -26,6 +26,7 @@ from senselab.audio.workflows.triage.nodes.airway import AirwayResult
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult
 from senselab.audio.workflows.triage.nodes.redact import RedactResult
+from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
 from senselab.audio.workflows.triage.run import run_triage
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Release, RunState
@@ -34,7 +35,7 @@ from senselab.utils.prov_store import ProvStore
 REPO_ROOT = Path(__file__).resolve().parents[5]
 CLI = REPO_ROOT / "scripts" / "triage_audio.py"
 
-GRAPH = ("ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+GRAPH = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
 
 
 @pytest.fixture
@@ -64,14 +65,24 @@ def _fakes(
     admit_outcome: Outcome = Outcome.PASS,
     raising: str | None = None,
     released: dict[str, Path] | None = None,
+    kinds: dict[str, str] | None = None,
+    pii: bool = True,
+    routing_outcome: str | None = None,
 ) -> dict[str, Callable[..., Any]]:
     """Fake node functions, one per graph node, recording their calls into ``calls``.
+
+    ``routing`` is the exception: its entry calls the **real** node over the store the fake TAXONOMY
+    seeded, so the gate under test is the production one and only the branches around it are faked.
 
     Args:
         calls: The list every fake appends its node name to, in call order.
         admit_outcome: What the fake ADMIT concludes; ``FAIL`` returns no audio.
         raising: The node whose fake raises ``RuntimeError`` instead of concluding.
         released: What the fake REDACT reports as its released pair.
+        kinds: The classification the fake TAXONOMY writes as ``kind`` entities. None writes none,
+            which is what a run where TAXONOMY never concluded leaves behind.
+        pii: Whether the fake SPEECH writes a live ``pii`` entity, which is REDACT's whole gate.
+        routing_outcome: ``"raise"`` makes the routing entry raise instead of calling the real node.
 
     Returns:
         The fakes, keyed by the attribute name they replace on the runner's module.
@@ -101,8 +112,24 @@ def _fakes(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
     ) -> TaxonomyResult:
         _record("TAXONOMY")
+        fold = store.activity(node="TAXONOMY", step="fold", parameters={})
+        for kind, state in (kinds or {}).items():
+            kind_id = store.entity(
+                prov_type="kind",
+                extent=None,
+                attributes={"kind": kind, "state": state, "lines": {}, "stream": "plain"},
+            )
+            store.was_generated_by(kind_id, fold)
         entity_id, verdict = _conclude(store, "TAXONOMY", Outcome.PASS, None)
-        return TaxonomyResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, kinds={})
+        return TaxonomyResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, kinds=dict(kinds or {}))
+
+    def _routing(
+        store: ProvStore, source: str | None, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
+    ) -> Any:  # noqa: ANN401
+        _record("routing")
+        if routing_outcome == "raise":
+            raise RuntimeError("routing could not run")
+        return real_routing(store, source, config, hint, run_dir=run_dir)
 
     def _airway(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
@@ -112,9 +139,19 @@ def _fakes(
         return AirwayResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, figure_path=None)
 
     def _speech(
-        store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
+        store: ProvStore,
+        source: str,
+        config: TriageConfig,
+        hint: AudioHints | None = None,
+        *,
+        run_dir: Path,
+        enrollment: Any = None,  # noqa: ANN401
     ) -> NodeResult:
         _record("SPEECH")
+        if pii:
+            scan = store.activity(node="SPEECH", step="pii", parameters={})
+            finding = store.entity(prov_type="pii", extent=(0.0, 1.0), attributes={"category": "name"})
+            store.was_generated_by(finding, scan)
         entity_id, verdict = _conclude(store, "SPEECH", Outcome.PASS, "speech")
         return NodeResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id)
 
@@ -148,6 +185,7 @@ def _fakes(
         "admit": _admit,
         "preprocess": _preprocess,
         "taxonomy": _taxonomy,
+        "routing": _routing,
         "airway": _airway,
         "speech": _speech,
         "voice": _voice,
@@ -178,7 +216,7 @@ def graph(monkeypatch: pytest.MonkeyPatch) -> Callable[..., list[str]]:
 class TestHappyPath:
     """Every node runs, in order, and the fold is reported."""
 
-    def test_calls_all_eight_nodes_in_graph_order(
+    def test_calls_all_nine_nodes_in_graph_order(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
         """The runner drives the DAG in the graph's declared order, VERDICT last."""
@@ -189,7 +227,7 @@ class TestHappyPath:
     def test_returns_the_file_verdict_with_every_node_completed(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A graph in which nothing raised reports ``COMPLETED`` for all eight nodes."""
+        """A graph in which nothing raised reports ``COMPLETED`` for all nine nodes."""
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
@@ -227,7 +265,7 @@ class TestHappyPath:
         """The caller's hint is handed to each node rather than dropped at the runner."""
         seen: list[AudioHints | None] = []
         graph()
-        for name in ("admit", "preprocess", "taxonomy", "airway", "speech", "voice", "redact", "verdict"):
+        for name in ("admit", "preprocess", "taxonomy", "routing", "airway", "speech", "voice", "redact", "verdict"):
             original = getattr(run_module, name)
 
             def _spy(*args: Any, _original: Any = original, **kwargs: Any) -> Any:  # noqa: ANN401
@@ -238,6 +276,65 @@ class TestHappyPath:
         hint = AudioHints(may_contain=["cough"])
         run_triage(tmp_path / "recording.wav", tmp_path / "out", config, hint=hint)
         assert seen == [hint] * len(GRAPH)
+
+
+class TestConditionalExecution:
+    """run.py runs the branches routing selected, and records the rest as skipped."""
+
+    def test_a_skipped_branch_is_not_called_and_is_recorded_skipped(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A branch with will_run false never runs, and RunState.SKIPPED says so."""
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "AIRWAY" not in calls
+        assert result.ran["AIRWAY"] is RunState.SKIPPED
+        assert result.ran["SPEECH"] is RunState.COMPLETED
+
+    def test_redact_runs_only_when_speech_ran_and_found_pii(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """REDACT is a step of SPEECH; no speech branch means no REDACT verdict at all."""
+        calls = graph(kinds={"speech": "absent", "airway": "present", "voice": "absent"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "REDACT" not in calls
+        assert result.ran["REDACT"] is RunState.SKIPPED
+
+    def test_speech_running_without_a_finding_still_skips_redact(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """redact.md: SPEECH ran and found no PII, so the release axis reads not_assessed."""
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"}, pii=False)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "SPEECH" in calls and "REDACT" not in calls
+        assert result.file_verdict is not None
+        assert result.file_verdict.release is Release.NOT_ASSESSED
+
+    def test_speech_running_with_a_finding_reaches_redact(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """One live pii entity is the whole gate."""
+        calls = graph(kinds={"speech": "present", "airway": "absent", "voice": "absent"}, pii=True)
+        run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert "REDACT" in calls
+
+    def test_an_empty_execution_set_still_reaches_verdict(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The file reaches the fold with no branch conclusions, which is what routing.md requires."""
+        calls = graph(kinds={"speech": "absent", "airway": "absent", "voice": "absent"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.ran["VERDICT"] is RunState.COMPLETED
+        assert {"AIRWAY", "SPEECH", "VOICE"}.isdisjoint(calls)
+
+    def test_a_raising_routing_runs_every_branch_and_is_recorded_errored(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The degradation is designed, not a default: the fold sees a node that was asked and was silent."""
+        calls = graph(routing_outcome="raise")
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert {"AIRWAY", "SPEECH", "VOICE"} <= set(calls)
+        assert result.ran["routing"] is RunState.ERRORED
 
 
 class TestNodeErrorsAreCaptured:
