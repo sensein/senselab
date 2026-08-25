@@ -12,19 +12,23 @@ from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
 
 
+def _config(tmp_path: Path, entries: str) -> TriageConfig:
+    """The packaged config with ``routing.hint_kind_map`` supplied from the given YAML entries."""
+    path = tmp_path / "routing.yaml"
+    path.write_text("routing:\n  hint_kind_map:\n" + entries)
+    return load_triage_config(path)
+
+
 def _map(tmp_path: Path) -> TriageConfig:
     """The packaged config with a hint map supplied, covering tags and one speech_type value."""
-    path = tmp_path / "routing.yaml"
-    path.write_text(
-        "routing:\n"
-        "  hint_kind_map:\n"
+    return _config(
+        tmp_path,
         "    speech: speech\n"
         "    read-speech: speech\n"
         "    cough: airway\n"
         "    phonation: voice\n"
-        "    prolonged-vowel: voice\n"
+        "    prolonged-vowel: voice\n",
     )
-    return load_triage_config(path)
 
 
 def _kinds(store: ProvStore, **states: str) -> None:
@@ -106,6 +110,33 @@ class TestHintsForceAndNothingElse:
         assert result.runs == ()
         decision = live_entities(store, "branch_decision")[0]
         assert decision.attributes["unmapped_tags"] == ["birdsong"]
+
+    def test_a_map_value_that_is_not_a_kind_forces_nothing_and_names_the_typo(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A typo'd map value must not make a declared tag vanish from both records.
+
+        The tag reached no kind this graph screens, so it is unmapped like any other tag that
+        reached none — that keeps the accounting total, every declared tag landing in exactly one of
+        ``hint_tags`` and ``unmapped_tags``. ``bad_map_values`` then says *why* it reached none,
+        because a config typo silently under-routing every file in a run is a different thing to
+        chase than a tag the vocabulary does not cover.
+        """
+        _kinds(store, speech="absent", airway="absent", voice="absent")
+        config = _config(tmp_path, "    cough: airwy\n")
+        result = routing(store, None, config, AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+        assert result.runs == ()
+        assert result.forced == ()
+        decisions = live_entities(store, "branch_decision")
+        assert [d.attributes["hint_tags"] for d in decisions] == [[], [], []]
+        assert decisions[0].attributes["unmapped_tags"] == ["cough"]
+        assert decisions[0].attributes["bad_map_values"] == {"cough": "airwy"}
+
+    def test_a_good_map_records_no_bad_values(self, store: ProvStore, tmp_path: Path) -> None:
+        """The control: the typo record must stay empty when the map is well formed."""
+        _kinds(store, speech="absent", airway="absent", voice="absent")
+        routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
+        assert all(d.attributes["bad_map_values"] == {} for d in live_entities(store, "branch_decision"))
 
     def test_a_null_map_forces_nothing(self, store: ProvStore, config: TriageConfig, tmp_path: Path) -> None:
         """While the vocabulary is unmeasured, every tag is unmapped and nothing is forced."""
