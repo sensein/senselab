@@ -47,15 +47,23 @@ def _node_verdict_from_entity(entity: Entity) -> NodeVerdict:
         entity: A ``verdict`` entity.
 
     Returns:
-        Its vocabulary verdict.
+        Its vocabulary verdict. An ``outcome`` outside :class:`Outcome` is not folded as a
+        conclusion: the node is reported as having written something no reader can act on, which
+        flags the file, where raising here would lose the whole file verdict along with it.
     """
     attributes = entity.attributes
-    return NodeVerdict(
-        node=attributes["node"],
-        outcome=Outcome(attributes["outcome"]),
-        kind=attributes.get("kind"),
-        why=attributes["why"],
-    )
+    node = str(attributes["node"])
+    raw = attributes["outcome"]
+    try:
+        outcome = Outcome(raw)
+    except ValueError:
+        return NodeVerdict(
+            node=node,
+            outcome=Outcome.FLAG,
+            kind=None,
+            why=f"{node} wrote outcome {raw!r}, which is not a node outcome; its verdict was not folded",
+        )
+    return NodeVerdict(node=node, outcome=outcome, kind=attributes.get("kind"), why=attributes["why"])
 
 
 def _live_latest(store: ProvStore, prov_type: PROV_TYPE, key: Callable[[Entity], str]) -> list[Entity]:
