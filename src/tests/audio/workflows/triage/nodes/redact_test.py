@@ -912,6 +912,7 @@ class TestWhatTheStoreRecords:
         _stub_pii(monkeypatch, findings=[])
         findings = {e.attributes["category"]: e.id for e in store.entities("pii")}
         scan = next(e for e in store.entities("measurement") if e.attributes.get("name") == "pii_scan")
+        consensus = next(e for e in store.entities("measurement") if e.attributes.get("name") == "consensus_transcript")
         recording = next(e for e in store.entities("stream") if e.attributes.get("name") == "recording")
         words = {w.id for w in store.entities("word")}
         result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
@@ -932,11 +933,18 @@ class TestWhatTheStoreRecords:
         for category, finding_id in findings.items():
             assert store.derived_from(by_category[category].id) == [finding_id], "derived from the pii it covers"
 
-        assert set(store.uses_of(plan_act.id)) == {scan.id, *findings.values()}
+        markings = {e.id for e in store.entities("assertion") if e.attributes.get("label") == "pii"}
+        assert set(store.uses_of(plan_act.id)) == {scan.id, *findings.values(), *markings}, (
+            "the plan read the scan, the findings, and the markings the re-plan would widen to"
+        )
         apply_used = set(store.uses_of(apply_act.id))
         assert recording.id in apply_used, "the recording stream it redacted"
         assert words <= apply_used, "every consensus word the transcript read"
         assert {span.id for span in spans} <= apply_used
+        verify_used = set(store.uses_of(verify_act.id))
+        assert consensus.id in verify_used, "the transcript measurement the verified text came from"
+        assert words <= verify_used, "and the words it was rendered from"
+        assert {span.id for span in spans} <= verify_used, "and the extents that shaped it"
 
         verdict = store.get_entity(result.verdict_entity_id)
         assert store.generated_by(verdict.id) == verify_act.id
@@ -944,3 +952,40 @@ class TestWhatTheStoreRecords:
         assert associated[0] == associated[1] == associated[2], "one agent answerable for all three steps"
         (software,) = associated[0]
         assert store.get_agent(software).agent_type == "software", "and it is software, not a model"
+
+    def test_the_widen_path_records_what_it_read_and_what_caused_it(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A re-plan that leaves no edges is a redaction nobody can trace to its cause.
+
+        The plan read the markings, the verification read the transcript it verified, and the span
+        the re-plan added exists because one marking said so. Each was an empty relation before.
+        """
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["jane", "doe", "here"],
+            findings=[("PERSON", (0.0, 0.5))],
+            extra_marks=[("doe", "PERSON")],
+        )
+        _stub_pii_sequence(monkeypatch, [[("PERSON", "doe")], []])
+        doe = next(w for w in store.entities("word") if w.attributes.get("text") == "doe")
+        marking = next(e for e in store.entities("assertion") if doe.id in store.derived_from(e.id))
+        consensus = next(e for e in store.entities("measurement") if e.attributes.get("name") == "consensus_transcript")
+        redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+
+        plan_act = next(a for a in store.activities("REDACT") if a.step == "plan")
+        verify_act = next(a for a in store.activities("REDACT") if a.step == "verify")
+        assert marking.id in store.uses_of(plan_act.id), "the plan consulted the marking it widened to"
+        assert consensus.id in store.uses_of(verify_act.id), "verification read the transcript measurement"
+        assert {w.id for w in store.entities("word")} <= set(store.uses_of(verify_act.id))
+
+        spans = [e for e in store.entities("span") if e.attributes.get("name") == "redaction"]
+        widened = next(
+            span for span in spans if span.extent is not None and span.extent[0] < 1.5 and span.extent[1] > 1.0
+        )
+        assert marking.id in store.derived_from(widened.id), "the widened span names the marking that caused it"
