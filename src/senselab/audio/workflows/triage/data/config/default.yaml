@@ -146,11 +146,6 @@ derivation: |
   how loud a released artifact's redactions are without anyone having measured which is preferable.
 
   UNSET, and why -- benchmarks/open.md carries each of these:
-    phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
-      autocorrelation, (0.44, 0.933) and (0.0007, 0.0161) on one recording, and the implementation now
-      uses Praat harmonicity in dB. The units differ, so the interval does not transfer and neither
-      floor has a value. CLAUDE.md records a related trap: a 2-10 dB HNR ramp under which ordinary
-      voiced speech, median 8.12 dB, read as only partly voiced.
     redaction.padding_ms: must exceed the *worst* alignment edge error, which is unquantified. The
       median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
       neighbour, only one is recoverable.
@@ -238,7 +233,8 @@ derivation: |
   in a busy window would vanish. HeAR is unaffected: detect_health_acoustic_events takes a different
   path on which top_k=None does keep all eight labels.
 
-  HeAR's 2 s window is model-imposed and already lives at hear.window_s; only its hop is a key.
+  HeAR's 2 s window is model-imposed and lives in the module, as HEAR_WINDOW_SECONDS; only its hop
+  is a key here.
   windows.hear.hop_s 2.0 -- non-overlapping 2 s windows, by the same ruling as windows.ast.hop_s and
   for the same reason: a null hop meant HeAR never ran under the packaged config. A fit on spans
   HeAR's input does not have to be padded to fill is still owed, and lands as an override. hear.placement and
@@ -371,9 +367,6 @@ gammatone:
   high_hz: 7800.0
   hop_s: 0.005
 
-hear:
-  window_s: 2.0
-
 yamnet:
   silence_threshold: 0.5
   coverage_threshold: 0.5
@@ -424,8 +417,6 @@ airway:
   contest_labels: null
 
 phonation:
-  hnr_floor_db: null
-  rms_floor: null
   hop_s: 0.01
   silence_threshold: 0.1
   periods_per_window: 4.5
