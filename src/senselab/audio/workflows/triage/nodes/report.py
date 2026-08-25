@@ -37,6 +37,7 @@ _SOURCE_STREAM = "recording"
 _CLASSIFIERS = ("yamnet", "ast", "hear")
 _UNLABELLED = "unlabelled"
 _UNKNOWN = "—"
+_UNSCANNED = "[unscanned]"
 _SHA_LENGTH = 40
 _BLOCK_COLUMNS = 168
 _TOP_CATEGORIES = 6
@@ -116,7 +117,38 @@ def _assertions_by_source(store: ProvStore) -> dict[str, list[Entity]]:
     return index
 
 
-def _redacted_text(marks: dict[str, list[Entity]], word: Entity) -> str:
+def _scan_state(store: ProvStore) -> tuple[bool, str]:
+    """Whether a PII scan covered this transcript, and what to say when it did not.
+
+    The marking is what redacts, so a page that renders unmarked words verbatim is trusting the
+    absence of a marking. That absence has two causes and they are not the same: SPEECH scanned and
+    found nothing, or nobody scanned at all — because routing declined the branch, because SPEECH
+    raised, or because every detector failed. REDACT already refuses to release on this distinction
+    (N15); the summary must respect it too, since it is written beside the store and read by people.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``(trustworthy, reason)``. ``reason`` is empty when the scan ran and every required detector
+        was attempted.
+    """
+    scan = find_measurement(store, "pii_scan")
+    if scan is None:
+        return False, "no pii scan is in the store; SPEECH did not run or did not reach its scan"
+    failed = [str(name) for name in (scan.attributes.get("failed") or [])]
+    missing = [str(name) for name in (scan.attributes.get("missing") or [])]
+    if failed or missing:
+        parts = []
+        if failed:
+            parts.append(f"detectors failed: {', '.join(sorted(failed))}")
+        if missing:
+            parts.append(f"required detectors were not attempted: {', '.join(sorted(missing))}")
+        return False, "the pii scan is incomplete (" + "; ".join(parts) + ")"
+    return True, ""
+
+
+def _redacted_text(marks: dict[str, list[Entity]], word: Entity, *, scanned: bool = True) -> str:
     """A word's renderable text: its category placeholder when the scan marked it, else the word.
 
     The store holds PII by design and the report carries element ids, so the report is not a released
@@ -126,16 +158,18 @@ def _redacted_text(marks: dict[str, list[Entity]], word: Entity) -> str:
         marks: :func:`_assertions_by_source`'s index, so the answer costs one dictionary lookup
             rather than a walk over every assertion in the store.
         word: A ``word`` entity.
+        scanned: Whether a complete PII scan stands behind the markings. When it does not, every word
+            is withheld: an unmarked word is only evidence of cleanliness if something looked.
 
     Returns:
-        ``"[<CATEGORY>]"`` when a live ``pii`` label assertion is derived from this word, else the
-        word's own text.
+        ``"[<CATEGORY>]"`` when a live ``pii`` label assertion is derived from this word,
+        ``"[unscanned]"`` when no complete scan covered the transcript, else the word's own text.
     """
     for assertion in marks.get(word.id, ()):
         attributes = assertion.attributes
         if attributes.get("verb") == "label" and attributes.get("label") == "pii":
             return f"[{attributes.get('category')}]"
-    return str(word.attributes.get("text") or "")
+    return str(word.attributes.get("text") or "") if scanned else _UNSCANNED
 
 
 def _words(store: ProvStore) -> list[Entity]:
@@ -161,9 +195,11 @@ def _transcript(store: ProvStore, marks: dict[str, list[Entity]]) -> str:
         marks: :func:`_assertions_by_source`'s index.
 
     Returns:
-        The redacted transcript, empty when the store holds no consensus words.
+        The redacted transcript, empty when the store holds no consensus words, and every word
+        withheld when no complete PII scan covered it.
     """
-    return " ".join(_redacted_text(marks, word) for word in _words(store))
+    scanned, _ = _scan_state(store)
+    return " ".join(_redacted_text(marks, word, scanned=scanned) for word in _words(store))
 
 
 def _envelope_spans(store: ProvStore) -> list[Entity]:
@@ -308,6 +344,7 @@ def _panels(
         Panel specifications for ``plot_aligned_panels``. Every lane carries a ``name``.
     """
     panels: list[dict[str, Any]] = [{"type": "waveform"}]
+    scanned, _ = _scan_state(store)
 
     envelope = find_measurement(store, "energy_envelope")
     if envelope is not None:
@@ -363,7 +400,11 @@ def _panels(
     )
     panels += _lane(
         "words",
-        _segments((word.extent, _redacted_text(marks, word)) for word in _words(store) if word.extent is not None),
+        _segments(
+            (word.extent, _redacted_text(marks, word, scanned=scanned))
+            for word in _words(store)
+            if word.extent is not None
+        ),
     )
     panels += _lane(
         "airway",
@@ -827,7 +868,15 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
         lines.append("  every declared lane was drawn")
 
     lines.append("")
-    lines.append("TRANSCRIPT (marked words rendered as their category)")
+    scanned, why_not = _scan_state(store)
+    heading = (
+        "TRANSCRIPT (marked words rendered as their category)"
+        if scanned
+        else "TRANSCRIPT (WITHHELD — every word rendered as [unscanned])"
+    )
+    lines.append(heading)
+    if not scanned:
+        lines.append(f"  {why_not}; an unscanned transcript is not a clean one")
     transcript = _transcript(store, marks)
     if not transcript:
         lines.append("  no consensus transcript is in the store")
