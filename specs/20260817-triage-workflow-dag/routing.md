@@ -59,12 +59,14 @@ The mapping from a hint tag or `speech_type` value to a kind is the config key
 SPEECH's PII scan over the consensus transcript found something. A file where SPEECH did not run, or
 ran and found no PII, has no REDACT verdict at all, and its release axis reads `not_assessed`.
 
-## A file that enters no branch is flagged
+## A file that enters no branch is recorded, not judged
 
-If every kind is `absent` and no hint forces a branch, the execution set is empty. That is a
-`flag`, carrying which kinds were classified absent and on what evidence, and the file reaches
-[`verdict.md`](verdict.md) with no branch conclusions to fold. It is not a `discard` here: whether an
-empty execution set discards the file is the fold's decision, taken against the hints
+If every kind is `absent` and no hint forces a branch, the execution set is empty. The three
+decisions carry `will_run: false` with the kind state and the evidence behind each, and the file
+reaches [`verdict.md`](verdict.md) with no branch conclusions to fold. **This node does not `flag`
+it.** A flag here would decide the file, because the fold tests any node `flag` before it tests
+every-kind-absent, and verdict.md's "acoustically empty → discard" would then be unreachable. The
+fold reads `will_run` off the decisions and takes that decision against the hints
 ([`verdict.md`](verdict.md)).
 
 ## The pass is encapsulated
@@ -103,7 +105,7 @@ instead; a branch with `will_run: true` and no verdict errored, and the fold say
 ## Product
 
 ```
-outcome:   flag(reason, decisions) | pass
+outcome:   pass          # always; this node reaches no conclusion about the recording
 verdict:   { runs: [branch, ...], skipped: [branch, ...], forced: [branch, ...], empty_set: bool }
 view:      the branch_decision element ids
 ```
