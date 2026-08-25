@@ -54,14 +54,30 @@ class TestRefusal:
             vector=[1.0],
             provenance=_provenance(model_commit_sha=None, unresolved_reason="hub outage"),
         )
-        assert "resolved model commit" in (enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb") or "")
+        assert "resolved model commit" in (
+            enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb", "a" * 40) or ""
+        )
 
     def test_a_different_model_is_refused(self) -> None:
         """Embeddings from different models are not comparable at any threshold."""
         enrollment = Enrollment(subject_id="sub-01", vector=[1.0], provenance=_provenance())
-        assert "not the probe" in (enrollment.refusal_against("pyannote/embedding") or "")
+        assert "not the probe" in (enrollment.refusal_against("pyannote/embedding", "a" * 40) or "")
+
+    def test_a_different_commit_of_the_same_model_is_refused(self) -> None:
+        """branch-speech.md section 6: 'from two commits of one model, are not comparable'."""
+        enrollment = Enrollment(subject_id="sub-01", vector=[1.0], provenance=_provenance())
+        refusal = enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb", "b" * 40) or ""
+        assert "two commits of one model are not comparable" in refusal
+
+    def test_an_unpinned_probe_is_refused_like_a_mismatched_one(self) -> None:
+        """A ref resolves to whatever it points at today, so it names no commit to agree with."""
+        enrollment = Enrollment(subject_id="sub-01", vector=[1.0], provenance=_provenance())
+        assert "carries no resolved model commit" in (
+            enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb", None) or ""
+        )
+        assert "not comparable" in (enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb", "main") or "")
 
     def test_a_matching_model_and_commit_is_comparable(self) -> None:
-        """The one case that is not a refusal."""
+        """The one case that is not a refusal: same model, same resolved commit."""
         enrollment = Enrollment(subject_id="sub-01", vector=[1.0], provenance=_provenance())
-        assert enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb") is None
+        assert enrollment.refusal_against("speechbrain/spkrec-ecapa-voxceleb", "a" * 40) is None

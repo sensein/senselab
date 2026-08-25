@@ -785,7 +785,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         store.was_attributed_to(enrollment_id, software)
         view.append(enrollment_id)
 
-        refusal = enrollment.refusal_against(values["enrollment_model_id"])
+        refusal = enrollment.refusal_against(values["enrollment_model_id"], values["enrollment_revision"])
         if refusal is not None:
             flags.append(refusal)
         elif speaker_segments:

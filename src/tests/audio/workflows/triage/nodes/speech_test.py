@@ -746,6 +746,21 @@ class TestEnrollment:
         )
         assert "not the probe" in result.verdict.why
 
+    def test_an_enrollment_at_another_commit_of_the_same_model_is_refused(
+        self, store: ProvStore, enrollment_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """branch-speech.md section 6: a matching model id is not enough; the commits must agree."""
+        _seed_speech_store(store, tmp_path, words=["hello", "world"])
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        embedder = _stub_embedder(monkeypatch)
+        result = speech(
+            store, "plain", enrollment_config, run_dir=tmp_path, enrollment=_enrollment(commit="b" * 40)
+        )
+        assert embedder == [], "no probe runs against an enrollment it cannot be compared with"
+        assert result.verdict.outcome is Outcome.FLAG
+        assert "two commits of one model are not comparable" in result.verdict.why
+        assert not live_entities(store, "target_match"), "no comparison happened"
+
     def test_a_null_enrollment_model_key_refuses_before_any_store_write(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
