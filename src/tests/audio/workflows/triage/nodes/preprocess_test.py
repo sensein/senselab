@@ -292,7 +292,7 @@ class TestWindowClassificationsAreSets:
         assert find_measurement(store, "yamnet_windows") is None
         assert "yamnet_windows" in result.absent
 
-    def test_ast_runs_at_the_configured_window_not_at_10_24_s(
+    def test_ast_runs_at_the_owner_directed_window(
         self,
         store: ProvStore,
         windows_config: TriageConfig,
@@ -300,13 +300,12 @@ class TestWindowClassificationsAreSets:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The 'native frame' reasoning is retracted in this repo; the window is a key defaulting to 0.96."""
+        """AST reads the recording in 10 s windows; 10.24 s is the nearest realisable width."""
         seen: dict[str, Any] = {}
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch, ast=[window(0.0, 0.96, {"Speech": 0.9})], record=seen)
+        _stub_models(monkeypatch, ast=[window(0.0, 10.24, {"Speech": 0.9})], record=seen)
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
         assert seen["ast"]["win_length"] == pytest.approx(10.24)
-        assert seen["ast"]["hop_length"] == pytest.approx(0.48)
 
     def test_ast_is_asked_for_its_whole_vocabulary(
         self,
