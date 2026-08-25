@@ -200,6 +200,57 @@ class TestTheClassificationIsReadVerbatim:
         assert result.file_verdict.screened["speech"] == "present"
 
 
+class TestAnUnreadableNodeVerdictDoesNotKillTheFold:
+    """One node writing something no reader can act on must not cost the whole file verdict."""
+
+    def test_an_alien_outcome_flags_and_names_the_node_and_the_value(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The union on ``write_verdict``'s outcome means a node can write a triage value by mistake."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
+            kinds={"airway": "present", "speech": "present", "voice": "absent"},
+        )
+        activity = store.activity(node="SPEECH", step="seed", parameters={})
+        agent = software_agent(store)
+        store.was_associated_with(activity, agent)
+        alien = store.entity(
+            prov_type="verdict",
+            extent=None,
+            attributes={"node": "SPEECH", "outcome": "discard", "kind": "speech", "why": "a node erred"},
+        )
+        store.was_generated_by(alien, activity)
+
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.triage is Triage.FLAG
+        assert any(
+            "SPEECH" in reason.why and "'discard'" in reason.why for reason in result.file_verdict.reasons
+        ), "the offending node and the value it wrote are both named"
+
+    def test_the_unreadable_verdict_resolves_no_kind_and_the_fold_still_completes(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Every other node's conclusion survives, and the kind that node screened stays unanswered."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("AIRWAY", Outcome.PASS, "airway")],
+            kinds={"airway": "present", "speech": "present", "voice": "absent"},
+        )
+        activity = store.activity(node="SPEECH", step="seed", parameters={})
+        store.was_associated_with(activity, software_agent(store))
+        alien = store.entity(
+            prov_type="verdict",
+            extent=None,
+            attributes={"node": "SPEECH", "outcome": "banana", "kind": "speech", "why": "a node erred"},
+        )
+        store.was_generated_by(alien, activity)
+
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path)
+        assert result.file_verdict.kinds["airway"] == "present"
+        assert result.file_verdict.kinds["speech"] == "present", "the classification stands where no branch answered"
+        assert result.file_verdict.agreement["speech"] == "not_run"
+        assert _file_verdict_entity(store).attributes["triage"] == "flag"
+
+
 class TestTheBranchDecisionsAreRead:
     """Which branch was asked is a store fact now, not a guess from the classification."""
 
