@@ -66,6 +66,14 @@ class TestTheTextPanel:
         assert figure.axes[0].get_ylabel() == "airway"
         assert figure.axes[1].get_ylabel() == "Segment"
 
+    def test_a_features_panel_can_name_its_lane(self) -> None:
+        """A stack of feature curves labelled "Value" says nothing about which curve is which."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [{"type": "features", "data": [([0.1], [1.0], "f0", "steelblue")], "name": "envelope"}],
+        )
+        assert figure.axes[0].get_ylabel() == "envelope"
+
     def test_an_unknown_panel_type_now_raises(self) -> None:
         """A typo used to yield a blank axis and a report that looked finished."""
         with pytest.raises(ValueError, match="unknown panel type"):
