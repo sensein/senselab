@@ -29,9 +29,11 @@ stated and its constant unjustified — not silently guessed.
 | item | current state |
 | --- | --- |
 | **The word-gap threshold** grouping words into speech spans | unspecified. Any value is a claim about what makes one utterance |
-| **The F0 search range** — `phonation.f0_min_hz` and `f0_max_hz` | no single range serves both populations: wide enough for a low adult male fundamental admits period-doubling artefacts, narrow enough to exclude them cuts off infant and high-F0 voices. The caller must state which population it is measuring, and a run whose F0 sits where the range is ambiguous is flagged rather than resolved |
+| **The F0 search range** — `voice.f0_range_hz` and `voice.f0_range_by_population` | no single range serves both populations: wide enough for a low adult male fundamental admits period-doubling artefacts, narrow enough to exclude them cuts off infant and high-F0 voices. The caller must state which population it is measuring, and a run whose F0 sits where the range is ambiguous is flagged rather than resolved |
 | **What consumes fabrication candidates** | SPEECH detects them and nothing acts on them |
-| **`min_families` per kind** | TAXONOMY states the asymmetry (airway 3 families, speech 2) but not the values |
+| **`speech.second_diarizer`** — which model corroborates pyannote's count | no measured ranking of second diarizers exists. While null, a count that is not 1 records `second_diarizer: not_consulted` and still flags, so the flag is reached without the corroboration it was meant to carry |
+| **`speech.target_match_cosine`** — the similarity above which a diarized speaker is the enrolled target | no threshold has been derived on this embedding model. While null, an enrollment is refused rather than answered with an invented cut, so the enrolled path is unreachable by design until it is fitted |
+| **`taxonomy.presence_floor` per line** | the v1 `min_families` committee is deleted. Each kind now has named evidence lines — speech `acoustic`/`lexical`, airway `health_acoustic`/`acoustic` — and all four floors are null. The asymmetry the v1 row stated survives as the line structure; the counts do not exist |
 
 ## Measurements named in the specs and not run
 
