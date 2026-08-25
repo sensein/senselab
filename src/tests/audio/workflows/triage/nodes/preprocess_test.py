@@ -284,7 +284,7 @@ class TestWindowClassificationsAreSets:
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, ast=[window(0.0, 0.96, {"Speech": 0.9})], record=seen)
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
-        assert seen["ast"]["win_length"] == pytest.approx(0.96)
+        assert seen["ast"]["win_length"] == pytest.approx(10.24)
         assert seen["ast"]["hop_length"] == pytest.approx(0.48)
 
     def test_ast_is_asked_for_its_whole_vocabulary(

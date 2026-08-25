@@ -200,24 +200,16 @@ derivation: |
   ignores win_length/hop_length for YAMNet and returns its own 0.96 s / 0.48 s frames, so the grid is
   recorded as a fact on the pooled measurement.
 
-  windows.ast.win_length_s 0.96 -- NOT 10.24. The "native frame: 1024 mel frames at 10 ms" reasoning
-  is RETRACTED in this repository, and the retraction is quoted here because a plan that reintroduced
-  the value would be reintroducing a defect this codebase already measured and removed. From
-  audio_analysis/data/run_config/default.yaml: "That conflates the model's required input size with
-  its temporal precision. 1024 frames is a fixed input shape, not an analysis resolution: a shorter
-  window is zero-padded to 1024 frames by ASTFeatureExtractor -- rectangular padding, no taper -- so
-  the content is unattenuated and AST can be slid at any hop." Measured there on a 21.48 s
-  conversation clip: 10.24 s / 10.24 s gave 3 windows scoring 0.473, 0.449 and 0.195 on speech, while
-  0.96 s / 0.48 s gave 45 windows scoring 0.75-0.92 -- confidence ROSE, because a 10.24 s window of a
-  conversation spreads its softmax mass over speech plus silence plus everything else while a 0.96 s
-  window of speech is unambiguous. And on a 4.9 s recording the coarse window exceeded the whole clip,
-  so AST returned one flat value for every bucket while carrying the largest weight on its axis. The
-  "kaldi-fbank refuses chunks below ~1 s" constraint is real and does not bind: 0.96 s is ~96 mel
-  frames. 0.96 s also puts AST on YAMNet's grid, which is what lets the acoustic evidence line count
-  windows from either classifier without reconciling two frame rates. A coarser window -- the owner's
-  10 s figure among them -- remains reachable as an override, and a run that takes it declares it in
-  config_hash. windows.ast.hop_s stays null because the v2 spec owes it a fit; 0.48 is the value the
-  retraction above measured at, and is what an override should start from.
+  windows.ast.win_length_s 10.24 -- owner-directed: AST reads the recording in 10 s windows (10.24 s
+  is the model's 1024-frame input at a 10 ms hop, the nearest realisable width to the directive).
+  The audio_analysis workflow measured and prefers a 0.96 s slid window for its own purposes; that
+  workflow's notes do not govern triage, and this key exists precisely so the choice is declared and
+  hashed rather than inherited. A finer window remains reachable as an override. Two consequences a
+  reader should know: a recording shorter than the window is zero-padded by ASTFeatureExtractor, so
+  it yields one window covering the whole file; and AST's windows sit on a coarser grid than
+  YAMNet's, so the acoustic evidence line counts each classifier's windows on its own grid.
+  windows.ast.hop_s stays null because the v2 spec owes it a fit; non-overlapping (hop = window) is
+  what an override should start from.
 
   windows.ast.top_k 527 -- the full AudioSet label space AST was fine-tuned on. A SIZE, not a
   threshold, and the same reason yamnet.top_k is 521: classify_audios does `top_k=top_k or 5` on its
@@ -350,8 +342,8 @@ windows:
   ast:
     default_threshold: null
     label_thresholds: null
-    win_length_s: 0.96      # NOT 10.24 -- the "native frame" reasoning is retracted; see the derivation
-    hop_s: null             # owed a fit; the retraction measured at 0.48
+    win_length_s: 10.24     # owner-directed 10 s window (1024-frame input); see the derivation
+    hop_s: null             # owed a fit; non-overlapping (hop = window) is the starting override
     top_k: 527              # AudioSet's full label space; a size, not a threshold (classify_audios: top_k or 5)
   hear:
     default_threshold: null
