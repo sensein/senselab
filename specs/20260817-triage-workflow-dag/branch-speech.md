@@ -283,7 +283,7 @@ when the branch failed for want of words, REDACT does not run and the file's rel
 | outcome | when |
 | --- | --- |
 | `fail` | no consensus word |
-| `flag` | PII in a target speaker's spans, or PII with no known target, or a PII detector failed to run; step 3's instruments disagreed; the speaker count is not 1; the two diarizers disagree; the count is ≥3 so separation cannot isolate a speaker; single-recognizer words survive as fabrication candidates; an enrollment was given without model and revision, or with them and no speaker matches; a hint asserts speech this branch did not find |
+| `flag` | PII in a target speaker's spans, or PII with no known target, or a PII detector failed to run; step 3's instruments disagreed; the speaker count is not 1; the two diarizers disagree; the count is ≥3 so separation cannot isolate a speaker; single-recognizer words survive as fabrication candidates; an enrollment was given without model and revision, or with them and no speaker matches |
 | `pass` | words, spans, speakers and quality are in the store, and the verdict below says what the branch concluded |
 
 ## Product

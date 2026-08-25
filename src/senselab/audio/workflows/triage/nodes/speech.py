@@ -115,7 +115,6 @@ def _required(config: TriageConfig, enrollment: Enrollment | None) -> dict[str, 
     values: dict[str, Any] = {
         "word_gap_ms": float(config.require("speech.word_gap_ms")),
         "coverage_threshold": float(config.require("yamnet.coverage_threshold")),
-        "hint_tags": [str(tag) for tag in config.require("speech.hint_tags")],
         "clip_headroom": float(config.require("disruptions.clip_headroom")),
         "min_clip_run": int(config.require("disruptions.min_clip_run")),
         "min_dropout_ms": float(config.require("disruptions.min_dropout_ms")),
@@ -129,23 +128,6 @@ def _required(config: TriageConfig, enrollment: Enrollment | None) -> dict[str, 
         values["enrollment_revision"] = str(model["revision"])
         values["target_match_cosine"] = float(config.require("speech.target_match_cosine"))
     return values
-
-
-def _hint_asserts_speech(hint: AudioHints | None, hint_tags: list[str]) -> bool:
-    """Whether the caller asserted speech content (N25).
-
-    Args:
-        hint: The caller's hint.
-        hint_tags: The tags ``speech.hint_tags`` counts as asserting speech.
-
-    Returns:
-        True when the hint asserts speech.
-    """
-    if hint is None:
-        return False
-    if hint.expected_speech:
-        return True
-    return bool({tag.lower() for tag in hint.may_contain} & {tag.lower() for tag in hint_tags})
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -519,14 +501,9 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
             "which was supplied and is not read"
         )
 
-    hint_asserts = _hint_asserts_speech(hint, values["hint_tags"])
     if not words:
         why = "no consensus word; this branch has no subject"
         outcome = Outcome.FAIL
-        if hint_asserts:
-            outcome = Outcome.FLAG
-            why += "; a hint asserts speech not found"
-            flags.append(why)
         verdict_id, verdict = write_verdict(
             store,
             transcript,

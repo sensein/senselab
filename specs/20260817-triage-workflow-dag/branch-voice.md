@@ -135,7 +135,7 @@ Neither is a label this branch can attach, and it does not try.
 | outcome | when |
 | --- | --- |
 | `fail` | the store carries no phonation span |
-| `flag` | a span's F0 sits where the declared population's range is ambiguous; a declared task's expected duration range is not met; the gate's parameters are still un-derived and a span sits near an interval's edge; a hint asserts phonation the branch did not find |
+| `flag` | a span's F0 sits where the declared population's range is ambiguous; a declared task's expected duration range is not met; the gate's parameters are still un-derived and a span sits near an interval's edge |
 | `pass` | spans, tracks, period marks and amplitudes are in the store |
 
 **VOICE concludes about the voice kind and no other** — [`verdict.md`](verdict.md).
