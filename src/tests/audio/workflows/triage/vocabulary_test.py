@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from senselab.audio.workflows.triage.vocabulary import (
+    BAD_MAP_VALUES,
     UNREAD_DECLARATION,
     BranchDecision,
     FileVerdict,
@@ -573,6 +576,38 @@ class TestHintsForMismatchOnly:
         assert folded.hints == {}
         assert folded.triage is Triage.FLAG
         assert any(reason.why == UNREAD_DECLARATION for reason in folded.reasons)
+
+
+class TestAConfigTypoIsNamedNotSwallowed:
+    """A map value that is not a kind under-claims every file in the run; it must not discard one."""
+
+    def test_a_bad_map_value_flags_where_the_file_would_otherwise_discard(self) -> None:
+        """One character in the map turns a declared cough into a silent discard of the evidence."""
+        decisions = _all_skipped()
+        decisions["AIRWAY"] = replace(decisions["AIRWAY"], bad_map_values={"cough": "airwy"})
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            screened={"speech": "absent", "airway": "absent", "voice": "absent"},
+            branch_decisions=decisions,
+            ran={},
+            hint_claims={},
+        )
+        assert folded.triage is Triage.FLAG
+        assert folded.discard_ground is None
+        assert folded.bad_map_values == {"cough": "airwy"}
+        assert any(BAD_MAP_VALUES in reason.why and "airwy" in reason.why for reason in folded.reasons)
+
+    def test_a_well_formed_map_flags_nothing(self) -> None:
+        """The control: the same recording discards when the map is sound."""
+        folded = fold_file_verdict(
+            [NodeVerdict("ADMIT", Outcome.PASS, None, "ok")],
+            screened={"speech": "absent", "airway": "absent", "voice": "absent"},
+            branch_decisions=_all_skipped(),
+            ran={},
+            hint_claims={},
+        )
+        assert folded.bad_map_values == {}
+        assert folded.triage is Triage.DISCARD
 
 
 class TestTheReleaseAxis:

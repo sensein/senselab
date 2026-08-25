@@ -150,6 +150,9 @@ def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list
             kind_state=str(entity.attributes["kind_state"]),
             forced_by_hint=bool(entity.attributes["forced_by_hint"]),
             hint_tags=tuple(str(tag) for tag in entity.attributes.get("hint_tags") or ()),
+            bad_map_values={
+                str(tag): str(value) for tag, value in (entity.attributes.get("bad_map_values") or {}).items()
+            },
         )
         ids.append(entity.id)
     return decisions, ids
@@ -265,6 +268,7 @@ def verdict(
             "agreement": dict(file_verdict.agreement),
             "hints": dict(file_verdict.hints),
             "branches": dict(file_verdict.branches),
+            "bad_map_values": dict(file_verdict.bad_map_values),
             "ran": {node: state.value for node, state in file_verdict.ran.items()},
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in file_verdict.reasons
