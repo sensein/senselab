@@ -23,8 +23,12 @@ NODE = "routing"
 
 BRANCH_FOR_KIND = {"airway": "AIRWAY", "speech": "SPEECH", "voice": "VOICE"}
 
+PRESENT = "present"
 ABSENT = "absent"
 UNCERTAIN = "uncertain"
+UNREADABLE = "unreadable"
+
+KIND_STATES = (PRESENT, ABSENT, UNCERTAIN)
 
 _SPEECH_TYPE = "speech_type"
 _STREAM = "plain"
@@ -115,7 +119,7 @@ def _why(state: str, forced_by_hint: bool) -> str:
     """One decision's reason, in controlled vocabulary.
 
     Args:
-        state: What TAXONOMY said about the kind.
+        state: The kind's state, already folded into the closed vocabulary.
         forced_by_hint: Whether the branch runs only because a hint named its kind.
 
     Returns:
@@ -137,6 +141,9 @@ def routing(
     A kind classified ``absent`` withholds its branch; anything else runs it, since a state this node
     cannot read is not evidence of absence. A hint naming an absent kind forces that branch to run and
     the decision records the disagreement rather than resolving it.
+
+    ``kind_state`` and ``why`` are closed vocabularies: a state outside :data:`KIND_STATES` reads
+    ``unreadable``, and the string TAXONOMY actually wrote is kept verbatim in ``raw_state``.
 
     Args:
         store: The provenance store, holding TAXONOMY's ``kind`` elements.
@@ -171,7 +178,11 @@ def routing(
 
     for kind, branch in BRANCH_FOR_KIND.items():
         classification = classified.get(kind)
-        state = str(classification.attributes["state"]) if classification is not None else UNCERTAIN
+        raw_state = str(classification.attributes["state"]) if classification is not None else None
+        if raw_state is None:
+            state = UNCERTAIN
+        else:
+            state = raw_state if raw_state in KIND_STATES else UNREADABLE
         hint_tags = tags_by_kind.get(kind, [])
         by_classification = state != ABSENT
         forced_by_hint = bool(hint_tags) and not by_classification
@@ -185,6 +196,7 @@ def routing(
                 "kind": kind,
                 "will_run": will_run,
                 "kind_state": state,
+                "raw_state": raw_state,
                 "forced_by_hint": forced_by_hint,
                 "hint_tags": hint_tags,
                 "unmapped_tags": unmapped,
