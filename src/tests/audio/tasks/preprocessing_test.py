@@ -177,6 +177,36 @@ class TestExtractSegmentsRefusesAnEmptySegment:
         [[segment]] = extract_segments([(self._tone(1.0), [(0.2, 0.4)])])
         assert segment.waveform.shape[-1] > 0
 
+    def test_a_nonzero_request_narrower_than_one_sample_raises_too(self) -> None:
+        """The refusal is about the tensor, so it has to reach the sample domain.
+
+        ``(0.0, 0.00001)`` at 16 kHz has ``start < end`` and still selects sample 0 to sample 0 --
+        the same ``(1, 0)`` shape pyannote rejects, reached through the arithmetic rather than
+        through the arguments.
+        """
+        with pytest.raises(ValueError, match="select no samples"):
+            extract_segments([(self._tone(1.0), [(0.0, 0.00001)])])
+
+    def test_the_narrowest_request_that_does_select_a_sample_is_allowed(self) -> None:
+        """One sample is not zero samples; the guard refuses the empty case and nothing wider."""
+        [[segment]] = extract_segments([(self._tone(1.0), [(0.0, 1.0 / 16000)])])
+        assert segment.waveform.shape[-1] == 1
+
+    def test_no_accepted_request_ever_returns_an_empty_waveform(self) -> None:
+        """The invariant the guard exists for, swept across the sub-sample boundary."""
+        audio = self._tone(0.05)
+        refused, accepted = 0, 0
+        for quarter_samples in range(0, 9):  # quarter-sample steps, so the sub-sample region is swept
+            end = quarter_samples / (4 * 16000)
+            try:
+                [[segment]] = extract_segments([(audio, [(0.0, end)])])
+            except ValueError:
+                refused += 1
+                continue
+            accepted += 1
+            assert segment.waveform.shape[-1] > 0, f"(0.0, {end}) returned a zero-length Audio"
+        assert refused and accepted, "the sweep must cross the boundary, not sit on one side of it"
+
     def test_the_guard_is_what_keeps_a_1_by_0_tensor_out_of_a_model(self) -> None:
         """Before the guard a degenerate request returned Audio(waveform=(1, 0)).
 
