@@ -192,7 +192,7 @@ def _voice_line(spans: list[Entity] | None, min_s: Any, uncertain_s: Any) -> tup
         The line as it is written onto the kind element, and the kind's state.
     """
     longest_s = max((float(e.attributes["duration_s"]) for e in spans), default=0.0) if spans else 0.0
-    if min_s is None or uncertain_s is None:
+    if spans is None or min_s is None or uncertain_s is None:
         line_state, kind_state = UNAVAILABLE, UNCERTAIN
     elif longest_s >= float(min_s):
         line_state, kind_state = PRESENT, PRESENT
