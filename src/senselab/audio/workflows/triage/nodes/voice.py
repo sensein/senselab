@@ -1,14 +1,12 @@
-"""VOICE — vocalic activity nobody else claimed. It measures; it does not classify.
+"""VOICE — the phonation spans PREPROCESS detected, measured. It measures; it does not classify.
 
-The residual is a store fold: contiguous intervals where the envelope exceeds its local floor, minus
-airway-labelled spans, minus SPEECH's spans — an unlabelled span is not excluded. The gate is energy
-AND periodicity; runs are elementary; period marks are a point process per voiced run, absent outside
-runs. The HNR, F0 and RMS tracks are measured once over the whole stream and sliced per residual
-interval by time, each on its own frame grid; only the point process is queried per run.
-The onset is a period and the offset is a criterion, named apart in the span attributes. A
-residual interval shorter than the shortest duration Praat's harmonicity accepts is pruned before
-analysis and counted in the verdict's ``short_intervals_n``; a gate run shorter than the shortest
-duration its point process accepts has no marks measured and is counted in ``marks_skipped_short_n``.
+The subject is a store read: every live ``span`` whose ``family`` is ``phonation``. Nothing another
+branch claimed is removed from it, and no span is refused for being unvoiced. The HNR, F0 and RMS
+tracks are measured once over the whole stream and sliced per span by time, each on its own frame
+grid; only the point process is queried per span, and it is absent outside voiced and mixed spans.
+The onset is a period where one exists and the offset is always a criterion, named apart in the span
+attributes; the criterion itself is PREPROCESS's, reported verbatim. A span shorter than the window
+the point process needs has no marks measured and is counted in ``marks_skipped_short_n``.
 """
 
 from __future__ import annotations
@@ -25,84 +23,82 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     clamp_extent,
     find_measurement,
+    live_entities,
     resolve_stream,
     software_agent,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.prov_store import ProvStore
 
 NODE = "VOICE"
-KIND = "voice_no_words"
+KIND = "voice"
+_PHONATION_FAMILY = "phonation"
 _MARK_PERIODS = 3.0  # Praat's point process needs this many periods of f0_min; its own limit, not a choice
 _MARKS_UNMEASURED = "shorter_than_mark_window"  # a vocabulary token for the skip, not a threshold
+_UNVOICED_SPAN = "unvoiced_span"  # the other reason nobody looked, told apart from the first
+_TASK_NOT_EVALUATED = "not_evaluated"
+_NO_TASK_DECLARED = "no_task_declared"
+_TASK_HAS_NO_RANGE = "task_has_no_declared_range"
 
 
-def _required(config: TriageConfig) -> dict[str, Any]:
+def _f0_range(config: TriageConfig, hint: AudioHints | None) -> tuple[float, float]:
+    """The F0 search range for this recording's declared population.
+
+    Args:
+        config: The triage configuration.
+        hint: The caller's hint; ``metadata["population"]`` selects an override.
+
+    Returns:
+        ``(f0_min_hz, f0_max_hz)``.
+
+    Raises:
+        ValueError: If ``voice.f0_range_hz`` is unmeasured, or if ``f0_max / f0_min`` exceeds
+            ``voice.f0_range_ratio_max`` — a period-doubling check over a range that wide flags every
+            recording, and a check that fires on everything reports nothing, so the configuration is
+            refused rather than run and flagged.
+    """
+    declared = hint.metadata.get("population") if hint is not None else None
+    population = str(declared) if declared else None
+    by_population = config.get("voice.f0_range_by_population") or {}
+    raw = by_population.get(population) if population is not None else None
+    if raw is None:
+        raw = config.require("voice.f0_range_hz")
+    f0_min_hz, f0_max_hz = float(raw[0]), float(raw[1])
+    ratio_max = config.get("voice.f0_range_ratio_max")
+    if ratio_max is not None and f0_max_hz / f0_min_hz > float(ratio_max):
+        raise ValueError(
+            f"voice.f0_range_ratio_max is {float(ratio_max)} and the declared range "
+            f"[{f0_min_hz}, {f0_max_hz}] has ratio {f0_max_hz / f0_min_hz:.2f}; the period-doubling "
+            "check over that range flags every recording and is refused rather than run"
+        )
+    return f0_min_hz, f0_max_hz
+
+
+def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
     """Resolve every ``require()`` key at entry, before the store is touched (N2).
 
     Args:
         config: The triage configuration.
+        hint: The caller's hint, which selects the population's F0 range.
 
     Returns:
-        The resolved phonation parameters, the period-doubling identity factor and the hint tags.
+        The resolved analysis parameters, the period-doubling identity factor and the hint tags.
 
     Raises:
-        ValueError: If any ``phonation.*`` key is null — the gate never invents a floor.
+        ValueError: If any key read here is null, or if the declared range is vacuous.
     """
+    f0_min_hz, f0_max_hz = _f0_range(config, hint)
     return {
-        "f0_min_hz": float(config.require("phonation.f0_min_hz")),
-        "f0_max_hz": float(config.require("phonation.f0_max_hz")),
-        "hnr_floor_db": float(config.require("phonation.hnr_floor_db")),
-        "rms_floor": float(config.require("phonation.rms_floor")),
+        "f0_min_hz": f0_min_hz,
+        "f0_max_hz": f0_max_hz,
         "hop_s": float(config.require("phonation.hop_s")),
         "silence_threshold": float(config.require("phonation.silence_threshold")),
         "periods_per_window": float(config.require("phonation.periods_per_window")),
         "doubling": float(config.require("phonation.period_doubling_factor")),
+        "span_hop_s": float(config.require("phonation_spans.hop_s")),
         "hint_tags": [str(tag) for tag in config.require("voice.hint_tags")],
     }
-
-
-def _generating_node(store: ProvStore, entity_id: str) -> str | None:
-    """The node whose activity generated this entity, or None (N19)."""
-    activity_id = store.generated_by(entity_id)
-    if activity_id is None:
-        return None
-    return store.get_activity(activity_id).node
-
-
-def _runs_of_true(mask: np.ndarray) -> list[tuple[int, int]]:
-    """Maximal ``[i0, i1)`` index runs where the mask holds. Elementary: no merging."""
-    padded = np.concatenate(([False], np.asarray(mask, dtype=bool), [False]))
-    edges = np.flatnonzero(np.diff(padded.astype(np.int8)))
-    return [(int(edges[k]), int(edges[k + 1])) for k in range(0, len(edges), 2)]
-
-
-def _contiguous_true(mask: np.ndarray, rate: int) -> list[tuple[float, float]]:
-    """Contiguous True stretches of a boolean track, as ``(start_s, end_s)`` at this rate (N20)."""
-    return [(i0 / rate, i1 / rate) for i0, i1 in _runs_of_true(mask)]
-
-
-def _subtract_intervals(
-    intervals: list[tuple[float, float]], claimed: list[tuple[float, float]]
-) -> list[tuple[float, float]]:
-    """Remove every claimed extent from the intervals, keeping what nobody claimed."""
-    out: list[tuple[float, float]] = []
-    for start, end in intervals:
-        pieces = [(start, end)]
-        for c0, c1 in claimed:
-            survivors: list[tuple[float, float]] = []
-            for p0, p1 in pieces:
-                if c1 <= p0 or c0 >= p1:
-                    survivors.append((p0, p1))
-                    continue
-                if p0 < c0:
-                    survivors.append((p0, c0))
-                if c1 < p1:
-                    survivors.append((c1, p1))
-            pieces = survivors
-        out.extend(pieces)
-    return [(p0, p1) for p0, p1 in out if p1 > p0]
 
 
 def _rms_track(x: np.ndarray, sr: int, times: np.ndarray, window_s: float) -> np.ndarray:
@@ -120,35 +116,6 @@ def _rms_track(x: np.ndarray, sr: int, times: np.ndarray, window_s: float) -> np
     return out
 
 
-def _airway_labelled(store: ProvStore) -> list[tuple[tuple[float, float], str, str]]:
-    """Spans carrying a live ``label`` assertion authored by an AIRWAY activity (N19).
-
-    Returns:
-        ``(extent, span_id, assertion_id)`` per labelled span. A span AIRWAY proposed and declined
-        to label is not here — an unlabelled span is exactly where unclaimed vocalic activity sits.
-    """
-    out: list[tuple[tuple[float, float], str, str]] = []
-    for assertion in store.entities("assertion"):
-        if assertion.attributes.get("verb") != "label" or store.is_invalidated(assertion.id):
-            continue
-        if _generating_node(store, assertion.id) != "AIRWAY":
-            continue
-        for source_id in store.derived_from(assertion.id):
-            source = store.get_entity(source_id)
-            if source.prov_type == "span" and source.extent is not None:
-                out.append((source.extent, source_id, assertion.id))
-    return out
-
-
-def _speech_spans(store: ProvStore) -> list[Entity]:
-    """SPEECH's live speech spans, attributed by generating activity (N19)."""
-    return [
-        e
-        for e in store.entities("span")
-        if e.extent is not None and not store.is_invalidated(e.id) and _generating_node(store, e.id) == "SPEECH"
-    ]
-
-
 def _alias_in_range(f0_median_hz: float, *, factor: float, f0_min_hz: float, f0_max_hz: float) -> bool:
     """Whether the period-doubling alias of this F0 also lies inside the search range (N21)."""
     return f0_median_hz * factor <= f0_max_hz or f0_median_hz / factor >= f0_min_hz
@@ -161,18 +128,42 @@ def _hint_declares_voice(hint: AudioHints | None, hint_tags: list[str]) -> bool:
     return bool({tag.lower() for tag in hint.may_contain} & {tag.lower() for tag in hint_tags})
 
 
-def _offset_criterion(hnr_db: np.ndarray, rms: np.ndarray, i1: int, *, hnr_floor_db: float, rms_floor: float) -> str:
-    """Which gate condition stopped holding at the frame after the run, or ``residual_end``."""
-    if i1 >= len(hnr_db):
-        return "residual_end"
-    hnr_stopped = bool(hnr_db[i1] < hnr_floor_db)
-    rms_stopped = bool(rms[i1] < rms_floor)
-    if hnr_stopped and rms_stopped:
-        return "both"
-    return "hnr" if hnr_stopped else "rms"
+def _task_range(
+    config: TriageConfig, hint: AudioHints | None, longest_span_s: float
+) -> tuple[str | dict[str, Any], str | None]:
+    """Read the longest span against the range its declared task expects.
+
+    Args:
+        config: The triage configuration.
+        hint: The caller's hint; ``metadata["task"]`` names the task.
+        longest_span_s: The duration to read against the range.
+
+    Returns:
+        The verdict's ``task_range`` value and the flag naming the declared range, or None. The value
+        is a vocabulary token whenever no reading was possible and the four-field row when one was.
+    """
+    ranges = config.get("voice.task_duration_ranges")
+    if ranges is None:
+        return _TASK_NOT_EVALUATED, None
+    declared = hint.metadata.get("task") if hint is not None else None
+    if not declared:
+        return _NO_TASK_DECLARED, None
+    task = str(declared)
+    raw = ranges.get(task)
+    if raw is None:
+        return _TASK_HAS_NO_RANGE, None
+    low, high = float(raw[0]), float(raw[1])
+    within = low <= longest_span_s <= high
+    row = {"task": task, "range": [low, high], "longest_span_s": longest_span_s, "within": within}
+    if within:
+        return row, None
+    return (
+        row,
+        f"task_duration_outside_range: {task} declares [{low}, {high}] and the longest span is {longest_span_s:.3f}s",
+    )
 
 
-def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in order
+def voice(  # noqa: C901 — the store read, the tracks and the per-span assembly, in order
     store: ProvStore,
     source: str,
     config: TriageConfig,
@@ -180,25 +171,26 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     *,
     run_dir: Path,
 ) -> NodeResult:
-    """Measure voiced runs over the residual — energetic intervals no other branch claimed.
+    """Measure the phonation spans PREPROCESS detected.
 
     Args:
-        store: The provenance store, holding PREPROCESS's envelope and spans, AIRWAY's labels and
-            SPEECH's spans.
+        store: The provenance store, holding PREPROCESS's streams and phonation spans.
         source: The store-held stream name the audio is sliced from, ``"plain"``.
         config: The triage configuration.
-        hint: What the recording was declared to contain; read only to condition an absence.
+        hint: What the recording was declared to contain; read for the population, the task and to
+            condition an absence.
         run_dir: The run directory sidecar paths are relative to; ``voice_tracks.npz`` goes under
             ``derivatives/``.
 
     Returns:
-        The verdict, the view over the runs and measurements written, and the verdict entity id.
+        The verdict, the view over the spans and measurements written, and the verdict entity id.
 
     Raises:
-        ValueError: If any ``phonation.*`` key is null (N2) — raised before the store is touched.
-        LookupError: If the ``plain`` stream or the ``energy_envelope`` measurement is absent.
+        ValueError: If a key read at entry is null, or the declared F0 range is vacuous (N2) —
+            raised before the store is touched.
+        LookupError: If the ``source`` stream is absent.
     """
-    params = _required(config)
+    params = _required(config, hint)
     hnr_interval = config.get("phonation.hnr_floor_interval_db")
     rms_interval = config.get("phonation.rms_floor_interval")
     if hnr_interval is not None and rms_interval is not None:
@@ -207,13 +199,14 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         gate_interval = "unmeasured"
     else:
         gate_interval = "partial"
-    window_s = params["periods_per_window"] / params["f0_min_hz"]
-    min_analysis_s = (params["periods_per_window"] + 1.0) / params["f0_min_hz"]
-    min_marks_s = _MARK_PERIODS / params["f0_min_hz"]
+    f0_min_hz, f0_max_hz = params["f0_min_hz"], params["f0_max_hz"]
+    window_s = params["periods_per_window"] / f0_min_hz
+    min_marks_s = _MARK_PERIODS / f0_min_hz
+    # A frame stands for a hop-wide interval centred on its time, so a span's measurable extent runs
+    # from half a hop before its first frame to half a hop after its last: the tolerance is the hop,
+    # an identity of the analysis grid.
+    frame_edge_tolerance_s = params["span_hop_s"]
 
-    envelope_meas = find_measurement(store, "energy_envelope")
-    if envelope_meas is None:
-        raise LookupError("no energy_envelope measurement in the store; PREPROCESS has not run")
     stream_id, plain = resolve_stream(store, run_dir, source)
     sr = int(plain.sampling_rate)
 
@@ -222,50 +215,34 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
         node=NODE,
         step="analyze",
         parameters={
-            "f0_min_hz": params["f0_min_hz"],
-            "f0_max_hz": params["f0_max_hz"],
-            "hnr_floor_db": params["hnr_floor_db"],
-            "rms_floor": params["rms_floor"],
+            "f0_range_hz": [f0_min_hz, f0_max_hz],
             "hop_s": params["hop_s"],
             "window_s": window_s,
-            "min_analysis_s": min_analysis_s,
             "min_marks_s": min_marks_s,
+            "frame_edge_tolerance_s": frame_edge_tolerance_s,
             "period_doubling_factor": params["doubling"],
             "gate_interval": gate_interval,
         },
     )
     store.was_associated_with(activity, software)
     store.used(activity, stream_id)
-    store.used(activity, envelope_meas.id)
-    silence = find_measurement(store, "silence")
-    if silence is not None:
-        store.used(activity, silence.id)
+    for name in ("energy_envelope", "silence"):
+        measurement = find_measurement(store, name)
+        if measurement is not None:
+            store.used(activity, measurement.id)
 
-    labelled = _airway_labelled(store)
-    speech = _speech_spans(store)
-    for _, span_id, assertion_id in labelled:
-        store.used(activity, span_id)
-        store.used(activity, assertion_id)
-    for span in speech:
+    spans = [
+        entity
+        for entity in live_entities(store, "span")
+        if entity.attributes.get("family") == _PHONATION_FAMILY and entity.extent is not None
+    ]
+    spans.sort(key=lambda entity: entity.extent or (0.0, 0.0))
+    for span in spans:
         store.used(activity, span.id)
-
-    sidecar = np.load(run_dir / envelope_meas.attributes["path"])
-    envelope, floor = sidecar["envelope_dbfs"], sidecar["floor_dbfs"]
-    envelope_rate = int(envelope_meas.attributes["sampling_rate"])
-    energetic = _contiguous_true(envelope > floor, envelope_rate)
-    claimed = [extent for extent, _, _ in labelled] + [span.extent for span in speech if span.extent is not None]
-    unclaimed = _subtract_intervals(energetic, claimed)
-    residual = [(start, end) for start, end in unclaimed if end - start >= min_analysis_s]
-    short_intervals_n = len(unclaimed) - len(residual)
     hint_declares = _hint_declares_voice(hint, params["hint_tags"])
 
-    if not residual:
-        if unclaimed:
-            why = "every residual interval is shorter than the minimum analysable duration"
-        elif energetic:
-            why = "every energetic interval is claimed by another branch"
-        else:
-            why = "no energy exceeds the floor"
+    if not spans:
+        why = "PREPROCESS detected no phonation span"
         if hint_declares:
             why += "; a hint declares phonation not found"
         outcome = Outcome.FLAG if hint_declares else Outcome.FAIL
@@ -278,13 +255,18 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
             kind=KIND,
             why=why,
             detail={
-                "runs_n": 0,
-                "voiced_s": 0.0,
-                "ambiguous_runs_n": 0,
-                "short_intervals_n": short_intervals_n,
+                "spans_n": 0,
+                "phonation_s": 0.0,
+                "longest_span_s": 0.0,
+                "longest_span_criterion": None,
+                "production": {"voiced": 0, "unvoiced": 0, "mixed": 0},
+                "ambiguous_spans_n": 0,
                 "marks_skipped_short_n": 0,
-                "flags": [why] if hint_declares else [],
+                "task_range": _TASK_NOT_EVALUATED
+                if config.get("voice.task_duration_ranges") is None
+                else _NO_TASK_DECLARED,
                 "gate_interval": gate_interval,
+                "flags": [why] if hint_declares else [],
             },
         )
         return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
@@ -292,14 +274,14 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     mono = plain.waveform.mean(dim=0).numpy().astype(np.float64)
     stream_times, stream_hnr = hnr_track(
         plain,
-        f0_min_hz=params["f0_min_hz"],
+        f0_min_hz=f0_min_hz,
         hop_s=params["hop_s"],
         silence_threshold=params["silence_threshold"],
         periods_per_window=params["periods_per_window"],
     )
     stream_rms = _rms_track(mono, sr, stream_times, window_s)
     stream_f0_times, stream_f0, stream_strength = f0_track(
-        plain, f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"], hop_s=params["hop_s"]
+        plain, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=params["hop_s"]
     )
     track_times: list[np.ndarray] = []
     track_rms: list[np.ndarray] = []
@@ -311,79 +293,81 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     mark_ids: list[str] = []
     all_periods: list[float] = []
     flags: list[str] = []
-    runs_n = 0
-    voiced_s = 0.0
-    ambiguous_runs_n = 0
+    production_counts = {"voiced": 0, "unvoiced": 0, "mixed": 0}
+    phonation_s = 0.0
+    longest_span_s = 0.0
+    longest_span_criterion: str | None = None
+    ambiguous_spans_n = 0
     marks_skipped_short_n = 0
 
-    for raw_interval in residual:
-        interval_start, interval_end = clamp_extent(raw_interval, plain)
-        frames = (stream_times >= interval_start) & (stream_times < interval_end)
-        times, hnr_db, rms = stream_times[frames], stream_hnr[frames], stream_rms[frames]
-        pitch_frames = (stream_f0_times >= interval_start) & (stream_f0_times < interval_end)
-        track_times.append(times)
-        track_rms.append(rms)
-        track_hnr.append(hnr_db)
+    for span in spans:
+        assert span.extent is not None  # noqa: S101 — the comprehension above admits no other case
+        start, end = clamp_extent(span.extent, plain)
+        frames = (stream_times >= start) & (stream_times < end)
+        track_times.append(stream_times[frames])
+        track_rms.append(stream_rms[frames])
+        track_hnr.append(stream_hnr[frames])
+        pitch_frames = (stream_f0_times >= start) & (stream_f0_times < end)
         f0_times.append(stream_f0_times[pitch_frames])
         f0_values.append(stream_f0[pitch_frames])
         f0_strengths.append(stream_strength[pitch_frames])
 
-        gate_ok = (hnr_db >= params["hnr_floor_db"]) & (rms >= params["rms_floor"])
-        for r0, r1 in _runs_of_true(gate_ok):
-            gate_start, gate_end = float(times[r0]), float(times[r1 - 1])
-            marks_measured = gate_end - gate_start >= min_marks_s
-            marks: list[PeriodMark] = (
-                period_marks(plain, gate_start, gate_end, f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"])
-                if marks_measured
-                else []
-            )
-            if not marks_measured:
-                marks_skipped_short_n += 1
-            span_start = float(marks[0].time_s) if marks else gate_start
-            attributes = {
+        duration_s = float(span.attributes["duration_s"])
+        phonation_s += duration_s
+        if duration_s > longest_span_s:
+            longest_span_s = duration_s
+            longest_span_criterion = str(span.attributes["offset_criterion"])
+        production = str(span.attributes["production"])
+        production_counts[production] = production_counts.get(production, 0) + 1
+
+        measurable_s = (span.extent[1] - span.extent[0]) + frame_edge_tolerance_s
+        marks: list[PeriodMark] = []
+        marks_attributes: dict[str, Any] = {"name": "period_marks", "signal": source}
+        if production == "unvoiced":
+            marks_attributes["unmeasured"] = _UNVOICED_SPAN
+        elif measurable_s < min_marks_s:
+            marks_attributes["unmeasured"] = _MARKS_UNMEASURED
+            marks_skipped_short_n += 1
+        else:
+            marks = period_marks(plain, start, end, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz)
+            marks_attributes["n"] = len(marks)
+            marks_attributes["marks"] = [
+                {"time_s": m.time_s, "period_s": m.period_s, "amplitude": m.amplitude} for m in marks
+            ]
+
+        onset_s = float(marks[0].time_s) if marks else start
+        span_id = store.entity(
+            prov_type="span",
+            extent=(onset_s, end),
+            attributes={
+                "family": _PHONATION_FAMILY,
+                "member": str(span.attributes["member"]),
+                "production": production,
+                "duration_s": duration_s,
                 "onset_kind": "period" if marks else "criterion",
                 "offset_kind": "criterion",
-                "offset_criterion": _offset_criterion(
-                    hnr_db, rms, r1, hnr_floor_db=params["hnr_floor_db"], rms_floor=params["rms_floor"]
-                ),
-                "marks_n": len(marks) if marks_measured else None,
-                "hnr_onset_db": float(hnr_db[r0]),
-                "rms_onset": float(rms[r0]),
-                "hnr_offset_db": float(hnr_db[r1 - 1]),
-                "rms_offset": float(rms[r1 - 1]),
-            }
-            run_id = store.entity(prov_type="span", extent=(span_start, gate_end), attributes=attributes)
-            store.was_generated_by(run_id, activity)
-            store.was_attributed_to(run_id, software)
-            span_ids.append(run_id)
-            marks_attributes: dict[str, Any] = {"name": "period_marks", "signal": source}
-            if marks_measured:
-                marks_attributes["n"] = len(marks)
-                marks_attributes["marks"] = [
-                    {"time_s": m.time_s, "period_s": m.period_s, "amplitude": m.amplitude} for m in marks
-                ]
-            else:
-                marks_attributes["unmeasured"] = _MARKS_UNMEASURED
-            marks_id = store.entity(prov_type="measurement", extent=(span_start, gate_end), attributes=marks_attributes)
-            store.was_generated_by(marks_id, activity)
-            store.was_attributed_to(marks_id, software)
-            store.was_derived_from(marks_id, run_id)
-            mark_ids.append(marks_id)
-            runs_n += 1
-            voiced_s += gate_end - span_start
-            if marks:
-                periods = [m.period_s for m in marks]
-                all_periods.extend(periods)
-                run_f0 = float(1.0 / np.median(periods))
-                if _alias_in_range(
-                    run_f0, factor=params["doubling"], f0_min_hz=params["f0_min_hz"], f0_max_hz=params["f0_max_hz"]
-                ):
-                    ambiguous_runs_n += 1
-                    flags.append(f"period_doubling_alias in range for run at {span_start:.3f}s")
-            if hnr_interval is not None and hnr_interval[0] <= attributes["hnr_onset_db"] <= hnr_interval[1]:
-                flags.append(f"near_gate_edge hnr at onset of run at {span_start:.3f}s")
-            if rms_interval is not None and rms_interval[0] <= attributes["rms_onset"] <= rms_interval[1]:
-                flags.append(f"near_gate_edge rms at onset of run at {span_start:.3f}s")
+                "offset_criterion": str(span.attributes["offset_criterion"]),
+                "marks_n": len(marks) if "n" in marks_attributes else None,
+            },
+        )
+        store.was_generated_by(span_id, activity)
+        store.was_attributed_to(span_id, software)
+        store.was_derived_from(span_id, span.id)
+        span_ids.append(span_id)
+
+        marks_id = store.entity(prov_type="measurement", extent=(onset_s, end), attributes=marks_attributes)
+        store.was_generated_by(marks_id, activity)
+        store.was_attributed_to(marks_id, software)
+        store.was_derived_from(marks_id, span_id)
+        mark_ids.append(marks_id)
+
+        if marks:
+            periods = [m.period_s for m in marks]
+            all_periods.extend(periods)
+            span_f0 = float(1.0 / np.median(periods))
+            if _alias_in_range(span_f0, factor=params["doubling"], f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz):
+                ambiguous_spans_n += 1
+                flags.append(f"period_doubling_alias in range for span at {onset_s:.3f}s")
 
     (run_dir / "derivatives").mkdir(parents=True, exist_ok=True)
     tracks_path = "derivatives/voice_tracks.npz"
@@ -404,30 +388,30 @@ def voice(  # noqa: C901 — the fold, the gate and the per-run assembly, in ord
     store.was_generated_by(tracks_id, activity)
     store.was_attributed_to(tracks_id, software)
 
-    if runs_n == 0:
-        why = "no run passes the energy-and-periodicity gate"
-        if hint_declares:
-            why += "; a hint declares phonation not found"
-            flags.append(why)
-            outcome = Outcome.FLAG
-        else:
-            outcome = Outcome.FAIL
-    elif flags:
+    task_range, task_flag = _task_range(config, hint, longest_span_s)
+    if task_flag is not None:
+        flags.append(task_flag)
+
+    if flags:
         outcome, why = Outcome.FLAG, "; ".join(flags)
     else:
-        outcome, why = Outcome.PASS, "voiced runs measured; nothing contested"
+        outcome, why = Outcome.PASS, "phonation spans measured; nothing contested"
 
     detail: dict[str, Any] = {
-        "runs_n": runs_n,
-        "voiced_s": voiced_s,
-        "ambiguous_runs_n": ambiguous_runs_n,
-        "short_intervals_n": short_intervals_n,
+        "spans_n": len(spans),
+        "phonation_s": phonation_s,
+        "longest_span_s": longest_span_s,
+        "longest_span_criterion": longest_span_criterion,
+        "production": production_counts,
+        "ambiguous_spans_n": ambiguous_spans_n,
         "marks_skipped_short_n": marks_skipped_short_n,
-        "flags": flags,
+        "task_range": task_range,
         "gate_interval": gate_interval,
+        "flags": flags,
     }
     if all_periods:
         detail["f0_median_hz"] = float(1.0 / np.median(all_periods))
+        detail["f0_stream"] = source
     verdict_id, verdict = write_verdict(
         store, activity, software, node=NODE, outcome=outcome, kind=KIND, why=why, detail=detail
     )
