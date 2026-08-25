@@ -125,11 +125,19 @@ derivation: |
   Redaction rules, which are validity checks rather than values. redaction.padding_ms is required to
   be a non-negative whole number of milliseconds at REDACT's entry: a negative margin narrows every
   extent instead of widening it, so the audio keeps the name while the verdict and the transcript both
-  report a redaction, and neither verification channel can see the difference. Verification that could
-  re-run fewer than both of PREPROCESS's recognizers at their recorded commits is a flag rather than a
-  pass, and the verdict names the recognizers it did re-run in verify_systems. A consensus word the
-  store places nowhere overlaps no planned extent, so it is released as [UNPLACED] rather than
-  verbatim and counted in unplaced_words_n -- text of unknown location cannot be shown to be safe.
+  report a redaction, and neither verification channel can see the difference. REDACT runs no
+  recognizer: verification is a re-scan of the redacted consensus text, judged complete by the same
+  pii.required_detectors rule the planning scan is, and a re-scan that skipped a required detector is
+  a flag. A consensus word the store places nowhere overlaps no planned extent, so it is released as
+  [UNPLACED] rather than verbatim and counted in unplaced_words_n -- text of unknown location cannot
+  be shown to be safe.
+
+  redaction.fill -- redact.md leaves this DEFERRED: which of silence, noise or bleep is least damaging
+  to the measurements taken downstream of a released artifact has not been measured, so the key ships
+  null and a run must declare the fill it used. silence and bleep are implemented; noise raises rather
+  than shipping an unmeasured spectral shape, because "speech-shaped" names a shaping nobody here has
+  fitted. redaction.bleep_hz 1000.0 is the conventional broadcast censor tone -- a presentation
+  choice, declared rather than defaulted silently, and not fitted.
 
   UNSET, and why -- benchmarks/open.md carries each of these:
     phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
@@ -461,3 +469,5 @@ pii:
 
 redaction:
   padding_ms: null
+  fill: null
+  bleep_hz: 1000.0

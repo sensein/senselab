@@ -68,17 +68,46 @@ def plan_redactions(extents: Sequence[RedactionExtent], *, padding_ms: int) -> l
     return merged
 
 
-def apply_redactions(audio: Audio, extents: Sequence[RedactionExtent]) -> Audio:
-    """Silence every extent, preserving duration.
+def apply_redactions(
+    audio: Audio,
+    extents: Sequence[RedactionExtent],
+    *,
+    fill: str,
+    bleep_hz: float | None = None,
+) -> Audio:
+    """Mask every extent with the named fill, preserving duration.
 
     Args:
         audio: The recording.
-        extents: Regions to silence. Pass the output of :func:`plan_redactions`, not raw findings.
+        extents: Regions to mask. Pass the output of :func:`plan_redactions`, not raw findings.
+        fill: ``"silence"`` writes zeros; ``"bleep"`` writes a sine at ``bleep_hz`` scaled to the
+            extent's own peak. **Required, with no default**: which fill is least damaging to
+            downstream measurement is unmeasured, so a caller that does not say gets no answer rather
+            than silently getting silence. Read it from ``redaction.fill``.
+        bleep_hz: The bleep's frequency. Required when ``fill`` is ``"bleep"``. Read it from
+            ``redaction.bleep_hz``.
 
     Returns:
-        A new ``Audio``. The input is not modified. Each extent's start rounds down to a sample index and
-        its end rounds up, both clamped to the recording; an extent that selects no samples is a no-op.
+        A new ``Audio``. The input is not modified. Each extent's start rounds down to a sample index
+        and its end rounds up, both clamped to the recording; an extent that selects no samples is a
+        no-op.
+
+    Raises:
+        NotImplementedError: If ``fill`` is ``"noise"``. Which fill is least damaging to the
+            measurements taken downstream of a released artifact has not been measured, and
+            "speech-shaped" names a shaping nobody has fitted.
+        ValueError: If ``fill`` names no implemented fill, or if ``"bleep"`` is asked for without
+            ``bleep_hz``.
     """
+    if fill == "noise":
+        raise NotImplementedError(
+            "the 'noise' fill is deferred: which fill is least damaging to downstream measurement "
+            "has not been measured, and a speech-shaped spectrum nobody fitted is not a default"
+        )
+    if fill not in ("silence", "bleep"):
+        raise ValueError(f"fill must be 'silence' or 'bleep'; got {fill!r}")
+    if fill == "bleep" and bleep_hz is None:
+        raise ValueError("fill='bleep' needs bleep_hz; read it from redaction.bleep_hz")
     x = np.array(np.asarray(audio.waveform, dtype=np.float32), copy=True)
     if x.ndim == 1:
         x = x[None, :]
@@ -87,5 +116,12 @@ def apply_redactions(audio: Audio, extents: Sequence[RedactionExtent]) -> Audio:
     for extent in extents:
         lo = max(0, int(extent.start * sr))
         hi = max(lo, min(n, math.ceil(extent.end * sr)))
-        x[:, lo:hi] = 0.0
+        if hi <= lo:
+            continue
+        if fill == "silence":
+            x[:, lo:hi] = 0.0
+        else:
+            level = float(np.abs(x[:, lo:hi]).max())
+            t = np.arange(hi - lo, dtype=np.float32) / sr
+            x[:, lo:hi] = (level * np.sin(2.0 * np.pi * float(bleep_hz) * t)).astype(np.float32)
     return Audio(waveform=x, sampling_rate=sr)
