@@ -174,4 +174,4 @@ Derivations live in [`benchmarks/voice.md`](benchmarks/voice.md).
 | `voice.f0_range_hz`, `voice.f0_range_by_population` | the F0 search range per declared age and sex; **null** until fitted per population |
 | `voice.f0_range_ratio_max` | the `f0_max / f0_min` above which the period-doubling check is vacuous and the config is refused; owed the derivation that fixes it |
 | `voice.task_duration_ranges` | expected duration ranges per declared task, against which a span flags; **null** |
-| `phonation.hnr_floor_db`, `phonation.rms_floor` | the track floors, still an interval rather than a value; **null** |
+| `phonation.hnr_floor_interval_db`, `phonation.rms_floor_interval` | the near-edge intervals a span is read against (N22); still an interval rather than a value, and **null**. The two v1 scalar floors, `phonation.hnr_floor_db` and `phonation.rms_floor`, are **deleted**: nothing in v2 read either, and a null key nobody reads reads to an override author as a gate they have configured |

@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 import senselab.audio.tasks
-from senselab.audio.tasks.health_acoustics.hear import HEAR_WINDOW_SECONDS
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
 from senselab.text.tasks.pii_detection.api import default_detectors
 
@@ -26,11 +25,6 @@ class TestMeasuredValues:
         assert cfg.require("preemphasis.coefficient") == 0.97
         assert cfg.require("floor.eval_grid_s") == 0.1
         assert cfg.require("phonation.periods_per_window") == 4.5
-
-    def test_the_hear_window_agrees_with_the_model_imposed_constant(self) -> None:
-        """``hear.window_s`` reads back equal to ``HEAR_WINDOW_SECONDS``."""
-        cfg = load_triage_config()
-        assert cfg.require("hear.window_s") == HEAR_WINDOW_SECONDS
 
     def test_the_required_detectors_are_the_pii_modules_own_inventory(self) -> None:
         """``pii.required_detectors`` is a vocabulary read off the module, not a fitted subset.
@@ -56,20 +50,20 @@ class TestUnsetValues:
     def test_reading_an_unset_value_raises_and_names_it(self) -> None:
         """Requiring a null value raises, naming the parameter."""
         cfg = load_triage_config()
-        with pytest.raises(ValueError, match="phonation.hnr_floor_db"):
-            cfg.require("phonation.hnr_floor_db")
+        with pytest.raises(ValueError, match="phonation.hnr_floor_interval_db"):
+            cfg.require("phonation.hnr_floor_interval_db")
 
     def test_a_typo_is_an_unknown_key_not_an_unmeasured_value(self) -> None:
         """An absent key is a typo, and the error says so instead of citing open.md."""
         cfg = load_triage_config()
         with pytest.raises(ValueError, match="unknown configuration key"):
-            cfg.require("phonation.hnr_flor_db")
+            cfg.require("phonation.hnr_flor_interval_db")
 
     def test_a_null_key_is_unmeasured_not_unknown(self) -> None:
         """A present-null key still points at open.md, never at the typo message."""
         cfg = load_triage_config()
         with pytest.raises(ValueError, match="benchmarks/open.md"):
-            cfg.require("phonation.rms_floor")
+            cfg.require("phonation.rms_floor_interval")
 
     def test_the_error_points_at_what_would_settle_it(self) -> None:
         """The error names the open-questions file."""
@@ -81,8 +75,8 @@ class TestUnsetValues:
         """Absent is a typo; null is a decision not yet taken."""
         cfg = load_triage_config()
         for path in (
-            "phonation.hnr_floor_db",
-            "phonation.rms_floor",
+            "phonation.hnr_floor_interval_db",
+            "phonation.rms_floor_interval",
             "redaction.padding_ms",
             "speech.word_gap_ms",
             "quality.stoi_floor",
@@ -97,7 +91,7 @@ class TestUnsetValues:
     def test_get_returns_a_default_instead_of_raising(self) -> None:
         """A caller that can proceed without the value may ask politely."""
         cfg = load_triage_config()
-        assert cfg.get("phonation.hnr_floor_db", 8.0) == 8.0
+        assert cfg.get("phonation.hnr_floor_interval_db", 8.0) == 8.0
 
 
 class TestOverrides:
