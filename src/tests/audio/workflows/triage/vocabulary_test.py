@@ -250,6 +250,25 @@ class TestBranchAuthorityIsScoped:
         )
         assert folded.kinds["speech"] == "absent"
 
+    def test_a_failing_branch_does_not_carry_its_absence_onto_a_sibling_kind(self) -> None:
+        """SPEECH found no subject; that says nothing about the airway the classification found.
+
+        The other direction of the same rule: a branch that passed must not promote a sibling's kind
+        either, and each direction needs its own case to be pinned.
+        """
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
+            ],
+            screened={"speech": "present", "airway": "present", "voice": "absent"},
+            branch_decisions=_decisions(airway=True, speech=True, voice=False),
+            ran={},
+            hint_claims={},
+        )
+        assert folded.kinds["airway"] == "present"
+        assert folded.kinds["speech"] == "absent"
+
 
 class TestTaxonomyIsReportedBeside:
     """Both maps are always present, and agreement is checkable by a reader."""
