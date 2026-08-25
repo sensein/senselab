@@ -1,20 +1,26 @@
-"""The REDACT node: every PII finding padded, merged, silenced, and verified on the node's own output.
+"""The REDACT node: every PII finding padded, merged, masked with the declared fill, and verified.
 
-Every non-invalidated ``pii`` entity is redacted regardless of speaker. Extents are padded and merged
-by ``plan_redactions``; the margin is the ``redaction.padding_ms`` config key, whose derivation is in
-``data/config/default.yaml`` and which must be a non-negative whole number of milliseconds.
-Verification re-runs the recognizers PREPROCESS used, at their recorded commits, plus the PII scan
-over the redacted audio and transcript; the verdict records ``audio_check: "bounded"`` (see
-``specs/20260817-triage-workflow-dag/redact.md``). The set it is measured against is the one
-PREPROCESS declared in its own activities, with the word-derived set as the fallback and
-``expected_source`` naming which was read. A scan is complete only when every detector
-``pii.required_detectors`` names is in ``scanned_by`` and nothing is in ``failed``; a required
-detector that was never attempted is recorded in ``scan_missing``. An incomplete scan is unchecked
-rather than clean, and verification over such a scan is not a result — such a store withholds
-without needing any recognizer, since nothing has to be verified to refuse a release. Only a pass
-produces a released pair; a flag withholds exactly like a fail, and the verdict's
-``artifacts_withheld`` records it. Artifacts are written into a directory disjoint from the run
-directory, and carry no store element id.
+REDACT is the last step of the SPEECH branch and runs only when SPEECH's PII scan found something;
+the runner gates on that, and this node refuses an incoherent store — findings with no scan
+measurement — rather than concluding over one. Every non-invalidated ``pii`` entity is redacted
+regardless of speaker. Extents are padded and merged by ``plan_redactions``; the margin is the
+``redaction.padding_ms`` config key and must be a non-negative whole number of milliseconds. What is
+written into an extent is ``redaction.fill``, which ships with no default, at ``redaction.bleep_hz``
+when it is a bleep.
+
+**No recognizer runs here.** Verification is a re-scan of the redacted consensus text with the same
+detectors, judged complete by ``pii.required_detectors``: a surviving finding is a fail, an
+incomplete re-scan is a flag. A finding the planner placed and the verifier still sees is remediable
+exactly once — the verifier's words are fed back for a single re-planning pass, and what survives
+that is ``unremediable``. The verdict's ``audio_check`` is the constant ``"bounded"`` on every path:
+the re-scan establishes that the redacted text no longer carries the finding and nothing about the
+audio. See ``specs/20260817-triage-workflow-dag/redact.md``.
+
+A word carries a PII marking through a live ``assertion`` entity whose ``verb`` is ``"label"``,
+whose ``label`` is ``"pii"``, and which is ``wasDerivedFrom`` the word — the store's shared shape for
+a label. Only a pass produces a released pair; a flag withholds exactly like a fail, and the
+verdict's ``artifacts_withheld`` records it. Artifacts are written into a directory disjoint from the
+run directory, and carry no store element id.
 """
 
 from __future__ import annotations
@@ -26,29 +32,30 @@ from pathlib import Path
 
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.redaction.api import RedactionExtent, apply_redactions, plan_redactions
-from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
+    live_entities,
     resolve_stream,
     software_agent,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.text.tasks.pii_detection.api import flatten_script_line, scan_for_pii
-from senselab.utils.data_structures import HFModel
+from senselab.text.tasks.pii_detection.api import scan_for_pii
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REDACT"
 
+_FILL_KEY = "redaction.fill"
+_BLEEP_HZ_KEY = "redaction.bleep_hz"
 _PADDING_KEY = "redaction.padding_ms"
 _REQUIRED_DETECTORS_KEY = "pii.required_detectors"
-_PREPROCESS_NODE = "PREPROCESS"  # whose activities declare the recognizer set, a node name not a value
-_MODEL_PARAMETER = "model"  # the activity parameter PREPROCESS's recognizer steps name their model in
-_NOT_REQUIRED = "not_required"  # the expected-set source when the scan already withholds the release
+_LABEL_VERB = "label"  # the store's assertion verb, a vocabulary term not a value
+_PII_LABEL = "pii"  # the marking SPEECH places on a word carrying a finding
 _RESERVED_CATEGORY_CHAR = "+"  # plan_redactions' merge separator; a string, not a threshold
 _UNPLACED_PLACEHOLDER = "[UNPLACED]"  # a word the store places nowhere; a category-less placeholder
+_AUDIO_CHECK = "bounded"  # what a text re-scan can claim about the audio, on every path
 
 
 @dataclass(frozen=True)
@@ -65,17 +72,29 @@ class RedactResult(NodeResult):
 
 @dataclass(frozen=True)
 class _Verification:
-    """What re-running the recognizers and the scan over the node's own output established.
+    """What re-scanning the redacted consensus text established.
 
     Attributes:
-        verified: Whether every scan ran and none of them found anything.
-        survived: The categories found on the redacted output, sorted; never matched text.
-        scan_ran: Whether a detector ran at all — an empty ``failures`` is not evidence that one did.
+        verified: Whether the re-scan ran completely and found nothing.
+        survived: The categories found on the redacted text, sorted; never matched text.
+        scan_ran: Whether a complete re-scan happened at all — an empty ``failures`` is not evidence
+            that one did.
+        failed: Detectors the **verification** re-scan attempted and that raised. Names only; a
+            failure's message may quote the scanned input.
+        missing: Detectors ``pii.required_detectors`` names that the verification re-scan never
+            attempted. Kept apart from ``failed`` for the reason the planning scan keeps them apart:
+            "it broke" and "nobody ran it" are different findings, and the second is the silent one.
+            Both are reported in the verdict separately from the planning scan's own ``scan_failed``
+            and ``scan_missing``, because a store whose planning scan was complete and whose
+            verification was not is a different state from the reverse, and an operator reading one
+            pair of keys for both could not tell which half failed.
     """
 
     verified: bool
     survived: list[str]
     scan_ran: bool
+    failed: list[str]
+    missing: list[str]
 
 
 def _padding_ms(config: TriageConfig) -> int:
@@ -132,7 +151,7 @@ def _findings(store: ProvStore) -> list[Entity]:
     Returns:
         The non-invalidated findings.
     """
-    return [finding for finding in store.entities("pii") if not store.is_invalidated(finding.id)]
+    return live_entities(store, "pii")
 
 
 def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
@@ -162,125 +181,95 @@ def _extents_from_findings(findings: list[Entity]) -> list[RedactionExtent]:
     return extents
 
 
-def _verification_model(model_id: str, commit_sha: str) -> HFModel:
-    """A recognizer at the commit the store's model agent recorded — never a ref (N14).
+def _verify(transcript_text: str, required: list[str]) -> _Verification:
+    """Re-scan the redacted consensus text with the same detectors.
+
+    No recognizer runs. Re-transcribing would draw a second sample from the recognizers, which is a
+    different measurement of a different signal rather than a check on this one, and the claim about
+    the audio is bounded either way.
 
     Args:
-        model_id: The recognizer's model id.
-        commit_sha: The resolved 40-hex commit the store recorded for it.
-
-    Returns:
-        The model spec.
-    """
-    return HFModel(path_or_uri=model_id, revision=commit_sha)
-
-
-def _verify(
-    redacted: Audio, transcript_text: str, asr_models: list[tuple[str, str]], required: list[str]
-) -> _Verification:
-    """Re-run the recognizers and the scan on the node's own output.
-
-    Args:
-        redacted: The redacted audio.
-        transcript_text: The redacted transcript.
-        asr_models: ``(model_id, commit_sha)`` pairs read from the store's model agents.
+        transcript_text: The redacted consensus transcript.
         required: The detector set ``pii.required_detectors`` names.
 
     Returns:
-        What the re-run established. Any finding anywhere fails; a scan with a failed detector, with
-        no detector at all, or missing a required one did not run, which is not a clean result.
+        What the re-scan established. A finding that survives fails; a re-scan that skipped a
+        required detector did not run, which is not a clean result.
     """
-    hypotheses = []
-    for model_id, commit_sha in asr_models:
-        (line,) = transcribe_audios([redacted], model=_verification_model(model_id, commit_sha))
-        hypotheses.append(flatten_script_line(line))
-    scans = scan_for_pii([*hypotheses, transcript_text])
-    scans = scans if isinstance(scans, list) else [scans]
-    incomplete = any(
-        s.failures or not s.detectors_used or set(required) - set(s.detectors_used) - set(s.failures) for s in scans
-    )
-    if incomplete:
-        return _Verification(verified=False, survived=[], scan_ran=False)
-    survived = sorted({span.category for s in scans for span in s.spans})
-    return _Verification(verified=not survived, survived=survived, scan_ran=True)
-
-
-def _declared_recognizers(store: ProvStore) -> list[str]:
-    """The recognizers PREPROCESS declared, read from its own activities rather than from words.
-
-    A PREPROCESS activity naming a model in its parameters and running under that model's agent is
-    a declared recognizer whether or not it went on to write a word.
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        The declared model ids, sorted; empty when the store carries no such declaration.
-    """
-    declared: set[str] = set()
-    for activity in store.activities(_PREPROCESS_NODE):
-        model_id = activity.parameters.get(_MODEL_PARAMETER)
-        if model_id is None:
-            continue
-        for agent_id in store.associated_with(activity.id):
-            agent = store.get_agent(agent_id)
-            if agent.agent_type == "model" and agent.model_id == str(model_id):
-                declared.add(str(model_id))
-    return sorted(declared)
-
-
-def _asr_models(store: ProvStore) -> tuple[list[tuple[str, str]], list[str], str]:
-    """The re-runnable recognizers and the set they are expected to cover (N14).
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        ``([(model_id, commit_sha), ...], [model_id, ...], source)`` — the re-runnable pairs, every
-        recognizer verification is expected to cover, and where that expected set came from:
-        ``"preprocess"`` for the node's own declaration, ``"words"`` when the store carries none and
-        only the recognizers that wrote a word can be named.
-
-    Raises:
-        ValueError: If no word entity leads to a model agent with a resolved commit — verification
-            cannot re-run recognizers it cannot name.
-    """
-    pairs: dict[str, str] = {}
-    wrote_words: set[str] = set()
-    for word in store.entities("word"):
-        recognizer = word.attributes.get("recognizer")
-        activity_id = store.generated_by(word.id)
-        if not recognizer or activity_id is None or store.is_invalidated(word.id):
-            continue
-        for agent_id in store.associated_with(activity_id):
-            agent = store.get_agent(agent_id)
-            if agent.agent_type == "model" and agent.model_id == recognizer:
-                wrote_words.add(str(recognizer))
-                if agent.commit_sha is not None:
-                    pairs[str(recognizer)] = agent.commit_sha
-    if not pairs:
-        raise ValueError("no recognizer model agent with a resolved commit in the store; nothing can re-verify")
-    declared = _declared_recognizers(store)
-    if declared:
-        return sorted(pairs.items()), declared, "preprocess"
-    return sorted(pairs.items()), sorted(wrote_words), "words"
+    scan = scan_for_pii(transcript_text)
+    scan = scan[0] if isinstance(scan, list) else scan
+    missing = sorted(set(required) - set(scan.detectors_used) - set(scan.failures))
+    failed = sorted(scan.failures)
+    if failed or not scan.detectors_used or missing:
+        return _Verification(verified=False, survived=[], scan_ran=False, failed=failed, missing=missing)
+    survived = sorted({span.category for span in scan.spans})
+    return _Verification(verified=not survived, survived=survived, scan_ran=True, failed=[], missing=[])
 
 
 def _overlaps(a: tuple[float, float], b: tuple[float, float]) -> bool:
-    """Whether two extents share any temporal intersection > 0."""
+    """Whether two extents share any temporal intersection > 0.
+
+    Args:
+        a: One extent.
+        b: The other.
+
+    Returns:
+        True when they intersect.
+    """
     return a[0] < b[1] and a[1] > b[0]
 
 
 def _consensus_words(store: ProvStore) -> list[Entity]:
-    """SPEECH's word entities, non-invalidated, in time order; the unplaced sort first."""
-    words = []
-    for word in store.entities("word"):
-        if store.is_invalidated(word.id):
+    """The consensus words, in time order; a word the store places nowhere sorts first.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The live ``word`` entities PREPROCESS authored, oldest-extent first.
+    """
+    return sorted(live_entities(store, "word"), key=lambda w: w.extent or (-1.0, -1.0))
+
+
+def _pii_marked_words(store: ProvStore) -> dict[str, set[str]]:
+    """Which PII categories the store's live label assertions place on each word.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        A mapping from word entity id to the categories marked on it. A word nothing marks is
+        absent rather than mapped to an empty set.
+    """
+    marked: dict[str, set[str]] = {}
+    for assertion in live_entities(store, "assertion"):
+        attributes = assertion.attributes
+        if attributes.get("verb") != _LABEL_VERB or attributes.get("label") != _PII_LABEL:
             continue
-        activity_id = store.generated_by(word.id)
-        if activity_id is not None and store.get_activity(activity_id).node == "SPEECH":
-            words.append(word)
-    return sorted(words, key=lambda w: w.extent or (-1.0, -1.0))
+        category = str(attributes.get("category") or "")
+        if not category:
+            continue
+        for source_id in store.derived_from(assertion.id):
+            marked.setdefault(source_id, set()).add(category)
+    return marked
+
+
+def _matches_surviving(word: Entity, category: str, planned: list[RedactionExtent], marked: set[str]) -> bool:
+    """Whether this word carries a surviving category that no planned extent already covers.
+
+    Args:
+        word: A live consensus ``word`` entity.
+        category: A category the verification re-scan still saw.
+        planned: The padded, merged extents the failing pass produced.
+        marked: The PII categories the store's label assertions place on this word.
+
+    Returns:
+        True when the re-plan should widen to this word. A word a planned extent already covers is
+        excluded, so the re-plan widens what the first pass missed rather than re-planning it.
+    """
+    if category not in marked or word.extent is None:
+        return False
+    return not any(_overlaps(word.extent, (extent.start, extent.end)) for extent in planned)
 
 
 def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[str, int]:
@@ -292,7 +281,7 @@ def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[st
     text.
 
     Args:
-        words: SPEECH's consensus words, in time order.
+        words: PREPROCESS's consensus words, in time order.
         planned: The padded, merged extents.
 
     Returns:
@@ -343,10 +332,11 @@ def redact(
     run_dir: Path,
     artifacts_dir: Path,
 ) -> RedactResult:
-    """Redact every PII finding from the recording and verify the result before releasing it.
+    """Redact every PII finding from the recording and verify the redacted text before releasing it.
 
     Args:
-        store: The provenance store, holding SPEECH's ``pii`` entities, words and scan measurement.
+        store: The provenance store, holding SPEECH's ``pii`` entities and scan measurement and
+            PREPROCESS's consensus words.
         source: The store-held stream name, ``"recording"`` (N17).
         config: The triage configuration.
         hint: Accepted for the shared node shape; not read.
@@ -358,14 +348,15 @@ def redact(
         the outcome is a pass.
 
     Raises:
-        ValueError: If ``redaction.padding_ms`` has no usable value (see :func:`_padding_ms`), if
-            ``artifacts_dir`` and ``run_dir`` contain one another, if the store carries no PII scan
-            measurement (N15), if a finding's category is unusable (see
-            :func:`_extents_from_findings`), or if a scan claiming completeness has no re-runnable
-            recognizer (see :func:`_asr_models`) — an incoherent store, as distinct from a complete
-            store with nothing to scan, which concludes.
+        ValueError: If ``redaction.fill`` has no value, if ``redaction.padding_ms`` has no usable
+            value (see :func:`_padding_ms`), if ``artifacts_dir`` and ``run_dir`` contain one
+            another, if the store carries no PII scan measurement (N15) — an incoherent store, as
+            distinct from a complete store with nothing to scan, which concludes — or if a finding's
+            category is unusable (see :func:`_extents_from_findings`).
         LookupError: If no live stream carries ``source``.
     """
+    fill = str(config.require(_FILL_KEY))
+    bleep_hz = config.get(_BLEEP_HZ_KEY)
     padding_ms = _padding_ms(config)
     required_detectors = sorted(str(name) for name in config.require(_REQUIRED_DETECTORS_KEY))
     run_resolved, release_resolved = run_dir.resolve(), artifacts_dir.resolve()
@@ -381,19 +372,38 @@ def redact(
     scan_incomplete = bool(scan_failed) or bool(scan_missing) or not scanned_by
     findings = _findings(store)
     extents = _extents_from_findings(findings)
+    words = _consensus_words(store)
+    marked = _pii_marked_words(store)
+
     planned = plan_redactions(extents, padding_ms=padding_ms)
-    if scan_incomplete:
-        asr_models: list[tuple[str, str]] = []
-        expected_recognizers: list[str] = []
-        expected_source = _NOT_REQUIRED
-    else:
-        asr_models, expected_recognizers, expected_source = _asr_models(store)
+    transcript_text, unplaced_n = _transcript(words, planned)
+    checked = (
+        _verify(transcript_text, required_detectors)
+        if not scan_incomplete
+        else _Verification(verified=False, survived=[], scan_ran=False, failed=[], missing=[])
+    )
+    replanned_n = 0
+    unremediable: list[str] = []
+    if checked.scan_ran and checked.survived:
+        replanned_n = 1
+        extents = extents + [
+            RedactionExtent(start=word.extent[0], end=word.extent[1], category=category)
+            for category in checked.survived
+            for word in words
+            if word.extent is not None and _matches_surviving(word, category, planned, marked.get(word.id, set()))
+        ]
+        planned = plan_redactions(extents, padding_ms=padding_ms)
+        transcript_text, unplaced_n = _transcript(words, planned)
+        checked = _verify(transcript_text, required_detectors)
+        unremediable = list(checked.survived)
+
     stream_id, recording = resolve_stream(store, run_dir, source)
+    redacted = apply_redactions(recording, planned, fill=fill, bleep_hz=bleep_hz)
 
     software = software_agent(store)
     view: list[str] = []
 
-    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": padding_ms})
+    plan_act = store.activity(node=NODE, step="plan", parameters={"padding_ms": padding_ms, "replanned_n": replanned_n})
     store.was_associated_with(plan_act, software)
     store.used(plan_act, scan_measurement.id)
     for finding in findings:
@@ -413,28 +423,16 @@ def redact(
         span_ids.append(span_id)
         view.append(span_id)
 
-    apply_act = store.activity(node=NODE, step="apply", parameters={"redactions_n": len(planned)})
+    apply_act = store.activity(node=NODE, step="apply", parameters={"redactions_n": len(planned), "fill": fill})
     store.was_associated_with(apply_act, software)
     store.used(apply_act, stream_id)
     for span_id in span_ids:
         store.used(apply_act, span_id)
-    redacted = apply_redactions(recording, planned)
-    words = _consensus_words(store)
     for word in words:
         store.used(apply_act, word.id)
-    transcript_text, unplaced_n = _transcript(words, planned)
 
-    verify_systems = [] if scan_incomplete else [model_id for model_id, _ in asr_models]
-    verify_act = store.activity(node=NODE, step="verify", parameters={"systems": verify_systems})
+    verify_act = store.activity(node=NODE, step="verify", parameters={"required_detectors": required_detectors})
     store.was_associated_with(verify_act, software)
-    if scan_incomplete:
-        checked = _Verification(verified=False, survived=[], scan_ran=False)
-    else:
-        for model_id, commit_sha in asr_models:
-            model_agent = store.agent(agent_type="model", model_id=model_id, commit_sha=commit_sha)
-            store.was_associated_with(verify_act, model_agent)
-        checked = _verify(redacted, transcript_text, asr_models, required_detectors)
-    unverifiable = sorted(set(expected_recognizers) - set(verify_systems))
 
     artifacts: dict[str, Path] = {}
     if scan_incomplete:
@@ -451,24 +449,23 @@ def redact(
             "an unchecked recording is not a clean one (N15)"
         )
     elif not checked.scan_ran:
-        outcome = Outcome.FAIL
+        outcome = Outcome.FLAG
+        parts = []
+        if checked.failed:
+            parts.append(f"detectors failed: {', '.join(checked.failed)}")
+        if checked.missing:
+            parts.append(f"required detectors were not attempted: {', '.join(checked.missing)}")
+        if not parts:
+            parts.append("no detector ran")
         why = (
-            "verification did not run: the re-scan over the output did not cover every required pii "
-            "detector; an unverified artifact is withheld (N16)"
+            f"the re-scan over the redacted text is incomplete ({'; '.join(parts)}); an unverified artifact is withheld"
         )
     elif checked.survived:
         outcome = Outcome.FAIL
-        why = "verification found pii on the redacted output: " + ", ".join(checked.survived)
-    elif unverifiable:
-        outcome = Outcome.FLAG
-        why = (
-            "the redacted output re-scans clean, but verification re-ran only "
-            f"{', '.join(verify_systems)}; {', '.join(unverifiable)} wrote no word at a resolved commit "
-            "to re-run at"
-        )
+        why = "verification found pii on the redacted transcript: " + ", ".join(checked.survived)
     else:
         outcome = Outcome.PASS
-        why = "every finding redacted; the redacted output re-scans clean"
+        why = "every finding redacted; the redacted transcript re-scans clean"
         artifacts = _write_artifacts(redacted, transcript_text, artifacts_dir)
     verdict_id, verdict = write_verdict(
         store,
@@ -482,16 +479,18 @@ def redact(
             "redactions_n": len(planned),
             "by_category": dict(Counter(extent.category for extent in planned)),
             "padding_ms": padding_ms,
+            "fill": fill,
             "verified": checked.verified,
             "survived": checked.survived,
-            "verify_systems": verify_systems,
-            "expected_systems": expected_recognizers,
-            "expected_source": expected_source,
+            "unremediable": unremediable,
+            "replanned_n": replanned_n,
             "scan_failed": scan_failed,
             "scan_missing": scan_missing,
+            "verify_failed": checked.failed,
+            "verify_missing": checked.missing,
             "required_detectors": required_detectors,
             "unplaced_words_n": unplaced_n,
-            "audio_check": "bounded",
+            "audio_check": _AUDIO_CHECK,
             "artifacts_withheld": not artifacts,
         },
     )
