@@ -1,7 +1,9 @@
 """PREPROCESS — one conditioning pass, every shared derivative written to the store.
 
-The recognizers, the aligner, SQUIM, level and YAMNet silence read the plain resampled signal; the
-envelope, spans, spectrograms and gammatone read the pre-emphasised one. A derivative that cannot be
+Every model that answers a whole-file question runs here: YAMNet, AST and HeAR alike. No later node
+re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers read the plain
+resampled signal; the envelope, spans, spectrograms, gammatone and the phonation pass read the
+pre-emphasised one; ``disruptions_file`` reads the original recording. A derivative that cannot be
 computed is absent from the store, not an error. Every parameter's derivation is in
 ``data/config/default.yaml``.
 """
@@ -9,7 +11,7 @@ computed is absent from the store, not an error. Every parameter's derivation is
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from importlib.metadata import version as _dist_version
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +22,7 @@ import torch
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.envelope.api import hilbert_envelope_dbfs, rolling_floor_dbfs
 from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
@@ -28,10 +31,13 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
 from senselab.audio.tasks.forced_alignment.constants import DEFAULT_ALIGN_MODELS_HF
 from senselab.audio.tasks.forced_alignment.forced_alignment import align_transcriptions
 from senselab.audio.tasks.gammatone.api import gammatone_filterbank
+from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
+from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION
+from senselab.audio.tasks.phonation.api import f0_track, formant_track, propose_phonation_spans
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.spans.api import NoContrast, propose_spans
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
-from senselab.audio.tasks.speech_to_text_ensemble.api import fuse_word_streams, iter_word_leaves
+from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
@@ -43,6 +49,8 @@ NODE = "PREPROCESS"
 CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
 QWEN_ID = "Qwen/Qwen3-ASR-1.7B"
 QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
+AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
+YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
 ALIGNMENT_LANGUAGE = "en"
 
 
@@ -54,6 +62,11 @@ def _crisperwhisper_model() -> HFModel:
 def _qwen_model() -> HFModel:
     """The Qwen3-ASR model spec; its commit resolves at construction."""
     return HFModel(path_or_uri=QWEN_ID, revision="main")
+
+
+def _ast_model() -> HFModel:
+    """The AST model spec; its commit resolves at construction."""
+    return HFModel(path_or_uri=AST_ID, revision="main")
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,56 @@ def _bound_to_duration(start: float, end: float, duration_s: float) -> tuple[flo
     return start, min(end, duration_s)
 
 
+def _norm_token(token: str) -> str:
+    """A token normalised for vocabulary matching: casefolded, edge punctuation stripped."""
+    return token.casefold().strip(".,;:!?\"'()")
+
+
+def _as_non_word(text: str, onomatopoeic: set[str]) -> tuple[str | None, str | None]:
+    """The bracketed form of a non-lexical token, or ``(None, None)`` when the token is a word.
+
+    Args:
+        text: The token as the recognizer produced it.
+        onomatopoeic: The normalised ``words.onomatopoeic_tokens`` vocabulary; empty while it is null.
+
+    Returns:
+        ``(bracketed, origin)`` where ``origin`` is ``"bracketed"`` or ``"onomatopoeic"``, or
+        ``(None, None)``.
+    """
+    stripped = text.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        return stripped, "bracketed"
+    normalised = _norm_token(stripped)
+    if normalised and normalised in onomatopoeic:
+        return f"[{normalised.upper()}]", "onomatopoeic"
+    return None, None
+
+
+def _confident_labels(
+    window: dict[str, Any], default_threshold: float, label_thresholds: dict[str, float]
+) -> dict[str, float]:
+    """The labels this window is confident of, each with the score behind it.
+
+    A label is a member iff its score clears its own threshold — ``label_thresholds[label]`` where
+    one exists, ``default_threshold`` otherwise. The result may be empty, which is a window nobody's
+    threshold cleared and is a different fact from a window that was never classified.
+
+    Args:
+        window: A classifier window, in the shape ``label_scores`` reads.
+        default_threshold: The threshold for a label with no entry of its own.
+        label_thresholds: Per-label thresholds.
+
+    Returns:
+        ``{label: score}`` over the members, in descending score order.
+    """
+    members: dict[str, float] = {}
+    for pair in label_scores(window):
+        for label, score in pair.items():
+            if float(score) >= float(label_thresholds.get(label, default_threshold)):
+                members[label] = float(score)
+    return dict(sorted(members.items(), key=lambda item: -item[1]))
+
+
 def _measurement(
     store: ProvStore,
     activity_id: str,
@@ -93,10 +156,11 @@ def _measurement(
     signal: str,
     attributes: dict[str, Any],
     derived_from: tuple[str, ...] = (),
+    extent: tuple[float, float] | None = None,
 ) -> str:
     """Write one derivative measurement entity with its provenance."""
     entity_id = store.entity(
-        prov_type="measurement", extent=None, attributes={"name": name, "signal": signal, **attributes}
+        prov_type="measurement", extent=extent, attributes={"name": name, "signal": signal, **attributes}
     )
     store.was_generated_by(entity_id, activity_id)
     store.was_attributed_to(entity_id, agent_id)
@@ -290,7 +354,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             span_id = store.entity(
                 prov_type="span",
                 extent=(span.start, span.end),
-                attributes={"peak_over_floor_db": span.peak_over_floor_db, "k_db": k_db, "signal": sharp_signal},
+                attributes={
+                    "peak_over_floor_db": span.peak_over_floor_db,
+                    "k_db": k_db,
+                    "signal": sharp_signal,
+                    "merged_proposals": span.merged_proposals,
+                },
             )
             store.was_generated_by(span_id, activity)
             store.was_attributed_to(span_id, software)
@@ -300,38 +369,144 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(span_ids)
         state["span_ids"] = span_ids
 
-    def _yamnet() -> None:
-        """The full YAMNet native windows, to a json sidecar."""
-        top_k = int(config.require("yamnet.top_k"))
-        agent = store.agent(
-            agent_type="model",
-            model_id="https://tfhub.dev/google/yamnet/1",
-            unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
-        )
-        activity = _step("yamnet", {"top_k": top_k}, (plain_id,), agent)
-        [windows] = classify_audios([plain], model="yamnet", top_k=top_k)
-        (run_dir / "derivatives" / "yamnet_windows.json").write_text(json.dumps(windows))
+    def _scores(name: str, agent_id: str, activity_step: str, run: Callable[[], list[dict[str, Any]]]) -> None:
+        """Run one classifier and store its verbatim windows; no threshold is read here (V3)."""
+        activity = _step(activity_step, {}, (plain_id,), agent_id)
+        windows = run()
+        path = f"derivatives/{name}.json"
+        (run_dir / path).write_text(json.dumps(windows))
         entity_id = _measurement(
             store,
             activity,
-            agent,
-            name="yamnet_windows",
+            agent_id,
+            name=name,
             signal="plain",
-            attributes={"path": "derivatives/yamnet_windows.json", "n_windows": len(windows)},
+            attributes={
+                "classifier": name.removesuffix("_scores"),
+                "path": path,
+                "n_windows": len(windows),
+                "win_length_s": float(windows[0]["win_length"]) if windows else None,
+                "hop_s": float(windows[0]["hop_length"]) if windows else None,
+            },
             derived_from=(plain_id,),
         )
-        derivatives["yamnet_windows"] = entity_id
+        derivatives[name] = entity_id
         view.append(entity_id)
-        state.update(yamnet_windows=windows, yamnet_windows_id=entity_id)
+        state[name] = windows
+        state[name + "_id"] = entity_id
+
+    def _windows(classifier: str) -> None:
+        """Fold the thresholds over one classifier's stored scores into per-window label sets."""
+        scores_name = f"{classifier}_scores"
+        if scores_name not in state:
+            raise LookupError(f"{scores_name} is absent")
+        default_threshold = float(config.require(f"windows.{classifier}.default_threshold"))
+        label_thresholds = {
+            str(label): float(value)
+            for label, value in (config.require(f"windows.{classifier}.label_thresholds") or {}).items()
+        }
+        activity = _step(
+            f"{classifier}_windows",
+            {"default_threshold": default_threshold, "label_thresholds": label_thresholds},
+            (state[scores_name + "_id"],),
+            software,
+        )
+        raw = state[scores_name]
+        window_ids: list[str] = []
+        windows_by_label: dict[str, list[str]] = {}
+        fired: dict[str, float] = {}
+        for raw_window in raw:
+            members = _confident_labels(raw_window, default_threshold, label_thresholds)
+            window_id = store.entity(
+                prov_type="measurement",
+                extent=(float(raw_window["start"]), float(raw_window["end"])),
+                attributes={
+                    "name": f"{classifier}_window",
+                    "classifier": classifier,
+                    "signal": "plain",
+                    "labels": list(members),
+                    "scores": members,
+                },
+            )
+            store.was_generated_by(window_id, activity)
+            store.was_attributed_to(window_id, software)
+            store.was_derived_from(window_id, state[scores_name + "_id"])
+            window_ids.append(window_id)
+            for label in members:
+                windows_by_label.setdefault(label, []).append(window_id)
+                if label in label_thresholds:
+                    fired[label] = label_thresholds[label]
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name=f"{classifier}_windows",
+            signal="plain",
+            attributes={
+                "classifier": classifier,
+                "labels": sorted(windows_by_label),
+                "windows_by_label": windows_by_label,
+                "n_windows": len(raw),
+                "win_length_s": float(raw[0]["win_length"]) if raw else None,
+                "hop_s": float(raw[0]["hop_length"]) if raw else None,
+                "default_threshold": default_threshold,
+                "label_thresholds": fired,
+            },
+            derived_from=(state[scores_name + "_id"],),
+        )
+        derivatives[f"{classifier}_windows"] = entity_id
+        view.append(entity_id)
+        view.extend(window_ids)
+
+    def _yamnet_scores() -> None:
+        """YAMNet on its own native grid; `win_length`/`hop_length` are ignored by this backend."""
+        _scores(
+            "yamnet_scores",
+            store.agent(
+                agent_type="model",
+                model_id=YAMNET_MODEL_URI,
+                unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
+            ),
+            "yamnet",
+            lambda: classify_audios([plain], model="yamnet", top_k=int(config.require("yamnet.top_k")))[0],
+        )
+
+    def _ast_scores() -> None:
+        """AST at the configured window and hop, over its whole label space (C1, C2)."""
+        model = _ast_model()
+        _scores(
+            "ast_scores",
+            store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha),
+            "ast",
+            lambda: classify_audios(
+                [plain],
+                model=model,
+                win_length=float(config.require("windows.ast.win_length_s")),
+                hop_length=float(config.require("windows.ast.hop_s")),
+                top_k=int(config.require("windows.ast.top_k")),
+                function_to_apply="sigmoid",
+            )[0],
+        )
+
+    def _hear_scores() -> None:
+        """HeAR at its model-imposed 2 s window and the configured hop; `top_k=None` keeps all eight."""
+        _scores(
+            "hear_scores",
+            store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION),
+            "hear",
+            lambda: detect_health_acoustic_events(
+                [plain], hop_length=float(config.require("windows.hear.hop_s")), top_k=None
+            )[0],
+        )
 
     def _silence() -> None:
-        """The Silence projection of the YAMNet windows."""
-        if "yamnet_windows" not in state:
-            raise LookupError("yamnet_windows is absent")
+        """The Silence projection of the stored YAMNet scores."""
+        if "yamnet_scores" not in state:
+            raise LookupError("yamnet_scores is absent")
         threshold = float(config.require("yamnet.silence_threshold"))
-        activity = _step("silence", {"threshold": threshold}, (state["yamnet_windows_id"],), software)
+        activity = _step("silence", {"threshold": threshold}, (state["yamnet_scores_id"],), software)
         rows = []
-        for window in state["yamnet_windows"]:
+        for window in state["yamnet_scores"]:
             score = 0.0
             for pair in label_scores(window):
                 if "Silence" in pair:
@@ -347,7 +522,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             name="silence",
             signal="plain",
             attributes={"threshold": threshold, "windows": rows},
-            derived_from=(state["yamnet_windows_id"],),
+            derived_from=(state["yamnet_scores_id"],),
         )
         derivatives["silence"] = entity_id
         view.append(entity_id)
@@ -369,6 +544,33 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             derived_from=(plain_id,),
         )
         derivatives["level"] = entity_id
+        view.append(entity_id)
+
+    def _disruptions_file() -> None:
+        """Clipping, dropouts, discontinuities, DC and ZCR over the whole ORIGINAL recording."""
+        if not recording_ids:
+            raise LookupError("no recording stream in the store")
+        parameters: dict[str, Any] = {
+            "clip_headroom": float(config.require("disruptions.clip_headroom")),
+            "min_clip_run": int(config.require("disruptions.min_clip_run")),
+            "min_dropout_ms": float(config.require("disruptions.min_dropout_ms")),
+            "discontinuity_local_factor": float(config.require("disruptions.discontinuity_local_factor")),
+            "discontinuity_window_ms": float(config.require("disruptions.discontinuity_window_ms")),
+        }
+        activity = _step("disruptions_file", parameters, (recording_ids[-1],), software)
+        original_duration = source.waveform.shape[-1] / int(source.sampling_rate)
+        found = detect_disruptions(source, 0.0, original_duration, **parameters)
+        counts = {key: value for key, value in asdict(found).items() if key not in ("start", "end")}
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name="disruptions_file",
+            signal="recording",
+            attributes={**counts, "sampling_rate": int(source.sampling_rate)},
+            derived_from=(recording_ids[-1],),
+        )
+        derivatives["disruptions_file"] = entity_id
         view.append(entity_id)
 
     def _squim() -> None:
@@ -415,13 +617,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         timing_model: str | None,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
-        """One recognizer: transcript measurement plus one word entity per chunk it timed in bounds.
+        """One recognizer: its transcript and its own word list, retained as the consensus's evidence.
 
-        A chunk missing either bound is counted in ``untimed_chunks_n`` and written as no word; a
-        chunk starting at or after the plain stream's duration is counted in
-        ``out_of_bounds_chunks_n`` and likewise written as no word. Either way its text stays in the
-        transcript. A chunk that starts in bounds and ends past the duration keeps its word, with
-        the end bound by the duration.
+        No ``word`` entity is written here. PREPROCESS writes those once, over the consensus, so a
+        consumer never has to disambiguate two populations of ``word`` by generating activity.
         """
         model = factory()
         agent = store.agent(agent_type="model", model_id=str(model.path_or_uri), commit_sha=model.commit_sha)
@@ -429,7 +628,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             name, {"model": str(model.path_or_uri), **{k: str(v) for k, v in kwargs.items()}}, (plain_id,), agent
         )
         [line] = transcribe_audios([plain], model=model, **kwargs)
-        word_ids: list[str] = []
+        words: list[dict[str, Any]] = []
         untimed_chunks_n = 0
         out_of_bounds_chunks_n = 0
         for chunk in line.chunks or []:
@@ -440,29 +639,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             if span is None:
                 out_of_bounds_chunks_n += 1
                 continue
-            start, end = span
-            attributes: dict[str, Any] = {
-                "text": chunk.text,
-                "score": chunk.score,
-                "recognizer": str(model.path_or_uri),
-                "timestamp_source": source_kind,
-            }
-            if end < float(chunk.end):
-                attributes["end_clamped_to_duration"] = True
-            if timing_model is not None:
-                attributes["timestamp_model"] = timing_model
-            word_id = store.entity(
-                prov_type="word",
-                extent=(start, end),
-                attributes=attributes,
-            )
-            store.was_generated_by(word_id, activity)
-            store.was_attributed_to(word_id, agent)
-            word_ids.append(word_id)
+            words.append({"text": chunk.text, "start": span[0], "end": span[1], "score": chunk.score})
         meta: dict[str, Any] = {
             "recognizer": str(model.path_or_uri),
             "transcript": line.text or "",
-            "word_ids": word_ids,
+            "words": words,
             "untimed_chunks_n": untimed_chunks_n,
             "out_of_bounds_chunks_n": out_of_bounds_chunks_n,
             "timestamp_source": source_kind,
@@ -474,71 +655,105 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         )
         derivatives[name] = entity_id
         view.append(entity_id)
-        view.extend(word_ids)
         state[name] = line
         state[name + "_id"] = entity_id
 
-    def _agreement() -> None:
-        """The fused word list over both recognizers — the derivative SPEECH reads.
-
-        ``iter_word_leaves`` re-reads each recognizer's own output, which the bound on the word
-        entities does not reach, so the same bound is applied to the fused list: a word starting at
-        or past the plain stream's duration is dropped and counted in ``out_of_bounds_words_n``, and
-        an end past the duration is bound by it. ``_alignment`` takes its transcript's end from this
-        list, so bounding it here is what keeps a hallucinated timestamp out of the aligner's slice.
-        """
+    def _consensus() -> None:
+        """The consensus over both recognizers, by the audio-analysis routine, plus its word entities."""
         if "asr_crisperwhisper" not in state or "asr_qwen" not in state:
             raise LookupError("both recognizers are needed")
         activity = _step(
-            "agreement",
-            {"systems": [CRISPERWHISPER_ID, QWEN_ID]},
+            "consensus",
+            {"systems": [CRISPERWHISPER_ID, QWEN_ID], "routine": "fuse_consensus_words"},
             (state["asr_crisperwhisper_id"], state["asr_qwen_id"]),
             software,
         )
-        streams = {
-            CRISPERWHISPER_ID: iter_word_leaves([state["asr_crisperwhisper"].model_dump()]),
-            QWEN_ID: iter_word_leaves([state["asr_qwen"].model_dump()]),
-        }
-        fused: list[dict[str, Any]] = []
-        out_of_bounds_words_n = 0
-        for word in fuse_word_streams(streams):
-            span = _bound_to_duration(float(word["start"]), float(word["end"]), duration_s)
+        fused, provenance = fuse_consensus_words(
+            {CRISPERWHISPER_ID: state["asr_crisperwhisper"], QWEN_ID: state["asr_qwen"]}
+        )
+        if not provenance:
+            provenance = {"operator": "consensus_words/resample", "sources": [], "n_words": 0}
+        onomatopoeic = {_norm_token(str(token)) for token in (config.get("words.onomatopoeic_tokens") or [])}
+        word_ids: list[str] = []
+        event_ids: list[str] = []
+        kept: list[dict[str, Any]] = []
+        for entry in fused:
+            span = _bound_to_duration(float(entry["start"]), float(entry["end"]), duration_s)
             if span is None:
-                out_of_bounds_words_n += 1
                 continue
-            fused.append({**word, "start": span[0], "end": span[1]})
+            text = str(entry.get("text") or "")
+            recognizers = [str(s) for s in (entry.get("sources") or [])]
+            bracketed, origin = _as_non_word(text, onomatopoeic)
+            if bracketed is not None:
+                event_id = store.entity(
+                    prov_type="event",
+                    extent=span,
+                    attributes={
+                        "bracketed": bracketed,
+                        "raw": text,
+                        "origin": origin,
+                        "recognizers": recognizers,
+                    },
+                )
+                store.was_generated_by(event_id, activity)
+                store.was_attributed_to(event_id, software)
+                event_ids.append(event_id)
+                continue
+            word_id = store.entity(
+                prov_type="word",
+                extent=span,
+                attributes={
+                    "text": text,
+                    "confidence": entry.get("confidence"),
+                    "existence_confidence": entry.get("existence_confidence"),
+                    "temporal_confidence": entry.get("temporal_confidence"),
+                    "coverage": entry.get("coverage"),
+                    "recognizers": recognizers,
+                    "timing_sources": entry.get("timing_sources"),
+                    "index": len(kept),
+                },
+            )
+            store.was_generated_by(word_id, activity)
+            store.was_attributed_to(word_id, software)
+            word_ids.append(word_id)
+            kept.append({**entry, "start": span[0], "end": span[1]})
         entity_id = _measurement(
             store,
             activity,
             software,
-            name="asr_agreement",
+            name="consensus_transcript",
             signal="plain",
             attributes={
-                "words": fused,
+                "words": kept,
+                "provenance": provenance,
                 "systems": [CRISPERWHISPER_ID, QWEN_ID],
-                "out_of_bounds_words_n": out_of_bounds_words_n,
+                "word_ids": word_ids,
+                "event_ids": event_ids,
+                "text": " ".join(str(entry.get("text") or "") for entry in kept),
             },
             derived_from=(state["asr_crisperwhisper_id"], state["asr_qwen_id"]),
         )
-        derivatives["asr_agreement"] = entity_id
+        derivatives["consensus_transcript"] = entity_id
         view.append(entity_id)
-        state.update(fused=fused, asr_agreement_id=entity_id)
+        view.extend(word_ids)
+        view.extend(event_ids)
+        state.update(consensus=kept, consensus_id=entity_id)
 
     def _alignment() -> None:
-        """Forced alignment of the agreed transcript, on the plain signal."""
-        if not state.get("fused"):
-            raise LookupError("asr_agreement is absent or empty")
-        fused = state["fused"]
+        """Forced alignment of the consensus transcript, on the plain signal."""
+        if not state.get("consensus"):
+            raise LookupError("consensus_transcript is absent or empty")
+        consensus = state["consensus"]
         agent = store.agent(
             agent_type="model",
             model_id=str(DEFAULT_ALIGN_MODELS_HF[ALIGNMENT_LANGUAGE]["path_or_uri"]),
             unresolved_reason="align_transcriptions loads its aligner internally; the commit is not reported",
         )
-        activity = _step("alignment", {"language": ALIGNMENT_LANGUAGE}, (state["asr_agreement_id"],), agent)
+        activity = _step("alignment", {"language": ALIGNMENT_LANGUAGE}, (state["consensus_id"],), agent)
         transcript = ScriptLine(
-            text=" ".join(word["text"] for word in fused),
-            start=min(word["start"] for word in fused),
-            end=max(word["end"] for word in fused),
+            text=" ".join(str(word["text"]) for word in consensus),
+            start=min(float(word["start"]) for word in consensus),
+            end=max(float(word["end"]) for word in consensus),
         )
         [aligned] = align_transcriptions([(plain, transcript, Language(language_code=ALIGNMENT_LANGUAGE))])
         payload = [line.model_dump() for line in aligned if line is not None]
@@ -552,12 +767,99 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             attributes={
                 "path": "derivatives/alignment.json",
                 "language": ALIGNMENT_LANGUAGE,
-                "transcript_source": "asr_agreement",
+                "transcript_source": "consensus_transcript",
             },
-            derived_from=(state["asr_agreement_id"],),
+            derived_from=(state["consensus_id"],),
         )
         derivatives["alignment"] = entity_id
         view.append(entity_id)
+
+    def _phonation_spans() -> None:
+        """Sustained-phonation and glide spans, from tracks computed once over the whole stream."""
+        f0_range = config.require("voice.f0_range_hz")
+        f0_min_hz, f0_max_hz = float(f0_range[0]), float(f0_range[1])
+        parameters: dict[str, Any] = {
+            "hop_s": float(config.require("phonation_spans.hop_s")),
+            "f0_stability_cents": float(config.require("phonation_spans.f0_stability_cents")),
+            "formant_stability_hz": float(config.require("phonation_spans.formant_stability_hz")),
+            "glide_min_excursion_cents": float(config.require("phonation_spans.glide_min_excursion_cents")),
+            "hangover_ms": float(config.require("phonation_spans.hangover_ms")),
+            "voicing_strength_floor": float(config.require("phonation_spans.voicing_strength_floor")),
+            "mixed_voiced_fraction": float(config.require("phonation_spans.mixed_voiced_fraction")),
+            "max_formants": int(config.require("phonation_spans.max_formants")),
+            "formant_max_hz": float(config.require("phonation_spans.formant_max_hz")),
+            "formant_window_s": float(config.require("phonation_spans.formant_window_s")),
+            "formant_preemphasis_hz": float(config.require("phonation_spans.formant_preemphasis_hz")),
+            "f0_min_hz": f0_min_hz,
+            "f0_max_hz": f0_max_hz,
+        }
+        activity = _step("phonation_spans", parameters, (sharp_id,), software)
+        times, f0_hz, strength = f0_track(sharp, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=parameters["hop_s"])
+        formants = formant_track(
+            sharp,
+            hop_s=parameters["hop_s"],
+            max_formants=parameters["max_formants"],
+            formant_max_hz=parameters["formant_max_hz"],
+            window_s=parameters["formant_window_s"],
+            preemphasis_hz=parameters["formant_preemphasis_hz"],
+        )
+        proposals = propose_phonation_spans(
+            times=times,
+            f0_hz=f0_hz,
+            strength=strength,
+            formants=formants,
+            hop_s=parameters["hop_s"],
+            f0_stability_cents=parameters["f0_stability_cents"],
+            formant_stability_hz=parameters["formant_stability_hz"],
+            glide_min_excursion_cents=parameters["glide_min_excursion_cents"],
+            hangover_ms=parameters["hangover_ms"],
+            voicing_strength_floor=parameters["voicing_strength_floor"],
+            mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
+        )
+        span_ids: list[str] = []
+        for proposal in proposals:
+            span_id = store.entity(
+                prov_type="span",
+                extent=(proposal.start, proposal.end),
+                attributes={
+                    "family": "phonation",
+                    "member": proposal.member,
+                    "duration_s": proposal.end - proposal.start,
+                    "production": proposal.production,
+                    "voiced_fraction": proposal.voiced_fraction,
+                    "f0_median_hz": proposal.f0_median_hz,
+                    "f0_start_hz": proposal.f0_start_hz,
+                    "f0_end_hz": proposal.f0_end_hz,
+                    "glide_direction": proposal.glide_direction,
+                    "glide_extent_cents": proposal.glide_extent_cents,
+                    "offset_criterion": proposal.offset_criterion,
+                    "signal": sharp_signal,
+                    "hop_s": parameters["hop_s"],
+                },
+            )
+            store.was_generated_by(span_id, activity)
+            store.was_attributed_to(span_id, software)
+            store.was_derived_from(span_id, sharp_id)
+            span_ids.append(span_id)
+            inside = (formants.times_s >= proposal.start) & (formants.times_s < proposal.end)
+            track_id = _measurement(
+                store,
+                activity,
+                software,
+                name="formant_tracks",
+                signal=sharp_signal,
+                extent=(proposal.start, proposal.end),
+                attributes={
+                    "times_s": formants.times_s[inside].tolist(),
+                    "hop_s": parameters["hop_s"],
+                    **{f"f{order + 1}_hz": formants.f_hz[order][inside].tolist() for order in range(4)},
+                    **{f"f{order + 1}_bw_hz": formants.bandwidth_hz[order][inside].tolist() for order in range(4)},
+                },
+                derived_from=(span_id,),
+            )
+            view.append(track_id)
+        derivatives["phonation_spans"] = span_ids
+        view.extend(span_ids)
 
     def _spectrogram(name: str, window_key: str) -> None:
         """One STFT magnitude, window and hop from the config, n_fft = win_length (decision N7)."""
@@ -619,17 +921,24 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     blocks: list[tuple[str, Callable[[], None]]] = [
         ("energy_envelope", _envelope),
         ("spans", _spans),
-        ("yamnet_windows", _yamnet),
+        ("yamnet_scores", _yamnet_scores),
+        ("yamnet_windows", lambda: _windows("yamnet")),
         ("silence", _silence),
+        ("ast_scores", _ast_scores),
+        ("ast_windows", lambda: _windows("ast")),
+        ("hear_scores", _hear_scores),
+        ("hear_windows", lambda: _windows("hear")),
         ("level", _level),
+        ("disruptions_file", _disruptions_file),
         ("squim", _squim),
         ("asr_crisperwhisper", lambda: _asr("asr_crisperwhisper", _crisperwhisper_model, "native", None)),
         (
             "asr_qwen",
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
-        ("asr_agreement", _agreement),
+        ("consensus_transcript", _consensus),
         ("alignment", _alignment),
+        ("phonation_spans", _phonation_spans),
         ("spectrogram_wideband", lambda: _spectrogram("spectrogram_wideband", "spectrogram.wideband_window_ms")),
         (
             "spectrogram_narrowband",

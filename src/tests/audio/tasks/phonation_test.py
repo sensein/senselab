@@ -215,12 +215,8 @@ class TestProposePhonationSpans:
     def test_a_steady_f0_run_is_one_sustained_voiced_span(self) -> None:
         """Stable F0 satisfies its limb on its own, and strength over the floor makes it voiced."""
         n = 100
-        times, f0, strength, formants = _tracks(
-            np.full(n, 200.0), np.full(n, 700.0), np.full(n, 0.9)
-        )
-        [span] = propose_phonation_spans(
-            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
-        )
+        times, f0, strength, formants = _tracks(np.full(n, 200.0), np.full(n, 700.0), np.full(n, 0.9))
+        [span] = propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE)
         assert span.member == "sustained"
         assert span.production == "voiced"
         assert span.voiced_fraction == pytest.approx(1.0)
@@ -230,12 +226,8 @@ class TestProposePhonationSpans:
     def test_an_unvoiced_sustain_is_a_span_carried_by_the_formant_limb(self) -> None:
         """No F0 anywhere, stable formants throughout: a span opens and reads unvoiced."""
         n = 100
-        times, f0, strength, formants = _tracks(
-            np.full(n, np.nan), np.full(n, 700.0), np.full(n, 0.1)
-        )
-        [span] = propose_phonation_spans(
-            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
-        )
+        times, f0, strength, formants = _tracks(np.full(n, np.nan), np.full(n, 700.0), np.full(n, 0.1))
+        [span] = propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE)
         assert span.member == "sustained"
         assert span.production == "unvoiced"
         assert span.f0_median_hz is None
@@ -245,9 +237,7 @@ class TestProposePhonationSpans:
         n = 40
         f0 = 150.0 * 2.0 ** (np.arange(n) * 100.0 / 1200.0)
         times, f0, strength, formants = _tracks(f0, f0 * 4.0, np.full(n, 0.9))
-        spans = propose_phonation_spans(
-            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
-        )
+        spans = propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE)
         assert [s.member for s in spans] == ["glide"]
         assert spans[0].glide_direction == "rising"
         assert spans[0].glide_extent_cents == pytest.approx(3900.0, rel=0.01)
@@ -258,9 +248,7 @@ class TestProposePhonationSpans:
         f0 = np.full(n, 200.0)
         f0[50] = 260.0
         times, f0, strength, formants = _tracks(f0, np.full(n, 700.0) + (np.arange(n) == 50) * 500.0, np.full(n, 0.9))
-        spans = propose_phonation_spans(
-            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
-        )
+        spans = propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE)
         assert len(spans) == 1
 
     def test_every_parameter_is_required(self) -> None:
