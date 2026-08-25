@@ -29,7 +29,7 @@ from senselab.audio.workflows.triage.nodes.redact import RedactResult
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
 from senselab.audio.workflows.triage.run import run_triage
-from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Release, RunState
+from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome, Release, RunState, Triage
 from senselab.utils.prov_store import ProvStore
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -159,7 +159,7 @@ def _fakes(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
     ) -> NodeResult:
         _record("VOICE")
-        entity_id, verdict = _conclude(store, "VOICE", Outcome.PASS, "voice_no_words")
+        entity_id, verdict = _conclude(store, "VOICE", Outcome.PASS, "voice")
         return NodeResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id)
 
     def _redact(
@@ -231,7 +231,7 @@ class TestHappyPath:
         graph()
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Outcome.PASS
+        assert result.file_verdict.triage is Triage.PASS
         assert result.ran == dict.fromkeys(GRAPH, RunState.COMPLETED)
 
     def test_the_layout_is_written_and_the_release_dir_is_disjoint(
@@ -409,14 +409,14 @@ class TestAdmitFailShortCircuits:
         skipped = [node for node in GRAPH[1:-1]]
         assert [result.ran[node] for node in skipped] == [RunState.SKIPPED] * len(skipped)
 
-    def test_the_file_verdict_is_fail_and_nothing_is_released(
+    def test_the_file_verdict_discards_and_nothing_is_released(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """An unmeasurable recording fails on triage and is never assessed for release."""
+        """An unmeasurable recording discards on triage and is never assessed for release."""
         graph(admit_outcome=Outcome.FAIL)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
-        assert result.file_verdict.triage is Outcome.FAIL
+        assert result.file_verdict.triage is Triage.DISCARD
         assert result.file_verdict.release is Release.NOT_ASSESSED
         assert result.released == {}
         assert result.store_path.is_file()

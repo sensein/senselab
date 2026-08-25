@@ -1,7 +1,7 @@
 """The VERDICT node: the store's contents read into the vocabulary's fold, and the result recorded.
 
 The fold itself is ``vocabulary.fold_file_verdict``; this node maps store facts onto its inputs and
-writes its result back. The two axes it keeps apart — triage and release — and the mapping table it
+writes its result back. The two axes it keeps apart — triage and release — and the tables it
 implements are in ``specs/20260817-triage-workflow-dag/verdict.md``.
 """
 
@@ -14,12 +14,12 @@ from typing import Callable, Mapping, Sequence
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
+from senselab.audio.workflows.triage.nodes.routing import BRANCH_FOR_KIND, declared_tags, map_tags
 from senselab.audio.workflows.triage.vocabulary import (
+    BranchDecision,
     FileVerdict,
-    KindState,
     NodeVerdict,
     Outcome,
-    Release,
     RunState,
     fold_file_verdict,
 )
@@ -27,8 +27,9 @@ from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
 
-_GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "AIRWAY", "SPEECH", "VOICE", "REDACT")
-_NOT_SCREENED = "not_screened"
+_GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT")
+
+_HINT_KIND_MAP = "routing.hint_kind_map"
 
 
 @dataclass(frozen=True)
@@ -69,7 +70,7 @@ def _live_latest(store: ProvStore, prov_type: PROV_TYPE, key: Callable[[Entity],
     Args:
         store: The provenance store.
         prov_type: The entity type to read.
-        key: What makes two entities the same assertion — a node name, a kind name.
+        key: What makes two entities the same assertion — a node name, a kind name, a branch name.
 
     Returns:
         One entity per key, the latest live one, in order of each key's first appearance.
@@ -104,55 +105,63 @@ def _node_verdicts_in_graph_order(store: ProvStore) -> list[tuple[Entity, NodeVe
     )
 
 
-def _kind_predictions(store: ProvStore) -> tuple[dict[str, KindState], list[str]]:
-    """TAXONOMY's kind entities as ``KindState``s; ``not_screened`` is ``UNDECIDED`` (N27).
+def _screened(store: ProvStore) -> tuple[dict[str, str], list[str]]:
+    """TAXONOMY's classification per kind, verbatim.
 
     Args:
         store: The provenance store.
 
     Returns:
-        The predictions per kind, one per kind under the store's shared rule, and the ids of the
-        entities they came from.
-
-    Raises:
-        ValueError: If a kind entity carries a state outside the vocabulary. The message names the
-            kind and the entity so the writer can be found; a state nobody can read must not be
-            folded into a verdict.
+        The state per kind as the string TAXONOMY wrote, one per kind under the store's shared rule,
+        and the ids of the entities they came from.
     """
-    predictions: dict[str, KindState] = {}
+    screened: dict[str, str] = {}
     ids: list[str] = []
     for entity in _live_latest(store, "kind", lambda e: str(e.attributes["kind"])):
-        kind = entity.attributes["kind"]
-        state = entity.attributes["state"]
-        if state == _NOT_SCREENED:
-            predictions[kind] = KindState.UNDECIDED
-        else:
-            try:
-                predictions[kind] = KindState(state)
-            except ValueError as error:
-                raise ValueError(
-                    f"kind entity {entity.id} for kind {kind!r} carries state {state!r}, which is not a KindState; "
-                    "the node that wrote it must be repaired before this screen can be folded"
-                ) from error
+        screened[str(entity.attributes["kind"])] = str(entity.attributes["state"])
         ids.append(entity.id)
-    return predictions, ids
+    return screened, ids
 
 
-def _release_from(verdicts: Sequence[NodeVerdict]) -> Release:
-    """REDACT's outcome as a release state; an absent verdict means unexamined, never releasable.
+def _branch_decisions(store: ProvStore) -> tuple[dict[str, BranchDecision], list[str]]:
+    """ROUTING's decision per branch.
 
     Args:
-        verdicts: Every node verdict read from the store.
+        store: The provenance store.
 
     Returns:
-        The release state for REDACT's artifacts only — never for anything in the store. Only
-        ``pass`` clears an artifact, so the mapping is total over ``Outcome``: a flag, or any member
-        added later, withholds rather than defaulting to cleared.
+        The decision per branch name, one per branch under the store's shared rule, and the ids of
+        the entities they came from. Empty when ROUTING never ran, which is a graph in which no
+        branch was ever asked.
     """
-    redact = next((v for v in verdicts if v.node == "REDACT"), None)
-    if redact is None:
-        return Release.NOT_ASSESSED
-    return Release.RELEASABLE if redact.outcome is Outcome.PASS else Release.WITHHELD
+    decisions: dict[str, BranchDecision] = {}
+    ids: list[str] = []
+    for entity in _live_latest(store, "branch_decision", lambda e: str(e.attributes["branch"])):
+        branch = str(entity.attributes["branch"])
+        decisions[branch] = BranchDecision(
+            branch=branch,
+            kind=str(entity.attributes["kind"]),
+            will_run=bool(entity.attributes["will_run"]),
+            kind_state=str(entity.attributes["kind_state"]),
+            forced_by_hint=bool(entity.attributes["forced_by_hint"]),
+        )
+        ids.append(entity.id)
+    return decisions, ids
+
+
+def _hint_claims(config: TriageConfig, hint: AudioHints | None) -> dict[str, bool]:
+    """Which kinds the caller's declaration claimed, read through ROUTING's own map.
+
+    Args:
+        config: The triage configuration, read for ``routing.hint_kind_map``.
+        hint: What the recording was declared to contain, if anything.
+
+    Returns:
+        True per claimed kind; a kind no declared tag reaches is simply absent from the mapping, and
+        the fold reads a missing kind as unclaimed.
+    """
+    tags_by_kind, _, _ = map_tags(declared_tags(hint), config.get(_HINT_KIND_MAP) or {})
+    return {kind: True for kind in BRANCH_FOR_KIND if tags_by_kind.get(kind)}
 
 
 def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str, RunState]:
@@ -174,21 +183,6 @@ def _derived_ran(store: ProvStore, verdicts: Sequence[NodeVerdict]) -> dict[str,
     }
 
 
-def _is_gated(predictions: Mapping[str, KindState], verdicts: Sequence[NodeVerdict]) -> bool:
-    """Whether any absent-predicted kind went without a branch verdict.
-
-    Args:
-        predictions: TAXONOMY's prediction per kind.
-        verdicts: Every node verdict read from the store.
-
-    Returns:
-        True when at least one kind predicted absent has no branch verdict to be read against, so
-        the contradiction check never happened for it.
-    """
-    screened = {v.kind for v in verdicts if v.kind}
-    return any(state is KindState.ABSENT and kind not in screened for kind, state in predictions.items())
-
-
 def verdict(
     store: ProvStore,
     source: None,
@@ -198,15 +192,17 @@ def verdict(
     run_dir: Path,
     ran: Mapping[str, RunState] | None = None,
 ) -> VerdictResult:
-    """Fold every node's verdict, TAXONOMY's kinds and REDACT's release into one file verdict.
+    """Fold every node's verdict, ROUTING's decisions and TAXONOMY's classification into one file verdict.
 
     Args:
-        store: The provenance store, holding every node's ``verdict`` entity and TAXONOMY's ``kind``
-            entities. This node reads nothing else.
+        store: The provenance store, holding every node's ``verdict`` entity, ROUTING's
+            ``branch_decision`` entities and TAXONOMY's ``kind`` entities. This node reads nothing
+            else.
         source: Accepted for the shared node shape; not read.
-        config: The triage configuration, named in the activity by its hash. VERDICT has no
-            thresholds.
-        hint: Accepted for the shared node shape; not read.
+        config: The triage configuration, named in the activity by its hash and read for
+            ``routing.hint_kind_map``. VERDICT has no thresholds.
+        hint: What the recording was declared to contain. Read for branch mismatch only: a hint never
+            resolves a kind and never turns a flag into a pass.
         run_dir: Accepted for the shared node shape; VERDICT writes no sidecars.
         ran: Whether each node ran, from the runner, merged over what the store derives so that a
             partial mapping overrides per node without erasing the rest. The derivation reads a
@@ -217,22 +213,24 @@ def verdict(
     Returns:
         The file verdict on both axes, the verdict entity it was written to, and a view leading with
         that entity followed by every id the fold consumed.
-
-    Raises:
-        ValueError: If a ``kind`` entity carries a state outside the vocabulary (see
-            :func:`_kind_predictions`).
     """
     pairs = _node_verdicts_in_graph_order(store)
     node_verdicts = [node_verdict for _, node_verdict in pairs]
-    predictions, kind_ids = _kind_predictions(store)
+    screened, kind_ids = _screened(store)
+    decisions, decision_ids = _branch_decisions(store)
     resolved_ran = {**_derived_ran(store, node_verdicts), **(ran or {})}
-    file_verdict = fold_file_verdict(node_verdicts, predictions, resolved_ran, release=_release_from(node_verdicts))
-    gated = _is_gated(predictions, node_verdicts)
+    file_verdict = fold_file_verdict(
+        node_verdicts,
+        screened=screened,
+        branch_decisions=decisions,
+        ran=resolved_ran,
+        hint_claims=_hint_claims(config, hint),
+    )
 
     software = software_agent(store)
     activity = store.activity(node=NODE, step=None, parameters={"config_hash": config.config_hash})
     store.was_associated_with(activity, software)
-    folded_ids = [entity.id for entity, _ in pairs] + kind_ids
+    folded_ids = [entity.id for entity, _ in pairs] + kind_ids + decision_ids
     for folded_id in folded_ids:
         store.used(activity, folded_id)
 
@@ -243,14 +241,17 @@ def verdict(
         node=NODE,
         outcome=file_verdict.triage,
         kind=None,
-        why=f"folded {len(node_verdicts)} node verdicts over {len(predictions)} screened kinds",
+        why=f"folded {len(node_verdicts)} node verdicts over {len(screened)} screened kinds",
         detail={
             "triage": file_verdict.triage.value,
             "release": file_verdict.release.value,
-            "kinds": {kind: state.value for kind, state in file_verdict.kinds.items()},
+            "discard_ground": file_verdict.discard_ground,
+            "kinds": dict(file_verdict.kinds),
+            "screened": dict(file_verdict.screened),
+            "agreement": dict(file_verdict.agreement),
+            "hints": dict(file_verdict.hints),
+            "branches": dict(file_verdict.branches),
             "ran": {node: state.value for node, state in file_verdict.ran.items()},
-            "screened": bool(predictions),
-            "gated": gated,
             "reasons": [
                 {"node": r.node, "outcome": r.outcome.value, "kind": r.kind, "why": r.why} for r in file_verdict.reasons
             ],
