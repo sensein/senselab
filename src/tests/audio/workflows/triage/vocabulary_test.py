@@ -344,6 +344,25 @@ class TestTaxonomyIsReportedBeside:
         assert folded.screened["airway"] == "present"
         assert folded.kinds["airway"] == "absent"
 
+    def test_a_kind_with_neither_a_classification_nor_a_decision_reads_uncertain(self) -> None:
+        """Nothing said anything about ``voice``; reading that as absent would invent a measurement.
+
+        It is the difference between a discard and a pass on a file whose other kinds were found.
+        """
+        folded = fold_file_verdict(
+            [
+                NodeVerdict("ADMIT", Outcome.PASS, None, "ok"),
+                NodeVerdict("SPEECH", Outcome.FAIL, "speech", "no consensus word"),
+            ],
+            screened={},
+            branch_decisions={},
+            ran={},
+            hint_claims={"voice": True},
+        )
+        assert folded.screened["voice"] == "uncertain"
+        assert folded.kinds["voice"] == "uncertain"
+        assert folded.triage is not Triage.DISCARD
+
     def test_a_kind_taxonomy_never_classified_reads_uncertain(self) -> None:
         """No classification is not a classification of absent; it is the unsettled state."""
         folded = fold_file_verdict(
