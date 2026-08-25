@@ -46,6 +46,14 @@ class TestTheTextPanel:
         )
         assert tall.get_size_inches()[1] > short.get_size_inches()[1]
 
+    def test_the_time_axis_stays_labelled_under_a_trailing_text_panel(self) -> None:
+        """A text panel turns its axis off; with sharex that used to hide every panel's time scale."""
+        figure = plot_aligned_panels(
+            _tone(), [{"type": "waveform"}, {"type": "spectrogram"}, {"type": "text", "lines": ["a"]}]
+        )
+        assert figure.axes[1].get_xlabel() == "Time (seconds)"
+        assert any(tick.get_text() for tick in figure.axes[1].get_xticklabels())
+
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""
         figure = plot_aligned_panels(
