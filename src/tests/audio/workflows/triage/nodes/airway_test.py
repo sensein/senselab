@@ -465,6 +465,29 @@ class TestContestRequiresColocation:
         assert confirm.attributes["yamnet_labels"] == ["Cough"]
         assert result.verdict.outcome is Outcome.PASS
 
+    def test_any_member_of_the_confirmation_set_confirms_not_only_the_identical_label(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """Breathe's set is {Breathing, Sigh, Gasp}: Sigh corroborates a breath and is not the same word.
+
+        Every other confirmation here reads Cough against Cough, which a node comparing the HeAR label
+        to itself would also pass. Sigh is a member of Breathe's set and nothing else, so shrinking the
+        map to {Breathing} leaves the span abstaining instead.
+        """
+        _seed_airway_store(
+            store,
+            tmp_path,
+            spans=[(1.0, 1.3, 30.0)],
+            hear_windows=[((0.0, 2.0), ["Breathe"])],
+            yamnet_windows=[((0.96, 1.92), ["Sigh"])],
+        )
+        result = airway(store, "plain", airway_config, run_dir=tmp_path)
+        [confirm] = _assertions(store, "confirm")
+        assert confirm.attributes["label"] == "Breathe"
+        assert confirm.attributes["yamnet_labels"] == ["Sigh"]
+        assert _assertions(store, "abstain") == []
+        assert result.verdict.outcome is Outcome.PASS
+
     def test_no_colocated_window_abstains(self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path) -> None:
         """Nothing co-located either way: the label stands, marked single-source."""
         _seed_airway_store(
