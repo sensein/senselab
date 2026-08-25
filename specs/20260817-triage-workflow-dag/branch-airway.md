@@ -83,12 +83,14 @@ airway event is level-limited, and one value fitted on coughs does not serve qui
 
 | outcome | when |
 | --- | --- |
-| `fail` | no airway was established and no hint declares airway content: either no span was proposed (or PREPROCESS reported `no_contrast`), or spans exist and none carries a label |
-| `flag` | YAMNet contests a label; a word falls inside the interval; a labelled span sits within `airway.k_margin_db` of the gate; or no airway was established and a hint declares airway content |
+| `fail` | no airway was established: either no span was proposed (or PREPROCESS reported `no_contrast`), or spans exist and none carries a label |
+| `flag` | YAMNet contests a label; a word falls inside the interval; a labelled span sits within `airway.k_margin_db` of the gate |
 | `pass` | at least one span carries a label of interest, and none of the above |
 
-A hint changes only what an absence means. It never creates a span, relabels one, alters a threshold,
-or promotes a `fail` to a `pass`.
+A hint reaches this branch's gate and nothing else. It never creates a span, relabels one, alters a
+threshold, promotes a `fail` to a `pass`, or raises an absence to a `flag`: a flag resolves the kind
+`present` in the fold, so a branch with no subject may not write one. A declaration this branch's
+absence contradicts is named by VERDICT — [`verdict.md`](verdict.md).
 
 **AIRWAY concludes about the airway kind and no other.** Its labels do not withdraw a diarizer
 segment, do not remove energy from another branch's analysis, and do not refute the speech or voice

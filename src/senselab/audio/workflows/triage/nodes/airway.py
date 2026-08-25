@@ -26,22 +26,6 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "AIRWAY"
 
 
-def _hint_declares_airway(hint: AudioHints | None, labels_of_interest: list[str]) -> bool:
-    """Whether the caller declared airway content.
-
-    Args:
-        hint: What the recording was declared to contain, or None.
-        labels_of_interest: The HeAR labels this branch concludes about.
-
-    Returns:
-        True when a declared tag names a label of interest or the airway kind itself.
-    """
-    if hint is None:
-        return False
-    declared = {tag.lower() for tag in hint.may_contain}
-    return bool(declared & ({label.lower() for label in labels_of_interest} | {"airway"}))
-
-
 def _inside_certified_silence(span: Entity, silence_windows: list[dict[str, Any]] | None) -> bool | None:
     """Whether every silence-graded window overlapping the span was certified silent.
 
@@ -167,8 +151,8 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         store: The provenance store, holding PREPROCESS's spans and window classifications.
         source: The store-held stream the spans were proposed over, ``"plain"``.
         config: The triage configuration.
-        hint: What the recording was declared to contain; read for the task's gate and to condition
-            what an absence means.
+        hint: What the recording was declared to contain; read for the task's gate only. A
+            declaration this branch's measurements contradict is named by VERDICT's fold.
         run_dir: The run directory the stream sidecar is relative to.
 
     Returns:
@@ -190,7 +174,6 @@ def airway(  # noqa: C901 — the branch's four steps, in order
 
     spans = [e for e in live_entities(store, "span") if e.attributes.get("k_db") == k_db]
     spans.sort(key=lambda e: e.extent or (0.0, 0.0))
-    hint_declares = _hint_declares_airway(hint, labels_of_interest)
     silence = find_measurement(store, "silence")
     silence_windows = silence.attributes.get("windows") if silence is not None else None
 
@@ -203,11 +186,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         store.used(activity, stream_id)
         if at_this_k and no_contrast is not None:
             store.used(activity, no_contrast.id)
-        if hint_declares:
-            outcome = Outcome.FLAG
-            why = reason + "; a hint declares airway content not found"
-        else:
-            outcome, why = Outcome.FAIL, reason
+        outcome, why = Outcome.FAIL, reason
         verdict_id, verdict = write_verdict(
             store,
             activity,
@@ -383,15 +362,10 @@ def airway(  # noqa: C901 — the branch's four steps, in order
             store.was_derived_from(flag_id, interval_id)
             flags.append("lexical_contamination")
 
-    # Step 4 — the outcome. A hint conditions only what an absence means, on either route to one.
+    # Step 4 — the outcome. An absence is a fail; the fold names any declaration it contradicts.
     if not labels_by_span:
         why = "spans exist but none carries a label of interest"
-        if hint_declares:
-            why += "; a hint declares airway content not found"
-            flags.append(why)
-            outcome = Outcome.FLAG
-        else:
-            outcome = Outcome.FAIL
+        outcome = Outcome.FAIL
     elif flags:
         outcome, why = Outcome.FLAG, "; ".join(flags)
     else:

@@ -20,7 +20,9 @@ from senselab.audio.workflows.triage.config import TriageConfig, load_triage_con
 from senselab.audio.workflows.triage.nodes import airway as airway_module
 from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.common import live_entities
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.nodes.routing import routing
+from senselab.audio.workflows.triage.nodes.verdict import verdict
+from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
 from senselab.utils.prov_store import Entity, ProvStore
 
 _CLASSIFIER_GRID = {"hear": (2.0, 2.0), "yamnet": (0.96, 0.48)}
@@ -730,12 +732,12 @@ class TestLexicalContamination:
 
 
 class TestOutcomeAndHint:
-    """A hint conditions only what an absence means."""
+    """An absence is a fail whatever the hint said; the mismatch is the fold's to name."""
 
-    def test_no_spans_is_fail_and_a_hint_makes_it_flag(
+    def test_no_spans_is_fail_with_or_without_a_hint(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Nothing proposed: fail without a hint, flag with one — never a pass."""
+        """Nothing proposed: this branch found no airway, and a declaration does not supply one."""
         _seed_airway_store(store, tmp_path, spans=[], no_contrast_k=18.0)
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
@@ -743,7 +745,9 @@ class TestOutcomeAndHint:
         hinted_store = ProvStore(run_id="hinted")
         _seed_airway_store(hinted_store, tmp_path, spans=[], no_contrast_k=18.0)
         hinted = airway(hinted_store, "plain", airway_config, hint=AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        assert hinted.verdict.outcome is Outcome.FLAG
+        assert hinted.verdict.outcome is Outcome.FAIL
+        assert "hint" not in hinted.verdict.why
+        assert _verdict_entity(hinted_store, "AIRWAY").attributes["flags"] == []
 
     def test_no_contrast_at_another_k_is_not_this_readers_no_contrast(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -754,10 +758,10 @@ class TestOutcomeAndHint:
         assert result.verdict.outcome is Outcome.FAIL
         assert "no_contrast" not in result.verdict.why
 
-    def test_spans_that_carry_no_label_are_hint_dependent_like_no_spans_at_all(
+    def test_spans_that_carry_no_label_fail_like_no_spans_at_all(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Both routes to no airway established mean the same thing, so both answer to the hint."""
+        """Both routes to no airway established mean the same thing, and neither is a hint's to change."""
         _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Laugh"])])
         result = airway(store, "plain", airway_config, run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
@@ -765,12 +769,13 @@ class TestOutcomeAndHint:
         hinted_store = ProvStore(run_id="hinted-unlabelled")
         _seed_airway_store(hinted_store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Laugh"])])
         hinted = airway(hinted_store, "plain", airway_config, hint=AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        assert hinted.verdict.outcome is Outcome.FLAG
+        assert hinted.verdict.outcome is Outcome.FAIL
+        assert _verdict_entity(hinted_store, "AIRWAY").attributes["flags"] == []
 
     def test_a_hint_that_does_not_declare_airway_leaves_an_absence_a_fail(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Only a hint naming a label of interest or 'airway' conditions the absence; 'music' does not."""
+        """The control: an unrelated tag and a declaring tag reach the same fail."""
         _seed_airway_store(store, tmp_path, spans=[], no_contrast_k=18.0)
         result = airway(store, "plain", airway_config, hint=AudioHints(may_contain=["music"]), run_dir=tmp_path)
         assert result.verdict.outcome is Outcome.FAIL
@@ -809,3 +814,58 @@ class TestOutcomeAndHint:
         concluding = store.generated_by(result.verdict_entity_id)
         assert concluding is not None
         assert store.get_activity(concluding).step == "confirm"
+
+
+class TestTheFoldNamesTheHintMismatchThisBranchDoesNot:
+    """The end-to-end pin: a declared kind no branch found reaches the file verdict as a mismatch."""
+
+    def _seed_kinds(self, store: ProvStore) -> None:
+        """Write TAXONOMY's classification: every kind absent, which is what an empty file screens as."""
+        seed = store.activity(node="TAXONOMY", step="seed-kinds", parameters={})
+        agent = store.agent(agent_type="software", version="senselab test-seed")
+        store.was_associated_with(seed, agent)
+        for kind_name in ("airway", "speech", "voice"):
+            kind_id = store.entity(
+                prov_type="kind",
+                extent=None,
+                attributes={"kind": kind_name, "state": "absent", "lines": {}, "stream": "plain"},
+            )
+            store.was_generated_by(kind_id, seed)
+
+    def test_a_declared_kind_the_branch_did_not_find_flags_the_file_and_records_the_kind_absent(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """AIRWAY fails, ROUTING recorded the claim, and the fold flags without resolving the kind present."""
+        hint_config = _override(
+            tmp_path,
+            "airway:\n  k_db: 18.0\n  k_margin_db: 2.0\n  contest_labels: [Speech]\n"
+            "routing:\n  hint_kind_map:\n    cough: airway\n",
+        )
+        hint = AudioHints(may_contain=["cough"])
+        _seed_airway_store(store, tmp_path, spans=[], no_contrast_k=18.0)
+        self._seed_kinds(store)
+        routing(store, "plain", hint_config, hint, run_dir=tmp_path)
+        branch = airway(store, "plain", hint_config, hint, run_dir=tmp_path)
+        assert branch.verdict.outcome is Outcome.FAIL
+
+        folded = verdict(store, None, hint_config, hint, run_dir=tmp_path).file_verdict
+        assert folded.triage is Triage.FLAG
+        assert folded.kinds["airway"] == "absent"
+        assert folded.hints["airway"] == "claimed_not_found"
+        assert folded.discard_ground is None
+        assert any(
+            reason.why == "hint mismatch: airway was declared and AIRWAY did not find it" for reason in folded.reasons
+        ), [reason.why for reason in folded.reasons]
+
+    def test_the_same_file_with_no_declaration_discards_as_acoustically_empty(
+        self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The control the upgrade made unreachable: nothing found and nothing claimed is an empty file."""
+        _seed_airway_store(store, tmp_path, spans=[], no_contrast_k=18.0)
+        self._seed_kinds(store)
+        routing(store, "plain", airway_config, None, run_dir=tmp_path)
+        airway(store, "plain", airway_config, None, run_dir=tmp_path)
+
+        folded = verdict(store, None, airway_config, None, run_dir=tmp_path).file_verdict
+        assert folded.triage is Triage.DISCARD
+        assert folded.discard_ground == "acoustically_empty"

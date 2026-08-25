@@ -55,8 +55,11 @@ for the kind it measures; it is not an instrument for the others.
 | VOICE | the `voice` kind only |
 
 A branch's conclusion about its own kind stands in the resolved `kinds` map, whatever the
-classification said, and whether the branch passed, flagged or failed. A branch that flagged still
-resolves its kind — the flag travels beside the resolution and is not a reason to withhold it.
+classification said, and whether the branch passed, flagged or failed. The resolution axis is
+found/not-found, not the outcome's severity: a branch flags only with a subject in hand, so a flag
+resolves the kind `present` and the flag travels beside the resolution; a `fail` is the branch
+reporting no subject and always resolves `absent`. A branch therefore never raises its own absence
+to a flag over a declaration — that mismatch is the fold's to name, from the `hints` table below.
 
 ## TAXONOMY is reported beside the branches, never over them
 

@@ -492,19 +492,19 @@ class TestThePeriodDoublingAlias:
         assert result.verdict.outcome is Outcome.PASS
 
 
-class TestAHintConditionsTheAbsence:
-    """No span is a normal fail, except where the caller declared there would be one (N25)."""
+class TestAHintDoesNotConditionTheAbsence:
+    """No span is a fail; the declaration it contradicts is named by the fold, not by this branch."""
 
-    def test_a_hint_declaring_phonation_makes_the_absence_a_flag(
+    def test_a_hint_declaring_phonation_leaves_the_absence_a_fail(
         self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A declared expectation the recording did not meet is contested, not concluded."""
+        """A branch that flags reports its kind present, so an absent subject may not flag here."""
         _seed_voice_store(store, tmp_path, phonation=[])
         hint = AudioHints(may_contain=["phonation"])
         result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "a hint declares phonation not found" in result.verdict.why
-        assert _verdict_entity(store, "VOICE").attributes["flags"] == [result.verdict.why]
+        assert result.verdict.outcome is Outcome.FAIL
+        assert "hint" not in result.verdict.why
+        assert _verdict_entity(store, "VOICE").attributes["flags"] == []
 
     def test_a_hint_declaring_nothing_this_branch_screens_leaves_the_absence_a_fail(
         self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path

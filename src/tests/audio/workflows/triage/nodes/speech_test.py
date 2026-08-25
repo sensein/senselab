@@ -690,25 +690,25 @@ class TestTheUnmeasuredKeyAndTheHintThatContradictsTheFile:
             speech(store, "plain", load_triage_config(), run_dir=tmp_path, enrollment=None)
         assert store.fingerprint() == before, "an unmeasured key must leave the store untouched"
 
-    def test_a_hint_asserting_speech_this_branch_did_not_find_flags(
+    def test_a_hint_asserting_speech_this_branch_did_not_find_still_fails(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """A wordless recording fails; a wordless recording the caller said held speech flags."""
+        """A wordless recording has no subject, whoever said otherwise; the fold names the mismatch."""
         _seed_speech_store(store, tmp_path, words=[])
         hint = AudioHints(expected_speech=[ExpectedSpeech(text="the rainbow passage")])
         result = speech(store, "plain", speech_config, hint, run_dir=tmp_path, enrollment=None)
-        assert result.verdict.outcome is Outcome.FLAG
-        assert "a hint asserts speech not found" in result.verdict.why
+        assert result.verdict.outcome is Outcome.FAIL
+        assert "hint" not in result.verdict.why
 
-    def test_a_hint_tag_asserts_speech_the_same_way(
+    def test_a_hint_tag_leaves_the_absence_alone_the_same_way(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """speech.hint_tags is the vocabulary, so a tagged recording contradicts a fail too."""
+        """speech.hint_tags reaches ROUTING and the fold; it does not reach this branch's outcome."""
         _seed_speech_store(store, tmp_path, words=[])
         result = speech(
             store, "plain", speech_config, AudioHints(may_contain=["Read-Speech"]), run_dir=tmp_path, enrollment=None
         )
-        assert result.verdict.outcome is Outcome.FLAG
+        assert result.verdict.outcome is Outcome.FAIL
 
     def test_a_wordless_recording_nobody_claimed_held_speech_simply_fails(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path

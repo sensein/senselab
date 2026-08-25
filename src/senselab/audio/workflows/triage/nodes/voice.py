@@ -83,7 +83,7 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
         hint: The caller's hint, which selects the population's F0 range.
 
     Returns:
-        The resolved analysis parameters, the period-doubling identity factor and the hint tags.
+        The resolved analysis parameters and the period-doubling identity factor.
 
     Raises:
         ValueError: If any key read here is null, or if the declared range is vacuous.
@@ -97,7 +97,6 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
         "periods_per_window": float(config.require("phonation.periods_per_window")),
         "doubling": float(config.require("phonation.period_doubling_factor")),
         "span_hop_s": float(config.require("phonation_spans.hop_s")),
-        "hint_tags": [str(tag) for tag in config.require("voice.hint_tags")],
     }
 
 
@@ -119,13 +118,6 @@ def _rms_track(x: np.ndarray, sr: int, times: np.ndarray, window_s: float) -> np
 def _alias_in_range(f0_median_hz: float, *, factor: float, f0_min_hz: float, f0_max_hz: float) -> bool:
     """Whether the period-doubling alias of this F0 also lies inside the search range (N21)."""
     return f0_median_hz * factor <= f0_max_hz or f0_median_hz / factor >= f0_min_hz
-
-
-def _hint_declares_voice(hint: AudioHints | None, hint_tags: list[str]) -> bool:
-    """Whether the caller declared phonation content (N25)."""
-    if hint is None:
-        return False
-    return bool({tag.lower() for tag in hint.may_contain} & {tag.lower() for tag in hint_tags})
 
 
 def _task_range(
@@ -177,8 +169,8 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
         store: The provenance store, holding PREPROCESS's streams and phonation spans.
         source: The store-held stream name the audio is sliced from, ``"plain"``.
         config: The triage configuration.
-        hint: What the recording was declared to contain; read for the population, the task and to
-            condition an absence.
+        hint: What the recording was declared to contain; read for the population and the task. A
+            declaration this branch's measurements contradict is named by VERDICT's fold.
         run_dir: The run directory sidecar paths are relative to; ``voice_tracks.npz`` goes under
             ``derivatives/``.
 
@@ -239,13 +231,9 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     spans.sort(key=lambda entity: entity.extent or (0.0, 0.0))
     for span in spans:
         store.used(activity, span.id)
-    hint_declares = _hint_declares_voice(hint, params["hint_tags"])
-
     if not spans:
         why = "PREPROCESS detected no phonation span"
-        if hint_declares:
-            why += "; a hint declares phonation not found"
-        outcome = Outcome.FLAG if hint_declares else Outcome.FAIL
+        outcome = Outcome.FAIL
         verdict_id, verdict = write_verdict(
             store,
             activity,
@@ -266,7 +254,7 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
                 if config.get("voice.task_duration_ranges") is None
                 else _NO_TASK_DECLARED,
                 "gate_interval": gate_interval,
-                "flags": [why] if hint_declares else [],
+                "flags": [],
             },
         )
         return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)

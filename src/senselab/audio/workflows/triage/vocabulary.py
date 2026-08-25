@@ -172,8 +172,9 @@ def _resolved(outcome: Outcome | Triage) -> str:
         outcome: The branch's outcome.
 
     Returns:
-        ``absent`` for a branch that found no subject, ``present`` otherwise: a branch that flagged
-        still found its kind, and the flag travels beside the resolution.
+        ``absent`` for a branch that failed, ``present`` otherwise. The axis is found/not-found: a
+        branch flags only with a subject in hand, so its flag travels beside a ``present``; a fail
+        is the branch reporting no subject and never resolves one.
     """
     return KindState.ABSENT.value if outcome is Outcome.FAIL else KindState.PRESENT.value
 
