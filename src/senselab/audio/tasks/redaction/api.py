@@ -108,6 +108,7 @@ def apply_redactions(
         raise ValueError(f"fill must be 'silence' or 'bleep'; got {fill!r}")
     if fill == "bleep" and bleep_hz is None:
         raise ValueError("fill='bleep' needs bleep_hz; read it from redaction.bleep_hz")
+    tone_hz = 0.0 if bleep_hz is None else float(bleep_hz)
     x = np.array(np.asarray(audio.waveform, dtype=np.float32), copy=True)
     if x.ndim == 1:
         x = x[None, :]
@@ -123,5 +124,5 @@ def apply_redactions(
         else:
             level = float(np.abs(x[:, lo:hi]).max())
             t = np.arange(hi - lo, dtype=np.float32) / sr
-            x[:, lo:hi] = (level * np.sin(2.0 * np.pi * float(bleep_hz) * t)).astype(np.float32)
+            x[:, lo:hi] = (level * np.sin(2.0 * np.pi * tone_hz * t)).astype(np.float32)
     return Audio(waveform=x, sampling_rate=sr)
