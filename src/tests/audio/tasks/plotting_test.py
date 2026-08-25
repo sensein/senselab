@@ -74,6 +74,29 @@ class TestTheTextPanel:
         )
         assert figure.axes[0].get_ylabel() == "envelope"
 
+    def test_a_waveform_panel_can_carry_a_twin_axis(self) -> None:
+        """Amplitude and a dB curve are two scales over one signal; one row can hold both."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "waveform",
+                    "twin": {
+                        "name": "envelope dBFS",
+                        "data": [([0.1, 0.2], [-40.0, -30.0], "envelope dBFS", "steelblue")],
+                    },
+                }
+            ],
+        )
+        assert figure.axes[0].get_ylabel() == "Amplitude"
+        assert figure.axes[1].get_ylabel() == "envelope dBFS"
+        assert figure.axes[1].yaxis.get_label_position() == "right"
+
+    def test_a_waveform_panel_with_no_twin_draws_one_axis(self) -> None:
+        """The twin is opt-in; a bare waveform panel must not sprout an empty right-hand scale."""
+        figure = plot_aligned_panels(_tone(), [{"type": "waveform"}])
+        assert len(figure.axes) == 1
+
     def test_an_unknown_panel_type_now_raises(self) -> None:
         """A typo used to yield a blank axis and a report that looked finished."""
         with pytest.raises(ValueError, match="unknown panel type"):

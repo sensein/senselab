@@ -595,7 +595,8 @@ class TestTheSummaryLayers:
         report(store, tmp_path / "summary", _png(tmp_path))
         kinds = [panel["type"] for panel in panels[0]]
         assert kinds.count("segments") >= 5
-        assert "waveform" in kinds and "features" in kinds
+        assert "waveform" in kinds
+        assert panels[0][0]["twin"]["data"]
 
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1123,3 +1124,49 @@ class TestThePdfIsTwoPages:
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         assert artifacts["summary"].suffix == ".png"
         assert panels[0][-1]["type"] == "text"
+
+
+class TestTheWaveformAndTheEnvelopeShareOneRow:
+    """Two scales over one signal, not two rows a reader has to register by eye."""
+
+    def test_the_envelope_has_no_row_of_its_own(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The separate features row is gone; nothing else moved."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert "features" not in [panel["type"] for panel in panels[0]]
+        assert [panel for panel in panels[0] if panel.get("name") == "envelope"] == []
+
+    def test_the_waveform_row_carries_the_envelope_and_its_floor(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Both curves reach the twin axis, and the axis says what its scale is."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        twin = panels[0][0]["twin"]
+        assert panels[0][0]["type"] == "waveform"
+        assert [curve[2] for curve in twin["data"]] == ["envelope dBFS", "floor dBFS"]
+        assert "dBFS" in twin["name"]
+
+    def test_a_store_with_no_envelope_leaves_the_waveform_bare(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An absent derivative is an absent curve, not a twin axis with nothing on it."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert panels[0][0]["type"] == "waveform"
+        assert "twin" not in panels[0][0]
+
+    def test_the_envelope_lane_still_reads_as_drawn(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Sharing a row is not being absent; the ABSENT block must not claim it was skipped."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "lane not drawn — envelope" not in blocks
