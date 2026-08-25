@@ -150,12 +150,15 @@ def _seed_voice_store(
             store.was_derived_from(label_id, span_id)
 
 
-def _stub_period_marks(monkeypatch: pytest.MonkeyPatch, *, marks: int) -> list[tuple[float, float]]:
+def _stub_period_marks(
+    monkeypatch: pytest.MonkeyPatch, *, marks: int, rate_hz: float = FAKE_F0
+) -> list[tuple[float, float]]:
     """Replace the point process with a recorder returning a fixed number of marks.
 
     Args:
         monkeypatch: The test's patcher.
         marks: How many marks each call returns.
+        rate_hz: The rate the marks are spaced at, which is the F0 the node reads back off them.
 
     Returns:
         The list the recorder appends each call's ``(start_s, end_s)`` to.
@@ -164,7 +167,7 @@ def _stub_period_marks(monkeypatch: pytest.MonkeyPatch, *, marks: int) -> list[t
 
     def _marks(audio: Audio, start_s: float, end_s: float, *, f0_min_hz: float, f0_max_hz: float) -> list[PeriodMark]:
         calls.append((start_s, end_s))
-        period = 1.0 / FAKE_F0
+        period = 1.0 / rate_hz
         return [PeriodMark(time_s=start_s + k * period, period_s=period, amplitude=0.1) for k in range(marks)]
 
     monkeypatch.setattr(voice_module, "period_marks", _marks)
@@ -439,3 +442,69 @@ class TestEdgesAreNamedApart:
         detail = _verdict_entity(store, "VOICE").attributes
         assert "f0_median_hz" not in detail
         assert "f0_stream" not in detail
+
+
+class TestThePeriodDoublingAlias:
+    """Whether a span's F0 could equally be its own double or half, inside the declared range (N21).
+
+    One declared range throughout, and the point process's rate is what moves: the ambiguity is a
+    property of where a measured F0 sits in the range, not of the range being wide enough to catch
+    everything. ``voice_config``'s ``[75, 190]`` has ratio 2.53, so it does not.
+    """
+
+    def test_a_span_whose_alias_lands_in_the_range_is_ambiguous(
+        self,
+        store: ProvStore,
+        voice_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """90 Hz doubles to 180 Hz, which is inside [75, 190]: the two readings are not separable."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _stub_period_marks(monkeypatch, marks=6, rate_hz=90.0)
+        result = voice(store, "plain", voice_config, run_dir=tmp_path)
+        detail = _verdict_entity(store, "VOICE").attributes
+        assert detail["ambiguous_spans_n"] == 1
+        assert any("period_doubling_alias" in flag for flag in detail["flags"])
+        assert result.verdict.outcome is Outcome.FLAG
+
+    def test_a_span_whose_aliases_both_fall_outside_the_range_is_not(
+        self,
+        store: ProvStore,
+        voice_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """100 Hz doubles to 200 Hz, above the maximum, and halves to 50 Hz, below the minimum."""
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")])
+        _stub_period_marks(monkeypatch, marks=6, rate_hz=100.0)
+        result = voice(store, "plain", voice_config, run_dir=tmp_path)
+        detail = _verdict_entity(store, "VOICE").attributes
+        assert detail["ambiguous_spans_n"] == 0
+        assert not any("period_doubling_alias" in flag for flag in detail["flags"])
+        assert result.verdict.outcome is Outcome.PASS
+
+
+class TestAHintConditionsTheAbsence:
+    """No span is a normal fail, except where the caller declared there would be one (N25)."""
+
+    def test_a_hint_declaring_phonation_makes_the_absence_a_flag(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A declared expectation the recording did not meet is contested, not concluded."""
+        _seed_voice_store(store, tmp_path, phonation=[])
+        hint = AudioHints(may_contain=["phonation"])
+        result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+        assert "a hint declares phonation not found" in result.verdict.why
+        assert _verdict_entity(store, "VOICE").attributes["flags"] == [result.verdict.why]
+
+    def test_a_hint_declaring_nothing_this_branch_screens_leaves_the_absence_a_fail(
+        self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """A hint is read against voice.hint_tags, so an unrelated tag does not contest the absence."""
+        _seed_voice_store(store, tmp_path, phonation=[])
+        hint = AudioHints(may_contain=["read-speech"])
+        result = voice(store, "plain", voice_config, hint, run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FAIL
+        assert _verdict_entity(store, "VOICE").attributes["flags"] == []
