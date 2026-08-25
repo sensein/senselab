@@ -69,12 +69,27 @@ class TestTheRule:
         The same rule TAXONOMY applies to a missing derivative. Reading the rule the other way round
         — run only on the states this node knows — would make an unreadable classification silently
         skip the instrument that would have settled it.
+
+        The state does not travel verbatim, either: ``kind_state`` and ``why`` are closed
+        vocabularies a downstream reader switches on, so an unrecognised state folds to one token
+        and the string TAXONOMY actually wrote is kept beside it.
         """
         _kinds(store, speech="wobbly", airway="absent", voice="absent")
         result = routing(store, None, _map(tmp_path), run_dir=tmp_path)
         assert result.runs == ("SPEECH",)
         decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "SPEECH")
-        assert decision.attributes["kind_state"] == "wobbly"
+        assert decision.attributes["kind_state"] == "unreadable"
+        assert decision.attributes["why"] == "kind_unreadable"
+        assert decision.attributes["raw_state"] == "wobbly"
+
+    def test_a_readable_state_keeps_its_own_word(self, store: ProvStore, tmp_path: Path) -> None:
+        """The control: folding the unreadable case must not flatten the three states that are read."""
+        _kinds(store, speech="present", airway="absent", voice="uncertain")
+        routing(store, None, _map(tmp_path), run_dir=tmp_path)
+        states = {e.attributes["branch"]: e.attributes["kind_state"] for e in live_entities(store, "branch_decision")}
+        assert states == {"SPEECH": "present", "AIRWAY": "absent", "VOICE": "uncertain"}
+        raw = {e.attributes["branch"]: e.attributes["raw_state"] for e in live_entities(store, "branch_decision")}
+        assert raw == states
 
 
 class TestHintsForceAndNothingElse:
