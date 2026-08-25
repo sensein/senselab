@@ -5,9 +5,10 @@ It runs no ASR and never re-transcribes: PREPROCESS produced the consensus with
 never the envelope, and pyannote sees only ``[first word start, last word end]``. The second
 diarizer runs only when pyannote's count is not 1; separation runs only when
 ``speech.separation_backend`` names a backend. The target speaker is identified by a caller-supplied
-enrollment, not by a per-file hint, and an enrollment without a model and a resolved commit is
-refused rather than compared. The PII scan reads the consensus transcript and nothing else. This
-branch marks; it removes nothing.
+enrollment, not by a per-file hint, and an enrollment is refused rather than compared unless its
+model and its resolved commit are both the probe's. The PII scan reads the consensus transcript and
+nothing else, once, and marks every occurrence of what it finds. This branch marks; it removes
+nothing.
 
 Every parameter's derivation is in ``data/config/default.yaml``; the design is in
 ``specs/20260817-triage-workflow-dag/branch-speech.md``.
