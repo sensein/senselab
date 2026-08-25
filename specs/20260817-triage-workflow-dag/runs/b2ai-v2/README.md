@@ -14,6 +14,12 @@ derivation beside each value. Nothing here was fitted.
 The hash is stamped into every artifact. If it is not `1bb3b69061bb75ea` in a run's
 `summary.json` → `provenance.config_hash`, that run is not this campaign.
 
+The hash binds to the base commit as well as the override: the packaged default gained
+`report.format: pdf` after this campaign closed, so a re-run of the same override on a later base
+hashes differently (`34ad76742d0208d6` at the two-page-report commit). That is a different config,
+not a corrupted run — the check above identifies *this* campaign's artifacts, it does not forbid
+later ones.
+
 ## Sources
 
 ```
