@@ -1,398 +1,246 @@
-"""TAXONOMY predicts kinds by family agreement. Advisory: it gates nothing and runs on every path.
-
-AST and HeAR are monkeypatched on the node module; YAMNet's windows come from the seeded store.
-"""
+"""TAXONOMY v2: a fold over PREPROCESS's stored derivatives. No models, no hints, no localisation."""
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
-import pytest
-
-from senselab.audio.data_structures import AudioClassificationResult
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes import taxonomy as node
-from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
+from senselab.audio.workflows.triage.nodes import taxonomy as taxonomy_module
+from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.taxonomy import SCREENED_KINDS, taxonomy
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.prov_store import ProvStore
 
 
-class _FakeModel:
-    """A model spec stub carrying path_or_uri and a resolved commit."""
+def _floors(tmp_path: Path, **extra: str) -> TriageConfig:
+    """The packaged config with every TAXONOMY floor supplied and the speech family named.
 
-    def __init__(self, path_or_uri: str) -> None:
-        """Stub a resolved model."""
-        self.path_or_uri = path_or_uri
-        self.commit_sha = "b" * 40
+    Args:
+        tmp_path: Where the override YAML is written.
+        **extra: Further YAML fragments appended to the override, for a test that needs one.
 
-
-def _yamnet_window(start: float, end: float, scores: dict[str, float]) -> dict[str, Any]:
-    """One YAMNet-shaped window."""
-    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-    return {
-        "start": start,
-        "end": end,
-        "label_scores": [{label: score} for label, score in ranked],
-        "win_length": 0.96,
-        "hop_length": 0.48,
-    }
-
-
-@pytest.fixture
-def detector_calls() -> dict[str, list]:
-    """Captured AST and HeAR call arguments."""
-    return {"ast": [], "hear": []}
-
-
-@pytest.fixture
-def mock_detectors(monkeypatch: pytest.MonkeyPatch, detector_calls: dict[str, list]) -> dict[str, Any]:
-    """Replace AST and HeAR with controllable fakes; return the mutable score dicts.
-
-    AST's payload mirrors classify_audios' whole-audio return (AudioClassificationResult with
-    parallel labels/scores); HeAR's mirrors detect_health_acoustic_events (windowed dicts with
-    descending single-key label_scores over the eight labels).
+    Returns:
+        The resolved configuration.
     """
-    scores = {"ast": {"Cough": 0.1, "Speech": 0.1}, "hear": {"Cough": 0.1, "Speech": 0.01}}
-    monkeypatch.setattr(node, "_ast_model", lambda: _FakeModel(node.AST_ID))
-
-    def fake_ast(audios: list, model: object, top_k: int | None = None, **kwargs: object) -> list:
-        """AST, whole-audio mode."""
-        detector_calls["ast"].append({"top_k": top_k, **kwargs})
-        labels = list(scores["ast"])
-        return [AudioClassificationResult(labels=labels, scores=[scores["ast"][label] for label in labels])]
-
-    def fake_hear(
-        audios: list,
-        model: str = "hear-event-detector",
-        device: object = None,
-        hop_length: float = 0.25,
-        top_k: int | None = None,
-    ) -> list:
-        """HeAR's sliding detector."""
-        detector_calls["hear"].append({"top_k": top_k, "hop_length": hop_length})
-        ranked = sorted(scores["hear"].items(), key=lambda kv: -kv[1])
-        window = {
-            "start": 0.0,
-            "end": 2.0,
-            "label_scores": [{label: score} for label, score in ranked],
-            "win_length": 2.0,
-            "hop_length": hop_length,
-        }
-        return [[window] for _ in audios]
-
-    monkeypatch.setattr(node, "classify_audios", fake_ast)
-    monkeypatch.setattr(node, "detect_health_acoustic_events", fake_hear)
-    return scores
+    body = (
+        "taxonomy:\n"
+        "  presence_floor:\n"
+        "    speech: {acoustic: 1, lexical: 1}\n"
+        "    airway: {health_acoustic: 1, acoustic: 1}\n"
+        "  voice_min_duration_s: 1.0\n"
+        "  voice_uncertain_duration_s: 0.3\n"
+        "  speech_labels: [Speech, Narration, monologue, Conversation]\n"
+    )
+    path = tmp_path / "floors.yaml"
+    path.write_text(body + "".join(extra.values()))
+    return load_triage_config(path)
 
 
-def _kind(store: ProvStore, name: str) -> Entity:
-    """The one kind entity for this kind."""
-    [entity] = [e for e in store.entities("kind") if e.attributes["kind"] == name]
-    return entity
+class TestItRunsNoModels:
+    """Every classifier call belongs to PREPROCESS; this node folds what is already there."""
 
+    def test_the_module_imports_no_classifier(self) -> None:
+        """A model function reachable from this module is a boundary violation, not a convenience."""
+        for name in ("classify_audios", "detect_health_acoustic_events", "transcribe_audios"):
+            assert not hasattr(taxonomy_module, name)
 
-class TestEligibility:
-    """Who may vote, per kind."""
-
-    def test_hear_is_barred_from_the_speech_kind(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_it_writes_no_activity_that_names_a_model(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """A strong HeAR Speech score contributes nothing: speech is folded from families A and B."""
-        mock_detectors["hear"]["Speech"] = 0.99
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1})], words=())
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        speech = _kind(store, "speech")
-        assert "C_health" not in speech.attributes["families"]
+        """The only activity is the fold."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
+        taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert [a.step for a in store.activities("TAXONOMY")] == ["fold"]
+        assert not [
+            agent
+            for activity in store.activities("TAXONOMY")
+            for agent in store.associated_with(activity.id)
+            if store.get_agent(agent).agent_type == "model"
+        ]
+
+
+class TestTheThreeKinds:
+    """speech, airway and voice, each with its own rule and its own evidence."""
+
+    def test_speech_needs_both_lines(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """Acoustic windows and lexical words both clearing their floors makes speech present."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two", "three"])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["speech"] == "present"
+
+    def test_speech_with_windows_but_no_words_is_uncertain(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """One line present and one absent is disagreement, which is uncertain, not present."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=[])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["speech"] == "uncertain"
+
+    def test_speech_with_neither_line_is_absent(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """Both lines below their floors is absence."""
+        seed_preprocess_store(store, yamnet_labels=[["Music"]], words=[])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "absent"
 
-    def test_lexical_airway_vote_reads_bracketed_tokens_only(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_a_bracketed_event_carries_no_lexical_evidence(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """[cough] votes airway-present; the plain word "cough" is lexical content, not an event."""
-        seed_store(
-            store,
-            yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1})],
-            words=({"text": "[cough]", "start": 1.0, "end": 1.2},),
-        )
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        airway = _kind(store, "airway")
-        assert airway.attributes["families"]["B_lexical"]["state"] == "present"
-        speech = _kind(store, "speech")
-        assert speech.attributes["families"]["B_lexical"]["state"] == "absent"
+        """PREPROCESS wrote it as an event, so nothing here counts it toward the word floor."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=[], events=["[COUGH]", "[COUGH]", "ahem"])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["speech"] == "uncertain"
 
-    def test_no_windows_is_unavailable_while_all_low_windows_vote_absent(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_airway_needs_hear_and_audioset(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """An empty window list is no measurement, not negative evidence; low scores are the evidence."""
-        seed_store(store, yamnet_windows=[], words=())
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        empty = _kind(store, "speech").attributes["families"]["A_audioset"]["members"]["yamnet"]
-        assert empty["state"] == "unavailable"
-        scored_store = ProvStore(run_id="scored")
-        seed_store(scored_store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1})], words=())
-        taxonomy(scored_store, "plain", config, run_dir=tmp_path)
-        scored = _kind(scored_store, "speech").attributes["families"]["A_audioset"]["members"]["yamnet"]
-        assert scored["state"] == "absent", "a window list that measured Speech low is real absence evidence"
-
-    def test_an_empty_hear_grid_is_unavailable_on_the_same_rule(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Family C reads a window list too, so an empty one is no measurement there either."""
-        monkeypatch.setattr(node, "detect_health_acoustic_events", lambda audios, **kw: [[] for _ in audios])
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.1})], words=())
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        hear = _kind(store, "airway").attributes["families"]["C_health"]["members"]["hear"]
-        assert hear["state"] == "unavailable"
-
-    def test_an_invalidated_word_does_not_vote(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-    ) -> None:
-        """A withdrawn word is not evidence: the store's shared rule applies to this read like any other."""
-        ids = seed_store(
-            store,
-            yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1})],
-            words=({"text": "hello", "start": 1.0, "end": 1.2},),
-        )
-        [word_id] = ids["words"]
-        store.was_invalidated_by(word_id, store.activity(node="PREPROCESS", step="withdraw", parameters={}))
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        speech = _kind(store, "speech")
-        assert speech.attributes["families"]["B_lexical"]["state"] == "absent"
-        assert speech.attributes["families"]["B_lexical"]["members"]["crisperwhisper"]["n_words"] == 0
-
-
-class TestTheFold:
-    """Presence needs agreement, absence needs unanimity, and the unmeasured count stays honest."""
-
-    def test_unanimous_presence_is_present_while_min_families_is_unmeasured(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-    ) -> None:
-        """All three eligible families agree, so any legal min_families would agree too."""
-        mock_detectors["hear"]["Cough"] = 0.9
-        seed_store(
-            store,
-            yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})],
-            words=({"text": "[cough]", "start": 1.0, "end": 1.2},),
-        )
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
+        """The health-acoustic and acoustic lines both carrying evidence makes airway present."""
+        seed_preprocess_store(store, hear_labels=[["Cough"]], yamnet_labels=[["Cough"]])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["airway"] == "present"
-        assert _kind(store, "airway").attributes["min_families"] == "unmeasured"
 
-    def test_disagreement_without_min_families_is_undecided_and_flags(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_ast_windows_serve_the_acoustic_line_beside_yamnet(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """One family present and two absent cannot be adjudicated without the count."""
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
+        """The acoustic line reads either grid; a label on AST alone is still acoustic evidence."""
+        seed_preprocess_store(store, hear_labels=[["Cough"]], ast_labels=[["Cough"]])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["airway"] == "present"
+
+    def test_voice_is_classified_from_phonation_span_duration_alone(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A 2 s sustain makes voice present, whatever else is in the recording."""
+        seed_preprocess_store(store, phonation=[(0.0, 2.0, "voiced")])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["voice"] == "present"
+
+    def test_an_unvoiced_sustain_makes_voice_present_too(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A disordered voice sustaining without periodicity is phonation."""
+        seed_preprocess_store(store, phonation=[(0.0, 2.0, "unvoiced")])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["voice"] == "present"
+
+    def test_a_short_span_is_uncertain_and_a_shorter_one_is_absent(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """Between the two floors is uncertain; below the shorter floor there is nothing to be sure of."""
+        seed_preprocess_store(store, phonation=[(0.0, 0.5, "voiced")])
+        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
+        other = ProvStore(run_id="short")
+        seed_preprocess_store(other, phonation=[(0.0, 0.1, "voiced")])
+        assert taxonomy(other, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "absent"
+
+    def test_no_phonation_span_is_absent(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """The pass ran and found nothing, which is absence."""
+        seed_preprocess_store(store, phonation=[])
+        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "absent"
+
+    def test_no_phonation_pass_at_all_is_uncertain(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """A pass that did not run leaves the line unavailable; that is not evidence of absence."""
+        seed_preprocess_store(store, phonation=None)
+        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
+
+
+class TestAMissingDerivativeIsNotAbsence:
+    """A line whose derivative never reached the store is unavailable, and unavailable is uncertain."""
+
+    def test_a_null_threshold_leaves_every_kind_uncertain(
+        self, store: ProvStore, config: TriageConfig, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """The packaged config folds no windows, so nothing can be absent."""
+        seed_preprocess_store(store, yamnet_labels=None, hear_labels=None, ast_labels=None, phonation=None)
         result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        assert result.kinds["airway"] == "undecided"
+        assert set(result.kinds.values()) == {"uncertain"}
         assert result.verdict.outcome is Outcome.FLAG
 
-    def test_two_of_three_present_without_min_families_is_undecided_and_flags(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_the_unavailable_line_says_so_on_the_kind_element(
+        self, store: ProvStore, config: TriageConfig, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """Two families present and one absent is not unanimity, so the unmeasured count stays honest."""
-        mock_detectors["hear"]["Cough"] = 0.9
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        airway = _kind(store, "airway")
-        assert airway.attributes["families"]["A_audioset"]["state"] == "present"
-        assert airway.attributes["families"]["C_health"]["state"] == "present"
-        assert airway.attributes["families"]["B_lexical"]["state"] == "absent"
-        assert result.kinds["airway"] == "undecided"
-        assert result.verdict.outcome is Outcome.FLAG
+        """A reader must see why a kind is uncertain, not only that it is."""
+        seed_preprocess_store(store, yamnet_labels=None, hear_labels=None, ast_labels=None, phonation=None)
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        speech = next(e for e in live_entities(store, "kind") if e.attributes["kind"] == "speech")
+        assert speech.attributes["lines"]["acoustic"]["state"] == "unavailable"
 
-    def test_two_family_a_members_agreeing_count_as_one_family(
-        self,
-        store: ProvStore,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-    ) -> None:
-        """YAMNet and AST both present is one family's vote, so min_families = 2 is not met."""
-        override = tmp_path / "override.yaml"
-        override.write_text("taxonomy:\n  presence_floor:\n    ast: 0.5\n  min_families:\n    airway: 2\n")
-        config = load_triage_config(override)
-        mock_detectors["ast"]["Cough"] = 0.99
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        family_a = _kind(store, "airway").attributes["families"]["A_audioset"]
-        assert family_a["members"]["yamnet"]["state"] == "present"
-        assert family_a["members"]["ast"]["state"] == "present"
-        assert family_a["state"] == "present"
-        assert result.kinds["airway"] == "undecided"
 
-    def test_a_min_families_override_applies_the_design_rule(
-        self,
-        store: ProvStore,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-    ) -> None:
-        """With min_families.airway = 2, two present families out of three decide presence."""
-        override = tmp_path / "override.yaml"
-        override.write_text("taxonomy:\n  min_families:\n    airway: 2\n")
-        config = load_triage_config(override)
-        mock_detectors["hear"]["Cough"] = 0.9
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        assert result.kinds["airway"] == "present"
-        assert _kind(store, "airway").attributes["min_families"] == 2
+class TestHintsAreNotAnInput:
+    """A classification that reads the declaration cannot disagree with it."""
 
-    def test_an_out_of_range_override_raises(
-        self,
-        store: ProvStore,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_a_hint_declaring_speech_does_not_move_the_classification(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """min_families beyond the eligible family count is a configuration error, not a fold."""
-        override = tmp_path / "override.yaml"
-        override.write_text("taxonomy:\n  min_families:\n    airway: 5\n")
-        config = load_triage_config(override)
-        seed_store(store, yamnet_windows=[], words=())
-        with pytest.raises(ValueError, match="min_families"):
-            taxonomy(store, "plain", config, run_dir=tmp_path)
+        """The same store classifies the same way with and without a hint."""
+        seed_preprocess_store(store, yamnet_labels=[["Music"]], words=[])
+        hinted = taxonomy(store, "plain", _floors(tmp_path), AudioHints(may_contain=["speech"]), run_dir=tmp_path)
+        other = ProvStore(run_id="unhinted")
+        seed_preprocess_store(other, yamnet_labels=[["Music"]], words=[])
+        plain = taxonomy(other, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert hinted.kinds == plain.kinds
 
-    def test_absence_needs_unanimity_and_all_absent_fails(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-    ) -> None:
-        """Every eligible family says absent for both screened kinds: the prediction is fail."""
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.1, "Cough": 0.1})], words=())
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        assert result.kinds == {"airway": "absent", "speech": "absent", "voice_no_words": "not_screened"}
-        assert result.verdict.outcome is Outcome.FAIL
 
-    def test_speech_present_with_airway_absent_passes(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+class TestTheOutcome:
+    """fail on all-absent, flag on any-uncertain, pass otherwise."""
+
+    def test_all_absent_fails(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """Present + absent with no undecided kind is a pass."""
-        seed_store(
-            store,
-            yamnet_windows=[_yamnet_window(0.0, 0.96, {"Speech": 0.9})],
-            words=({"text": "hello", "start": 1.0, "end": 1.2},),
+        """Nothing is classified present."""
+        seed_preprocess_store(
+            store, yamnet_labels=[["Music"]], hear_labels=[[]], ast_labels=[[]], words=[], phonation=[]
         )
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        assert result.kinds["speech"] == "present"
-        assert result.kinds["airway"] == "absent"
-        assert result.verdict.outcome is Outcome.PASS
+        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FAIL
 
-
-class TestMembersAndArguments:
-    """Member-level honesty and the explicit model arguments."""
-
-    def test_ast_abstains_while_its_floor_is_null(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_any_uncertain_flags(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """AST's presence floor ships unmeasured; its member abstains and the record says why."""
-        mock_detectors["ast"]["Cough"] = 0.99
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        family_a = _kind(store, "airway").attributes["families"]["A_audioset"]
-        assert family_a["members"]["ast"]["state"] == "abstained"
-        assert family_a["state"] == "present"  # YAMNet's vote carries the family
+        """One kind the lines disagree about is enough."""
+        seed_preprocess_store(
+            store, yamnet_labels=[["Speech"]], hear_labels=[[]], ast_labels=[[]], words=[], phonation=[]
+        )
+        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FLAG
 
-    def test_an_abstained_ast_member_still_records_what_it_measured(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_present_and_absent_together_pass(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """AST's inference ran, so the abstained member carries its score, label and analysis frame."""
-        mock_detectors["ast"]["Cough"] = 0.99
-        seed_store(store, yamnet_windows=[_yamnet_window(0.0, 0.96, {"Cough": 0.9})], words=())
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        member = _kind(store, "airway").attributes["families"]["A_audioset"]["members"]["ast"]
-        assert member["state"] == "abstained"
-        assert member["max_score"] == pytest.approx(0.99)
-        assert member["label"] == "Cough"
-        assert member["frame_s"] == config.require("taxonomy.ast_frame_s") == 10.24
+        """Speech present, airway and voice absent, nothing uncertain."""
+        seed_preprocess_store(
+            store,
+            yamnet_labels=[["Speech"]],
+            hear_labels=[[]],
+            ast_labels=[["Speech"]],
+            words=["one", "two", "three"],
+            phonation=[],
+        )
+        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.PASS
 
-    def test_model_arguments_are_explicit(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
-        detector_calls: dict[str, list],
+    def test_exactly_three_kind_elements_and_no_residual(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """AST runs with sigmoid and no top-k truncation; HeAR keeps all eight labels."""
-        seed_store(store, yamnet_windows=[], words=())
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        [ast_call] = detector_calls["ast"]
-        assert ast_call["function_to_apply"] == "sigmoid"
-        assert ast_call["top_k"] is None
-        [hear_call] = detector_calls["hear"]
-        assert hear_call["top_k"] is None
+        """voice_no_words and not_screened are gone; nothing is a kind by virtue of the others."""
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two", "three"])
+        taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        kinds = {e.attributes["kind"] for e in live_entities(store, "kind")}
+        assert kinds == set(SCREENED_KINDS) == {"airway", "speech", "voice"}
+        assert not [e for e in live_entities(store, "kind") if e.attributes["state"] == "not_screened"]
 
-    def test_advisory_on_fail_everything_is_still_written(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        seed_store: Callable[..., dict],
-        mock_detectors: dict[str, Any],
+    def test_it_localises_nothing(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """A fail is a prediction, not a gate: three kind entities and a verdict exist regardless."""
-        seed_store(store, yamnet_windows=[], words=())
-        result = taxonomy(store, "plain", config, run_dir=tmp_path)
-        assert len(store.entities("kind")) == 3
-        assert _kind(store, "voice_no_words").attributes["state"] == "not_screened"
-        assert store.get_entity(result.verdict_entity_id).attributes["kinds"] == result.kinds
+        """No span, no interval, no extent-bearing element is authored by this node."""
+        seed_preprocess_store(
+            store, yamnet_labels=[["Speech"]], words=["one", "two", "three"], phonation=[(0.0, 2.0, "voiced")]
+        )
+        before = {e.id for e in live_entities(store, "span")}
+        taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert {e.id for e in live_entities(store, "span")} == before
+        assert not live_entities(store, "interval")
