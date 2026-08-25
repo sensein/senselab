@@ -62,7 +62,6 @@ class TestTheRule:
         assert result.runs == ("AIRWAY",)
         assert set(result.skipped) == {"SPEECH", "VOICE"}
 
-
     def test_a_state_this_node_cannot_read_runs_the_branch(self, store: ProvStore, tmp_path: Path) -> None:
         """A state nobody can read is not evidence of absence, so only ``absent`` withholds a branch.
 

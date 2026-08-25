@@ -157,9 +157,7 @@ def routing(
         The branches that run, those that do not, those a hint forced, and whether the set is empty.
     """
     stream = source or _STREAM
-    tags_by_kind, unmapped, bad_values = _map_tags(
-        _declared_tags(hint), config.get("routing.hint_kind_map") or {}
-    )
+    tags_by_kind, unmapped, bad_values = _map_tags(_declared_tags(hint), config.get("routing.hint_kind_map") or {})
     classified = _classifications(store)
 
     software = software_agent(store)
