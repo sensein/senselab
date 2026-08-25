@@ -134,10 +134,13 @@ never redacted, and must not be read as cleared of content a transcript could no
 **The goal on this axis is to minimise `withheld`**: a withhold is a file no consumer can use, and
 every withhold that rests on a scan of text nobody uttered is one the graph created.
 
-## A REDACT non-pass does not flip triage, and is never invisible
+## A REDACT `fail` does not flip triage, and no non-pass is invisible
 
 Triage answers whether a human must look at the recording; release answers whether an artifact may be
-handed on. A surviving PII finding is a release problem, so it does not move the triage axis.
+handed on. A surviving PII finding — REDACT's `fail` — is a release problem, so it does not move the
+triage axis. A REDACT `flag` **does** flag the file, by the ladder's row 2 like any other node's flag:
+it says verification did not finish, which is a question about the graph rather than about the
+artifact.
 
 **It appears in the product regardless.** `reasons` carries REDACT's outcome, its surviving
 categories and its `unremediable` set on every non-pass, and the [report](report.md) shows it beside
