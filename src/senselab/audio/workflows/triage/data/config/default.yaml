@@ -427,7 +427,7 @@ phonation:
   rms_floor_interval: null           # N22
 
 voice:
-  hint_tags: [phonation, humming, sustained-vowel, voice]   # N25 -- vocabulary, not fitted
+  hint_tags: [phonation, humming, sustained-vowel, voice]  # unread as of v2 — hints route through routing.hint_kind_map alone; deletion pending the campaign-config decision
   f0_range_hz: null
   f0_range_by_population: null
   f0_range_ratio_max: null
@@ -439,7 +439,7 @@ speech:
   target_match_cosine: null          # benchmarks/open.md: no similarity threshold has been derived
   speech_test_stoi_floor: null       # benchmarks/open.md: SQUIM thresholds over speech spans
   speech_test_si_sdr_floor: null     # benchmarks/open.md: SQUIM thresholds over speech spans
-  hint_tags: [speech, read-speech]   # vocabulary from the design docs, not fitted
+  hint_tags: [speech, read-speech]  # unread as of v2 — hints route through routing.hint_kind_map alone; deletion pending the campaign-config decision
   enrollment_model: null
   separation_backend: null
   separation_sound_class: null
