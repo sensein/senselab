@@ -76,11 +76,19 @@ class TestHintsForceAndNothingElse:
         assert routing(store, None, _map(tmp_path), hint, run_dir=tmp_path).runs == ("SPEECH",)
 
     def test_forcing_does_not_rewrite_the_kind_element(self, store: ProvStore, tmp_path: Path) -> None:
-        """The disagreement between decision and classification is the product, not a thing to erase."""
+        """The disagreement between decision and classification is the product, not a thing to erase.
+
+        Read the way every store reader reads: the *latest* live kind element per kind wins, so a
+        node that appended a rewritten classification beside the original would be caught here and
+        not by a first-match read. The second assertion closes the same hole from the other side —
+        ROUTING generates no kind element at all, whatever its state.
+        """
         _kinds(store, speech="absent", airway="absent", voice="absent")
         routing(store, None, _map(tmp_path), AudioHints(may_contain=["cough"]), run_dir=tmp_path)
-        airway = next(e for e in live_entities(store, "kind") if e.attributes["kind"] == "airway")
+        airway = [e for e in live_entities(store, "kind") if e.attributes["kind"] == "airway"][-1]
         assert airway.attributes["state"] == "absent"
+        by_routing = {activity.id for activity in store.activities(node="routing")}
+        assert [e for e in live_entities(store, "kind") if store.generated_by(e.id) in by_routing] == []
         decision = next(e for e in live_entities(store, "branch_decision") if e.attributes["branch"] == "AIRWAY")
         assert decision.attributes["kind_state"] == "absent"
         assert decision.attributes["forced_by_hint"] is True
