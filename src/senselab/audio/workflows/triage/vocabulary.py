@@ -11,6 +11,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Mapping, Sequence
 
+GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+"""The nodes the runner drives, in the order it drives them. VERDICT folds the eight before it."""
+
+BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
+"""The three branches routing selects among; each is the authority on its own kind and no other."""
+
 
 class Outcome(Enum):
     """What a node concluded."""

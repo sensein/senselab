@@ -15,6 +15,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.vocabulary import (
+    GRAPH_ORDER,
     BranchDecision,
     FileVerdict,
     NodeVerdict,
@@ -26,7 +27,7 @@ from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 NODE = "VERDICT"
 
-_GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT")
+_GRAPH_ORDER = GRAPH_ORDER[:-1]
 
 
 @dataclass(frozen=True)
