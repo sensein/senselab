@@ -466,6 +466,39 @@ class TestPhonationSpans:
         assert set(store.derived_from(tracks[0].id)) & {e.id for e in spans}
         assert len(tracks[0].attributes["f1_hz"]) == len(tracks[0].attributes["times_s"])
 
+    def test_the_formant_track_is_measured_once_over_the_whole_stream(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One call, over the whole stream, however many spans come out of it.
+
+        "Tracks are computed once on the stream and then sliced" is a property of the call graph, so
+        the call graph is what this asserts: a per-span re-fit produces identical stored attributes on
+        a steady fixture and is invisible to every other test in this file. The duration assertion is
+        the half that matters -- a re-fit would pass a span-length fragment, and a fragment
+        renormalises to its own maximum, which is the failure the rule exists to prevent.
+        """
+        seen_durations: list[float] = []
+        measure = preprocess_module.formant_track
+
+        def counting(audio: Audio, **kwargs: Any) -> Any:  # noqa: ANN401 — delegates to the real one
+            """Record what the tracker was handed, then track it for real."""
+            seen_durations.append(audio.waveform.shape[-1] / audio.sampling_rate)
+            return measure(audio, **kwargs)
+
+        monkeypatch.setattr(preprocess_module, "formant_track", counting)
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        assert len(spans) >= 2, "the fixture must yield several spans or a call count of one proves nothing"
+        assert len(seen_durations) == 1
+        assert seen_durations[0] == pytest.approx(3.0, abs=0.05)
+
     def test_a_null_criterion_leaves_the_spans_absent(
         self,
         store: ProvStore,
