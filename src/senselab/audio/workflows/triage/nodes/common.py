@@ -9,7 +9,7 @@ from typing import Any
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.vocabulary import NodeVerdict, Outcome
-from senselab.utils.prov_store import Entity, ProvStore
+from senselab.utils.prov_store import PROV_TYPE, Entity, ProvStore
 
 
 @dataclass(frozen=True)
@@ -130,6 +130,41 @@ def find_measurement(store: ProvStore, name: str) -> Entity | None:
         e for e in store.entities("measurement") if e.attributes.get("name") == name and not store.is_invalidated(e.id)
     ]
     return found[-1] if found else None
+
+
+def find_measurements(store: ProvStore, name: str) -> list[Entity]:
+    """Every live measurement entity carrying this name, in write order.
+
+    The plural of :func:`find_measurement`, for a name one node writes many of — the per-window
+    classifications, the per-span formant tracks. Reads by the store's shared rule: an invalidated
+    entity is never returned.
+
+    Args:
+        store: The provenance store.
+        name: The measurement's ``name`` attribute.
+
+    Returns:
+        The entities, oldest first. Empty when nothing live carries the name.
+    """
+    return [
+        e for e in store.entities("measurement") if e.attributes.get("name") == name and not store.is_invalidated(e.id)
+    ]
+
+
+def live_entities(store: ProvStore, prov_type: PROV_TYPE) -> list[Entity]:
+    """Every non-invalidated entity of one type, in write order.
+
+    The store's shared read rule in its simplest form, so no node re-derives the filter and forgets
+    the invalidation check.
+
+    Args:
+        store: The provenance store.
+        prov_type: The entity type to read.
+
+    Returns:
+        The live entities, oldest first.
+    """
+    return [e for e in store.entities(prov_type) if not store.is_invalidated(e.id)]
 
 
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:

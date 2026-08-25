@@ -1,28 +1,23 @@
-"""PREPROCESS writes every derivative to the store with provenance; an uncomputable one is absent.
+"""PREPROCESS v2: every whole-file model here, sets not winners, phonation spans, bracket-aware words."""
 
-Every model call is monkeypatched on the node module (the pii_adapter_test pattern); the DSP —
-resample, envelope, spans, spectrograms, gammatone, fuse_word_streams — runs real. No test here
-loads weights or touches the network.
-"""
-
-import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pytest
-import soundfile as sf
+from scipy.signal import lfilter
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
-from senselab.audio.workflows.triage.nodes import preprocess as node
+from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.admit import admit
-from senselab.audio.workflows.triage.nodes.common import clamp_extent
-from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult, preprocess
-from senselab.audio.workflows.triage.vocabulary import Outcome
+from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
+from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID, preprocess
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.nodes.conftest import burst_samples
+from tests.audio.workflows.triage.nodes.conftest import window
+
+SR = 16000
 
 
 class _FakeModel:
@@ -34,489 +29,553 @@ class _FakeModel:
         self.commit_sha = "a" * 40
 
 
-@pytest.fixture
-def calls() -> dict[str, list]:
-    """Captured model-call arguments, per mocked function."""
-    return {"classify": [], "transcribe": [], "align": [], "squim": []}
-
-
-@pytest.fixture
-def mock_models(monkeypatch: pytest.MonkeyPatch, calls: dict[str, list]) -> None:
-    """Replace every model call PREPROCESS makes; payload shapes mirror the real returns.
-
-    CrisperWhisper/Qwen: a ScriptLine whose ``chunks`` are word ScriptLines with text/start/end/score
-    (crisperwhisper.py builds exactly that). YAMNet: windowed dicts with start/end/label_scores/
-    win_length/hop_length (classification/api.py). SQUIM: one dict with stoi/pesq/si_sdr
-    (torchaudio_squim.py). Alignment: a list per input of ScriptLine | None (forced_alignment.py).
-    """
-    monkeypatch.setattr(node, "_crisperwhisper_model", lambda: _FakeModel(node.CRISPERWHISPER_ID))
-    monkeypatch.setattr(node, "_qwen_model", lambda: _FakeModel(node.QWEN_ID))
-
-    def fake_classify(audios: list, model: object, top_k: int | None = None, **kwargs: object) -> list:
-        """YAMNet-shaped windows over the input's real duration."""
-        calls["classify"].append({"model": model, "top_k": top_k})
-        duration = audios[0].waveform.shape[-1] / audios[0].sampling_rate
-        windows, start = [], 0.0
-        while start + 0.96 <= duration:
-            windows.append(
-                {
-                    "start": round(start, 2),
-                    "end": round(start + 0.96, 2),
-                    "label_scores": [{"Silence": 0.7}, {"Speech": 0.1}],
-                    "win_length": 0.96,
-                    "hop_length": 0.48,
-                }
+def _resonate(excitation: np.ndarray, formants: np.ndarray, bandwidth: float = 80.0) -> np.ndarray:
+    """Pass an excitation through one two-pole resonator per column of ``formants``."""
+    out = excitation.astype(np.float64)
+    r = float(np.exp(-np.pi * bandwidth / SR))
+    for column in range(formants.shape[1]):
+        track = formants[:, column]
+        if float(track.min()) == float(track.max()):
+            centre = float(track[0])
+            out = lfilter([1.0 - r], [1.0, -2 * r * np.cos(2 * np.pi * centre / SR), r * r], out)
+            continue
+        filtered = np.zeros_like(out)
+        previous, before = 0.0, 0.0
+        for index, centre in enumerate(track):
+            filtered[index] = (
+                (1.0 - r) * out[index] + 2 * r * np.cos(2 * np.pi * centre / SR) * previous - r * r * before
             )
-            start += 0.48
-        return [windows]
+            before, previous = previous, filtered[index]
+        out = filtered
+    return np.asarray(out / (np.abs(out).max() + 1e-12), dtype=np.float64)
 
-    def fake_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
-        """Two words inside the burst, for either recognizer."""
-        calls["transcribe"].append({"model": model.path_or_uri, "audio": audios[0], "kwargs": kwargs})
-        chunks = [
-            ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
-            ScriptLine(text="doctor", start=1.60, end=1.66, score=0.9),
-        ]
-        return [ScriptLine(text="hello doctor", start=1.50, end=1.66, chunks=chunks, score=0.9)]
 
-    def fake_align(items: list, levels_to_keep: dict | None = None, aligner_model: str | None = None) -> list:
+def _pulses(rate_hz: np.ndarray) -> np.ndarray:
+    """A pulse train whose instantaneous rate follows ``rate_hz``."""
+    out = np.zeros(len(rate_hz))
+    phase = 0.0
+    for index, rate in enumerate(rate_hz):
+        phase += rate / SR
+        if phase >= 1.0:
+            phase -= 1.0
+            out[index] = 1.0
+    return out
+
+
+def _fixed(centres: tuple[float, ...], n_samples: int) -> np.ndarray:
+    """A constant formant track, one column per centre frequency."""
+    return np.tile(np.array([list(centres)]), (n_samples, 1))
+
+
+def _steady_vowel() -> np.ndarray:
+    """1.5 s of a 200 Hz buzz through fixed resonators: a sustained, voiced production."""
+    n_samples = int(1.5 * SR)
+    return _resonate(_pulses(np.full(n_samples, 200.0)), _fixed((700.0, 1200.0, 2600.0), n_samples))
+
+
+def _steady_noise() -> np.ndarray:
+    """1.5 s of noise through the same resonators: a sustain with no periodicity at all."""
+    n_samples = int(1.5 * SR)
+    excitation = np.random.default_rng(0).standard_normal(n_samples)
+    return _resonate(excitation, _fixed((700.0, 1200.0, 2600.0), n_samples))
+
+
+def _rising_glide() -> np.ndarray:
+    """0.3 s in which F0 and the resonances both sweep upward faster than either limb tolerates."""
+    n_samples = int(0.3 * SR)
+    ramp = np.linspace(0.0, 1.0, n_samples)
+    resonances = np.stack([300.0 + 3300.0 * ramp, 900.0 + 3500.0 * ramp], axis=1)
+    swept = _resonate(_pulses(150.0 * (480.0 / 150.0) ** ramp), resonances)
+    return np.concatenate([swept, np.zeros(int(0.2 * SR))])
+
+
+def _line(text: str) -> ScriptLine:
+    """One recognizer's result: a chunk per whitespace-separated token, 0.3 s apart."""
+    tokens = [token for token in text.split() if token]
+    chunks = [
+        ScriptLine(text=token, start=0.5 + index * 0.3, end=0.5 + index * 0.3 + 0.2, score=0.9)
+        for index, token in enumerate(tokens)
+    ]
+    if not chunks:
+        return ScriptLine(text="", start=0.0, end=0.0, chunks=None, score=0.9)
+    return ScriptLine(text=text, start=chunks[0].start, end=chunks[-1].end, chunks=chunks, score=0.9)
+
+
+def _seed_admit(
+    store: ProvStore, tmp_path: Path, wav_writer: Callable[..., Path], samples: np.ndarray | None = None
+) -> None:
+    """Write the fixture recording and run ADMIT over it, so the ``recording`` stream exists."""
+    path = wav_writer("input.wav", _default_samples() if samples is None else samples)
+    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
+    assert admitted.audio is not None
+
+
+def _default_samples() -> np.ndarray:
+    """A quiet noise bed with one loud burst — enough contrast for one envelope span."""
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
+    start = int(1.5 * SR)
+    stop = start + int(0.15 * SR)
+    grid = np.arange(stop - start) / SR
+    samples[start:stop] += (0.5 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    return samples
+
+
+def _audio(tmp_path: Path) -> Audio:
+    """The fixture recording, as ADMIT returned it."""
+    return Audio(filepath=str(tmp_path / "input.wav"))
+
+
+def _stub_models(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    yamnet: list[dict[str, Any]] | None = None,
+    ast: list[dict[str, Any]] | None = None,
+    hear: list[dict[str, Any]] | None = None,
+    crisper: ScriptLine | None = None,
+    qwen: ScriptLine | None = None,
+    record: dict[str, Any] | None = None,
+) -> None:
+    """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs."""
+    seen = record if record is not None else {}
+
+    def fake_classify(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+        """YAMNet or AST, told apart by the model the node passed."""
+        which = "yamnet" if model == "yamnet" else "ast"
+        seen[which] = {"model": model, **kwargs}
+        return [list(yamnet or []) if which == "yamnet" else list(ast or [])]
+
+    def fake_hear(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+        """HeAR's event detector, on its fixed 2 s window."""
+        seen["hear"] = dict(kwargs)
+        return [list(hear or [])]
+
+    def fake_transcribe(audios: list, model: _FakeModel, **kwargs: Any) -> list:  # noqa: ANN401
+        """Whichever recognizer the node asked for."""
+        seen.setdefault("transcribe", []).append(str(model.path_or_uri))
+        return [(crisper if str(model.path_or_uri) == CRISPERWHISPER_ID else qwen) or _line("")]
+
+    def fake_align(items: list, **kwargs: Any) -> list:  # noqa: ANN401
         """One aligned line per input tuple."""
-        calls["align"].append({"n": len(items)})
-        return [[ScriptLine(text="hello doctor", start=1.50, end=1.66)] for _ in items]
+        seen["align"] = len(items)
+        return [[ScriptLine(text="hello", start=0.5, end=0.7)] for _ in items]
 
-    def fake_squim(audios: list, device: object = None) -> list:
+    def fake_squim(audios: list, device: Any = None) -> list:  # noqa: ANN401
         """One objective-head dict per input."""
-        calls["squim"].append({"n_samples": int(audios[0].waveform.shape[-1])})
         return [{"stoi": 0.91, "pesq": 1.8, "si_sdr": 7.5} for _ in audios]
 
-    monkeypatch.setattr(node, "classify_audios", fake_classify)
-    monkeypatch.setattr(node, "transcribe_audios", fake_transcribe)
-    monkeypatch.setattr(node, "align_transcriptions", fake_align)
-    monkeypatch.setattr(node, "extract_objective_quality_features_from_audios", fake_squim)
+    monkeypatch.setattr(preprocess_module, "_crisperwhisper_model", lambda: _FakeModel(CRISPERWHISPER_ID))
+    monkeypatch.setattr(preprocess_module, "_qwen_model", lambda: _FakeModel(QWEN_ID))
+    monkeypatch.setattr(preprocess_module, "_ast_model", lambda: _FakeModel(preprocess_module.AST_ID))
+    monkeypatch.setattr(preprocess_module, "classify_audios", fake_classify)
+    monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
+    monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
+    monkeypatch.setattr(preprocess_module, "align_transcriptions", fake_align)
+    monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
 
 
-def _run(
-    store: ProvStore,
-    config: TriageConfig,
-    tmp_path: Path,
-    samples: np.ndarray | None = None,
-    sampling_rate: int = 16000,
-) -> PreprocessResult:
-    """Admit a fixture recording, then preprocess it."""
-    path = tmp_path / "input.wav"
-    sf.write(str(path), (burst_samples() if samples is None else samples).astype(np.float32), sampling_rate)
-    admitted = admit(store, path, config, run_dir=tmp_path)
-    assert admitted.audio is not None
-    return preprocess(store, admitted.audio, config, run_dir=tmp_path)
+class TestWindowClassificationsAreSets:
+    """A window carries every label over its own threshold, and pooling is set-union."""
 
-
-def _measurement(store: ProvStore, name: str) -> Any:  # noqa: ANN401 — the store's Entity, untyped here
-    """The one measurement entity with this name."""
-    [entity] = [e for e in store.entities("measurement") if e.attributes.get("name") == name]
-    return entity
-
-
-class TestConditioning:
-    """The two retained signals and the overshoot guard."""
-
-    def test_plain_stream_is_mono_16k_with_provenance(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
+    def test_a_window_may_carry_several_labels(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A 48 kHz stereo input becomes one mono 16 kHz plain stream derived from the recording."""
-        stereo = np.stack([burst_samples(sampling_rate=48000)] * 2, axis=1)
-        _run(store, config, tmp_path, samples=stereo, sampling_rate=48000)
-        [plain] = [e for e in store.entities("stream") if e.attributes.get("name") == "plain"]
-        assert plain.attributes["sampling_rate"] == 16000
-        assert plain.attributes["channels"] == 1
-        assert plain.attributes["peak_scale"] == 1.0
-        data, rate = sf.read(str(tmp_path / plain.attributes["path"]))
-        assert rate == 16000
-        [recording] = [e for e in store.entities("stream") if e.attributes.get("name") == "recording"]
-        assert recording.id in store.derived_from(plain.id)
+        """Two labels clearing their thresholds in one window are both members; nothing wins."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.9, "Cough": 0.7, "Music": 0.1})])
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        pooled = find_measurement(store, "yamnet_windows")
+        assert pooled is not None
+        assert pooled.attributes["labels"] == ["Cough", "Speech"]
+        per_window = find_measurements(store, "yamnet_window")
+        assert len(per_window) == 1
+        assert sorted(per_window[0].attributes["labels"]) == ["Cough", "Speech"]
+        assert set(per_window[0].attributes["scores"]) == {"Cough", "Speech"}
 
-    def test_an_invalidated_recording_is_not_a_source_of_the_plain_stream(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
+    def test_a_per_label_threshold_overrides_the_default(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A withdrawn recording must not be recorded as what plain derives from."""
-        path = tmp_path / "input.wav"
-        sf.write(str(path), burst_samples().astype(np.float32), 16000)
-        admitted = admit(store, path, config, run_dir=tmp_path)
-        assert admitted.audio is not None
-        [withdrawn] = [e for e in store.entities("stream") if e.attributes.get("name") == "recording"]
-        store.was_invalidated_by(withdrawn.id, store.activity(node="ADMIT", step="withdraw", parameters={}))
-        preprocess(store, admitted.audio, config, run_dir=tmp_path)
-        [plain] = [e for e in store.entities("stream") if e.attributes.get("name") == "plain"]
-        assert withdrawn.id not in store.derived_from(plain.id)
+        """Speech at 0.45 clears its own 0.4 while Cough at 0.45 misses the 0.5 default."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.45, "Cough": 0.45})])
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        assert find_measurements(store, "yamnet_window")[0].attributes["labels"] == ["Speech"]
 
-    def test_preemphasised_stream_is_the_first_difference(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
+    def test_an_empty_window_is_still_written(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """y[n] = x[n] - c * x[n-1], with the coefficient from the config, derived from plain."""
-        _run(store, config, tmp_path)
-        [plain] = [e for e in store.entities("stream") if e.attributes.get("name") == "plain"]
-        [sharp] = [e for e in store.entities("stream") if e.attributes.get("name") == "preemphasised"]
-        c = float(config.require("preemphasis.coefficient"))
-        assert sharp.attributes["coefficient"] == c
-        x, _ = sf.read(str(tmp_path / plain.attributes["path"]))
-        y, _ = sf.read(str(tmp_path / sharp.attributes["path"]))
-        assert np.allclose(y[1:], x[1:] - c * x[:-1], atol=1e-6)
-        assert plain.id in store.derived_from(sharp.id)
+        """A window nobody's threshold cleared is not the same fact as a window never classified."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            yamnet=[window(0.0, 0.96, {"Speech": 0.9}), window(0.48, 1.44, {"Speech": 0.01})],
+        )
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        per_window = find_measurements(store, "yamnet_window")
+        assert len(per_window) == 2
+        assert per_window[1].attributes["labels"] == []
+        pooled = find_measurement(store, "yamnet_windows")
+        assert pooled is not None
+        assert pooled.attributes["n_windows"] == 2
 
-    def test_disabled_preemphasis_routes_envelope_to_plain(
-        self, store: ProvStore, tmp_path: Path, mock_models: None
+    def test_pooling_is_union_and_the_windows_are_retained(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """With preemphasis.enabled false there is no second stream and derivatives read plain."""
-        override = tmp_path / "override.yaml"
-        override.write_text("preemphasis:\n  enabled: false\n")
-        config = load_triage_config(override)
-        _run(store, config, tmp_path)
-        assert [e for e in store.entities("stream") if e.attributes.get("name") == "preemphasised"] == []
-        assert _measurement(store, "energy_envelope").attributes["signal"] == "plain"
+        """The union names the labels; windows_by_label names where each one was."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            yamnet=[window(0.0, 0.96, {"Speech": 0.9}), window(0.48, 1.44, {"Cough": 0.9})],
+        )
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        pooled = find_measurement(store, "yamnet_windows")
+        per_window = find_measurements(store, "yamnet_window")
+        assert pooled is not None
+        assert pooled.attributes["labels"] == ["Cough", "Speech"]
+        assert pooled.attributes["windows_by_label"]["Speech"] == [per_window[0].id]
+        assert pooled.attributes["windows_by_label"]["Cough"] == [per_window[1].id]
 
-
-class TestEnvelopeAndSpans:
-    """The pre-emphasised derivatives and the span proposals."""
-
-    def test_envelope_reads_the_preemphasised_signal(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
-    ) -> None:
-        """The envelope names its signal and its sidecar holds envelope and floor tracks."""
-        _run(store, config, tmp_path)
-        envelope = _measurement(store, "energy_envelope")
-        assert envelope.attributes["signal"] == "preemphasised"
-        sidecar = np.load(tmp_path / envelope.attributes["path"])
-        assert sidecar["envelope_dbfs"].shape == sidecar["floor_dbfs"].shape
-
-    def test_spans_carry_the_airway_k_and_no_label(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
-    ) -> None:
-        """The burst yields at least one span at K = spans.k_db.airway, unlabelled."""
-        _run(store, config, tmp_path)
-        spans = store.entities("span")
-        assert spans, "the burst fixture must propose at least one span"
-        for span in spans:
-            assert span.attributes["k_db"] == float(config.require("spans.k_db.airway"))
-            assert "label" not in span.attributes
-            assert span.attributes["peak_over_floor_db"] >= float(config.require("spans.k_db.airway"))
-
-    def test_no_contrast_is_recorded_with_its_k(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
-    ) -> None:
-        """A burst-free recording writes spans_no_contrast, not an empty span list."""
-        rng = np.random.default_rng(1)
-        _run(store, config, tmp_path, samples=(rng.standard_normal(48000) * 1e-4))
-        assert store.entities("span") == []
-        no_contrast = _measurement(store, "spans_no_contrast")
-        assert no_contrast.attributes["k_db"] == float(config.require("spans.k_db.airway"))
-        assert "reason" in no_contrast.attributes
-
-
-class TestModelDerivatives:
-    """The plain-signal derivatives: YAMNet, level, SQUIM, the recognizers, agreement, alignment."""
-
-    def test_yamnet_is_read_with_the_full_label_space(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None, calls: dict
-    ) -> None:
-        """top_k comes from the config, never the function's windowed default of 5."""
-        _run(store, config, tmp_path)
-        [call] = calls["classify"]
-        assert call["model"] == "yamnet"
-        assert call["top_k"] == int(config.require("yamnet.top_k"))
-        windows_entity = _measurement(store, "yamnet_windows")
-        windows = json.loads((tmp_path / windows_entity.attributes["path"]).read_text())
-        assert windows_entity.attributes["n_windows"] == len(windows) > 0
-        silence = _measurement(store, "silence")
-        assert all(row["is_silence"] == (row["score"] >= 0.5) for row in silence.attributes["windows"])
-
-    def test_asr_runs_on_the_plain_signal_not_the_preemphasised_one(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None, calls: dict
-    ) -> None:
-        """Both recognizers receive the plain waveform (pre-emphasis changes the peak measurably)."""
-        _run(store, config, tmp_path)
-        [plain] = [e for e in store.entities("stream") if e.attributes.get("name") == "plain"]
-        reference, _ = sf.read(str(tmp_path / plain.attributes["path"]), dtype="float32")
-        assert len(calls["transcribe"]) == 2
-        for call in calls["transcribe"]:
-            received = call["audio"].waveform.squeeze(0).numpy()
-            assert np.allclose(received, reference, atol=1e-4)
-
-    def test_words_become_word_entities_with_recognizer_provenance(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
-    ) -> None:
-        """One word entity per recognizer word, stamped with who timed it, attributed to the model."""
-        _run(store, config, tmp_path)
-        words = store.entities("word")
-        assert len(words) == 4  # two words from each recognizer
-        recognizers = {w.attributes["recognizer"] for w in words}
-        assert recognizers == {node.CRISPERWHISPER_ID, node.QWEN_ID}
-        sources = {w.attributes["recognizer"]: w.attributes["timestamp_source"] for w in words}
-        assert sources[node.CRISPERWHISPER_ID] == "native"
-        assert sources[node.QWEN_ID] == "bundled_aligner"
-        for word in words:
-            [agent_id] = [a for a in store.associated_with(store.generated_by(word.id) or "")]
-            agent = store.get_agent(agent_id)
-            assert agent.agent_type == "model"
-            assert agent.commit_sha == "a" * 40
-
-    def test_agreement_and_alignment_follow_the_recognizers(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None, calls: dict
-    ) -> None:
-        """asr_agreement fuses both streams; alignment aligns the fused transcript on plain."""
-        _run(store, config, tmp_path)
-        agreement = _measurement(store, "asr_agreement")
-        assert agreement.attributes["systems"] == [node.CRISPERWHISPER_ID, node.QWEN_ID]
-        assert {w["text"] for w in agreement.attributes["words"]} == {"hello", "doctor"}
-        alignment = _measurement(store, "alignment")
-        assert alignment.attributes["transcript_source"] == "asr_agreement"
-        payload = json.loads((tmp_path / alignment.attributes["path"]).read_text())
-        assert payload, "the aligned transcript is serialised to the sidecar"
-        assert calls["align"] == [{"n": 1}]
-
-    def test_an_untimed_chunk_is_counted_not_placed_at_zero(
+    def test_the_scores_survive_a_null_threshold(
         self,
         store: ProvStore,
         config: TriageConfig,
         tmp_path: Path,
-        mock_models: None,
+        wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A chunk with no timestamp has no extent; coercing None to 0.0 invents one at the file start.
-
-        The word entity is not written, the count is in the measurement, and the text survives in
-        the transcript — the recognizer said it, it just did not say where.
-        """
-
-        def untimed_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
-            chunks = [
-                ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
-                ScriptLine(text="doctor", start=None, end=None, score=0.9),
-            ]
-            return [ScriptLine(text="hello doctor", start=1.50, end=1.66, chunks=chunks, score=0.9)]
-
-        monkeypatch.setattr(node, "transcribe_audios", untimed_transcribe)
-        _run(store, config, tmp_path)
-        words = store.entities("word")
-        assert [w.extent for w in words] == [(1.50, 1.58), (1.50, 1.58)], "one timed word per recognizer, no more"
-        assert all(w.extent != (0.0, 0.0) for w in words)
-        measurement = _measurement(store, "asr_crisperwhisper")
-        assert measurement.attributes["untimed_chunks_n"] == 1
-        assert "doctor" in measurement.attributes["transcript"], "the transcript keeps what the recognizer said"
-
-    def test_the_fused_words_are_bounded_so_alignment_survives_a_hallucination(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        mock_models: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """asr_agreement fuses from the recognizer output, which no word-entity bound reaches.
-
-        The production trigger: a hallucinated word at 11.32 s among legitimate ones. The word
-        entities are bounded, but `_agreement` re-derives its list from the raw ScriptLine, so the
-        fused list carried 11.32 s, `_alignment` set the transcript end from it, and
-        `align_transcriptions` refused a slice past the decode. The block loop caught that, so the
-        `alignment` derivative vanished from the run instead of failing it.
-        """
-        received: list[tuple[float, float]] = []
-
-        def hallucinating_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
-            chunks = [
-                ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
-                ScriptLine(text="doctor", start=1.60, end=1.66, score=0.9),
-                ScriptLine(text="podcast", start=11.32, end=11.60, score=0.9),
-            ]
-            return [ScriptLine(text="hello doctor podcast", start=1.50, end=11.60, chunks=chunks, score=0.9)]
-
-        def bound_checking_align(items: list, **kwargs: object) -> list:
-            """Refuse a transcript past the decode, exactly as ``extract_segments`` does."""
-            out = []
-            for audio, transcript, _language in items:
-                duration = audio.waveform.shape[-1] / audio.sampling_rate
-                received.append((float(transcript.start or 0.0), float(transcript.end or 0.0)))
-                if float(transcript.end or 0.0) > duration:
-                    raise ValueError(f"End must be <= duration of the audio ({duration} sec).")
-                out.append([ScriptLine(text=transcript.text, start=transcript.start, end=transcript.end)])
-            return out
-
-        monkeypatch.setattr(node, "transcribe_audios", hallucinating_transcribe)
-        monkeypatch.setattr(node, "align_transcriptions", bound_checking_align)
-        result = _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
-
-        agreement = _measurement(store, "asr_agreement")
-        assert all(float(w["end"]) <= 5.76 for w in agreement.attributes["words"]), "no fused word outruns the decode"
-        assert {w["text"] for w in agreement.attributes["words"]} == {"hello", "doctor"}
-        assert agreement.attributes["out_of_bounds_words_n"] == 1
-
-        assert "alignment" not in result.absent, "a hallucinated word must not delete the alignment derivative"
-        assert received == [(1.50, 1.66)], "the transcript the aligner saw is inside the recording"
-
-    def test_a_chunk_starting_past_the_decode_is_dropped_and_counted(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        mock_models: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A hallucinated word timed after the file ends is not a word; it is a count.
-
-        Observed in production: on a 5.76 s recording Qwen returned words at 11.32 s and 29.08 s.
-        A start at-or-past the decode duration names no sample of this recording, so no word entity
-        is written; the text stays in the transcript, as an untimed chunk's does.
-        """
-
-        def hallucinating_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
-            chunks = [
-                ScriptLine(text="hello", start=1.50, end=1.58, score=0.9),
-                ScriptLine(text="podcast", start=11.32, end=11.60, score=0.9),
-            ]
-            return [ScriptLine(text="hello podcast", start=1.50, end=11.60, chunks=chunks, score=0.9)]
-
-        monkeypatch.setattr(node, "transcribe_audios", hallucinating_transcribe)
-        _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
-        words = store.entities("word")
-        assert [w.extent for w in words] == [(1.50, 1.58), (1.50, 1.58)], "one in-bounds word per recognizer"
-        measurement = _measurement(store, "asr_crisperwhisper")
-        assert measurement.attributes["out_of_bounds_chunks_n"] == 1
-        assert measurement.attributes["untimed_chunks_n"] == 0
-        assert "podcast" in measurement.attributes["transcript"], "the transcript keeps what was said"
-
-    def test_a_chunk_overshooting_the_decode_end_is_clamped_not_dropped(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        mock_models: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A word that starts inside the recording and ends past it is plausibly real with a bad end.
-
-        The clamp here is semantic and unbounded in size, which is what distinguishes it from
-        ``nodes.common.clamp_extent``: that one bounds float noise within a single sample period and
-        raises on anything larger. The raw extent would raise there; the stored one does not, which
-        is what stops SPEECH's slice of this word from crashing.
-        """
-
-        def overshooting_transcribe(audios: list, model: _FakeModel, **kwargs: object) -> list:
-            chunks = [ScriptLine(text="hello", start=0.30, end=6.10, score=0.9)]
-            return [ScriptLine(text="hello", start=0.30, end=6.10, chunks=chunks, score=0.9)]
-
-        monkeypatch.setattr(node, "transcribe_audios", overshooting_transcribe)
-        _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
-        plain = Audio(filepath=str(tmp_path / "streams" / "plain.wav"))
-        words = store.entities("word")
-        assert [w.extent for w in words] == [(0.30, 5.76), (0.30, 5.76)], "the end is bound by the decode"
-        measurement = _measurement(store, "asr_crisperwhisper")
-        assert measurement.attributes["out_of_bounds_chunks_n"] == 0, "a clamped word was not dropped"
-        with pytest.raises(ValueError, match="more than one sample period"):
-            clamp_extent((0.30, 6.10), plain)
-        assert clamp_extent(words[0].extent or (0.0, 0.0), plain) == (0.30, 5.76)
-
-    def test_an_in_bounds_chunk_keeps_the_timings_the_recognizer_gave(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
-    ) -> None:
-        """Bounding touches nothing that was already inside the recording."""
-        _run(store, config, tmp_path, samples=burst_samples(duration_s=5.76))
-        words = store.entities("word")
-        assert {w.extent for w in words} == {(1.50, 1.58), (1.60, 1.66)}
-        for name in ("asr_crisperwhisper", "asr_qwen"):
-            assert _measurement(store, name).attributes["out_of_bounds_chunks_n"] == 0
-
-    def test_the_aligner_agent_names_the_model_not_its_whole_spec(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None
-    ) -> None:
-        """A model_id must be a model id: the language table's value is a mapping, not a name."""
-        _run(store, config, tmp_path)
-        alignment = _measurement(store, "alignment")
-        [agent_id] = store.associated_with(store.generated_by(alignment.id) or "")
-        agent = store.get_agent(agent_id)
-        assert agent.model_id == "facebook/wav2vec2-base-960h"
-        assert agent.commit_sha is None
-        assert agent.unresolved_reason is not None, "align_transcriptions reports no commit; the store says so"
-
-    def test_squim_is_measured_per_span_as_a_measure_assertion(
-        self, store: ProvStore, config: TriageConfig, tmp_path: Path, mock_models: None, calls: dict
-    ) -> None:
-        """One measure assertion per span, derived from it, on the sliced plain signal."""
-        _run(store, config, tmp_path)
-        spans = store.entities("span")
-        measures = [a for a in store.entities("assertion") if a.attributes.get("name") == "squim"]
-        assert len(measures) == len(spans) > 0
-        for measure in measures:
-            assert measure.attributes["verb"] == "measure"
-            assert measure.attributes["stoi"] == 0.91
-            assert any(s.id in store.derived_from(measure.id) for s in spans)
-        assert all(c["n_samples"] > 0 for c in calls["squim"])
-
-    def test_a_span_squim_refuses_is_unmeasured_not_padded(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        mock_models: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """SQUIM re-raises on short input; the node records unmeasured and never pads."""
-
-        def refusing_squim(audios: list, device: object = None) -> list:
-            """The real function's failure mode for a too-short span."""
-            raise RuntimeError("input too short")
-
-        monkeypatch.setattr(node, "extract_objective_quality_features_from_audios", refusing_squim)
-        result = _run(store, config, tmp_path)
-        measures = [a for a in store.entities("assertion") if a.attributes.get("name") == "squim"]
-        assert measures, "the refusal is recorded per span, not dropped"
-        assert all(m.attributes["unmeasured"] == "RuntimeError" for m in measures)
-        assert result.verdict.outcome is Outcome.PASS
-
-
-class TestAbsenceIsNotAnError:
-    """A derivative that cannot be computed is absent from the store; the node still passes."""
-
-    def test_a_failing_model_leaves_its_derivatives_absent(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        mock_models: None,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """YAMNet failing removes yamnet_windows and silence; nothing raises; outcome stays pass."""
-
-        def broken_classify(*args: object, **kwargs: object) -> list:
-            """A backend crash."""
-            raise RuntimeError("subprocess venv failed")
-
-        monkeypatch.setattr(node, "classify_audios", broken_classify)
-        result = _run(store, config, tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
+        """The packaged config folds nothing, but the model output is still in the store (V3)."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.9})])
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert find_measurement(store, "yamnet_scores") is not None
+        assert find_measurement(store, "yamnet_windows") is None
         assert "yamnet_windows" in result.absent
-        assert "silence" in result.absent
-        names = {e.attributes.get("name") for e in store.entities("measurement")}
-        assert "yamnet_windows" not in names and "silence" not in names
-        verdict = store.get_entity(result.verdict_entity_id)
-        assert verdict.attributes["absent"]["yamnet_windows"] == "RuntimeError"
 
-    def test_one_missing_recognizer_takes_agreement_and_alignment_with_it(
+    def test_ast_runs_at_the_configured_window_not_at_10_24_s(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The 'native frame' reasoning is retracted in this repo; the window is a key defaulting to 0.96."""
+        seen: dict[str, Any] = {}
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, ast=[window(0.0, 0.96, {"Speech": 0.9})], record=seen)
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        assert seen["ast"]["win_length"] == pytest.approx(0.96)
+        assert seen["ast"]["hop_length"] == pytest.approx(0.48)
+
+    def test_ast_is_asked_for_its_whole_vocabulary(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """classify_audios does `top_k or 5`, so None would rank 527 labels down to five (C2)."""
+        seen: dict[str, Any] = {}
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, ast=[window(0.0, 0.96, {"Speech": 0.9})], record=seen)
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        assert seen["ast"]["top_k"] == 527
+
+    def test_a_truncating_top_k_would_lose_a_confident_label(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A window carrying six labels over threshold keeps all six; a top-5 rank would drop one."""
+        _seed_admit(store, tmp_path, wav_writer)
+        scores = {f"L{i}": 0.9 - i * 0.01 for i in range(6)}
+        _stub_models(monkeypatch, ast=[window(0.0, 0.96, scores)])
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        ast_window = find_measurements(store, "ast_window")[0]
+        assert len(ast_window.attributes["labels"]) == 6
+
+    def test_hear_runs_on_its_fixed_window_at_the_configured_hop(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """HeAR's 2 s window is model-imposed; hop_s is the only key."""
+        seen: dict[str, Any] = {}
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, hear=[window(0.0, 2.0, {"Cough": 0.9})], record=seen)
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+        assert seen["hear"]["hop_length"] == pytest.approx(1.0)
+        pooled = find_measurement(store, "hear_windows")
+        assert pooled is not None
+        assert pooled.attributes["labels"] == ["Cough"]
+
+
+class TestPhonationSpans:
+    """Sustains and glides, voiced, unvoiced or mixed, with duration_s as the primary feature."""
+
+    def test_a_sustained_vowel_yields_a_span_carrying_its_duration(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A 1.5 s steady tone is one sustained span whose duration_s is its extent."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        assert spans
+        best = max(spans, key=lambda e: e.attributes["duration_s"])
+        assert best.attributes["member"] == "sustained"
+        assert best.extent is not None
+        assert best.attributes["duration_s"] == pytest.approx(best.extent[1] - best.extent[0])
+        assert best.attributes["duration_s"] > 1.0
+
+    def test_an_unvoiced_sustain_is_a_span_like_any_other(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Steady band-limited noise sustains with no periodicity and is not refused."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_steady_noise())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        assert spans
+        assert any(e.attributes["production"] in ("unvoiced", "mixed") for e in spans)
+
+    def test_a_glide_is_a_span_with_a_direction_and_an_excursion(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A rising sweep is a glide, not a sustain, and carries where it went."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_rising_glide())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        glides = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("family") == "phonation" and e.attributes["member"] == "glide"
+        ]
+        assert glides
+        assert glides[0].attributes["glide_direction"] == "rising"
+        assert glides[0].attributes["glide_extent_cents"] > 0.0
+
+    def test_formant_tracks_are_written_per_span_and_sliced_from_the_stream(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One formant_tracks measurement per span, each derived from the span it covers."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        tracks = find_measurements(store, "formant_tracks")
+        assert len(tracks) == len(spans)
+        assert set(store.derived_from(tracks[0].id)) & {e.id for e in spans}
+        assert len(tracks[0].attributes["f1_hz"]) == len(tracks[0].attributes["times_s"])
+
+    def test_a_null_criterion_leaves_the_spans_absent(
         self,
         store: ProvStore,
         config: TriageConfig,
         tmp_path: Path,
-        mock_models: None,
+        wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Agreement needs both recognizers; its absence is recorded, not raised."""
+        """The packaged config fits nothing, so the pass is absent rather than run on invented floors."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
+        _stub_models(monkeypatch)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert "phonation_spans" in result.absent
+        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
 
-        def qwen_only_fails(audios: list, model: _FakeModel, **kwargs: object) -> list:
-            """Qwen's venv fails; CrisperWhisper still answers."""
-            if model.path_or_uri == node.QWEN_ID:
-                raise RuntimeError("qwen venv failed")
-            chunks = [ScriptLine(text="hello", start=1.50, end=1.58, score=0.9)]
-            return [ScriptLine(text="hello", start=1.50, end=1.58, chunks=chunks, score=0.9)]
 
-        monkeypatch.setattr(node, "transcribe_audios", qwen_only_fails)
-        result = _run(store, config, tmp_path)
-        assert result.verdict.outcome is Outcome.PASS
-        assert {"asr_qwen", "asr_agreement", "alignment"} <= set(result.absent)
-        assert _measurement(store, "asr_crisperwhisper") is not None
+class TestTheConsensusTranscript:
+    """fuse_consensus_words is called, and its output is what every text consumer reads."""
+
+    def test_the_consensus_comes_from_fuse_consensus_words(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The routine is called with both recognizers' resolved results, and its provenance stored."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert sorted(consensus.attributes["systems"]) == sorted([CRISPERWHISPER_ID, QWEN_ID])
+        assert consensus.attributes["provenance"]["operator"] == "consensus_words/resample"
+        assert consensus.attributes["text"] == "hello world"
+
+    def test_word_entities_are_the_consensus_words_only(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Two recognizers agreeing on two words yield two word entities, not four."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert len(live_entities(store, "word")) == 2
+
+    def test_the_per_recognizer_hypotheses_stay_as_measurements(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The evidence the consensus was fused from is retained, but not as word entities."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello there"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        for name in ("asr_crisperwhisper", "asr_qwen"):
+            measurement = find_measurement(store, name)
+            assert measurement is not None
+            assert len(measurement.attributes["words"]) == 2
+
+
+class TestWordsAreBracketAware:
+    """A bracketed or onomatopoeic token is an event, and carries no lexical evidence."""
+
+    def test_a_bracketed_token_is_an_event_not_a_word(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """[COUGH] between two words leaves two words and one event."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            crisper=_line("hello [COUGH] world"),
+            qwen=_line("hello [COUGH] world"),
+        )
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert [e.attributes["text"] for e in live_entities(store, "word")] == ["hello", "world"]
+        events = live_entities(store, "event")
+        assert len(events) == 1
+        assert events[0].attributes["bracketed"] == "[COUGH]"
+        assert events[0].attributes["origin"] == "bracketed"
+
+    def test_an_onomatopoeic_token_is_normalised_into_an_event(
+        self,
+        store: ProvStore,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """With the vocabulary supplied, 'khh' becomes [KHH] and the raw token travels with it."""
+        override = tmp_path / "tokens.yaml"
+        override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\n")
+        config = load_triage_config(override)
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert [e.attributes["text"] for e in live_entities(store, "word")] == ["hello", "world"]
+        events = live_entities(store, "event")
+        assert events[0].attributes["bracketed"] == "[KHH]"
+        assert events[0].attributes["raw"] == "khh"
+        assert events[0].attributes["origin"] == "onomatopoeic"
+
+    def test_a_null_vocabulary_leaves_an_onomatopoeic_token_a_word(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The honest unfitted state: nobody drew the vocabulary, so nothing is normalised."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert [e.attributes["text"] for e in live_entities(store, "word")] == ["hello", "khh", "world"]
+
+
+class TestDisruptionsAreMeasuredOnTheOriginal:
+    """The file-level reading exists whatever the transcript says (V9, V10)."""
+
+    def test_a_wordless_file_still_carries_a_file_level_disruption_reading(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No words is not no measurement; that confusion is what this row exists to remove."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line(""), qwen=_line(""))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "disruptions_file")
+        assert measurement is not None
+        assert measurement.attributes["clipped_runs"] == 0
+        assert "zero_crossing_rate" in measurement.attributes
+
+    def test_the_reading_names_the_original_recording_stream(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Peak normalisation and resampling destroy the defects, so the stream must be the original."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "disruptions_file")
+        assert measurement is not None
+        assert measurement.attributes["signal"] == "recording"
