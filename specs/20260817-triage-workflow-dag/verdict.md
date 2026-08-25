@@ -152,6 +152,7 @@ record and cannot mistake one for the other.
 ```
 triage:   pass | flag | discard
 release:  releasable | withheld | not_assessed
+discard_ground: "unmeasurable" | "acoustically_empty" | null
 reasons:  [ { node, outcome, kind?, why } ]        # every contributing verdict, in order
 ran:      { node: "completed" | "skipped" | "errored" }
 branches: { branch: { will_run, forced_by_hint, kind_state, verdict? } }
@@ -163,6 +164,10 @@ view:     the verdict element id, and the node verdict ids it folded
 ```
 
 `reasons` carries **every** node's contribution, not only the deciding one.
+
+`discard_ground` names which of the two grounds a `discard` rests on, and is null on every other
+outcome. It is in the product because the two grounds are the difference between a broken recording
+and an empty one, and a consumer must not have to re-derive that from the reasons.
 
 `kinds` and `screened` are both present, always. `kinds` is the resolved state after branch authority;
 `screened` is what TAXONOMY classified. Keeping both is what makes `agreement` checkable by a reader
