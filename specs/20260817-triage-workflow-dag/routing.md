@@ -87,7 +87,8 @@ branch_decision: {
   will_run:      bool,
   kind_state:    "present" | "uncertain" | "absent",     # what TAXONOMY said
   forced_by_hint: bool,
-  hint_tags:     [ ... ],                                 # the tags that forced it, if any
+  hint_tags:     [ ... ],                                 # the tags naming this branch's kind;
+                                                          # forced_by_hint says whether they changed the outcome
   why:           reason
 }
 ```
