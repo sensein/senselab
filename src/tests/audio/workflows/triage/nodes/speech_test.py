@@ -6,8 +6,10 @@ from typing import Any, Callable, Iterator, Optional
 
 import numpy as np
 import pytest
+import soundfile as sf
 import torch
 import yaml
+from scipy.signal import lfilter
 
 from senselab.audio.data_structures import (
     Audio,
@@ -318,6 +320,45 @@ def _seed_level(store: ProvStore, tmp_path: Path) -> None:
         },
     )
     store.was_generated_by(entity_id, activity)
+
+
+_NEAR_EXTENTS = [(0.5, 0.8), (0.9, 1.2)]  # one span, 0.5-1.2 s
+_FAR_EXTENTS = [(2.0, 2.4), (2.6, 3.1)]  # one span, 2.0-3.1 s -- a different length, deliberately
+
+
+def _seed_two_distance_spans(store: ProvStore, tmp_path: Path, duration_s: float = 5.0) -> None:
+    """Seed two speech spans a metre apart on every proximity leg, over a real waveform.
+
+    The near span is loud broadband noise: high RMS, a flat spectrum, and an autocorrelation that is
+    nearly a delta, so its direct-to-reverberant ratio is high. The far span is the same noise, made
+    quiet and run through a one-pole low pass: low RMS, a spectrum falling about 6 dB per octave,
+    and a smeared autocorrelation whose tail carries most of the energy, so its ratio is low. Every
+    leg puts the far span behind the near one, which is what lets a test pin each comparison's
+    direction rather than its threshold.
+
+    Args:
+        store: The store to seed.
+        tmp_path: The run directory.
+        duration_s: The streams' duration.
+    """
+    _seed_speech_store(
+        store,
+        tmp_path,
+        words=["near", "one", "far", "two"],
+        word_extents=[*_NEAR_EXTENTS, *_FAR_EXTENTS],
+        duration_s=duration_s,
+    )
+    plain = [e for e in live_entities(store, "stream") if e.attributes.get("name") == "plain"][-1]
+    rate = int(plain.attributes["sampling_rate"])
+    samples = np.zeros(int(duration_s * rate), dtype=np.float32)
+    rng = np.random.default_rng(0)
+    near = slice(int(0.5 * rate), int(1.2 * rate))
+    samples[near] = (0.4 * rng.standard_normal(near.stop - near.start)).astype(np.float32)
+    far = slice(int(2.0 * rate), int(3.1 * rate))
+    low_passed = lfilter([1 - 0.99], [1, -0.99], rng.standard_normal(far.stop - far.start))
+    samples[far] = (0.01 * low_passed / np.abs(low_passed).max()).astype(np.float32)
+    sf.write(str(tmp_path / plain.attributes["path"]), samples, rate)
+    _seed_level(store, tmp_path)
 
 
 # --------------------------------------------------------------------------------------
@@ -1096,6 +1137,40 @@ class TestTheNonTargetAxis:
         _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
         speech(store, "plain", config, run_dir=tmp_path, enrollment=None)
         assert isinstance(_verdict_entity(store, "SPEECH").attributes["nontarget_speech_s"], float)
+
+    def test_every_leg_is_compared_in_the_direction_the_spec_states(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Behind the target is quieter, more steeply tilted and less direct — not the reverse.
+
+        The two spans are placed on opposite sides of all three legs by construction, and the cuts
+        are then set strictly between the two measured values, so what is pinned is each
+        comparison's *sense*, never a threshold. The far span is 1.1 s and the near one 0.7 s, so
+        reversing the senses changes the product rather than leaving it alone.
+        """
+        _stub_diarizers(monkeypatch, primary_speakers=1, second_speakers=1)
+        _seed_two_distance_spans(store, tmp_path)
+        speech(store, "plain", _override(tmp_path), run_dir=tmp_path, enrollment=None)
+        readings = sorted(find_measurements(store, "proximity"), key=lambda m: (m.extent or (0.0, 0.0))[0])
+        assert len(readings) == 2, "the fixture must produce exactly the two spans it describes"
+        near, far = readings[0].attributes, readings[1].attributes
+        for leg in ("level_over_reference_db", "tilt_db_per_octave", "d_to_r_db"):
+            assert far[leg] < near[leg], f"the fixture does not separate the spans on {leg}"
+
+        cuts = {
+            "level_db": (far["level_over_reference_db"] + near["level_over_reference_db"]) / 2,
+            "tilt_db_per_octave": (far["tilt_db_per_octave"] + near["tilt_db_per_octave"]) / 2,
+            "d_to_r_db": (far["d_to_r_db"] + near["d_to_r_db"]) / 2,
+        }
+        config = _override(
+            tmp_path,
+            "speech:\n  nontarget:\n"
+            + "".join(f"    {leg}: {value!r}\n" for leg, value in cuts.items()),
+        )
+        second = ProvStore(run_id="second")
+        _seed_two_distance_spans(second, tmp_path)
+        speech(second, "plain", config, run_dir=tmp_path, enrollment=None)
+        assert _verdict_entity(second, "SPEECH").attributes["nontarget_speech_s"] == pytest.approx(1.1, abs=1e-3)
 
     def test_no_span_is_excluded_on_this_evidence(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
