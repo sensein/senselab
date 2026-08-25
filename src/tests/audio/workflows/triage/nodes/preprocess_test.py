@@ -568,6 +568,33 @@ class TestTheConsensusTranscript:
             assert len(measurement.attributes["words"]) == 2
 
 
+    def test_a_wordless_run_still_writes_the_consensus_with_a_filled_provenance(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A fold that ran and found nothing is a fact, and it is not the same fact as never folding.
+
+        ``fuse_consensus_words`` returns ``([], {})`` when no recognizer produced a readable word, so
+        every named read of the provenance would raise and the measurement would be lost with it.
+        TAXONOMY's lexical line reads ``absent`` from this measurement and ``unavailable`` from its
+        absence (I7), so collapsing the two here would silently change a downstream verdict.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line(""), qwen=_line(""))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert consensus.attributes["words"] == []
+        assert consensus.attributes["text"] == ""
+        assert consensus.attributes["provenance"]["operator"] == "consensus_words/resample"
+        assert consensus.attributes["provenance"]["n_words"] == 0
+        assert live_entities(store, "word") == []
+
+
 class TestWordsAreBracketAware:
     """A bracketed or onomatopoeic token is an event, and carries no lexical evidence."""
 
