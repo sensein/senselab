@@ -104,7 +104,9 @@ class BranchDecision:
         branch: The branch's name.
         kind: The kind it concludes about.
         will_run: Whether routing selected it.
-        kind_state: What TAXONOMY classified, verbatim.
+        kind_state: The classification folded into ROUTING's closed vocabulary — ``present``,
+            ``absent``, ``uncertain`` or ``unreadable``. The verbatim string TAXONOMY wrote is
+            the decision element's ``raw_state``, which the fold does not read.
         forced_by_hint: Whether a hint added it.
         hint_tags: The declared tags naming this branch's kind. Non-empty is a claim, whether or not
             it changed the outcome.
