@@ -17,28 +17,47 @@ fact the store does not already hold.
 
 | product | form | what it is for |
 | --- | --- | --- |
-| **summary** | one PDF **or** one image per file | a human reading one recording |
+| **summary** | one two-page PDF **or** one image per file | a human reading one recording |
 | **summary JSON** | one JSON per file | a consumer reading many |
 
-The two carry the same claims. The image form exists for a file whose summary fits on one page; the
-choice is the config key `report.format` and it does not change the content.
+The two carry the same claims, and so do the summary's own two forms: the choice is the config key
+`report.format` and it does not change the content.
 
-## The summary — one file, one page
+- **`pdf`, the packaged form, is two pages.** Page one is the aligned panels and nothing else; page
+  two is every block, typeset on a text-only page. The blocks share no axis with the panels, so
+  paginating on that seam breaks no alignment, and the panels stay one uncut canvas.
+- **`png` is one image** carrying the panels and the blocks together, for a viewer that scrolls
+  rather than pages.
 
-On a single shared time axis:
+## The summary — the panels
+
+On a single shared time axis, one row each:
 
 | layer | drawn from |
 | --- | --- |
-| waveform and energy envelope with its floor | PREPROCESS |
-| every `span`, with its `peak_over_floor_db` | PREPROCESS |
+| waveform amplitude on the left y-axis, energy envelope and its floor in dBFS on a twin right axis, and every `span` as a translucent overlay annotated with its `peak_over_floor_db` — **one row** | PREPROCESS |
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
 | window label sets — YAMNet, AST, HeAR — as label lanes over their own grids | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
+| words, redacted by the PII marking | SPEECH |
 | airway-labelled spans with their labels and confirmations | AIRWAY |
 | voiced runs and their extents | VOICE |
 | redacted extents | REDACT |
+| spectrogram | the conditioned stream |
 
-Beside the axis, one block per step:
+The waveform, the envelope and the envelope spans are three readings of one signal and share one
+row: the right-hand y-label names both the envelope's dBFS scale and the span overlay, since the
+overlay has no scale of its own. A lane that shares that row is still a **declared lane**, and the
+ABSENT block reports it as drawn.
+
+**The title is short.** The task token the run id names, the date, and the two verdict axes —
+`task-… · 2026-08-25 · triage: flag · release: not_assessed`. The full run id and the file path are
+provenance and appear in the blocks; every block line is folded to the block width, so nothing runs
+off the page.
+
+## The summary — the blocks
+
+Page two of the PDF, the foot of the PNG. One block per step:
 
 - **which branches ran, which were skipped, and which a hint forced** — the `branch_decision`
   elements;
@@ -91,7 +110,7 @@ embedded rather than referenced**:
     streams/  derivatives/            # the sidecars measurements point at
     run.json                          # the runner's own record
   summary/
-    summary.pdf | summary.png
+    summary.pdf | summary.png             # pdf: page 1 panels, page 2 blocks
     summary.json
   released/                           # REDACT's artifacts, only on a REDACT pass
 ```
@@ -110,4 +129,4 @@ producing a releasable artifact — that is [`REDACT`](redact.md)'s.
 
 | key | what is owed |
 | --- | --- |
-| `report.format` | `pdf` or `png`; a presentation choice, owed no measurement, but it must be declared rather than defaulted silently |
+| `report.format` | `pdf` (packaged) or `png`; a presentation choice, owed no measurement, but it must be declared rather than defaulted silently. The derivation beside the key records why the earlier `png` default was withdrawn |
