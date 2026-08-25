@@ -232,6 +232,20 @@ class TestProposePhonationSpans:
         assert span.production == "unvoiced"
         assert span.f0_median_hz is None
 
+    def test_a_span_voiced_for_half_its_frames_is_mixed(self) -> None:
+        """Between the two cutoffs is its own production, not rounded to the nearer one.
+
+        A disordered voice sustains with little or no periodicity, so `mixed` is the reading the
+        detector exists to be able to give; collapsing it into voiced or unvoiced would lose exactly
+        the voices worth measuring.
+        """
+        n = 100
+        strength = np.concatenate([np.full(n // 2, 0.9), np.full(n // 2, 0.1)])
+        times, f0, strength, formants = _tracks(np.full(n, 200.0), np.full(n, 700.0), strength)
+        [span] = propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE)
+        assert span.voiced_fraction == pytest.approx(0.5)
+        assert span.production == "mixed"
+
     def test_a_monotone_run_that_fails_both_limbs_is_a_glide(self) -> None:
         """F0 rising 100 cents a hop breaks stability; its monotone excursion makes it a glide."""
         n = 40
