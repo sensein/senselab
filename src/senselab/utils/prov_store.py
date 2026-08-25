@@ -17,6 +17,7 @@ from typing import Any, Literal, Sequence, cast, get_args
 PROV_TYPE = Literal[
     "span",
     "word",
+    "event",
     "speaker",
     "interval",
     "measurement",
@@ -26,6 +27,8 @@ PROV_TYPE = Literal[
     "verdict",
     "assertion",
     "target_match",
+    "branch_decision",
+    "enrollment",
 ]
 AGENT_TYPE = Literal["model", "software"]
 RELATION = Literal[
