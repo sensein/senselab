@@ -56,6 +56,7 @@ _ABSENCE_BY_CLASS = {
 _ABSENCE_ERRORED = "errored"
 _NO_AXIS = "no time axis: the store holds no readable stream, so there is no shared axis to draw over"
 _ENVELOPE_AXIS = "envelope dBFS"
+_SPANS_OVERLAY = "spans (dB over floor)"
 
 _LANE_SOURCE = {
     "envelope": "energy_envelope",
@@ -382,8 +383,9 @@ def _panels(
 
     Returns:
         The panel specifications for ``plot_aligned_panels``, and the names of the declared lanes
-        they drew. The two are not the same set: the envelope shares the waveform's row and is
-        named by that row's right-hand scale rather than by a panel ``name`` of its own.
+        they drew. The two are not the same set: the envelope and the envelope spans share the
+        waveform's row and are named by that row's right-hand scale rather than by a panel ``name``
+        of their own.
     """
     waveform: dict[str, Any] = {"type": "waveform"}
     panels: list[dict[str, Any]] = [waveform]
@@ -396,14 +398,15 @@ def _panels(
         drawn.add("envelope")
 
     spans = _envelope_spans(store)
-    panels += _lane(
-        "spans (dB over floor)",
-        _segments(
-            (span.extent, f"{float(span.attributes['peak_over_floor_db']):.0f} dB")
-            for span in spans
-            if span.extent is not None
-        ),
+    overlay = _segments(
+        (span.extent, f"{float(span.attributes['peak_over_floor_db']):.0f} dB")
+        for span in spans
+        if span.extent is not None
     )
+    if overlay:
+        waveform["spans"] = {"name": _SPANS_OVERLAY, "segments": overlay}
+        drawn.add(_SPANS_OVERLAY)
+
     panels += _lane(
         "phonation",
         _segments(
