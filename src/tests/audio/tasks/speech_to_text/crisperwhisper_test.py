@@ -2,8 +2,9 @@
 
 The assembly test is hermetic (worker + venv mocked): it verifies the
 worker-output → ScriptLine mapping, including per-word / line ``score`` and the
-line span derived from word timestamps. The integration test runs the real
-model only when the ``crisperwhisper`` venv is already provisioned (skipped in
+line span derived from word timestamps. The conversion-cache tests are pure
+filesystem tests over ``tmp_path``. The integration test runs the real model
+only when the ``crisperwhisper`` venv is already provisioned (skipped in
 default CI).
 """
 
@@ -65,6 +66,44 @@ def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> N
     assert sl.chunks[0].text == "This" and sl.chunks[0].score == 0.95
     assert sl.chunks[1].score is None  # native confidence absent for a word → None
     assert sl.start == 0.0 and sl.end == 0.9
+
+
+def test_ct2_cache_key_matches_the_library_layout() -> None:
+    """The computed key is the directory name the library's converter writes."""
+    snapshot = (
+        "/orcd/data/satra/002/huggingface/hub/models--nyralabs--CrisperWhisper2.0_turbo"
+        "/snapshots/de0369c8a68025b7f6e86387b6eb5a3b369787c8"
+    )
+    assert cw._ct2_cache_key(snapshot, "float32") == (
+        "--orcd--data--satra--002--huggingface--hub--models--nyralabs--CrisperWhisper2.0_turbo"
+        "--snapshots--de0369c8a68025b7f6e86387b6eb5a3b369787c8_float32_6794fe16e2f2"
+    )
+    assert cw._ct2_cache_key(snapshot, "float16").endswith("_float16_6794fe16e2f2")
+
+
+def test_torn_ct2_entry_is_discarded(tmp_path: Path) -> None:
+    """A cache entry stamped complete without weights is torn, and is deleted."""
+    entry = tmp_path / "model_float32_abc"
+    entry.mkdir()
+    (entry / ".conversion_complete").touch()
+    (entry / "config.json").write_text("{}")
+
+    assert cw._ct2_entry_is_torn(entry) is True
+    assert cw._discard_torn_ct2_entry(entry) is True
+    assert not entry.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_complete_ct2_entry_is_kept(tmp_path: Path) -> None:
+    """A cache entry carrying weights is left alone."""
+    entry = tmp_path / "model_float32_abc"
+    entry.mkdir()
+    (entry / ".conversion_complete").touch()
+    (entry / "model.bin").write_bytes(b"weights")
+
+    assert cw._ct2_entry_is_torn(entry) is False
+    assert cw._discard_torn_ct2_entry(entry) is False
+    assert (entry / "model.bin").read_bytes() == b"weights"
 
 
 def test_backend_selection_is_platform_appropriate() -> None:
