@@ -517,65 +517,6 @@ def seed_store(tmp_path: Path) -> Callable[..., dict]:
 
 
 @pytest.fixture
-def seed_airway_store(tmp_path: Path, config: TriageConfig) -> Callable[..., dict]:
-    """A seeder writing the store surface PREPROCESS leaves behind, constructed directly.
-
-    Spans at the airway ``K``, a ``plain`` stream sidecar, the ``yamnet_windows`` json sidecar,
-    CrisperWhisper ``word`` entities and, optionally, a ``spans_no_contrast`` finding at one ``K``
-    and a ``silence`` measurement carrying YAMNet's graded windows.
-    """
-
-    def _seed(
-        store: ProvStore,
-        *,
-        spans: tuple[tuple[float, float, float], ...],
-        yamnet_windows: list[dict[str, Any]],
-        words: tuple[dict[str, Any], ...] = (),
-        no_contrast_k: float | None = None,
-        silence_windows: list[dict[str, Any]] | None = None,
-    ) -> dict[str, Any]:
-        """Seed one store; returns the ids of what it wrote, keyed ``stream``/``spans``/``yamnet``/``words``."""
-        from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID
-
-        k_db = float(config.require("spans.k_db.airway"))
-        ends = [end for _, end, _ in spans] + [float(w["end"]) for w in words]
-        duration = max([3.0, *(end + 0.5 for end in ends)])
-        wav = tmp_path / f"plain-{store.run_id}.wav"
-        sf.write(str(wav), burst_samples(duration_s=duration), 16000)
-        stream_id = store.entity(prov_type="stream", extent=None, attributes={"name": "plain", "path": wav.name})
-        span_ids = [
-            store.entity(prov_type="span", extent=(start, end), attributes={"k_db": k_db, "peak_over_floor_db": peak})
-            for start, end, peak in spans
-        ]
-        sidecar = tmp_path / f"yamnet-{store.run_id}.json"
-        sidecar.write_text(json.dumps(yamnet_windows))
-        yamnet_id = store.entity(
-            prov_type="measurement", extent=None, attributes={"name": "yamnet_windows", "path": sidecar.name}
-        )
-        word_ids = [
-            store.entity(
-                prov_type="word",
-                extent=(float(w["start"]), float(w["end"])),
-                attributes={"text": w["text"], "recognizer": CRISPERWHISPER_ID},
-            )
-            for w in words
-        ]
-        if no_contrast_k is not None:
-            store.entity(
-                prov_type="measurement", extent=None, attributes={"name": "spans_no_contrast", "k_db": no_contrast_k}
-            )
-        if silence_windows is not None:
-            store.entity(
-                prov_type="measurement",
-                extent=None,
-                attributes={"name": "silence", "signal": "plain", "threshold": 0.5, "windows": silence_windows},
-            )
-        return {"stream": stream_id, "spans": span_ids, "yamnet": yamnet_id, "words": word_ids}
-
-    return _seed
-
-
-@pytest.fixture
 def seed_voice_store(tmp_path: Path) -> Callable[..., dict]:
     """A seeder writing the store surface VOICE reads, constructed directly.
 

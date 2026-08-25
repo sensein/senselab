@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from senselab.audio.workflows.triage.nodes.routing import BRANCH_FOR_KIND
 from senselab.audio.workflows.triage.vocabulary import (
     BAD_MAP_VALUES,
     UNREAD_DECLARATION,
@@ -16,8 +17,6 @@ from senselab.audio.workflows.triage.vocabulary import (
     Triage,
     fold_file_verdict,
 )
-
-_BRANCH_FOR_KIND = {"airway": "AIRWAY", "speech": "SPEECH", "voice": "VOICE"}
 
 
 def _decisions(*, airway: bool, speech: bool, voice: bool) -> dict[str, BranchDecision]:
@@ -33,8 +32,8 @@ def _decisions(*, airway: bool, speech: bool, voice: bool) -> dict[str, BranchDe
     """
     selected = {"airway": airway, "speech": speech, "voice": voice}
     return {
-        _BRANCH_FOR_KIND[kind]: BranchDecision(
-            branch=_BRANCH_FOR_KIND[kind],
+        BRANCH_FOR_KIND[kind]: BranchDecision(
+            branch=BRANCH_FOR_KIND[kind],
             kind=kind,
             will_run=will_run,
             kind_state="uncertain" if will_run else "absent",
