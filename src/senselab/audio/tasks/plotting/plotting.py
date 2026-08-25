@@ -506,6 +506,9 @@ def plot_aligned_panels(
     - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
       spectrogram with scatter overlays (each overlay is a dict with keys
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
+    - ``{"type": "text", "lines": [str, ...], "fontsize": int}`` -- monospaced prose on an
+      axis with no time scale, for blocks that accompany the shared axis rather than share it.
+      Its height grows with the number of lines.
 
     Args:
         audio: Input mono audio.
@@ -519,6 +522,11 @@ def plot_aligned_panels(
 
     Returns:
         matplotlib.figure.Figure: The created figure.
+
+    Raises:
+        ValueError: If ``audio`` is not mono, or if a panel names a type this function does not
+            draw. An unrecognised type used to yield a blank axis, so a caller's typo produced a
+            figure that looked finished and said nothing.
     """
     import torchaudio.transforms as T
 
@@ -540,7 +548,12 @@ def plot_aligned_panels(
         "segments": 1,
         "overlay_on_spectrogram": 2,
     }
-    height_ratios = [ratio_map.get(p.get("type", "waveform"), 1) for p in panels]
+    height_ratios = [
+        max(1.0, 0.18 * len(p.get("lines", [])))
+        if p.get("type") == "text"
+        else ratio_map.get(p.get("type", "waveform"), 1)
+        for p in panels
+    ]
 
     scale = _resolve_scale(context)
     rc = _rc_for_scale(scale)
@@ -661,6 +674,26 @@ def plot_aligned_panels(
                 ax.set_ylabel("Mel bins" if mel else "Frequency (Hz)")
                 if overlays:
                     ax.legend(loc="upper right", fontsize=7)
+
+            elif ptype == "text":
+                ax.axis("off")
+                lines = [str(line) for line in panel.get("lines", [])]
+                ax.text(
+                    0.01,
+                    0.98,
+                    "\n".join(lines),
+                    transform=ax.transAxes,
+                    va="top",
+                    ha="left",
+                    family="monospace",
+                    fontsize=panel.get("fontsize", 8),
+                )
+
+            else:
+                raise ValueError(
+                    f"unknown panel type {ptype!r}; plot_aligned_panels supports "
+                    "waveform, spectrogram, features, segments, overlay_on_spectrogram and text"
+                )
 
         # Shared x-axis config
         axes_list[-1].set_xlabel("Time (seconds)")
