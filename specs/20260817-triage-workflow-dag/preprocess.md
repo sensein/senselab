@@ -12,6 +12,24 @@ refine what they find there rather than receiving it as an argument.
 No `fail`, no `flag`. A derivative that cannot be computed is simply absent from the store, and a
 consumer that needs it does not run.
 
+### What an absence records
+
+The verdict's `absent` map is `{derivative: "Class: first line"}`, written by
+`common.describe_exception`. The class is what REPORT reads to say *which kind* of failure it was —
+`ValueError` for a null config key, `LookupError` for a missing input, anything else a genuine
+crash — and the message is what says *which* key or *which* input. Recording the class alone was
+attribution a reader could not act on: eleven blocks read null keys and all eleven read `ValueError`.
+
+The message is bounded rather than allowlisted. Only the first line is kept, and it is truncated at
+200 characters with an ellipsis. **Residual risk:** an exception raised from inside an ASR or PII
+block could in principle interpolate transcript-derived text into its message, and 200 characters of
+it would then be recorded and rendered on the page. The alternative considered was an allowlist of
+exception types that cannot carry audio-derived text; it was rejected because the set is not
+knowable across the third-party stack (any dependency may raise any type), and a wrong allowlist
+gives a false assurance where a stated cap gives a known bound. The page and the store already carry
+element ids and inherit the store's sensitivity, so neither is a release artifact; the bound is what
+keeps an absence record from becoming a second transcript.
+
 PREPROCESS runs **every model that answers a whole-file question**. No later node re-runs YAMNet, AST
 or HeAR over the file: [`TAXONOMY`](taxonomy.md) and the branches read the window classifications from
 here. See [`routing.md`](routing.md) for the pass this node opens.
