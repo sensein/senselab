@@ -138,3 +138,51 @@ def test_concatenate_audios(resampled_mono_audio_sample: Audio, resampled_mono_a
         resampled_mono_audio_sample_x2.waveform,
         torch.cat([resampled_mono_audio_sample.waveform, resampled_mono_audio_sample.waveform], dim=1),
     )
+
+
+class TestExtractSegmentsRefusesAnEmptySegment:
+    """The one fix that is correct under every mechanism (C3b).
+
+    See ``specs/20260817-triage-workflow-dag/benchmarks/glides-diarization.md`` for the run this
+    came from.
+    """
+
+    @staticmethod
+    def _tone(duration_s: float, sampling_rate: int = 16000) -> Audio:
+        """A 440 Hz mono tone.
+
+        Args:
+            duration_s: How long the tone runs.
+            sampling_rate: Its rate.
+
+        Returns:
+            The audio.
+        """
+        t = torch.arange(int(duration_s * sampling_rate), dtype=torch.float32) / sampling_rate
+        return Audio(waveform=(0.5 * torch.sin(2 * math.pi * 440.0 * t)).unsqueeze(0), sampling_rate=sampling_rate)
+
+    def test_a_zero_length_request_raises_like_its_sibling_does(self) -> None:
+        """chunk_audios has refused start >= end since it was written; extract_segments did not."""
+        audio = self._tone(1.0)
+        with pytest.raises(ValueError, match="Start time must be < end"):
+            extract_segments([(audio, [(1.0, 1.0)])])
+
+    def test_a_reversed_request_raises_too(self) -> None:
+        """An end before its start selects nothing and is a caller error, not an empty result."""
+        with pytest.raises(ValueError, match="Start time must be < end"):
+            extract_segments([(self._tone(1.0), [(0.5, 0.2)])])
+
+    def test_an_ordinary_segment_is_unaffected(self) -> None:
+        """The guard is a refusal at the degenerate boundary, not a new minimum length."""
+        [[segment]] = extract_segments([(self._tone(1.0), [(0.2, 0.4)])])
+        assert segment.waveform.shape[-1] > 0
+
+    def test_the_guard_is_what_keeps_a_1_by_0_tensor_out_of_a_model(self) -> None:
+        """Before the guard a degenerate request returned Audio(waveform=(1, 0)).
+
+        Every model-facing caller then passed it on: pyannote refuses it with the exact message the
+        cluster recorded, and nothing before that point had said anything was wrong.
+        """
+        audio = self._tone(1.0)
+        with pytest.raises(ValueError):
+            extract_segments([(audio, [(0.5, 0.5)])])
