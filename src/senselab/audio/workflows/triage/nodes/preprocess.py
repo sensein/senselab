@@ -403,7 +403,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         default_threshold = float(config.require(f"windows.{classifier}.default_threshold"))
         label_thresholds = {
             str(label): float(value)
-            for label, value in (config.require(f"windows.{classifier}.label_thresholds") or {}).items()
+            for label, value in config.require(f"windows.{classifier}.label_thresholds").items()
         }
         activity = _step(
             f"{classifier}_windows",

@@ -341,7 +341,7 @@ def test_a_store_scan_with_no_detectors_is_withheld(make_redact_run: MakeRedactR
 def test_a_required_detector_that_was_never_attempted_is_an_incomplete_scan(
     make_redact_run: MakeRedactRun, tmp_path: Path
 ) -> None:
-    """ "Complete" must not depend on the host that ran the scan.
+    """A complete scan must not depend on the host that ran it.
 
     Locally ``scan_for_pii`` ran [presidio, rules] with ``failed={}`` — gliner was never attempted,
     so nothing recorded its absence and the scan read as complete; on the cluster the same recording
