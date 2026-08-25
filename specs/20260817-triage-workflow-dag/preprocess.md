@@ -68,7 +68,7 @@ Three classifiers run over the whole file, each on its own grid:
 | classifier | window | hop | config |
 | --- | --- | --- | --- |
 | YAMNet | 0.96 s (its native frame) | 0.48 s | `windows.yamnet` |
-| AST | `windows.ast.win_length_s`, default 0.96 s | `windows.ast.hop_s` | `windows.ast` |
+| AST | `windows.ast.win_length_s`, default 10.24 s (the 10 s directive; the model's 1024-frame input) | `windows.ast.hop_s` | `windows.ast` |
 | HeAR | 2 s (fixed by the graph) | `windows.hear.hop_s` | `windows.hear` |
 
 **A window's product is a set of labels, not a winner.** A label is a member of the window's set iff
@@ -174,7 +174,7 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | key | what is owed |
 | --- | --- |
 | `windows.yamnet.default_threshold`, `.label_thresholds` | the score at which a YAMNet label is confident enough to enter a window's set; **null** until fitted |
-| `windows.ast.default_threshold`, `.label_thresholds`, `.hop_s` | the same for AST, and the hop between its frames; **null** until fitted. `.win_length_s` is **not** open: it ships 0.96 s. AST's "native 10.24 s frame" reasoning is retracted — 1024 mel frames is a fixed input shape, not an analysis resolution, `ASTFeatureExtractor` zero-pads a shorter window without a taper, and the coarse setting measured worse on both resolution and confidence (`audio_analysis/data/run_config/default.yaml`) |
+| `windows.ast.default_threshold`, `.label_thresholds`, `.hop_s` | the same for AST, and the hop between its frames; **null** until fitted. `.win_length_s` is **not** open: it ships 10.24 s by the owner's 10 s directive (analyze_audio's window notes do not govern triage). A recording shorter than the window yields one zero-padded window covering the whole file |
 | `windows.hear.default_threshold`, `.label_thresholds`, `.hop_s` | the same for HeAR; **null** until fitted on spans HeAR's 2 s input does not have to be padded to fill |
 | `phonation_spans.*` continuity criterion and hangover | what opens and closes a sustained-phonation or glide span for voiced, unvoiced and mixed production; **null** until fitted |
 | `words.onomatopoeic_tokens` | the token set normalised into bracketed non-words; a vocabulary, owed a corpus it was drawn from |
