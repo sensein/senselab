@@ -22,6 +22,7 @@ from senselab.audio.workflows.triage.nodes.airway import airway
 from senselab.audio.workflows.triage.nodes.common import NodeResult
 from senselab.audio.workflows.triage.nodes.preprocess import preprocess
 from senselab.audio.workflows.triage.nodes.redact import redact
+from senselab.audio.workflows.triage.nodes.report import report
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
@@ -31,6 +32,7 @@ from senselab.audio.workflows.triage.vocabulary import FileVerdict, NodeVerdict,
 from senselab.utils.prov_store import ProvStore
 
 GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
+REPORT_NODE = "REPORT"
 
 _BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 
@@ -38,7 +40,8 @@ STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
 RUN_SUBDIR = "run"
 RELEASE_SUBDIR = "released"
-SIDECAR_SUBDIRS = ("streams", "derivatives", "figures")
+SUMMARY_SUBDIR = "summary"
+SIDECAR_SUBDIRS = ("streams", "derivatives")
 
 _RUN_STAMP = "%Y%m%d-%H%M%S"
 _CONDITIONED_STREAM = "plain"
@@ -75,7 +78,10 @@ class TriageRunResult:
         run_dir: The run directory holding the store and every sidecar.
         artifacts_dir: The release directory REDACT was given; disjoint from ``run_dir``.
         store_path: The persisted store.
+        summary_dir: Where REPORT's two products go. Beside the store, never under ``artifacts_dir``:
+            both carry element ids, which are a join key back into the store.
         released: REDACT's released pair, empty unless it cleared one.
+        summary: REPORT's two products, empty when REPORT itself raised.
     """
 
     file_verdict: FileVerdict | None
@@ -83,7 +89,9 @@ class TriageRunResult:
     run_dir: Path
     artifacts_dir: Path
     store_path: Path
+    summary_dir: Path
     released: dict[str, Path] = field(default_factory=dict)
+    summary: dict[str, Path] = field(default_factory=dict)
 
     @property
     def ran(self) -> dict[str, RunState]:
@@ -104,12 +112,15 @@ class RunLayout:
         run_dir: Where the store and every sidecar go.
         artifacts_dir: Where REDACT may release a pair. Fresh and empty on every run.
         store_path: Where the store is persisted.
+        summary_dir: Where REPORT's two products go, a sibling of the store tree and of the release
+            tree alike.
     """
 
     root: Path
     run_dir: Path
     artifacts_dir: Path
     store_path: Path
+    summary_dir: Path
 
 
 def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
@@ -142,7 +153,13 @@ def prepare_run_layout(out_dir: Path, stem: str) -> RunLayout:
         (run_dir / subdir).mkdir(parents=True)
     artifacts_dir = root / RELEASE_SUBDIR
     artifacts_dir.mkdir()
-    return RunLayout(root=root, run_dir=run_dir, artifacts_dir=artifacts_dir, store_path=run_dir / STORE_FILE)
+    return RunLayout(
+        root=root,
+        run_dir=run_dir,
+        artifacts_dir=artifacts_dir,
+        store_path=run_dir / STORE_FILE,
+        summary_dir=root / SUMMARY_SUBDIR,
+    )
 
 
 def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]) -> _R | None:
@@ -233,6 +250,31 @@ def _drive_branches(
     return {}
 
 
+def _attempt_artifacts(
+    outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], dict[str, Path]]
+) -> dict[str, Path]:
+    """Call one node that renders rather than concludes, recording what happened.
+
+    REPORT writes no verdict — a rendering is not evidence — so its outcome carries no conclusion,
+    and its failure changes nothing about the file: the store was already written.
+
+    Args:
+        outcomes: The per-node record this call is added to.
+        node: The node's name.
+        call: The node call, already bound to its arguments.
+
+    Returns:
+        The artifacts it produced, empty when it raised.
+    """
+    try:
+        artifacts = call()
+    except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
+        outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=f"{type(error).__name__}: {error}")
+        return {}
+    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED)
+    return artifacts
+
+
 def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRunResult) -> None:
     """Write the runner's own record of the run beside the store.
 
@@ -253,6 +295,8 @@ def _write_log(path: Path, source: Path, config: TriageConfig, result: TriageRun
         "ran": {node: outcome.state.value for node, outcome in result.nodes.items()},
         "errors": {node: outcome.error for node, outcome in result.nodes.items() if outcome.error is not None},
         "released": {name: str(released) for name, released in result.released.items()},
+        "summary_dir": str(result.summary_dir),
+        "summary": {name: str(product) for name, product in result.summary.items()},
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
@@ -280,8 +324,9 @@ def run_triage(
         enrollment: The target speaker's enrollment, handed to SPEECH when the caller supplied one.
 
     Returns:
-        The file verdict, the per-node outcomes and errors, the run's paths and REDACT's released
-        pair.
+        The file verdict, the per-node outcomes and errors, the run's paths, REDACT's released pair
+        and REPORT's two products. REPORT runs after VERDICT on every outcome and writes no elements,
+        so its own failure is recorded beside every other node's and changes no verdict.
     """
     source = Path(source)
     layout = prepare_run_layout(Path(out_dir), source.stem)
@@ -315,13 +360,21 @@ def run_triage(
     )
     store.write_jsonl(layout.store_path)
 
+    summary = _attempt_artifacts(
+        outcomes,
+        REPORT_NODE,
+        lambda: report(store, layout.summary_dir, config, run_dir=layout.run_dir),
+    )
+
     result = TriageRunResult(
         file_verdict=folded.file_verdict if folded is not None else None,
-        nodes={node: outcomes[node] for node in GRAPH_ORDER if node in outcomes},
+        nodes={node: outcomes[node] for node in (*GRAPH_ORDER, REPORT_NODE) if node in outcomes},
         run_dir=layout.run_dir,
         artifacts_dir=layout.artifacts_dir,
         store_path=layout.store_path,
+        summary_dir=layout.summary_dir,
         released=released,
+        summary=summary,
     )
     _write_log(layout.run_dir / LOG_FILE, source, config, result)
     return result

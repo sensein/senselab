@@ -501,8 +501,9 @@ def plot_aligned_panels(
     - ``{"type": "spectrogram", "mel": True/False}`` -- linear or mel spectrogram.
     - ``{"type": "features", "data": [(times, values, label, color), ...]}`` --
       scatter/line overlay of feature curves (e.g., pitch, formants).
-    - ``{"type": "segments", "segments": [{"label": str, "start": float, "end": float}, ...]}``
-      -- colored horizontal bars for phoneme/word segments.
+    - ``{"type": "segments", "segments": [{"label": str, "start": float, "end": float}, ...],
+      "name": str}`` -- colored horizontal bars for phoneme/word segments. ``name`` becomes the
+      panel's y-label, so a figure stacking several lanes says which is which.
     - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
       spectrogram with scatter overlays (each overlay is a dict with keys
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
@@ -644,7 +645,7 @@ def plot_aligned_panels(
                     ax.barh(y, w, left=seg["start"], height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
                 ax.set_yticks(range(len(unique_labels)))
                 ax.set_yticklabels(unique_labels, fontsize=7)
-                ax.set_ylabel("Segment")
+                ax.set_ylabel(panel.get("name") or "Segment")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
 
             elif ptype == "overlay_on_spectrogram":

@@ -322,6 +322,14 @@ derivation: |
   leg's three thresholds, each null; until all three exist the legs are measured and reported per span
   and nontarget_speech_s is written as null rather than zero.
 
+  report.format png. report.md calls it a presentation choice owed no measurement, but one that "must
+  be declared rather than defaulted silently". Declaring it here IS the declaration: a null would make
+  the one product report.md requires on EVERY file and EVERY outcome unreachable under the packaged
+  config, which is a worse failure than a defaulted presentation choice -- the run would emit nothing
+  for the file it most needs to emit something for, the one ADMIT refused. png rather than pdf because
+  the image form is the one report.md describes for a summary that fits on one page, which is what
+  this summary is. The two forms carry the same claims, and pdf is one override away.
+
 resample:
   target_hz: 16000
 
@@ -477,3 +485,6 @@ redaction:
   padding_ms: null
   fill: null
   bleep_hz: 1000.0
+
+report:
+  format: png

@@ -22,7 +22,6 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage import run as run_module
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.admit import AdmitResult
-from senselab.audio.workflows.triage.nodes.airway import AirwayResult
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult
 from senselab.audio.workflows.triage.nodes.redact import RedactResult
@@ -133,10 +132,10 @@ def _fakes(
 
     def _airway(
         store: ProvStore, source: str, config: TriageConfig, hint: AudioHints | None = None, *, run_dir: Path
-    ) -> AirwayResult:
+    ) -> NodeResult:
         _record("AIRWAY")
         entity_id, verdict = _conclude(store, "AIRWAY", Outcome.PASS, "airway")
-        return AirwayResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id, figure_path=None)
+        return NodeResult(verdict=verdict, view=(entity_id,), verdict_entity_id=entity_id)
 
     def _speech(
         store: ProvStore,
@@ -232,7 +231,7 @@ class TestHappyPath:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.file_verdict is not None
         assert result.file_verdict.triage is Triage.PASS
-        assert result.ran == dict.fromkeys(GRAPH, RunState.COMPLETED)
+        assert result.ran == {**dict.fromkeys(GRAPH, RunState.COMPLETED), "REPORT": RunState.COMPLETED}
 
     def test_the_layout_is_written_and_the_release_dir_is_disjoint(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -242,13 +241,58 @@ class TestHappyPath:
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
         assert result.store_path == result.run_dir / "store.jsonl"
         assert result.store_path.is_file()
-        for sub in ("streams", "derivatives", "figures"):
+        for sub in ("streams", "derivatives"):
             assert (result.run_dir / sub).is_dir()
         run_resolved, release_resolved = result.run_dir.resolve(), result.artifacts_dir.resolve()
         assert not run_resolved.is_relative_to(release_resolved)
         assert not release_resolved.is_relative_to(run_resolved)
         assert sorted(result.released) == ["audio", "transcript"]
         assert all(path.parent == result.artifacts_dir for path in result.released.values())
+
+    def test_the_summary_sits_beside_the_store_and_never_under_released(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """It carries element ids and marked words' extents, so it inherits the store's sensitivity."""
+        graph(released={"audio": "audio.wav", "transcript": "transcript.txt"})
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.summary_dir.parent == result.run_dir.parent
+        assert not result.summary_dir.resolve().is_relative_to(result.artifacts_dir.resolve())
+        assert not result.artifacts_dir.resolve().is_relative_to(result.summary_dir.resolve())
+
+    def test_both_products_are_emitted_on_every_run(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """REPORT runs after VERDICT, on every outcome, and its products land under summary/."""
+        graph()
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert sorted(result.summary) == ["json", "summary"]
+        assert all(product.parent == result.summary_dir for product in result.summary.values())
+        assert all(product.is_file() for product in result.summary.values())
+
+    def test_a_refused_file_still_gets_both_products(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The file that most needs a report is the one ADMIT refused (V24)."""
+        graph(admit_outcome=Outcome.FAIL)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert sorted(result.summary) == ["json", "summary"]
+        assert json.loads(result.summary["json"].read_text())["verdict"]["triage"] == "discard"
+
+    def test_a_report_failure_is_recorded_and_changes_no_verdict(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The store was already written; a rendering that failed is an operational fact, not a finding."""
+        graph()
+
+        def _raise(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("the renderer could not run")
+
+        monkeypatch.setattr(run_module, "report", _raise)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.summary == {}
+        assert result.ran["REPORT"] is RunState.ERRORED
+        assert result.file_verdict is not None and result.file_verdict.triage is Triage.PASS
+        assert result.store_path.is_file()
 
     def test_the_release_axis_follows_redact(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
@@ -507,6 +551,7 @@ class TestCli:
                 run_dir=run_dir,
                 artifacts_dir=tmp_path / "released",
                 store_path=run_dir / "store.jsonl",
+                summary_dir=tmp_path / "summary",
             )
 
         monkeypatch.setattr(cli, "run_triage", _fake_run)
@@ -536,6 +581,7 @@ class TestCli:
                 run_dir=run_dir,
                 artifacts_dir=tmp_path / "released",
                 store_path=run_dir / "store.jsonl",
+                summary_dir=tmp_path / "summary",
             )
 
         monkeypatch.setattr(cli, "run_triage", _fake_run)

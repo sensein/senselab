@@ -46,6 +46,18 @@ class TestTheTextPanel:
         )
         assert tall.get_size_inches()[1] > short.get_size_inches()[1]
 
+    def test_a_segments_panel_can_name_its_lane(self) -> None:
+        """A figure stacking several segment lanes is unreadable if every one says "Segment"."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {"type": "segments", "segments": [{"label": "Cough", "start": 0.1, "end": 0.2}], "name": "airway"},
+                {"type": "segments", "segments": [{"label": "a", "start": 0.1, "end": 0.2}]},
+            ],
+        )
+        assert figure.axes[0].get_ylabel() == "airway"
+        assert figure.axes[1].get_ylabel() == "Segment"
+
     def test_an_unknown_panel_type_now_raises(self) -> None:
         """A typo used to yield a blank axis and a report that looked finished."""
         with pytest.raises(ValueError, match="unknown panel type"):
