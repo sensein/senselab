@@ -544,6 +544,25 @@ def _cli() -> types.ModuleType:
     return module
 
 
+@pytest.fixture
+def fake_result(tmp_path: Path) -> Callable[..., Any]:
+    """A ``TriageRunResult`` standing in for a graph run, so the CLI can be driven without one."""
+
+    def _make(file_verdict: Any = None, nodes: Any = None) -> Any:  # noqa: ANN401
+        run_dir = tmp_path / "run"
+        run_dir.mkdir(exist_ok=True)
+        return run_module.TriageRunResult(
+            file_verdict=file_verdict,
+            nodes=nodes or {},
+            run_dir=run_dir,
+            artifacts_dir=tmp_path / "released",
+            store_path=run_dir / "store.jsonl",
+            summary_dir=tmp_path / "summary",
+        )
+
+    return _make
+
+
 class TestCli:
     """The CLI is two arguments over one versioned config."""
 
@@ -560,8 +579,8 @@ class TestCli:
         hint_file.write_text("may_contain: [cough]\nenvironment: clinic\n")
         seen: dict[str, Any] = {}
 
-        def _fake_run(source: Path, out_dir: Path, config: TriageConfig, hint: AudioHints | None = None) -> Any:  # noqa: ANN401
-            seen.update(source=source, out_dir=out_dir, config=config, hint=hint)
+        def _fake_run(source: Path, out_dir: Path, config: TriageConfig, **kwargs: Any) -> Any:  # noqa: ANN401
+            seen.update(source=source, out_dir=out_dir, config=config, **kwargs)
             run_dir = tmp_path / "run"
             run_dir.mkdir(exist_ok=True)
             return run_module.TriageRunResult(
@@ -590,8 +609,8 @@ class TestCli:
         source.write_bytes(b"")
         seen: dict[str, Any] = {}
 
-        def _fake_run(source: Path, out_dir: Path, config: TriageConfig, hint: AudioHints | None = None) -> Any:  # noqa: ANN401
-            seen.update(source=source, out_dir=out_dir, config=config, hint=hint)
+        def _fake_run(source: Path, out_dir: Path, config: TriageConfig, **kwargs: Any) -> Any:  # noqa: ANN401
+            seen.update(source=source, out_dir=out_dir, config=config, **kwargs)
             run_dir = tmp_path / "run"
             run_dir.mkdir(exist_ok=True)
             return run_module.TriageRunResult(
@@ -619,7 +638,7 @@ class TestCli:
         cli = _cli()
         parser = cli.build_parser()
         options = {action.dest for action in parser._actions if action.dest != "help"}
-        assert options == {"audio", "out", "config", "hint"}
+        assert options == {"audio", "out", "config", "hint", "enrollment"}
 
     def test_a_hints_table_is_refused_rather_than_read_as_an_empty_hint(self, tmp_path: Path) -> None:
         """AudioHints ignores unknown keys, so a filename-keyed hints table validated to may_contain=[].
@@ -647,3 +666,124 @@ class TestCli:
         hint_file = tmp_path / "hint.yaml"
         hint_file.write_text("may_contain: [cough]\nenvironment: clinic\n")
         assert cli.load_hint(hint_file) == AudioHints(may_contain=["cough"], environment="clinic")
+
+
+ENROLLMENT_YAML = f"""\
+subject_id: sub-01
+task: sustained-vowel
+vector: [1.0, 0.0]
+provenance:
+  model_id: speechbrain/spkrec-ecapa-voxceleb
+  model_commit_sha: {"a" * 40}
+  source_files: [a.wav, b.wav]
+  n_windows_used: 12
+  n_windows_dropped: 1
+"""
+
+
+class TestTheEnrollmentDriver:
+    """SPEECH identifies the target by enrollment, so the CLI must be able to supply one."""
+
+    def test_an_enrollment_file_reaches_the_runner(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """Without this flag the enrollment path was unreachable from the shipped entry point."""
+        cli = _cli()
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        enrollment_file = tmp_path / "enrollment.yaml"
+        enrollment_file.write_text(ENROLLMENT_YAML)
+        seen: dict[str, Any] = {}
+
+        def _fake_run(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            seen.update(kwargs)
+            return fake_result()
+
+        monkeypatch.setattr(cli, "run_triage", _fake_run)
+        assert cli.main([str(source), "--enrollment", str(enrollment_file)]) == 0
+        enrollment = seen["enrollment"]
+        assert enrollment.subject_id == "sub-01"
+        assert enrollment.vector == [1.0, 0.0]
+        assert enrollment.provenance.model_id == "speechbrain/spkrec-ecapa-voxceleb"
+        assert enrollment.provenance.model_commit_sha == "a" * 40
+        assert enrollment.sources == ["a.wav", "b.wav"]
+
+    def test_no_enrollment_flag_hands_the_runner_none(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_result: Callable[..., Any]
+    ) -> None:
+        """The control: an unenrolled run is the ordinary one, and must stay a run."""
+        cli = _cli()
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        seen: dict[str, Any] = {}
+
+        def _fake_run(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            seen.update(kwargs)
+            return fake_result()
+
+        monkeypatch.setattr(cli, "run_triage", _fake_run)
+        assert cli.main([str(source)]) == 0
+        assert seen["enrollment"] is None
+
+    def test_json_is_read_the_same_way(self, tmp_path: Path) -> None:
+        """An estimator writing JSON must not need a converter to feed this flag."""
+        cli = _cli()
+        path = tmp_path / "enrollment.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "subject_id": "sub-01",
+                    "vector": [1.0, 0.0],
+                    "provenance": {"model_id": "m", "model_commit_sha": "b" * 40, "source_files": ["a.wav"]},
+                }
+            )
+        )
+        assert cli.load_enrollment(path).subject_id == "sub-01"
+
+    def test_an_unknown_top_level_key_is_refused_loudly(self, tmp_path: Path) -> None:
+        """Pydantic ignores an extra key, so a misspelled field would enrol a different vector silently."""
+        cli = _cli()
+        path = tmp_path / "enrollment.yaml"
+        path.write_text(ENROLLMENT_YAML.replace("subject_id:", "subjectId:"))
+        with pytest.raises(ValueError, match="subjectId"):
+            cli.load_enrollment(path)
+
+    def test_an_unknown_provenance_key_is_refused_loudly(self, tmp_path: Path) -> None:
+        """The commit lives in the nested block, and an ignored key there is an unpinned enrollment."""
+        cli = _cli()
+        path = tmp_path / "enrollment.yaml"
+        path.write_text(ENROLLMENT_YAML.replace("  model_commit_sha:", "  revision:"))
+        with pytest.raises(ValueError, match="revision"):
+            cli.load_enrollment(path)
+
+    def test_a_table_keyed_by_subject_is_refused_rather_than_read_as_one_enrollment(self, tmp_path: Path) -> None:
+        """A per-subject table is the shape an estimator naturally writes; it is not this file."""
+        cli = _cli()
+        path = tmp_path / "enrollments.json"
+        path.write_text(json.dumps({"sub-01": {"subject_id": "sub-01", "vector": [1.0]}}))
+        with pytest.raises(ValueError, match="sub-01"):
+            cli.load_enrollment(path)
+
+    def test_a_file_that_is_not_a_mapping_is_refused(self, tmp_path: Path) -> None:
+        """A list of enrollments is the other shape, and is refused with the same message."""
+        cli = _cli()
+        path = tmp_path / "enrollments.json"
+        path.write_text(json.dumps([{"subject_id": "sub-01"}]))
+        with pytest.raises(ValueError, match="mapping"):
+            cli.load_enrollment(path)
+
+    def test_a_malformed_enrollment_is_an_invocation_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bad enrollment is the caller's error, so nothing is measured and the exit code says so."""
+        cli = _cli()
+        source = tmp_path / "recording.wav"
+        source.write_bytes(b"")
+        path = tmp_path / "enrollment.yaml"
+        path.write_text("subject_id: sub-01\n")
+
+        def _never(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise AssertionError("the graph must not run against an enrollment that did not load")
+
+        monkeypatch.setattr(cli, "run_triage", _never)
+        assert cli.main([str(source), "--enrollment", str(path)]) == 2
