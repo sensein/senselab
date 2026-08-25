@@ -12,6 +12,11 @@ from senselab.audio.workflows.triage.nodes.common import find_measurement, find_
 from senselab.utils.prov_store import ProvStore
 
 
+def _steps(store: ProvStore) -> list[str | None]:
+    """Every PREPROCESS activity step the seeder recorded."""
+    return [activity.step for activity in store.activities("PREPROCESS")]
+
+
 class TestSeeder:
     """The shared seeder writes what the contract says it writes."""
 
@@ -34,7 +39,71 @@ class TestSeeder:
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
         assert pooled.attributes["n_windows"] == 0
-        assert [a.step for a in store.activities("PREPROCESS")].count("phonation_spans") == 1
+        assert _steps(store).count("phonation_spans") == 1
+
+    def test_every_documented_argument_tells_none_from_empty(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """The whole point of the fixture: `[]` leaves a mark on the store and `None` leaves none.
+
+        ``spans`` and ``events`` used to collapse the two through an ``or []``, which made a seeded
+        "the pass ran and proposed nothing" indistinguishable from "the pass never ran" — the exact
+        distinction six downstream suites read as ``absent`` against ``unavailable``.
+        """
+        seed_preprocess_store(store, spans=[], events=[], ast_labels=[], hear_labels=[])
+        assert _steps(store).count("spans") == 1
+        assert _steps(store).count("consensus") == 1
+        assert live_entities(store, "span") == []
+        assert live_entities(store, "event") == []
+        assert find_measurement(store, "ast_windows") is not None
+        assert find_measurement(store, "hear_windows") is not None
+        assert find_measurement(store, "consensus_transcript") is None
+
+    def test_none_writes_no_marker_for_any_argument(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """The other half of the same distinction, asserted on the same store shape."""
+        seed_preprocess_store(store)
+        steps = _steps(store)
+        assert "spans" not in steps
+        assert "consensus" not in steps
+        assert "phonation_spans" not in steps
+        for name in ("ast_windows", "hear_windows", "ast_scores", "hear_scores", "yamnet_scores"):
+            assert find_measurement(store, name) is None, name
+
+    def test_scores_only_seeds_the_packaged_configs_own_state(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """Model ran, threshold null, so the scores exist and the fold does not.
+
+        This is what the shipped configuration actually produces, and until the seeder could write it
+        no downstream test could exercise the case its own node will meet first.
+        """
+        seed_preprocess_store(
+            store,
+            yamnet_labels=[["Speech"]],
+            ast_labels=[["Speech"]],
+            hear_labels=[["Cough"]],
+            scores_only=("ast", "hear"),
+        )
+        for name in ("yamnet_scores", "ast_scores", "hear_scores"):
+            assert find_measurement(store, name) is not None, name
+        assert find_measurement(store, "yamnet_windows") is not None
+        for name in ("ast_windows", "hear_windows"):
+            assert find_measurement(store, name) is None, name
+        assert find_measurements(store, "ast_window") == []
+
+    def test_a_phonation_span_may_be_seeded_as_a_glide(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """T5 and T6 both read the glide member, so the seeder has to be able to write one."""
+        seed_preprocess_store(store, phonation=[(1.0, 2.0, "voiced"), (3.0, 3.4, "voiced", "glide")])
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        assert [e.attributes["member"] for e in spans] == ["sustained", "glide"]
+        assert spans[0].attributes["glide_direction"] is None
+        assert spans[1].attributes["glide_direction"] == "rising"
+        assert spans[1].attributes["glide_extent_cents"] > 0.0
+        assert spans[1].attributes["offset_criterion"] == "monotonicity"
 
     def test_the_full_surface(self, store: ProvStore, seed_preprocess_store: Callable[..., None]) -> None:
         """Every argument at once, in both the bare and the timed shape."""
