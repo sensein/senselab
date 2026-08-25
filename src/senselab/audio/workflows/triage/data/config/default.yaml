@@ -326,9 +326,14 @@ derivation: |
   be declared rather than defaulted silently". Declaring it here IS the declaration: a null would make
   the one product report.md requires on EVERY file and EVERY outcome unreachable under the packaged
   config, which is a worse failure than a defaulted presentation choice -- the run would emit nothing
-  for the file it most needs to emit something for, the one ADMIT refused. png rather than pdf because
-  the image form is the one report.md describes for a summary that fits on one page, which is what
-  this summary is. The two forms carry the same claims, and pdf is one override away.
+  for the file it most needs to emit something for, the one ADMIT refused. png rather than pdf, and
+  NOT because the summary fits on one page: measured on the first real rendering it is about 32
+  inches tall, because thirteen lanes over one shared time axis is what "time-aligned" costs. The
+  image is the form of a single uncut canvas that any viewer scrolls at any zoom, which is the only
+  form in which the lanes and the spectrogram stay registered against each other. Paginating it would
+  break exactly the alignment the summary exists to show, so the choice is between one tall image and
+  one tall page, and the image needs no reader. pdf is one override away and carries identical
+  claims; it is the better choice for printing or for a vector zoom.
 
 resample:
   target_hz: 16000

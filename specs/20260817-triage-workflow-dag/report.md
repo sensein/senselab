@@ -84,16 +84,21 @@ embedded rather than referenced**:
 ## Placement
 
 ```
-<run_dir>/
-  store.jsonl              # the store
+<out_dir>/<stem>_<utc-timestamp>/     # the run root; the three trees below are siblings
+  run/
+    store.jsonl                       # the store
+    streams/  derivatives/            # the sidecars measurements point at
+    run.json                          # the runner's own record
   summary/
     summary.pdf | summary.png
     summary.json
-  released/                # REDACT's artifacts, only on a REDACT pass
+  released/                           # REDACT's artifacts, only on a REDACT pass
 ```
 
-`summary/` sits beside the store, under the run directory, and is **not** under `released/`: it
-carries element ids and marked words' extents, so it inherits the store's sensitivity.
+`summary/` sits **beside** the store tree rather than inside it, and is **not** under `released/`: it
+carries element ids and marked words' extents, so it inherits the store's sensitivity and is not a
+releasable artifact. Three siblings rather than two nested trees is what lets a publish step sweep
+`released/` without reaching either of the other two.
 
 ## Out of scope
 
