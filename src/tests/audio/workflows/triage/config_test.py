@@ -166,10 +166,8 @@ class TestTheV2OpenKeys:
         "windows.yamnet.label_thresholds",
         "windows.ast.default_threshold",
         "windows.ast.label_thresholds",
-        "windows.ast.hop_s",
         "windows.hear.default_threshold",
         "windows.hear.label_thresholds",
-        "windows.hear.hop_s",
         "phonation_spans.f0_stability_cents",
         "phonation_spans.formant_stability_hz",
         "phonation_spans.glide_min_excursion_cents",
@@ -225,6 +223,22 @@ class TestTheV2OpenKeys:
             "hear.label_floor",
         ):
             with pytest.raises(ValueError, match="unknown configuration key"):
+                config.require(path)
+
+    def test_the_window_hops_are_declared_defaults_not_open_keys(self) -> None:
+        """A null hop is not the honest state here: it stopped the classifier running at all.
+
+        ``require`` raises on a null, and both hops are read inside the *scores* block, so while they
+        were null AST and HeAR never ran under the packaged config -- the expensive model output was
+        lost along with the threshold fold V3 exists to let it survive. Both now ship non-overlapping,
+        which is a declared choice the config_hash names, while the thresholds stay null.
+        """
+        config = load_triage_config()
+        assert config.require("windows.ast.hop_s") == 10.24
+        assert config.require("windows.ast.win_length_s") == 10.24
+        assert config.require("windows.hear.hop_s") == 2.0
+        for path in ("windows.ast.default_threshold", "windows.hear.default_threshold"):
+            with pytest.raises(ValueError, match="has no value"):
                 config.require(path)
 
     def test_the_f0_range_replaces_the_two_scalar_keys(self) -> None:

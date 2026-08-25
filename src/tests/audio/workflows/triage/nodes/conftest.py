@@ -53,7 +53,11 @@ def burst_samples(duration_s: float = 3.0, sampling_rate: int = 16000) -> np.nda
 
 @pytest.fixture
 def windows_config(tmp_path: Path) -> TriageConfig:
-    """The packaged config with every window threshold and hop supplied, so the folds can run."""
+    """The packaged config with every window threshold supplied, so the folds can run.
+
+    The hops are left at their shipped non-overlapping defaults: they are declared values, not
+    open keys, and a fixture that overrode them would stop testing what production reads.
+    """
     override = tmp_path / "windows.yaml"
     override.write_text(
         "windows:\n"
@@ -63,11 +67,9 @@ def windows_config(tmp_path: Path) -> TriageConfig:
         "  ast:\n"
         "    default_threshold: 0.3\n"
         "    label_thresholds: {}\n"
-        "    hop_s: 0.48\n"
         "  hear:\n"
         "    default_threshold: 0.5\n"
         "    label_thresholds: {}\n"
-        "    hop_s: 1.0\n"
     )
     return load_triage_config(override)
 
