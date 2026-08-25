@@ -137,7 +137,12 @@ derivation: |
   null and a run must declare the fill it used. silence and bleep are implemented; noise raises rather
   than shipping an unmeasured spectral shape, because "speech-shaped" names a shaping nobody here has
   fitted. redaction.bleep_hz 1000.0 is the conventional broadcast censor tone -- a presentation
-  choice, declared rather than defaulted silently, and not fitted.
+  choice, declared rather than defaulted silently, and not fitted. The bleep is scaled to the
+  extent's own PEAK, so its RMS is peak/sqrt(2) and the masked extent comes out louder than what it
+  replaced by that extent's crest factor over sqrt(2): measured 1.00x on a pure tone, 2.34x on a
+  speech probe and 3.19x on the gaussian-noise fixture the node's own tests use. That is a
+  presentation choice too, and equally unfitted -- matching the extent's RMS instead would change
+  how loud a released artifact's redactions are without anyone having measured which is preferable.
 
   UNSET, and why -- benchmarks/open.md carries each of these:
     phonation.hnr_floor_db, phonation.rms_floor: the gate's interval was measured as normalised
