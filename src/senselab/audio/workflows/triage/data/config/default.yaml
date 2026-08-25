@@ -208,8 +208,12 @@ derivation: |
   reader should know: a recording shorter than the window is zero-padded by ASTFeatureExtractor, so
   it yields one window covering the whole file; and AST's windows sit on a coarser grid than
   YAMNet's, so the acoustic evidence line counts each classifier's windows on its own grid.
-  windows.ast.hop_s stays null because the v2 spec owes it a fit; non-overlapping (hop = window) is
-  what an override should start from.
+  windows.ast.hop_s 10.24 -- owner-directed 10 s windows are read NON-OVERLAPPING until a hop is
+  fitted, so the hop equals the window and AST reads the recording once end to end. It is a declared
+  default rather than a null because a null hop stopped AST running at all: require() raised inside
+  the scores block, so the model never ran under the packaged config and the expensive output was
+  lost along with the threshold fold it was supposed to survive. A fitted overlap remains an
+  override.
 
   windows.ast.top_k 527 -- the full AudioSet label space AST was fine-tuned on. A SIZE, not a
   threshold, and the same reason yamnet.top_k is 521: classify_audios does `top_k=top_k or 5` on its
@@ -220,8 +224,10 @@ derivation: |
   in a busy window would vanish. HeAR is unaffected: detect_health_acoustic_events takes a different
   path on which top_k=None does keep all eight labels.
 
-  HeAR's 2 s window is model-imposed and already lives at hear.window_s; only its hop is a key, and it
-  is owed a fit on spans HeAR's input does not have to be padded to fill. hear.placement and
+  HeAR's 2 s window is model-imposed and already lives at hear.window_s; only its hop is a key.
+  windows.hear.hop_s 2.0 -- non-overlapping 2 s windows, by the same ruling as windows.ast.hop_s and
+  for the same reason: a null hop meant HeAR never ran under the packaged config. A fit on spans
+  HeAR's input does not have to be padded to fill is still owed, and lands as an override. hear.placement and
   hear.label_floor are DELETED with the code that read them: placement was only ever an argument to
   span_to_hear_buffer, which branch-airway.md removes from the graph by confining HeAR to PREPROCESS,
   and label_floor is replaced by windows.hear.default_threshold. speech.agreement_flag_floor is
@@ -342,13 +348,13 @@ windows:
   ast:
     default_threshold: null
     label_thresholds: null
-    win_length_s: 10.24     # owner-directed 10 s window (1024-frame input); see the derivation
-    hop_s: null             # owed a fit; non-overlapping (hop = window) is the starting override
+    win_length_s: 10.24     # owner-directed 10 s window (1024-frame input)
+    hop_s: 10.24            # non-overlapping until a hop is fitted; a null here stopped AST running
     top_k: 527              # AudioSet's full label space; a size, not a threshold (classify_audios: top_k or 5)
   hear:
     default_threshold: null
     label_thresholds: null
-    hop_s: null
+    hop_s: 2.0              # non-overlapping 2 s windows; a null here stopped HeAR running
 
 phonation_spans:
   hop_s: 0.01

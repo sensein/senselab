@@ -331,10 +331,61 @@ class TestWindowClassificationsAreSets:
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, hear=[window(0.0, 2.0, {"Cough": 0.9})], record=seen)
         preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
-        assert seen["hear"]["hop_length"] == pytest.approx(1.0)
+        assert seen["hear"]["hop_length"] == pytest.approx(2.0)
         pooled = find_measurement(store, "hear_windows")
         assert pooled is not None
         assert pooled.attributes["labels"] == ["Cough"]
+
+
+class TestThePackagedConfigStillRunsEveryClassifier:
+    """V3's split, for all three classifiers: the model runs, the threshold fold is what goes absent."""
+
+    def test_every_classifier_scores_survive_the_packaged_config(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A null threshold must not cost the expensive model output, and a null hop must not either.
+
+        The hops are what made this worth pinning: while ``windows.ast.hop_s`` and
+        ``windows.hear.hop_s`` were null, ``require`` raised inside the scores block, so AST and HeAR
+        never ran at all under the packaged config and V3 held for one classifier out of three.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            yamnet=[window(0.0, 0.96, {"Speech": 0.9})],
+            ast=[window(0.0, 10.24, {"Speech": 0.9})],
+            hear=[window(0.0, 2.0, {"Cough": 0.9})],
+            crisper=_line("hello world"),
+            qwen=_line("hello world"),
+        )
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        for name in ("yamnet_scores", "ast_scores", "hear_scores"):
+            assert find_measurement(store, name) is not None, name
+        for name in ("yamnet_windows", "ast_windows", "hear_windows"):
+            assert find_measurement(store, name) is None, name
+        assert set(result.absent) == {"yamnet_windows", "ast_windows", "hear_windows", "phonation_spans"}
+
+    def test_the_shipped_hops_are_non_overlapping(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Each classifier reads the recording once end to end until a hop is fitted."""
+        seen: dict[str, Any] = {}
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, record=seen)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert seen["ast"]["hop_length"] == pytest.approx(10.24)
+        assert seen["ast"]["win_length"] == pytest.approx(10.24)
+        assert seen["hear"]["hop_length"] == pytest.approx(2.0)
 
 
 class TestPhonationSpans:
