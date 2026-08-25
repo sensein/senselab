@@ -102,12 +102,22 @@ def _line(text: str) -> ScriptLine:
 
 
 def _seed_admit(
-    store: ProvStore, tmp_path: Path, wav_writer: Callable[..., Path], samples: np.ndarray | None = None
+    store: ProvStore,
+    tmp_path: Path,
+    wav_writer: Callable[..., Path],
+    samples: np.ndarray | None = None,
+    sampling_rate: int = SR,
 ) -> None:
     """Write the fixture recording and run ADMIT over it, so the ``recording`` stream exists."""
-    path = wav_writer("input.wav", _default_samples() if samples is None else samples)
+    path = wav_writer("input.wav", _default_samples() if samples is None else samples, sampling_rate)
     admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
     assert admitted.audio is not None
+
+
+def _clipped_at_44k() -> np.ndarray:
+    """2 s of a 220 Hz tone driven 3.5 dB past full scale, so it clips in flat plateaus."""
+    grid = np.arange(int(2.0 * 44100)) / 44100
+    return np.clip(1.5 * np.sin(2 * np.pi * 220.0 * grid), -1.0, 1.0).astype(np.float32)
 
 
 def _default_samples() -> np.ndarray:
@@ -726,6 +736,31 @@ class TestDisruptionsAreMeasuredOnTheOriginal:
         assert measurement is not None
         assert measurement.attributes["clipped_runs"] == 0
         assert "zero_crossing_rate" in measurement.attributes
+
+    def test_the_reading_is_taken_at_the_original_rate_and_level(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A hard-clipped 44.1 kHz recording reports its clipping, and reports it at 44100.
+
+        Naming the stream is not enough on its own: rewriting the block to read ``plain`` leaves the
+        ``signal`` attribute untouched and every other assertion in this class passes. What the plain
+        stream cannot fake is the evidence -- it is peak-normalised, which lifts the samples off full
+        scale, and resampled to 16 kHz, which rounds the flat plateaus clipping consists of into
+        ripple. So the mutation reads sampling_rate 16000 and clipped_runs 0, and both are pinned.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_clipped_at_44k(), sampling_rate=44100)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        measurement = find_measurement(store, "disruptions_file")
+        assert measurement is not None
+        assert measurement.attributes["sampling_rate"] == 44100
+        assert measurement.attributes["clipped_runs"] > 0
+        assert measurement.attributes["clipped_s"] > 0.0
 
     def test_the_reading_names_the_original_recording_stream(
         self,
