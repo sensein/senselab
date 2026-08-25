@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 r"""Triage one recording through the senselab triage graph.
 
-    uv run python scripts/triage_audio.py recording.wav [--out DIR] [--config OVERRIDE.yaml] [--hint HINT.yaml]
+    uv run python scripts/triage_audio.py recording.wav [--out DIR] [--config OVERRIDE.yaml] \
+        [--hint HINT.yaml] [--enrollment ENROLLMENT.yaml]
 
-Two arguments, and two optional files. There are deliberately no per-knob flags: every number the
+Two arguments, and three optional files. There are deliberately no per-knob flags: every number the
 graph uses lives in one versioned file with its derivation written beside it,
 
     src/senselab/audio/workflows/triage/data/config/default.yaml
@@ -19,6 +20,18 @@ it maps onto ``senselab.audio.data_structures.AudioHints``:
     expected_speech:
       - text: "The quick brown fox"
         prompt_id: harvard-01
+
+``--enrollment`` is the target speaker's vector, estimated across that subject's recordings by
+whatever produced it; SPEECH identifies the target by this and by nothing in the hint. It maps onto
+``senselab.audio.workflows.triage.enrollment.Enrollment``, and YAML or JSON both read:
+
+    subject_id: sub-01
+    task: sustained-vowel
+    vector: [0.021, -0.114, ...]
+    provenance:
+      model_id: speechbrain/spkrec-ecapa-voxceleb
+      model_commit_sha: <the resolved 40-hex commit, never a ref>
+      source_files: [sub-01_ses-1_task-vowel.wav, sub-01_ses-2_task-vowel.wav]
 
 Layout under ``--out/<stem>_<utc-timestamp>/``:
 
@@ -43,11 +56,13 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Mapping
 
 import yaml  # type: ignore[import-untyped]
 
-from senselab.audio.data_structures import AudioHints
+from senselab.audio.data_structures import AudioHints, SpeakerEmbeddingProvenance
 from senselab.audio.workflows.triage.config import load_triage_config
+from senselab.audio.workflows.triage.enrollment import Enrollment
 from senselab.audio.workflows.triage.run import run_triage
 
 DEFAULT_OUT_DIR = Path("artifacts/triage")
@@ -88,6 +103,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="AudioHints YAML: what the recording was declared to contain. An assertion, not a measurement.",
     )
+    parser.add_argument(
+        "--enrollment",
+        type=Path,
+        default=None,
+        help="Enrollment YAML or JSON: one subject's target-speaker vector, with the model and the "
+        "resolved commit it was estimated at. SPEECH identifies the target by this and nothing else.",
+    )
     return parser
 
 
@@ -118,6 +140,57 @@ def load_hint(path: Path) -> AudioHints:
     return AudioHints.model_validate(payload)
 
 
+def load_enrollment(path: Path) -> Enrollment:
+    """Read an enrollment YAML or JSON into the structure SPEECH compares its speakers against.
+
+    Args:
+        path: The YAML or JSON file. Its shape is :class:`Enrollment`: ``subject_id``, ``vector``,
+            a ``provenance`` block carrying ``model_id`` and the resolved ``model_commit_sha``, and
+            optionally ``task`` and ``distribution``. ``sources`` is read off
+            ``provenance.source_files`` and is not a field of its own.
+
+    Returns:
+        The enrollment.
+
+    Raises:
+        ValueError: If the file is not a mapping, or carries a key the structure does not have —
+            at the top level or inside ``provenance``.
+    """
+    payload = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} must hold a mapping of Enrollment fields, not {type(payload).__name__}")
+    _refuse_unknown(path, payload, Enrollment.model_fields, "Enrollment")
+    provenance = payload.get("provenance")
+    if isinstance(provenance, dict):
+        _refuse_unknown(path, provenance, SpeakerEmbeddingProvenance.model_fields, "provenance")
+    return Enrollment.model_validate(payload)
+
+
+def _refuse_unknown(path: Path, payload: dict, fields: Mapping[str, object], what: str) -> None:
+    """Refuse a mapping carrying a key the model does not have.
+
+    Args:
+        path: The file the mapping came from, for the message.
+        payload: The mapping to check.
+        fields: The model's fields.
+        what: What the mapping is meant to be, for the message.
+
+    Raises:
+        ValueError: When any key is not a field. Pydantic ignores an extra key, so a misspelled
+            field or a table keyed by subject would otherwise load as a different enrollment than
+            the caller wrote — and an enrollment nobody notices is wrong identifies a target.
+    """
+    unknown = sorted(str(key) for key in payload if key not in fields)
+    if not unknown:
+        return
+    raise ValueError(
+        f"{path} carries {what} keys the structure does not have: {', '.join(unknown)}. "
+        "Pydantic ignores unknown keys, so this would have loaded as a different enrollment than "
+        "the one on disk. A table keyed by subject needs the per-subject entry extracted first; "
+        f"the fields available are: {', '.join(sorted(fields))}."
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Triage one recording and print where the run went.
 
@@ -144,10 +217,17 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as error:
             print(f"ERROR: invalid hint {args.hint}: {error}", file=sys.stderr)
             return 2
+    enrollment = None
+    if args.enrollment is not None:
+        try:
+            enrollment = load_enrollment(args.enrollment)
+        except (OSError, ValueError) as error:
+            print(f"ERROR: invalid enrollment {args.enrollment}: {error}", file=sys.stderr)
+            return 2
 
     print(f"Config: {config.name} v{config.version} ({config.config_hash})")
     print(f"Input:  {args.audio}")
-    result = run_triage(args.audio, args.out, config, hint=hint)
+    result = run_triage(args.audio, args.out, config, hint=hint, enrollment=enrollment)
 
     print(f"Run:    {result.run_dir}")
     print(f"Store:  {result.store_path}")
