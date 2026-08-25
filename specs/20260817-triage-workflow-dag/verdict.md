@@ -173,6 +173,10 @@ and an empty one, and a consumer must not have to re-derive that from the reason
 `screened` is what TAXONOMY classified. Keeping both is what makes `agreement` checkable by a reader
 rather than asserted by this node.
 
+**`screened` carries the store's open-vocabulary states verbatim**, including one no reader can parse
+and `uncertain` where TAXONOMY classified nothing; `branches[*].kind_state` is the closed vocabulary
+[`routing.md`](routing.md) folded them into, and is what a consumer should key on.
+
 `ran` comes from two sources and is **merged, the runner's over the store's**: the store derives
 `completed` for a node that wrote a verdict, `errored` for one that wrote an activity and no live
 verdict, and `skipped` for one that wrote neither; the runner's mapping then overrides per node.
