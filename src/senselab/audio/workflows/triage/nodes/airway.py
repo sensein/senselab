@@ -1,34 +1,26 @@
-"""AIRWAY — interpret PREPROCESS's spans. It proposes nothing: it labels, confirms and contests.
+"""AIRWAY — interpret PREPROCESS's spans. It runs no classifier: it labels, confirms and contests.
 
-HeAR classifies each whole span placed in a silent buffer of exactly the model's window, via
-``span_to_hear_buffer``; YAMNet confirms from its own native windows by coverage, never from a
-padded span; ASR words are read for presence only. A hint changes only what an absence means.
+Every window classification this branch reads was written by PREPROCESS. HeAR confirms a span rather
+than finding one, a contest must be co-located in the same HeAR window, and the gate is per task.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-from senselab.audio.data_structures import Audio, AudioHints
-from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
-from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION, span_to_hear_buffer
-from senselab.audio.tasks.plotting.plotting import plot_aligned_panels
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
-    clamp_extent,
     find_measurement,
+    find_measurements,
+    live_entities,
     resolve_stream,
     software_agent,
     write_verdict,
 )
-from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
 
@@ -40,15 +32,22 @@ class AirwayResult(NodeResult):
     """AIRWAY's result.
 
     Attributes:
-        figure_path: The aligned figure, or None when rendering failed. An artifact, not store
-            content.
+        figure_path: Always None. REPORT renders the graph's figures; this branch draws none.
     """
 
     figure_path: Path | None
 
 
 def _hint_declares_airway(hint: AudioHints | None, labels_of_interest: list[str]) -> bool:
-    """Whether the caller declared airway content (decision N18)."""
+    """Whether the caller declared airway content.
+
+    Args:
+        hint: What the recording was declared to contain, or None.
+        labels_of_interest: The HeAR labels this branch concludes about.
+
+    Returns:
+        True when a declared tag names a label of interest or the airway kind itself.
+    """
     if hint is None:
         return False
     declared = {tag.lower() for tag in hint.may_contain}
@@ -56,7 +55,16 @@ def _hint_declares_airway(hint: AudioHints | None, labels_of_interest: list[str]
 
 
 def _inside_certified_silence(span: Entity, silence_windows: list[dict[str, Any]] | None) -> bool | None:
-    """Whether every silence-graded window overlapping the span was certified silent (N17)."""
+    """Whether every silence-graded window overlapping the span was certified silent.
+
+    Args:
+        span: The span being labelled.
+        silence_windows: PREPROCESS's graded windows, or None when it graded none.
+
+    Returns:
+        True or False when at least one graded window overlaps, and None when the question has no
+        answer here.
+    """
     if silence_windows is None:
         return None
     start, end = span.extent or (0.0, 0.0)
@@ -66,20 +74,95 @@ def _inside_certified_silence(span: Entity, silence_windows: list[dict[str, Any]
     return all(bool(w["is_silence"]) for w in overlapping)
 
 
-def _max_score(windows: list[dict[str, Any]], label: str) -> float:
-    """The label's highest score across these windows."""
-    best = 0.0
-    for window in windows:
-        for pair in window.get("label_scores", []):
-            score = pair.get(label)
-            if score is not None and float(score) > best:
-                best = float(score)
-    return best
+def _windows_covering(store: ProvStore, classifier: str, extent: tuple[float, float]) -> list[Entity]:
+    """Every one of this classifier's stored windows overlapping the extent, oldest first.
+
+    Args:
+        store: The provenance store.
+        classifier: ``"hear"`` or ``"yamnet"``.
+        extent: The extent to cover.
+
+    Returns:
+        The per-window measurement entities PREPROCESS wrote, filtered to those that overlap.
+    """
+    return [
+        window
+        for window in find_measurements(store, f"{classifier}_window")
+        if window.extent is not None and window.extent[0] < extent[1] and window.extent[1] > extent[0]
+    ]
 
 
-def _best_of_interest(windows: list[dict[str, Any]], labels_of_interest: list[str]) -> dict[str, float]:
-    """Each label of interest's highest score over these windows."""
-    return {label: _max_score(windows, label) for label in labels_of_interest}
+def _is_transcribed(store: ProvStore, extent: tuple[float, float]) -> bool:
+    """Whether a consensus word overlaps this span, which makes it transcribed content.
+
+    An ``event`` entity — a bracketed or onomatopoeic non-word — does not make a span transcribed.
+
+    Args:
+        store: The provenance store.
+        extent: The span's extent.
+
+    Returns:
+        True when at least one live ``word`` entity overlaps.
+    """
+    return any(
+        word.extent is not None and word.extent[0] < extent[1] and word.extent[1] > extent[0]
+        for word in live_entities(store, "word")
+    )
+
+
+def _labels_of(window: Entity) -> list[str]:
+    """The label set a stored window carries.
+
+    Args:
+        window: A ``<classifier>_window`` measurement entity.
+
+    Returns:
+        The labels, as strings; empty when the window retained none.
+    """
+    return [str(label) for label in window.attributes.get("labels") or []]
+
+
+def _gate(config: TriageConfig, hint: AudioHints | None) -> tuple[float, float | None]:
+    """Resolve this branch's K and its near-gate band.
+
+    Args:
+        config: The triage configuration.
+        hint: What the recording was declared to contain; its ``metadata["task"]`` selects the gate.
+
+    Returns:
+        The K in dB and the near-gate band in dB, which is None while unmeasured.
+    """
+    task = str(hint.metadata.get("task")) if hint is not None and hint.metadata.get("task") else None
+    by_task = config.get("airway.k_db_by_task") or {}
+    for_task = by_task.get(task) if task is not None else None
+    branch = config.get("airway.k_db", config.require("spans.k_db.airway"))
+    k_db = float(branch if for_task is None else for_task)
+    band = config.get("airway.k_margin_db")
+    return k_db, None if band is None else float(band)
+
+
+def _contest_labels(config: TriageConfig) -> set[str]:
+    """The YAMNet labels that may contest a HeAR label, refused when they are also airway evidence.
+
+    Args:
+        config: The triage configuration.
+
+    Returns:
+        The declared contest labels; empty while the key is null.
+
+    Raises:
+        ValueError: If the declared set intersects ``taxonomy.audioset_airway_labels``.
+    """
+    contest_labels = {str(label) for label in (config.get("airway.contest_labels") or [])}
+    airway_evidence = {str(label) for label in config.require("taxonomy.audioset_airway_labels")}
+    overlap = contest_labels & airway_evidence
+    if overlap:
+        raise ValueError(
+            f"airway.contest_labels and taxonomy.audioset_airway_labels must be disjoint; "
+            f"{sorted(overlap)} appear in both, so the same label would be airway evidence and a "
+            "contest of airway evidence"
+        )
+    return contest_labels
 
 
 def airway(  # noqa: C901 — the branch's four steps, in order
@@ -93,36 +176,31 @@ def airway(  # noqa: C901 — the branch's four steps, in order
     """Label, confirm and contest the spans PREPROCESS proposed at the airway K.
 
     Args:
-        store: The provenance store, holding PREPROCESS's spans and derivatives.
-        source: The store-held stream name HeAR's buffers are cut from, ``"plain"``.
+        store: The provenance store, holding PREPROCESS's spans and window classifications.
+        source: The store-held stream the spans were proposed over, ``"plain"``.
         config: The triage configuration.
-        hint: What the recording was declared to contain; read only to condition an absence.
-        run_dir: The run directory; the figure goes under ``figures/``.
+        hint: What the recording was declared to contain; read for the task's gate and to condition
+            what an absence means.
+        run_dir: The run directory the stream sidecar is relative to.
 
     Returns:
-        The verdict, the view over the spans and assertions touched, and the figure path.
+        The verdict, the view over the spans and assertions touched, and a null figure path.
 
     Raises:
-        ValueError: If ``hear.placement`` names an unimplemented placement.
+        ValueError: If ``airway.contest_labels`` intersects ``taxonomy.audioset_airway_labels``.
     """
-    software = software_agent(store)
-    stream_id, plain = resolve_stream(store, run_dir, source)
-    sr = int(plain.sampling_rate)
-
-    k_db = float(config.require("spans.k_db.airway"))
     labels_of_interest = [str(label) for label in config.require("airway.labels_of_interest")]
-    label_floor = float(config.require("hear.label_floor"))
-    window_s = float(config.require("hear.window_s"))
-    placement = str(config.require("hear.placement"))
-    if placement != "centre":
-        raise ValueError(f"hear.placement {placement!r} is not implemented; only 'centre' is")
-    coverage_threshold = float(config.require("yamnet.coverage_threshold"))
     confirmation_map = {
         str(hear_label): {str(v) for v in yamnet_labels}
         for hear_label, yamnet_labels in config.require("airway.confirmation_map").items()
     }
+    contest_labels = _contest_labels(config)
+    k_db, k_margin_db = _gate(config, hint)
 
-    spans = [e for e in store.entities("span") if e.attributes.get("k_db") == k_db and not store.is_invalidated(e.id)]
+    software = software_agent(store)
+    stream_id, _ = resolve_stream(store, run_dir, source)
+
+    spans = [e for e in live_entities(store, "span") if e.attributes.get("k_db") == k_db]
     spans.sort(key=lambda e: e.extent or (0.0, 0.0))
     hint_declares = _hint_declares_airway(hint, labels_of_interest)
     silence = find_measurement(store, "silence")
@@ -154,148 +232,143 @@ def airway(  # noqa: C901 — the branch's four steps, in order
                 "labelled_n": 0,
                 "by_label": {},
                 "contested_n": 0,
+                "near_gate_n": 0,
+                "merged_n": 0,
+                "k_db": k_db,
                 "flags": [why] if outcome is Outcome.FLAG else [],
             },
         )
         return AirwayResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id, figure_path=None)
 
-    # Step 1 — HeAR labels each span: the whole span, buffered by span_to_hear_buffer; a span the
-    # function refuses (longer than the window) is scanned over its own audio instead.
-    hear_agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
+    # Step 1 — HeAR confirms a span: the label is the labels_of_interest member the span's stored
+    # windows carry. A span overlapping consensus words is transcribed content and is not offered.
     classify = store.activity(
         node=NODE,
         step="classify",
-        parameters={
-            "k_db": k_db,
-            "labels_of_interest": labels_of_interest,
-            "label_floor": label_floor,
-            "window_s": window_s,
-            "placement": placement,
-            "n_spans": len(spans),
-        },
+        parameters={"k_db": k_db, "labels_of_interest": labels_of_interest, "n_spans": len(spans)},
     )
-    store.was_associated_with(classify, hear_agent)
+    store.was_associated_with(classify, software)
     store.used(classify, stream_id)
     for span in spans:
         store.used(classify, span.id)
     if silence is not None:
         store.used(classify, silence.id)
 
-    buffered: list[tuple[Entity, Audio]] = []
-    sliding: list[tuple[Entity, Audio]] = []
-    for span in spans:
-        start, end = clamp_extent(span.extent or (0.0, 0.0), plain)
-        try:
-            buffered.append((span, span_to_hear_buffer(plain, start, end, placement=placement)))
-        except ValueError:  # the function refuses a span longer than the window (N14)
-            segment = plain.waveform[:, int(start * sr) : int(end * sr)]
-            sliding.append((span, Audio(waveform=segment, sampling_rate=sr)))
-
-    scored: list[tuple[Entity, dict[str, float], str]] = []
-    if buffered:
-        outputs = detect_health_acoustic_events([audio for _, audio in buffered], hop_length=window_s)
-        for (span, _), windows in zip(buffered, outputs):
-            scored.append((span, _best_of_interest(windows, labels_of_interest), "buffered"))
-    if sliding:
-        outputs = detect_health_acoustic_events([audio for _, audio in sliding])
-        for (span, _), windows in zip(sliding, outputs):
-            scored.append((span, _best_of_interest(windows, labels_of_interest), "sliding"))
-
-    label_ids: dict[str, str] = {}
-    span_labels: dict[str, str] = {}
+    labels_by_span: dict[str, list[tuple[str, str, list[str]]]] = {}
     by_label: dict[str, int] = {}
-    for span, scores, input_kind in scored:
-        best_label = max(scores, key=lambda label: scores[label])
-        if scores[best_label] < label_floor:
-            continue
-        assertion_id = store.entity(
-            prov_type="assertion",
-            extent=span.extent,
-            attributes={
-                "verb": "label",
-                "label": best_label,
-                "score": scores[best_label],
-                "scores": scores,
-                "input": input_kind,
-                "in_certified_silence": _inside_certified_silence(span, silence_windows),
-            },
-        )
-        store.was_generated_by(assertion_id, classify)
-        store.was_attributed_to(assertion_id, hear_agent)
-        store.was_derived_from(assertion_id, span.id)
-        label_ids[span.id] = assertion_id
-        span_labels[span.id] = best_label
-        by_label[best_label] = by_label.get(best_label, 0) + 1
-
-    # Step 2 — YAMNet answers each label from its own native windows, by coverage.
-    yamnet_meas = find_measurement(store, "yamnet_windows")
-    yamnet_windows: list[dict[str, Any]] | None = None
-    if yamnet_meas is not None:
-        yamnet_windows = json.loads((run_dir / yamnet_meas.attributes["path"]).read_text())
-    yamnet_agent = store.agent(
-        agent_type="model",
-        model_id="https://tfhub.dev/google/yamnet/1",
-        unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
-    )
-    confirm_activity = store.activity(node=NODE, step="confirm", parameters={"coverage_threshold": coverage_threshold})
-    store.was_associated_with(confirm_activity, yamnet_agent)
-    if yamnet_meas is not None:
-        store.used(confirm_activity, yamnet_meas.id)
-
-    contested_n = 0
+    near_gate_n = 0
+    merged_n = 0
     flags: list[str] = []
+    for span in spans:
+        extent = span.extent or (0.0, 0.0)
+        if _is_transcribed(store, extent):
+            continue
+        members: dict[str, list[str]] = {}
+        for hear_window in _windows_covering(store, "hear", extent):
+            for label in _labels_of(hear_window):
+                if label in labels_of_interest:
+                    members.setdefault(label, []).append(hear_window.id)
+        if not members:
+            continue
+        merged_proposals = int(span.attributes.get("merged_proposals", 1))
+        merged_n += merged_proposals
+        margin = float(span.attributes["peak_over_floor_db"]) - k_db
+        if k_margin_db is not None and margin <= k_margin_db:
+            near_gate_n += 1
+            flags.append(f"labelled span at {extent[0]:.2f}s sits {margin:.1f} dB over the gate")
+        for label, window_ids in sorted(members.items()):
+            attributes: dict[str, Any] = {
+                "verb": "label",
+                "label": label,
+                "hear_window_ids": window_ids,
+                "in_certified_silence": _inside_certified_silence(span, silence_windows),
+                "merged_proposals": merged_proposals,
+            }
+            if k_margin_db is not None:
+                attributes["margin_over_k_db"] = margin
+            assertion_id = store.entity(prov_type="assertion", extent=span.extent, attributes=attributes)
+            store.was_generated_by(assertion_id, classify)
+            store.was_attributed_to(assertion_id, software)
+            store.was_derived_from(assertion_id, span.id)
+            for window_id in window_ids:
+                store.used(classify, window_id)
+                store.was_derived_from(assertion_id, window_id)
+            labels_by_span.setdefault(span.id, []).append((assertion_id, label, window_ids))
+            by_label[label] = by_label.get(label, 0) + 1
+
+    # Step 2 — YAMNet answers each label from inside the very window that carried it (V21).
+    confirm_activity = store.activity(node=NODE, step="confirm", parameters={"contest_labels": sorted(contest_labels)})
+    store.was_associated_with(confirm_activity, software)
+    contested_n = 0
     answers: list[str] = []
     for span in spans:
-        label_id = label_ids.get(span.id)
-        if label_id is None:
-            continue
-        start, end = span.extent or (0.0, 0.0)
-        overlapping = (
-            [w for w in yamnet_windows if float(w["start"]) < end and float(w["end"]) > start]
-            if yamnet_windows is not None
-            else []
-        )
-        coverage_counts: dict[str, int] = {}
-        for window in overlapping:
-            for pair in window.get("label_scores", []):
-                for label, score in pair.items():
-                    if float(score) >= coverage_threshold:
-                        coverage_counts[label] = coverage_counts.get(label, 0) + 1
-        if not coverage_counts:
-            attributes: dict[str, Any] = {
-                "verb": "abstain",
-                "best_coverage": 0.0,
-                "n_windows": len(overlapping),
-            }
-        else:
-            winner = max(
-                coverage_counts,
-                key=lambda label: (coverage_counts[label], _max_score(overlapping, label)),
-            )
-            verb = "confirm" if winner in confirmation_map.get(span_labels[span.id], set()) else "contest"
-            attributes = {
-                "verb": verb,
-                "winner": winner,
-                "coverage": coverage_counts[winner] / len(overlapping),
-                "n_windows": len(overlapping),
-                "mapped_to": span_labels[span.id],
-            }
-            if verb == "contest":
+        for assertion_id, label, window_ids in labels_by_span.get(span.id, []):
+            confirms: list[tuple[str, str, str]] = []
+            contests: list[tuple[str, str, str]] = []
+            colocated: list[str] = []
+            for hear_window_id in window_ids:
+                hear_extent = store.get_entity(hear_window_id).extent or (0.0, 0.0)
+                for yamnet_window in _windows_covering(store, "yamnet", hear_extent):
+                    inside = (
+                        yamnet_window.extent is not None
+                        and yamnet_window.extent[0] >= hear_extent[0]
+                        and yamnet_window.extent[1] <= hear_extent[1]
+                    )
+                    if not inside:
+                        continue
+                    colocated.append(yamnet_window.id)
+                    store.used(confirm_activity, yamnet_window.id)
+                    for yamnet_label in _labels_of(yamnet_window):
+                        if yamnet_label in confirmation_map.get(label, set()):
+                            confirms.append((yamnet_window.id, yamnet_label, hear_window_id))
+                        elif yamnet_label in contest_labels:
+                            contests.append((yamnet_window.id, yamnet_label, hear_window_id))
+            for verb, found in (("confirm", confirms), ("contest", contests)):
+                if not found:
+                    continue
+                answer_id = store.entity(
+                    prov_type="assertion",
+                    extent=span.extent,
+                    attributes={
+                        "verb": verb,
+                        "label": label,
+                        "yamnet_labels": [yamnet_label for _, yamnet_label, _ in found],
+                        "yamnet_window_ids": [window_id for window_id, _, _ in found],
+                        "hear_window_ids": [window_id for _, _, window_id in found],
+                    },
+                )
+                store.was_generated_by(answer_id, confirm_activity)
+                store.was_attributed_to(answer_id, software)
+                store.was_derived_from(answer_id, assertion_id)
+                for window_id, _, _ in found:
+                    store.was_derived_from(answer_id, window_id)
+                answers.append(answer_id)
+            if contests:
                 contested_n += 1
-                flags.append(f"yamnet contests {span_labels[span.id]} with {winner}")
-        answer_id = store.entity(prov_type="assertion", extent=span.extent, attributes=attributes)
-        store.was_generated_by(answer_id, confirm_activity)
-        store.was_attributed_to(answer_id, yamnet_agent)
-        store.was_derived_from(answer_id, label_id)
-        store.was_derived_from(answer_id, span.id)
-        answers.append(answer_id)
+                named = sorted({yamnet_label for _, yamnet_label, _ in contests})
+                flags.append(f"{label} contested by {named} co-located in the same HeAR window")
+            if not confirms and not contests:
+                answer_id = store.entity(
+                    prov_type="assertion",
+                    extent=span.extent,
+                    attributes={
+                        "verb": "abstain",
+                        "label": label,
+                        "colocated_windows_n": len(colocated),
+                        "hear_window_ids": window_ids,
+                    },
+                )
+                store.was_generated_by(answer_id, confirm_activity)
+                store.was_attributed_to(answer_id, software)
+                store.was_derived_from(answer_id, assertion_id)
+                answers.append(answer_id)
 
     # Step 3 — lexical contamination over the airway-labelled interval only.
     interval_id: str | None = None
     flag_id: str | None = None
     concluding = confirm_activity
-    if span_labels:
-        labelled_extents = [store.get_entity(span_id).extent or (0.0, 0.0) for span_id in span_labels]
+    if labels_by_span:
+        labelled_extents = [store.get_entity(span_id).extent or (0.0, 0.0) for span_id in labels_by_span]
         interval = (min(e[0] for e in labelled_extents), max(e[1] for e in labelled_extents))
         lexical = store.activity(node=NODE, step="lexical", parameters={"interval": list(interval)})
         store.was_associated_with(lexical, software)
@@ -306,12 +379,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         store.was_generated_by(interval_id, lexical)
         store.was_attributed_to(interval_id, software)
         contaminating: list[str] = []
-        for word in store.entities("word"):
-            if word.attributes.get("recognizer") != CRISPERWHISPER_ID or store.is_invalidated(word.id):
-                continue
-            text = str(word.attributes.get("text") or "")
-            if text.startswith("[") and text.endswith("]"):
-                continue
+        for word in live_entities(store, "word"):
             word_start, word_end = word.extent or (0.0, 0.0)
             if word_start < interval[1] and word_end > interval[0]:
                 store.used(lexical, word.id)
@@ -328,8 +396,8 @@ def airway(  # noqa: C901 — the branch's four steps, in order
             flags.append("lexical_contamination")
 
     # Step 4 — the outcome. A hint conditions only what an absence means, on either route to one.
-    if not span_labels:
-        why = "spans exist but none clears the label floor"
+    if not labels_by_span:
+        why = "spans exist but none carries a label of interest"
         if hint_declares:
             why += "; a hint declares airway content not found"
             flags.append(why)
@@ -350,81 +418,23 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         outcome=outcome,
         kind="airway",
         why=why,
-        detail={"labelled_n": len(span_labels), "by_label": by_label, "contested_n": contested_n, "flags": flags},
+        detail={
+            "labelled_n": len(labels_by_span),
+            "by_label": by_label,
+            "contested_n": contested_n,
+            "near_gate_n": near_gate_n,
+            "merged_n": merged_n,
+            "k_db": k_db,
+            "flags": flags,
+        },
     )
-
-    figure_path: Path | None = None
-    try:
-        figure_path = _render_figure(store, plain, spans, span_labels, silence_windows, run_dir, config)
-    except Exception:  # noqa: BLE001 — the figure is an artifact; failing to draw it changes no verdict
-        figure_path = None
 
     view = (
         [span.id for span in spans]
-        + list(label_ids.values())
+        + [assertion_id for entries in labels_by_span.values() for assertion_id, _, _ in entries]
         + answers
         + ([interval_id] if interval_id else [])
         + ([flag_id] if flag_id else [])
         + [verdict_id]
     )
-    return AirwayResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id, figure_path=figure_path)
-
-
-def _render_figure(
-    store: ProvStore,
-    plain: Audio,
-    spans: list[Entity],
-    span_labels: dict[str, str],
-    silence_windows: list[dict[str, Any]] | None,
-    run_dir: Path,
-    config: TriageConfig,
-) -> Path:
-    """One aligned figure: plain waveform, envelope with floor, spans, silence, spectrogram."""
-    panels: list[dict[str, Any]] = [{"type": "waveform"}]
-    envelope = find_measurement(store, "energy_envelope")
-    if envelope is not None:
-        sidecar = np.load(run_dir / envelope.attributes["path"])
-        rate = int(envelope.attributes["sampling_rate"])
-        stride = max(1, int(rate * float(config.require("gammatone.hop_s"))))
-        times = (np.arange(len(sidecar["envelope_dbfs"])) / rate)[::stride]
-        panels.append(
-            {
-                "type": "features",
-                "data": [
-                    (
-                        times.tolist(),
-                        sidecar["envelope_dbfs"][::stride].tolist(),
-                        "envelope dBFS (pre-emphasised)",
-                        "tab:blue",
-                    ),
-                    (times.tolist(), sidecar["floor_dbfs"][::stride].tolist(), "floor dBFS", "tab:gray"),
-                ],
-            }
-        )
-    segments = [
-        {
-            "label": span_labels.get(span.id, "unlabelled"),
-            "start": (span.extent or (0.0, 0.0))[0],
-            "end": (span.extent or (0.0, 0.0))[1],
-        }
-        for span in spans
-    ]
-    if segments:
-        panels.append({"type": "segments", "segments": segments})
-    if silence_windows:
-        panels.append(
-            {
-                "type": "segments",
-                "segments": [
-                    {"label": "Silence" if w["is_silence"] else "sound", "start": w["start"], "end": w["end"]}
-                    for w in silence_windows
-                ],
-            }
-        )
-    panels.append({"type": "spectrogram", "mel": False})
-    figure = plot_aligned_panels(plain, panels, title="AIRWAY")
-    (run_dir / "figures").mkdir(parents=True, exist_ok=True)
-    path = run_dir / "figures" / "airway.png"
-    figure.savefig(path)
-    plt.close(figure)
-    return path
+    return AirwayResult(verdict=verdict, view=tuple(view), verdict_entity_id=verdict_id, figure_path=None)
