@@ -333,6 +333,36 @@ class TestRemediationHappensExactlyOnce:
         assert detail["replanned_n"] == 1 and detail["redactions_n"] == 2
         assert detail["unremediable"] == []
 
+    def test_the_replan_does_not_widen_to_a_word_a_planned_extent_already_covers(
+        self,
+        store: ProvStore,
+        redact_config: TriageConfig,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The exclusion half of the clause, which the widening test alone does not reach.
+
+        ``boston`` carries a LOCATION marking and sits **inside** the planned PERSON extent, so the
+        surviving LOCATION has nothing to widen to and the plan must come out unchanged. Without the
+        exclusion the re-plan would add ``boston``'s own extent, which merges into the PERSON one and
+        renames the category — so ``by_category`` is the observable that tells the two apart.
+        """
+        _seed_redact_store(
+            store,
+            tmp_path,
+            words=["hello", "alicia", "boston"],
+            findings=[("PERSON", (1.0, 2.5))],
+            extra_marks=[("boston", "LOCATION")],
+        )
+        scanned = _stub_pii(monkeypatch, findings=[("LOCATION", "boston")])
+        result = redact(store, "recording", redact_config, run_dir=tmp_path, artifacts_dir=_release(tmp_path))
+        detail = _verdict_entity(store, "REDACT").attributes
+        assert detail["by_category"] == {"PERSON": 1}, "a covered word must not be re-planned as its own extent"
+        assert detail["redactions_n"] == 1
+        assert scanned == ["hello [PERSON]", "hello [PERSON]"], "the re-plan changed nothing to scan"
+        assert detail["replanned_n"] == 1 and detail["unremediable"] == ["LOCATION"]
+        assert result.verdict.outcome is Outcome.FAIL
+
     def test_a_failed_and_a_missing_verify_detector_are_reported_apart(
         self,
         store: ProvStore,
