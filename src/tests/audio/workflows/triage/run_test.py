@@ -25,6 +25,7 @@ from senselab.audio.workflows.triage.nodes.admit import AdmitResult
 from senselab.audio.workflows.triage.nodes.common import NodeResult, software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.preprocess import PreprocessResult
 from senselab.audio.workflows.triage.nodes.redact import RedactResult
+from senselab.audio.workflows.triage.nodes.report import ReportRenderError
 from senselab.audio.workflows.triage.nodes.routing import routing as real_routing
 from senselab.audio.workflows.triage.nodes.taxonomy import TaxonomyResult
 from senselab.audio.workflows.triage.run import run_triage
@@ -293,6 +294,24 @@ class TestHappyPath:
         assert result.ran["REPORT"] is RunState.ERRORED
         assert result.file_verdict is not None and result.file_verdict.triage is Triage.PASS
         assert result.store_path.is_file()
+
+    def test_a_drawing_failure_keeps_the_json_it_had_already_written(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A consumer reading many files must not lose one because a page could not be drawn."""
+        graph()
+        written = tmp_path / "salvaged.json"
+        written.write_text("{}")
+
+        def _raise(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise ReportRenderError("the canvas is gone", {"json": written})
+
+        monkeypatch.setattr(run_module, "report", _raise)
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.summary == {"json": written}
+        assert result.ran["REPORT"] is RunState.ERRORED
+        assert "the canvas is gone" in (result.nodes["REPORT"].error or "")
+        assert json.loads((result.run_dir / "run.json").read_text())["summary"] == {"json": str(written)}
 
     def test_the_release_axis_follows_redact(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path

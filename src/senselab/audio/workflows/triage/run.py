@@ -28,13 +28,17 @@ from senselab.audio.workflows.triage.nodes.speech import speech
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.nodes.voice import voice
-from senselab.audio.workflows.triage.vocabulary import FileVerdict, NodeVerdict, Outcome, RunState
+from senselab.audio.workflows.triage.vocabulary import (
+    BRANCHES,
+    GRAPH_ORDER,
+    FileVerdict,
+    NodeVerdict,
+    Outcome,
+    RunState,
+)
 from senselab.utils.prov_store import ProvStore
 
-GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
 REPORT_NODE = "REPORT"
-
-_BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 
 STORE_FILE = "store.jsonl"
 LOG_FILE = "run.json"
@@ -228,13 +232,13 @@ def _drive_branches(
     _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
-    selected = set(routed.runs) if routed is not None else set(_BRANCHES)
+    selected = set(routed.runs) if routed is not None else set(BRANCHES)
     branches: dict[str, Callable[[], NodeResult]] = {
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
         "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
         "VOICE": lambda: voice(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
     }
-    for branch in _BRANCHES:
+    for branch in BRANCHES:
         if branch in selected:
             _attempt(outcomes, branch, branches[branch])
         else:
@@ -264,13 +268,16 @@ def _attempt_artifacts(
         call: The node call, already bound to its arguments.
 
     Returns:
-        The artifacts it produced, empty when it raised.
+        The artifacts it produced. A failure that carried artifacts on the exception keeps them —
+        REPORT writes its JSON before it draws, and losing a complete product because the picture
+        beside it could not be drawn would be a second failure, not a consequence of the first.
     """
     try:
         artifacts = call()
     except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
         outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=f"{type(error).__name__}: {error}")
-        return {}
+        salvaged = getattr(error, "artifacts", None)
+        return dict(salvaged) if isinstance(salvaged, dict) else {}
     outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED)
     return artifacts
 

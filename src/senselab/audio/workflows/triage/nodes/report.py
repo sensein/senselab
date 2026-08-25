@@ -18,9 +18,14 @@ from typing import Any, Iterable
 import numpy as np
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.plotting.plotting import plot_aligned_panels
+from senselab.audio.tasks.plotting.plotting import (
+    MIN_FIGURE_HEIGHT_IN,
+    TEXT_PANEL_INCHES_PER_LINE,
+    plot_aligned_panels,
+)
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, resolve_stream
+from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER
 from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "REPORT"
@@ -29,34 +34,106 @@ FORMATS = ("png", "pdf")
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
-_GRAPH_ORDER = ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT", "VERDICT")
-_BRANCHES = ("AIRWAY", "SPEECH", "VOICE")
 _CLASSIFIERS = ("yamnet", "ast", "hear")
 _UNLABELLED = "unlabelled"
+_UNKNOWN = "—"
 _SHA_LENGTH = 40
 _BLOCK_COLUMNS = 168
 _TOP_CATEGORIES = 6
 
+_ABSENCE_BY_CLASS = {
+    "ValueError": "unfitted (a config key it reads is null)",
+    "LookupError": "unavailable (a derivative it reads is absent)",
+}
+_ABSENCE_ERRORED = "errored"
 
-def _redacted_text(store: ProvStore, word: Entity) -> str:
+_LANE_SOURCE = {
+    "envelope": "energy_envelope",
+    "spans (dB over floor)": "spans",
+    "phonation": "phonation_spans",
+    "yamnet labels": "yamnet_windows",
+    "ast labels": "ast_windows",
+    "hear labels": "hear_windows",
+    "words": "consensus_transcript",
+    "airway": "spans",
+}
+_LANE_BRANCH = {"speech spans": "SPEECH", "airway": "AIRWAY", "voice": "VOICE", "redacted": "REDACT"}
+_LANES = (
+    "envelope",
+    "spans (dB over floor)",
+    "phonation",
+    "yamnet labels",
+    "ast labels",
+    "hear labels",
+    "speech spans",
+    "words",
+    "airway",
+    "voice",
+    "redacted",
+)
+
+_BRANCH_MEASURES = {
+    "AIRWAY": ("labelled_n", "contested_n", "near_gate_n", "merged_n", "k_db"),
+    "SPEECH": ("speaker_count", "words_n", "speech_s", "nontarget_speech_s"),
+    "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
+}
+
+
+class ReportRenderError(RuntimeError):
+    """The summary could not be drawn, after the JSON was already written.
+
+    The JSON is the product a consumer reads and it is complete by the time the renderer runs, so a
+    drawing failure must not take it down with it. The artifacts written before the failure travel on
+    the exception; the runner records the failure and keeps them.
+
+    Attributes:
+        artifacts: What was written before the renderer raised.
+    """
+
+    def __init__(self, message: str, artifacts: dict[str, Path]) -> None:
+        """Carry the message and the artifacts that survived."""
+        super().__init__(message)
+        self.artifacts = dict(artifacts)
+
+
+def _assertions_by_source(store: ProvStore) -> dict[str, list[Entity]]:
+    """Every live assertion, indexed by the element it was derived from.
+
+    Built once per report. The two readers below ask "what was asserted over this word / this span",
+    which the store answers only in the forward direction, so without an index each of them walks
+    every assertion for every element it renders — cubic in the size of a transcript.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{source element id: [assertion, ...]}``, in write order.
+    """
+    index: dict[str, list[Entity]] = {}
+    for assertion in live_entities(store, "assertion"):
+        for source_id in store.derived_from(assertion.id):
+            index.setdefault(source_id, []).append(assertion)
+    return index
+
+
+def _redacted_text(marks: dict[str, list[Entity]], word: Entity) -> str:
     """A word's renderable text: its category placeholder when the scan marked it, else the word.
 
     The store holds PII by design and the report carries element ids, so the report is not a released
     artifact — but no matched text may appear in it either way.
 
     Args:
-        store: The provenance store.
+        marks: :func:`_assertions_by_source`'s index, so the answer costs one dictionary lookup
+            rather than a walk over every assertion in the store.
         word: A ``word`` entity.
 
     Returns:
         ``"[<CATEGORY>]"`` when a live ``pii`` label assertion is derived from this word, else the
         word's own text.
     """
-    for assertion in live_entities(store, "assertion"):
+    for assertion in marks.get(word.id, ()):
         attributes = assertion.attributes
-        if attributes.get("verb") != "label" or attributes.get("label") != "pii":
-            continue
-        if word.id in store.derived_from(assertion.id):
+        if attributes.get("verb") == "label" and attributes.get("label") == "pii":
             return f"[{attributes.get('category')}]"
     return str(word.attributes.get("text") or "")
 
@@ -76,16 +153,17 @@ def _words(store: ProvStore) -> list[Entity]:
     )
 
 
-def _transcript(store: ProvStore) -> str:
+def _transcript(store: ProvStore, marks: dict[str, list[Entity]]) -> str:
     """The consensus transcript with every marked word replaced by its category.
 
     Args:
         store: The provenance store.
+        marks: :func:`_assertions_by_source`'s index.
 
     Returns:
         The redacted transcript, empty when the store holds no consensus words.
     """
-    return " ".join(_redacted_text(store, word) for word in _words(store))
+    return " ".join(_redacted_text(marks, word) for word in _words(store))
 
 
 def _envelope_spans(store: ProvStore) -> list[Entity]:
@@ -121,23 +199,28 @@ def _spans_of_family(store: ProvStore, family: str, *, voice: bool | None = None
     return sorted(found, key=lambda span: span.extent or (0.0, 0.0))
 
 
-def _airway_labels(store: ProvStore, span: Entity) -> list[str]:
-    """The airway labels a span carries, from the assertions derived from it.
+def _airway_labels(store: ProvStore, marks: dict[str, list[Entity]], span: Entity) -> list[str]:
+    """The airway labels a span carries, from AIRWAY's own label assertions over it.
+
+    The generating activity's node is what makes this AIRWAY's answer rather than any label another
+    node might one day assert over the same span.
 
     Args:
-        store: The provenance store.
+        store: The provenance store, read for each assertion's generating activity.
+        marks: :func:`_assertions_by_source`'s index.
         span: An envelope span.
 
     Returns:
-        The labels, sorted. Empty when nothing labelled the span.
+        The labels, sorted. Empty when AIRWAY labelled nothing over the span.
     """
-    labels = {
-        str(assertion.attributes["label"])
-        for assertion in live_entities(store, "assertion")
-        if assertion.attributes.get("verb") == "label"
-        and assertion.attributes.get("label") != "pii"
-        and span.id in store.derived_from(assertion.id)
-    }
+    labels = set()
+    for assertion in marks.get(span.id, ()):
+        if assertion.attributes.get("verb") != "label":
+            continue
+        activity_id = store.generated_by(assertion.id)
+        if activity_id is None or store.get_activity(activity_id).node != "AIRWAY":
+            continue
+        labels.add(str(assertion.attributes["label"]))
     return sorted(labels)
 
 
@@ -205,19 +288,24 @@ def _label_counts(store: ProvStore, classifier: str) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 
-def _panels(store: ProvStore, run_dir: Path, config: TriageConfig) -> list[dict[str, Any]]:
+def _panels(
+    store: ProvStore, marks: dict[str, list[Entity]], run_dir: Path, config: TriageConfig
+) -> list[dict[str, Any]]:
     """The summary's layers on one shared time axis, drawn from whatever the store holds.
 
     A layer whose derivative is absent is omitted; nothing raises for want of one, because
-    report.md requires a product on every outcome including a file ADMIT refused.
+    report.md requires a product on every outcome including a file ADMIT refused. Which layers were
+    omitted, and why, is what the ABSENT block says — an omitted lane must never read as a measured
+    absence.
 
     Args:
         store: The provenance store.
+        marks: :func:`_assertions_by_source`'s index.
         run_dir: Where sidecar paths resolve against.
         config: The triage configuration, read for the envelope decimation stride only.
 
     Returns:
-        Panel specifications for ``plot_aligned_panels``.
+        Panel specifications for ``plot_aligned_panels``. Every lane carries a ``name``.
     """
     panels: list[dict[str, Any]] = [{"type": "waveform"}]
 
@@ -233,6 +321,7 @@ def _panels(store: ProvStore, run_dir: Path, config: TriageConfig) -> list[dict[
             panels.append(
                 {
                     "type": "features",
+                    "name": "envelope",
                     "style": "line",
                     "data": [
                         (times, loaded["envelope_dbfs"][::stride], "envelope dBFS", "steelblue"),
@@ -274,12 +363,12 @@ def _panels(store: ProvStore, run_dir: Path, config: TriageConfig) -> list[dict[
     )
     panels += _lane(
         "words",
-        _segments((word.extent, _redacted_text(store, word)) for word in _words(store) if word.extent is not None),
+        _segments((word.extent, _redacted_text(marks, word)) for word in _words(store) if word.extent is not None),
     )
     panels += _lane(
         "airway",
         _segments(
-            (span.extent, ", ".join(_airway_labels(store, span)) or _UNLABELLED)
+            (span.extent, ", ".join(_airway_labels(store, marks, span)) or _UNLABELLED)
             for span in spans
             if span.extent is not None
         ),
@@ -328,17 +417,20 @@ def _steps(store: ProvStore) -> dict[str, dict[str, Any]]:
 
     Returns:
         ``{step: {**verdict detail, "element_ids": [...]}}`` over every node that wrote a verdict.
-        The ids are the verdict entity itself and every entity the node's activities generated,
-        which is what makes any number in the summary traceable to the assertion that produced it.
+        The ids are the verdict entity itself and every **live** entity the node's activities
+        generated, which is what makes any number in the summary traceable to the assertion that
+        produced it. An invalidated entity is left out under the store's shared read rule: it is a
+        join key to something the graph has withdrawn, and citing it would credit a claim to
+        evidence that no longer stands.
     """
     by_node = _verdict_entities(store)
     generated: dict[str, list[str]] = {}
     for entity in store.entities():
         activity_id = store.generated_by(entity.id)
-        if activity_id is None:
+        if activity_id is None or store.is_invalidated(entity.id):
             continue
         generated.setdefault(store.get_activity(activity_id).node, []).append(entity.id)
-    ordered = sorted(by_node, key=lambda node: _GRAPH_ORDER.index(node) if node in _GRAPH_ORDER else len(_GRAPH_ORDER))
+    ordered = sorted(by_node, key=lambda node: GRAPH_ORDER.index(node) if node in GRAPH_ORDER else len(GRAPH_ORDER))
     return {
         node: {
             **{key: value for key, value in by_node[node].attributes.items() if key != "node"},
@@ -447,25 +539,110 @@ def _provenance(store: ProvStore, config: TriageConfig, run_id: str) -> dict[str
     }
 
 
-def _file(store: ProvStore) -> dict[str, Any]:
-    """What the recording is, from ADMIT's stream entity.
+def _admitted_path(store: ProvStore) -> str | None:
+    """The path ADMIT was handed, from its own activity parameters.
+
+    A file ADMIT refused has no stream entity, so this is the only place its name survives — and a
+    refusal page that cannot name the file it refused is of no use to whoever has to find it.
 
     Args:
         store: The provenance store.
 
     Returns:
-        ``{path, duration_s, sample_rate, channels}``, every field None when ADMIT wrote no stream.
+        The path, or None when ADMIT has no activity.
+    """
+    for activity in store.activities("ADMIT"):
+        found = activity.parameters.get("audio_file")
+        if found:
+            return str(found)
+    return None
+
+
+def _file(store: ProvStore) -> dict[str, Any]:
+    """What the recording is, from ADMIT's stream entity, falling back to what it was handed.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{path, duration_s, sample_rate, channels}``. Only ``path`` survives a refusal; the other
+        three are None, because nothing measured them.
     """
     found = [entity for entity in live_entities(store, "stream") if entity.attributes.get("name") == _SOURCE_STREAM]
     if not found:
-        return {"path": None, "duration_s": None, "sample_rate": None, "channels": None}
+        return {"path": _admitted_path(store), "duration_s": None, "sample_rate": None, "channels": None}
     entity = found[-1]
     return {
-        "path": entity.attributes.get("path"),
+        "path": entity.attributes.get("path") or _admitted_path(store),
         "duration_s": None if entity.extent is None else float(entity.extent[1]),
         "sample_rate": entity.attributes.get("sampling_rate"),
         "channels": entity.attributes.get("channels"),
     }
+
+
+def _shown(value: Any) -> str:  # noqa: ANN401 — anything a store attribute can hold
+    """One value as the page shows it: an em dash where the store holds nothing.
+
+    Args:
+        value: The value.
+
+    Returns:
+        Its text, or ``"—"`` when it is None. A page reading "duration: None" is a Python repr
+        leaking into a document a reviewer is meant to judge the run by.
+    """
+    return _UNKNOWN if value is None else str(value)
+
+
+def _absences(store: ProvStore) -> dict[str, tuple[str, str]]:
+    """Why each PREPROCESS derivative is missing, keyed by the derivative's name.
+
+    PREPROCESS records only the exception's class, so the reading is by class: ``config.require``
+    raises ``ValueError`` for a key nobody has measured, and a block whose input is missing raises
+    ``LookupError``. Anything else is a genuine failure. Attribution by class is coarser than
+    attribution by message and is upstream's to improve; recording nothing would be worse.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``{derivative: (reading, exception class)}``. Empty when PREPROCESS never concluded.
+    """
+    verdict_entity = _verdict_entities(store).get("PREPROCESS")
+    absent = (verdict_entity.attributes.get("absent") or {}) if verdict_entity is not None else {}
+    return {
+        str(name): (_ABSENCE_BY_CLASS.get(str(raised), _ABSENCE_ERRORED), str(raised))
+        for name, raised in sorted(absent.items())
+    }
+
+
+def _lane_absences(store: ProvStore, drawn: set[str]) -> list[tuple[str, str]]:
+    """Each declared lane the page did not draw, with why, as far as the store can say.
+
+    Args:
+        store: The provenance store.
+        drawn: The names of the lanes that were drawn.
+
+    Returns:
+        ``[(lane, reason), ...]`` for every declared lane not in ``drawn``.
+    """
+    absences = _absences(store)
+    branches = _branches(store)
+    out: list[tuple[str, str]] = []
+    for lane in _LANES:
+        if lane in drawn:
+            continue
+        derivative = _LANE_SOURCE.get(lane)
+        branch = _LANE_BRANCH.get(lane)
+        if derivative is not None and derivative in absences:
+            reading, raised = absences[derivative]
+            out.append((lane, f"PREPROCESS/{derivative} {reading} [{raised}]"))
+        elif branch is not None and branch in branches and not branches[branch]["will_run"]:
+            out.append((lane, f"{branch} did not run: {branches[branch]['why']}"))
+        elif branch is not None and _verdict_entities(store).get(branch) is None:
+            out.append((lane, f"{branch} wrote no verdict"))
+        else:
+            out.append((lane, "nothing in the store for it"))
+    return out
 
 
 def _verdict(store: ProvStore) -> dict[str, Any]:
@@ -510,43 +687,94 @@ def _categories(store: ProvStore) -> dict[str, dict[str, int]]:
     return {classifier: counts for classifier, counts in found.items() if counts}
 
 
-def _blocks(store: ProvStore) -> list[str]:  # noqa: C901 — one independent block per step, as report.md asks
+def _provenance_line(provenance: dict[str, Any]) -> str:
+    """One line naming the run's identity: its config, its commit and how its models resolved.
+
+    The full model list stays in the JSON. What belongs on the page is enough for a reviewer to say
+    "this page came from that configuration at that commit" without opening anything else.
+
+    Args:
+        provenance: :func:`_provenance`'s mapping.
+
+    Returns:
+        The line.
+    """
+    models = provenance["models"]
+    resolved = sum(1 for model in models if model["revision"] is not None)
+    commit = provenance["commit"] or f"unresolved: {provenance['commit_unresolved_reason']}"
+    return (
+        f"provenance: config {provenance['config_hash']}  senselab {commit}  "
+        f"models: {resolved} at a resolved commit, {len(models) - resolved} with a reason"
+    )
+
+
+def _ran_line(verdict: dict[str, Any]) -> str:
+    """One line saying what each node did, so a node that raised is not read as one never asked.
+
+    Args:
+        verdict: :func:`_verdict`'s mapping.
+
+    Returns:
+        The line, in graph order, with any node the fold names but the graph does not appended.
+    """
+    ran = verdict.get("ran") or {}
+    if not ran:
+        return "ran: —  (VERDICT wrote no run state)"
+    ordered = [node for node in GRAPH_ORDER if node in ran] + [node for node in ran if node not in GRAPH_ORDER]
+    return "ran: " + "  ".join(f"{node}:{ran[node]}" for node in ordered)
+
+
+def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
+    store: ProvStore, marks: dict[str, list[Entity]], drawn: set[str], provenance: dict[str, Any]
+) -> list[str]:
     """The per-step blocks that accompany the shared axis.
 
     Every line goes through the PII rule: no matched text, in the blocks any more than in the lanes.
 
     Args:
         store: The provenance store.
+        marks: :func:`_assertions_by_source`'s index, built once per report and shared with the lanes.
+        drawn: The names of the lanes the page drew, so the rest can be reported as absent rather
+            than silently missing.
+        provenance: :func:`_provenance`'s mapping, summarised onto one line.
 
     Returns:
-        The lines, in report.md's order: the branch decisions, each branch's conclusion and flags,
-        TAXONOMY's classification beside the resolved kinds, and the verdict — with REDACT's outcome
-        shown whatever the triage axis says.
+        The lines, in report.md's order: the file and its provenance, what ran, the branch decisions
+        with each branch's conclusion, flags and measurements, TAXONOMY's classification beside the
+        resolved kinds, the top categories, the spans, what was NOT drawn and why, the transcript,
+        and the verdict — with REDACT's outcome shown whatever the triage axis says.
     """
+    steps = _steps(store)
+    verdict = _verdict(store)
     lines: list[str] = []
+
     described = _file(store)
     lines.append(
-        f"file: {described['path']}  duration: {described['duration_s']}s  "
-        f"rate: {described['sample_rate']} Hz  channels: {described['channels']}"
+        f"file: {_shown(described['path'])}  duration: {_shown(described['duration_s'])} s  "
+        f"rate: {_shown(described['sample_rate'])} Hz  channels: {_shown(described['channels'])}"
     )
+    lines.append(_provenance_line(provenance))
+    lines.append(_ran_line(verdict))
 
     branches = _branches(store)
     lines.append("")
     lines.append("BRANCHES")
     if not branches:
         lines.append("  routing did not run; no branch was asked")
-    for branch in sorted(branches, key=lambda name: _BRANCHES.index(name) if name in _BRANCHES else len(_BRANCHES)):
+    for branch in sorted(branches, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
         decision = branches[branch]
         lines.append(
             f"  {branch}: will_run={decision['will_run']} forced_by_hint={decision['forced_by_hint']} "
             f"kind_state={decision['kind_state']} why={decision['why']}"
         )
-        lines.append(f"    verdict: {decision['verdict']}")
+        lines.append(f"    verdict: {_shown(decision['verdict'])}")
+        detail = steps.get(branch, {})
+        measured = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
+        if measured:
+            lines.append("    measured: " + "  ".join(measured))
         for flag in decision["flags"]:
             lines.append(f"    flag: {flag}")
 
-    steps = _steps(store)
-    verdict = _verdict(store)
     lines.append("")
     lines.append("TAXONOMY")
     screened = verdict.get("screened") or (steps.get("TAXONOMY", {}).get("kinds") or {})
@@ -556,7 +784,8 @@ def _blocks(store: ProvStore) -> list[str]:  # noqa: C901 — one independent bl
         lines.append("  TAXONOMY did not classify this recording")
     for kind in sorted(screened):
         lines.append(
-            f"  {kind}: screened={screened[kind]} resolved={resolved.get(kind)} agreement={agreement.get(kind)}"
+            f"  {kind}: screened={screened[kind]} resolved={_shown(resolved.get(kind))} "
+            f"agreement={_shown(agreement.get(kind))}"
         )
 
     lines.append("")
@@ -566,7 +795,8 @@ def _blocks(store: ProvStore) -> list[str]:  # noqa: C901 — one independent bl
         lines.append("  no window label set is in the store")
     for classifier, counts in categories.items():
         top = list(counts.items())[:_TOP_CATEGORIES]
-        lines.append("  " + classifier + ": " + ", ".join(f"{label} ({n})" for label, n in top))
+        marker = f" (top {_TOP_CATEGORIES} of {len(counts)})" if len(counts) > _TOP_CATEGORIES else ""
+        lines.append(f"  {classifier}{marker}: " + ", ".join(f"{label} ({n})" for label, n in top))
     airway = steps.get("AIRWAY", {}).get("by_label") or {}
     if airway:
         lines.append("  airway labels: " + ", ".join(f"{label} ({n})" for label, n in sorted(airway.items())))
@@ -579,8 +809,26 @@ def _blocks(store: ProvStore) -> list[str]:  # noqa: C901 — one independent bl
     lines.append(f"  voice spans: {len(_spans_of_family(store, 'phonation', voice=True))}")
 
     lines.append("")
+    lines.append("ABSENT (a lane not drawn is not a measured absence)")
+    absences = _absences(store)
+    if absences:
+        by_reading: dict[str, list[str]] = {}
+        for derivative, (reading, raised) in absences.items():
+            by_reading.setdefault(reading, []).append(f"{derivative} [{raised}]")
+        for reading in sorted(by_reading):
+            lines.append(f"  {reading}: " + ", ".join(sorted(by_reading[reading])))
+    else:
+        lines.append("  PREPROCESS reports no absent derivative")
+    lane_absences = _lane_absences(store, drawn)
+    if lane_absences:
+        for lane, reason in lane_absences:
+            lines.append(f"  lane not drawn — {lane}: {reason}")
+    else:
+        lines.append("  every declared lane was drawn")
+
+    lines.append("")
     lines.append("TRANSCRIPT (marked words rendered as their category)")
-    transcript = _transcript(store)
+    transcript = _transcript(store, marks)
     if not transcript:
         lines.append("  no consensus transcript is in the store")
     lines += ["  " + wrapped for wrapped in textwrap.wrap(transcript, width=_BLOCK_COLUMNS)]
@@ -588,14 +836,17 @@ def _blocks(store: ProvStore) -> list[str]:  # noqa: C901 — one independent bl
     lines.append("")
     lines.append("VERDICT")
     lines.append(
-        f"  triage: {verdict['triage']}   release: {verdict['release']}   "
-        f"discard_ground: {verdict.get('discard_ground')}"
+        f"  triage: {_shown(verdict['triage'])}   release: {_shown(verdict['release'])}   "
+        f"discard_ground: {_shown(verdict.get('discard_ground'))}"
     )
     redact = steps.get("REDACT")
     if redact is None:
         lines.append("  redact: did not run")
     else:
-        lines.append(f"  redact: {redact.get('outcome')} — {redact.get('why')}")
+        lines.append(
+            f"  redact: {redact.get('outcome')} — {redact.get('why')} "
+            f"(redactions_n={_shown(redact.get('redactions_n'))})"
+        )
     for reason in verdict.get("reasons") or []:
         lines.append(
             f"  reason: {reason.get('node')} {reason.get('outcome')} [{reason.get('kind')}] {reason.get('why')}"
@@ -627,6 +878,8 @@ def report(
     Raises:
         ValueError: If ``report.format`` names a form other than ``png`` or ``pdf``. A typo must not
             fall through to a silent default.
+        ReportRenderError: If the summary could not be drawn. The JSON is written first and is
+            complete by then, so it travels on the exception rather than being lost with the page.
     """
     fmt = str(config.require("report.format"))
     if fmt not in FORMATS:
@@ -635,50 +888,70 @@ def report(
     summary_dir.mkdir(parents=True, exist_ok=True)
     resolved_run_dir = Path(run_dir) if run_dir is not None else summary_dir.parent
 
+    marks = _assertions_by_source(store)
     verdict = _verdict(store)
+    provenance = _provenance(store, config, store.run_id)
     payload = {
         "file": _file(store),
         "verdict": verdict,
         "branches": _branches(store),
         "steps": _steps(store),
-        "transcript": {"text": _transcript(store), "words_n": len(_words(store))},
+        "transcript": {"text": _transcript(store, marks), "words_n": len(_words(store))},
         "categories": _categories(store),
-        "provenance": _provenance(store, config, store.run_id),
+        "provenance": provenance,
     }
     json_path = summary_dir / f"{SUMMARY_STEM}.json"
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
-    title = f"triage: {verdict['triage']}   ·   release: {verdict['release']}   ·   run {store.run_id}"
+    title = f"triage: {_shown(verdict['triage'])}   ·   release: {_shown(verdict['release'])}   ·   run {store.run_id}"
     summary_path = summary_dir / f"{SUMMARY_STEM}.{fmt}"
-    _render(store, resolved_run_dir, config, title, summary_path)
+    try:
+        _render(store, marks, resolved_run_dir, config, provenance, title, summary_path)
+    except Exception as error:  # noqa: BLE001 — any drawing failure keeps the product already written
+        raise ReportRenderError(
+            f"the summary could not be drawn ({type(error).__name__}: {error}); the JSON was written",
+            {"json": json_path},
+        ) from error
     return {"summary": summary_path, "json": json_path}
 
 
-def _render(store: ProvStore, run_dir: Path, config: TriageConfig, title: str, path: Path) -> None:
+def _render(  # noqa: PLR0913 — every argument is one thing the page needs and none has a default
+    store: ProvStore,
+    marks: dict[str, list[Entity]],
+    run_dir: Path,
+    config: TriageConfig,
+    provenance: dict[str, Any],
+    title: str,
+    path: Path,
+) -> None:
     """Draw the summary, on the shared time axis when there is a stream and on prose alone when not.
 
     A file ADMIT refused has no conditioned stream, so there is no axis to share; the blocks are the
-    whole product, and they say that.
+    whole product, and they say so — including which lanes are missing and why.
 
     Args:
         store: The provenance store.
+        marks: :func:`_assertions_by_source`'s index.
         run_dir: Where sidecar paths resolve against.
         config: The triage configuration.
+        provenance: :func:`_provenance`'s mapping, summarised onto the page's second line.
         title: The figure's title, carrying the decision.
         path: Where the rendered summary goes.
     """
     from matplotlib import pyplot
 
-    blocks = _blocks(store)
     audio = _stream(store, run_dir)
+    panels = [] if audio is None else _panels(store, marks, run_dir, config)
+    drawn = {str(panel["name"]) for panel in panels if "name" in panel}
+    blocks = _blocks(store, marks, drawn, provenance)
     if audio is None:
-        figure = pyplot.figure(figsize=(14.0, max(4.0, 0.18 * len(blocks) * 1.8)))
+        height = max(MIN_FIGURE_HEIGHT_IN, TEXT_PANEL_INCHES_PER_LINE * len(blocks))
+        figure = pyplot.figure(figsize=(14.0, height))
         axis = figure.add_subplot(111)
         axis.axis("off")
         axis.text(0.01, 0.98, "\n".join(blocks), va="top", ha="left", family="monospace", fontsize=8)
         figure.suptitle(title)
     else:
-        panels = _panels(store, run_dir, config)
         panels.append({"type": "text", "lines": blocks})
         figure = plot_aligned_panels(audio, panels, title=title)
     figure.savefig(path, bbox_inches="tight")
