@@ -32,6 +32,24 @@
             <h2>API Documentation</h2>
                 <ul class="memberlist">
             <li>
+                    <a class="class" href="#FormantTrack">FormantTrack</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#FormantTrack.__init__">FormantTrack</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#FormantTrack.times_s">times_s</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#FormantTrack.f_hz">f_hz</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#FormantTrack.bandwidth_hz">bandwidth_hz</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
                     <a class="class" href="#PeriodMark">PeriodMark</a>
                             <ul class="memberlist">
                         <li>
@@ -50,13 +68,61 @@
 
             </li>
             <li>
+                    <a class="class" href="#PhonationSpan">PhonationSpan</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#PhonationSpan.__init__">PhonationSpan</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.start">start</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.end">end</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.member">member</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.production">production</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.voiced_fraction">voiced_fraction</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.f0_median_hz">f0_median_hz</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.f0_start_hz">f0_start_hz</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.f0_end_hz">f0_end_hz</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.glide_direction">glide_direction</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.glide_extent_cents">glide_extent_cents</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#PhonationSpan.offset_criterion">offset_criterion</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
                     <a class="function" href="#f0_track">f0_track</a>
+            </li>
+            <li>
+                    <a class="function" href="#formant_track">formant_track</a>
             </li>
             <li>
                     <a class="function" href="#hnr_track">hnr_track</a>
             </li>
             <li>
                     <a class="function" href="#period_marks">period_marks</a>
+            </li>
+            <li>
+                    <a class="function" href="#propose_phonation_spans">propose_phonation_spans</a>
             </li>
     </ul>
 
@@ -81,15 +147,119 @@
 
                         <label class="view-source-button" for="mod-phonation-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Phonation measurements through Praat.&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.phonation.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">PeriodMark</span><span class="p">,</span> <span class="n">f0_track</span><span class="p">,</span> <span class="n">hnr_track</span><span class="p">,</span> <span class="n">period_marks</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;PeriodMark&quot;</span><span class="p">,</span> <span class="s2">&quot;f0_track&quot;</span><span class="p">,</span> <span class="s2">&quot;hnr_track&quot;</span><span class="p">,</span> <span class="s2">&quot;period_marks&quot;</span><span class="p">]</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Phonation measurements through Praat.&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.phonation.api</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>    <span class="n">FormantTrack</span><span class="p">,</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>    <span class="n">PeriodMark</span><span class="p">,</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">PhonationSpan</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">f0_track</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">formant_track</span><span class="p">,</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">hnr_track</span><span class="p">,</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">period_marks</span><span class="p">,</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">propose_phonation_spans</span><span class="p">,</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a><span class="p">)</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="s2">&quot;FormantTrack&quot;</span><span class="p">,</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="s2">&quot;PeriodMark&quot;</span><span class="p">,</span>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="s2">&quot;PhonationSpan&quot;</span><span class="p">,</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="s2">&quot;f0_track&quot;</span><span class="p">,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="s2">&quot;formant_track&quot;</span><span class="p">,</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="s2">&quot;hnr_track&quot;</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="s2">&quot;period_marks&quot;</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="s2">&quot;propose_phonation_spans&quot;</span><span class="p">,</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="FormantTrack">
+                            <input id="FormantTrack-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+                    <div class="decorator decorator-dataclass">@dataclass(frozen=True)</div>
+
+    <span class="def">class</span>
+    <span class="name">FormantTrack</span>:
+
+                <label class="view-source-button" for="FormantTrack-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#FormantTrack"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="FormantTrack-159"><a href="#FormantTrack-159"><span class="linenos">159</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="FormantTrack-160"><a href="#FormantTrack-160"><span class="linenos">160</span></a><span class="k">class</span><span class="w"> </span><span class="nc">FormantTrack</span><span class="p">:</span>
+</span><span id="FormantTrack-161"><a href="#FormantTrack-161"><span class="linenos">161</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Formant frequencies and bandwidths over one stream, on a fixed hop.</span>
+</span><span id="FormantTrack-162"><a href="#FormantTrack-162"><span class="linenos">162</span></a>
+</span><span id="FormantTrack-163"><a href="#FormantTrack-163"><span class="linenos">163</span></a><span class="sd">    Attributes:</span>
+</span><span id="FormantTrack-164"><a href="#FormantTrack-164"><span class="linenos">164</span></a><span class="sd">        times_s: Frame times, in seconds.</span>
+</span><span id="FormantTrack-165"><a href="#FormantTrack-165"><span class="linenos">165</span></a><span class="sd">        f_hz: Four arrays, F1 to F4, each one value per frame. NaN where Praat placed none.</span>
+</span><span id="FormantTrack-166"><a href="#FormantTrack-166"><span class="linenos">166</span></a><span class="sd">        bandwidth_hz: Four arrays, the corresponding 3 dB bandwidths. NaN where the formant is NaN.</span>
+</span><span id="FormantTrack-167"><a href="#FormantTrack-167"><span class="linenos">167</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="FormantTrack-168"><a href="#FormantTrack-168"><span class="linenos">168</span></a>
+</span><span id="FormantTrack-169"><a href="#FormantTrack-169"><span class="linenos">169</span></a>    <span class="n">times_s</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+</span><span id="FormantTrack-170"><a href="#FormantTrack-170"><span class="linenos">170</span></a>    <span class="n">f_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>
+</span><span id="FormantTrack-171"><a href="#FormantTrack-171"><span class="linenos">171</span></a>    <span class="n">bandwidth_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Formant frequencies and bandwidths over one stream, on a fixed hop.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>times_s:</strong>  Frame times, in seconds.</li>
+<li><strong>f_hz:</strong>  Four arrays, F1 to F4, each one value per frame. NaN where Praat placed none.</li>
+<li><strong>bandwidth_hz:</strong>  Four arrays, the corresponding 3 dB bandwidths. NaN where the formant is NaN.</li>
+</ul>
+</div>
+
+
+                            <div id="FormantTrack.__init__" class="classattr">
+                                <div class="attr function">
+            
+        <span class="name">FormantTrack</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">times_s</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">f_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span>,</span><span class="param">	<span class="n">bandwidth_hz</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span></span>)</span>
+
+        
+    </div>
+    <a class="headerlink" href="#FormantTrack.__init__"></a>
+    
+    
+
+                            </div>
+                            <div id="FormantTrack.times_s" class="classattr">
+                                <div class="attr variable">
+            <span class="name">times_s</span><span class="annotation">: numpy.ndarray</span>
+
+        
+    </div>
+    <a class="headerlink" href="#FormantTrack.times_s"></a>
+    
+    
+
+                            </div>
+                            <div id="FormantTrack.f_hz" class="classattr">
+                                <div class="attr variable">
+            <span class="name">f_hz</span><span class="annotation">: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#FormantTrack.f_hz"></a>
+    
+    
+
+                            </div>
+                            <div id="FormantTrack.bandwidth_hz" class="classattr">
+                                <div class="attr variable">
+            <span class="name">bandwidth_hz</span><span class="annotation">: tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray, numpy.ndarray]</span>
+
+        
+    </div>
+    <a class="headerlink" href="#FormantTrack.bandwidth_hz"></a>
+    
+    
+
+                            </div>
+                </section>
                 <section id="PeriodMark">
                             <input id="PeriodMark-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr class">
@@ -176,6 +346,206 @@
 
                             </div>
                 </section>
+                <section id="PhonationSpan">
+                            <input id="PhonationSpan-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+                    <div class="decorator decorator-dataclass">@dataclass(frozen=True)</div>
+
+    <span class="def">class</span>
+    <span class="name">PhonationSpan</span>:
+
+                <label class="view-source-button" for="PhonationSpan-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#PhonationSpan"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="PhonationSpan-235"><a href="#PhonationSpan-235"><span class="linenos">235</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="PhonationSpan-236"><a href="#PhonationSpan-236"><span class="linenos">236</span></a><span class="k">class</span><span class="w"> </span><span class="nc">PhonationSpan</span><span class="p">:</span>
+</span><span id="PhonationSpan-237"><a href="#PhonationSpan-237"><span class="linenos">237</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One proposed sustained-phonation or glide span, with the statistics of its own frames.</span>
+</span><span id="PhonationSpan-238"><a href="#PhonationSpan-238"><span class="linenos">238</span></a>
+</span><span id="PhonationSpan-239"><a href="#PhonationSpan-239"><span class="linenos">239</span></a><span class="sd">    Attributes:</span>
+</span><span id="PhonationSpan-240"><a href="#PhonationSpan-240"><span class="linenos">240</span></a><span class="sd">        start: Onset in seconds.</span>
+</span><span id="PhonationSpan-241"><a href="#PhonationSpan-241"><span class="linenos">241</span></a><span class="sd">        end: Offset in seconds.</span>
+</span><span id="PhonationSpan-242"><a href="#PhonationSpan-242"><span class="linenos">242</span></a><span class="sd">        member: ``&quot;sustained&quot;`` or ``&quot;glide&quot;``.</span>
+</span><span id="PhonationSpan-243"><a href="#PhonationSpan-243"><span class="linenos">243</span></a><span class="sd">        production: ``&quot;voiced&quot;``, ``&quot;unvoiced&quot;`` or ``&quot;mixed&quot;``.</span>
+</span><span id="PhonationSpan-244"><a href="#PhonationSpan-244"><span class="linenos">244</span></a><span class="sd">        voiced_fraction: Fraction of the span&#39;s frames whose pitch strength cleared the floor.</span>
+</span><span id="PhonationSpan-245"><a href="#PhonationSpan-245"><span class="linenos">245</span></a><span class="sd">        f0_median_hz: Median F0 over the voiced frames, or None when there are none.</span>
+</span><span id="PhonationSpan-246"><a href="#PhonationSpan-246"><span class="linenos">246</span></a><span class="sd">        f0_start_hz: F0 at the first voiced frame, or None.</span>
+</span><span id="PhonationSpan-247"><a href="#PhonationSpan-247"><span class="linenos">247</span></a><span class="sd">        f0_end_hz: F0 at the last voiced frame, or None.</span>
+</span><span id="PhonationSpan-248"><a href="#PhonationSpan-248"><span class="linenos">248</span></a><span class="sd">        glide_direction: ``&quot;rising&quot;``, ``&quot;falling&quot;``, or None for a sustained span.</span>
+</span><span id="PhonationSpan-249"><a href="#PhonationSpan-249"><span class="linenos">249</span></a><span class="sd">        glide_extent_cents: The monotone excursion&#39;s magnitude, or None for a sustained span.</span>
+</span><span id="PhonationSpan-250"><a href="#PhonationSpan-250"><span class="linenos">250</span></a><span class="sd">        offset_criterion: What closed the span — ``&quot;f0_stability&quot;``, ``&quot;formant_stability&quot;``,</span>
+</span><span id="PhonationSpan-251"><a href="#PhonationSpan-251"><span class="linenos">251</span></a><span class="sd">            ``&quot;both&quot;``, ``&quot;monotonicity&quot;`` or ``&quot;stream_end&quot;``.</span>
+</span><span id="PhonationSpan-252"><a href="#PhonationSpan-252"><span class="linenos">252</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="PhonationSpan-253"><a href="#PhonationSpan-253"><span class="linenos">253</span></a>
+</span><span id="PhonationSpan-254"><a href="#PhonationSpan-254"><span class="linenos">254</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="PhonationSpan-255"><a href="#PhonationSpan-255"><span class="linenos">255</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="PhonationSpan-256"><a href="#PhonationSpan-256"><span class="linenos">256</span></a>    <span class="n">member</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="PhonationSpan-257"><a href="#PhonationSpan-257"><span class="linenos">257</span></a>    <span class="n">production</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="PhonationSpan-258"><a href="#PhonationSpan-258"><span class="linenos">258</span></a>    <span class="n">voiced_fraction</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="PhonationSpan-259"><a href="#PhonationSpan-259"><span class="linenos">259</span></a>    <span class="n">f0_median_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="PhonationSpan-260"><a href="#PhonationSpan-260"><span class="linenos">260</span></a>    <span class="n">f0_start_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="PhonationSpan-261"><a href="#PhonationSpan-261"><span class="linenos">261</span></a>    <span class="n">f0_end_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="PhonationSpan-262"><a href="#PhonationSpan-262"><span class="linenos">262</span></a>    <span class="n">glide_direction</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="PhonationSpan-263"><a href="#PhonationSpan-263"><span class="linenos">263</span></a>    <span class="n">glide_extent_cents</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>
+</span><span id="PhonationSpan-264"><a href="#PhonationSpan-264"><span class="linenos">264</span></a>    <span class="n">offset_criterion</span><span class="p">:</span> <span class="nb">str</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>One proposed sustained-phonation or glide span, with the statistics of its own frames.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>start:</strong>  Onset in seconds.</li>
+<li><strong>end:</strong>  Offset in seconds.</li>
+<li><strong>member:</strong>  <code>"sustained"</code> or <code>"glide"</code>.</li>
+<li><strong>production:</strong>  <code>"voiced"</code>, <code>"unvoiced"</code> or <code>"mixed"</code>.</li>
+<li><strong>voiced_fraction:</strong>  Fraction of the span's frames whose pitch strength cleared the floor.</li>
+<li><strong>f0_median_hz:</strong>  Median F0 over the voiced frames, or None when there are none.</li>
+<li><strong>f0_start_hz:</strong>  F0 at the first voiced frame, or None.</li>
+<li><strong>f0_end_hz:</strong>  F0 at the last voiced frame, or None.</li>
+<li><strong>glide_direction:</strong>  <code>"rising"</code>, <code>"falling"</code>, or None for a sustained span.</li>
+<li><strong>glide_extent_cents:</strong>  The monotone excursion's magnitude, or None for a sustained span.</li>
+<li><strong>offset_criterion:</strong>  What closed the span — <code>"f0_stability"</code>, <code>"formant_stability"</code>,
+<code>"both"</code>, <code>"monotonicity"</code> or <code>"stream_end"</code>.</li>
+</ul>
+</div>
+
+
+                            <div id="PhonationSpan.__init__" class="classattr">
+                                <div class="attr function">
+            
+        <span class="name">PhonationSpan</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">start</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">end</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">member</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">production</span><span class="p">:</span> <span class="nb">str</span>,</span><span class="param">	<span class="n">voiced_fraction</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">f0_median_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">f0_start_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">f0_end_hz</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">glide_direction</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">glide_extent_cents</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span>,</span><span class="param">	<span class="n">offset_criterion</span><span class="p">:</span> <span class="nb">str</span></span>)</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.__init__"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.start" class="classattr">
+                                <div class="attr variable">
+            <span class="name">start</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.start"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.end" class="classattr">
+                                <div class="attr variable">
+            <span class="name">end</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.end"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.member" class="classattr">
+                                <div class="attr variable">
+            <span class="name">member</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.member"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.production" class="classattr">
+                                <div class="attr variable">
+            <span class="name">production</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.production"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.voiced_fraction" class="classattr">
+                                <div class="attr variable">
+            <span class="name">voiced_fraction</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.voiced_fraction"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.f0_median_hz" class="classattr">
+                                <div class="attr variable">
+            <span class="name">f0_median_hz</span><span class="annotation">: float | None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.f0_median_hz"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.f0_start_hz" class="classattr">
+                                <div class="attr variable">
+            <span class="name">f0_start_hz</span><span class="annotation">: float | None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.f0_start_hz"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.f0_end_hz" class="classattr">
+                                <div class="attr variable">
+            <span class="name">f0_end_hz</span><span class="annotation">: float | None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.f0_end_hz"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.glide_direction" class="classattr">
+                                <div class="attr variable">
+            <span class="name">glide_direction</span><span class="annotation">: str | None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.glide_direction"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.glide_extent_cents" class="classattr">
+                                <div class="attr variable">
+            <span class="name">glide_extent_cents</span><span class="annotation">: float | None</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.glide_extent_cents"></a>
+    
+    
+
+                            </div>
+                            <div id="PhonationSpan.offset_criterion" class="classattr">
+                                <div class="attr variable">
+            <span class="name">offset_criterion</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#PhonationSpan.offset_criterion"></a>
+    
+    
+
+                            </div>
+                </section>
                 <section id="f0_track">
                             <input id="f0_track-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
@@ -201,8 +571,8 @@
 </span><span id="f0_track-136"><a href="#f0_track-136"><span class="linenos">136</span></a>
 </span><span id="f0_track-137"><a href="#f0_track-137"><span class="linenos">137</span></a><span class="sd">    Args:</span>
 </span><span id="f0_track-138"><a href="#f0_track-138"><span class="linenos">138</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
-</span><span id="f0_track-139"><a href="#f0_track-139"><span class="linenos">139</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from ``phonation.f0_min_hz``.</span>
-</span><span id="f0_track-140"><a href="#f0_track-140"><span class="linenos">140</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from ``phonation.f0_max_hz``.</span>
+</span><span id="f0_track-139"><a href="#f0_track-139"><span class="linenos">139</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.</span>
+</span><span id="f0_track-140"><a href="#f0_track-140"><span class="linenos">140</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.</span>
 </span><span id="f0_track-141"><a href="#f0_track-141"><span class="linenos">141</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation.hop_s``.</span>
 </span><span id="f0_track-142"><a href="#f0_track-142"><span class="linenos">142</span></a>
 </span><span id="f0_track-143"><a href="#f0_track-143"><span class="linenos">143</span></a><span class="sd">    Returns:</span>
@@ -231,8 +601,8 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
 <ul>
 <li><strong>audio:</strong>  The recording. <code>get_sound</code> handles channel merging and resampling.</li>
-<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code>phonation.f0_min_hz</code>.</li>
-<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code>phonation.f0_max_hz</code>.</li>
+<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
+<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
 <li><strong>hop_s:</strong>  Praat's <code>time_step</code>. Read it from <code>phonation.hop_s</code>.</li>
 </ul>
 
@@ -240,6 +610,111 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
 <blockquote>
   <p><code>(times_s, f0_hz, strength)</code>, one value per frame, all three the same length.</p>
+</blockquote>
+
+<h6 id="raises">Raises:</h6>
+
+<ul>
+<li><strong>ModuleNotFoundError:</strong>  If parselmouth is not installed.</li>
+</ul>
+</div>
+
+
+                </section>
+                <section id="formant_track">
+                            <input id="formant_track-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">formant_track</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">max_formants</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">formant_max_hz</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">window_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">preemphasis_hz</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="n"><a href="#FormantTrack">FormantTrack</a></span>:</span></span>
+
+                <label class="view-source-button" for="formant_track-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#formant_track"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="formant_track-174"><a href="#formant_track-174"><span class="linenos">174</span></a><span class="k">def</span><span class="w"> </span><span class="nf">formant_track</span><span class="p">(</span>
+</span><span id="formant_track-175"><a href="#formant_track-175"><span class="linenos">175</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="formant_track-176"><a href="#formant_track-176"><span class="linenos">176</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="formant_track-177"><a href="#formant_track-177"><span class="linenos">177</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-178"><a href="#formant_track-178"><span class="linenos">178</span></a>    <span class="n">max_formants</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="formant_track-179"><a href="#formant_track-179"><span class="linenos">179</span></a>    <span class="n">formant_max_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-180"><a href="#formant_track-180"><span class="linenos">180</span></a>    <span class="n">window_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-181"><a href="#formant_track-181"><span class="linenos">181</span></a>    <span class="n">preemphasis_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="formant_track-182"><a href="#formant_track-182"><span class="linenos">182</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">FormantTrack</span><span class="p">:</span>
+</span><span id="formant_track-183"><a href="#formant_track-183"><span class="linenos">183</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;F1-F4 and their bandwidths over the whole stream, by Praat&#39;s Burg method.</span>
+</span><span id="formant_track-184"><a href="#formant_track-184"><span class="linenos">184</span></a>
+</span><span id="formant_track-185"><a href="#formant_track-185"><span class="linenos">185</span></a><span class="sd">    Computed once over the stream so a consumer slices the track rather than re-tracking a fragment.</span>
+</span><span id="formant_track-186"><a href="#formant_track-186"><span class="linenos">186</span></a>
+</span><span id="formant_track-187"><a href="#formant_track-187"><span class="linenos">187</span></a><span class="sd">    Args:</span>
+</span><span id="formant_track-188"><a href="#formant_track-188"><span class="linenos">188</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
+</span><span id="formant_track-189"><a href="#formant_track-189"><span class="linenos">189</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation_spans.hop_s``.</span>
+</span><span id="formant_track-190"><a href="#formant_track-190"><span class="linenos">190</span></a><span class="sd">        max_formants: Praat&#39;s ``max_number_of_formants``. Read it from ``phonation_spans.max_formants``.</span>
+</span><span id="formant_track-191"><a href="#formant_track-191"><span class="linenos">191</span></a><span class="sd">        formant_max_hz: Praat&#39;s ``maximum_formant``. Read it from ``phonation_spans.formant_max_hz``.</span>
+</span><span id="formant_track-192"><a href="#formant_track-192"><span class="linenos">192</span></a><span class="sd">        window_s: Praat&#39;s ``window_length``. Read it from ``phonation_spans.formant_window_s``.</span>
+</span><span id="formant_track-193"><a href="#formant_track-193"><span class="linenos">193</span></a><span class="sd">        preemphasis_hz: Praat&#39;s ``pre_emphasis_from``. Read it from</span>
+</span><span id="formant_track-194"><a href="#formant_track-194"><span class="linenos">194</span></a><span class="sd">            ``phonation_spans.formant_preemphasis_hz``.</span>
+</span><span id="formant_track-195"><a href="#formant_track-195"><span class="linenos">195</span></a>
+</span><span id="formant_track-196"><a href="#formant_track-196"><span class="linenos">196</span></a><span class="sd">    Returns:</span>
+</span><span id="formant_track-197"><a href="#formant_track-197"><span class="linenos">197</span></a><span class="sd">        The track. A frame where Praat placed no formant carries NaN in both arrays, so a missing</span>
+</span><span id="formant_track-198"><a href="#formant_track-198"><span class="linenos">198</span></a><span class="sd">        formant is absent rather than zero.</span>
+</span><span id="formant_track-199"><a href="#formant_track-199"><span class="linenos">199</span></a>
+</span><span id="formant_track-200"><a href="#formant_track-200"><span class="linenos">200</span></a><span class="sd">    Raises:</span>
+</span><span id="formant_track-201"><a href="#formant_track-201"><span class="linenos">201</span></a><span class="sd">        ModuleNotFoundError: If parselmouth is not installed.</span>
+</span><span id="formant_track-202"><a href="#formant_track-202"><span class="linenos">202</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="formant_track-203"><a href="#formant_track-203"><span class="linenos">203</span></a>    <span class="n">_require_parselmouth</span><span class="p">()</span>
+</span><span id="formant_track-204"><a href="#formant_track-204"><span class="linenos">204</span></a>    <span class="n">snd</span> <span class="o">=</span> <span class="n">get_sound</span><span class="p">(</span><span class="n">audio</span><span class="p">)</span>
+</span><span id="formant_track-205"><a href="#formant_track-205"><span class="linenos">205</span></a>    <span class="n">formants</span> <span class="o">=</span> <span class="n">snd</span><span class="o">.</span><span class="n">to_formant_burg</span><span class="p">(</span>
+</span><span id="formant_track-206"><a href="#formant_track-206"><span class="linenos">206</span></a>        <span class="n">time_step</span><span class="o">=</span><span class="n">hop_s</span><span class="p">,</span>
+</span><span id="formant_track-207"><a href="#formant_track-207"><span class="linenos">207</span></a>        <span class="n">max_number_of_formants</span><span class="o">=</span><span class="n">max_formants</span><span class="p">,</span>
+</span><span id="formant_track-208"><a href="#formant_track-208"><span class="linenos">208</span></a>        <span class="n">maximum_formant</span><span class="o">=</span><span class="n">formant_max_hz</span><span class="p">,</span>
+</span><span id="formant_track-209"><a href="#formant_track-209"><span class="linenos">209</span></a>        <span class="n">window_length</span><span class="o">=</span><span class="n">window_s</span><span class="p">,</span>
+</span><span id="formant_track-210"><a href="#formant_track-210"><span class="linenos">210</span></a>        <span class="n">pre_emphasis_from</span><span class="o">=</span><span class="n">preemphasis_hz</span><span class="p">,</span>
+</span><span id="formant_track-211"><a href="#formant_track-211"><span class="linenos">211</span></a>    <span class="p">)</span>
+</span><span id="formant_track-212"><a href="#formant_track-212"><span class="linenos">212</span></a>    <span class="n">times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">formants</span><span class="o">.</span><span class="n">xs</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="formant_track-213"><a href="#formant_track-213"><span class="linenos">213</span></a>    <span class="n">values</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="formant_track-214"><a href="#formant_track-214"><span class="linenos">214</span></a>    <span class="n">bandwidths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="formant_track-215"><a href="#formant_track-215"><span class="linenos">215</span></a>    <span class="k">for</span> <span class="n">order</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">):</span>
+</span><span id="formant_track-216"><a href="#formant_track-216"><span class="linenos">216</span></a>        <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="formant_track-217"><a href="#formant_track-217"><span class="linenos">217</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+</span><span id="formant_track-218"><a href="#formant_track-218"><span class="linenos">218</span></a>                <span class="p">[</span><span class="n">formants</span><span class="o">.</span><span class="n">get_value_at_time</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">FormantUnit</span><span class="o">.</span><span class="n">HERTZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">times</span><span class="p">],</span>
+</span><span id="formant_track-219"><a href="#formant_track-219"><span class="linenos">219</span></a>                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
+</span><span id="formant_track-220"><a href="#formant_track-220"><span class="linenos">220</span></a>            <span class="p">)</span>
+</span><span id="formant_track-221"><a href="#formant_track-221"><span class="linenos">221</span></a>        <span class="p">)</span>
+</span><span id="formant_track-222"><a href="#formant_track-222"><span class="linenos">222</span></a>        <span class="n">bandwidths</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="formant_track-223"><a href="#formant_track-223"><span class="linenos">223</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span>
+</span><span id="formant_track-224"><a href="#formant_track-224"><span class="linenos">224</span></a>                <span class="p">[</span><span class="n">formants</span><span class="o">.</span><span class="n">get_bandwidth_at_time</span><span class="p">(</span><span class="n">order</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="n">parselmouth</span><span class="o">.</span><span class="n">FormantUnit</span><span class="o">.</span><span class="n">HERTZ</span><span class="p">)</span> <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="n">times</span><span class="p">],</span>
+</span><span id="formant_track-225"><a href="#formant_track-225"><span class="linenos">225</span></a>                <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span>
+</span><span id="formant_track-226"><a href="#formant_track-226"><span class="linenos">226</span></a>            <span class="p">)</span>
+</span><span id="formant_track-227"><a href="#formant_track-227"><span class="linenos">227</span></a>        <span class="p">)</span>
+</span><span id="formant_track-228"><a href="#formant_track-228"><span class="linenos">228</span></a>    <span class="k">return</span> <span class="n">FormantTrack</span><span class="p">(</span>
+</span><span id="formant_track-229"><a href="#formant_track-229"><span class="linenos">229</span></a>        <span class="n">times_s</span><span class="o">=</span><span class="n">times</span><span class="p">,</span>
+</span><span id="formant_track-230"><a href="#formant_track-230"><span class="linenos">230</span></a>        <span class="n">f_hz</span><span class="o">=</span><span class="p">(</span><span class="n">values</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">values</span><span class="p">[</span><span class="mi">3</span><span class="p">]),</span>
+</span><span id="formant_track-231"><a href="#formant_track-231"><span class="linenos">231</span></a>        <span class="n">bandwidth_hz</span><span class="o">=</span><span class="p">(</span><span class="n">bandwidths</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="n">bandwidths</span><span class="p">[</span><span class="mi">3</span><span class="p">]),</span>
+</span><span id="formant_track-232"><a href="#formant_track-232"><span class="linenos">232</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>F1-F4 and their bandwidths over the whole stream, by Praat's Burg method.</p>
+
+<p>Computed once over the stream so a consumer slices the track rather than re-tracking a fragment.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio:</strong>  The recording. <code>get_sound</code> handles channel merging and resampling.</li>
+<li><strong>hop_s:</strong>  Praat's <code>time_step</code>. Read it from <code>phonation_spans.hop_s</code>.</li>
+<li><strong>max_formants:</strong>  Praat's <code>max_number_of_formants</code>. Read it from <code>phonation_spans.max_formants</code>.</li>
+<li><strong>formant_max_hz:</strong>  Praat's <code>maximum_formant</code>. Read it from <code>phonation_spans.formant_max_hz</code>.</li>
+<li><strong>window_s:</strong>  Praat's <code>window_length</code>. Read it from <code>phonation_spans.formant_window_s</code>.</li>
+<li><strong>preemphasis_hz:</strong>  Praat's <code>pre_emphasis_from</code>. Read it from
+<code>phonation_spans.formant_preemphasis_hz</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The track. A frame where Praat placed no formant carries NaN in both arrays, so a missing
+  formant is absent rather than zero.</p>
 </blockquote>
 
 <h6 id="raises">Raises:</h6>
@@ -274,7 +749,7 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 </span><span id="hnr_track-50"><a href="#hnr_track-50"><span class="linenos">50</span></a>
 </span><span id="hnr_track-51"><a href="#hnr_track-51"><span class="linenos">51</span></a><span class="sd">    Args:</span>
 </span><span id="hnr_track-52"><a href="#hnr_track-52"><span class="linenos">52</span></a><span class="sd">        audio: The recording. ``get_sound`` handles channel merging and resampling.</span>
-</span><span id="hnr_track-53"><a href="#hnr_track-53"><span class="linenos">53</span></a><span class="sd">        f0_min_hz: Lowest F0 the analysis considers. Read it from ``phonation.f0_min_hz``.</span>
+</span><span id="hnr_track-53"><a href="#hnr_track-53"><span class="linenos">53</span></a><span class="sd">        f0_min_hz: Lowest F0 the analysis considers. Read it from ``voice.f0_range_hz``.</span>
 </span><span id="hnr_track-54"><a href="#hnr_track-54"><span class="linenos">54</span></a><span class="sd">        hop_s: Praat&#39;s ``time_step``. Read it from ``phonation.hop_s``.</span>
 </span><span id="hnr_track-55"><a href="#hnr_track-55"><span class="linenos">55</span></a><span class="sd">        silence_threshold: Praat&#39;s silence threshold. Read it from ``phonation.silence_threshold``.</span>
 </span><span id="hnr_track-56"><a href="#hnr_track-56"><span class="linenos">56</span></a><span class="sd">        periods_per_window: Praat&#39;s analysis window length, in periods of ``f0_min_hz``. Read it</span>
@@ -307,7 +782,7 @@ with the periodicity that placed it and a reader cannot separate them.</p>
 
 <ul>
 <li><strong>audio:</strong>  The recording. <code>get_sound</code> handles channel merging and resampling.</li>
-<li><strong>f0_min_hz:</strong>  Lowest F0 the analysis considers. Read it from <code>phonation.f0_min_hz</code>.</li>
+<li><strong>f0_min_hz:</strong>  Lowest F0 the analysis considers. Read it from <code>voice.f0_range_hz</code>.</li>
 <li><strong>hop_s:</strong>  Praat's <code>time_step</code>. Read it from <code>phonation.hop_s</code>.</li>
 <li><strong>silence_threshold:</strong>  Praat's silence threshold. Read it from <code>phonation.silence_threshold</code>.</li>
 <li><strong>periods_per_window:</strong>  Praat's analysis window length, in periods of <code>f0_min_hz</code>. Read it
@@ -355,8 +830,8 @@ from <code>phonation.periods_per_window</code>.</li>
 </span><span id="period_marks-90"><a href="#period_marks-90"><span class="linenos"> 90</span></a><span class="sd">        audio: The recording.</span>
 </span><span id="period_marks-91"><a href="#period_marks-91"><span class="linenos"> 91</span></a><span class="sd">        start_s: Span onset.</span>
 </span><span id="period_marks-92"><a href="#period_marks-92"><span class="linenos"> 92</span></a><span class="sd">        end_s: Span offset.</span>
-</span><span id="period_marks-93"><a href="#period_marks-93"><span class="linenos"> 93</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from ``phonation.f0_min_hz``.</span>
-</span><span id="period_marks-94"><a href="#period_marks-94"><span class="linenos"> 94</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from ``phonation.f0_max_hz``.</span>
+</span><span id="period_marks-93"><a href="#period_marks-93"><span class="linenos"> 93</span></a><span class="sd">        f0_min_hz: Lowest F0 to search. Read it from ``voice.f0_range_hz``.</span>
+</span><span id="period_marks-94"><a href="#period_marks-94"><span class="linenos"> 94</span></a><span class="sd">        f0_max_hz: Highest F0 to search. Read it from ``voice.f0_range_hz``.</span>
 </span><span id="period_marks-95"><a href="#period_marks-95"><span class="linenos"> 95</span></a>
 </span><span id="period_marks-96"><a href="#period_marks-96"><span class="linenos"> 96</span></a><span class="sd">    Returns:</span>
 </span><span id="period_marks-97"><a href="#period_marks-97"><span class="linenos"> 97</span></a><span class="sd">        One mark per pair of consecutive pulses whose gap is a plausible period — within</span>
@@ -396,8 +871,8 @@ from <code>phonation.periods_per_window</code>.</li>
 <li><strong>audio:</strong>  The recording.</li>
 <li><strong>start_s:</strong>  Span onset.</li>
 <li><strong>end_s:</strong>  Span offset.</li>
-<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code>phonation.f0_min_hz</code>.</li>
-<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code>phonation.f0_max_hz</code>.</li>
+<li><strong>f0_min_hz:</strong>  Lowest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
+<li><strong>f0_max_hz:</strong>  Highest F0 to search. Read it from <code>voice.f0_range_hz</code>.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
@@ -413,6 +888,199 @@ from <code>phonation.periods_per_window</code>.</li>
 <ul>
 <li><strong>ModuleNotFoundError:</strong>  If parselmouth is not installed.</li>
 </ul>
+</div>
+
+
+                </section>
+                <section id="propose_phonation_spans">
+                            <input id="propose_phonation_spans-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">propose_phonation_spans</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">times</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">f0_hz</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">strength</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="n">formants</span><span class="p">:</span> <span class="n"><a href="#FormantTrack">FormantTrack</a></span>,</span><span class="param">	<span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">f0_stability_cents</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">formant_stability_hz</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">glide_min_excursion_cents</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">hangover_ms</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">voicing_strength_floor</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">mixed_voiced_fraction</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">list</span><span class="p">[</span><span class="n"><a href="#PhonationSpan">PhonationSpan</a></span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="propose_phonation_spans-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#propose_phonation_spans"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="propose_phonation_spans-346"><a href="#propose_phonation_spans-346"><span class="linenos">346</span></a><span class="k">def</span><span class="w"> </span><span class="nf">propose_phonation_spans</span><span class="p">(</span>  <span class="c1"># noqa: C901 — one branch per member and per offset criterion</span>
+</span><span id="propose_phonation_spans-347"><a href="#propose_phonation_spans-347"><span class="linenos">347</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-348"><a href="#propose_phonation_spans-348"><span class="linenos">348</span></a>    <span class="n">times</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-349"><a href="#propose_phonation_spans-349"><span class="linenos">349</span></a>    <span class="n">f0_hz</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-350"><a href="#propose_phonation_spans-350"><span class="linenos">350</span></a>    <span class="n">strength</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-351"><a href="#propose_phonation_spans-351"><span class="linenos">351</span></a>    <span class="n">formants</span><span class="p">:</span> <span class="n">FormantTrack</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-352"><a href="#propose_phonation_spans-352"><span class="linenos">352</span></a>    <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-353"><a href="#propose_phonation_spans-353"><span class="linenos">353</span></a>    <span class="n">f0_stability_cents</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-354"><a href="#propose_phonation_spans-354"><span class="linenos">354</span></a>    <span class="n">formant_stability_hz</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-355"><a href="#propose_phonation_spans-355"><span class="linenos">355</span></a>    <span class="n">glide_min_excursion_cents</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-356"><a href="#propose_phonation_spans-356"><span class="linenos">356</span></a>    <span class="n">hangover_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-357"><a href="#propose_phonation_spans-357"><span class="linenos">357</span></a>    <span class="n">voicing_strength_floor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-358"><a href="#propose_phonation_spans-358"><span class="linenos">358</span></a>    <span class="n">mixed_voiced_fraction</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-359"><a href="#propose_phonation_spans-359"><span class="linenos">359</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">PhonationSpan</span><span class="p">]:</span>
+</span><span id="propose_phonation_spans-360"><a href="#propose_phonation_spans-360"><span class="linenos">360</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Sustained-phonation and glide spans over tracks measured once on the whole stream.</span>
+</span><span id="propose_phonation_spans-361"><a href="#propose_phonation_spans-361"><span class="linenos">361</span></a>
+</span><span id="propose_phonation_spans-362"><a href="#propose_phonation_spans-362"><span class="linenos">362</span></a><span class="sd">    A frame continues the criterion when its F0 moved less than ``f0_stability_cents`` across one hop</span>
+</span><span id="propose_phonation_spans-363"><a href="#propose_phonation_spans-363"><span class="linenos">363</span></a><span class="sd">    — a frame with no F0 never satisfies this limb — **or** when F1 and F2 both moved less than</span>
+</span><span id="propose_phonation_spans-364"><a href="#propose_phonation_spans-364"><span class="linenos">364</span></a><span class="sd">    ``formant_stability_hz``. A maximal run of continuing frames, closed by ``hangover_ms`` of</span>
+</span><span id="propose_phonation_spans-365"><a href="#propose_phonation_spans-365"><span class="linenos">365</span></a><span class="sd">    continuous failure, is a ``&quot;sustained&quot;`` span. A maximal run outside every such span whose</span>
+</span><span id="propose_phonation_spans-366"><a href="#propose_phonation_spans-366"><span class="linenos">366</span></a><span class="sd">    defined F0 values, or F1 where none is defined, are monotone with an excursion at or over</span>
+</span><span id="propose_phonation_spans-367"><a href="#propose_phonation_spans-367"><span class="linenos">367</span></a><span class="sd">    ``glide_min_excursion_cents`` is a ``&quot;glide&quot;`` span. No periodicity floor opens or closes a span.</span>
+</span><span id="propose_phonation_spans-368"><a href="#propose_phonation_spans-368"><span class="linenos">368</span></a>
+</span><span id="propose_phonation_spans-369"><a href="#propose_phonation_spans-369"><span class="linenos">369</span></a><span class="sd">    Args:</span>
+</span><span id="propose_phonation_spans-370"><a href="#propose_phonation_spans-370"><span class="linenos">370</span></a><span class="sd">        times: The F0 track&#39;s frame times, in seconds. Every span is placed on this grid.</span>
+</span><span id="propose_phonation_spans-371"><a href="#propose_phonation_spans-371"><span class="linenos">371</span></a><span class="sd">        f0_hz: F0 per frame, NaN where unvoiced, as :func:`f0_track` returns it.</span>
+</span><span id="propose_phonation_spans-372"><a href="#propose_phonation_spans-372"><span class="linenos">372</span></a><span class="sd">        strength: Praat&#39;s pitch strength per frame, the same length as ``times``.</span>
+</span><span id="propose_phonation_spans-373"><a href="#propose_phonation_spans-373"><span class="linenos">373</span></a><span class="sd">        formants: The stream&#39;s formant track. It is read at the frame nearest each of ``times``,</span>
+</span><span id="propose_phonation_spans-374"><a href="#propose_phonation_spans-374"><span class="linenos">374</span></a><span class="sd">            so the two need not share a grid.</span>
+</span><span id="propose_phonation_spans-375"><a href="#propose_phonation_spans-375"><span class="linenos">375</span></a><span class="sd">        hop_s: The analysis hop, in seconds. Read it from ``phonation_spans.hop_s``.</span>
+</span><span id="propose_phonation_spans-376"><a href="#propose_phonation_spans-376"><span class="linenos">376</span></a><span class="sd">        f0_stability_cents: The F0 limb of the continuity criterion. Read it from</span>
+</span><span id="propose_phonation_spans-377"><a href="#propose_phonation_spans-377"><span class="linenos">377</span></a><span class="sd">            ``phonation_spans.f0_stability_cents``.</span>
+</span><span id="propose_phonation_spans-378"><a href="#propose_phonation_spans-378"><span class="linenos">378</span></a><span class="sd">        formant_stability_hz: The formant limb. Read it from ``phonation_spans.formant_stability_hz``.</span>
+</span><span id="propose_phonation_spans-379"><a href="#propose_phonation_spans-379"><span class="linenos">379</span></a><span class="sd">        glide_min_excursion_cents: The excursion separating a glide from drift. Read it from</span>
+</span><span id="propose_phonation_spans-380"><a href="#propose_phonation_spans-380"><span class="linenos">380</span></a><span class="sd">            ``phonation_spans.glide_min_excursion_cents``.</span>
+</span><span id="propose_phonation_spans-381"><a href="#propose_phonation_spans-381"><span class="linenos">381</span></a><span class="sd">        hangover_ms: How long the criterion must fail continuously before a span closes. Read it</span>
+</span><span id="propose_phonation_spans-382"><a href="#propose_phonation_spans-382"><span class="linenos">382</span></a><span class="sd">            from ``phonation_spans.hangover_ms``.</span>
+</span><span id="propose_phonation_spans-383"><a href="#propose_phonation_spans-383"><span class="linenos">383</span></a><span class="sd">        voicing_strength_floor: The pitch strength above which a frame counts as voiced. Read it</span>
+</span><span id="propose_phonation_spans-384"><a href="#propose_phonation_spans-384"><span class="linenos">384</span></a><span class="sd">            from ``phonation_spans.voicing_strength_floor``.</span>
+</span><span id="propose_phonation_spans-385"><a href="#propose_phonation_spans-385"><span class="linenos">385</span></a><span class="sd">        mixed_voiced_fraction: The voiced-frame fraction separating the three productions. Read it</span>
+</span><span id="propose_phonation_spans-386"><a href="#propose_phonation_spans-386"><span class="linenos">386</span></a><span class="sd">            from ``phonation_spans.mixed_voiced_fraction``.</span>
+</span><span id="propose_phonation_spans-387"><a href="#propose_phonation_spans-387"><span class="linenos">387</span></a>
+</span><span id="propose_phonation_spans-388"><a href="#propose_phonation_spans-388"><span class="linenos">388</span></a><span class="sd">    Returns:</span>
+</span><span id="propose_phonation_spans-389"><a href="#propose_phonation_spans-389"><span class="linenos">389</span></a><span class="sd">        The spans in time order. Empty when no run satisfies either member.</span>
+</span><span id="propose_phonation_spans-390"><a href="#propose_phonation_spans-390"><span class="linenos">390</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="propose_phonation_spans-391"><a href="#propose_phonation_spans-391"><span class="linenos">391</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">times</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-392"><a href="#propose_phonation_spans-392"><span class="linenos">392</span></a>    <span class="k">if</span> <span class="n">n</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-393"><a href="#propose_phonation_spans-393"><span class="linenos">393</span></a>        <span class="k">return</span> <span class="p">[]</span>
+</span><span id="propose_phonation_spans-394"><a href="#propose_phonation_spans-394"><span class="linenos">394</span></a>    <span class="n">f0</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">f0_hz</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-395"><a href="#propose_phonation_spans-395"><span class="linenos">395</span></a>    <span class="n">f1</span> <span class="o">=</span> <span class="n">_on_grid</span><span class="p">(</span><span class="n">formants</span><span class="o">.</span><span class="n">times_s</span><span class="p">,</span> <span class="n">formants</span><span class="o">.</span><span class="n">f_hz</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">times</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-396"><a href="#propose_phonation_spans-396"><span class="linenos">396</span></a>    <span class="n">f2</span> <span class="o">=</span> <span class="n">_on_grid</span><span class="p">(</span><span class="n">formants</span><span class="o">.</span><span class="n">times_s</span><span class="p">,</span> <span class="n">formants</span><span class="o">.</span><span class="n">f_hz</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="n">times</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-397"><a href="#propose_phonation_spans-397"><span class="linenos">397</span></a>
+</span><span id="propose_phonation_spans-398"><a href="#propose_phonation_spans-398"><span class="linenos">398</span></a>    <span class="n">f0_ok</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-399"><a href="#propose_phonation_spans-399"><span class="linenos">399</span></a>    <span class="n">formant_ok</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-400"><a href="#propose_phonation_spans-400"><span class="linenos">400</span></a>    <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">n</span><span class="p">):</span>
+</span><span id="propose_phonation_spans-401"><a href="#propose_phonation_spans-401"><span class="linenos">401</span></a>        <span class="n">moved</span> <span class="o">=</span> <span class="n">_cents</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">f0</span><span class="p">[</span><span class="n">index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">f0</span><span class="p">[</span><span class="n">index</span><span class="p">]))</span>
+</span><span id="propose_phonation_spans-402"><a href="#propose_phonation_spans-402"><span class="linenos">402</span></a>        <span class="n">f0_ok</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">moved</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">abs</span><span class="p">(</span><span class="n">moved</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">f0_stability_cents</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-403"><a href="#propose_phonation_spans-403"><span class="linenos">403</span></a>        <span class="n">formant_ok</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span>
+</span><span id="propose_phonation_spans-404"><a href="#propose_phonation_spans-404"><span class="linenos">404</span></a>            <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">f1</span><span class="p">[</span><span class="n">index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">])</span>
+</span><span id="propose_phonation_spans-405"><a href="#propose_phonation_spans-405"><span class="linenos">405</span></a>            <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">f1</span><span class="p">[</span><span class="n">index</span><span class="p">])</span>
+</span><span id="propose_phonation_spans-406"><a href="#propose_phonation_spans-406"><span class="linenos">406</span></a>            <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">f2</span><span class="p">[</span><span class="n">index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">])</span>
+</span><span id="propose_phonation_spans-407"><a href="#propose_phonation_spans-407"><span class="linenos">407</span></a>            <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">f2</span><span class="p">[</span><span class="n">index</span><span class="p">])</span>
+</span><span id="propose_phonation_spans-408"><a href="#propose_phonation_spans-408"><span class="linenos">408</span></a>            <span class="ow">and</span> <span class="nb">abs</span><span class="p">(</span><span class="n">f1</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">-</span> <span class="n">f1</span><span class="p">[</span><span class="n">index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">])</span> <span class="o">&lt;</span> <span class="n">formant_stability_hz</span>
+</span><span id="propose_phonation_spans-409"><a href="#propose_phonation_spans-409"><span class="linenos">409</span></a>            <span class="ow">and</span> <span class="nb">abs</span><span class="p">(</span><span class="n">f2</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">-</span> <span class="n">f2</span><span class="p">[</span><span class="n">index</span> <span class="o">-</span> <span class="mi">1</span><span class="p">])</span> <span class="o">&lt;</span> <span class="n">formant_stability_hz</span>
+</span><span id="propose_phonation_spans-410"><a href="#propose_phonation_spans-410"><span class="linenos">410</span></a>        <span class="p">)</span>
+</span><span id="propose_phonation_spans-411"><a href="#propose_phonation_spans-411"><span class="linenos">411</span></a>    <span class="n">continues</span> <span class="o">=</span> <span class="n">f0_ok</span> <span class="o">|</span> <span class="n">formant_ok</span>
+</span><span id="propose_phonation_spans-412"><a href="#propose_phonation_spans-412"><span class="linenos">412</span></a>
+</span><span id="propose_phonation_spans-413"><a href="#propose_phonation_spans-413"><span class="linenos">413</span></a>    <span class="n">hangover_frames</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">hangover_ms</span> <span class="o">/</span> <span class="n">_MS_PER_S</span> <span class="o">/</span> <span class="n">hop_s</span><span class="p">)))</span>
+</span><span id="propose_phonation_spans-414"><a href="#propose_phonation_spans-414"><span class="linenos">414</span></a>    <span class="n">sustained</span> <span class="o">=</span> <span class="n">_sustained_runs</span><span class="p">(</span><span class="n">continues</span><span class="p">,</span> <span class="n">hangover_frames</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-415"><a href="#propose_phonation_spans-415"><span class="linenos">415</span></a>
+</span><span id="propose_phonation_spans-416"><a href="#propose_phonation_spans-416"><span class="linenos">416</span></a>    <span class="k">def</span><span class="w"> </span><span class="nf">_statistics</span><span class="p">(</span><span class="n">first</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">last</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span><span class="p">]:</span>
+</span><span id="propose_phonation_spans-417"><a href="#propose_phonation_spans-417"><span class="linenos">417</span></a><span class="w">        </span><span class="sd">&quot;&quot;&quot;The span&#39;s voiced fraction, production, and F0 statistics over its voiced frames.&quot;&quot;&quot;</span>
+</span><span id="propose_phonation_spans-418"><a href="#propose_phonation_spans-418"><span class="linenos">418</span></a>        <span class="n">window</span> <span class="o">=</span> <span class="nb">slice</span><span class="p">(</span><span class="n">first</span><span class="p">,</span> <span class="n">last</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-419"><a href="#propose_phonation_spans-419"><span class="linenos">419</span></a>        <span class="n">voiced</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">strength</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)[</span><span class="n">window</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">voicing_strength_floor</span>
+</span><span id="propose_phonation_spans-420"><a href="#propose_phonation_spans-420"><span class="linenos">420</span></a>        <span class="n">fraction</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">voiced</span><span class="p">))</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">voiced</span><span class="p">)</span> <span class="k">else</span> <span class="mf">0.0</span>
+</span><span id="propose_phonation_spans-421"><a href="#propose_phonation_spans-421"><span class="linenos">421</span></a>        <span class="k">if</span> <span class="n">fraction</span> <span class="o">&gt;</span> <span class="n">mixed_voiced_fraction</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-422"><a href="#propose_phonation_spans-422"><span class="linenos">422</span></a>            <span class="n">production</span> <span class="o">=</span> <span class="s2">&quot;voiced&quot;</span>
+</span><span id="propose_phonation_spans-423"><a href="#propose_phonation_spans-423"><span class="linenos">423</span></a>        <span class="k">elif</span> <span class="n">fraction</span> <span class="o">&lt;</span> <span class="mf">1.0</span> <span class="o">-</span> <span class="n">mixed_voiced_fraction</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-424"><a href="#propose_phonation_spans-424"><span class="linenos">424</span></a>            <span class="n">production</span> <span class="o">=</span> <span class="s2">&quot;unvoiced&quot;</span>
+</span><span id="propose_phonation_spans-425"><a href="#propose_phonation_spans-425"><span class="linenos">425</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-426"><a href="#propose_phonation_spans-426"><span class="linenos">426</span></a>            <span class="n">production</span> <span class="o">=</span> <span class="s2">&quot;mixed&quot;</span>
+</span><span id="propose_phonation_spans-427"><a href="#propose_phonation_spans-427"><span class="linenos">427</span></a>        <span class="n">placed</span> <span class="o">=</span> <span class="n">f0</span><span class="p">[</span><span class="n">window</span><span class="p">][</span><span class="n">voiced</span> <span class="o">&amp;</span> <span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">f0</span><span class="p">[</span><span class="n">window</span><span class="p">])]</span>
+</span><span id="propose_phonation_spans-428"><a href="#propose_phonation_spans-428"><span class="linenos">428</span></a>        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">placed</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-429"><a href="#propose_phonation_spans-429"><span class="linenos">429</span></a>            <span class="k">return</span> <span class="n">fraction</span><span class="p">,</span> <span class="n">production</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span>
+</span><span id="propose_phonation_spans-430"><a href="#propose_phonation_spans-430"><span class="linenos">430</span></a>        <span class="k">return</span> <span class="n">fraction</span><span class="p">,</span> <span class="n">production</span><span class="p">,</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">placed</span><span class="p">)),</span> <span class="nb">float</span><span class="p">(</span><span class="n">placed</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="nb">float</span><span class="p">(</span><span class="n">placed</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+</span><span id="propose_phonation_spans-431"><a href="#propose_phonation_spans-431"><span class="linenos">431</span></a>
+</span><span id="propose_phonation_spans-432"><a href="#propose_phonation_spans-432"><span class="linenos">432</span></a>    <span class="n">spans</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">PhonationSpan</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="propose_phonation_spans-433"><a href="#propose_phonation_spans-433"><span class="linenos">433</span></a>    <span class="k">for</span> <span class="n">first</span><span class="p">,</span> <span class="n">last</span> <span class="ow">in</span> <span class="n">sustained</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-434"><a href="#propose_phonation_spans-434"><span class="linenos">434</span></a>        <span class="k">if</span> <span class="n">last</span> <span class="o">==</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-435"><a href="#propose_phonation_spans-435"><span class="linenos">435</span></a>            <span class="n">criterion</span> <span class="o">=</span> <span class="s2">&quot;stream_end&quot;</span>
+</span><span id="propose_phonation_spans-436"><a href="#propose_phonation_spans-436"><span class="linenos">436</span></a>        <span class="k">elif</span> <span class="n">f0_ok</span><span class="p">[</span><span class="n">last</span><span class="p">]</span> <span class="ow">and</span> <span class="n">formant_ok</span><span class="p">[</span><span class="n">last</span><span class="p">]:</span>
+</span><span id="propose_phonation_spans-437"><a href="#propose_phonation_spans-437"><span class="linenos">437</span></a>            <span class="n">criterion</span> <span class="o">=</span> <span class="s2">&quot;both&quot;</span>
+</span><span id="propose_phonation_spans-438"><a href="#propose_phonation_spans-438"><span class="linenos">438</span></a>        <span class="k">elif</span> <span class="n">f0_ok</span><span class="p">[</span><span class="n">last</span><span class="p">]:</span>
+</span><span id="propose_phonation_spans-439"><a href="#propose_phonation_spans-439"><span class="linenos">439</span></a>            <span class="n">criterion</span> <span class="o">=</span> <span class="s2">&quot;f0_stability&quot;</span>
+</span><span id="propose_phonation_spans-440"><a href="#propose_phonation_spans-440"><span class="linenos">440</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-441"><a href="#propose_phonation_spans-441"><span class="linenos">441</span></a>            <span class="n">criterion</span> <span class="o">=</span> <span class="s2">&quot;formant_stability&quot;</span>
+</span><span id="propose_phonation_spans-442"><a href="#propose_phonation_spans-442"><span class="linenos">442</span></a>        <span class="n">fraction</span><span class="p">,</span> <span class="n">production</span><span class="p">,</span> <span class="n">median</span><span class="p">,</span> <span class="n">opening</span><span class="p">,</span> <span class="n">closing</span> <span class="o">=</span> <span class="n">_statistics</span><span class="p">(</span><span class="n">first</span><span class="p">,</span> <span class="n">last</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-443"><a href="#propose_phonation_spans-443"><span class="linenos">443</span></a>        <span class="n">spans</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="propose_phonation_spans-444"><a href="#propose_phonation_spans-444"><span class="linenos">444</span></a>            <span class="n">PhonationSpan</span><span class="p">(</span>
+</span><span id="propose_phonation_spans-445"><a href="#propose_phonation_spans-445"><span class="linenos">445</span></a>                <span class="n">start</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">times</span><span class="p">[</span><span class="n">first</span><span class="p">]),</span>
+</span><span id="propose_phonation_spans-446"><a href="#propose_phonation_spans-446"><span class="linenos">446</span></a>                <span class="n">end</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">times</span><span class="p">[</span><span class="n">last</span><span class="p">])</span> <span class="o">+</span> <span class="n">hop_s</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-447"><a href="#propose_phonation_spans-447"><span class="linenos">447</span></a>                <span class="n">member</span><span class="o">=</span><span class="s2">&quot;sustained&quot;</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-448"><a href="#propose_phonation_spans-448"><span class="linenos">448</span></a>                <span class="n">production</span><span class="o">=</span><span class="n">production</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-449"><a href="#propose_phonation_spans-449"><span class="linenos">449</span></a>                <span class="n">voiced_fraction</span><span class="o">=</span><span class="n">fraction</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-450"><a href="#propose_phonation_spans-450"><span class="linenos">450</span></a>                <span class="n">f0_median_hz</span><span class="o">=</span><span class="n">median</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-451"><a href="#propose_phonation_spans-451"><span class="linenos">451</span></a>                <span class="n">f0_start_hz</span><span class="o">=</span><span class="n">opening</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-452"><a href="#propose_phonation_spans-452"><span class="linenos">452</span></a>                <span class="n">f0_end_hz</span><span class="o">=</span><span class="n">closing</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-453"><a href="#propose_phonation_spans-453"><span class="linenos">453</span></a>                <span class="n">glide_direction</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-454"><a href="#propose_phonation_spans-454"><span class="linenos">454</span></a>                <span class="n">glide_extent_cents</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-455"><a href="#propose_phonation_spans-455"><span class="linenos">455</span></a>                <span class="n">offset_criterion</span><span class="o">=</span><span class="n">criterion</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-456"><a href="#propose_phonation_spans-456"><span class="linenos">456</span></a>            <span class="p">)</span>
+</span><span id="propose_phonation_spans-457"><a href="#propose_phonation_spans-457"><span class="linenos">457</span></a>        <span class="p">)</span>
+</span><span id="propose_phonation_spans-458"><a href="#propose_phonation_spans-458"><span class="linenos">458</span></a>
+</span><span id="propose_phonation_spans-459"><a href="#propose_phonation_spans-459"><span class="linenos">459</span></a>    <span class="k">for</span> <span class="n">first</span><span class="p">,</span> <span class="n">last</span> <span class="ow">in</span> <span class="n">_uncovered_runs</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">sustained</span><span class="p">):</span>
+</span><span id="propose_phonation_spans-460"><a href="#propose_phonation_spans-460"><span class="linenos">460</span></a>        <span class="n">trajectory</span> <span class="o">=</span> <span class="n">f0</span><span class="p">[</span><span class="n">first</span> <span class="p">:</span> <span class="n">last</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+</span><span id="propose_phonation_spans-461"><a href="#propose_phonation_spans-461"><span class="linenos">461</span></a>        <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">count_nonzero</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">trajectory</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-462"><a href="#propose_phonation_spans-462"><span class="linenos">462</span></a>            <span class="n">trajectory</span> <span class="o">=</span> <span class="n">f1</span><span class="p">[</span><span class="n">first</span> <span class="p">:</span> <span class="n">last</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+</span><span id="propose_phonation_spans-463"><a href="#propose_phonation_spans-463"><span class="linenos">463</span></a>        <span class="n">found</span> <span class="o">=</span> <span class="n">_monotone_excursion</span><span class="p">(</span><span class="n">trajectory</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-464"><a href="#propose_phonation_spans-464"><span class="linenos">464</span></a>        <span class="k">if</span> <span class="n">found</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">found</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">glide_min_excursion_cents</span><span class="p">:</span>
+</span><span id="propose_phonation_spans-465"><a href="#propose_phonation_spans-465"><span class="linenos">465</span></a>            <span class="k">continue</span>
+</span><span id="propose_phonation_spans-466"><a href="#propose_phonation_spans-466"><span class="linenos">466</span></a>        <span class="n">direction</span><span class="p">,</span> <span class="n">extent</span> <span class="o">=</span> <span class="n">found</span>
+</span><span id="propose_phonation_spans-467"><a href="#propose_phonation_spans-467"><span class="linenos">467</span></a>        <span class="n">fraction</span><span class="p">,</span> <span class="n">production</span><span class="p">,</span> <span class="n">median</span><span class="p">,</span> <span class="n">opening</span><span class="p">,</span> <span class="n">closing</span> <span class="o">=</span> <span class="n">_statistics</span><span class="p">(</span><span class="n">first</span><span class="p">,</span> <span class="n">last</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-468"><a href="#propose_phonation_spans-468"><span class="linenos">468</span></a>        <span class="n">spans</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="propose_phonation_spans-469"><a href="#propose_phonation_spans-469"><span class="linenos">469</span></a>            <span class="n">PhonationSpan</span><span class="p">(</span>
+</span><span id="propose_phonation_spans-470"><a href="#propose_phonation_spans-470"><span class="linenos">470</span></a>                <span class="n">start</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">times</span><span class="p">[</span><span class="n">first</span><span class="p">]),</span>
+</span><span id="propose_phonation_spans-471"><a href="#propose_phonation_spans-471"><span class="linenos">471</span></a>                <span class="n">end</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">times</span><span class="p">[</span><span class="n">last</span><span class="p">])</span> <span class="o">+</span> <span class="n">hop_s</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-472"><a href="#propose_phonation_spans-472"><span class="linenos">472</span></a>                <span class="n">member</span><span class="o">=</span><span class="s2">&quot;glide&quot;</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-473"><a href="#propose_phonation_spans-473"><span class="linenos">473</span></a>                <span class="n">production</span><span class="o">=</span><span class="n">production</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-474"><a href="#propose_phonation_spans-474"><span class="linenos">474</span></a>                <span class="n">voiced_fraction</span><span class="o">=</span><span class="n">fraction</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-475"><a href="#propose_phonation_spans-475"><span class="linenos">475</span></a>                <span class="n">f0_median_hz</span><span class="o">=</span><span class="n">median</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-476"><a href="#propose_phonation_spans-476"><span class="linenos">476</span></a>                <span class="n">f0_start_hz</span><span class="o">=</span><span class="n">opening</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-477"><a href="#propose_phonation_spans-477"><span class="linenos">477</span></a>                <span class="n">f0_end_hz</span><span class="o">=</span><span class="n">closing</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-478"><a href="#propose_phonation_spans-478"><span class="linenos">478</span></a>                <span class="n">glide_direction</span><span class="o">=</span><span class="n">direction</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-479"><a href="#propose_phonation_spans-479"><span class="linenos">479</span></a>                <span class="n">glide_extent_cents</span><span class="o">=</span><span class="n">extent</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-480"><a href="#propose_phonation_spans-480"><span class="linenos">480</span></a>                <span class="n">offset_criterion</span><span class="o">=</span><span class="s2">&quot;stream_end&quot;</span> <span class="k">if</span> <span class="n">last</span> <span class="o">==</span> <span class="n">n</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">else</span> <span class="s2">&quot;monotonicity&quot;</span><span class="p">,</span>
+</span><span id="propose_phonation_spans-481"><a href="#propose_phonation_spans-481"><span class="linenos">481</span></a>            <span class="p">)</span>
+</span><span id="propose_phonation_spans-482"><a href="#propose_phonation_spans-482"><span class="linenos">482</span></a>        <span class="p">)</span>
+</span><span id="propose_phonation_spans-483"><a href="#propose_phonation_spans-483"><span class="linenos">483</span></a>    <span class="n">spans</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">span</span><span class="p">:</span> <span class="n">span</span><span class="o">.</span><span class="n">start</span><span class="p">)</span>
+</span><span id="propose_phonation_spans-484"><a href="#propose_phonation_spans-484"><span class="linenos">484</span></a>    <span class="k">return</span> <span class="n">spans</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Sustained-phonation and glide spans over tracks measured once on the whole stream.</p>
+
+<p>A frame continues the criterion when its F0 moved less than <code>f0_stability_cents</code> across one hop
+— a frame with no F0 never satisfies this limb — <strong>or</strong> when F1 and F2 both moved less than
+<code>formant_stability_hz</code>. A maximal run of continuing frames, closed by <code>hangover_ms</code> of
+continuous failure, is a <code>"sustained"</code> span. A maximal run outside every such span whose
+defined F0 values, or F1 where none is defined, are monotone with an excursion at or over
+<code>glide_min_excursion_cents</code> is a <code>"glide"</code> span. No periodicity floor opens or closes a span.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>times:</strong>  The F0 track's frame times, in seconds. Every span is placed on this grid.</li>
+<li><strong>f0_hz:</strong>  F0 per frame, NaN where unvoiced, as <code><a href="#f0_track">f0_track()</a></code> returns it.</li>
+<li><strong>strength:</strong>  Praat's pitch strength per frame, the same length as <code>times</code>.</li>
+<li><strong>formants:</strong>  The stream's formant track. It is read at the frame nearest each of <code>times</code>,
+so the two need not share a grid.</li>
+<li><strong>hop_s:</strong>  The analysis hop, in seconds. Read it from <code>phonation_spans.hop_s</code>.</li>
+<li><strong>f0_stability_cents:</strong>  The F0 limb of the continuity criterion. Read it from
+<code>phonation_spans.f0_stability_cents</code>.</li>
+<li><strong>formant_stability_hz:</strong>  The formant limb. Read it from <code>phonation_spans.formant_stability_hz</code>.</li>
+<li><strong>glide_min_excursion_cents:</strong>  The excursion separating a glide from drift. Read it from
+<code>phonation_spans.glide_min_excursion_cents</code>.</li>
+<li><strong>hangover_ms:</strong>  How long the criterion must fail continuously before a span closes. Read it
+from <code>phonation_spans.hangover_ms</code>.</li>
+<li><strong>voicing_strength_floor:</strong>  The pitch strength above which a frame counts as voiced. Read it
+from <code>phonation_spans.voicing_strength_floor</code>.</li>
+<li><strong>mixed_voiced_fraction:</strong>  The voiced-frame fraction separating the three productions. Read it
+from <code>phonation_spans.mixed_voiced_fraction</code>.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The spans in time order. Empty when no run satisfies either member.</p>
+</blockquote>
 </div>
 
 

@@ -58,6 +58,9 @@
                         <li>
                                 <a class="variable" href="#Span.peak_over_floor_db">peak_over_floor_db</a>
                         </li>
+                        <li>
+                                <a class="variable" href="#Span.merged_proposals">merged_proposals</a>
+                        </li>
                 </ul>
 
             </li>
@@ -112,17 +115,17 @@
 
     </div>
     <a class="headerlink" href="#NoContrast"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="NoContrast-27"><a href="#NoContrast-27"><span class="linenos">27</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="NoContrast-28"><a href="#NoContrast-28"><span class="linenos">28</span></a><span class="k">class</span><span class="w"> </span><span class="nc">NoContrast</span><span class="p">:</span>
-</span><span id="NoContrast-29"><a href="#NoContrast-29"><span class="linenos">29</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;No peak anywhere rose the required amount above the local floor.</span>
-</span><span id="NoContrast-30"><a href="#NoContrast-30"><span class="linenos">30</span></a>
-</span><span id="NoContrast-31"><a href="#NoContrast-31"><span class="linenos">31</span></a><span class="sd">    Distinct from an empty span list: an unmeasurable recording must not read as a quiet one.</span>
-</span><span id="NoContrast-32"><a href="#NoContrast-32"><span class="linenos">32</span></a>
-</span><span id="NoContrast-33"><a href="#NoContrast-33"><span class="linenos">33</span></a><span class="sd">    Attributes:</span>
-</span><span id="NoContrast-34"><a href="#NoContrast-34"><span class="linenos">34</span></a><span class="sd">        reason: What was required and what was found.</span>
-</span><span id="NoContrast-35"><a href="#NoContrast-35"><span class="linenos">35</span></a><span class="sd">    &quot;&quot;&quot;</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="NoContrast-31"><a href="#NoContrast-31"><span class="linenos">31</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="NoContrast-32"><a href="#NoContrast-32"><span class="linenos">32</span></a><span class="k">class</span><span class="w"> </span><span class="nc">NoContrast</span><span class="p">:</span>
+</span><span id="NoContrast-33"><a href="#NoContrast-33"><span class="linenos">33</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;No peak anywhere rose the required amount above the local floor.</span>
+</span><span id="NoContrast-34"><a href="#NoContrast-34"><span class="linenos">34</span></a>
+</span><span id="NoContrast-35"><a href="#NoContrast-35"><span class="linenos">35</span></a><span class="sd">    Distinct from an empty span list: an unmeasurable recording must not read as a quiet one.</span>
 </span><span id="NoContrast-36"><a href="#NoContrast-36"><span class="linenos">36</span></a>
-</span><span id="NoContrast-37"><a href="#NoContrast-37"><span class="linenos">37</span></a>    <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span>
+</span><span id="NoContrast-37"><a href="#NoContrast-37"><span class="linenos">37</span></a><span class="sd">    Attributes:</span>
+</span><span id="NoContrast-38"><a href="#NoContrast-38"><span class="linenos">38</span></a><span class="sd">        reason: What was required and what was found.</span>
+</span><span id="NoContrast-39"><a href="#NoContrast-39"><span class="linenos">39</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="NoContrast-40"><a href="#NoContrast-40"><span class="linenos">40</span></a>
+</span><span id="NoContrast-41"><a href="#NoContrast-41"><span class="linenos">41</span></a>    <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span>
 </span></pre></div>
 
 
@@ -176,28 +179,35 @@
     <a class="headerlink" href="#Span"></a>
             <div class="pdoc-code codehilite"><pre><span></span><span id="Span-12"><a href="#Span-12"><span class="linenos">12</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </span><span id="Span-13"><a href="#Span-13"><span class="linenos">13</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Span</span><span class="p">:</span>
-</span><span id="Span-14"><a href="#Span-14"><span class="linenos">14</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A proposed span, carrying no label.</span>
+</span><span id="Span-14"><a href="#Span-14"><span class="linenos">14</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One proposed span.</span>
 </span><span id="Span-15"><a href="#Span-15"><span class="linenos">15</span></a>
 </span><span id="Span-16"><a href="#Span-16"><span class="linenos">16</span></a><span class="sd">    Attributes:</span>
 </span><span id="Span-17"><a href="#Span-17"><span class="linenos">17</span></a><span class="sd">        start: Onset in seconds.</span>
 </span><span id="Span-18"><a href="#Span-18"><span class="linenos">18</span></a><span class="sd">        end: Offset in seconds.</span>
-</span><span id="Span-19"><a href="#Span-19"><span class="linenos">19</span></a><span class="sd">        peak_over_floor_db: How far the span&#39;s peak stood above the local floor.</span>
-</span><span id="Span-20"><a href="#Span-20"><span class="linenos">20</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="Span-21"><a href="#Span-21"><span class="linenos">21</span></a>
-</span><span id="Span-22"><a href="#Span-22"><span class="linenos">22</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Span-23"><a href="#Span-23"><span class="linenos">23</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Span-24"><a href="#Span-24"><span class="linenos">24</span></a>    <span class="n">peak_over_floor_db</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-19"><a href="#Span-19"><span class="linenos">19</span></a><span class="sd">        peak_over_floor_db: The span&#39;s peak, referenced to the local floor.</span>
+</span><span id="Span-20"><a href="#Span-20"><span class="linenos">20</span></a><span class="sd">        merged_proposals: How many proposals this span absorbed. One for a span the merge rule left</span>
+</span><span id="Span-21"><a href="#Span-21"><span class="linenos">21</span></a><span class="sd">            alone — a span is its own proposal — so zero is never a valid value, and a span covering</span>
+</span><span id="Span-22"><a href="#Span-22"><span class="linenos">22</span></a><span class="sd">            several events is legible as one rather than indistinguishable from a single event.</span>
+</span><span id="Span-23"><a href="#Span-23"><span class="linenos">23</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="Span-24"><a href="#Span-24"><span class="linenos">24</span></a>
+</span><span id="Span-25"><a href="#Span-25"><span class="linenos">25</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-26"><a href="#Span-26"><span class="linenos">26</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-27"><a href="#Span-27"><span class="linenos">27</span></a>    <span class="n">peak_over_floor_db</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-28"><a href="#Span-28"><span class="linenos">28</span></a>    <span class="n">merged_proposals</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>A proposed span, carrying no label.</p>
+            <div class="docstring"><p>One proposed span.</p>
 
 <h6 id="attributes">Attributes:</h6>
 
 <ul>
 <li><strong>start:</strong>  Onset in seconds.</li>
 <li><strong>end:</strong>  Offset in seconds.</li>
-<li><strong>peak_over_floor_db:</strong>  How far the span's peak stood above the local floor.</li>
+<li><strong>peak_over_floor_db:</strong>  The span's peak, referenced to the local floor.</li>
+<li><strong>merged_proposals:</strong>  How many proposals this span absorbed. One for a span the merge rule left
+alone — a span is its own proposal — so zero is never a valid value, and a span covering
+several events is legible as one rather than indistinguishable from a single event.</li>
 </ul>
 </div>
 
@@ -205,7 +215,7 @@
                             <div id="Span.__init__" class="classattr">
                                 <div class="attr function">
             
-        <span class="name">Span</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">start</span><span class="p">:</span> <span class="nb">float</span>, </span><span class="param"><span class="n">end</span><span class="p">:</span> <span class="nb">float</span>, </span><span class="param"><span class="n">peak_over_floor_db</span><span class="p">:</span> <span class="nb">float</span></span>)</span>
+        <span class="name">Span</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">start</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">end</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">peak_over_floor_db</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">merged_proposals</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span></span>)</span>
 
         
     </div>
@@ -247,6 +257,18 @@
     
 
                             </div>
+                            <div id="Span.merged_proposals" class="classattr">
+                                <div class="attr variable">
+            <span class="name">merged_proposals</span><span class="annotation">: int</span>        =
+<span class="default_value">1</span>
+
+        
+    </div>
+    <a class="headerlink" href="#Span.merged_proposals"></a>
+    
+    
+
+                            </div>
                 </section>
                 <section id="propose_spans">
                             <input id="propose_spans-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
@@ -259,76 +281,77 @@
 
     </div>
     <a class="headerlink" href="#propose_spans"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="propose_spans-40"><a href="#propose_spans-40"><span class="linenos"> 40</span></a><span class="k">def</span><span class="w"> </span><span class="nf">propose_spans</span><span class="p">(</span>
-</span><span id="propose_spans-41"><a href="#propose_spans-41"><span class="linenos"> 41</span></a>    <span class="n">envelope_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="propose_spans-42"><a href="#propose_spans-42"><span class="linenos"> 42</span></a>    <span class="n">floor_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="propose_spans-43"><a href="#propose_spans-43"><span class="linenos"> 43</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-44"><a href="#propose_spans-44"><span class="linenos"> 44</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="propose_spans-45"><a href="#propose_spans-45"><span class="linenos"> 45</span></a>    <span class="n">k_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="propose_spans-46"><a href="#propose_spans-46"><span class="linenos"> 46</span></a>    <span class="n">onset_drop_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="propose_spans-47"><a href="#propose_spans-47"><span class="linenos"> 47</span></a>    <span class="n">offset_fraction</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="propose_spans-48"><a href="#propose_spans-48"><span class="linenos"> 48</span></a>    <span class="n">hangover_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-49"><a href="#propose_spans-49"><span class="linenos"> 49</span></a>    <span class="n">min_duration_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-50"><a href="#propose_spans-50"><span class="linenos"> 50</span></a>    <span class="n">min_separation_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-51"><a href="#propose_spans-51"><span class="linenos"> 51</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">|</span> <span class="n">NoContrast</span><span class="p">:</span>
-</span><span id="propose_spans-52"><a href="#propose_spans-52"><span class="linenos"> 52</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Propose spans from an envelope, anchoring the onset to each event&#39;s own peak.</span>
-</span><span id="propose_spans-53"><a href="#propose_spans-53"><span class="linenos"> 53</span></a>
-</span><span id="propose_spans-54"><a href="#propose_spans-54"><span class="linenos"> 54</span></a><span class="sd">    Args:</span>
-</span><span id="propose_spans-55"><a href="#propose_spans-55"><span class="linenos"> 55</span></a><span class="sd">        envelope_db: Envelope in dBFS.</span>
-</span><span id="propose_spans-56"><a href="#propose_spans-56"><span class="linenos"> 56</span></a><span class="sd">        floor_db: Local floor, same length as ``envelope_db``.</span>
-</span><span id="propose_spans-57"><a href="#propose_spans-57"><span class="linenos"> 57</span></a><span class="sd">        sampling_rate: Samples per second.</span>
-</span><span id="propose_spans-58"><a href="#propose_spans-58"><span class="linenos"> 58</span></a><span class="sd">        k_db: How far above the local floor a peak must rise to be proposed. Per reader: read it</span>
-</span><span id="propose_spans-59"><a href="#propose_spans-59"><span class="linenos"> 59</span></a><span class="sd">            from ``spans.k_db.&lt;reader&gt;`` in the triage config.</span>
-</span><span id="propose_spans-60"><a href="#propose_spans-60"><span class="linenos"> 60</span></a><span class="sd">        onset_drop_db: Walk back from the peak to ``peak - onset_drop_db``. Read it from</span>
-</span><span id="propose_spans-61"><a href="#propose_spans-61"><span class="linenos"> 61</span></a><span class="sd">            ``spans.onset_drop_db``.</span>
-</span><span id="propose_spans-62"><a href="#propose_spans-62"><span class="linenos"> 62</span></a><span class="sd">        offset_fraction: Walk forward to ``peak - offset_fraction * (peak - floor)``. Read it from</span>
-</span><span id="propose_spans-63"><a href="#propose_spans-63"><span class="linenos"> 63</span></a><span class="sd">            ``spans.offset_fraction``.</span>
-</span><span id="propose_spans-64"><a href="#propose_spans-64"><span class="linenos"> 64</span></a><span class="sd">        hangover_ms: The offset closes only after this long continuously below threshold. Must be</span>
-</span><span id="propose_spans-65"><a href="#propose_spans-65"><span class="linenos"> 65</span></a><span class="sd">            shorter than the shortest event to be bounded. Read it from ``spans.hangover_ms``.</span>
-</span><span id="propose_spans-66"><a href="#propose_spans-66"><span class="linenos"> 66</span></a><span class="sd">        min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.</span>
-</span><span id="propose_spans-67"><a href="#propose_spans-67"><span class="linenos"> 67</span></a><span class="sd">        min_separation_ms: Minimum distance between two proposed peaks. Read it from</span>
-</span><span id="propose_spans-68"><a href="#propose_spans-68"><span class="linenos"> 68</span></a><span class="sd">            ``spans.min_separation_ms``.</span>
-</span><span id="propose_spans-69"><a href="#propose_spans-69"><span class="linenos"> 69</span></a>
-</span><span id="propose_spans-70"><a href="#propose_spans-70"><span class="linenos"> 70</span></a><span class="sd">    Returns:</span>
-</span><span id="propose_spans-71"><a href="#propose_spans-71"><span class="linenos"> 71</span></a><span class="sd">        Merged spans in time order, or :class:`NoContrast` when no peak clears ``k_db``.</span>
-</span><span id="propose_spans-72"><a href="#propose_spans-72"><span class="linenos"> 72</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="propose_spans-73"><a href="#propose_spans-73"><span class="linenos"> 73</span></a>    <span class="n">above</span> <span class="o">=</span> <span class="n">envelope_db</span> <span class="o">-</span> <span class="n">floor_db</span>
-</span><span id="propose_spans-74"><a href="#propose_spans-74"><span class="linenos"> 74</span></a>    <span class="n">peaks</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">find_peaks</span><span class="p">(</span><span class="n">above</span><span class="p">,</span> <span class="n">height</span><span class="o">=</span><span class="n">k_db</span><span class="p">,</span> <span class="n">distance</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">min_separation_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">))</span>
-</span><span id="propose_spans-75"><a href="#propose_spans-75"><span class="linenos"> 75</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">peaks</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="propose_spans-76"><a href="#propose_spans-76"><span class="linenos"> 76</span></a>        <span class="k">return</span> <span class="n">NoContrast</span><span class="p">(</span>
-</span><span id="propose_spans-77"><a href="#propose_spans-77"><span class="linenos"> 77</span></a>            <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;no peak rose </span><span class="si">{</span><span class="n">k_db</span><span class="si">}</span><span class="s2"> dB above the local floor; the largest rose </span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">above</span><span class="o">.</span><span class="n">max</span><span class="p">())</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> dB&quot;</span>
-</span><span id="propose_spans-78"><a href="#propose_spans-78"><span class="linenos"> 78</span></a>        <span class="p">)</span>
-</span><span id="propose_spans-79"><a href="#propose_spans-79"><span class="linenos"> 79</span></a>    <span class="n">hang</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">hangover_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
-</span><span id="propose_spans-80"><a href="#propose_spans-80"><span class="linenos"> 80</span></a>    <span class="n">found</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="propose_spans-81"><a href="#propose_spans-81"><span class="linenos"> 81</span></a>    <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">peaks</span><span class="p">:</span>
-</span><span id="propose_spans-82"><a href="#propose_spans-82"><span class="linenos"> 82</span></a>        <span class="n">peak</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">[</span><span class="n">p</span><span class="p">])</span>
-</span><span id="propose_spans-83"><a href="#propose_spans-83"><span class="linenos"> 83</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
-</span><span id="propose_spans-84"><a href="#propose_spans-84"><span class="linenos"> 84</span></a>        <span class="k">while</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">envelope_db</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">peak</span> <span class="o">-</span> <span class="n">onset_drop_db</span><span class="p">:</span>
-</span><span id="propose_spans-85"><a href="#propose_spans-85"><span class="linenos"> 85</span></a>            <span class="n">i</span> <span class="o">-=</span> <span class="mi">1</span>
-</span><span id="propose_spans-86"><a href="#propose_spans-86"><span class="linenos"> 86</span></a>        <span class="n">threshold</span> <span class="o">=</span> <span class="n">peak</span> <span class="o">-</span> <span class="n">offset_fraction</span> <span class="o">*</span> <span class="p">(</span><span class="n">peak</span> <span class="o">-</span> <span class="nb">float</span><span class="p">(</span><span class="n">floor_db</span><span class="p">[</span><span class="n">p</span><span class="p">]))</span>
-</span><span id="propose_spans-87"><a href="#propose_spans-87"><span class="linenos"> 87</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
-</span><span id="propose_spans-88"><a href="#propose_spans-88"><span class="linenos"> 88</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="propose_spans-89"><a href="#propose_spans-89"><span class="linenos"> 89</span></a>            <span class="n">window</span> <span class="o">=</span> <span class="n">envelope_db</span><span class="p">[</span><span class="n">j</span> <span class="p">:</span> <span class="n">j</span> <span class="o">+</span> <span class="n">hang</span><span class="p">]</span>
-</span><span id="propose_spans-90"><a href="#propose_spans-90"><span class="linenos"> 90</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">window</span><span class="p">)</span> <span class="ow">and</span> <span class="n">window</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">threshold</span><span class="p">:</span>
-</span><span id="propose_spans-91"><a href="#propose_spans-91"><span class="linenos"> 91</span></a>                <span class="k">break</span>
-</span><span id="propose_spans-92"><a href="#propose_spans-92"><span class="linenos"> 92</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
-</span><span id="propose_spans-93"><a href="#propose_spans-93"><span class="linenos"> 93</span></a>        <span class="k">if</span> <span class="p">(</span><span class="n">j</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">min_duration_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">:</span>
-</span><span id="propose_spans-94"><a href="#propose_spans-94"><span class="linenos"> 94</span></a>            <span class="n">found</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-</span><span id="propose_spans-95"><a href="#propose_spans-95"><span class="linenos"> 95</span></a>                <span class="n">Span</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">i</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">j</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="n">peak</span> <span class="o">-</span> <span class="nb">float</span><span class="p">(</span><span class="n">floor_db</span><span class="p">[</span><span class="n">p</span><span class="p">]))</span>
-</span><span id="propose_spans-96"><a href="#propose_spans-96"><span class="linenos"> 96</span></a>            <span class="p">)</span>
-</span><span id="propose_spans-97"><a href="#propose_spans-97"><span class="linenos"> 97</span></a>    <span class="n">found</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">s</span><span class="o">.</span><span class="n">start</span><span class="p">)</span>
-</span><span id="propose_spans-98"><a href="#propose_spans-98"><span class="linenos"> 98</span></a>    <span class="n">merged</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="propose_spans-99"><a href="#propose_spans-99"><span class="linenos"> 99</span></a>    <span class="k">for</span> <span class="n">span</span> <span class="ow">in</span> <span class="n">found</span><span class="p">:</span>
-</span><span id="propose_spans-100"><a href="#propose_spans-100"><span class="linenos">100</span></a>        <span class="k">if</span> <span class="n">merged</span> <span class="ow">and</span> <span class="n">span</span><span class="o">.</span><span class="n">start</span> <span class="o">&lt;=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">end</span><span class="p">:</span>
-</span><span id="propose_spans-101"><a href="#propose_spans-101"><span class="linenos">101</span></a>            <span class="n">last</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-</span><span id="propose_spans-102"><a href="#propose_spans-102"><span class="linenos">102</span></a>            <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">Span</span><span class="p">(</span>
-</span><span id="propose_spans-103"><a href="#propose_spans-103"><span class="linenos">103</span></a>                <span class="n">start</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">start</span><span class="p">,</span>
-</span><span id="propose_spans-104"><a href="#propose_spans-104"><span class="linenos">104</span></a>                <span class="n">end</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">end</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">end</span><span class="p">),</span>
-</span><span id="propose_spans-105"><a href="#propose_spans-105"><span class="linenos">105</span></a>                <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">),</span>
-</span><span id="propose_spans-106"><a href="#propose_spans-106"><span class="linenos">106</span></a>            <span class="p">)</span>
-</span><span id="propose_spans-107"><a href="#propose_spans-107"><span class="linenos">107</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="propose_spans-108"><a href="#propose_spans-108"><span class="linenos">108</span></a>            <span class="n">merged</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">span</span><span class="p">)</span>
-</span><span id="propose_spans-109"><a href="#propose_spans-109"><span class="linenos">109</span></a>    <span class="k">return</span> <span class="n">merged</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="propose_spans-44"><a href="#propose_spans-44"><span class="linenos"> 44</span></a><span class="k">def</span><span class="w"> </span><span class="nf">propose_spans</span><span class="p">(</span>
+</span><span id="propose_spans-45"><a href="#propose_spans-45"><span class="linenos"> 45</span></a>    <span class="n">envelope_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="propose_spans-46"><a href="#propose_spans-46"><span class="linenos"> 46</span></a>    <span class="n">floor_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="propose_spans-47"><a href="#propose_spans-47"><span class="linenos"> 47</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-48"><a href="#propose_spans-48"><span class="linenos"> 48</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="propose_spans-49"><a href="#propose_spans-49"><span class="linenos"> 49</span></a>    <span class="n">k_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_spans-50"><a href="#propose_spans-50"><span class="linenos"> 50</span></a>    <span class="n">onset_drop_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_spans-51"><a href="#propose_spans-51"><span class="linenos"> 51</span></a>    <span class="n">offset_fraction</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_spans-52"><a href="#propose_spans-52"><span class="linenos"> 52</span></a>    <span class="n">hangover_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-53"><a href="#propose_spans-53"><span class="linenos"> 53</span></a>    <span class="n">min_duration_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-54"><a href="#propose_spans-54"><span class="linenos"> 54</span></a>    <span class="n">min_separation_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-55"><a href="#propose_spans-55"><span class="linenos"> 55</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">|</span> <span class="n">NoContrast</span><span class="p">:</span>
+</span><span id="propose_spans-56"><a href="#propose_spans-56"><span class="linenos"> 56</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Propose spans from an envelope, anchoring the onset to each event&#39;s own peak.</span>
+</span><span id="propose_spans-57"><a href="#propose_spans-57"><span class="linenos"> 57</span></a>
+</span><span id="propose_spans-58"><a href="#propose_spans-58"><span class="linenos"> 58</span></a><span class="sd">    Args:</span>
+</span><span id="propose_spans-59"><a href="#propose_spans-59"><span class="linenos"> 59</span></a><span class="sd">        envelope_db: Envelope in dBFS.</span>
+</span><span id="propose_spans-60"><a href="#propose_spans-60"><span class="linenos"> 60</span></a><span class="sd">        floor_db: Local floor, same length as ``envelope_db``.</span>
+</span><span id="propose_spans-61"><a href="#propose_spans-61"><span class="linenos"> 61</span></a><span class="sd">        sampling_rate: Samples per second.</span>
+</span><span id="propose_spans-62"><a href="#propose_spans-62"><span class="linenos"> 62</span></a><span class="sd">        k_db: How far above the local floor a peak must rise to be proposed. Per reader: read it</span>
+</span><span id="propose_spans-63"><a href="#propose_spans-63"><span class="linenos"> 63</span></a><span class="sd">            from ``spans.k_db.&lt;reader&gt;`` in the triage config.</span>
+</span><span id="propose_spans-64"><a href="#propose_spans-64"><span class="linenos"> 64</span></a><span class="sd">        onset_drop_db: Walk back from the peak to ``peak - onset_drop_db``. Read it from</span>
+</span><span id="propose_spans-65"><a href="#propose_spans-65"><span class="linenos"> 65</span></a><span class="sd">            ``spans.onset_drop_db``.</span>
+</span><span id="propose_spans-66"><a href="#propose_spans-66"><span class="linenos"> 66</span></a><span class="sd">        offset_fraction: Walk forward to ``peak - offset_fraction * (peak - floor)``. Read it from</span>
+</span><span id="propose_spans-67"><a href="#propose_spans-67"><span class="linenos"> 67</span></a><span class="sd">            ``spans.offset_fraction``.</span>
+</span><span id="propose_spans-68"><a href="#propose_spans-68"><span class="linenos"> 68</span></a><span class="sd">        hangover_ms: The offset closes only after this long continuously below threshold. Must be</span>
+</span><span id="propose_spans-69"><a href="#propose_spans-69"><span class="linenos"> 69</span></a><span class="sd">            shorter than the shortest event to be bounded. Read it from ``spans.hangover_ms``.</span>
+</span><span id="propose_spans-70"><a href="#propose_spans-70"><span class="linenos"> 70</span></a><span class="sd">        min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.</span>
+</span><span id="propose_spans-71"><a href="#propose_spans-71"><span class="linenos"> 71</span></a><span class="sd">        min_separation_ms: Minimum distance between two proposed peaks. Read it from</span>
+</span><span id="propose_spans-72"><a href="#propose_spans-72"><span class="linenos"> 72</span></a><span class="sd">            ``spans.min_separation_ms``.</span>
+</span><span id="propose_spans-73"><a href="#propose_spans-73"><span class="linenos"> 73</span></a>
+</span><span id="propose_spans-74"><a href="#propose_spans-74"><span class="linenos"> 74</span></a><span class="sd">    Returns:</span>
+</span><span id="propose_spans-75"><a href="#propose_spans-75"><span class="linenos"> 75</span></a><span class="sd">        Merged spans in time order, or :class:`NoContrast` when no peak clears ``k_db``.</span>
+</span><span id="propose_spans-76"><a href="#propose_spans-76"><span class="linenos"> 76</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="propose_spans-77"><a href="#propose_spans-77"><span class="linenos"> 77</span></a>    <span class="n">above</span> <span class="o">=</span> <span class="n">envelope_db</span> <span class="o">-</span> <span class="n">floor_db</span>
+</span><span id="propose_spans-78"><a href="#propose_spans-78"><span class="linenos"> 78</span></a>    <span class="n">peaks</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">find_peaks</span><span class="p">(</span><span class="n">above</span><span class="p">,</span> <span class="n">height</span><span class="o">=</span><span class="n">k_db</span><span class="p">,</span> <span class="n">distance</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">min_separation_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">))</span>
+</span><span id="propose_spans-79"><a href="#propose_spans-79"><span class="linenos"> 79</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">peaks</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="propose_spans-80"><a href="#propose_spans-80"><span class="linenos"> 80</span></a>        <span class="k">return</span> <span class="n">NoContrast</span><span class="p">(</span>
+</span><span id="propose_spans-81"><a href="#propose_spans-81"><span class="linenos"> 81</span></a>            <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;no peak rose </span><span class="si">{</span><span class="n">k_db</span><span class="si">}</span><span class="s2"> dB above the local floor; the largest rose </span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">above</span><span class="o">.</span><span class="n">max</span><span class="p">())</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> dB&quot;</span>
+</span><span id="propose_spans-82"><a href="#propose_spans-82"><span class="linenos"> 82</span></a>        <span class="p">)</span>
+</span><span id="propose_spans-83"><a href="#propose_spans-83"><span class="linenos"> 83</span></a>    <span class="n">hang</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">hangover_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
+</span><span id="propose_spans-84"><a href="#propose_spans-84"><span class="linenos"> 84</span></a>    <span class="n">found</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="propose_spans-85"><a href="#propose_spans-85"><span class="linenos"> 85</span></a>    <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">peaks</span><span class="p">:</span>
+</span><span id="propose_spans-86"><a href="#propose_spans-86"><span class="linenos"> 86</span></a>        <span class="n">peak</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">[</span><span class="n">p</span><span class="p">])</span>
+</span><span id="propose_spans-87"><a href="#propose_spans-87"><span class="linenos"> 87</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+</span><span id="propose_spans-88"><a href="#propose_spans-88"><span class="linenos"> 88</span></a>        <span class="k">while</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="ow">and</span> <span class="n">envelope_db</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">peak</span> <span class="o">-</span> <span class="n">onset_drop_db</span><span class="p">:</span>
+</span><span id="propose_spans-89"><a href="#propose_spans-89"><span class="linenos"> 89</span></a>            <span class="n">i</span> <span class="o">-=</span> <span class="mi">1</span>
+</span><span id="propose_spans-90"><a href="#propose_spans-90"><span class="linenos"> 90</span></a>        <span class="n">threshold</span> <span class="o">=</span> <span class="n">peak</span> <span class="o">-</span> <span class="n">offset_fraction</span> <span class="o">*</span> <span class="p">(</span><span class="n">peak</span> <span class="o">-</span> <span class="nb">float</span><span class="p">(</span><span class="n">floor_db</span><span class="p">[</span><span class="n">p</span><span class="p">]))</span>
+</span><span id="propose_spans-91"><a href="#propose_spans-91"><span class="linenos"> 91</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
+</span><span id="propose_spans-92"><a href="#propose_spans-92"><span class="linenos"> 92</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="propose_spans-93"><a href="#propose_spans-93"><span class="linenos"> 93</span></a>            <span class="n">window</span> <span class="o">=</span> <span class="n">envelope_db</span><span class="p">[</span><span class="n">j</span> <span class="p">:</span> <span class="n">j</span> <span class="o">+</span> <span class="n">hang</span><span class="p">]</span>
+</span><span id="propose_spans-94"><a href="#propose_spans-94"><span class="linenos"> 94</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">window</span><span class="p">)</span> <span class="ow">and</span> <span class="n">window</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">threshold</span><span class="p">:</span>
+</span><span id="propose_spans-95"><a href="#propose_spans-95"><span class="linenos"> 95</span></a>                <span class="k">break</span>
+</span><span id="propose_spans-96"><a href="#propose_spans-96"><span class="linenos"> 96</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="propose_spans-97"><a href="#propose_spans-97"><span class="linenos"> 97</span></a>        <span class="k">if</span> <span class="p">(</span><span class="n">j</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">min_duration_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">:</span>
+</span><span id="propose_spans-98"><a href="#propose_spans-98"><span class="linenos"> 98</span></a>            <span class="n">found</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="propose_spans-99"><a href="#propose_spans-99"><span class="linenos"> 99</span></a>                <span class="n">Span</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">i</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">j</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="n">peak</span> <span class="o">-</span> <span class="nb">float</span><span class="p">(</span><span class="n">floor_db</span><span class="p">[</span><span class="n">p</span><span class="p">]))</span>
+</span><span id="propose_spans-100"><a href="#propose_spans-100"><span class="linenos">100</span></a>            <span class="p">)</span>
+</span><span id="propose_spans-101"><a href="#propose_spans-101"><span class="linenos">101</span></a>    <span class="n">found</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">s</span><span class="o">.</span><span class="n">start</span><span class="p">)</span>
+</span><span id="propose_spans-102"><a href="#propose_spans-102"><span class="linenos">102</span></a>    <span class="n">merged</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="propose_spans-103"><a href="#propose_spans-103"><span class="linenos">103</span></a>    <span class="k">for</span> <span class="n">span</span> <span class="ow">in</span> <span class="n">found</span><span class="p">:</span>
+</span><span id="propose_spans-104"><a href="#propose_spans-104"><span class="linenos">104</span></a>        <span class="k">if</span> <span class="n">merged</span> <span class="ow">and</span> <span class="n">span</span><span class="o">.</span><span class="n">start</span> <span class="o">&lt;=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">end</span><span class="p">:</span>
+</span><span id="propose_spans-105"><a href="#propose_spans-105"><span class="linenos">105</span></a>            <span class="n">last</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="propose_spans-106"><a href="#propose_spans-106"><span class="linenos">106</span></a>            <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">Span</span><span class="p">(</span>
+</span><span id="propose_spans-107"><a href="#propose_spans-107"><span class="linenos">107</span></a>                <span class="n">start</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">start</span><span class="p">,</span>
+</span><span id="propose_spans-108"><a href="#propose_spans-108"><span class="linenos">108</span></a>                <span class="n">end</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">end</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">end</span><span class="p">),</span>
+</span><span id="propose_spans-109"><a href="#propose_spans-109"><span class="linenos">109</span></a>                <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">),</span>
+</span><span id="propose_spans-110"><a href="#propose_spans-110"><span class="linenos">110</span></a>                <span class="n">merged_proposals</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">merged_proposals</span> <span class="o">+</span> <span class="n">span</span><span class="o">.</span><span class="n">merged_proposals</span><span class="p">,</span>
+</span><span id="propose_spans-111"><a href="#propose_spans-111"><span class="linenos">111</span></a>            <span class="p">)</span>
+</span><span id="propose_spans-112"><a href="#propose_spans-112"><span class="linenos">112</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="propose_spans-113"><a href="#propose_spans-113"><span class="linenos">113</span></a>            <span class="n">merged</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">span</span><span class="p">)</span>
+</span><span id="propose_spans-114"><a href="#propose_spans-114"><span class="linenos">114</span></a>    <span class="k">return</span> <span class="n">merged</span>
 </span></pre></div>
 
 
