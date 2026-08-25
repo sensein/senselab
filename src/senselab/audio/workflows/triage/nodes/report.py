@@ -648,7 +648,7 @@ def report(
     json_path = summary_dir / f"{SUMMARY_STEM}.json"
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
-    title = f"{verdict['triage']} · release {verdict['release']} · run {store.run_id}"
+    title = f"triage: {verdict['triage']}   ·   release: {verdict['release']}   ·   run {store.run_id}"
     summary_path = summary_dir / f"{SUMMARY_STEM}.{fmt}"
     _render(store, resolved_run_dir, config, title, summary_path)
     return {"summary": summary_path, "json": json_path}
@@ -667,9 +667,6 @@ def _render(store: ProvStore, run_dir: Path, config: TriageConfig, title: str, p
         title: The figure's title, carrying the decision.
         path: Where the rendered summary goes.
     """
-    import matplotlib
-
-    matplotlib.use("Agg", force=False)
     from matplotlib import pyplot
 
     blocks = _blocks(store)

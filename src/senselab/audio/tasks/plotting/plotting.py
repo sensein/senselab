@@ -24,6 +24,7 @@ from senselab.utils.data_structures import logger
 # ---------------------------
 
 _Context = Union[str, float]  # "auto" | "small" | "medium" | "large" | float scale
+_INCHES_PER_RATIO = 1.8  # what one unit of plot_aligned_panels' height_ratios is worth
 
 
 def _detect_screen_resolution() -> Tuple[int, int]:
@@ -509,7 +510,8 @@ def plot_aligned_panels(
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
     - ``{"type": "text", "lines": [str, ...], "fontsize": int}`` -- monospaced prose on an
       axis with no time scale, for blocks that accompany the shared axis rather than share it.
-      Its height grows with the number of lines.
+      Its height is ``max(1.0, 0.18 * len(lines))`` inches, so a long block grows the figure
+      rather than overflowing its own axis.
 
     Args:
         audio: Input mono audio.
@@ -550,7 +552,7 @@ def plot_aligned_panels(
         "overlay_on_spectrogram": 2,
     }
     height_ratios = [
-        max(1.0, 0.18 * len(p.get("lines", [])))
+        max(1.0, 0.18 * len(p.get("lines", []))) / _INCHES_PER_RATIO
         if p.get("type") == "text"
         else ratio_map.get(p.get("type", "waveform"), 1)
         for p in panels
@@ -559,7 +561,7 @@ def plot_aligned_panels(
     scale = _resolve_scale(context)
     rc = _rc_for_scale(scale)
     if figsize is None:
-        base_h = float(sum(height_ratios)) * 1.8
+        base_h = float(sum(height_ratios)) * _INCHES_PER_RATIO
         base = (14.0, max(base_h, 4.0))
     else:
         base = figsize
@@ -696,8 +698,12 @@ def plot_aligned_panels(
                     "waveform, spectrogram, features, segments, overlay_on_spectrogram and text"
                 )
 
-        # Shared x-axis config
-        axes_list[-1].set_xlabel("Time (seconds)")
+        # Shared x-axis config. The scale belongs to the last panel that USES it: a text panel has
+        # its axis off, and with sharex that hides the tick labels for every panel above it.
+        timed = [ax for ax, panel in zip(axes_list, panels) if panel.get("type", "waveform") != "text"]
+        bottom = timed[-1] if timed else axes_list[-1]
+        bottom.set_xlabel("Time (seconds)")
+        bottom.tick_params(labelbottom=True)
         axes_list[0].set_xlim(0, duration)
 
         if title:
