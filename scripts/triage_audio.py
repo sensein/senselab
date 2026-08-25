@@ -39,8 +39,9 @@ Layout under ``--out/<stem>_<utc-timestamp>/``:
     run/streams/           the conditioned streams
     run/derivatives/       the sidecars measurements point at
     run/run.json           the runner's own record: per-node run state, and any node that raised
-    summary/              REPORT's two products, on every file and every outcome: one page a reviewer
-                          reads and one JSON a consumer does. A sibling of ``run/`` and never inside
+    summary/              REPORT's two products, on every file and every outcome: a two-page pdf a
+                          reviewer reads — the aligned panels, then the blocks — and one JSON a
+                          consumer does. A sibling of ``run/`` and never inside
                           ``released/``: both carry element ids, so both inherit the store's
                           sensitivity
     released/             REDACT's released pair, when it cleared one — a sibling of ``run/``, never
