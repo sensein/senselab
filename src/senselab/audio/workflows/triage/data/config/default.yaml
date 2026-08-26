@@ -225,12 +225,6 @@ derivation: |
   10.24 s remains an override; a smaller hop would make heavily overlapping AST contexts look like
   independent time-local evidence and is rejected by config validation.
 
-  gammatone.span_bands_hz -- three overlapping auditory proposal bands, not event labels: speech
-  reads 80–1000 Hz, breathing 500–2500 Hz, and cough 2000–8000 Hz. Every band uses its own local floor
-  and the existing span contrast rule, so this declares which channels may propose an event without
-  introducing a second, unmeasured threshold. Their proposals merge with the broadband envelope and
-  AIRWAY still re-evaluates every resulting span with HeAR.
-
   windows.ast.top_k 527 -- the full AudioSet label space AST was fine-tuned on. A SIZE, not a
   threshold, and the same reason yamnet.top_k is 521: classify_audios does `top_k=top_k or 5` on its
   windowed path (classification/api.py:135), so passing None does not mean "keep everything", it means
@@ -386,10 +380,6 @@ gammatone:
   low_hz: 80.0
   high_hz: 7800.0
   hop_s: 0.005
-  span_bands_hz:
-    speech: [80.0, 1000.0]
-    breathing: [500.0, 2500.0]
-    cough: [2000.0, 8000.0]
 
 yamnet:
   silence_threshold: 0.5
