@@ -299,6 +299,16 @@ class TestTheV2OpenKeys:
             with pytest.raises(ValueError, match="has no value"):
                 config.require(path)
 
+    def test_ast_hop_cannot_imply_finer_temporal_evidence_than_the_model_has(self, tmp_path: Path) -> None:
+        """AST's 10.24-second context is summary evidence, so its hop has an explicit lower bound."""
+        override = tmp_path / "ast-hop.yaml"
+        override.write_text("windows:\n  ast:\n    hop_s: 7.99\n")
+        with pytest.raises(ValueError, match=r"windows\.ast\.hop_s must be at least 8 s"):
+            load_triage_config(override)
+
+        override.write_text("windows:\n  ast:\n    hop_s: 8.0\n")
+        assert load_triage_config(override).require("windows.ast.hop_s") == 8.0
+
     def test_the_f0_range_replaces_the_two_scalar_keys(self) -> None:
         """One range, read by PREPROCESS and VOICE alike, so the two cannot drift."""
         config = load_triage_config()

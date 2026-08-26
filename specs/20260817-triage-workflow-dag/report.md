@@ -37,7 +37,7 @@ On a single shared time axis, one row each:
 | --- | --- |
 | waveform amplitude on the left y-axis, energy envelope and its floor in dBFS on a twin right axis, and every `span` as a translucent overlay annotated with its `peak_over_floor_db` — **one row** | PREPROCESS |
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
-| window label sets — YAMNet, AST, HeAR — as label lanes over their own grids | PREPROCESS |
+| YAMNet and HeAR window label sets as label lanes over their own grids; AST as a label lane only when its stored hop is under 8 s, otherwise as a coarse-window summary in Supporting Evidence | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
 | words, redacted by the PII marking — a token lane: one bar per word at its own extent with its renderable text drawn on the bar, never as a y-tick | SPEECH |
 | airway-labelled spans with their labels and confirmations | AIRWAY |
@@ -49,6 +49,12 @@ The waveform, the envelope and the envelope spans are three readings of one sign
 row: the right-hand y-label names both the envelope's dBFS scale and the span overlay, since the
 overlay has no scale of its own. A lane that shares that row is still a **declared lane**, and the
 ABSENT block reports it as drawn.
+
+AST's packaged 10.24 s window and hop are intentionally rendered as a summary rather than a timeline:
+each fired label is a property of that broad acoustic context, not a local event boundary. The JSON
+records `evidence.label_presentations.ast` with the stored window and hop plus `mode: summary_only`,
+so an analytical consumer receives the same distinction as the human reader. A run whose stored AST
+hop is below 8 s retains its time-aligned label lane; new configs reject such a hop.
 
 **The title is short.** The task token the run id names, the date, and the two verdict axes —
 `task-… · 2026-08-25 · triage: flag · release: not_assessed`. The full run id and the file path are

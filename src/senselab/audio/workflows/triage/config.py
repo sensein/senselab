@@ -33,6 +33,13 @@ import yaml  # type: ignore[import-untyped]
 _DEFAULT = Path(__file__).parent / "data" / "config" / "default.yaml"
 _OPEN_QUESTIONS = "specs/20260817-triage-workflow-dag/benchmarks/open.md"
 _ABSENT = object()
+MIN_AST_HOP_S = 8.0
+"""Shortest supported AST hop, in seconds.
+
+AST scores a 10.24-second context window. More frequent outputs would look like independent
+time-local evidence in the report even though their acoustic context heavily overlaps, so this is a
+configuration constraint rather than a presentation preference.
+"""
 
 DATA_MAP_PATHS = frozenset(
     {
@@ -150,6 +157,16 @@ def _merge(base: dict[str, Any], over: dict[str, Any], trail: str = "") -> dict[
     return out
 
 
+def _validate(values: dict[str, Any]) -> None:
+    """Reject resolved settings that would misrepresent AST's temporal resolution."""
+    try:
+        hop_s = float(values["windows"]["ast"]["hop_s"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("windows.ast.hop_s must be a numeric number of seconds") from error
+    if hop_s < MIN_AST_HOP_S:
+        raise ValueError(f"windows.ast.hop_s must be at least {MIN_AST_HOP_S:g} s; received {hop_s:g} s")
+
+
 def load_triage_config(override: str | Path | None = None) -> TriageConfig:
     """Load the packaged configuration, deep-merging one override over it.
 
@@ -168,5 +185,6 @@ def load_triage_config(override: str | Path | None = None) -> TriageConfig:
     values = yaml.safe_load(_DEFAULT.read_text())
     if override is not None:
         values = _merge(values, yaml.safe_load(Path(override).read_text()) or {})
+    _validate(values)
     digest = hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()[:16]
     return TriageConfig(name=values["name"], version=int(values["version"]), config_hash=digest, values=values)

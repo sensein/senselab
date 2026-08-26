@@ -221,8 +221,9 @@ derivation: |
   fitted, so the hop equals the window and AST reads the recording once end to end. It is a declared
   default rather than a null because a null hop stopped AST running at all: require() raised inside
   the scores block, so the model never ran under the packaged config and the expensive output was
-  lost along with the threshold fold it was supposed to survive. A fitted overlap remains an
-  override.
+  lost along with the threshold fold it was supposed to survive. A fitted hop from 8.0 s through
+  10.24 s remains an override; a smaller hop would make heavily overlapping AST contexts look like
+  independent time-local evidence and is rejected by config validation.
 
   windows.ast.top_k 527 -- the full AudioSet label space AST was fine-tuned on. A SIZE, not a
   threshold, and the same reason yamnet.top_k is 521: classify_audios does `top_k=top_k or 5` on its
