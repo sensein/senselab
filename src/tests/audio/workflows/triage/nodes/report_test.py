@@ -1350,3 +1350,34 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
         drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
         assert drawn == ["[unscanned]", "[unscanned]"]
+
+    @staticmethod
+    def _placed(axis: Any) -> list[Any]:  # noqa: ANN401
+        """The labels the saved page actually drew, the fit having been decided against its renderer."""
+        return [text for text in axis.texts if text.get_visible()]
+
+    def test_a_marked_word_is_never_drawn_verbatim(self, store: ProvStore, tmp_path: Path) -> None:
+        """The fit decides how much of the lane is legible; it never decides what may be legible."""
+        figure, panels = self._render(store, tmp_path, words=["hello"], marked_words=[("alice", "PERSON")])
+        drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
+        assert "alice" not in drawn
+        assert drawn <= {"hello", "[PERSON]"}
+
+    def test_an_unscanned_page_draws_no_word_it_did_not_clear(self, store: ProvStore, tmp_path: Path) -> None:
+        """A label too wide for its bar is dropped whole; what it is dropped in favour of is nothing."""
+        figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
+        drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
+        assert drawn <= {"[unscanned]"}
+
+    def test_no_two_words_collide_on_the_rendered_page(self, store: ProvStore, tmp_path: Path) -> None:
+        """The defect as the reader met it: adjacent labels ran into one another's glyphs."""
+        prose = "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
+        figure, panels = self._render(store, tmp_path, words=[prose[index % len(prose)] for index in range(40)])
+        axis = self._words_axis(figure, panels)
+        renderer = figure.canvas.get_renderer()
+        extents = [text.get_window_extent(renderer) for text in self._placed(axis)]
+        assert extents, "the page must still carry words"
+        collisions = [
+            (one, two) for index, one in enumerate(extents) for two in extents[index + 1 :] if one.overlaps(two)
+        ]
+        assert collisions == []

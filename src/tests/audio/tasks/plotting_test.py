@@ -1,14 +1,22 @@
 """This script contains unit tests for the plotting tasks."""
 
+from typing import Any, Dict, List, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from matplotlib.artist import Artist
+from matplotlib.backend_bases import RendererBase
+from matplotlib.patches import Rectangle
 from matplotlib.pyplot import Figure
 from matplotlib.text import Text
+from matplotlib.transforms import Bbox
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.plotting.plotting import (
+    TOKEN_LABEL_FLOOR_FONTSIZE,
+    TOKEN_LABEL_FONTSIZE,
+    _fitted_token_fontsize,
     play_audio,
     plot_aligned_panels,
     plot_specgram,
@@ -16,9 +24,31 @@ from senselab.audio.tasks.plotting.plotting import (
 )
 
 
-def _tone() -> Audio:
-    """A short mono waveform, enough for a shared time axis."""
-    return Audio(waveform=torch.linspace(-0.5, 0.5, 16000).unsqueeze(0), sampling_rate=16000)
+def _tone(seconds: float = 1.0) -> Audio:
+    """A mono waveform of the requested length, enough for a shared time axis."""
+    samples = int(16000 * seconds)
+    return Audio(waveform=torch.linspace(-0.5, 0.5, samples).unsqueeze(0), sampling_rate=16000)
+
+
+_STORY_RECALL_PROSE = (
+    "The story was about a grandfather who lived alone beside the river "
+    "and mended nets for the village children every summer"
+)
+
+
+def _connected_speech(duration: float) -> List[Dict[str, Any]]:
+    """Word extents at the density of the Story-recall page: 0.20-0.40 s bars, 3-9 character words."""
+    tokens: List[Dict[str, Any]] = []
+    cursor = 0.4
+    words = _STORY_RECALL_PROSE.split()
+    for index in range(len(words) * 8):
+        word = words[index % len(words)]
+        width = 0.20 + 0.02 * (len(word) % 11)
+        if cursor + width > duration:
+            break
+        tokens.append({"text": word, "start": cursor, "end": cursor + width})
+        cursor += width + 0.05
+    return tokens
 
 
 class TestTheTextPanel:
@@ -143,8 +173,25 @@ class TestTheTokenLane:
 
     @staticmethod
     def _tokens(figure: Figure, index: int = 0) -> list[str]:
-        """The texts drawn on one panel's axis, in draw order."""
-        return [text.get_text() for text in figure.axes[index].texts]
+        """The texts a real draw put on one panel's axis, in draw order."""
+        figure.canvas.draw()
+        return [text.get_text() for text in figure.axes[index].texts if text.get_visible()]
+
+    @staticmethod
+    def _placed(figure: Figure, index: int = 0) -> list[Text]:
+        """The token labels a real draw placed on one panel's axis."""
+        figure.canvas.draw()
+        return [text for text in figure.axes[index].texts if text.get_visible()]
+
+    @staticmethod
+    def _renderer(figure: Figure) -> RendererBase:
+        """The renderer the figure's own canvas draws through."""
+        return cast(RendererBase, figure.canvas.get_renderer())  # type: ignore[attr-defined]
+
+    @classmethod
+    def _extent(cls, figure: Figure, artist: Artist) -> Bbox:
+        """One drawn artist's extent, in the display space bars and labels share."""
+        return artist.get_window_extent(cls._renderer(figure))
 
     def test_a_token_carries_its_text_on_the_axis(self) -> None:
         """The text belongs on the bar; as a y-tick, 40 words collapse into one unreadable stack."""
@@ -177,7 +224,7 @@ class TestTheTokenLane:
                 }
             ],
         )
-        bars = figure.axes[0].patches
+        bars = [cast(Rectangle, patch) for patch in figure.axes[0].patches]
         assert len(bars) == 6
         assert bars[0].get_x() == pytest.approx(0.0)
         assert bars[5].get_width() == pytest.approx(0.08)
@@ -199,7 +246,7 @@ class TestTheTokenLane:
         assert list(figure.axes[0].get_yticks()) == []
 
     def test_a_bar_too_narrow_for_its_text_keeps_the_bar(self) -> None:
-        """A 5 ms token's text would overflow its neighbours, so it is skipped and the bar stays."""
+        """A long word on a narrow bar loses its text, not its bar; the bar is the measurement."""
         figure = plot_aligned_panels(
             _tone(),
             [
@@ -208,13 +255,127 @@ class TestTheTokenLane:
                     "name": "words",
                     "tokens": [
                         {"text": "wide", "start": 0.1, "end": 0.4},
-                        {"text": "narrow", "start": 0.5, "end": 0.505},
+                        {"text": "grandfather", "start": 0.5, "end": 0.505},
                     ],
                 }
             ],
+            context=1.0,
         )
         assert len(figure.axes[0].patches) == 2
         assert self._tokens(figure) == ["wide"]
+
+    def test_a_placed_label_never_outgrows_its_own_bar(self) -> None:
+        """The rendered text is measured against the bar in display space, not assumed in seconds."""
+        tokens = [
+            {"text": "grandfather", "start": 0.05, "end": 0.09},
+            {"text": "was", "start": 0.2, "end": 0.42},
+            {"text": "village", "start": 0.5, "end": 0.56},
+            {"text": "a", "start": 0.7, "end": 0.95},
+        ]
+        figure = plot_aligned_panels(_tone(), [{"type": "tokens", "name": "words", "tokens": tokens}], context=1.0)
+        bars = {token["text"]: patch for token, patch in zip(tokens, figure.axes[0].patches)}
+        assert len(self._placed(figure)) >= 1
+        for label in self._placed(figure):
+            bar = self._extent(figure, bars[label.get_text()])
+            assert self._extent(figure, label).width <= bar.width
+
+    def test_a_short_word_on_a_wide_bar_keeps_its_full_size(self) -> None:
+        """Shrinking is what a narrow bar buys; a wide one must not pay for it."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [{"type": "tokens", "name": "words", "tokens": [{"text": "a", "start": 0.1, "end": 0.9}]}],
+            context=1.0,
+        )
+        (label,) = self._placed(figure)
+        assert label.get_fontsize() == pytest.approx(TOKEN_LABEL_FONTSIZE)
+
+    def test_no_two_placed_labels_overlap(self) -> None:
+        """Connected speech is where the pileup was: adjacent words ran into overlapping glyphs."""
+        tokens = _connected_speech(duration=30.0)
+        figure = plot_aligned_panels(_tone(30.0), [{"type": "tokens", "name": "words", "tokens": tokens}], context=1.0)
+        assert len(figure.axes[0].patches) == len(tokens)
+        extents = [self._extent(figure, label) for label in self._placed(figure)]
+        overlapping = [
+            (one, two) for index, one in enumerate(extents) for two in extents[index + 1 :] if one.overlaps(two)
+        ]
+        assert overlapping == []
+
+    def test_the_fit_decision_follows_the_figure_width(self) -> None:
+        """The gate is scale-free: the same lane at twice the width places strictly more labels."""
+        tokens = _connected_speech(duration=30.0)
+        panel = {"type": "tokens", "name": "words", "tokens": tokens}
+        narrow = plot_aligned_panels(_tone(30.0), [panel], figsize=(8.0, 2.0), context=1.0)
+        wide = plot_aligned_panels(_tone(30.0), [panel], figsize=(64.0, 2.0), context=1.0)
+        assert len(self._placed(narrow)) < len(self._placed(wide))
+
+    def test_a_label_is_shrunk_toward_the_floor_before_it_is_dropped(self) -> None:
+        """The policy is shrink-then-drop: a bar that fits the text only smaller still carries it."""
+        widths = [0.05 + 0.05 * step for step in range(29)]
+        tokens = [
+            {"text": "village", "start": 0.2 + index * 2.0, "end": 0.2 + index * 2.0 + width}
+            for index, width in enumerate(widths)
+        ]
+        figure = plot_aligned_panels(
+            _tone(60.0), [{"type": "tokens", "name": "words", "tokens": tokens}], figsize=(20.0, 2.0), context=1.0
+        )
+        sizes = {float(label.get_fontsize()) for label in self._placed(figure)}
+        assert sizes, "a shrinkable bar must still carry its label"
+        assert min(sizes) >= TOKEN_LABEL_FLOOR_FONTSIZE
+        assert any(size < TOKEN_LABEL_FONTSIZE for size in sizes)
+
+    def test_drawing_twice_does_not_shrink_twice(self) -> None:
+        """A figure saved as a PNG and then into the PDF must not compound its own decision."""
+        tokens = _connected_speech(duration=30.0)
+        figure = plot_aligned_panels(
+            _tone(30.0), [{"type": "tokens", "name": "words", "tokens": tokens}], figsize=(20.0, 2.0), context=1.0
+        )
+        first = [(label.get_text(), label.get_fontsize()) for label in self._placed(figure)]
+        second = [(label.get_text(), label.get_fontsize()) for label in self._placed(figure)]
+        assert first == second
+
+    def test_a_png_and_a_pdf_of_one_figure_agree(self, tmp_path: Any) -> None:  # noqa: ANN401
+        """Both output paths render through their own renderer; neither may re-decide the other's."""
+        from matplotlib.backends.backend_pdf import PdfPages
+
+        tokens = _connected_speech(duration=30.0)
+        figure = plot_aligned_panels(
+            _tone(30.0), [{"type": "tokens", "name": "words", "tokens": tokens}], figsize=(20.0, 2.0), context=1.0
+        )
+        figure.savefig(tmp_path / "page.png", bbox_inches="tight")
+        after_png = [(label.get_text(), label.get_fontsize()) for label in self._placed(figure)]
+        with PdfPages(tmp_path / "page.pdf") as pages:
+            pages.savefig(figure, bbox_inches="tight")
+        after_pdf = [(label.get_text(), label.get_fontsize()) for label in self._placed(figure)]
+        assert after_png == after_pdf
+        assert (tmp_path / "page.pdf").stat().st_size > 0
+
+
+class TestTheTokenLabelFitPolicy:
+    """The arithmetic behind shrink-then-drop, apart from any renderer."""
+
+    @staticmethod
+    def _measure(width_per_point: float) -> Any:  # noqa: ANN401
+        """A text whose rendered width is proportional to its point size."""
+        return lambda fontsize: width_per_point * fontsize
+
+    def test_a_fitting_label_keeps_its_full_size(self) -> None:
+        """Nothing is bought by shrinking a label that already fits."""
+        assert _fitted_token_fontsize(self._measure(2.0), 20.0, 5.0, 4.0) == pytest.approx(5.0)
+
+    def test_a_label_that_fits_only_smaller_is_shrunk(self) -> None:
+        """The size returned is the largest at which the measured width still fits."""
+        fitted = _fitted_token_fontsize(self._measure(2.0), 9.0, 5.0, 4.0)
+        assert fitted is not None
+        assert fitted == pytest.approx(4.5)
+
+    def test_a_label_that_does_not_fit_at_the_floor_is_dropped(self) -> None:
+        """Below the floor the text is no longer legible, so it is not drawn at all."""
+        assert _fitted_token_fontsize(self._measure(2.0), 4.0, 5.0, 4.0) is None
+
+    def test_a_bar_with_no_room_at_all_is_dropped(self) -> None:
+        """A bar narrower than the padding carries no text, whatever the text is."""
+        assert _fitted_token_fontsize(self._measure(2.0), 0.0, 5.0, 4.0) is None
+        assert _fitted_token_fontsize(self._measure(2.0), -3.0, 5.0, 4.0) is None
 
     def test_the_text_is_clipped_to_the_axis(self) -> None:
         """A token at the edge of the window must not draw outside the panel it belongs to."""
