@@ -307,6 +307,15 @@ def fold_file_verdict(
         bad_map_values.update(recorded.bad_map_values)
 
     reasons = list(node_verdicts)
+    if ran.get(_ROUTING) is RunState.ERRORED:
+        reasons.append(
+            NodeVerdict(
+                _ROUTING,
+                Outcome.FLAG,
+                None,
+                "routing failed; branch execution was withheld because no complete routing result was available",
+            )
+        )
     if bad_map_values:
         named = ", ".join(f"{tag}: {value}" for tag, value in sorted(bad_map_values.items()))
         reasons.append(NodeVerdict(_ROUTING, Outcome.FLAG, None, f"{BAD_MAP_VALUES}: {named}"))
