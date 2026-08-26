@@ -16,7 +16,11 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.plotting.plotting import (
     TOKEN_LABEL_FLOOR_FONTSIZE,
     TOKEN_LABEL_FONTSIZE,
+    TOKEN_ROW_PITCH_EM,
     _fitted_token_fontsize,
+    _staggered_row_ceiling,
+    _staggered_row_count,
+    _token_label_slots,
     play_audio,
     plot_aligned_panels,
     plot_specgram,
@@ -414,6 +418,230 @@ class TestTheTokenLabelFitPolicy:
         figure = plot_aligned_panels(_tone(), [{"type": "tokens", "name": "words", "tokens": []}])
         assert figure.axes[0].get_ylabel() == "words"
         assert len(figure.axes[0].patches) == 0
+
+
+class TestTheStaggeredTokenRows:
+    """A lane whose labels cannot lie side by side in one row spreads them over rows it derives."""
+
+    @staticmethod
+    def _draw(duration: float, size: tuple[float, float]) -> Figure:
+        """A connected-speech lane of the given length, drawn at the given figure size."""
+        tokens = _connected_speech(duration=duration)
+        figure = plot_aligned_panels(
+            _tone(duration),
+            [{"type": "tokens", "name": "words", "tokens": tokens}],
+            figsize=size,
+            context=1.0,
+        )
+        figure.canvas.draw()
+        return figure
+
+    @staticmethod
+    def _bar_tops(figure: Figure, index: int = 0) -> list[float]:
+        """Each bar's lower edge, in the order the tokens were given."""
+        return [round(float(cast(Rectangle, patch).get_y()), 6) for patch in figure.axes[index].patches]
+
+    @classmethod
+    def _row_tops(cls, figure: Figure, index: int = 0) -> list[float]:
+        """The distinct bar rows a real draw laid out, from the top of the lane downwards."""
+        return sorted(set(cls._bar_tops(figure, index)), reverse=True)
+
+    @classmethod
+    def _rows(cls, figure: Figure, index: int = 0) -> list[int]:
+        """Each bar's row, counted from the top of the lane, in the order the tokens were given."""
+        tops = cls._row_tops(figure, index)
+        return [tops.index(top) for top in cls._bar_tops(figure, index)]
+
+    @staticmethod
+    def _drawn(figure: Figure, index: int = 0) -> list[Text]:
+        """The token labels a real draw placed on one panel's axis."""
+        return [text for text in figure.axes[index].texts if text.get_visible()]
+
+    @classmethod
+    def _overlaps(cls, figure: Figure, index: int = 0) -> list[tuple[str, str]]:
+        """Every pair of drawn labels whose display-space boxes intersect."""
+        renderer = cast(RendererBase, figure.canvas.get_renderer())  # type: ignore[attr-defined]
+        drawn = cls._drawn(figure, index)
+        boxes = [(text.get_text(), text.get_window_extent(renderer)) for text in drawn]
+        return [
+            (one[0], two[0])
+            for position, one in enumerate(boxes)
+            for two in boxes[position + 1 :]
+            if one[1].overlaps(two[1])
+        ]
+
+    def test_a_campaign_length_lane_is_no_longer_nearly_wordless(self) -> None:
+        """The defect: 30 s of speech on a report-width page drew 21 of its 88 words and no more."""
+        tokens = _connected_speech(duration=30.0)
+        figure = self._draw(30.0, (14.0, 4.0))
+        assert len(figure.axes[0].patches) == len(tokens)
+        assert len(self._drawn(figure)) >= 66
+
+    def test_a_sixty_second_lane_carries_words_at_all(self) -> None:
+        """At one row a 60 s page drew nothing; the reviewer met a row of bare bars."""
+        tokens = _connected_speech(duration=60.0)
+        figure = self._draw(60.0, (14.0, 4.0))
+        assert len(figure.axes[0].patches) == len(tokens)
+        assert len(self._drawn(figure)) >= 126
+
+    def test_no_two_drawn_labels_overlap_at_campaign_length(self) -> None:
+        """The load-bearing invariant: more rows may never buy a single touching pair of glyphs."""
+        assert self._overlaps(self._draw(30.0, (14.0, 4.0))) == []
+
+    def test_no_two_drawn_labels_overlap_on_the_longest_page(self) -> None:
+        """Sixty seconds is the top of the campaign range and the densest lane the panel meets."""
+        assert self._overlaps(self._draw(60.0, (14.0, 4.0))) == []
+
+    def test_no_two_drawn_labels_overlap_on_a_narrow_page(self) -> None:
+        """A page narrow enough to exhaust the row ceiling must still not overlap; it drops."""
+        assert self._overlaps(self._draw(60.0, (6.0, 1.6))) == []
+
+    def test_a_wider_page_uses_fewer_rows(self) -> None:
+        """The row count is derived from the width the labels are given, so it must follow it."""
+        narrow = self._draw(30.0, (8.0, 2.0))
+        wide = self._draw(30.0, (64.0, 2.0))
+        assert len(self._row_tops(wide)) == 1
+        assert len(self._row_tops(narrow)) > len(self._row_tops(wide))
+
+    def test_a_lane_whose_labels_already_fit_side_by_side_stays_on_one_row(self) -> None:
+        """A row is spent only when the labels cannot lie side by side; twelve seconds is not that."""
+        assert len(self._row_tops(self._draw(12.0, (14.0, 4.0)))) == 1
+
+    def test_a_sparse_lane_stays_on_one_row(self) -> None:
+        """Rows relieve crowding. Twenty-nine words over sixty seconds are not crowded."""
+        tokens = [{"text": "village", "start": 0.2 + index * 2.0, "end": 0.7 + index * 2.0} for index in range(29)]
+        figure = plot_aligned_panels(
+            _tone(60.0), [{"type": "tokens", "name": "words", "tokens": tokens}], figsize=(20.0, 2.0), context=1.0
+        )
+        figure.canvas.draw()
+        assert len(self._row_tops(figure)) == 1
+
+    def test_the_reading_order_cycles_by_index(self) -> None:
+        """Token i is in row i mod R, so the sequence is a staircase that never reorders time."""
+        figure = self._draw(30.0, (14.0, 4.0))
+        rows = self._rows(figure)
+        row_count = len(self._row_tops(figure))
+        assert row_count > 1
+        assert rows == [index % row_count for index in range(len(rows))]
+
+    def test_a_row_never_shrinks_below_what_its_font_needs(self) -> None:
+        """The ceiling is typographic: a row too short to hold its own label is not a row."""
+        figure = self._draw(60.0, (6.0, 1.0))
+        renderer = cast(RendererBase, figure.canvas.get_renderer())  # type: ignore[attr-defined]
+        lane = figure.axes[0].get_window_extent(renderer).height * 72.0 / figure.dpi
+        assert lane / len(self._row_tops(figure)) >= TOKEN_ROW_PITCH_EM * TOKEN_LABEL_FONTSIZE
+
+    def test_a_label_may_use_the_width_its_row_neighbours_leave(self) -> None:
+        """This is the whole mechanism: a staggered label is measured against its row's slot."""
+        figure = self._draw(30.0, (14.0, 4.0))
+        renderer = cast(RendererBase, figure.canvas.get_renderer())  # type: ignore[attr-defined]
+        axis = figure.axes[0]
+        pairs = [(text, bar) for text, bar in zip(axis.texts, axis.patches) if text.get_visible()]
+        assert pairs
+        widest = max(
+            text.get_window_extent(renderer).width / bar.get_window_extent(renderer).width for text, bar in pairs
+        )
+        assert widest > 1.0
+
+    def test_a_declared_row_wins_and_is_not_restaggered(self) -> None:
+        """The per-model stripe contract: a token that names its row is placed in it, and stays."""
+        tokens = [
+            {
+                "text": f"w{index}",
+                "start": 0.4 * index,
+                "end": 0.4 * index + 0.3,
+                "row": "whisper" if index % 2 else "canary",
+            }
+            for index in range(24)
+        ]
+        figure = plot_aligned_panels(
+            _tone(12.0), [{"type": "tokens", "name": "words", "tokens": tokens}], figsize=(6.0, 2.0), context=1.0
+        )
+        figure.canvas.draw()
+        rows = self._rows(figure)
+        assert len(set(rows)) == 2
+        assert len(set(rows[0::2])) == 1
+        assert len(set(rows[1::2])) == 1
+        assert [tick.get_text() for tick in figure.axes[0].get_yticklabels()] == ["canary", "whisper"]
+
+    def test_only_the_tokens_that_declare_no_row_are_staggered(self) -> None:
+        """Precedence is explicit: the named stripe is one row however dense the unnamed block is."""
+        declared = [
+            {"text": f"d{index}", "start": 0.35 * index, "end": 0.35 * index + 0.3, "row": "canary"}
+            for index in range(80)
+        ]
+        free = [{"text": word["text"], "start": word["start"], "end": word["end"]} for word in _connected_speech(30.0)]
+        figure = plot_aligned_panels(
+            _tone(30.0),
+            [{"type": "tokens", "name": "words", "tokens": declared + free}],
+            figsize=(14.0, 4.0),
+            context=1.0,
+        )
+        figure.canvas.draw()
+        rows = self._rows(figure)
+        assert len(set(rows[: len(declared)])) == 1
+        assert len(set(rows[len(declared) :])) > 1
+
+    def test_the_staggered_rows_carry_no_tick_of_their_own(self) -> None:
+        """Rows must not read as named lanes; only a declared row is ever named on the axis."""
+        assert list(self._draw(30.0, (14.0, 4.0)).axes[0].get_yticks()) == []
+
+    def test_the_staggered_rows_share_one_colour(self) -> None:
+        """A row is a wrap of one reading, so colouring rows apart would imply a grouping there is not."""
+        figure = self._draw(30.0, (14.0, 4.0))
+        assert len({tuple(patch.get_facecolor()) for patch in figure.axes[0].patches}) == 1
+
+
+class TestTheStaggeredRowArithmetic:
+    """How many rows a lane takes, and how wide a label may grow in one, apart from any renderer."""
+
+    def test_labels_that_fit_side_by_side_take_one_row(self) -> None:
+        """The demand is the labels' own widths; a lane under its supply needs no second row."""
+        assert _staggered_row_count([10.0] * 8, 200.0, 1.0, 9) == 1
+
+    def test_a_lane_over_its_width_takes_the_rows_its_labels_demand(self) -> None:
+        """Eleven points of ink each over a hundred points of page is two rows, not a guess."""
+        assert _staggered_row_count([10.0] * 20, 100.0, 1.0, 9) == 3
+
+    def test_the_row_count_never_passes_its_ceiling(self) -> None:
+        """A row shorter than its own font is illegible, so the ceiling wins over the demand."""
+        assert _staggered_row_count([10.0] * 200, 100.0, 1.0, 4) == 4
+
+    def test_an_empty_lane_takes_one_row(self) -> None:
+        """No label demands anything; the lane is still one row of bars."""
+        assert _staggered_row_count([], 100.0, 1.0, 9) == 1
+
+    def test_a_lane_with_no_width_takes_one_row(self) -> None:
+        """An axis of no width cannot be divided into rows that help."""
+        assert _staggered_row_count([10.0] * 20, 0.0, 1.0, 9) == 1
+
+    def test_the_ceiling_is_the_lane_over_the_row_pitch(self) -> None:
+        """The pitch is stated in multiples of the label's point size, which is dpi-free."""
+        assert _staggered_row_ceiling(92.0, 5.0) == 9
+        assert _staggered_row_ceiling(9.0, 5.0) == 1
+
+    def test_one_row_measures_a_label_against_its_own_bar(self) -> None:
+        """At one row the slot is the bar, which is what the panel did before it staggered."""
+        slots = _token_label_slots([1.0, 2.0, 3.0], [0.4, 0.4, 0.4], [0, 0, 0], 1, (0.0, 4.0))
+        assert slots == pytest.approx([(0.6, 1.4), (1.6, 2.4), (2.6, 3.4)])
+
+    def test_a_staggered_label_may_reach_across_the_rows_it_is_not_in(self) -> None:
+        """Two rows give a label twice its bar, bounded by the neighbour that shares its row."""
+        slots = _token_label_slots([1.0, 2.0, 3.0, 4.0], [0.4] * 4, [0, 1, 0, 1], 2, (0.0, 5.0))
+        assert slots[0] == pytest.approx((0.2, 1.8))
+        assert slots[2] == pytest.approx((2.2, 3.8))
+
+    def test_a_slot_stops_at_the_midpoint_to_its_row_neighbour(self) -> None:
+        """The bound that makes the pairwise overlap impossible rather than merely unobserved."""
+        slots = _token_label_slots([1.0, 1.4, 2.0], [1.0, 1.0, 1.0], [0, 1, 0], 2, (0.0, 3.0))
+        assert slots[0][1] == pytest.approx(1.5)
+        assert slots[2][0] == pytest.approx(1.5)
+
+    def test_a_slot_stops_at_the_edge_of_the_axis(self) -> None:
+        """A row's first and last label reach to the window, never past it."""
+        slots = _token_label_slots([0.2, 2.8], [2.0, 2.0], [0, 0], 2, (0.0, 3.0))
+        assert slots[0] == pytest.approx((0.0, 0.4))
+        assert slots[1] == pytest.approx((2.6, 3.0))
 
 
 class TestPlotWaveform:
