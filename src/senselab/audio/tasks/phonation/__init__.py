@@ -9,6 +9,7 @@ from senselab.audio.tasks.phonation.api import (
     hnr_track,
     period_marks,
     propose_phonation_spans,
+    propose_word_aligned_phonation_spans,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     "hnr_track",
     "period_marks",
     "propose_phonation_spans",
+    "propose_word_aligned_phonation_spans",
 ]

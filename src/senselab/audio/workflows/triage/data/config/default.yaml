@@ -244,7 +244,7 @@ derivation: |
   deleted likewise: branch-speech.md replaces the aggregate-agreement flag with per-word recognizer
   membership, so there is no aggregate for a floor to gate.
 
-  phonation_spans -- preprocess.md's sustained-phonation and glide detector. Its six criterion
+  phonation_spans -- preprocess.md's sustained-phonation and glide detector. Its seven criterion
   parameters are null; the five described at the end of this paragraph -- hop_s, formant_max_hz,
   max_formants, formant_window_s and formant_preemphasis_hz -- ship declared defaults.
   f0_stability_cents and formant_stability_hz are the two limbs of the continuity criterion (a frame
@@ -255,6 +255,14 @@ derivation: |
   mixed_voiced_fraction is the voiced-frame fraction separating voiced from mixed from unvoiced -- both
   are needed because a disordered voice sustains with little or no periodicity and a detector that
   required a periodicity floor would measure exactly the voices least in need of measurement.
+  unvoiced_max_formant_bandwidth_hz requires the F1/F2 poles that carry an aperiodic sustain to be
+  narrow enough to be resonant evidence; stable Burg poles alone also arise in broadband noise and
+  must not promote it to phonation. It is null until fitted, is not a diagnostic proxy, and does not
+  apply to the periodic F0 limb.
+  word_aligned_min_evidence_fraction is the fraction of frames in a timed consensus-word segment that
+  must show periodic or narrow-resonant evidence before that acoustic segment becomes a phonation
+  span. Word text never enters the test, and word evidence is complementary: no word cannot suppress
+  a sustained-phonation span. It is null until fitted.
   formant_max_hz 5000.0, max_formants 5, formant_window_s 0.025 and formant_preemphasis_hz 50.0 are
   praat_parselmouth.py:813's own to_formant_burg defaults -- conventional, not fitted here. hop_s 0.01
   is Praat's documented time_step default, the same value phonation.hop_s already carries.
@@ -400,6 +408,8 @@ phonation_spans:
   hangover_ms: null
   voicing_strength_floor: null
   mixed_voiced_fraction: null
+  unvoiced_max_formant_bandwidth_hz: null
+  word_aligned_min_evidence_fraction: null
   formant_max_hz: 5000.0
   max_formants: 5
   formant_window_s: 0.025

@@ -16,6 +16,7 @@ from senselab.audio.tasks.phonation import (
     hnr_track,
     period_marks,
     propose_phonation_spans,
+    propose_word_aligned_phonation_spans,
 )
 
 SR = 16000
@@ -185,7 +186,11 @@ class TestFormantTrack:
 
 
 def _tracks(
-    f0_hz: np.ndarray, f1_hz: np.ndarray, strength: np.ndarray, hop_s: float = 0.01
+    f0_hz: np.ndarray,
+    f1_hz: np.ndarray,
+    strength: np.ndarray,
+    hop_s: float = 0.01,
+    formant_bandwidth_hz: float = 60.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, FormantTrack]:
     """Synthetic tracks on one hop: F2 follows F1 so both stability limbs move together."""
     times = np.arange(len(f0_hz)) * hop_s
@@ -194,7 +199,16 @@ def _tracks(
         times,
         f0_hz,
         strength,
-        FormantTrack(times_s=times, f_hz=(f1_hz, f1_hz * 2.0, nan, nan), bandwidth_hz=(nan, nan, nan, nan)),
+        FormantTrack(
+            times_s=times,
+            f_hz=(f1_hz, f1_hz * 2.0, nan, nan),
+            bandwidth_hz=(
+                np.full(len(times), formant_bandwidth_hz),
+                np.full(len(times), formant_bandwidth_hz),
+                nan,
+                nan,
+            ),
+        ),
     )
 
 
@@ -206,6 +220,7 @@ _SPAN_RULE = {
     "hangover_ms": 50.0,
     "voicing_strength_floor": 0.5,
     "mixed_voiced_fraction": 0.6,
+    "unvoiced_max_formant_bandwidth_hz": 250.0,
 }
 
 
@@ -231,6 +246,19 @@ class TestProposePhonationSpans:
         assert span.member == "sustained"
         assert span.production == "unvoiced"
         assert span.f0_median_hz is None
+
+    def test_the_unvoiced_formant_limb_rejects_broadband_structure(self) -> None:
+        """Stable LPC poles alone are not phonation when F1/F2 are too broad to be resonant evidence."""
+        n = 100
+        times, f0, strength, formants = _tracks(
+            np.full(n, np.nan),
+            np.full(n, 700.0),
+            np.full(n, 0.1),
+            formant_bandwidth_hz=600.0,
+        )
+        assert propose_phonation_spans(
+            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
+        ) == []
 
     def test_a_span_voiced_for_half_its_frames_is_mixed(self) -> None:
         """Between the two cutoffs is its own production, not rounded to the nearer one.
@@ -270,3 +298,42 @@ class TestProposePhonationSpans:
         times, f0, strength, formants = _tracks(np.full(10, 200.0), np.full(10, 700.0), np.full(10, 0.9))
         with pytest.raises(TypeError):
             propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants)  # type: ignore[call-arg]
+
+
+class TestWordAlignedPhonationEvidence:
+    """Timed words provide boundaries; their text is not acoustic evidence."""
+
+    def test_an_aperiodic_resonant_word_is_an_unvoiced_span(self) -> None:
+        """Narrow, stable resonances inside a timed word are positive acoustic evidence without F0."""
+        n = 100
+        times, f0, strength, formants = _tracks(np.full(n, np.nan), np.full(n, 700.0), np.full(n, 0.1))
+        [span] = propose_word_aligned_phonation_spans(
+            times=times,
+            f0_hz=f0,
+            strength=strength,
+            formants=formants,
+            word_extents=[(0.1, 0.8)],
+            voicing_strength_floor=0.5,
+            mixed_voiced_fraction=0.6,
+            unvoiced_max_formant_bandwidth_hz=250.0,
+            min_evidence_fraction=0.8,
+        )
+        assert (span.member, span.production, span.offset_criterion) == ("word_aligned", "unvoiced", "word_boundary")
+
+    def test_a_broadband_word_is_not_positive_evidence(self) -> None:
+        """A word boundary cannot promote broadband audio when its fitted formants are broad."""
+        n = 100
+        times, f0, strength, formants = _tracks(
+            np.full(n, np.nan), np.full(n, 700.0), np.full(n, 0.1), formant_bandwidth_hz=600.0
+        )
+        assert propose_word_aligned_phonation_spans(
+            times=times,
+            f0_hz=f0,
+            strength=strength,
+            formants=formants,
+            word_extents=[(0.1, 0.8)],
+            voicing_strength_floor=0.5,
+            mixed_voiced_fraction=0.6,
+            unvoiced_max_formant_bandwidth_hz=250.0,
+            min_evidence_fraction=0.8,
+        ) == []
