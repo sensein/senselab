@@ -138,6 +138,123 @@ class TestTheTextPanel:
             plot_aligned_panels(_tone(), [{"type": "sepctrogram"}])
 
 
+class TestTheTokenLane:
+    """A lane of timed tokens — words, phones — each carrying its own text on its own bar."""
+
+    @staticmethod
+    def _tokens(figure: Figure, index: int = 0) -> list[str]:
+        """The texts drawn on one panel's axis, in draw order."""
+        return [text.get_text() for text in figure.axes[index].texts]
+
+    def test_a_token_carries_its_text_on_the_axis(self) -> None:
+        """The text belongs on the bar; as a y-tick, 40 words collapse into one unreadable stack."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "tokens",
+                    "name": "words",
+                    "tokens": [
+                        {"text": "hello", "start": 0.1, "end": 0.35},
+                        {"text": "world", "start": 0.4, "end": 0.65},
+                    ],
+                }
+            ],
+        )
+        assert self._tokens(figure) == ["hello", "world"]
+
+    def test_every_token_is_drawn_as_a_bar_at_its_own_extent(self) -> None:
+        """One bar per token, positioned in time, whether or not its text was placed."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "tokens",
+                    "name": "words",
+                    "tokens": [
+                        {"text": f"w{index}", "start": 0.1 * index, "end": 0.1 * index + 0.08} for index in range(6)
+                    ],
+                }
+            ],
+        )
+        bars = figure.axes[0].patches
+        assert len(bars) == 6
+        assert bars[0].get_x() == pytest.approx(0.0)
+        assert bars[5].get_width() == pytest.approx(0.08)
+
+    def test_the_lane_carries_no_tick_per_token(self) -> None:
+        """The y-axis is not a legend: one tick per word is the defect this panel type replaces."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "tokens",
+                    "name": "words",
+                    "tokens": [
+                        {"text": f"w{index}", "start": 0.02 * index, "end": 0.02 * index + 0.015} for index in range(40)
+                    ],
+                }
+            ],
+        )
+        assert list(figure.axes[0].get_yticks()) == []
+
+    def test_a_bar_too_narrow_for_its_text_keeps_the_bar(self) -> None:
+        """A 5 ms token's text would overflow its neighbours, so it is skipped and the bar stays."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "tokens",
+                    "name": "words",
+                    "tokens": [
+                        {"text": "wide", "start": 0.1, "end": 0.4},
+                        {"text": "narrow", "start": 0.5, "end": 0.505},
+                    ],
+                }
+            ],
+        )
+        assert len(figure.axes[0].patches) == 2
+        assert self._tokens(figure) == ["wide"]
+
+    def test_the_text_is_clipped_to_the_axis(self) -> None:
+        """A token at the edge of the window must not draw outside the panel it belongs to."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [{"type": "tokens", "name": "words", "tokens": [{"text": "edge", "start": 0.8, "end": 0.99}]}],
+        )
+        assert figure.axes[0].texts[0].get_clip_on()
+
+    def test_the_lane_names_itself(self) -> None:
+        """A stack of lanes is unreadable if none of them says which reading it is."""
+        figure = plot_aligned_panels(
+            _tone(), [{"type": "tokens", "name": "words", "tokens": [{"text": "a", "start": 0.1, "end": 0.4}]}]
+        )
+        assert figure.axes[0].get_ylabel() == "words"
+
+    def test_declared_rows_become_the_only_y_ticks(self) -> None:
+        """Several stripes over one axis are named by stripe, still never by token."""
+        figure = plot_aligned_panels(
+            _tone(),
+            [
+                {
+                    "type": "tokens",
+                    "name": "words",
+                    "tokens": [
+                        {"text": "one", "start": 0.1, "end": 0.4, "row": "consensus"},
+                        {"text": "two", "start": 0.1, "end": 0.4, "row": "whisper"},
+                    ],
+                }
+            ],
+        )
+        assert [tick.get_text() for tick in figure.axes[0].get_yticklabels()] == ["consensus", "whisper"]
+
+    def test_a_lane_with_no_token_still_draws(self) -> None:
+        """An empty lane is an empty stripe, not a raise and not a blank unnamed axis."""
+        figure = plot_aligned_panels(_tone(), [{"type": "tokens", "name": "words", "tokens": []}])
+        assert figure.axes[0].get_ylabel() == "words"
+        assert len(figure.axes[0].patches) == 0
+
+
 class TestPlotWaveform:
     """Tests for the plot_waveform function."""
 

@@ -28,6 +28,8 @@ _Context = Union[str, float]  # "auto" | "small" | "medium" | "large" | float sc
 _INCHES_PER_RATIO = 1.8  # what one unit of plot_aligned_panels' height_ratios is worth
 TEXT_PANEL_INCHES_PER_LINE = 0.18  # 8 pt at 1.2 line spacing is 0.133 in; the rest is headroom
 MIN_FIGURE_HEIGHT_IN = 4.0  # the floor plot_aligned_panels puts under a short panel stack
+TOKEN_LABEL_FONTSIZE = 5.0  # the default point size of the text a tokens panel draws on a bar
+TOKEN_LABEL_MIN_WIDTH_S = 0.06  # a bar narrower than this carries no text; panel key min_width_s
 
 
 def _detect_screen_resolution() -> Tuple[int, int]:
@@ -553,7 +555,15 @@ def plot_aligned_panels(
       panel's y-label.
     - ``{"type": "segments", "segments": [{"label": str, "start": float, "end": float}, ...],
       "name": str}`` -- colored horizontal bars for phoneme/word segments. ``name`` becomes the
-      panel's y-label, so a figure stacking several lanes says which is which.
+      panel's y-label, so a figure stacking several lanes says which is which. Each distinct label
+      is a y-tick, so this type suits a lane of a few repeating labels rather than of many texts.
+    - ``{"type": "tokens", "tokens": [{"text": str, "start": float, "end": float,
+      "row": str (optional)}, ...], "name": str, "fontsize": float (optional),
+      "min_width_s": float (optional)}`` -- one bar per timed token with the token's **text drawn on
+      the bar**, for a lane of many distinct texts: words, phones, a recognizer's tokens. The y-axis
+      carries a tick per declared ``row`` and none at all when no token declares one, so 40 words
+      are 40 labelled bars rather than 40 y-ticks. A bar narrower than ``min_width_s`` keeps its bar
+      and is drawn without text.
     - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
       spectrogram with scatter overlays (each overlay is a dict with keys
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
@@ -598,6 +608,7 @@ def plot_aligned_panels(
         "spectrogram": 2,
         "features": 1,
         "segments": 1,
+        "tokens": 1,
         "overlay_on_spectrogram": 2,
     }
 
@@ -705,6 +716,38 @@ def plot_aligned_panels(
                 ax.set_ylabel(panel.get("name") or "Segment")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
 
+            elif ptype == "tokens":
+                tokens = panel.get("tokens", [])
+                rows = list(dict.fromkeys(str(token.get("row") or "") for token in tokens))
+                y_of = {row: index for index, row in enumerate(rows)}
+                named_rows = [row for row in rows if row]
+                fontsize = float(panel.get("fontsize", TOKEN_LABEL_FONTSIZE))
+                min_width = float(panel.get("min_width_s", TOKEN_LABEL_MIN_WIDTH_S))
+                cmap = plt.get_cmap("tab20", max(len(rows), 1))
+                for token in tokens:
+                    y = y_of[str(token.get("row") or "")]
+                    start, end = float(token["start"]), float(token["end"])
+                    width = end - start
+                    ax.barh(y + 0.5, width, left=start, height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
+                    text = str(token.get("text") or "")
+                    if text and width >= min_width:
+                        ax.text(
+                            start + width / 2.0,
+                            y + 0.5,
+                            text,
+                            ha="center",
+                            va="center",
+                            fontsize=fontsize,
+                            color="black",
+                            clip_on=True,
+                        )
+                ax.set_ylim(0.0, float(max(len(rows), 1)))
+                ax.set_yticks([index + 0.5 for index in range(len(rows))] if named_rows else [])
+                if named_rows:
+                    ax.set_yticklabels(rows, fontsize=7)
+                ax.set_ylabel(panel.get("name") or "Tokens")
+                ax.grid(axis="x", linestyle="--", alpha=0.3)
+
             elif ptype == "overlay_on_spectrogram":
                 mel = panel.get("mel", False)
                 spec_db, f0, f1 = _get_spec(mel)
@@ -750,7 +793,7 @@ def plot_aligned_panels(
             else:
                 raise ValueError(
                     f"unknown panel type {ptype!r}; plot_aligned_panels supports "
-                    "waveform, spectrogram, features, segments, overlay_on_spectrogram and text"
+                    "waveform, spectrogram, features, segments, tokens, overlay_on_spectrogram and text"
                 )
 
         # Shared x-axis config. The scale belongs to the last panel that USES it: a text panel has

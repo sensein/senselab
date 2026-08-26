@@ -1284,3 +1284,69 @@ class TestTheEnvelopePanelsScaleIsTheSignals:
             panels = captured
         values = np.concatenate([np.asarray(curve[1], dtype=float) for curve in panels[0][0]["twin"]["data"]])
         assert not np.any(values <= -240.0)
+
+
+class TestTheWordsLaneFollowsTheConsensusStyle:
+    """A word's text belongs on its own bar, as the analyze_audio consensus row draws it."""
+
+    @staticmethod
+    def _render(store: ProvStore, tmp_path: Path, **seed: Any) -> Any:  # noqa: ANN401
+        """Seed the store, draw the real figure, and hand back the figure and the panels."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[Any] = []
+        captured: list[list[dict[str, Any]]] = []
+        real = report_module.plot_aligned_panels
+
+        def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+            captured.append([dict(panel) for panel in panels])
+            figure = real(audio, panels, **kwargs)
+            drawn.append(figure)
+            return figure
+
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(report_module, "plot_aligned_panels", _spy)
+            _seed_report_store(store, tmp_path, full=True, **seed)
+            report(store, tmp_path / "summary", _png(tmp_path))
+        return drawn[0], captured[0]
+
+    @staticmethod
+    def _words_axis(figure: Any, panels: list[dict[str, Any]]) -> Any:  # noqa: ANN401
+        """The axis the words lane was drawn on, found by the lane's position in the stack."""
+        index = [position for position, panel in enumerate(panels) if panel.get("name") == "words"]
+        assert index, "the words lane must be on the page"
+        return figure.axes[index[0]]
+
+    def test_the_words_lane_is_a_token_lane(self, store: ProvStore, tmp_path: Path) -> None:
+        """A generic segments lane turns each word's text into a y-tick label."""
+        _, panels = self._render(store, tmp_path, words=["hello", "world"])
+        lane = [panel for panel in panels if panel.get("name") == "words"]
+        assert [panel["type"] for panel in lane] == ["tokens"]
+        assert [token["text"] for token in lane[0]["tokens"]] == ["hello", "world"]
+
+    def test_every_word_is_drawn_on_the_bar_and_not_on_the_axis(self, store: ProvStore, tmp_path: Path) -> None:
+        """The reader sees the drawn artists; the panel dict alone proves nothing."""
+        figure, panels = self._render(store, tmp_path, words=["hello", "world"])
+        axis = self._words_axis(figure, panels)
+        assert [text.get_text() for text in axis.texts] == ["hello", "world"]
+        assert list(axis.get_yticks()) == []
+
+    def test_forty_words_do_not_become_forty_ticks(self, store: ProvStore, tmp_path: Path) -> None:
+        """The rendered failure: 40+ overlapping tick labels beside unlabelled coloured dashes."""
+        figure, panels = self._render(store, tmp_path, words=[f"word{index}" for index in range(40)])
+        axis = self._words_axis(figure, panels)
+        assert len(axis.patches) == 40
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == []
+
+    def test_a_marked_word_renders_its_category_on_the_bar(self, store: ProvStore, tmp_path: Path) -> None:
+        """The redaction discipline is unchanged by the move: the bar carries the placeholder."""
+        figure, panels = self._render(store, tmp_path, words=["hello"], marked_words=[("alice", "PERSON")])
+        drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
+        assert "[PERSON]" in drawn
+        assert "alice" not in drawn
+
+    def test_an_unscanned_transcript_withholds_every_bar(self, store: ProvStore, tmp_path: Path) -> None:
+        """No complete scan stands behind the words, so no page may render one verbatim."""
+        figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
+        drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
+        assert drawn == ["[unscanned]", "[unscanned]"]

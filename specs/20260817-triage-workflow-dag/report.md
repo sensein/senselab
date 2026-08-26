@@ -39,7 +39,7 @@ On a single shared time axis, one row each:
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
 | window label sets — YAMNet, AST, HeAR — as label lanes over their own grids | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
-| words, redacted by the PII marking | SPEECH |
+| words, redacted by the PII marking — a token lane: one bar per word at its own extent with its renderable text drawn on the bar, never as a y-tick | SPEECH |
 | airway-labelled spans with their labels and confirmations | AIRWAY |
 | voiced runs and their extents | VOICE |
 | redacted extents | REDACT |
