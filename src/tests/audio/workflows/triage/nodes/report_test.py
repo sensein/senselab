@@ -1223,3 +1223,64 @@ class TestTheSpansAreAnOverlayNotALane:
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "lane not drawn — spans (dB over floor)" not in blocks
         assert "every declared lane was drawn" in blocks
+
+
+class TestTheEnvelopePanelsScaleIsTheSignals:
+    """The dB panel's y-scale must come from measured values, never from a clamp's own value."""
+
+    @staticmethod
+    def _undershooting_envelope(tmp_path: Path) -> np.ndarray:
+        """PREPROCESS's own envelope over a burst with a sharp offset, written to the run's sidecar.
+
+        The zero-phase lowpass undershoots at the offset, which is where a clamped floor used to be
+        fabricated. This is the real producer feeding the real panel.
+        """
+        from senselab.audio.data_structures import Audio
+        from senselab.audio.tasks.envelope import hilbert_envelope_dbfs, rolling_floor_dbfs
+
+        grid = np.arange(int(_DURATION_S * _RATE)) / _RATE
+        samples = np.zeros_like(grid)
+        voiced = (grid >= 1.0) & (grid < 3.0)
+        samples[voiced] = 0.6 * np.sin(2 * np.pi * 220.0 * grid[voiced])
+        audio = Audio(waveform=samples.astype(np.float32)[None, :], sampling_rate=_RATE)
+        envelope = hilbert_envelope_dbfs(audio, lowpass_hz=40.0, filter_order=4)
+        floor = rolling_floor_dbfs(envelope, _RATE, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
+        np.savez(tmp_path / "derivatives" / "energy_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
+        return envelope
+
+    def test_the_twin_axis_stays_inside_the_measured_range(self, store: ProvStore, tmp_path: Path) -> None:
+        """15 fabricated -240 dBFS spikes stretched the axis to -250 and squashed -50..-90 flat."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[Any] = []
+        real = report_module.plot_aligned_panels
+
+        def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+            figure = real(audio, panels, **kwargs)
+            drawn.append(figure)
+            return figure
+
+        with pytest.MonkeyPatch.context() as patched:
+            patched.setattr(report_module, "plot_aligned_panels", _spy)
+            _seed_report_store(store, tmp_path, full=True)
+            envelope = self._undershooting_envelope(tmp_path)
+            report(store, tmp_path / "summary", _png(tmp_path))
+        twin = [axis for axis in drawn[0].axes if "dBFS" in axis.get_ylabel()]
+        assert twin, "the envelope's twin axis must be on the figure"
+        low, high = twin[0].get_ylim()
+        assert high < 20.0, "a 0.6-amplitude tone reads near -4 dBFS"
+        assert low > -120.0, f"the axis floor {low:.0f} dBFS is below anything this signal can measure"
+        assert high - low < 150.0, "the informative band must not be squashed into a corner"
+        assert envelope.size == int(_DURATION_S * _RATE)
+
+    def test_no_curve_carries_the_clamps_value(self, store: ProvStore, tmp_path: Path) -> None:
+        """Whatever the axis does, -240 dBFS must not reach the panel as a datum."""
+        panels: list[list[dict[str, Any]]] = []
+        with pytest.MonkeyPatch.context() as patched:
+            captured = _capture_panels(patched)
+            _seed_report_store(store, tmp_path, full=True)
+            self._undershooting_envelope(tmp_path)
+            report(store, tmp_path / "summary", _png(tmp_path))
+            panels = captured
+        values = np.concatenate([np.asarray(curve[1], dtype=float) for curve in panels[0][0]["twin"]["data"]])
+        assert not np.any(values <= -240.0)

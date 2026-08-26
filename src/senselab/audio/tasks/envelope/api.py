@@ -20,14 +20,18 @@ def hilbert_envelope_dbfs(audio: Audio, *, lowpass_hz: float, filter_order: int)
         filter_order: Order of the Butterworth design. Read it from ``envelope.filter_order``.
 
     Returns:
-        One dBFS value per input sample. Absolute, never normalised by the input's maximum.
+        One value per input sample, in dBFS, absolute and never normalised by the input's maximum.
+        A sample whose filtered envelope is non-positive has no dB value and reads ``nan``.
     """
     x = np.asarray(audio.waveform, dtype=np.float64)
     if x.ndim > 1:
         x = x.mean(axis=0)
     b, a = butter(filter_order, lowpass_hz / (audio.sampling_rate / 2), "low")
-    env = np.maximum(filtfilt(b, a, np.abs(hilbert(x))), 1e-12)
-    return 20.0 * np.log10(env)
+    env = np.asarray(filtfilt(b, a, np.abs(hilbert(x))), dtype=np.float64)
+    out = np.full(env.shape, np.nan)
+    measurable = env > 0.0
+    out[measurable] = 20.0 * np.log10(env[measurable])
+    return out
 
 
 def rolling_floor_dbfs(
@@ -41,7 +45,7 @@ def rolling_floor_dbfs(
     """A low percentile of the envelope over a sliding window.
 
     Args:
-        envelope_db: Output of :func:`hilbert_envelope_dbfs`.
+        envelope_db: Output of :func:`hilbert_envelope_dbfs`, ``nan`` where it had no dB value.
         sampling_rate: Samples per second of ``envelope_db``.
         window_s: Width of the sliding window. Read it from ``floor.window_s``.
         percentile: Which percentile within the window is the floor. Config `floor.percentile`.
@@ -49,11 +53,16 @@ def rolling_floor_dbfs(
             ``floor.eval_grid_s``.
 
     Returns:
-        One floor value per sample of ``envelope_db``.
+        One floor value per sample of ``envelope_db``, taken over that window's measured samples.
+        A window holding none reads ``nan``, and so does every sample interpolating from it.
     """
     n = len(envelope_db)
     half = int(window_s * sampling_rate) // 2
     step = max(1, int(eval_grid_s * sampling_rate))
     centres = range(0, n, step)
-    vals = [float(np.percentile(envelope_db[max(0, c - half) : min(n, c + half)], percentile)) for c in centres]
+    vals: list[float] = []
+    for c in centres:
+        window = envelope_db[max(0, c - half) : min(n, c + half)]
+        measured = window[np.isfinite(window)]
+        vals.append(float(np.percentile(measured, percentile)) if measured.size else float("nan"))
     return np.interp(np.arange(n), centres, vals)

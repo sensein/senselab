@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -61,3 +63,70 @@ class TestRollingFloor:
         """The floor track has the envelope's own shape."""
         env = np.full(3 * SR, -50.0)
         assert rolling_floor_dbfs(env, SR, window_s=3.0, percentile=10.0, eval_grid_s=0.1).shape == env.shape
+
+
+def _burst(seconds: float = 2.0, amp: float = 0.6, freq: float = 220.0) -> Audio:
+    """A tone burst with a sharp offset, which is what makes ``filtfilt`` undershoot below zero."""
+    t = np.arange(int(seconds * SR)) / SR
+    x = np.zeros_like(t)
+    voiced = (t >= 0.5) & (t < 1.0)
+    x[voiced] = amp * np.sin(2 * np.pi * freq * t[voiced])
+    return Audio(waveform=x.astype(np.float32)[None, :], sampling_rate=SR)
+
+
+class TestAnUnmeasurableSampleHasNoDecibelValue:
+    """A filtered envelope that undershoots to zero or below has no dB value there to report."""
+
+    def test_an_undershooting_sample_reads_nan(self) -> None:
+        """The samples where the zero-phase filter undershoots are unmeasurable, not very quiet."""
+        env = _env(_burst())
+        assert np.isnan(env).any(), "this signal must undershoot; the fixture is the whole test"
+
+    def test_the_samples_that_are_measurable_stay_finite(self) -> None:
+        """Only the undershoot goes; the burst itself still reads a level."""
+        env = _env(_burst())
+        assert np.isfinite(env[int(0.75 * SR)])
+        assert np.isfinite(env).sum() > env.size // 2
+
+    def test_no_sample_reads_the_clamps_own_value(self) -> None:
+        """-240 dBFS was 20*log10(1e-12): the clamp's value, never a measurement of the signal."""
+        env = _env(_burst())
+        assert not np.any(env <= -240.0)
+
+    def test_the_finite_range_is_the_signals_own(self) -> None:
+        """The panel's y-scale comes from these values, so a fabricated floor destroys it."""
+        env = _env(_burst())
+        assert float(np.nanmin(env)) > -150.0
+
+    def test_the_contract_is_still_one_value_per_input_sample(self) -> None:
+        """A gap is a NaN in place, not a dropped sample; the time axis must stay aligned."""
+        audio = _burst()
+        assert _env(audio).shape == (audio.waveform.shape[1],)
+
+
+class TestTheFloorOverAnUnmeasurableEnvelope:
+    """The floor is a percentile of what was measured, and says nothing where nothing was."""
+
+    def test_the_floor_is_computed_over_the_finite_samples(self) -> None:
+        """A scatter of NaN inside a level window leaves the floor at that level."""
+        env = np.full(6 * SR, -50.0)
+        env[:: SR // 100] = np.nan
+        fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
+        assert fl[3 * SR] == pytest.approx(-50.0, abs=0.5)
+
+    def test_a_window_with_no_finite_sample_has_no_floor(self) -> None:
+        """Nothing was measured there, so there is no percentile of it to report."""
+        env = np.full(9 * SR, -50.0)
+        env[3 * SR : 6 * SR] = np.nan
+        fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
+        assert np.isnan(fl[int(4.5 * SR)])
+        assert np.isfinite(fl[SR])
+        assert np.isfinite(fl[8 * SR])
+
+    def test_an_unmeasurable_window_raises_no_warning(self) -> None:
+        """A run that prints a RuntimeWarning per window is a run nobody reads the output of."""
+        env = np.full(3 * SR, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
+        assert np.isnan(fl).all()

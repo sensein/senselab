@@ -368,19 +368,21 @@ class TestSpansCarryTheirMergeRate:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Three bursts, one span, and the stored entity names all three.
+        """Three bursts, one span, and the stored entity names every proposal that span absorbed.
 
-        The count is written by ``propose_spans`` and copied onto the entity by the node, so this is
-        the assertion that keeps sibling T6's merge-rate report reading production rather than a
-        fixture. Asserting the exact three is what makes it discriminating: a node that hard-coded
-        the field, or a fixture that supplied it, would read one.
+        The count is proposals rather than events: the three bursts and the envelope's ripple lobe in
+        the gap between the second and third each clear the gate, and one span covers all four. The
+        count is written by ``propose_spans`` and copied onto the entity by the node, so this is the
+        assertion that keeps sibling T6's merge-rate report reading production rather than a fixture.
+        Asserting the exact number is what makes it discriminating: a node that hard-coded the field,
+        or a fixture that supplied it, would read one.
         """
         _seed_admit(store, tmp_path, wav_writer, samples=_merging_bursts())
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
         assert len(spans) == 1
-        assert spans[0].attributes["merged_proposals"] == 3
+        assert spans[0].attributes["merged_proposals"] == 4
 
     def test_an_unmerged_span_reports_one(
         self,
@@ -849,3 +851,67 @@ class TestDisruptionsAreMeasuredOnTheOriginal:
         measurement = find_measurement(store, "disruptions_file")
         assert measurement is not None
         assert measurement.attributes["signal"] == "recording"
+
+
+def _burst_with_a_sharp_offset() -> np.ndarray:
+    """3 s of digital silence around one 0.5 s tone, whose offset makes the envelope undershoot."""
+    grid = np.arange(int(3.0 * SR)) / SR
+    samples = np.zeros_like(grid)
+    voiced = (grid >= 1.0) & (grid < 1.5)
+    samples[voiced] = 0.6 * np.sin(2 * np.pi * 440.0 * grid[voiced])
+    return samples.astype(np.float32)
+
+
+class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
+    """An undershooting filter has no dB value to write there, and a clamp is not a measurement."""
+
+    def test_the_written_envelope_carries_no_fabricated_floor(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """-240 dBFS in the sidecar is 20*log10(1e-12), which REPORT then drew as the panel's floor."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_burst_with_a_sharp_offset())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        loaded = np.load(tmp_path / "derivatives" / "energy_envelope.npz")
+        envelope = loaded["envelope_dbfs"]
+        assert not np.any(envelope <= -240.0)
+        assert np.isnan(envelope).any(), "digital silence and the offset undershoot are unmeasurable"
+        assert float(np.nanmax(envelope)) > -20.0
+
+    def test_the_written_floor_is_absent_where_nothing_was_measured(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A percentile over a window of nothing is not a floor; the sidecar must say so."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_burst_with_a_sharp_offset())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        loaded = np.load(tmp_path / "derivatives" / "energy_envelope.npz")
+        assert not np.any(loaded["floor_dbfs"] <= -240.0)
+
+    def test_no_span_extent_reaches_the_end_of_the_recording(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An unmeasurable hangover window used to keep the offset open to the last sample."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_burst_with_a_sharp_offset())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        for span in spans:
+            assert span.extent is not None
+            assert np.isfinite(span.extent).all()
+            assert span.extent[1] < 2.9, "the burst ends at 1.5 s; a span to 3.0 s is the NaN hangover"
