@@ -24,7 +24,8 @@ OUT="$EVALUATION_ROOT/runs/$SUB"
 CONFIG="$REPO_DIR/specs/20260817-triage-workflow-dag/runs/b2ai-v2/override.yaml"
 
 export PATH="$HOME/.local/bin:$PATH"
-export UV_PROJECT_ENVIRONMENT="$SCRATCH/senselab-triage-venv"
+# Keep the installed editable package aligned with the checked-out workflow code.
+export UV_PROJECT_ENVIRONMENT="$REPO_DIR/.venv"
 export UV_CACHE_DIR="$SCRATCH/uv-cache"
 module load ffmpeg/5.1.4 >/dev/null 2>&1 || true
 export LD_LIBRARY_PATH="$SCRATCH/miniforge/lib:${LD_LIBRARY_PATH:-}"
