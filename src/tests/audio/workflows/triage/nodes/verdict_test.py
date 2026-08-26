@@ -310,6 +310,22 @@ class TestTheBranchDecisionsAreRead:
         assert result.file_verdict.branches == {}
         assert result.file_verdict.triage is Triage.PASS
 
+    def test_a_routing_error_without_decisions_flags_instead_of_discarding(
+        self, make_verdict_store: Callable[..., ProvStore], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """An execution failure cannot be mistaken for ROUTING deliberately declining every branch."""
+        store = make_verdict_store(
+            node_verdicts=[("ADMIT", Outcome.PASS, None), ("TAXONOMY", Outcome.PASS, None)],
+            kinds={"airway": "absent", "speech": "absent", "voice": "absent"},
+            route=False,
+        )
+        result = verdict_module.verdict(store, None, config, run_dir=tmp_path, ran={"routing": RunState.ERRORED})
+        assert result.file_verdict.triage is Triage.FLAG
+        assert result.file_verdict.discard_ground is None
+        assert any(
+            "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
+        )
+
 
 class TestHintsAreReadThroughRoutingsMap:
     """The tag that forces a branch is the tag that can name a mismatch; one map, not two."""

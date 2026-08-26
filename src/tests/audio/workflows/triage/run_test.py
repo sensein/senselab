@@ -91,7 +91,8 @@ def _fakes(
         kinds: The classification the fake TAXONOMY writes as ``kind`` entities. None writes none,
             which is what a run where TAXONOMY never concluded leaves behind.
         pii: Whether the fake SPEECH writes a live ``pii`` entity, which is REDACT's whole gate.
-        routing_outcome: ``"raise"`` makes the routing entry raise instead of calling the real node.
+        routing_outcome: ``"raise"`` makes the routing entry raise; ``"none"`` makes it return no
+            result instead of calling the real node.
 
     Returns:
         The fakes, keyed by the attribute name they replace on the runner's module.
@@ -138,6 +139,8 @@ def _fakes(
         _record("routing")
         if routing_outcome == "raise":
             raise RuntimeError("routing could not run")
+        if routing_outcome == "none":
+            return None
         return real_routing(store, source, config, hint, run_dir=run_dir)
 
     def _airway(
@@ -406,14 +409,21 @@ class TestConditionalExecution:
         assert result.file_verdict.triage is Triage.DISCARD
         assert result.file_verdict.discard_ground == "acoustically_empty"
 
-    def test_a_raising_routing_runs_every_branch_and_is_recorded_errored(
-        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    @pytest.mark.parametrize("routing_outcome", ["raise", "none"])
+    def test_a_failed_routing_skips_dependent_branches_and_flags_the_file(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path, routing_outcome: str
     ) -> None:
-        """The degradation is designed, not a default: the fold sees a node that was asked and was silent."""
-        calls = graph(routing_outcome="raise")
+        """Branches do not run without ROUTING's decisions, and VERDICT records why they did not."""
+        calls = graph(routing_outcome=routing_outcome)
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert {"AIRWAY", "SPEECH", "VOICE"} <= set(calls)
+        assert tuple(calls) == ("ADMIT", "PREPROCESS", "TAXONOMY", "routing", "VERDICT")
         assert result.ran["routing"] is RunState.ERRORED
+        assert all(result.ran[branch] is RunState.SKIPPED for branch in ("AIRWAY", "SPEECH", "VOICE", "REDACT"))
+        assert result.file_verdict is not None
+        assert result.file_verdict.triage is Triage.FLAG
+        assert any(
+            "routing failed; branch execution was withheld" in reason.why for reason in result.file_verdict.reasons
+        )
 
 
 class TestNodeErrorsAreCaptured:
