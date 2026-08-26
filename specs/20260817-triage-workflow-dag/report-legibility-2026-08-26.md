@@ -91,3 +91,53 @@ count moved 3 → 4 for that reason, and stays exact so a hard-coded field would
 Nothing is owed as a threshold — `nan` is an absence, not a cut. One observation goes to
 `benchmarks/open.md`: the 40 Hz envelope's own ringing produces lobes between close events that clear
 the airway `k_db`, so `merged_proposals` counts filter ripple alongside events.
+
+## D-2 — the words lane rendered every word as a y-tick
+
+### What was drawn
+
+The words lane was a generic `segments` panel:
+
+```python
+panels += _lane("words", _segments((word.extent, _redacted_text(...)) for word in _words(store)))
+```
+
+A `segments` panel gives each **distinct label** a y position and prints the label set as y-tick
+labels. That is right for a lane of a few repeating labels — `Cough`, `unlabelled` — and wrong for a
+lane of many distinct texts: on the campaign page 40+ word texts became 40+ overlapping tick labels
+stacked on the left axis, while the bars themselves were unlabelled coloured dashes. The text was on
+the page but not beside the time it belonged to.
+
+### The idiom followed
+
+`audio_analysis/plot.py`'s `asr_words` row (≈ lines 745-800): one horizontal bar per token at its own
+time extent, the token's text drawn **on** the bar in a small font, `clip_on=True`, and a width below
+which the text is skipped so it cannot overflow into the neighbouring token.
+
+That idiom is now a panel type in the shared plotting module rather than a copy in triage:
+`{"type": "tokens", "tokens": [{"text", "start", "end", "row"?}], "name", "fontsize"?,
+"min_width_s"?}` in `plot_aligned_panels`. The y-axis carries a tick per **declared row** and none at
+all when no token declares one, so the axis names the lane and never the tokens. `row` is what lets
+the same panel type carry the analyze_audio shape — one stripe per (pass, model) — without triage
+needing it.
+
+`REPORT`'s job stays supplying data: `_token_lane(name, entries)` turns `(extent, text)` pairs into
+the panel and draws nothing itself.
+
+### The redaction discipline is unchanged
+
+The text drawn per word is exactly what `_redacted_text(marks, word, scanned=scanned)` returns, the
+same call the previous lane made: `[CATEGORY]` for a word the scan marked, `[unscanned]` for every
+word when no complete scan stands behind the transcript, the word itself otherwise. Two tests assert
+this **on the drawn artists** rather than on the panel dict: a marked word draws `[PERSON]` and never
+`alice`, and an absent scan draws `[unscanned]` on every bar. The existing withheld-transcript tests
+are untouched and green.
+
+### Owed
+
+`TOKEN_LABEL_MIN_WIDTH_S = 0.06` s is inherited from the analyze_audio row and is a **presentation
+constant with no derivation**: it is absolute while the axis is not, so on a long recording drawn at
+the same figure width every token clears it while none has room for its text, and on a short one the
+reverse. The scale-free form compares the bar's width in points against the rendered text's own width
+at the chosen point size, which needs the axes geometry at draw time. Registered in
+`benchmarks/open.md`. `TOKEN_LABEL_FONTSIZE = 5.0` pt is ordinary style and gates nothing.

@@ -295,6 +295,20 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"type": "segments", "segments": entries, "name": name}] if entries else []
 
 
+def _token_lane(name: str, entries: Iterable[tuple[tuple[float, float], str]]) -> list[dict[str, Any]]:
+    """One ``tokens`` panel — a bar per token with its text on the bar — or none at all.
+
+    Args:
+        name: The lane's name, drawn as the panel's y-label.
+        entries: ``(extent, text)`` pairs, one per token, in the order they are drawn.
+
+    Returns:
+        A one-element list holding the panel, or an empty list when there is no token.
+    """
+    tokens = [{"text": text, "start": float(extent[0]), "end": float(extent[1])} for extent, text in entries]
+    return [{"type": "tokens", "tokens": tokens, "name": name}] if tokens else []
+
+
 def _window_lane(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
     """One classifier's label lane: one segment per window that carried a label set.
 
@@ -429,9 +443,9 @@ def _panels(
             if span.extent is not None
         ),
     )
-    panels += _lane(
+    panels += _token_lane(
         "words",
-        _segments(
+        (
             (word.extent, _redacted_text(marks, word, scanned=scanned))
             for word in _words(store)
             if word.extent is not None
