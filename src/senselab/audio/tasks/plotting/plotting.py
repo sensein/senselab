@@ -2,7 +2,7 @@
 
 import math
 import os
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
 if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND", ""):
@@ -867,6 +867,7 @@ def plot_aligned_panels(
     panels: List[Dict[str, Any]],
     title: str = "",
     header_lines: Sequence[str] | None = None,
+    header: Mapping[str, str] | None = None,
     figsize: Tuple[float, float] | None = None,
     spectrogram_params: Dict[str, Any] | None = None,
     context: _Context = "auto",
@@ -916,6 +917,9 @@ def plot_aligned_panels(
         title: Overall figure title.
         header_lines: Optional short, non-time-aligned lines placed below ``title`` and above the
             panel stack. This is for a concise decision context; it does not become another lane.
+        header: Optional structured, typographic header. Its labels and values are placed above the
+            panel stack as context, primary decision, leading evidence, and report-only summary;
+            it takes precedence over ``header_lines``.
         figsize: Base ``(width, height)`` in inches **before** context scaling.
             Defaults to ``(14, sum_of_panel_heights)``.
         spectrogram_params: Parameters forwarded to torchaudio spectrogram transforms.
@@ -1163,12 +1167,21 @@ def plot_aligned_panels(
         bottom.tick_params(labelbottom=True)
         axes_list[0].set_xlim(0, duration)
 
-        header = [str(line) for line in (header_lines or ()) if str(line)]
+        plain_header = [str(line) for line in (header_lines or ()) if str(line)]
         if title:
-            fig.suptitle(title, y=0.995)
+            fig.suptitle(title, y=0.997, fontsize=11)
         if header:
-            fig.text(0.015, 0.972, "\n".join(header), va="top", ha="left", fontsize=8, family="sans-serif")
-        top = 0.90 if header else (0.96 if title else 1.0)
+            fig.text(0.015, 0.972, header["context_label"], va="top", ha="left", fontsize=8, weight="bold")
+            fig.text(0.015, 0.958, header["context"], va="top", ha="left", fontsize=9)
+            fig.text(0.015, 0.930, header["decision_label"], va="top", ha="left", fontsize=8, weight="bold")
+            fig.text(0.015, 0.912, header["decision"], va="top", ha="left", fontsize=15, weight="bold")
+            fig.text(0.015, 0.885, header["evidence_label"], va="top", ha="left", fontsize=8, weight="bold")
+            fig.text(0.015, 0.871, header["evidence"], va="top", ha="left", fontsize=10)
+            fig.text(0.015, 0.845, header["support_label"], va="top", ha="left", fontsize=8, weight="bold")
+            fig.text(0.015, 0.831, header["support"], va="top", ha="left", fontsize=8.5, linespacing=1.4)
+        elif plain_header:
+            fig.text(0.015, 0.972, "\n".join(plain_header), va="top", ha="left", fontsize=8, family="sans-serif")
+        top = 0.79 if header else (0.90 if plain_header else (0.96 if title else 1.0))
         fig.tight_layout(rect=(0, 0, 1, top))
         plt.show(block=False)
         return fig

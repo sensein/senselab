@@ -48,6 +48,7 @@ _SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
 _TOKEN_CYCLE_ROWS = ("1", "2", "3")
 _EVIDENCE_BRANCHES = (*BRANCHES, "REDACT")
+_WORDS_LANE_LABEL = "words (report-only context)"
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
 _RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
@@ -298,12 +299,15 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [{"type": "segments", "segments": entries, "name": name}] if entries else []
 
 
-def _token_lane(name: str, entries: Iterable[tuple[tuple[float, float], str]]) -> list[dict[str, Any]]:
+def _token_lane(
+    name: str, entries: Iterable[tuple[tuple[float, float], str]], *, report_lane: str | None = None
+) -> list[dict[str, Any]]:
     """One cycling-row ``tokens`` panel — a bar per token with inspectable timing — or none.
 
     Args:
         name: The lane's name, drawn as the panel's y-label.
         entries: ``(extent, text)`` pairs, one per token, in the order they are drawn.
+        report_lane: The semantic lane key when its reader-facing label carries a context qualifier.
 
     Returns:
         A one-element list holding the panel, or an empty list when there is no token.
@@ -317,7 +321,7 @@ def _token_lane(name: str, entries: Iterable[tuple[tuple[float, float], str]]) -
         }
         for index, (extent, text) in enumerate(entries)
     ]
-    return [{"type": "tokens", "tokens": tokens, "name": name}] if tokens else []
+    return [{"type": "tokens", "tokens": tokens, "name": name, "report_lane": report_lane}] if tokens else []
 
 
 def _window_lane(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
@@ -455,12 +459,13 @@ def _panels(
         ),
     )
     panels += _token_lane(
-        "words",
+        _WORDS_LANE_LABEL,
         (
             (word.extent, _redacted_text(marks, word, scanned=scanned))
             for word in _words(store)
             if word.extent is not None
         ),
+        report_lane="words",
     )
     panels += _lane(
         "airway",
@@ -487,7 +492,7 @@ def _panels(
         ),
     )
     panels.append({"type": "spectrogram"})
-    return panels, drawn | {str(panel["name"]) for panel in panels if "name" in panel}
+    return panels, drawn | {str(panel.get("report_lane") or panel["name"]) for panel in panels if "name" in panel}
 
 
 def _verdict_entities(store: ProvStore) -> dict[str, Entity]:
@@ -951,6 +956,13 @@ def _report_document(
                     "entity_id": word.id,
                     "text": _redacted_text(marks, word, scanned=scanned),
                     "timing": _timing(word),
+                    "timing_authority": "consensus",
+                    "confidence": word.attributes.get("confidence"),
+                    "existence_confidence": word.attributes.get("existence_confidence"),
+                    "temporal_confidence": word.attributes.get("temporal_confidence"),
+                    "coverage": word.attributes.get("coverage"),
+                    "recognizers": list(word.attributes.get("recognizers") or []),
+                    "timing_sources": word.attributes.get("timing_sources"),
                     "provenance": {"node": "PREPROCESS", "step": "consensus_transcript"},
                 }
                 for word in transcript_words
@@ -1035,8 +1047,8 @@ def _title(run_id: str, verdict: dict[str, Any]) -> str:
     return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
 
 
-def _header_lines(document: dict[str, Any]) -> list[str]:
-    """The short evidence-first header shown before the shared-axis detail."""
+def _header(document: dict[str, Any]) -> dict[str, str]:
+    """The evidence-first hierarchy shown before the shared-axis detail."""
     recording, decisions, screening, routing = (
         document["recording"],
         document["decisions"],
@@ -1046,7 +1058,9 @@ def _header_lines(document: dict[str, Any]) -> list[str]:
     task = recording.get("task_type") or "no task token declared"
     hints = recording.get("declared_hints") or {}
     hint_text = "; ".join(f"{kind}={value}" for kind, value in sorted(hints.items())) or "no declared hint"
-    evidence = decisions.get("flags") or decisions.get("reasons") or []
+    reasons = decisions.get("reasons") or []
+    redact_reasons = [reason for reason in reasons if reason.get("node") == "REDACT"]
+    evidence = decisions.get("flags") or redact_reasons or reasons[-1:]
     evidence_text = "; ".join(
         f"{reason.get('node')}: {reason.get('why')}" for reason in evidence[:2]
     ) or "no contributing reason"
@@ -1065,14 +1079,19 @@ def _header_lines(document: dict[str, Any]) -> list[str]:
             routing.items(), key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES)
         )
     ) or "no branch outcome"
-    return [
-        f"RECORDING  task: {task}  |  hint: {hint_text}",
-        f"FILE DECISION  triage: {_shown(decisions['file_triage'])}  |  release: {_shown(decisions['release'])}",
-        f"DECISION EVIDENCE  {evidence_text}",
-        f"SCREENED KINDS  {screened}",
-        f"ROUTING  {route}",
-        f"BRANCH OUTCOMES  {outcomes}",
-    ]
+    return {
+        "context_label": "TASK / CONTEXT (context only)",
+        "context": f"task: {task}  |  declared hints: {hint_text}",
+        "decision_label": "PRIMARY FILE DECISION",
+        "decision": (
+            f"TRIAGE: {_shown(decisions['file_triage']).upper()}  ·  "
+            f"RELEASE: {_shown(decisions['release']).upper()}"
+        ),
+        "evidence_label": "LEADING DECISION EVIDENCE",
+        "evidence": evidence_text,
+        "support_label": "SCREENING / ROUTING (report-only summary)",
+        "support": f"screened: {screened}\nrouting: {route}  |  outcomes: {outcomes}",
+    }
 
 
 def _wrapped(lines: Iterable[str]) -> list[str]:
@@ -1342,13 +1361,13 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     audio = _stream(store, run_dir)
     panels, drawn = ([], set[str]()) if audio is None else _panels(store, marks, run_dir, config)
     blocks = _blocks(document, drawn)
-    header = _header_lines(document)
+    header = _header(document)
 
     if fmt == "pdf":
         lanes = (
-            _text_figure([*header, "", _NO_AXIS], title)
+            _text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title)
             if audio is None
-            else plot_aligned_panels(audio, panels, title=title, header_lines=header)
+            else plot_aligned_panels(audio, panels, title=title, header=header)
         )
         with PdfPages(path) as pages:
             for figure in (lanes, _text_figure(blocks, title)):
@@ -1357,10 +1376,10 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
         return
 
     if audio is None:
-        figure = _text_figure([*header, "", *blocks], title)
+        figure = _text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS, "", *blocks], title)
     else:
         panels.append({"type": "text", "lines": blocks, "family": "sans-serif", "fontsize": 8})
-        figure = plot_aligned_panels(audio, panels, title=title, header_lines=header)
+        figure = plot_aligned_panels(audio, panels, title=title, header=header)
     figure.savefig(path, bbox_inches="tight")
     pyplot.close(figure)
 

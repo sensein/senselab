@@ -75,15 +75,15 @@ def _capture_titles(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return captured
 
 
-def _capture_headers(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+def _capture_headers(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     """Record the decision header supplied to the time-aligned page."""
     from senselab.audio.workflows.triage.nodes import report as report_module
 
-    captured: list[list[str]] = []
+    captured: list[dict[str, str]] = []
     real = report_module.plot_aligned_panels
 
     def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
-        captured.append([str(line) for line in kwargs.get("header_lines") or []])
+        captured.append({str(key): str(value) for key, value in (kwargs.get("header") or {}).items()})
         return real(audio, panels, **kwargs)
 
     monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
@@ -348,7 +348,20 @@ def _seed_report_store(  # noqa: C901 — one independent block per node, as the
     word_ids: list[str] = []
     for index, (text, category) in enumerate(every_word):
         extent = (0.2 * index, 0.2 * index + 0.15)
-        word_id = _entity("word", extent, {"text": text, "confidence": 0.9, "recognizers": [], "index": index})
+        word_id = _entity(
+            "word",
+            extent,
+            {
+                "text": text,
+                "confidence": 0.9,
+                "existence_confidence": 0.88,
+                "temporal_confidence": 0.86,
+                "coverage": 1.0,
+                "recognizers": ["crisperwhisper", "qwen"],
+                "timing_sources": ["native", "bundled_aligner"],
+                "index": index,
+            },
+        )
         word_ids.append(word_id)
         if category is not None:
             mark_id = _entity("assertion", extent, {"verb": "label", "label": "pii", "category": category})
@@ -548,6 +561,13 @@ class TestTheStructuredJsonCompanion:
         assert payload["routing"]["SPEECH"]["verdict"] is not None
         speech_items = payload["evidence"]["branches"]["SPEECH"]
         assert any(item["timing"] and item["provenance"]["node"] for item in speech_items)
+        token = payload["evidence"]["transcript_tokens"][0]
+        assert token["timing_authority"] == "consensus"
+        assert token["confidence"] == 0.9
+        assert token["existence_confidence"] == 0.88 and token["temporal_confidence"] == 0.86
+        assert token["coverage"] == 1.0
+        assert token["recognizers"] == ["crisperwhisper", "qwen"]
+        assert token["timing_sources"] == ["native", "bundled_aligner"]
         assert all("entity_id" in item for item in payload["evidence"]["transcript_tokens"])
 
 
@@ -648,10 +668,12 @@ class TestTheSummaryLayers:
         headers = _capture_headers(monkeypatch)
         _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
-        header = "\n".join(headers[0])
-        assert "FILE DECISION  triage:" in header and "release:" in header
-        assert "DECISION EVIDENCE" in header
-        assert "SCREENED KINDS" in header and "ROUTING" in header and "BRANCH OUTCOMES" in header
+        header = headers[0]
+        assert header["decision_label"] == "PRIMARY FILE DECISION"
+        assert "TRIAGE:" in header["decision"] and "RELEASE:" in header["decision"]
+        assert header["evidence_label"] == "LEADING DECISION EVIDENCE"
+        assert header["context_label"].endswith("(context only)")
+        assert header["support_label"].endswith("(report-only summary)")
 
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1368,15 +1390,16 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
     @staticmethod
     def _words_axis(figure: Any, panels: list[dict[str, Any]]) -> Any:  # noqa: ANN401
         """The axis the words lane was drawn on, found by the lane's position in the stack."""
-        index = [position for position, panel in enumerate(panels) if panel.get("name") == "words"]
+        index = [position for position, panel in enumerate(panels) if panel.get("report_lane") == "words"]
         assert index, "the words lane must be on the page"
         return figure.axes[index[0]]
 
     def test_the_words_lane_is_a_token_lane(self, store: ProvStore, tmp_path: Path) -> None:
         """A generic segments lane turns each word's text into a y-tick label."""
         _, panels = self._render(store, tmp_path, words=["hello", "world"])
-        lane = [panel for panel in panels if panel.get("name") == "words"]
+        lane = [panel for panel in panels if panel.get("report_lane") == "words"]
         assert [panel["type"] for panel in lane] == ["tokens"]
+        assert lane[0]["name"] == "words (report-only context)"
         assert [token["text"] for token in lane[0]["tokens"]] == ["hello", "world"]
 
     def test_every_word_is_drawn_on_the_bar_and_in_a_small_cycling_lane(self, store: ProvStore, tmp_path: Path) -> None:
