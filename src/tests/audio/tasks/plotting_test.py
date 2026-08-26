@@ -631,6 +631,19 @@ class TestTheStaggeredRowArithmetic:
         assert slots[0] == pytest.approx((0.2, 1.8))
         assert slots[2] == pytest.approx((2.2, 3.8))
 
+    def test_expanded_slots_use_the_full_gap_in_their_own_row(self) -> None:
+        """A report can show short transcript words without moving their timing bars."""
+        slots = _token_label_slots(
+            [1.0, 2.0, 3.0, 4.0],
+            [0.4] * 4,
+            [0, 1, 0, 1],
+            2,
+            (0.0, 5.0),
+            expand_to_row_neighbours=True,
+        )
+        assert slots[0] == pytest.approx((0.0, 2.0))
+        assert slots[2] == pytest.approx((2.0, 4.0))
+
     def test_a_slot_stops_at_the_midpoint_to_its_row_neighbour(self) -> None:
         """The bound that makes the pairwise overlap impossible rather than merely unobserved."""
         slots = _token_label_slots([1.0, 1.4, 2.0], [1.0, 1.0, 1.0], [0, 1, 0], 2, (0.0, 3.0))

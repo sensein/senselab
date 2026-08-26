@@ -1445,6 +1445,24 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         assert [text.get_text() for text in axis.texts] == ["hello", "world"]
         assert [tick.get_text() for tick in axis.get_yticklabels()] == ["1", "2"]
 
+    def test_short_timed_consensus_words_remain_visible(self, store: ProvStore, tmp_path: Path) -> None:
+        """The timing bar stays short, but its cycling row gives every normal word readable label space."""
+        figure, panels = self._render(
+            store,
+            tmp_path,
+            words=["one", "two", "three", "four"],
+            marked_words=[("five", "PERSON")],
+        )
+        axis = self._words_axis(figure, panels)
+        figure.canvas.draw()
+        assert {text.get_text() for text in axis.texts if text.get_visible()} == {
+            "one",
+            "two",
+            "three",
+            "four",
+            "[PERSON]",
+        }
+
     def test_forty_words_do_not_become_forty_ticks(self, store: ProvStore, tmp_path: Path) -> None:
         """The rendered failure: 40+ overlapping tick labels beside unlabelled coloured dashes."""
         figure, panels = self._render(store, tmp_path, words=[f"word{index}" for index in range(40)])
