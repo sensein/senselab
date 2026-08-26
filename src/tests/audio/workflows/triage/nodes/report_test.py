@@ -797,14 +797,14 @@ class TestTheAbsentLanesAreOnThePage:
             store,
             tmp_path,
             full=True,
-            absent={"phonation_spans": "ValueError", "alignment": "AttributeError", "silence": "LookupError"},
+            absent={"phonation_spans": "ValueError", "gammatone": "AttributeError", "silence": "LookupError"},
         )
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "ABSENT" in blocks
         assert "unfitted (a config key it reads is null): phonation_spans [ValueError]" in blocks
         assert "unavailable (a derivative it reads is absent): silence [LookupError]" in blocks
-        assert "errored: alignment [AttributeError]" in blocks
+        assert "errored: gammatone [AttributeError]" in blocks
 
     def test_the_recorded_message_is_rendered_beside_the_reading(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
