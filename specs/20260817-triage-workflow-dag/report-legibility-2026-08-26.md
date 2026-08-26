@@ -1,8 +1,9 @@
-# Two report-legibility defects, measured and fixed — 2026-08-26
+# Three report-legibility defects, measured and fixed — 2026-08-26
 
-Both were confirmed on a rendered campaign page (`Free-speech-(v2)-1`). Neither is cosmetic: one put
-a constant that is not a measurement on a measurement panel, the other put 40+ word texts where only
-a lane name belongs.
+Each was confirmed on a rendered campaign page (`Free-speech-(v2)-1` for D-1 and D-2,
+`17578482/Story-recall` for D-3). None is cosmetic: the first put a constant that is not a
+measurement on a measurement panel, the second put 40+ word texts where only a lane name belongs, and
+the third drew each of those texts wider than the bar it names.
 
 ## D-1 — the envelope's dB trace fabricated −240 dBFS
 
@@ -141,3 +142,110 @@ the same figure width every token clears it while none has room for its text, an
 reverse. The scale-free form compares the bar's width in points against the rendered text's own width
 at the chosen point size, which needs the axes geometry at draw time. Registered in
 `benchmarks/open.md`. `TOKEN_LABEL_FONTSIZE = 5.0` pt is ordinary style and gates nothing.
+
+*Settled by D-3 below, on the same day.*
+
+## D-3 — a label wider than its bar still overlapped its neighbour
+
+### What was still drawn
+
+D-2 moved the word's text onto its own bar and removed the tick pileup, but left the text's *width*
+unchecked. `clip_on=True` clips to the **axes**, not to the bar, and `TOKEN_LABEL_MIN_WIDTH_S` gated
+on the bar's extent **in seconds**, which says nothing about whether the text fits: at 14 in of
+figure a 0.30 s bar is 24 pt of page on a 12 s recording and 9.7 pt on a 30 s one, while the label it
+carries is the same width in points either way. On `17578482/Story-recall` the result at page scale
+and at 300 dpi zoom was adjacent labels running into overlapping glyphs.
+
+### Measured
+
+DejaVu Sans, the rendered width of a label against the bar it names, in points (72 pt = 1 in of page,
+so both are dpi-free):
+
+| label | at 5.0 pt | at 4.0 pt |
+| --- | --- | --- |
+| `was` | 9.8 | 7.8 |
+| `story` | 12.7 | 10.0 |
+| `[PERSON]` | 24.3 | 19.2 |
+| `grandfather` | 29.9 | 23.8 |
+| `[unscanned]` | 31.6 | 24.9 |
+
+| what carries it | bar in points |
+| --- | --- |
+| 0.30 s of a 12 s recording, 14 in figure | 24.2 |
+| 0.30 s of a 30 s recording, 14 in figure | **9.7** |
+| 0.30 s of a 60 s recording, 14 in figure | **4.8** |
+| 0.15 s of the seeded 6 s triage page, 14 in figure | 21.1 |
+
+`grandfather` needs 29.9 pt and had 9.7 pt of bar on a campaign-length page: three times its bar,
+which is the pileup, and no value of a seconds threshold separates that case from the same word on a
+12 s page where it also fails, or from `was` on the same page where it does not.
+
+### The policy implemented
+
+`_FittedTokenLabel` is a `matplotlib.text.Text` whose `draw` decides, against **the renderer that is
+about to draw it**, at what size it fits — shrink toward a floor, then drop:
+
+1. the bar's width in points, from the axes transform current for this draw, less
+   `TOKEN_LABEL_PADDING_PT = 1.0` pt shared between the two ends;
+2. the label's own rendered width in points at `TOKEN_LABEL_FONTSIZE = 5.0` pt. If it fits, it is
+   drawn at 5.0 pt;
+3. otherwise the size the width scales to, clamped up to `TOKEN_LABEL_FLOOR_FONTSIZE = 4.0` pt and
+   re-measured. If it fits there, it is drawn at that size;
+4. otherwise the label is not drawn at all. **The bar is always drawn.** A label is never truncated
+   and never drawn partially; a bar with no text says nothing rather than something wrong.
+
+The arithmetic is `_fitted_token_fontsize`, which takes the measurement as a callable and is unit
+tested against a renderer-free text whose width is proportional to its size. The floor is a
+**typographic** constant in points, not a temporal one in seconds: it is what the module is willing
+to call legible, and it scales with nothing, which is the point.
+
+What the 5.0 → 4.0 band buys, on a Story-recall-density lane (0.20-0.40 s bars, 3-11 character words):
+
+| lane | bars | labels drawn | of those, only because of the band |
+| --- | --- | --- | --- |
+| 12 s at 14 in | 34 | 32 | 0 |
+| 30 s at 14 in | 86 | 11 | 4 |
+| 30 s at 20 in | 86 | 59 | 7 |
+| 30 s at 40 in | 86 | 82 | 0 |
+
+The band matters exactly where the page is tight and is inert where it is not, which is why the
+policy is shrink-then-drop rather than drop: at 14 in a plain drop policy would place 7 labels where
+this places 11.
+
+### How the renderer is obtained
+
+Not by asking for one. `Text.draw(renderer)` is handed the renderer of whatever draw is in progress,
+so the same code serves the Agg canvas the cluster renders under (`MPLBACKEND=Agg`), `savefig` to
+PNG, and `PdfPages.savefig`'s own renderer for the two-page PDF, including the second draw
+`bbox_inches="tight"` performs. The decision is retaken from the full size on **every** draw, so a
+figure saved as a PNG and then into the PDF cannot compound its own shrink; two tests assert the
+decision is byte-identical across a second draw and across the two output paths.
+
+One trap cost a debugging pass and is worth recording: `Text.get_window_extent` returns `Bbox.unit()`
+— **one pixel wide** — for a `Text` whose visibility is off. Measuring a label that the previous
+draw had hidden therefore reported that it fitted, and the lane oscillated between hidden and shown
+on alternate draws. The measurement makes the label visible before asking its width.
+
+### The redaction discipline under the fit
+
+The fit decides how much of the lane is legible; it never decides what may be legible. The text
+handed to the panel is still exactly `_redacted_text(...)`, so a marked word can only ever draw
+`[PERSON]` and an unscanned transcript can only ever draw `[unscanned]`. The tests now assert the
+drawn set is a **subset** of what is permitted rather than equal to it, which is the invariant that
+survives a page of any width.
+
+It follows that a placeholder can be dropped like any other label, and on the seeded page it is:
+`[unscanned]` needs 24.9 pt at the floor and the page's 0.15 s bar is 21.1 pt. Nothing leaks — a
+bare bar is not a transcript — and the warning still stands twice over, in the summary blocks
+(`words_n` / `[unscanned]`) and in the JSON, both covered by their own tests. Special-casing the
+placeholder's size by its text would put a hidden decision in the drawing code, so it is not done.
+
+### Owed
+
+`TOKEN_LABEL_MIN_WIDTH_S` is deleted, along with the panel's `min_width_s` key; the panel takes
+`floor_fontsize` instead. What the register still carries after this is not a threshold but a
+**density**: at campaign length the lane is honest and nearly wordless — 11 labels over 86 bars for
+30 s at 14 in, where a 0.30 s bar is 9.7 pt and the shortest word measured is 7.8 pt at the floor.
+At 60 s the same bar is 4.8 pt and nothing fits. Reading a word off the lane at that length needs
+this change does not attempt: staggered rows (the panel already carries `row`), a detail lane over a
+window, or a page wider than the recording is long. Registered in `benchmarks/open.md`.
