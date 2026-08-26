@@ -33,6 +33,17 @@ engine.
 - [x] Produce two local demonstration reports, render their PDFs to PNG, visually inspect them, and
   commit only a stable manifest rather than generated report content.
 
+## Follow-up visual and transcript refinement
+
+- [x] Use the available top-page space for a clear typographic sequence: task/context, primary
+  triage and release decision, leading decision evidence, then compact screening/routing context.
+  Context and report-only summaries are labelled rather than presented as independent evidence.
+- [x] Label the consensus-word lane as report-only context. Keep its consensus timing authoritative
+  in JSON and retain each available token's confidence, existence and temporal confidence,
+  coverage, recognizers, and timing sources for analytical audit.
+- [x] Regenerate and visually inspect page 1 for both local demonstrations; assert the refined PDF
+  header and JSON transcript fields in focused tests.
+
 ## Non-goals
 
 No airway, routing, taxonomy, speech, voice, phonation or redaction decision logic changes. No
