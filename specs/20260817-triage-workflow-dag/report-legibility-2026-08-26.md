@@ -1,9 +1,10 @@
-# Three report-legibility defects, measured and fixed — 2026-08-26
+# Four report-legibility defects, measured and fixed — 2026-08-26
 
 Each was confirmed on a rendered campaign page (`Free-speech-(v2)-1` for D-1 and D-2,
-`17578482/Story-recall` for D-3). None is cosmetic: the first put a constant that is not a
-measurement on a measurement panel, the second put 40+ word texts where only a lane name belongs, and
-the third drew each of those texts wider than the bar it names.
+`17578482/Story-recall` for D-3 and D-4). None is cosmetic: the first put a constant that is not a
+measurement on a measurement panel, the second put 40+ word texts where only a lane name belongs, the
+third drew each of those texts wider than the bar it names, and the fourth left the lane honest and
+nearly wordless at every length the campaign actually records.
 
 ## D-1 — the envelope's dB trace fabricated −240 dBFS
 
@@ -248,4 +249,179 @@ placeholder's size by its text would put a hidden decision in the drawing code, 
 30 s at 14 in, where a 0.30 s bar is 9.7 pt and the shortest word measured is 7.8 pt at the floor.
 At 60 s the same bar is 4.8 pt and nothing fits. Reading a word off the lane at that length needs
 this change does not attempt: staggered rows (the panel already carries `row`), a detail lane over a
-window, or a page wider than the recording is long. Registered in `benchmarks/open.md`.
+window, or a page wider than the recording is long.
+
+*Settled by D-4 below, on the same day and the same fixture: staggered rows.*
+
+## D-4 — the honest lane was nearly wordless, and staggered rows fill it
+
+*The density D-3 left owed, settled on the same fixture.*
+
+### What was still drawn
+
+D-3's fit is per label against its own bar, and the bar is what campaign length shrinks. On the
+Story-recall lane at 14 in of figure the base commit draws:
+
+| lane | bars | labels drawn |
+| --- | --- | --- |
+| 12 s | 35 | 33 |
+| 30 s | 88 | **13** |
+| 60 s | 168 | **0** |
+| 30 s at 8 in | 88 | **0** |
+
+Campaign recordings are 10-60 s and the report page is ~14 in wide, so on most real pages the
+reviewer met a row of bare bars. Nothing about that is a threshold: `grandfather` is 23.76 pt at the
+4.0 pt floor and a 0.30 s bar at 30 s is 9.67 pt, so no per-label rule can place it.
+
+### The mechanism
+
+The lane's undeclared tokens are spread over `R` rows. A token's bar keeps its time extent; its row
+sets its height and its vertical place. Token `i` goes in row `i mod R`, counted from the **top** of
+the block, so consecutive tokens step downwards and wrap.
+
+A label is then measured not against its bar but against the **slot its row leaves it**
+(`_token_label_slots`), the widest extent centred on the bar that reaches no further than
+
+1. the midpoint to the nearest token **sharing its row**,
+2. the edge of the window, and
+3. `R` times its own bar.
+
+Bound 1 is what makes the pairwise overlap impossible rather than merely unobserved: two labels in
+one row occupy intervals separated by the midpoint between them, and the padding keeps that
+separation strict. Bound 3 is what makes `R = 1` **byte-identical to D-3** — at one row the slot is
+the bar, so every lane that did not need a row is drawn exactly as before, and every D-3 test still
+measures what it measured.
+
+### How R is chosen — measured, not assumed
+
+`R` is the fewest rows at which the lane's own labels lie side by side:
+
+```
+R = min(ceiling, ceil( Σ (width_i at the floor + padding) / row width ))
+```
+
+Every quantity is measured against the renderer of the draw in progress, in points. There is no
+target fraction and no tuned constant: the numerator is the ink the lane demands and the denominator
+is the width one row supplies.
+
+The **ceiling** is typographic, from the row's height rather than its width.
+`TOKEN_ROW_PITCH_EM = 2.0` sets the least pitch a row is given, in multiples of the label's point
+size, and `_staggered_row_ceiling` divides the block's height by it. It is derived from two measured
+quantities, not from taste: a DejaVu Sans label's rendered box is at most **0.972 × its point size**
+tall (`[unscanned]`, `[PERSON]`; plain lowercase is 0.864), and a bar fills
+`TOKEN_BAR_HEIGHT_FRACTION = 0.7` of its pitch. At a 2.0 em pitch and a 5.0 pt font that is a 10.0 pt
+pitch, a 7.0 pt bar around a ≤4.86 pt label — 44% headroom inside the bar — and 5.14 pt of clear
+space between adjacent rows' label boxes, more than a box is tall. It is what makes the
+cross-row half of the overlap invariant hold by construction rather than by luck.
+
+### What it draws
+
+Story-recall density (0.20-0.40 s bars, 3-11 character words), 14 in of figure, against the base
+commit on the same fixture:
+
+| lane | bars | before | after | rows | what is still dropped |
+| --- | --- | --- | --- | --- | --- |
+| 12 s | 35 | 33 | **33** | **1** | `grandfather` ×2 |
+| 30 s | 88 | 13 | **84** | **2** | `grandfather` ×4 |
+| 60 s | 168 | 0 | **144** | **3** | `grandfather`, `mended`, `summer`, ×8 each |
+| 30 s at 8 in | 88 | 0 | **46** | 2 | the long half of the vocabulary |
+| 30 s at 20 in | 88 | 55 | 72 | 1 | see *Owed* |
+| 30 s at 64 in | 88 | 84 | **88** | **1** | — |
+
+Twelve seconds is unchanged, which is the point of the demand rule: a lane whose labels already lie
+side by side spends no row. The residual at every length is the same shape — the longest words on
+the shortest bars — and never a placeholder leaking or a bar going undrawn.
+
+### Round-robin against greedy first-fit, measured
+
+Greedy first-fit places each label in the lowest row whose last-placed label leaves room for it.
+Counting the labels each assignment permits at every row count, on the same lanes:
+
+| lane | R | round-robin | greedy first-fit |
+| --- | --- | --- | --- |
+| 12 s at 14 in, 35 bars | 1 | 33 | 33 |
+| 30 s at 14 in, 88 bars | 2 | **84** | 71 |
+| 30 s at 14 in, 88 bars | 4 | **88** | 75 |
+| 60 s at 14 in, 168 bars | 3 | **144** | 114 |
+| 60 s at 14 in, 168 bars | 8 | **168** | 130 |
+| 30 s at 8 in, 88 bars | 4 | **84** | 63 |
+
+Round-robin wins at every row count and every geometry, and greedy saturates well below it: its
+left-only lookahead packs the low rows and starves the high ones, so a run of long words leaves the
+last rows empty while the first rows overflow. Round-robin also carries the reading invariant greedy
+cannot state, so it is what ships. No tie to break.
+
+### Reading order
+
+The invariant a reviewer relies on is not the rows at all: **the bars are at their true time extents
+and are never reordered, so the word sequence is the left-to-right order of the bars.** That is the
+x-axis every other panel on the page shares. The rows only wrap it, exactly as a line break wraps
+prose, and `i mod R` makes the wrap a constant descending staircase rather than an arrangement the
+reader has to infer.
+
+Two things keep the rows from reading as a false grouping — as speaker lanes, or as per-model
+stripes, which is what the `row` key really means:
+
+- the staggered rows carry **no y-tick**. Only a declared `row` is ever named on the axis;
+- every staggered bar is **one colour**. The lane's colormap is indexed by *block*, not by row, so a
+  token that declares no row is the same colour wherever it is placed.
+
+A connector line between consecutive bars was considered and rejected: at 168 tokens it is 167
+strokes crossing every row, which costs more legibility than the staircase buys.
+
+### The declared `row` keeps precedence
+
+A token that names a `row` is drawn in it and is never restaggered. The lane is divided into one
+block per declared row plus one block for the tokens that declare none; only that last block is
+subdivided. The block boundaries and the y-tick positions do not depend on `R`, so a declared row
+sits in the same place whatever the undeclared block does with its own height, and the ticks are
+never rewritten mid-draw. Both halves are tested, including the mixed case where 80 declared tokens
+share a page with 88 undeclared ones.
+
+### A second, separable gain: the shrink policy now matches its own docstring
+
+`_fitted_token_fontsize` claimed to return *"the largest point size in `[floor, full]` at which a
+label fits"* but returned `None` whenever the size it interpolated from the full-size width missed —
+which happens because glyph widths are not exactly linear in point size (`a` is 3.06 pt at 5.0 and
+2.52 pt at 4.0, where linearity would predict 2.448). One re-measurement at the floor before giving
+up closes it. Measured in isolation, at `R = 1` where staggering does nothing:
+
+| lane | before | after |
+| --- | --- | --- |
+| 30 s at 20 in | 55/88 | **72/88** |
+| 30 s at 64 in | 84/88 | **88/88** |
+
+It is a fit-policy correction, not a row one, and it is what makes the row count's own arithmetic
+sound: `R` is chosen by counting labels that fit at the floor, which is now exactly the set that is
+drawn.
+
+### Owed
+
+**A wider page can draw fewer labels than a narrower one.** At 30 s the lane draws 84 labels on a
+14 in page (2 rows) and 72 on a 20 in page (1 row), because at 20 in the aggregate demand fits one
+row while 16 individual labels still overflow their own bars. The rule never spends a row the lane
+does not need in aggregate, and the shortfall is a distribution effect — long words on short bars —
+that no aggregate measure sees.
+
+The obvious alternative is a per-token quantile: `R` = the rows the *q*-th percentile token needs,
+`ceil(quantile_q((width_i + padding) / bar_i))`. Measured on the lanes the aggregate rule was chosen
+against, it does not earn its knob:
+
+| lane | aggregate | q = 0.75 | q = 0.80 | q = 0.90 |
+| --- | --- | --- | --- | --- |
+| 12 s at 14 in | 1 | 1 | 1 | 1 |
+| 30 s at 14 in | 2 | 2 | 2 | 2 |
+| 60 s at 14 in | 3 | 3 | 3 | 4 |
+| **30 s at 20 in** (the inversion) | 1 | 1 | 1 | **2** |
+| sparse, 29 words over 60 s at 20 in | **1** | 2 | 2 | 4 |
+| two bars over 1 s at 14 in | **1** | 4 | 5 | 5 |
+
+Only `q = 0.90` fixes the inversion, and it is the value that also spends four rows on a lane of 29
+uncrowded words and five on a lane of two bars. At the values that behave on the sparse cases the
+quantile rule agrees with the aggregate rule everywhere and fixes nothing. So the knob buys a
+regression at one setting and nothing at the others; the inversion is registered rather than traded
+for it.
+
+**The longest words at 60 s are still dropped.** `grandfather` needs 24.76 pt at the floor and three
+rows of a 0.30 s bar give 14.5 pt. Raising `R` to 5 would place them, but the lane's labels lie side
+by side at 3, so the demand rule stops there. Same root as the above.

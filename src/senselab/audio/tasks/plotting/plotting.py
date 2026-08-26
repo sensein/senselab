@@ -1,7 +1,8 @@
 """This module contains functions for plotting audio-related data."""
 
+import math
 import os
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
 if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND", ""):
@@ -13,9 +14,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from matplotlib import rc_context
+from matplotlib.artist import Artist
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
 from matplotlib.figure import Figure
+from matplotlib.patches import Rectangle
 from matplotlib.text import Text
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
@@ -33,6 +36,8 @@ MIN_FIGURE_HEIGHT_IN = 4.0  # the floor plot_aligned_panels puts under a short p
 TOKEN_LABEL_FONTSIZE = 5.0  # the default point size of the text a tokens panel draws on a bar
 TOKEN_LABEL_FLOOR_FONTSIZE = 4.0  # the smallest point size a token label is shrunk to before it is dropped
 TOKEN_LABEL_PADDING_PT = 1.0  # points of the bar kept clear of its label, shared by the two ends
+TOKEN_ROW_PITCH_EM = 2.0  # the least pitch a staggered row is given, in multiples of the label's point size
+TOKEN_BAR_HEIGHT_FRACTION = 0.7  # the share of its row's pitch a token's bar fills
 
 
 def _fitted_token_fontsize(
@@ -60,11 +65,97 @@ def _fitted_token_fontsize(
     if width <= 0.0:
         return None
     candidate = min(full_fontsize, max(full_fontsize * available_pt / width, floor_fontsize))
-    return candidate if measure(candidate) <= available_pt else None
+    if measure(candidate) <= available_pt:
+        return candidate
+    if candidate > floor_fontsize and measure(floor_fontsize) <= available_pt:
+        return floor_fontsize
+    return None
+
+
+def _staggered_row_ceiling(block_height_pt: float, fontsize: float) -> int:
+    """The most rows a lane of this height can hold at this point size.
+
+    Args:
+        block_height_pt: The height available to the staggered block, in points.
+        fontsize: The point size the block's labels are drawn at when they fit.
+
+    Returns:
+        The row count above which a row is shorter than ``TOKEN_ROW_PITCH_EM`` of its own font.
+    """
+    pitch = TOKEN_ROW_PITCH_EM * fontsize
+    return max(1, int(block_height_pt // pitch)) if pitch > 0.0 else 1
+
+
+def _staggered_row_count(
+    label_widths_pt: Sequence[float],
+    available_pt: float,
+    padding_pt: float,
+    max_rows: int,
+) -> int:
+    """The number of rows a lane's labels take to lie side by side, capped by legibility.
+
+    Args:
+        label_widths_pt: Each label's rendered width in points at the size below which it is dropped.
+        available_pt: The width of one row, in points.
+        padding_pt: The points kept clear beside each label.
+        max_rows: The ceiling from ``_staggered_row_ceiling``.
+
+    Returns:
+        A row count of at least 1 and at most ``max_rows``.
+    """
+    if not label_widths_pt or available_pt <= 0.0 or max_rows <= 1:
+        return 1
+    demand = sum(float(width) + padding_pt for width in label_widths_pt)
+    return int(min(max_rows, max(1, math.ceil(demand / available_pt))))
+
+
+def _token_label_slots(
+    centres: Sequence[float],
+    half_spans: Sequence[float],
+    rows: Sequence[int],
+    row_count: int,
+    limits: Tuple[float, float],
+) -> List[Tuple[float, float]]:
+    """The extent on the time axis each label is measured against, one per token.
+
+    Each slot is centred on the token's bar and reaches no further than the midpoint to the nearest
+    token sharing its row, the edge of the window, or ``row_count`` times the token's own bar.
+
+    Args:
+        centres: Each token's bar centre, on the time axis.
+        half_spans: Half of each token's bar width, on the time axis.
+        rows: Each token's row.
+        row_count: The number of rows the tokens are spread over.
+        limits: The window's ``(lower, upper)`` extent on the time axis.
+
+    Returns:
+        One ``(lower, upper)`` extent per token, in the order the tokens were given.
+    """
+    lower, upper = limits
+    order = sorted(range(len(centres)), key=lambda index: centres[index])
+    left = [lower] * len(centres)
+    right = [upper] * len(centres)
+    seen: Dict[int, int] = {}
+    for index in order:
+        previous = seen.get(rows[index])
+        if previous is not None:
+            left[index] = (centres[index] + centres[previous]) / 2.0
+        seen[rows[index]] = index
+    seen.clear()
+    for index in reversed(order):
+        following = seen.get(rows[index])
+        if following is not None:
+            right[index] = (centres[index] + centres[following]) / 2.0
+        seen[rows[index]] = index
+    slots: List[Tuple[float, float]] = []
+    for index, centre in enumerate(centres):
+        reach = max(0.0, min(centre - left[index], right[index] - centre, row_count * half_spans[index]))
+        slots.append((centre - reach, centre + reach))
+    return slots
 
 
 class _FittedTokenLabel(Text):
-    """A token's text, drawn only at a point size at which it fits the bar it names.
+    """A token's text, drawn only at a point size at which it fits the span it is given.
 
     The decision is taken against the renderer that is about to draw it, so it holds for a figure
     saved at any width or dpi, and is retaken from ``full_fontsize`` on every draw.
@@ -76,38 +167,46 @@ class _FittedTokenLabel(Text):
         y: float,
         text: str,
         *,
-        bar: Tuple[float, float],
+        span: Tuple[float, float],
         full_fontsize: float,
         floor_fontsize: float = TOKEN_LABEL_FLOOR_FONTSIZE,
         **kwargs: Any,  # noqa: ANN401
     ) -> None:
-        """Place ``text`` at ``(x, y)`` as the label of the bar spanning ``bar`` on the time axis.
+        """Place ``text`` at ``(x, y)``, measured against ``span`` on the time axis.
 
         Args:
             x: The label's x position, in data coordinates.
             y: The label's y position, in data coordinates.
             text: The label's text.
-            bar: The bar's ``(start, end)`` extent on the time axis.
+            span: The ``(lower, upper)`` extent on the time axis the label must fit inside.
             full_fontsize: The point size the label is drawn at when it fits.
             floor_fontsize: The point size below which the label is dropped rather than shrunk.
             **kwargs: Forwarded to ``matplotlib.text.Text``.
         """
         super().__init__(x, y, text, **kwargs)
-        self._bar = bar
+        self._span = span
         self._full_fontsize = full_fontsize
         self._floor_fontsize = floor_fontsize
+
+    def set_span(self, span: Tuple[float, float]) -> None:
+        """Set the extent on the time axis the label is measured against.
+
+        Args:
+            span: The ``(lower, upper)`` extent, in data coordinates.
+        """
+        self._span = span
 
     def _points_per_pixel(self) -> float:
         """Display pixels are dpi-dependent; the fit is stated in points, which are not."""
         figure = self.get_figure()
         return 72.0 / float(figure.dpi) if figure is not None else 1.0
 
-    def _bar_width_pt(self) -> float:
-        """The bar's width in points, under the axes transform that is current for this draw."""
+    def _span_width_pt(self) -> float:
+        """The span's width in points, under the axes transform that is current for this draw."""
         axes = self.axes
         if axes is None:
             return 0.0
-        (x0, _), (x1, _) = axes.transData.transform([(self._bar[0], 0.0), (self._bar[1], 0.0)])
+        (x0, _), (x1, _) = axes.transData.transform([(self._span[0], 0.0), (self._span[1], 0.0)])
         return abs(float(x1) - float(x0)) * self._points_per_pixel()
 
     def _text_width_pt(self, renderer: RendererBase, fontsize: float) -> float:
@@ -125,7 +224,7 @@ class _FittedTokenLabel(Text):
         return float(self.get_window_extent(renderer).width) * self._points_per_pixel()
 
     def draw(self, renderer: RendererBase) -> None:
-        """Draw the label at a size at which it fits its bar, or not at all.
+        """Draw the label at a size at which it fits its span, or not at all.
 
         Args:
             renderer: The renderer this draw is going through.
@@ -134,7 +233,7 @@ class _FittedTokenLabel(Text):
         try:
             self.set_visible(True)
             self.set_fontsize(self._full_fontsize)
-            available = self._bar_width_pt() - TOKEN_LABEL_PADDING_PT
+            available = self._span_width_pt() - TOKEN_LABEL_PADDING_PT
             fitted = _fitted_token_fontsize(
                 lambda fontsize: self._text_width_pt(renderer, fontsize),
                 available,
@@ -147,6 +246,121 @@ class _FittedTokenLabel(Text):
             self.stale_callback = callback
             self.stale = False
         super().draw(renderer)
+
+
+class _TokenPlacement(NamedTuple):
+    """One token's bar, its label if it has one, and where on the time axis it sits."""
+
+    block: int
+    bar: Rectangle
+    label: Optional[_FittedTokenLabel]
+    centre: float
+    half_span: float
+
+
+class _StaggeredTokenLane(Artist):
+    """The vertical layout of a tokens panel, decided against the renderer that is about to draw it.
+
+    Draws nothing itself. It sits below every bar and label in the lane so that its ``draw`` runs
+    first, sets each bar's row and each label's slot, and leaves the drawing to them.
+    """
+
+    zorder = -1.0
+
+    def __init__(
+        self,
+        placements: List[_TokenPlacement],
+        blocks: int,
+        staggered_block: Optional[int],
+        fontsize: float,
+        floor_fontsize: float,
+    ) -> None:
+        """Lay ``placements`` out over ``blocks`` stacked blocks of the lane.
+
+        Args:
+            placements: One entry per token, in the order the tokens were given.
+            blocks: The number of blocks stacked in the lane.
+            staggered_block: The block holding the tokens that declared no row, if there is one.
+            fontsize: The point size the labels are drawn at when they fit.
+            floor_fontsize: The point size below which a label is dropped rather than shrunk.
+        """
+        super().__init__()
+        self._placements = placements
+        self._blocks = max(blocks, 1)
+        self._staggered_block = staggered_block
+        self._fontsize = fontsize
+        self._floor_fontsize = floor_fontsize
+
+    def _row_count(self, renderer: RendererBase, axes: Axes, points_per_pixel: float) -> int:
+        """The number of rows the block of undeclared tokens is spread over for this draw.
+
+        Args:
+            renderer: The renderer to measure the labels against.
+            axes: The axes the lane is drawn on.
+            points_per_pixel: The display-to-point conversion for this figure.
+
+        Returns:
+            A row count of at least 1.
+        """
+        if self._staggered_block is None:
+            return 1
+        lower, upper = axes.get_xlim()
+        (x0, _), (x1, _) = axes.transData.transform([(lower, 0.0), (upper, 0.0)])
+        width_pt = abs(float(x1) - float(x0)) * points_per_pixel
+        block_pt = float(axes.get_window_extent(renderer).height) * points_per_pixel / float(self._blocks)
+        widths = [
+            placement.label._text_width_pt(renderer, self._floor_fontsize)
+            for placement in self._placements
+            if placement.block == self._staggered_block and placement.label is not None
+        ]
+        ceiling = _staggered_row_ceiling(block_pt, self._fontsize)
+        return _staggered_row_count(widths, width_pt, TOKEN_LABEL_PADDING_PT, ceiling)
+
+    def draw(self, renderer: RendererBase) -> None:
+        """Place every bar in its row and hand every label the slot it is measured against.
+
+        Args:
+            renderer: The renderer this draw is going through.
+        """
+        axes = self.axes
+        if axes is None or not self._placements:
+            self.stale = False
+            return
+        figure = self.get_figure()
+        points_per_pixel = 72.0 / float(figure.dpi) if figure is not None else 1.0
+        limits = axes.get_xlim()
+        rows = self._row_count(renderer, cast(Axes, axes), points_per_pixel)
+        touched: List[Artist] = [placement.bar for placement in self._placements]
+        touched += [placement.label for placement in self._placements if placement.label is not None]
+        callbacks = [artist.stale_callback for artist in touched]
+        for artist in touched:
+            artist.stale_callback = None
+        try:
+            for block in range(self._blocks):
+                members = [placement for placement in self._placements if placement.block == block]
+                count = rows if block == self._staggered_block else 1
+                assignment = [index % count for index in range(len(members))]
+                slots = _token_label_slots(
+                    [placement.centre for placement in members],
+                    [placement.half_span for placement in members],
+                    assignment,
+                    count,
+                    limits,
+                )
+                pitch = 1.0 / float(self._blocks * count)
+                top = float(block + 1) / float(self._blocks)
+                for placement, row, slot in zip(members, assignment, slots):
+                    centre = top - (row + 0.5) * pitch
+                    height = TOKEN_BAR_HEIGHT_FRACTION * pitch
+                    placement.bar.set_y(centre - height / 2.0)
+                    placement.bar.set_height(height)
+                    if placement.label is not None:
+                        placement.label.set_y(centre)
+                        placement.label.set_span(slot)
+        finally:
+            for artist, callback in zip(touched, callbacks):
+                artist.stale_callback = callback
+            self.stale = False
 
 
 def _detect_screen_resolution() -> Tuple[int, int]:
@@ -679,9 +893,14 @@ def plot_aligned_panels(
       "floor_fontsize": float (optional)}`` -- one bar per timed token with the token's **text drawn
       on the bar**, for a lane of many distinct texts: words, phones, a recognizer's tokens. The
       y-axis carries a tick per declared ``row`` and none at all when no token declares one, so 40
-      words are 40 labelled bars rather than 40 y-ticks. Each label is measured against its own bar
-      at draw time, in points: one that does not fit at ``fontsize`` is shrunk towards
-      ``floor_fontsize`` and dropped if it does not fit there either. The bar is never dropped.
+      words are 40 labelled bars rather than 40 y-ticks. A token that declares a ``row`` is drawn in
+      it. Those that declare none share a block of the lane which is spread over as many unnamed
+      rows as their own rendered widths take to lie side by side, decided at draw time; token ``i``
+      of that block goes in row ``i mod R``, counted from the top of the block. Each label is
+      measured at draw time, in points, against the slot its row leaves it — its own bar at one row,
+      up to ``R`` times its bar when the row's neighbours leave the space — and one that does not fit
+      at ``fontsize`` is shrunk towards ``floor_fontsize`` and dropped if it does not fit there
+      either. The bar is never dropped.
     - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
       spectrogram with scatter overlays (each overlay is a dict with keys
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
@@ -836,24 +1055,32 @@ def plot_aligned_panels(
 
             elif ptype == "tokens":
                 tokens = panel.get("tokens", [])
-                rows = list(dict.fromkeys(str(token.get("row") or "") for token in tokens))
-                y_of = {row: index for index, row in enumerate(rows)}
-                named_rows = [row for row in rows if row]
+                named_rows = list(dict.fromkeys(str(token["row"]) for token in tokens if token.get("row")))
+                free_rows = [""] if any(not token.get("row") for token in tokens) else []
+                blocks = named_rows + free_rows
+                block_of = {row: index for index, row in enumerate(blocks)}
                 fontsize = float(panel.get("fontsize", TOKEN_LABEL_FONTSIZE))
                 floor = float(panel.get("floor_fontsize", TOKEN_LABEL_FLOOR_FONTSIZE))
-                cmap = plt.get_cmap("tab20", max(len(rows), 1))
+                count = max(len(blocks), 1)
+                cmap = plt.get_cmap("tab20", count)
+                placements: List[_TokenPlacement] = []
                 for token in tokens:
-                    y = y_of[str(token.get("row") or "")]
+                    block = block_of[str(token.get("row") or "")]
                     start, end = float(token["start"]), float(token["end"])
                     width = end - start
-                    ax.barh(y + 0.5, width, left=start, height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
+                    height = TOKEN_BAR_HEIGHT_FRACTION / float(count)
+                    centre = (block + 0.5) / float(count)
+                    bars = ax.barh(
+                        centre, width, left=start, height=height, color=cmap(block), alpha=0.85, edgecolor="none"
+                    )
                     text = str(token.get("text") or "")
+                    label = None
                     if text:
                         label = _FittedTokenLabel(
                             start + width / 2.0,
-                            y + 0.5,
+                            centre,
                             text,
-                            bar=(start, end),
+                            span=(start, end),
                             full_fontsize=fontsize,
                             floor_fontsize=floor,
                             ha="center",
@@ -865,10 +1092,15 @@ def plot_aligned_panels(
                         )
                         label.set_clip_path(ax.patch)
                         ax.add_artist(label)
-                ax.set_ylim(0.0, float(max(len(rows), 1)))
-                ax.set_yticks([index + 0.5 for index in range(len(rows))] if named_rows else [])
+                    placements.append(_TokenPlacement(block, bars[0], label, start + width / 2.0, width / 2.0))
+                if placements:
+                    ax.add_artist(
+                        _StaggeredTokenLane(placements, count, block_of[""] if free_rows else None, fontsize, floor)
+                    )
+                ax.set_ylim(0.0, 1.0)
+                ax.set_yticks([(index + 0.5) / float(count) for index in range(len(blocks))] if named_rows else [])
                 if named_rows:
-                    ax.set_yticklabels(rows, fontsize=7)
+                    ax.set_yticklabels(blocks, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Tokens")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
 

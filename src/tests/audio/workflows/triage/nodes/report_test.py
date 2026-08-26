@@ -1371,7 +1371,9 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
 
     def test_no_two_words_collide_on_the_rendered_page(self, store: ProvStore, tmp_path: Path) -> None:
         """The defect as the reader met it: adjacent labels ran into one another's glyphs."""
-        prose = "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
+        prose = (
+            "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
+        )
         figure, panels = self._render(store, tmp_path, words=[prose[index % len(prose)] for index in range(40)])
         axis = self._words_axis(figure, panels)
         renderer = figure.canvas.get_renderer()
@@ -1381,3 +1383,27 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
             (one, two) for index, one in enumerate(extents) for two in extents[index + 1 :] if one.overlaps(two)
         ]
         assert collisions == []
+
+    def test_a_page_whose_words_already_fit_across_it_spends_no_second_row(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """Six seconds of words lie side by side on a report-width page, so the lane stays one row."""
+        prose = (
+            "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
+        )
+        figure, panels = self._render(store, tmp_path, words=[prose[index % len(prose)] for index in range(40)])
+        axis = self._words_axis(figure, panels)
+        assert len({round(float(patch.get_y()), 6) for patch in axis.patches}) == 1
+        assert self._placed(axis)
+
+    def test_the_staggered_page_still_draws_only_what_redaction_permits(self, store: ProvStore, tmp_path: Path) -> None:
+        """More rows widen the slot a label is measured in; they never widen what may be drawn."""
+        figure, panels = self._render(
+            store,
+            tmp_path,
+            words=[f"word{index}" for index in range(40)],
+            marked_words=[("alice", "PERSON"), ("bob", "PERSON")],
+        )
+        drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
+        assert drawn <= {f"word{index}" for index in range(40)} | {"[PERSON]"}
+        assert not drawn & {"alice", "bob"}
