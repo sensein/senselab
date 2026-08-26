@@ -175,14 +175,17 @@ def _attempt(outcomes: dict[str, NodeOutcome], node: str, call: Callable[[], _R]
         call: The node call, already bound to its arguments.
 
     Returns:
-        The node's result, or None when it raised.
+        The node's result, or None when it raised or returned no result.
     """
     try:
         result = call()
+        if result is None:
+            raise RuntimeError(f"{node} returned no result")
+        node_verdict = result.verdict
     except Exception as error:  # noqa: BLE001 — any failure is an operational fact about the run
         outcomes[node] = NodeOutcome(node=node, state=RunState.ERRORED, error=describe_exception(error))
         return None
-    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED, verdict=result.verdict)
+    outcomes[node] = NodeOutcome(node=node, state=RunState.COMPLETED, verdict=node_verdict)
     return result
 
 
@@ -212,9 +215,10 @@ def _drive_branches(
     """Run PREPROCESS, TAXONOMY and routing, then exactly the branches routing selected.
 
     A branch routing declined is recorded ``SKIPPED`` and never called, which is what lets VERDICT
-    tell a branch that found nothing from a branch that never looked. A branch that raises is still
-    recorded ``ERRORED`` and its siblings still run: none of them reads another's output. REDACT is a
-    step of SPEECH and runs only when SPEECH ran and its scan found PII.
+    tell a branch that found nothing from a branch that never looked. A failed ROUTING call likewise
+    leaves every branch ``SKIPPED``: no branch has an authorised decision to act on. A branch that
+    raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
+    output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII.
 
     Args:
         store: The provenance store, already holding ADMIT's ``recording`` stream.
@@ -232,7 +236,7 @@ def _drive_branches(
     _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
-    selected = set(routed.runs) if routed is not None else set(BRANCHES)
+    selected = set(routed.runs) if routed is not None else set()
     branches: dict[str, Callable[[], NodeResult]] = {
         "AIRWAY": lambda: airway(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir),
         "SPEECH": lambda: speech(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir, enrollment=enrollment),
@@ -317,11 +321,12 @@ def run_triage(
 ) -> TriageRunResult:
     """Triage one recording: the whole graph, one store, one fresh run directory.
 
-    ADMIT is the only gate. A ``fail`` there means the recording was never measured, so every other
+    ADMIT is the initial gate. A ``fail`` there means the recording was never measured, so every other
     node is recorded as ``skipped`` and only VERDICT runs, which is what makes "could not measure"
-    distinguishable from "measured, and found nothing". Any other node's failure is captured, not
-    propagated: it is recorded as ``errored``, its successors still run, and the store is persisted
-    either way.
+    distinguishable from "measured, and found nothing". Every other node's failure is captured rather
+    than propagated and the store is persisted either way. ROUTING is the only later dependency gate:
+    when it fails, its dependent branches are recorded ``skipped`` because no execution decision was
+    written; other nodes' independent siblings still run.
 
     Args:
         source: The recording to triage.
