@@ -1,0 +1,19 @@
+{
+  "schema_version": "triage-summary-demo-manifest/v1",
+  "output_root": "/Users/satra/Downloads/pr567-redesigned-summaries",
+  "reports": [
+    {
+      "name": "sample-speech-flag",
+      "source_audio": "tutorial_audio_files/sample_speech.wav",
+      "artifacts": ["summary.pdf", "summary.json", "summary-page-1.png", "summary-page-2.png"],
+      "purpose": "speech-like local fixture rendered with a file-level flag outcome"
+    },
+    {
+      "name": "had-that-curiosity-redaction",
+      "source_audio": "src/tests/data_for_testing/had_that_curiosity.wav",
+      "artifacts": ["summary.pdf", "summary.json", "summary-page-1.png", "summary-page-2.png"],
+      "purpose": "local speech fixture rendered with redaction evidence and a releasable outcome"
+    }
+  ],
+  "limitation": "The PR campaign's original audio was not present with its PDFs. These are report-rendering demonstrations using repository fixtures and seeded provenance evidence, not reprocessed clinical recordings."
+}
