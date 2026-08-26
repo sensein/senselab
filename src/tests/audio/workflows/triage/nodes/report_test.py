@@ -99,7 +99,7 @@ def _stub_the_drawing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(report_module, "plot_aligned_panels", lambda audio, panels, **kw: pyplot.figure())
 
 
-def _seed_report_store(  # noqa: C901 — one independent block per node, as the graph itself has
+def _seed_report_store(  # noqa: C901, D417 — one independent block per node, as the graph itself has
     store: ProvStore,
     tmp_path: Path,
     *,
@@ -128,7 +128,7 @@ def _seed_report_store(  # noqa: C901 — one independent block per node, as the
         airway_labelled: Extents AIRWAY put a label of interest on.
         airway_unlabelled: Extents AIRWAY looked at and did not label.
         absent: What PREPROCESS records as uncomputed, ``{derivative: ExceptionClass}``.
-        classifiers: ``(name, grid_s, label)`` per window classifier; ``()`` writes none at all,
+    classifiers: ``(name, grid_s, label)`` per window classifier; ``()`` writes none at all,
             which is the state a null threshold leaves behind. None writes the three defaults.
         yamnet_labels: One extra label per YAMNet window, for a category list long enough to truncate.
         skip_voice: Whether VOICE writes an activity and no verdict — the store's own reading of a
@@ -217,7 +217,7 @@ def _seed_report_store(  # noqa: C901 — one independent block per node, as the
         },
     )
     declared = (
-        (("yamnet", 0.96, "Speech"), ("ast", 2.0, "Cough"), ("hear", 2.0, "Breathe"))
+        (("yamnet", 0.96, "Speech"), ("ast", 10.24, "Cough"), ("hear", 2.0, "Breathe"))
         if classifiers is None
         else tuple(classifiers)
     )
@@ -249,6 +249,8 @@ def _seed_report_store(  # noqa: C901 — one independent block per node, as the
                 "labels": [label],
                 "windows_by_label": {label: ["seeded"]},
                 "n_windows": 1,
+                "win_length_s": grid,
+                "hop_s": grid,
             },
         )
     write_verdict(
@@ -698,6 +700,40 @@ class TestTheSummaryLayers:
         assert "hello world" in blocks
         assert "Speech" in blocks
         assert "AIRWAY" in blocks
+
+    def test_coarse_ast_labels_are_summarized_instead_of_drawn_as_a_timeline(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One 10.24-second AST context is a coarse label summary, not a time-local event lane."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert "ast labels" not in {panel.get("name") for panel in panels[0]}
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["evidence"]["label_presentations"]["ast"] == {
+            "mode": "summary_only",
+            "hop_s": 10.24,
+            "window_length_s": 10.24,
+            "reason": "coarse_window_hop",
+        }
+        blocks = "\n".join(panels[0][-1]["lines"])
+        assert "ast: summary only (10.24 s window, 10.24 s hop) Cough (1)" in blocks
+
+    def test_ast_with_a_dense_historical_grid_remains_a_timeline(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The presentation follows the stored grid, preserving honest rendering of old runs."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(
+            store,
+            tmp_path,
+            full=True,
+            classifiers=(("yamnet", 0.96, "Speech"), ("ast", 2.0, "Cough"), ("hear", 2.0, "Breathe")),
+        )
+        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
+        assert "ast labels" in {panel.get("name") for panel in panels[0]}
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["evidence"]["label_presentations"]["ast"]["mode"] == "timeline"
 
     def test_labelled_and_unlabelled_spans_are_distinguishable(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

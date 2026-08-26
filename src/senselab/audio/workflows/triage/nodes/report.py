@@ -25,7 +25,7 @@ from senselab.audio.tasks.plotting.plotting import (
     TEXT_PANEL_INCHES_PER_LINE,
     plot_aligned_panels,
 )
-from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.config import MIN_AST_HOP_S, TriageConfig
 from senselab.audio.workflows.triage.nodes.common import find_measurement, live_entities, resolve_stream
 from senselab.audio.workflows.triage.vocabulary import BRANCHES, GRAPH_ORDER
 from senselab.utils.prov_store import Entity, ProvStore
@@ -324,6 +324,30 @@ def _token_lane(
     return [{"type": "tokens", "tokens": tokens, "name": name, "report_lane": report_lane}] if tokens else []
 
 
+def _window_presentation(store: ProvStore, classifier: str) -> dict[str, Any]:
+    """Describe whether one classifier's labels can honestly be read on the time axis."""
+    windows = find_measurement(store, f"{classifier}_windows")
+    attributes = {} if windows is None else windows.attributes
+    hop_s = attributes.get("hop_s")
+    window_length_s = attributes.get("win_length_s")
+    coarse_ast = classifier == "ast" and isinstance(hop_s, (int, float)) and hop_s >= MIN_AST_HOP_S
+    return {
+        "mode": "summary_only" if coarse_ast else "timeline",
+        "hop_s": hop_s,
+        "window_length_s": window_length_s,
+        "reason": "coarse_window_hop" if coarse_ast else None,
+    }
+
+
+def _window_presentations(store: ProvStore) -> dict[str, dict[str, Any]]:
+    """The report presentation contract for every available classifier window fold."""
+    return {
+        classifier: _window_presentation(store, classifier)
+        for classifier in _CLASSIFIERS
+        if find_measurement(store, f"{classifier}_windows") is not None
+    }
+
+
 def _window_lane(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
     """One classifier's label lane: one segment per window that carried a label set.
 
@@ -334,6 +358,8 @@ def _window_lane(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
     Returns:
         The lane, or an empty list when the classifier's window fold is absent from the store.
     """
+    if _window_presentation(store, classifier)["mode"] == "summary_only":
+        return []
     entries = []
     for window in live_entities(store, "measurement"):
         if window.attributes.get("name") != f"{classifier}_window" or window.extent is None:
@@ -951,6 +977,7 @@ def _report_document(
         "routing": branches,
         "evidence": {
             "branches": _branch_evidence(store, marks),
+            "label_presentations": _window_presentations(store),
             "transcript_tokens": [
                 {
                     "entity_id": word.id,
@@ -1139,9 +1166,13 @@ def _lane_absences_from_document(document: dict[str, Any], drawn: set[str]) -> l
     """Derive display-only lane omissions from the structured report object."""
     absences = document["evidence"]["preprocess_absences"]
     branches = document["routing"]
+    label_presentations = document["evidence"].get("label_presentations") or {}
     out: list[tuple[str, str]] = []
     for lane in _LANES:
         if lane in drawn:
+            continue
+        classifier = lane.removesuffix(" labels")
+        if label_presentations.get(classifier, {}).get("mode") == "summary_only":
             continue
         derivative = _LANE_SOURCE.get(lane)
         branch = _LANE_BRANCH.get(lane)
@@ -1238,7 +1269,17 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
     for classifier, counts in categories.items():
         top = list(counts.items())[:_TOP_CATEGORIES]
         marker = f" (top {_TOP_CATEGORIES} of {len(counts)})" if len(counts) > _TOP_CATEGORIES else ""
-        lines.append(f"  {classifier}{marker}: " + ", ".join(f"{label} ({n})" for label, n in top))
+        presentation = document["evidence"]["label_presentations"].get(classifier) or {}
+        summary_marker = (
+            f" summary only ({presentation['window_length_s']:g} s window, {presentation['hop_s']:g} s hop)"
+            if presentation.get("mode") == "summary_only"
+            and isinstance(presentation.get("window_length_s"), (int, float))
+            and isinstance(presentation.get("hop_s"), (int, float))
+            else ""
+        )
+        lines.append(
+            f"  {classifier}{marker}:" + summary_marker + " " + ", ".join(f"{label} ({n})" for label, n in top)
+        )
     lines.append("  transcript tokens: " + str(document["transcript"]["words_n"]))
 
     lines += ["", "ABSENT (a lane not drawn is not a measured absence)"]
@@ -1255,7 +1296,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
     for lane, reason in lane_absences:
         lines.append(f"  lane not drawn — {lane}: {reason}")
     if not lane_absences:
-        lines.append("  every declared lane was drawn")
+        lines.append("  every declared lane was drawn or summarized above")
 
     scan = document["evidence"]["transcript_scan"]
     transcript_heading = (
