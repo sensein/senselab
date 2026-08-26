@@ -357,7 +357,7 @@ class TestWindowClassificationsAreSets:
 
 
 class TestSpansCarryTheirMergeRate:
-    """A span covering several events names the production proposals it absorbed."""
+    """A span covering several events says so, and the count comes from production."""
 
     def test_a_merged_span_reports_every_proposal_it_absorbed(
         self,
@@ -369,17 +369,19 @@ class TestSpansCarryTheirMergeRate:
     ) -> None:
         """Three bursts, one span, and the stored entity names every proposal that span absorbed.
 
-        The three bursts and the envelope's ripple lobe in the gap between the second and third clear
-        the broadband gate. The gammatone bands can contribute more proposals, but the source count
-        preserves the four broadband ones rather than hiding them inside the merged total.
+        The count is proposals rather than events: the three bursts and the envelope's ripple lobe in
+        the gap between the second and third each clear the gate, and one span covers all four. The
+        count is written by ``propose_spans`` and copied onto the entity by the node, so this is the
+        assertion that keeps sibling T6's merge-rate report reading production rather than a fixture.
+        Asserting the exact number is what makes it discriminating: a node that hard-coded the field,
+        or a fixture that supplied it, would read one.
         """
         _seed_admit(store, tmp_path, wav_writer, samples=_merging_bursts())
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
         assert len(spans) == 1
-        assert spans[0].attributes["proposal_source_counts"]["envelope"] == 4
-        assert spans[0].attributes["merged_proposals"] >= 4
+        assert spans[0].attributes["merged_proposals"] == 4
 
     def test_an_unmerged_span_reports_one(
         self,
@@ -389,41 +391,12 @@ class TestSpansCarryTheirMergeRate:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The broadband envelope keeps its one proposal even when bands contribute as well."""
+        """The contrast the merged case needs: one burst absorbs one proposal, never zero."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
-        assert len(spans) == 1
-        assert spans[0].attributes["proposal_source_counts"]["envelope"] == 1
-
-    def test_gammatone_bands_each_add_a_provenanced_span_candidate(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Low, middle and high auditory bands all reach the merged span representation."""
-        _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch)
-        energy_db = np.full((3, 600), -80.0)
-        energy_db[0, 80:150] = -20.0
-        energy_db[1, 230:300] = -20.0
-        energy_db[2, 390:460] = -20.0
-        monkeypatch.setattr(
-            preprocess_module,
-            "gammatone_filterbank",
-            lambda *args, **kwargs: (np.array([300.0, 1500.0, 5000.0]), energy_db),
-        )
-        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
-        sources = {source for span in spans for source in span.attributes["proposal_sources"]}
-        assert {"gammatone:breathing", "gammatone:speech", "gammatone:cough"} <= sources
-        gammatone = find_measurement(store, "gammatone")
-        assert gammatone is not None
-        assert gammatone.attributes["span_bands_hz"]["speech"] == [80.0, 1000.0]
+        assert [e.attributes["merged_proposals"] for e in spans] == [1]
 
 
 class TestThePackagedConfigStillRunsEveryClassifier:

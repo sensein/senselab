@@ -38,7 +38,7 @@ from senselab.audio.tasks.phonation.api import (
     propose_word_aligned_phonation_spans,
 )
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
-from senselab.audio.tasks.spans.api import NoContrast, Span, propose_spans
+from senselab.audio.tasks.spans.api import NoContrast, propose_spans
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
@@ -59,48 +59,6 @@ QWEN_ID = "Qwen/Qwen3-ASR-1.7B"
 QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
 YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
-
-
-@dataclass(frozen=True)
-class _MergedSpanProposal:
-    """One span after broadband and auditory-band proposals are combined."""
-
-    span: Span
-    source_counts: dict[str, int]
-
-
-def _gammatone_band_envelope(
-    centre_frequencies_hz: np.ndarray, energy_db: np.ndarray, band_hz: tuple[float, float]
-) -> np.ndarray:
-    """Combine an ERB-channel band as power before returning a dBFS envelope."""
-    low_hz, high_hz = band_hz
-    selected = (centre_frequencies_hz >= low_hz) & (centre_frequencies_hz < high_hz)
-    if not np.any(selected):
-        raise ValueError(f"gammatone band {low_hz:g}-{high_hz:g} Hz selected no filterbank channel")
-    power = np.nanmean(np.power(10.0, energy_db[selected] / 10.0), axis=0)
-    return 10.0 * np.log10(power)
-
-
-def _merge_span_proposals(proposals: list[tuple[str, Span]]) -> list[_MergedSpanProposal]:
-    """Merge overlaps while retaining the count and source of every absorbed proposal."""
-    merged: list[_MergedSpanProposal] = []
-    for source, proposal in sorted(proposals, key=lambda item: item[1].start):
-        if not merged or proposal.start > merged[-1].span.end:
-            merged.append(_MergedSpanProposal(span=proposal, source_counts={source: proposal.merged_proposals}))
-            continue
-        previous = merged[-1]
-        source_counts = dict(previous.source_counts)
-        source_counts[source] = source_counts.get(source, 0) + proposal.merged_proposals
-        merged[-1] = _MergedSpanProposal(
-            span=Span(
-                start=previous.span.start,
-                end=max(previous.span.end, proposal.end),
-                peak_over_floor_db=max(previous.span.peak_over_floor_db, proposal.peak_over_floor_db),
-                merged_proposals=previous.span.merged_proposals + proposal.merged_proposals,
-            ),
-            source_counts=source_counts,
-        )
-    return merged
 
 
 def _crisperwhisper_model() -> HFModel:
@@ -361,29 +319,20 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         state.update(envelope=envelope, floor=floor, envelope_id=entity_id)
 
     def _spans() -> None:
-        """Merge broadband and gammatone-band proposals at the airway K into unlabeled candidate spans."""
+        """Span proposals at the airway K; `NoContrast` becomes a measurement, never an empty list."""
         if "envelope" not in state:
             raise LookupError("energy_envelope is absent")
         k_db = float(config.require("spans.k_db.airway"))
         parameters: dict[str, Any] = {
             "k_db": k_db,
-            "floor_window_s": float(config.require("floor.window_s")),
-            "floor_percentile": float(config.require("floor.percentile")),
-            "floor_eval_grid_s": float(config.require("floor.eval_grid_s")),
             "onset_drop_db": float(config.require("spans.onset_drop_db")),
             "offset_fraction": float(config.require("spans.offset_fraction")),
             "hangover_ms": int(config.require("spans.hangover_ms")),
             "min_duration_ms": int(config.require("spans.min_duration_ms")),
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
         }
-        gammatone_bands = {
-            name: tuple(float(value) for value in config.require(f"gammatone.span_bands_hz.{name}"))
-            for name in ("breathing", "speech", "cough")
-        }
-        parameters["gammatone_span_bands_hz"] = gammatone_bands
-        reads = (state["envelope_id"], *(() if "gammatone_id" not in state else (state["gammatone_id"],)))
-        activity = _step("spans", parameters, reads, software)
-        broadband = propose_spans(
+        activity = _step("spans", parameters, (state["envelope_id"],), software)
+        proposed = propose_spans(
             state["envelope"],
             state["floor"],
             target_hz,
@@ -394,60 +343,21 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             min_duration_ms=parameters["min_duration_ms"],
             min_separation_ms=parameters["min_separation_ms"],
         )
-        proposed: list[tuple[str, Span]] = []
-        no_contrast: dict[str, str] = {}
-        if isinstance(broadband, NoContrast):
-            no_contrast["envelope"] = broadband.reason
-        else:
-            proposed.extend(("envelope", span) for span in broadband)
-        if "gammatone_energy_db" in state:
-            gammatone_rate_hz = int(round(1.0 / float(state["gammatone_hop_s"])))
-            for name, values in gammatone_bands.items():
-                envelope = _gammatone_band_envelope(
-                    state["gammatone_centres_hz"], state["gammatone_energy_db"], (values[0], values[1])
-                )
-                source = f"gammatone:{name}"
-                if not len(envelope):
-                    no_contrast[source] = "the filterbank held no complete frame"
-                    continue
-                floor = rolling_floor_dbfs(
-                    envelope,
-                    gammatone_rate_hz,
-                    window_s=parameters["floor_window_s"],
-                    percentile=parameters["floor_percentile"],
-                    eval_grid_s=parameters["floor_eval_grid_s"],
-                )
-                band_proposals = propose_spans(
-                    envelope,
-                    floor,
-                    gammatone_rate_hz,
-                    k_db=k_db,
-                    onset_drop_db=parameters["onset_drop_db"],
-                    offset_fraction=parameters["offset_fraction"],
-                    hangover_ms=parameters["hangover_ms"],
-                    min_duration_ms=parameters["min_duration_ms"],
-                    min_separation_ms=parameters["min_separation_ms"],
-                )
-                if isinstance(band_proposals, NoContrast):
-                    no_contrast[source] = band_proposals.reason
-                else:
-                    proposed.extend((source, span) for span in band_proposals)
-        if not proposed:
+        if isinstance(proposed, NoContrast):
             entity_id = _measurement(
                 store,
                 activity,
                 software,
                 name="spans_no_contrast",
                 signal=sharp_signal,
-                attributes={"k_db": k_db, "reasons_by_source": no_contrast},
-                derived_from=reads,
+                attributes={"k_db": k_db, "reason": proposed.reason},
+                derived_from=(state["envelope_id"],),
             )
             derivatives["spans_no_contrast"] = entity_id
             view.append(entity_id)
             return
         span_ids: list[str] = []
-        for proposal in _merge_span_proposals(proposed):
-            span = proposal.span
+        for span in proposed:
             span_id = store.entity(
                 prov_type="span",
                 extent=(span.start, span.end),
@@ -456,17 +366,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     "k_db": k_db,
                     "signal": sharp_signal,
                     "merged_proposals": span.merged_proposals,
-                    "proposal_sources": sorted(proposal.source_counts),
-                    "proposal_source_counts": dict(sorted(proposal.source_counts.items())),
                 },
             )
             store.was_generated_by(span_id, activity)
             store.was_attributed_to(span_id, software)
-            source_ids = [state["envelope_id"]] if "envelope" in proposal.source_counts else []
-            if any(source.startswith("gammatone:") for source in proposal.source_counts):
-                source_ids.append(state["gammatone_id"])
-            for source_id in source_ids:
-                store.was_derived_from(span_id, source_id)
+            store.was_derived_from(span_id, state["envelope_id"])
             span_ids.append(span_id)
         derivatives["spans"] = span_ids
         view.extend(span_ids)
@@ -1015,28 +919,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             software,
             name="gammatone",
             signal=sharp_signal,
-            attributes={
-                "path": "derivatives/gammatone.npz",
-                "hop_s": parameters["hop_s"],
-                "span_bands_hz": {
-                    name: config.require(f"gammatone.span_bands_hz.{name}")
-                    for name in ("breathing", "speech", "cough")
-                },
-            },
+            attributes={"path": "derivatives/gammatone.npz", "hop_s": parameters["hop_s"]},
             derived_from=(sharp_id,),
         )
         derivatives["gammatone"] = entity_id
         view.append(entity_id)
-        state.update(
-            gammatone_centres_hz=centre_frequencies,
-            gammatone_energy_db=energy_db,
-            gammatone_hop_s=parameters["hop_s"],
-            gammatone_id=entity_id,
-        )
 
     blocks: list[tuple[str, Callable[[], None]]] = [
         ("energy_envelope", _envelope),
-        ("gammatone", _gammatone),
         ("spans", _spans),
         ("yamnet_scores", _yamnet_scores),
         ("yamnet_windows", lambda: _windows("yamnet")),
@@ -1060,6 +950,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "spectrogram_narrowband",
             lambda: _spectrogram("spectrogram_narrowband", "spectrogram.narrowband_window_ms"),
         ),
+        ("gammatone", _gammatone),
     ]
     for name, block in blocks:
         try:

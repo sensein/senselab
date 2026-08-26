@@ -73,7 +73,7 @@ recording (as supplied) --> resample-+
 | `consensus_transcript` | fused text, word extents, and word uncertainty from both ASRs | plain | SPEECH's PII scan and spans; REDACT; TAXONOMY's lexical evidence |
 | `spectrogram_wb` | 5 ms window, 5 ms hop | pre-emph | onsets, transients, glottal pulses |
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
-| `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | three auditory-band span proposal generators |
+| `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
 
 A derivative is admitted when it is written to the store with provenance. It does not need a
 declared consumer — see [`store.md`](store.md).
@@ -113,12 +113,12 @@ member.
 ## `spans`
 
 ```
-floor(t)  = rolling 10th percentile of each proposal envelope, 3 s window, dBFS
+floor(t)  = rolling 10th percentile of energy_envelope, 3 s window, dBFS
 propose   = peaks where envelope(t) - floor(t) >= K, minimum separation 150 ms
 onset     = walk back from the peak to peak - 15 dB
 offset    = walk forward to peak - 0.7·(peak - floor), closing after `hangover` ms continuously below
 discard   = spans shorter than 50 ms
-merge     = overlapping spans across the broadband envelope and each gammatone proposal band
+merge     = overlapping spans
 ```
 
 | parameter | value | scope |
@@ -126,16 +126,9 @@ merge     = overlapping spans across the broadband envelope and each gammatone p
 | `K` | `spans.k_db` | per reader; AIRWAY reads at its own setting and may adjust it — [`branch-airway.md`](branch-airway.md) |
 | `hangover` | 120 ms | per consumer; must be shorter than the shortest event to be bounded |
 
-The three gammatone proposal bands are `speech` (80–1000 Hz), `breathing` (500–2500 Hz), and `cough`
-(2000–8000 Hz). They overlap by design and are **candidate generators, not classifiers**: every surviving span is still
-unlabelled and AIRWAY re-evaluates it with HeAR. The band envelopes are a power-domain average of
-their selected ERB channels, then converted to dBFS; each gets its own local floor and uses the same
-contrast rule as the broadband envelope. A merged span records `proposal_sources` and
-`proposal_source_counts`, so a reviewer can distinguish the acoustic paths that opened it.
-
 Spans are written to the store as elements of kind `span`, carrying `peak_over_floor_db` and **no
 label**. Any node may read them; SPEECH proposes its own spans from word timings and `refine`s these
-where they overlap. If no proposal source reaches `K` above its local floor, the node reports
+where they overlap. If no peak anywhere reaches `K` above the local floor, the node reports
 **`no_contrast`** rather than an empty list.
 
 ## `phonation_spans` — sustained phonation and glides
