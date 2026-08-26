@@ -92,6 +92,8 @@ def phonation_config(tmp_path: Path) -> TriageConfig:
         "  hangover_ms: 50.0\n"
         "  voicing_strength_floor: 0.5\n"
         "  mixed_voiced_fraction: 0.6\n"
+        "  unvoiced_max_formant_bandwidth_hz: 250.0\n"
+        "  word_aligned_min_evidence_fraction: 0.8\n"
     )
     return load_triage_config(override)
 

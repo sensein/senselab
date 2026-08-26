@@ -230,6 +230,8 @@ class TestTheV2OpenKeys:
         "phonation_spans.hangover_ms",
         "phonation_spans.voicing_strength_floor",
         "phonation_spans.mixed_voiced_fraction",
+        "phonation_spans.unvoiced_max_formant_bandwidth_hz",
+        "phonation_spans.word_aligned_min_evidence_fraction",
         "words.onomatopoeic_tokens",
         "taxonomy.presence_floor.speech.acoustic",
         "taxonomy.presence_floor.speech.lexical",

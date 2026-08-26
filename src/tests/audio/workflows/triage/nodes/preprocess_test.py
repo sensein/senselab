@@ -80,6 +80,11 @@ def _steady_noise() -> np.ndarray:
     return _resonate(excitation, _fixed((700.0, 1200.0, 2600.0), n_samples))
 
 
+def _broadband_noise() -> np.ndarray:
+    """1.5 s of steady broadband noise, deliberately lacking vocal-tract resonances."""
+    return np.random.default_rng(0).standard_normal(int(1.5 * SR))
+
+
 def _rising_glide() -> np.ndarray:
     """0.3 s in which F0 and the resonances both sweep upward faster than either limb tolerates."""
     n_samples = int(0.3 * SR)
@@ -490,6 +495,20 @@ class TestPhonationSpans:
         assert spans
         assert any(e.attributes["production"] in ("unvoiced", "mixed") for e in spans)
 
+    def test_broadband_noise_does_not_become_an_unvoiced_span(
+        self,
+        store: ProvStore,
+        phonation_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Stable broad LPC poles are insufficient to claim phonation from ordinary noise."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_broadband_noise())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+
     def test_a_glide_is_a_span_with_a_direction_and_an_excursion(
         self,
         store: ProvStore,
@@ -554,13 +573,14 @@ class TestPhonationSpans:
             return measure(audio, **kwargs)
 
         monkeypatch.setattr(preprocess_module, "formant_track", counting)
-        _seed_admit(store, tmp_path, wav_writer)
+        samples = np.concatenate([_steady_vowel(), np.zeros(int(0.2 * SR)), _steady_vowel()])
+        _seed_admit(store, tmp_path, wav_writer, samples=samples)
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
         assert len(spans) >= 2, "the fixture must yield several spans or a call count of one proves nothing"
         assert len(seen_durations) == 1
-        assert seen_durations[0] == pytest.approx(3.0, abs=0.05)
+        assert seen_durations[0] == pytest.approx(3.2, abs=0.05)
 
     def test_a_null_criterion_leaves_the_spans_absent(
         self,

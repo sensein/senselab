@@ -140,7 +140,10 @@ hangover discipline as `spans`. Two productions qualify:
 **Production may be voiced, unvoiced or mixed.** Disordered voices sustain with little or no
 periodicity, so the detector may not require a periodicity floor to open a span; each span records
 which of `voiced`, `unvoiced`, `mixed` its tracks support, and an unvoiced sustained production is a
-span like any other.
+span like any other. For the non-periodic formant limb, however, stable F1/F2 estimates also need
+bandwidths no wider than `phonation_spans.unvoiced_max_formant_bandwidth_hz`: a stable LPC fit alone
+is possible on broadband noise and is not phonation evidence. The key is null until fitted and is an
+acoustic screening condition, not a diagnosis or a YAMNet label proxy.
 
 **Duration in seconds is the primary feature.** Each span carries `duration_s` beside its track
 statistics, and `duration_s` is what [`TAXONOMY`](taxonomy.md) reads to classify the voice kind and
@@ -148,6 +151,13 @@ what [`routing.md`](routing.md) gates the VOICE branch on.
 
 `formant_tracks` are written per span: F1–F4 with their bandwidths on the analysis hop, and, for a
 glide, the trajectory's direction and extent.
+
+Timed consensus words add a complementary positive path: their extents bound a segment assessed from
+the same periodic-or-resonant tracks, and a segment reaching
+`phonation_spans.word_aligned_min_evidence_fraction` is written as `member: word_aligned`. Word text
+is not read as phonation evidence, and no missing or rejected word suppresses a sustained/glide span.
+VOICE consumes this ordinary phonation-span representation; a word span contained by an existing
+sustained/glide span is omitted as redundant.
 
 Parameters live under `phonation_spans` in the config.
 
@@ -194,5 +204,5 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | `windows.yamnet.default_threshold`, `.label_thresholds` | the score at which a YAMNet label is confident enough to enter a window's set; **null** until fitted |
 | `windows.ast.default_threshold`, `.label_thresholds` | the same for AST; **null** until fitted. `.win_length_s` and `.hop_s` are **not** open: `.win_length_s` ships 10.24 s by the owner's 10 s directive (analyze_audio's window notes do not govern triage), and `.hop_s` ships 10.24 s, non-overlapping, because a null hop stopped AST running at all. A recording shorter than the window yields one zero-padded window covering the whole file |
 | `windows.hear.default_threshold`, `.label_thresholds` | the same for HeAR; **null** until fitted on spans HeAR's 2 s input does not have to be padded to fill. `.hop_s` is **not** open: it ships 2.0 s, non-overlapping, by the same ruling as AST's, and a fit on unpadded spans lands as an override |
-| `phonation_spans.*` continuity criterion and hangover | what opens and closes a sustained-phonation or glide span for voiced, unvoiced and mixed production; **null** until fitted |
+| `phonation_spans.*` continuity criterion and hangover | what opens and closes a sustained-phonation or glide span for voiced, unvoiced and mixed production; `unvoiced_max_formant_bandwidth_hz` is the required resonant-evidence guard for the non-periodic formant limb; **null** until fitted |
 | `words.onomatopoeic_tokens` | the token set normalised into bracketed non-words; a vocabulary, owed a corpus it was drawn from |

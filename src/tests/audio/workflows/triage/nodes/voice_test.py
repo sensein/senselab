@@ -18,6 +18,8 @@ from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.phonation import PeriodMark
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import find_measurements
+from senselab.audio.workflows.triage.nodes.routing import routing
+from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.audio.workflows.triage.nodes.voice import voice
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import Entity, ProvStore
@@ -271,6 +273,24 @@ class TestProductionModes:
         )
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert _verdict_entity(store, "VOICE").attributes["production"] == {"voiced": 1, "unvoiced": 1, "mixed": 1}
+
+    def test_a_sustained_unvoiced_span_routes_and_reaches_voice_without_marks(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """TAXONOMY and routing preserve aperiodic phonation; VOICE measures rather than rejects it."""
+        config = _override(
+            tmp_path,
+            "voice:\n"
+            "  f0_range_hz: [75.0, 190.0]\n"
+            "taxonomy:\n"
+            "  voice_min_duration_s: 1.0\n"
+            "  voice_uncertain_duration_s: 0.3\n",
+        )
+        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
+        assert taxonomy(store, "plain", config, run_dir=tmp_path).kinds["voice"] == "present"
+        assert "VOICE" in routing(store, None, config, run_dir=tmp_path).runs
+        voice(store, "plain", config, run_dir=tmp_path)
+        assert find_measurements(store, "period_marks")[-1].attributes["unmeasured"] == "unvoiced_span"
 
 
 class TestMptRecoverableProducts:
