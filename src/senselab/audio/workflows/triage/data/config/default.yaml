@@ -146,7 +146,7 @@ derivation: |
   how loud a released artifact's redactions are without anyone having measured which is preferable.
 
   UNSET, and why -- benchmarks/open.md carries each of these:
-    redaction.padding_ms: must exceed the *worst* alignment edge error, which is unquantified. The
+    redaction.padding_ms: must exceed the *worst* consensus-word edge error, which is unquantified. The
       median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
       neighbour, only one is recoverable.
     speech.word_gap_ms: any value is a claim about what makes one utterance.

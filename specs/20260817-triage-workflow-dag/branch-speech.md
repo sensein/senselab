@@ -19,7 +19,6 @@ What it reads from the store:
 | --- | --- | --- |
 | `consensus_transcript` and its `word` elements | PREPROCESS | the transcript, its edges, the agreement behind each word, and **the only text the PII scan reads** |
 | `asr_crisperwhisper`, `asr_qwen` words | PREPROCESS | the per-recognizer evidence the consensus was fused from |
-| `alignment` | PREPROCESS | published word and phone edges |
 | `yamnet_windows` | PREPROCESS | `Speech` corroboration per span |
 | `squim` | PREPROCESS | per-span quality and the speech test |
 | `energy_envelope`, `silence` | PREPROCESS | the local floor |
@@ -68,8 +67,8 @@ conditioned on what AIRWAY found.
   `fuse_consensus_words`; this branch reads it and does not re-fuse, re-clean or re-decode.
 - **Per-word agreement** between the recognizers is the word's confidence. It bounds confidence from
   above and is reported as agreement, never as correctness.
-- **Edges** come from `alignment`; the consensus word's own timings supply them where alignment is
-  absent.
+- **Edges** are the consensus word timings. Their temporal confidence and timing-source count travel
+  with the word; this branch does not replace them with a second aligner.
 - **Bracketed and onomatopoeic events are not words.** PREPROCESS wrote them as `event` elements, so
   nothing here counts them toward word totals, span extents, or the PII scan's subject.
 

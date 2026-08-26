@@ -28,8 +28,6 @@ from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrog
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
 )
-from senselab.audio.tasks.forced_alignment.constants import DEFAULT_ALIGN_MODELS_HF
-from senselab.audio.tasks.forced_alignment.forced_alignment import align_transcriptions
 from senselab.audio.tasks.gammatone.api import gammatone_filterbank
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
 from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION
@@ -52,7 +50,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
-from senselab.utils.data_structures import HFModel, Language, ScriptLine
+from senselab.utils.data_structures import HFModel
 from senselab.utils.prov_store import ProvStore
 
 NODE = "PREPROCESS"
@@ -61,7 +59,6 @@ QWEN_ID = "Qwen/Qwen3-ASR-1.7B"
 QWEN_TIMESTAMP_MODEL = "Qwen/Qwen3-ForcedAligner-0.6B"
 AST_ID = "MIT/ast-finetuned-audioset-10-10-0.4593"
 YAMNET_MODEL_URI = "https://tfhub.dev/google/yamnet/1"
-ALIGNMENT_LANGUAGE = "en"
 
 
 def _crisperwhisper_model() -> HFModel:
@@ -674,7 +671,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             raise LookupError("both recognizers are needed")
         activity = _step(
             "consensus",
-            {"systems": [CRISPERWHISPER_ID, QWEN_ID], "routine": "fuse_consensus_words"},
+            {
+                "systems": [CRISPERWHISPER_ID, QWEN_ID],
+                "routine": "fuse_consensus_words",
+                "timing_authority": "consensus_asr",
+            },
             (state["asr_crisperwhisper_id"], state["asr_qwen_id"]),
             software,
         )
@@ -737,6 +738,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 "words": kept,
                 "provenance": provenance,
                 "systems": [CRISPERWHISPER_ID, QWEN_ID],
+                "timing_authority": "consensus_asr",
                 "word_ids": word_ids,
                 "event_ids": event_ids,
                 "text": " ".join(str(entry.get("text") or "") for entry in kept),
@@ -748,41 +750,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(word_ids)
         view.extend(event_ids)
         state.update(consensus=kept, consensus_id=entity_id, consensus_word_ids=word_ids)
-
-    def _alignment() -> None:
-        """Forced alignment of the consensus transcript, on the plain signal."""
-        if not state.get("consensus"):
-            raise LookupError("consensus_transcript is absent or empty")
-        consensus = state["consensus"]
-        agent = store.agent(
-            agent_type="model",
-            model_id=str(DEFAULT_ALIGN_MODELS_HF[ALIGNMENT_LANGUAGE]["path_or_uri"]),
-            unresolved_reason="align_transcriptions loads its aligner internally; the commit is not reported",
-        )
-        activity = _step("alignment", {"language": ALIGNMENT_LANGUAGE}, (state["consensus_id"],), agent)
-        transcript = ScriptLine(
-            text=" ".join(str(word["text"]) for word in consensus),
-            start=min(float(word["start"]) for word in consensus),
-            end=max(float(word["end"]) for word in consensus),
-        )
-        [aligned] = align_transcriptions([(plain, transcript, Language(language_code=ALIGNMENT_LANGUAGE))])
-        payload = [line.model_dump() for line in aligned if line is not None]
-        (run_dir / "derivatives" / "alignment.json").write_text(json.dumps(payload, default=str))
-        entity_id = _measurement(
-            store,
-            activity,
-            agent,
-            name="alignment",
-            signal="plain",
-            attributes={
-                "path": "derivatives/alignment.json",
-                "language": ALIGNMENT_LANGUAGE,
-                "transcript_source": "consensus_transcript",
-            },
-            derived_from=(state["consensus_id"],),
-        )
-        derivatives["alignment"] = entity_id
-        view.append(entity_id)
 
     def _phonation_spans() -> None:
         """Sustained-phonation and glide spans, from tracks computed once over the whole stream."""
@@ -977,7 +944,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
         ("consensus_transcript", _consensus),
-        ("alignment", _alignment),
         ("phonation_spans", _phonation_spans),
         ("spectrogram_wideband", lambda: _spectrogram("spectrogram_wideband", "spectrogram.wideband_window_ms")),
         (

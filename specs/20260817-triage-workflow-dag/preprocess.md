@@ -37,7 +37,7 @@ here. See [`routing.md`](routing.md) for the pass this node opens.
 ## Conditioning
 
 ```
-                                     +--> plain ------> squim, level, ASR x2, alignment, silence,
+                                     +--> plain ------> squim, level, ASR x2, consensus, silence,
                                      |                  yamnet/ast/hear windows
 recording (as supplied) --> resample-+
      |                     16 kHz    +--> pre-emphasis --> envelope --> spans
@@ -70,14 +70,21 @@ recording (as supplied) --> resample-+
 | `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file**; reported, not gated |
 | `asr_crisperwhisper` | transcript, word and token edges | plain | word entities; airway lexical check; voice lexical exclusion |
 | `asr_qwen` | transcript, word timings | plain | word entities; agreement confidence |
-| `consensus_transcript` | see below | plain | SPEECH's PII scan; REDACT; TAXONOMY's lexical evidence |
-| `alignment` | forced alignment of the consensus transcript | plain | word and phone edges |
+| `consensus_transcript` | fused text, word extents, and word uncertainty from both ASRs | plain | SPEECH's PII scan and spans; REDACT; TAXONOMY's lexical evidence |
 | `spectrogram_wb` | 5 ms window, 5 ms hop | pre-emph | onsets, transients, glottal pulses |
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
 | `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
 
 A derivative is admitted when it is written to the store with provenance. It does not need a
 declared consumer — see [`store.md`](store.md).
+
+### Consensus timing authority
+
+`consensus_transcript` is the only triage transcript and word-timing authority. Its `word` elements
+carry `confidence`, `existence_confidence`, `temporal_confidence`, `coverage`, `recognizers`, and
+`timing_sources`; each has an extent produced by `fuse_consensus_words`. PREPROCESS does not run
+forced alignment after the consensus, so no competing word or phone edge product exists. The two
+per-recognizer transcript measurements remain provenance for the fused product.
 
 ## Window classifications — sets, not accumulators
 
