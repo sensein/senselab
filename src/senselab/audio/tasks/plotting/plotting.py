@@ -866,6 +866,7 @@ def plot_aligned_panels(
     audio: Audio,
     panels: List[Dict[str, Any]],
     title: str = "",
+    header_lines: Sequence[str] | None = None,
     figsize: Tuple[float, float] | None = None,
     spectrogram_params: Dict[str, Any] | None = None,
     context: _Context = "auto",
@@ -913,6 +914,8 @@ def plot_aligned_panels(
         audio: Input mono audio.
         panels: List of panel specification dicts (see above).
         title: Overall figure title.
+        header_lines: Optional short, non-time-aligned lines placed below ``title`` and above the
+            panel stack. This is for a concise decision context; it does not become another lane.
         figsize: Base ``(width, height)`` in inches **before** context scaling.
             Defaults to ``(14, sum_of_panel_heights)``.
         spectrogram_params: Parameters forwarded to torchaudio spectrogram transforms.
@@ -1142,7 +1145,7 @@ def plot_aligned_panels(
                     transform=ax.transAxes,
                     va="top",
                     ha="left",
-                    family="monospace",
+                    family=panel.get("family", "monospace"),
                     fontsize=panel.get("fontsize", 8),
                 )
 
@@ -1160,9 +1163,13 @@ def plot_aligned_panels(
         bottom.tick_params(labelbottom=True)
         axes_list[0].set_xlim(0, duration)
 
+        header = [str(line) for line in (header_lines or ()) if str(line)]
         if title:
-            fig.suptitle(title)
-        fig.tight_layout(rect=(0, 0, 1, 0.96) if title else (0, 0, 1, 1))
+            fig.suptitle(title, y=0.995)
+        if header:
+            fig.text(0.015, 0.972, "\n".join(header), va="top", ha="left", fontsize=8, family="sans-serif")
+        top = 0.90 if header else (0.96 if title else 1.0)
+        fig.tight_layout(rect=(0, 0, 1, top))
         plt.show(block=False)
         return fig
 

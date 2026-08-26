@@ -33,6 +33,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
+REPORT_SCHEMA_VERSION = "triage-summary/v1"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -45,6 +46,8 @@ _BLOCK_COLUMNS = 168
 _TITLE_COLUMNS = 96
 _SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
+_TOKEN_CYCLE_ROWS = ("1", "2", "3")
+_EVIDENCE_BRANCHES = (*BRANCHES, "REDACT")
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
 _RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
@@ -296,7 +299,7 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _token_lane(name: str, entries: Iterable[tuple[tuple[float, float], str]]) -> list[dict[str, Any]]:
-    """One ``tokens`` panel — a bar per token with its text on the bar — or none at all.
+    """One cycling-row ``tokens`` panel — a bar per token with inspectable timing — or none.
 
     Args:
         name: The lane's name, drawn as the panel's y-label.
@@ -305,7 +308,15 @@ def _token_lane(name: str, entries: Iterable[tuple[tuple[float, float], str]]) -
     Returns:
         A one-element list holding the panel, or an empty list when there is no token.
     """
-    tokens = [{"text": text, "start": float(extent[0]), "end": float(extent[1])} for extent, text in entries]
+    tokens = [
+        {
+            "text": text,
+            "start": float(extent[0]),
+            "end": float(extent[1]),
+            "row": _TOKEN_CYCLE_ROWS[index % len(_TOKEN_CYCLE_ROWS)],
+        }
+        for index, (extent, text) in enumerate(entries)
+    ]
     return [{"type": "tokens", "tokens": tokens, "name": name}] if tokens else []
 
 
@@ -780,6 +791,189 @@ def _categories(store: ProvStore) -> dict[str, dict[str, int]]:
     return {classifier: counts for classifier, counts in found.items() if counts}
 
 
+def _task_context(run_id: str, verdict: dict[str, Any]) -> dict[str, Any]:
+    """The recording/task context the report puts ahead of the evidence lanes.
+
+    ``run_id`` is the only universally available task source. Hints remain separate rather than
+    being recast as a task: they are a declared context for a triage decision, not a measurement.
+
+    Args:
+        run_id: The provenance store's run id.
+        verdict: The file-level verdict, read for declared hints.
+
+    Returns:
+        A stable recording context mapping for the PDF and JSON.
+    """
+    tokens = run_id.split("_")
+    task = next((token for token in tokens if token.startswith(_TASK_PREFIX)), None)
+    return {"task_type": task, "declared_hints": dict(verdict.get("hints") or {}), "run_label": _run_label(run_id)}
+
+
+def _timing(entity: Entity) -> dict[str, float] | None:
+    """One entity's time extent in the JSON's explicit timing form."""
+    if entity.extent is None:
+        return None
+    return {"start_s": float(entity.extent[0]), "end_s": float(entity.extent[1])}
+
+
+def _branch_evidence(store: ProvStore, marks: dict[str, list[Entity]]) -> dict[str, list[dict[str, Any]]]:
+    """Compact audit evidence for each decision branch, with no raw transcript text.
+
+    The detail page can show a few examples while JSON carries every item. A ``word`` is represented
+    only by the redacted transcript-token list built below; copying its attributes here could leak
+    the matched text that the report otherwise intentionally withholds.
+    """
+    by_branch: dict[str, list[dict[str, Any]]] = {branch: [] for branch in _EVIDENCE_BRANCHES}
+    for entity in store.entities():
+        if store.is_invalidated(entity.id):
+            continue
+        activity_id = store.generated_by(entity.id)
+        if activity_id is None:
+            continue
+        activity = store.get_activity(activity_id)
+        branch = activity.node
+        if branch not in by_branch or entity.prov_type == "word":
+            continue
+        if entity.prov_type not in {"span", "measurement", "assertion"}:
+            continue
+        if entity.prov_type == "assertion" and branch != "AIRWAY":
+            continue
+        description = str(entity.attributes.get("name") or entity.attributes.get("family") or entity.prov_type)
+        if branch == "AIRWAY" and entity.prov_type == "span":
+            labels = ", ".join(_airway_labels(store, marks, entity)) or _UNLABELLED
+            description = f"airway span: {labels}"
+        elif branch == "VOICE" and entity.prov_type == "span":
+            description = f"phonation: {entity.attributes.get('member')}/{entity.attributes.get('onset_kind')}"
+        elif branch == "REDACT" and entity.prov_type == "span":
+            description = f"redaction: {entity.attributes.get('category')}"
+        elif branch == "SPEECH" and entity.prov_type == "span":
+            description = f"speech span: {entity.attributes.get('attributed_to') or 'unattributed'}"
+        by_branch[branch].append(
+            {
+                "entity_id": entity.id,
+                "type": entity.prov_type,
+                "description": description,
+                "timing": _timing(entity),
+                "provenance": {"node": activity.node, "step": activity.step},
+            }
+        )
+    # A branch often evaluates evidence produced upstream (for example AIRWAY labels PREPROCESS
+    # proposals). Include those timed source elements too, retaining their actual producer rather
+    # than incorrectly attributing the measurement to the branch that read it.
+    source_spans = {
+        "AIRWAY": _envelope_spans(store),
+        "SPEECH": _spans_of_family(store, "speech"),
+        "VOICE": _spans_of_family(store, "phonation", voice=True),
+        "REDACT": [
+            span
+            for span in live_entities(store, "span")
+            if span.attributes.get("name") == "redaction" and span.extent is not None
+        ],
+    }
+    for branch, spans in source_spans.items():
+        known = {item["entity_id"] for item in by_branch[branch]}
+        for span in spans:
+            if span.id in known:
+                continue
+            activity_id = store.generated_by(span.id)
+            activity = None if activity_id is None else store.get_activity(activity_id)
+            if branch == "AIRWAY":
+                description = f"airway source span: {', '.join(_airway_labels(store, marks, span)) or _UNLABELLED}"
+            elif branch == "SPEECH":
+                description = f"speech span: {span.attributes.get('attributed_to') or 'unattributed'}"
+            elif branch == "VOICE":
+                description = f"phonation: {span.attributes.get('member')}/{span.attributes.get('onset_kind')}"
+            else:
+                description = f"redaction: {span.attributes.get('category')}"
+            by_branch[branch].append(
+                {
+                    "entity_id": span.id,
+                    "type": span.prov_type,
+                    "description": description,
+                    "timing": _timing(span),
+                    "provenance": {
+                        "node": None if activity is None else activity.node,
+                        "step": None if activity is None else activity.step,
+                    },
+                }
+            )
+    return {
+        branch: sorted(
+            items,
+            key=lambda item: (
+                float((item.get("timing") or {}).get("start_s", -1.0)),
+                str(item["entity_id"]),
+            ),
+        )
+        for branch, items in by_branch.items()
+    }
+
+
+def _report_document(
+    store: ProvStore,
+    marks: dict[str, list[Entity]],
+    config: TriageConfig,
+    *,
+    summary_format: str,
+) -> dict[str, Any]:
+    """Build the one structured report object used by the JSON and the human render.
+
+    Rendering reads this object rather than independently reading the store. That makes the JSON a
+    first-class companion, not a text extraction of a PDF, and prevents a later page-only change
+    from silently changing a decision claim.
+    """
+    verdict = _verdict(store)
+    branches = _branches(store)
+    steps = _steps(store)
+    transcript_words = _words(store)
+    scanned, scan_note = _scan_state(store)
+    reasons = list(verdict.get("reasons") or [])
+    document: dict[str, Any] = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "recording": {**_file(store), **_task_context(store.run_id, verdict)},
+        "decisions": {
+            "file_triage": verdict.get("triage"),
+            "release": verdict.get("release"),
+            "discard_ground": verdict.get("discard_ground"),
+            "flags": [reason for reason in reasons if reason.get("outcome") in {"flag", "fail", "discard"}],
+            "reasons": reasons,
+        },
+        "screening": {
+            "screened_kinds": verdict.get("screened") or (steps.get("TAXONOMY", {}).get("kinds") or {}),
+            "resolved_kinds": verdict.get("kinds") or {},
+            "agreement": verdict.get("agreement") or {},
+        },
+        "routing": branches,
+        "evidence": {
+            "branches": _branch_evidence(store, marks),
+            "transcript_tokens": [
+                {
+                    "entity_id": word.id,
+                    "text": _redacted_text(marks, word, scanned=scanned),
+                    "timing": _timing(word),
+                    "provenance": {"node": "PREPROCESS", "step": "consensus_transcript"},
+                }
+                for word in transcript_words
+            ],
+            "transcript_scan": {"complete": scanned, "note": scan_note or None},
+            "preprocess_absences": _absences(store),
+        },
+        "artifacts": {
+            "summary": {"path": f"{SUMMARY_STEM}.{summary_format}", "format": summary_format},
+            "json": {"path": f"{SUMMARY_STEM}.json", "format": "json", "schema_version": REPORT_SCHEMA_VERSION},
+        },
+        # Legacy fields remain so existing consumers can migrate deliberately.
+        "file": _file(store),
+        "verdict": verdict,
+        "branches": branches,
+        "steps": steps,
+        "transcript": {"text": _transcript(store, marks), "words_n": len(transcript_words)},
+        "categories": _categories(store),
+        "provenance": _provenance(store, config, store.run_id),
+    }
+    return document
+
+
 def _provenance_line(provenance: dict[str, Any]) -> str:
     """One line naming the run's identity: its config, its commit and how its models resolved.
 
@@ -841,6 +1035,46 @@ def _title(run_id: str, verdict: dict[str, Any]) -> str:
     return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
 
 
+def _header_lines(document: dict[str, Any]) -> list[str]:
+    """The short evidence-first header shown before the shared-axis detail."""
+    recording, decisions, screening, routing = (
+        document["recording"],
+        document["decisions"],
+        document["screening"],
+        document["routing"],
+    )
+    task = recording.get("task_type") or "no task token declared"
+    hints = recording.get("declared_hints") or {}
+    hint_text = "; ".join(f"{kind}={value}" for kind, value in sorted(hints.items())) or "no declared hint"
+    evidence = decisions.get("flags") or decisions.get("reasons") or []
+    evidence_text = "; ".join(
+        f"{reason.get('node')}: {reason.get('why')}" for reason in evidence[:2]
+    ) or "no contributing reason"
+    screened = "; ".join(
+        f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items())
+    ) or "not screened"
+    route = "; ".join(
+        f"{branch} {'run' if decision['will_run'] else 'skipped'} ({decision['why']})"
+        for branch, decision in sorted(
+            routing.items(),
+            key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES),
+        )
+    ) or "routing did not run"
+    outcomes = "; ".join(
+        f"{branch}={_shown(decision.get('verdict'))}" for branch, decision in sorted(
+            routing.items(), key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES)
+        )
+    ) or "no branch outcome"
+    return [
+        f"RECORDING  task: {task}  |  hint: {hint_text}",
+        f"FILE DECISION  triage: {_shown(decisions['file_triage'])}  |  release: {_shown(decisions['release'])}",
+        f"DECISION EVIDENCE  {evidence_text}",
+        f"SCREENED KINDS  {screened}",
+        f"ROUTING  {route}",
+        f"BRANCH OUTCOMES  {outcomes}",
+    ]
+
+
 def _wrapped(lines: Iterable[str]) -> list[str]:
     """Every block line folded to the block width, keeping its indent and its blank separators.
 
@@ -882,98 +1116,114 @@ def _ran_line(verdict: dict[str, Any]) -> str:
     return "ran: " + "  ".join(f"{node}:{ran[node]}" for node in ordered)
 
 
-def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
-    store: ProvStore, marks: dict[str, list[Entity]], drawn: set[str], provenance: dict[str, Any]
-) -> list[str]:
-    """The per-step blocks that accompany the shared axis.
+def _lane_absences_from_document(document: dict[str, Any], drawn: set[str]) -> list[tuple[str, str]]:
+    """Derive display-only lane omissions from the structured report object."""
+    absences = document["evidence"]["preprocess_absences"]
+    branches = document["routing"]
+    out: list[tuple[str, str]] = []
+    for lane in _LANES:
+        if lane in drawn:
+            continue
+        derivative = _LANE_SOURCE.get(lane)
+        branch = _LANE_BRANCH.get(lane)
+        if derivative is not None and derivative in absences:
+            reading, raised = absences[derivative]
+            out.append((lane, f"PREPROCESS/{derivative} {reading} [{raised}]"))
+        elif branch is not None and branch in branches and not branches[branch]["will_run"]:
+            out.append((lane, f"{branch} did not run: {branches[branch]['why']}"))
+        elif branch is not None and branches.get(branch, {}).get("verdict") is None:
+            out.append((lane, f"{branch} wrote no verdict"))
+        else:
+            out.append((lane, "nothing in the store for it"))
+    return out
 
-    Every line goes through the PII rule: no matched text, in the blocks any more than in the lanes.
 
-    Args:
-        store: The provenance store.
-        marks: :func:`_assertions_by_source`'s index, built once per report and shared with the lanes.
-        drawn: The names of the lanes the page drew, so the rest can be reported as absent rather
-            than silently missing.
-        provenance: :func:`_provenance`'s mapping, summarised onto one line.
-
-    Returns:
-        The lines, folded to the block width, in report.md's order: the run id, the file and its
-        provenance, what ran, the branch decisions
-        with each branch's conclusion, flags and measurements, TAXONOMY's classification beside the
-        resolved kinds and the hint reading for each, the top categories, the spans, what was NOT
-        drawn and why, the transcript, and the verdict — with REDACT's outcome shown whatever the
-        triage axis says.
-    """
-    steps = _steps(store)
-    verdict = _verdict(store)
-    lines: list[str] = []
-
-    described = _file(store)
-    lines.append(f"run: {_shown(provenance['run_id'])}")
-    lines.append(f"file: {_shown(described['path'])}")
-    lines.append(
-        f"duration: {_shown(described['duration_s'])} s  "
-        f"rate: {_shown(described['sample_rate'])} Hz  channels: {_shown(described['channels'])}"
+def _redact_line(redact: dict[str, Any] | None, *, prefix: str = "  ") -> str:
+    """One compact REDACT outcome line for the detail hierarchy."""
+    if redact is None:
+        return prefix + "redact: did not run"
+    return (
+        f"{prefix}redact: {redact.get('outcome')} — {redact.get('why')} "
+        f"(redactions_n={_shown(redact.get('redactions_n'))})"
     )
-    lines.append(_provenance_line(provenance))
-    lines.append(_ran_line(verdict))
 
-    branches = _branches(store)
-    lines.append("")
-    lines.append("BRANCHES")
+
+def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C901 — evidence hierarchy is explicit
+    """Render the detail page from the report object also written as JSON."""
+    steps, verdict, provenance = document["steps"], document["verdict"], document["provenance"]
+    described, decisions, screening = document["file"], document["decisions"], document["screening"]
+    lines: list[str] = ["DECISION SUMMARY"]
+    lines.append(
+        f"  triage: {_shown(decisions['file_triage'])}   release: {_shown(decisions['release'])}   "
+        f"discard_ground: {_shown(decisions.get('discard_ground'))}"
+    )
+    for reason in decisions.get("reasons") or []:
+        lines.append(
+            f"  reason: {reason.get('node')} {reason.get('outcome')} "
+            f"[{reason.get('kind')}] {reason.get('why')}"
+        )
+    if not decisions.get("reasons"):
+        lines.append("  no node contributed a reason")
+
+    lines += ["", "SCREENING AND ROUTING", _ran_line(verdict), "BRANCH DETAIL"]
+    branches = document["routing"]
     if not branches:
         lines.append("  routing did not run; no branch was asked")
     for branch in sorted(branches, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
-        decision = branches[branch]
+        decision, detail = branches[branch], steps.get(branch, {})
         lines.append(
             f"  {branch}: will_run={decision['will_run']} forced_by_hint={decision['forced_by_hint']} "
             f"kind_state={decision['kind_state']} why={decision['why']}"
         )
-        lines.append(f"    verdict: {_shown(decision['verdict'])}")
-        detail = steps.get(branch, {})
+        lines.append(f"    outcome: {_shown(decision['verdict'])}")
         measured = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
         if measured:
             lines.append("    measured: " + "  ".join(measured))
         for flag in decision["flags"]:
             lines.append(f"    flag: {flag}")
+        items = document["evidence"]["branches"].get(branch) or []
+        for item in items[:4]:
+            timing = item.get("timing") or {}
+            extent = (
+                "no time extent"
+                if not timing
+                else f"{_shown(timing.get('start_s'))}-{_shown(timing.get('end_s'))} s"
+            )
+            lines.append(f"    evidence: {item['description']} [{extent}; {item['entity_id']}]")
+        if len(items) > 4:
+            lines.append(f"    evidence: {len(items) - 4} additional item(s) in summary JSON")
 
-    lines.append("")
-    lines.append("TAXONOMY")
-    screened = verdict.get("screened") or (steps.get("TAXONOMY", {}).get("kinds") or {})
-    resolved = verdict.get("kinds") or {}
-    agreement = verdict.get("agreement") or {}
+    redact = steps.get("REDACT")
+    lines.append(_redact_line(redact).replace("redact:", "REDACT:", 1))
+    redact_items = document["evidence"]["branches"].get("REDACT") or []
+    for item in redact_items[:4]:
+        timing = item.get("timing") or {}
+        extent = "no time extent" if not timing else f"{_shown(timing.get('start_s'))}-{_shown(timing.get('end_s'))} s"
+        lines.append(f"    evidence: {item['description']} [{extent}; {item['entity_id']}]")
+
+    lines += ["", "TAXONOMY"]
     hints = verdict.get("hints") or {}
-    if not screened:
+    if not screening["screened_kinds"]:
         lines.append("  TAXONOMY did not classify this recording")
-    for kind in sorted(screened):
+    for kind in sorted(screening["screened_kinds"]):
         lines.append(
-            f"  {kind}: screened={screened[kind]} resolved={_shown(resolved.get(kind))} "
-            f"agreement={_shown(agreement.get(kind))} hint={_shown(hints.get(kind))}"
+            f"  {kind}: screened={screening['screened_kinds'][kind]} "
+            f"resolved={_shown(screening['resolved_kinds'].get(kind))} "
+            f"agreement={_shown(screening['agreement'].get(kind))} hint={_shown(hints.get(kind))}"
         )
 
-    lines.append("")
-    lines.append("TOP CATEGORIES")
-    categories = _categories(store)
+    lines += ["", "SUPPORTING EVIDENCE"]
+    categories = document["categories"]
     if not categories:
         lines.append("  no window label set is in the store")
     for classifier, counts in categories.items():
         top = list(counts.items())[:_TOP_CATEGORIES]
         marker = f" (top {_TOP_CATEGORIES} of {len(counts)})" if len(counts) > _TOP_CATEGORIES else ""
         lines.append(f"  {classifier}{marker}: " + ", ".join(f"{label} ({n})" for label, n in top))
-    airway = steps.get("AIRWAY", {}).get("by_label") or {}
-    if airway:
-        lines.append("  airway labels: " + ", ".join(f"{label} ({n})" for label, n in sorted(airway.items())))
+    lines.append("  transcript tokens: " + str(document["transcript"]["words_n"]))
 
-    lines.append("")
-    lines.append("SPANS")
-    lines.append(f"  envelope spans: {len(_envelope_spans(store))}")
-    lines.append(f"  phonation spans: {len(_spans_of_family(store, 'phonation', voice=False))}")
-    lines.append(f"  speech spans: {len(_spans_of_family(store, 'speech'))}")
-    lines.append(f"  voice spans: {len(_spans_of_family(store, 'phonation', voice=True))}")
-
-    lines.append("")
-    lines.append("ABSENT (a lane not drawn is not a measured absence)")
-    absences = _absences(store)
+    lines += ["", "ABSENT (a lane not drawn is not a measured absence)"]
+    absences = document["evidence"]["preprocess_absences"]
     if absences:
         by_reading: dict[str, list[str]] = {}
         for derivative, (reading, raised) in absences.items():
@@ -982,48 +1232,32 @@ def _blocks(  # noqa: C901 — one independent block per step, as report.md asks
             lines.append(f"  {reading}: " + ", ".join(sorted(by_reading[reading])))
     else:
         lines.append("  PREPROCESS reports no absent derivative")
-    lane_absences = _lane_absences(store, drawn)
-    if lane_absences:
-        for lane, reason in lane_absences:
-            lines.append(f"  lane not drawn — {lane}: {reason}")
-    else:
+    lane_absences = _lane_absences_from_document(document, drawn)
+    for lane, reason in lane_absences:
+        lines.append(f"  lane not drawn — {lane}: {reason}")
+    if not lane_absences:
         lines.append("  every declared lane was drawn")
 
-    lines.append("")
-    scanned, why_not = _scan_state(store)
-    heading = (
+    scan = document["evidence"]["transcript_scan"]
+    transcript_heading = (
         "TRANSCRIPT (marked words rendered as their category)"
-        if scanned
+        if scan["complete"]
         else "TRANSCRIPT (WITHHELD — every word rendered as [unscanned])"
     )
-    lines.append(heading)
-    if not scanned:
-        lines.append(f"  {why_not}; an unscanned transcript is not a clean one")
-    transcript = _transcript(store, marks)
-    if not transcript:
-        lines.append("  no consensus transcript is in the store")
-    lines += ["  " + wrapped for wrapped in textwrap.wrap(transcript, width=_BLOCK_COLUMNS)]
+    lines += ["", transcript_heading]
+    if not scan["complete"]:
+        lines.append(f"  {scan['note']}; an unscanned transcript is not a clean one")
+    transcript = document["transcript"]["text"]
+    display_transcript = transcript or "no consensus transcript is in the store"
+    lines += ["  " + wrapped for wrapped in textwrap.wrap(display_transcript, width=_BLOCK_COLUMNS)]
 
-    lines.append("")
-    lines.append("VERDICT")
+    lines += ["", "AUDIT", f"  run: {_shown(provenance['run_id'])}", f"  file: {_shown(described['path'])}"]
     lines.append(
-        f"  triage: {_shown(verdict['triage'])}   release: {_shown(verdict['release'])}   "
-        f"discard_ground: {_shown(verdict.get('discard_ground'))}"
+        f"  duration: {_shown(described['duration_s'])} s  rate: {_shown(described['sample_rate'])} Hz  "
+        f"channels: {_shown(described['channels'])}"
     )
-    redact = steps.get("REDACT")
-    if redact is None:
-        lines.append("  redact: did not run")
-    else:
-        lines.append(
-            f"  redact: {redact.get('outcome')} — {redact.get('why')} "
-            f"(redactions_n={_shown(redact.get('redactions_n'))})"
-        )
-    for reason in verdict.get("reasons") or []:
-        lines.append(
-            f"  reason: {reason.get('node')} {reason.get('outcome')} [{reason.get('kind')}] {reason.get('why')}"
-        )
-    if not (verdict.get("reasons") or []):
-        lines.append("  no node contributed a reason")
+    lines.append("  " + _provenance_line(provenance))
+    lines.append(_redact_line(redact))
     return _wrapped(lines)
 
 
@@ -1060,24 +1294,14 @@ def report(
     resolved_run_dir = Path(run_dir) if run_dir is not None else summary_dir.parent
 
     marks = _assertions_by_source(store)
-    verdict = _verdict(store)
-    provenance = _provenance(store, config, store.run_id)
-    payload = {
-        "file": _file(store),
-        "verdict": verdict,
-        "branches": _branches(store),
-        "steps": _steps(store),
-        "transcript": {"text": _transcript(store, marks), "words_n": len(_words(store))},
-        "categories": _categories(store),
-        "provenance": provenance,
-    }
+    payload = _report_document(store, marks, config, summary_format=fmt)
     json_path = summary_dir / f"{SUMMARY_STEM}.json"
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n")
 
-    title = _title(store.run_id, verdict)
+    title = _title(store.run_id, payload["verdict"])
     summary_path = summary_dir / f"{SUMMARY_STEM}.{fmt}"
     try:
-        _render(store, marks, resolved_run_dir, config, provenance, title, summary_path, fmt)
+        _render(store, marks, resolved_run_dir, config, payload, title, summary_path, fmt)
     except Exception as error:  # noqa: BLE001 — any drawing failure keeps the product already written
         raise ReportRenderError(
             f"the summary could not be drawn ({type(error).__name__}: {error}); the JSON was written",
@@ -1091,7 +1315,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     marks: dict[str, list[Entity]],
     run_dir: Path,
     config: TriageConfig,
-    provenance: dict[str, Any],
+    document: dict[str, Any],
     title: str,
     path: Path,
     fmt: str,
@@ -1106,7 +1330,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
         marks: :func:`_assertions_by_source`'s index.
         run_dir: Where sidecar paths resolve against.
         config: The triage configuration.
-        provenance: :func:`_provenance`'s mapping, summarised onto the page's second line.
+        document: The structured report object also written as JSON.
         title: The figure's title, carrying the decision.
         path: Where the rendered summary goes.
         fmt: ``pdf`` for two pages — the panels, then the blocks — or ``png`` for one image
@@ -1117,10 +1341,15 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
 
     audio = _stream(store, run_dir)
     panels, drawn = ([], set[str]()) if audio is None else _panels(store, marks, run_dir, config)
-    blocks = _blocks(store, marks, drawn, provenance)
+    blocks = _blocks(document, drawn)
+    header = _header_lines(document)
 
     if fmt == "pdf":
-        lanes = _text_figure([_NO_AXIS], title) if audio is None else plot_aligned_panels(audio, panels, title=title)
+        lanes = (
+            _text_figure([*header, "", _NO_AXIS], title)
+            if audio is None
+            else plot_aligned_panels(audio, panels, title=title, header_lines=header)
+        )
         with PdfPages(path) as pages:
             for figure in (lanes, _text_figure(blocks, title)):
                 pages.savefig(figure, bbox_inches="tight")
@@ -1128,10 +1357,10 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
         return
 
     if audio is None:
-        figure = _text_figure(blocks, title)
+        figure = _text_figure([*header, "", *blocks], title)
     else:
-        panels.append({"type": "text", "lines": blocks})
-        figure = plot_aligned_panels(audio, panels, title=title)
+        panels.append({"type": "text", "lines": blocks, "family": "sans-serif", "fontsize": 8})
+        figure = plot_aligned_panels(audio, panels, title=title, header_lines=header)
     figure.savefig(path, bbox_inches="tight")
     pyplot.close(figure)
 

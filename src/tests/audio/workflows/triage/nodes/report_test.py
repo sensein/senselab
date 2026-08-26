@@ -75,6 +75,21 @@ def _capture_titles(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return captured
 
 
+def _capture_headers(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Record the decision header supplied to the time-aligned page."""
+    from senselab.audio.workflows.triage.nodes import report as report_module
+
+    captured: list[list[str]] = []
+    real = report_module.plot_aligned_panels
+
+    def _spy(audio: Any, panels: list[dict[str, Any]], **kwargs: Any) -> Any:  # noqa: ANN401
+        captured.append([str(line) for line in kwargs.get("header_lines") or []])
+        return real(audio, panels, **kwargs)
+
+    monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+    return captured
+
+
 def _stub_the_drawing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace the aligned-panel render with a bare figure, to time the store-reading path alone."""
     from matplotlib import pyplot
@@ -508,6 +523,34 @@ class TestItWritesNoElements:
         assert store.fingerprint() == before
 
 
+class TestTheStructuredJsonCompanion:
+    """The JSON is the same report model as the PDF, with a stable machine interface."""
+
+    def test_pdf_and_versioned_json_agree_on_the_file_decision(self, store: ProvStore, tmp_path: Path) -> None:
+        """Both sibling artifacts exist and the decision fields are one source of truth."""
+        _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+        payload = json.loads(artifacts["json"].read_text())
+        assert artifacts["summary"].exists() and artifacts["json"].exists()
+        assert payload["schema_version"] == "triage-summary/v1"
+        assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
+        assert payload["decisions"]["release"] == payload["verdict"]["release"]
+        assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
+        assert payload["artifacts"]["json"]["path"] == artifacts["json"].name
+
+    def test_json_exposes_context_routing_and_timed_evidence(self, store: ProvStore, tmp_path: Path) -> None:
+        """A consumer can audit a branch without parsing PDF prose."""
+        _seed_report_store(store, tmp_path, full=True)
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert {"recording", "screening", "routing", "evidence"} <= set(payload)
+        assert payload["recording"]["run_label"]
+        assert payload["routing"]["SPEECH"]["verdict"] is not None
+        speech_items = payload["evidence"]["branches"]["SPEECH"]
+        assert any(item["timing"] and item["provenance"]["node"] for item in speech_items)
+        assert all("entity_id" in item for item in payload["evidence"]["transcript_tokens"])
+
+
 class TestItRespectsThePiiMarking:
     """No matched text appears anywhere in either product."""
 
@@ -597,6 +640,18 @@ class TestTheSummaryLayers:
         assert kinds.count("segments") >= 5
         assert "waveform" in kinds
         assert panels[0][0]["twin"]["data"]
+
+    def test_the_header_leads_with_decisions_and_routing(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A reader sees the file decision before inspecting the supporting lanes."""
+        headers = _capture_headers(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        header = "\n".join(headers[0])
+        assert "FILE DECISION  triage:" in header and "release:" in header
+        assert "DECISION EVIDENCE" in header
+        assert "SCREENED KINDS" in header and "ROUTING" in header and "BRANCH OUTCOMES" in header
 
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -917,8 +972,8 @@ class TestTheRefusalPage:
 
         real = report_module._blocks
 
-        def _spy(store_: ProvStore, marks: dict[str, Any], lanes: set[str], provenance: dict[str, Any]) -> list[str]:
-            lines = real(store_, marks, lanes, provenance)
+        def _spy(document: dict[str, Any], lanes: set[str]) -> list[str]:
+            lines = real(document, lanes)
             drawn.append(lines)
             return lines
 
@@ -1113,7 +1168,7 @@ class TestThePdfIsTwoPages:
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         report(store, tmp_path / "summary", pdf_config)
         blocks = "\n".join(drawn[-1])
-        assert "VERDICT" in blocks and "TAXONOMY" in blocks and "hello world" in blocks
+        assert "DECISION SUMMARY" in blocks and "TAXONOMY" in blocks and "hello world" in blocks
 
     def test_the_png_stays_one_image_with_the_blocks_on_it(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1324,19 +1379,19 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         assert [panel["type"] for panel in lane] == ["tokens"]
         assert [token["text"] for token in lane[0]["tokens"]] == ["hello", "world"]
 
-    def test_every_word_is_drawn_on_the_bar_and_not_on_the_axis(self, store: ProvStore, tmp_path: Path) -> None:
-        """The reader sees the drawn artists; the panel dict alone proves nothing."""
+    def test_every_word_is_drawn_on_the_bar_and_in_a_small_cycling_lane(self, store: ProvStore, tmp_path: Path) -> None:
+        """The reader sees timed artists; compact lane ids never become token labels."""
         figure, panels = self._render(store, tmp_path, words=["hello", "world"])
         axis = self._words_axis(figure, panels)
         assert [text.get_text() for text in axis.texts] == ["hello", "world"]
-        assert list(axis.get_yticks()) == []
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == ["1", "2"]
 
     def test_forty_words_do_not_become_forty_ticks(self, store: ProvStore, tmp_path: Path) -> None:
         """The rendered failure: 40+ overlapping tick labels beside unlabelled coloured dashes."""
         figure, panels = self._render(store, tmp_path, words=[f"word{index}" for index in range(40)])
         axis = self._words_axis(figure, panels)
         assert len(axis.patches) == 40
-        assert [tick.get_text() for tick in axis.get_yticklabels()] == []
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == ["1", "2", "3"]
 
     def test_a_marked_word_renders_its_category_on_the_bar(self, store: ProvStore, tmp_path: Path) -> None:
         """The redaction discipline is unchanged by the move: the bar carries the placeholder."""
@@ -1384,16 +1439,16 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         ]
         assert collisions == []
 
-    def test_a_page_whose_words_already_fit_across_it_spends_no_second_row(
+    def test_words_cycle_through_three_inspectable_rows(
         self, store: ProvStore, tmp_path: Path
     ) -> None:
-        """Six seconds of words lie side by side on a report-width page, so the lane stays one row."""
+        """Row cycling makes dense consensus timing inspectable without a label pileup."""
         prose = (
             "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()
         )
         figure, panels = self._render(store, tmp_path, words=[prose[index % len(prose)] for index in range(40)])
         axis = self._words_axis(figure, panels)
-        assert len({round(float(patch.get_y()), 6) for patch in axis.patches}) == 1
+        assert len({round(float(patch.get_y()), 6) for patch in axis.patches}) == 3
         assert self._placed(axis)
 
     def test_the_staggered_page_still_draws_only_what_redaction_permits(self, store: ProvStore, tmp_path: Path) -> None:
