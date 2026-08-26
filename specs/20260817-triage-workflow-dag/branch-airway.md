@@ -10,34 +10,38 @@ airway(store, hint?, labels_of_interest={"Cough","Breathe"})
     -> fail(reason) | flag(reason, spans) | pass(airway_spans, unlabelled_spans)
 ```
 
-Reads and writes the [element store](store.md). It **proposes no elements of its own**: it `label`s,
-`confirm`s and `contest`s the `span` elements PREPROCESS wrote.
+Reads and writes the [element store](store.md). It **proposes no candidate spans of its own**: it
+re-evaluates every eligible `span` PREPROCESS wrote with HeAR, then `label`s, `confirm`s and
+`contest`s those candidates.
 
 | element read | author | used for |
 | --- | --- | --- |
 | `span` elements at `K` | PREPROCESS | the candidates this branch classifies |
-| `hear_windows` | PREPROCESS | the health-acoustic evidence, **confined to this branch** |
+| `hear_windows` | PREPROCESS | TAXONOMY's whole-file health-acoustic evidence; **not used to label a candidate** |
 | `yamnet_windows`, `silence` | PREPROCESS | confirmation, contest, and negative evidence |
 | `word` and `event` elements | PREPROCESS | which spans already carry a transcript, and lexical contamination |
 | `spectrogram_wb`, `gammatone` | PREPROCESS | the [report](report.md) only |
 | `hint` | caller | conditions the outcome only |
 
-**This branch runs no classifier.** Every window classification it reads was written by PREPROCESS.
+**This branch re-runs HeAR per candidate span.** It never reuses a whole-file HeAR label as span
+evidence.
 
 ## 1. Label each span — HeAR, as confirmation
 
-**HeAR is read only here.** No other node in the graph reads a health-acoustic label: its cough and
-breath evidence is airway evidence and nothing else.
+**HeAR is re-evaluated only here.** No other branch reads health-acoustic labels: its cough and breath
+evidence is airway evidence and nothing else.
 
-**HeAR confirms a span; it does not find one.** The candidate is the `span` element; HeAR says whether
-that candidate's extent carries cough or breath.
+**HeAR confirms a span; it does not find one.** The candidate is the `span` element; AIRWAY puts a
+short candidate in the detector's two-second silent buffer, or scans a longer isolated candidate,
+then asks whether that input carries cough or breath.
 
 - A span is eligible for a HeAR label only if it carries **no non-cough/breath transcript**. A span
   overlapping `word` entities from the consensus is transcribed content and is not offered to HeAR; a
   span overlapping only bracketed or onomatopoeic `event` entities remains eligible, because those
   are the events this branch is looking for.
-- The label is the `labels_of_interest` member confident in the `hear_windows` overlapping the span —
-  membership in the window's set, per [`preprocess.md`](preprocess.md), not a score compared here.
+- The label is the `labels_of_interest` member whose score clears its configured HeAR threshold in the
+  span's fresh evaluation. The resulting `hear_span_window` records the scores and is derived from
+  the candidate span.
 - `labels_of_interest` is configurable; default `{"Cough", "Breathe"}`.
 - A span with no confident member of interest in its windows carries **no label**.
 
@@ -45,15 +49,15 @@ that candidate's extent carries cough or breath.
 
 YAMNet is read from `yamnet_windows`, on its own grid, never from the span as an input.
 
-**A contest requires co-location.** A YAMNet label may contest a HeAR label only when **both fall
-inside the same window** — a label a window away is a different event, not a disagreement about this
-one. The eligible contesting labels are the config key `airway.contest_labels`, a declared set rather
-than all 521.
+**A contest requires overlap with the candidate.** A YAMNet label may contest a fresh HeAR label only
+when its native window intersects the candidate span. A label elsewhere is a different event, not a
+disagreement about this one. The eligible contesting labels are the config key
+`airway.contest_labels`, a declared set rather than all 521.
 
-| the span's overlapping windows | effect |
+| the candidate's overlapping YAMNet windows | effect |
 | --- | --- |
 | carry a label mapping to HeAR's — `Cough`→`Cough`, `Breathe`→{`Breathing`,`Sigh`,`Gasp`} | **confirm** |
-| carry a member of `airway.contest_labels`, co-located in the same window | **contest** — flag the span, do not relabel |
+| carry a member of `airway.contest_labels` | **contest** — flag the span, do not relabel |
 | carry neither | **abstain** — HeAR's label stands, marked single-source |
 
 **A label may not both support and contest the same conclusion.** A label in
@@ -106,8 +110,8 @@ verdict:  { labelled_n, by_label{}, contested_n, near_gate_n, merged_n, k_db, fl
 view:     the span element ids this branch labelled, confirmed or contested
 ```
 
-Each span read through the view carries its `label`, the HeAR windows behind it, YAMNet's
-`confirm`/`contest`/abstain and the window the contest was co-located in, whether it lies inside
+Each span read through the view carries its `label`, the fresh HeAR evaluation behind it, YAMNet's
+`confirm`/`contest`/abstain and the overlapping YAMNet windows, whether it lies inside
 certified silence, how many proposals it absorbed, and its `peak_over_floor_db` with its margin over
 `K`.
 
