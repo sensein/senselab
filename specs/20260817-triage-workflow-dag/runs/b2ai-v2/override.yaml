@@ -15,6 +15,15 @@
 # voice.f0_range_hz below, carrying the same guess and the same caveat. The v1
 # phonation.hnr_floor_db / rms_floor and taxonomy.min_families keys no longer exist and are dropped.
 #
+# GUESS phonation_spans.unvoiced_max_formant_bandwidth_hz 250 -- the widest F1/F2 pole admitted as
+# resonant evidence when periodic F0 is absent. This is the conservative screening value exercised
+# by the task-level phonation tests; it is not fitted to B2AI and must not be interpreted as a
+# diagnostic threshold. What would fit it: bandwidth distributions over labelled unvoiced phonation
+# and non-vocal resonant noise.
+# GUESS phonation_spans.word_aligned_min_evidence_fraction 0.8 -- at least four fifths of a timed
+# consensus-word segment must show periodic or narrow-resonant evidence before it becomes a
+# word-aligned phonation span. This is an evaluation choice, not a lexical rule. What would fit it:
+# frame-level phonation annotations over words, disfluencies, and non-vocal intervals.
 # ---------------------------------------------------------------------------------------------
 # GUESS windows.{yamnet,ast,hear}.default_threshold 0.5 -- the score-gap heuristic, and EXPLICITLY
 #   UNVALIDATED as a per-window cut. The packaged derivation retracts the v1 taxonomy.presence_floor
@@ -219,6 +228,8 @@ phonation_spans:
   hangover_ms: 60.0
   voicing_strength_floor: 0.3
   mixed_voiced_fraction: 0.5
+  unvoiced_max_formant_bandwidth_hz: 250.0
+  word_aligned_min_evidence_fraction: 0.8
 
 voice:
   f0_range_hz: [75.0, 500.0]
