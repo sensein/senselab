@@ -1,7 +1,7 @@
 """This module contains functions for plotting audio-related data."""
 
 import os
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
 if not os.environ.get("DISPLAY") and "inline" not in os.environ.get("MPLBACKEND", ""):
@@ -14,7 +14,9 @@ import numpy as np
 import torch
 from matplotlib import rc_context
 from matplotlib.axes import Axes
+from matplotlib.backend_bases import RendererBase
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from senselab.audio.data_structures import Audio
@@ -29,7 +31,122 @@ _INCHES_PER_RATIO = 1.8  # what one unit of plot_aligned_panels' height_ratios i
 TEXT_PANEL_INCHES_PER_LINE = 0.18  # 8 pt at 1.2 line spacing is 0.133 in; the rest is headroom
 MIN_FIGURE_HEIGHT_IN = 4.0  # the floor plot_aligned_panels puts under a short panel stack
 TOKEN_LABEL_FONTSIZE = 5.0  # the default point size of the text a tokens panel draws on a bar
-TOKEN_LABEL_MIN_WIDTH_S = 0.06  # a bar narrower than this carries no text; panel key min_width_s
+TOKEN_LABEL_FLOOR_FONTSIZE = 4.0  # the smallest point size a token label is shrunk to before it is dropped
+TOKEN_LABEL_PADDING_PT = 1.0  # points of the bar kept clear of its label, shared by the two ends
+
+
+def _fitted_token_fontsize(
+    measure: Callable[[float], float],
+    available_pt: float,
+    full_fontsize: float,
+    floor_fontsize: float,
+) -> Optional[float]:
+    """The largest point size in ``[floor_fontsize, full_fontsize]`` at which a label fits its bar.
+
+    Args:
+        measure: The label's rendered width in points at a given point size.
+        available_pt: The bar's width in points, less the padding kept clear of the label.
+        full_fontsize: The size the label is drawn at when it fits.
+        floor_fontsize: The size below which the label is dropped rather than shrunk further.
+
+    Returns:
+        The point size to draw at, or ``None`` when the label does not fit even at the floor.
+    """
+    if available_pt <= 0.0:
+        return None
+    width = measure(full_fontsize)
+    if width <= available_pt:
+        return full_fontsize
+    if width <= 0.0:
+        return None
+    candidate = min(full_fontsize, max(full_fontsize * available_pt / width, floor_fontsize))
+    return candidate if measure(candidate) <= available_pt else None
+
+
+class _FittedTokenLabel(Text):
+    """A token's text, drawn only at a point size at which it fits the bar it names.
+
+    The decision is taken against the renderer that is about to draw it, so it holds for a figure
+    saved at any width or dpi, and is retaken from ``full_fontsize`` on every draw.
+    """
+
+    def __init__(
+        self,
+        x: float,
+        y: float,
+        text: str,
+        *,
+        bar: Tuple[float, float],
+        full_fontsize: float,
+        floor_fontsize: float = TOKEN_LABEL_FLOOR_FONTSIZE,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> None:
+        """Place ``text`` at ``(x, y)`` as the label of the bar spanning ``bar`` on the time axis.
+
+        Args:
+            x: The label's x position, in data coordinates.
+            y: The label's y position, in data coordinates.
+            text: The label's text.
+            bar: The bar's ``(start, end)`` extent on the time axis.
+            full_fontsize: The point size the label is drawn at when it fits.
+            floor_fontsize: The point size below which the label is dropped rather than shrunk.
+            **kwargs: Forwarded to ``matplotlib.text.Text``.
+        """
+        super().__init__(x, y, text, **kwargs)
+        self._bar = bar
+        self._full_fontsize = full_fontsize
+        self._floor_fontsize = floor_fontsize
+
+    def _points_per_pixel(self) -> float:
+        """Display pixels are dpi-dependent; the fit is stated in points, which are not."""
+        figure = self.get_figure()
+        return 72.0 / float(figure.dpi) if figure is not None else 1.0
+
+    def _bar_width_pt(self) -> float:
+        """The bar's width in points, under the axes transform that is current for this draw."""
+        axes = self.axes
+        if axes is None:
+            return 0.0
+        (x0, _), (x1, _) = axes.transData.transform([(self._bar[0], 0.0), (self._bar[1], 0.0)])
+        return abs(float(x1) - float(x0)) * self._points_per_pixel()
+
+    def _text_width_pt(self, renderer: RendererBase, fontsize: float) -> float:
+        """The label's rendered width in points at ``fontsize``, on the renderer about to draw it.
+
+        Args:
+            renderer: The renderer to measure against.
+            fontsize: The point size to measure at.
+
+        Returns:
+            The width in points. A hidden ``Text`` measures as a unit box, so it is shown first.
+        """
+        self.set_visible(True)
+        self.set_fontsize(fontsize)
+        return float(self.get_window_extent(renderer).width) * self._points_per_pixel()
+
+    def draw(self, renderer: RendererBase) -> None:
+        """Draw the label at a size at which it fits its bar, or not at all.
+
+        Args:
+            renderer: The renderer this draw is going through.
+        """
+        callback, self.stale_callback = self.stale_callback, None
+        try:
+            self.set_visible(True)
+            self.set_fontsize(self._full_fontsize)
+            available = self._bar_width_pt() - TOKEN_LABEL_PADDING_PT
+            fitted = _fitted_token_fontsize(
+                lambda fontsize: self._text_width_pt(renderer, fontsize),
+                available,
+                self._full_fontsize,
+                self._floor_fontsize,
+            )
+            self.set_fontsize(self._full_fontsize if fitted is None else fitted)
+            self.set_visible(fitted is not None)
+        finally:
+            self.stale_callback = callback
+            self.stale = False
+        super().draw(renderer)
 
 
 def _detect_screen_resolution() -> Tuple[int, int]:
@@ -559,11 +676,12 @@ def plot_aligned_panels(
       is a y-tick, so this type suits a lane of a few repeating labels rather than of many texts.
     - ``{"type": "tokens", "tokens": [{"text": str, "start": float, "end": float,
       "row": str (optional)}, ...], "name": str, "fontsize": float (optional),
-      "min_width_s": float (optional)}`` -- one bar per timed token with the token's **text drawn on
-      the bar**, for a lane of many distinct texts: words, phones, a recognizer's tokens. The y-axis
-      carries a tick per declared ``row`` and none at all when no token declares one, so 40 words
-      are 40 labelled bars rather than 40 y-ticks. A bar narrower than ``min_width_s`` keeps its bar
-      and is drawn without text.
+      "floor_fontsize": float (optional)}`` -- one bar per timed token with the token's **text drawn
+      on the bar**, for a lane of many distinct texts: words, phones, a recognizer's tokens. The
+      y-axis carries a tick per declared ``row`` and none at all when no token declares one, so 40
+      words are 40 labelled bars rather than 40 y-ticks. Each label is measured against its own bar
+      at draw time, in points: one that does not fit at ``fontsize`` is shrunk towards
+      ``floor_fontsize`` and dropped if it does not fit there either. The bar is never dropped.
     - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
       spectrogram with scatter overlays (each overlay is a dict with keys
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
@@ -722,7 +840,7 @@ def plot_aligned_panels(
                 y_of = {row: index for index, row in enumerate(rows)}
                 named_rows = [row for row in rows if row]
                 fontsize = float(panel.get("fontsize", TOKEN_LABEL_FONTSIZE))
-                min_width = float(panel.get("min_width_s", TOKEN_LABEL_MIN_WIDTH_S))
+                floor = float(panel.get("floor_fontsize", TOKEN_LABEL_FLOOR_FONTSIZE))
                 cmap = plt.get_cmap("tab20", max(len(rows), 1))
                 for token in tokens:
                     y = y_of[str(token.get("row") or "")]
@@ -730,17 +848,23 @@ def plot_aligned_panels(
                     width = end - start
                     ax.barh(y + 0.5, width, left=start, height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
                     text = str(token.get("text") or "")
-                    if text and width >= min_width:
-                        ax.text(
+                    if text:
+                        label = _FittedTokenLabel(
                             start + width / 2.0,
                             y + 0.5,
                             text,
+                            bar=(start, end),
+                            full_fontsize=fontsize,
+                            floor_fontsize=floor,
                             ha="center",
                             va="center",
                             fontsize=fontsize,
                             color="black",
+                            transform=ax.transData,
                             clip_on=True,
                         )
+                        label.set_clip_path(ax.patch)
+                        ax.add_artist(label)
                 ax.set_ylim(0.0, float(max(len(rows), 1)))
                 ax.set_yticks([index + 0.5 for index in range(len(rows))] if named_rows else [])
                 if named_rows:
