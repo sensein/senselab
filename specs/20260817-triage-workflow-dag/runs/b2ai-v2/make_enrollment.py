@@ -6,6 +6,10 @@
         --dir /orcd/data/.../sub-17cee767-1864-457a-b2ec-446a058a81f8/ \
         --out enrollment/sub-17cee767.yaml
 
+    # which files the source policy would enrol from, without loading a model
+    uv run python .../make_enrollment.py --list-sources --dir .../sub-<uuid>/
+    uv run python .../make_enrollment.py --selftest
+
 A thin driver over :func:`senselab.audio.tasks.speaker_embeddings.estimate_speaker_embedding_from_audios`,
 which does the actual work: it windows every file, embeds each window with ECAPA, pools them and
 describes the resulting distribution. This script adds only the three things that function has no
@@ -13,8 +17,7 @@ business deciding -- which files go in, what the subject is called, and the on-d
 ``scripts/triage_audio.py --enrollment`` reads (``Enrollment``: ``subject_id``, ``vector``,
 ``provenance``, and optionally ``task`` and ``distribution``).
 
-It refuses rather than guesses in three places, each of which produced a silently wrong enrollment
-when it was left to a default:
+It refuses rather than guesses:
 
 * **The commit must agree with the campaign override.** ``SPEECH`` passes
   ``speech.enrollment_model.revision`` STRAIGHT into ``Enrollment.refusal_against`` as the probe
@@ -22,11 +25,16 @@ when it was left to a default:
   on every file, and the run reports a refusal where a target should have been. ``--override``
   (default: the one beside this script) is read for the pinned commit, and the estimate is run at
   that commit rather than at ``main``.
-* **The estimate must be told which files to trust.** This function reaches no verdict about
-  whether its input was clean; a file that does not contain the target speaker is not an error, it
-  is a row in the returned per-file statistics. ``--exclude`` and the printed per-file report are
-  how a caller curates. Nothing here rejects contamination by default -- selecting a dominant group
-  is a decision, and it is made with ``--reject-contamination`` and recorded in the provenance.
+* **The sources are speech files only.** A candidate is enrolled from exactly when its task token
+  resolves, through :mod:`make_hints`, to a hint whose ``metadata.speech_type`` is in
+  :data:`SPEECH_TYPES` -- so every airway file and every non-lexical voice task is excluded, the
+  exclusions are printed by category, and a subject with no speech file is refused rather than
+  enrolled from what is left. This is the policy, not an option; see README.md, "Phase 2:
+  enrollment", for the ruling of 2026-08-25 and the measurements behind it.
+* **Within the selected speech, the estimator still reaches no verdict about its input.** A file
+  that does not contain the target speaker is not an error there, it is a row in the returned
+  per-file statistics. ``--exclude`` drops a named basename, and ``--reject-contamination`` keeps
+  only the dominant window group and records that in ``provenance.method``.
 * **``created_at`` is not "now" unless asked.** A stamp nobody chose makes the output
   unreproducible; ``--created-at`` supplies one deliberately.
 
@@ -40,14 +48,24 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, NamedTuple, Sequence
 
+import make_hints
 import yaml  # type: ignore[import-untyped]
 
 HERE = Path(__file__).resolve().parent
 DEFAULT_OVERRIDE = HERE / "override.yaml"
 _HEX = set("0123456789abcdef")
+
+SPEECH_TYPES: frozenset[str] = frozenset({"read", "elicited", "recall"})
+"""The ``metadata.speech_type`` values :data:`make_hints.RULES` gives a speech task. A recording
+whose task token resolves to any other value is not an enrollment source. See README.md, "Phase 2:
+enrollment", for the ruling and the measurements behind it."""
+
+UNCLASSIFIED = "unclassified"
+"""The exclusion category for a filename whose task token no hint rule claims."""
 
 
 def pinned_model(override: Path) -> tuple[str, str]:
@@ -83,17 +101,71 @@ def pinned_model(override: Path) -> tuple[str, str]:
     return str(model_id), revision.casefold()
 
 
-def _sources(args: argparse.Namespace) -> list[Path]:
-    """Every recording the enrollment is estimated from.
+class Selection(NamedTuple):
+    """One subject's candidate recordings, partitioned by the enrollment source policy.
+
+    Attributes:
+        kept: The speech recordings the enrollment is estimated from, sorted.
+        rejected: ``(path, category)`` for every candidate the policy excluded, sorted. The category
+            is ``<speech_type>/<rule name>`` from :data:`make_hints.RULES`, or :data:`UNCLASSIFIED`.
+    """
+
+    kept: list[Path]
+    rejected: list[tuple[Path, str]]
+
+
+def select_speech(paths: Sequence[Path]) -> Selection:
+    """Partition candidate recordings into speech sources and everything else.
+
+    The classification is :func:`make_hints.resolve` over :func:`make_hints.task_token`, so a
+    recording is a source exactly when the hint it would be given carries a
+    ``metadata.speech_type`` in :data:`SPEECH_TYPES`.
+
+    Args:
+        paths: The candidate recordings.
+
+    Returns:
+        The partition.
+    """
+    kept: list[Path] = []
+    rejected: list[tuple[Path, str]] = []
+    for path in sorted(set(paths)):
+        try:
+            rule = make_hints.resolve(make_hints.task_token(path.name))
+        except ValueError:
+            rejected.append((path, UNCLASSIFIED))
+            continue
+        if rule.speech_type in SPEECH_TYPES:
+            kept.append(path)
+        else:
+            rejected.append((path, f"{rule.speech_type}/{rule.name}"))
+    return Selection(kept, rejected)
+
+
+def _by_category(selection: Selection) -> list[tuple[str, int]]:
+    """How many recordings each exclusion category dropped.
+
+    Args:
+        selection: The partition.
+
+    Returns:
+        ``(category, count)``, most-dropped first, ties broken by category name.
+    """
+    counts = Counter(category for _, category in selection.rejected)
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+
+
+def _sources(args: argparse.Namespace) -> Selection:
+    """Every recording the enrollment is estimated from, and every candidate the policy dropped.
 
     Args:
         args: The parsed command line.
 
     Returns:
-        The paths, sorted, with excluded basenames removed.
+        The partition of the candidates, with ``--exclude``d basenames removed before it is made.
 
     Raises:
-        ValueError: If no recording survives.
+        ValueError: If no candidate was named at all, or if no candidate is a speech recording.
     """
     paths: list[Path] = [Path(name) for name in args.files]
     if args.dir is not None:
@@ -102,17 +174,44 @@ def _sources(args: argparse.Namespace) -> list[Path]:
         text = sys.stdin.read() if str(args.list) == "-" else Path(args.list).read_text()
         paths += [Path(line.strip()) for line in text.splitlines() if line.strip()]
     excluded = {name.casefold() for name in args.exclude}
-    kept = sorted({path for path in paths if path.name.casefold() not in excluded})
-    if not kept:
+    candidates = sorted({path for path in paths if path.name.casefold() not in excluded})
+    if not candidates:
         raise ValueError("no recordings to enrol from: give paths, --dir or --list")
-    return kept
+    selection = select_speech(candidates)
+    if not selection.kept:
+        counted = ", ".join(f"{category}: {count}" for category, count in _by_category(selection))
+        raise ValueError(
+            f"no speech recording to enrol from: all {len(candidates)} candidate(s) are excluded by "
+            f"the source policy ({counted}). The enrollment is estimated over speech only "
+            f"(speech_type {', '.join(sorted(SPEECH_TYPES))}); a subject with no speech file cannot "
+            "be enrolled from this session."
+        )
+    return selection
 
 
-def estimate(args: argparse.Namespace, model_id: str, commit: str) -> dict[str, object]:
+def report_selection(selection: Selection) -> None:
+    """Print the source selection and every exclusion it made.
+
+    Args:
+        selection: The partition.
+    """
+    total = len(selection.kept) + len(selection.rejected)
+    print(f"sources      {len(selection.kept)} speech file(s) of {total} candidate(s)")
+    for path in selection.kept:
+        print(f"  + {path.name}")
+    if selection.rejected:
+        counted = ", ".join(f"{category}: {count}" for category, count in _by_category(selection))
+        print(f"excluded     {len(selection.rejected)} non-speech file(s) -- {counted}")
+        for path, category in selection.rejected:
+            print(f"  - {path.name}  [{category}]")
+
+
+def estimate(args: argparse.Namespace, sources: Sequence[Path], model_id: str, commit: str) -> dict[str, object]:
     """Run the estimator and shape its result as an ``Enrollment`` mapping.
 
     Args:
         args: The parsed command line.
+        sources: The speech recordings :func:`_sources` selected.
         model_id: The embedding model, from the override.
         commit: The pinned 40-hex commit, from the override.
 
@@ -128,7 +227,6 @@ def estimate(args: argparse.Namespace, model_id: str, commit: str) -> dict[str, 
     from senselab.audio.tasks.speaker_embeddings import estimate_speaker_embedding_from_audios
     from senselab.utils.data_structures import SpeechBrainModel
 
-    sources = _sources(args)
     audios = resample_audios([Audio(filepath=str(path)) for path in sources], args.sample_rate)
     estimated = estimate_speaker_embedding_from_audios(
         audios,
@@ -156,6 +254,119 @@ def estimate(args: argparse.Namespace, model_id: str, commit: str) -> dict[str, 
     if estimated.distribution is not None and not args.drop_distribution:
         payload["distribution"] = estimated.distribution.model_dump(mode="json")
     return payload
+
+
+SELECTION_CASES: tuple[tuple[str, bool], ...] = (
+    # Speech: the tasks whose hint speech_type is read, elicited or recall.
+    ("Rainbow-Passage", True),
+    ("Caterpillar-Passage", True),
+    ("Reading-1", True),
+    ("Harvard-Sentences-List-49-1", True),
+    ("Cape-V-sentences-(v2)-3", True),
+    ("Free-speech-1", True),
+    ("Free-speech-(v2)-2", True),
+    ("Picture-description", True),
+    ("Picture-description-option2", True),
+    ("Productive-Vocabulary-1", True),
+    ("Random-Item-Generation-1", True),
+    ("Word-color-Stroop-1", True),
+    ("Story-recall", True),
+    ("Story-recall-(v2)", True),
+    ("Cinderella-Story", True),
+    # Airway.
+    ("Respiration-and-cough-Cough-1", False),
+    ("Respiration-and-cough-(v2)-HardCough", False),
+    ("Respiration-and-cough-Breath-1", False),
+    ("Respiration-and-cough-FiveBreaths-3", False),
+    ("Respiration-and-cough-(v2)-ThreeBreathsNose", False),
+    # Non-lexical voice.
+    ("Prolonged-vowel", False),
+    ("Maximum-phonation-time-1", False),
+    ("Maximum-phonation-time-(v2)-1", False),
+    ("Glides-High-to-Low", False),
+    ("Glides-Low-to-High", False),
+    ("Loudness", False),
+    ("Loudness-(v2)", False),
+    ("Diadochokinesis-KA", False),
+    ("Diadochokinesis-(v2)-puhtuhkuh", False),
+    # Both limbs of the one token whose may_contain carries `speech` while its speech_type is
+    # non-lexical: the speech_type governs the source policy, so it is excluded.
+    ("Diadochokinesis-buttercup", False),
+    ("Diadochokinesis-(v2)-buttercup", False),
+)
+"""Task token to whether the enrollment source policy selects it."""
+
+B2AI_28_SPEECH = 6
+V2_47_SPEECH = 32
+"""How many of the two pinned task inventories in ``make_hints`` the policy selects."""
+
+
+def _named(token: str) -> str:
+    """A b2ai-shaped filename carrying one task token.
+
+    Args:
+        token: The task token.
+
+    Returns:
+        The filename.
+    """
+    return f"{make_hints.B2AI_28_SUBJECT}_{make_hints.B2AI_28_SESSION}_task-{token}.wav"
+
+
+def selftest() -> int:
+    """Check the enrollment source policy against the hint rules it reuses.
+
+    Returns:
+        0 when every case holds, 1 otherwise.
+    """
+    failures: list[str] = []
+    for token, expected in SELECTION_CASES:
+        selection = select_speech([Path(_named(token))])
+        got = bool(selection.kept)
+        if got is not expected:
+            reason = selection.rejected[0][1] if selection.rejected else "selected"
+            failures.append(f"  {token}: selected={got}, expected {expected} ({reason})")
+    for inventory, expected_count, label in (
+        (make_hints.B2AI_28, B2AI_28_SPEECH, "B2AI_28"),
+        (make_hints.V2_47, V2_47_SPEECH, "V2_47"),
+    ):
+        selection = select_speech([Path(_named(token)) for token in inventory])
+        if len(selection.kept) != expected_count:
+            failures.append(f"  {label}: selected {len(selection.kept)} of {len(inventory)}, expected {expected_count}")
+        if len(selection.kept) + len(selection.rejected) != len(inventory):
+            failures.append(f"  {label}: {len(inventory)} tokens partitioned into a different total")
+        for token in inventory:
+            rule = make_hints.resolve(token)
+            wanted = rule.speech_type in SPEECH_TYPES
+            got = Path(_named(token)) in selection.kept
+            if got is not wanted:
+                failures.append(f"  {label}/{token}: speech_type {rule.speech_type!r} but selected={got}")
+    unreadable = select_speech([Path("not-a-b2ai-name.wav")])
+    if unreadable.kept or not unreadable.rejected:
+        failures.append("  a filename carrying no 'task-' element must be excluded, not enrolled from")
+    airway_only = [_named("Respiration-and-cough-Cough-1"), _named("Prolonged-vowel")]
+    try:
+        _sources(build_parser().parse_args(airway_only))
+    except ValueError as error:
+        if "speech" not in str(error):
+            failures.append(f"  zero-speech refusal raised the wrong message: {error}")
+    else:
+        failures.append("  a subject with no speech file must be refused, not enrolled from non-speech material")
+    speech_and_airway = [_named("Free-speech-1"), _named("Respiration-and-cough-Cough-1")]
+    survivors = _sources(build_parser().parse_args(speech_and_airway))
+    if [path.name for path in survivors.kept] != [_named("Free-speech-1")]:
+        failures.append(f"  a mixed directory selected {[path.name for path in survivors.kept]}")
+    if failures:
+        print(f"selftest FAILED ({len(failures)}):", file=sys.stderr)
+        print("\n".join(failures), file=sys.stderr)
+        return 1
+    print(
+        f"selftest ok: {len(SELECTION_CASES)} task tokens partitioned as ruled; "
+        f"{B2AI_28_SPEECH}/{len(make_hints.B2AI_28)} and {V2_47_SPEECH}/{len(make_hints.V2_47)} selected, "
+        "each agreeing with make_hints' speech_type; an unreadable name is excluded; "
+        "a subject with no speech file is refused"
+    )
+    return 0
 
 
 def report(payload: dict[str, object]) -> None:
@@ -189,11 +400,11 @@ def build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("files", nargs="*", help="Recordings to enrol from.")
-    parser.add_argument("--subject", required=True, help="Subject id written into the enrollment.")
+    parser.add_argument("--subject", default=None, help="Subject id written into the enrollment.")
     parser.add_argument("--dir", type=Path, default=None, help="Directory to scan recursively for *.wav.")
     parser.add_argument("--list", default=None, help="File of one path per line, or '-' for stdin.")
     parser.add_argument("--exclude", nargs="*", default=[], help="Basenames to leave out of the estimate.")
-    parser.add_argument("--out", type=Path, required=True, help="Where the enrollment YAML is written.")
+    parser.add_argument("--out", type=Path, default=None, help="Where the enrollment YAML is written.")
     parser.add_argument("--override", type=Path, default=DEFAULT_OVERRIDE, help="Campaign override (for the pin).")
     parser.add_argument("--task", default=None, help="The vocal task the enrollment was estimated over, if one.")
     parser.add_argument("--sample-rate", type=int, default=16000, help="Resample target (default: 16000).")
@@ -213,6 +424,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--created-at", default=None, help="ISO-8601 stamp. Omitted rather than defaulted to now.")
     parser.add_argument("--drop-distribution", action="store_true", help="Omit the distribution block from the file.")
     parser.add_argument("--json", action="store_true", help="Write JSON instead of YAML; the CLI reads either.")
+    parser.add_argument(
+        "--list-sources",
+        action="store_true",
+        help="Print the source selection and exit, without loading a model or embedding anything.",
+    )
+    parser.add_argument("--selftest", action="store_true", help="Check the source policy against the hint rules.")
     return parser
 
 
@@ -226,9 +443,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         0 on success, 2 when the arguments or the estimate could not be resolved.
     """
     args = build_parser().parse_args(list(argv) if argv is not None else None)
+    if args.selftest:
+        return selftest()
+    if not args.list_sources and (args.subject is None or args.out is None):
+        print("ERROR: --subject and --out are required unless --selftest or --list-sources", file=sys.stderr)
+        return 2
     try:
+        selection = _sources(args)
+        report_selection(selection)
+        if args.list_sources:
+            return 0
         model_id, commit = pinned_model(args.override)
-        payload = estimate(args, model_id, commit)
+        payload = estimate(args, selection.kept, model_id, commit)
     except (OSError, ValueError, KeyError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
