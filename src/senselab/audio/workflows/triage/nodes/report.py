@@ -300,7 +300,11 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _token_lane(
-    name: str, entries: Iterable[tuple[tuple[float, float], str]], *, report_lane: str | None = None
+    name: str,
+    entries: Iterable[tuple[tuple[float, float], str]],
+    *,
+    report_lane: str | None = None,
+    expand_label_slots: bool = False,
 ) -> list[dict[str, Any]]:
     """One cycling-row ``tokens`` panel — a bar per token with inspectable timing — or none.
 
@@ -308,6 +312,7 @@ def _token_lane(
         name: The lane's name, drawn as the panel's y-label.
         entries: ``(extent, text)`` pairs, one per token, in the order they are drawn.
         report_lane: The semantic lane key when its reader-facing label carries a context qualifier.
+        expand_label_slots: Whether short labels may use unused horizontal room in their cycling row.
 
     Returns:
         A one-element list holding the panel, or an empty list when there is no token.
@@ -321,7 +326,15 @@ def _token_lane(
         }
         for index, (extent, text) in enumerate(entries)
     ]
-    return [{"type": "tokens", "tokens": tokens, "name": name, "report_lane": report_lane}] if tokens else []
+    return [
+        {
+            "type": "tokens",
+            "tokens": tokens,
+            "name": name,
+            "report_lane": report_lane,
+            "expand_label_slots": expand_label_slots,
+        }
+    ] if tokens else []
 
 
 def _window_presentation(store: ProvStore, classifier: str) -> dict[str, Any]:
@@ -492,6 +505,7 @@ def _panels(
             if word.extent is not None
         ),
         report_lane="words",
+        expand_label_slots=True,
     )
     panels += _lane(
         "airway",

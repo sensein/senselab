@@ -115,11 +115,14 @@ def _token_label_slots(
     rows: Sequence[int],
     row_count: int,
     limits: Tuple[float, float],
+    *,
+    expand_to_row_neighbours: bool = False,
 ) -> List[Tuple[float, float]]:
     """The extent on the time axis each label is measured against, one per token.
 
     Each slot is centred on the token's bar and reaches no further than the midpoint to the nearest
-    token sharing its row, the edge of the window, or ``row_count`` times the token's own bar.
+    token sharing its row or the edge of the window. By default it additionally stays within the
+    bar's cycling-row reach; a report can opt into the unused row space for short transcript words.
 
     Args:
         centres: Each token's bar centre, on the time axis.
@@ -127,6 +130,7 @@ def _token_label_slots(
         rows: Each token's row.
         row_count: The number of rows the tokens are spread over.
         limits: The window's ``(lower, upper)`` extent on the time axis.
+        expand_to_row_neighbours: Whether labels may use all unused space in their cycling row.
 
     Returns:
         One ``(lower, upper)`` extent per token, in the order the tokens were given.
@@ -149,7 +153,10 @@ def _token_label_slots(
         seen[rows[index]] = index
     slots: List[Tuple[float, float]] = []
     for index, centre in enumerate(centres):
-        reach = max(0.0, min(centre - left[index], right[index] - centre, row_count * half_spans[index]))
+        reach = min(centre - left[index], right[index] - centre)
+        if not expand_to_row_neighbours:
+            reach = min(reach, row_count * half_spans[index])
+        reach = max(0.0, reach)
         slots.append((centre - reach, centre + reach))
     return slots
 
@@ -274,6 +281,7 @@ class _StaggeredTokenLane(Artist):
         staggered_block: Optional[int],
         fontsize: float,
         floor_fontsize: float,
+        expand_to_row_neighbours: bool = False,
     ) -> None:
         """Lay ``placements`` out over ``blocks`` stacked blocks of the lane.
 
@@ -283,6 +291,7 @@ class _StaggeredTokenLane(Artist):
             staggered_block: The block holding the tokens that declared no row, if there is one.
             fontsize: The point size the labels are drawn at when they fit.
             floor_fontsize: The point size below which a label is dropped rather than shrunk.
+            expand_to_row_neighbours: Whether labels may use unused horizontal room in their cycling row.
         """
         super().__init__()
         self._placements = placements
@@ -290,6 +299,7 @@ class _StaggeredTokenLane(Artist):
         self._staggered_block = staggered_block
         self._fontsize = fontsize
         self._floor_fontsize = floor_fontsize
+        self._expand_to_row_neighbours = expand_to_row_neighbours
 
     def _row_count(self, renderer: RendererBase, axes: Axes, points_per_pixel: float) -> int:
         """The number of rows the block of undeclared tokens is spread over for this draw.
@@ -346,6 +356,7 @@ class _StaggeredTokenLane(Artist):
                     assignment,
                     count,
                     limits,
+                    expand_to_row_neighbours=self._expand_to_row_neighbours,
                 )
                 pitch = 1.0 / float(self._blocks * count)
                 top = float(block + 1) / float(self._blocks)
@@ -1102,7 +1113,14 @@ def plot_aligned_panels(
                     placements.append(_TokenPlacement(block, bars[0], label, start + width / 2.0, width / 2.0))
                 if placements:
                     ax.add_artist(
-                        _StaggeredTokenLane(placements, count, block_of[""] if free_rows else None, fontsize, floor)
+                        _StaggeredTokenLane(
+                            placements,
+                            count,
+                            block_of[""] if free_rows else None,
+                            fontsize,
+                            floor,
+                            bool(panel.get("expand_label_slots", False)),
+                        )
                     )
                 ax.set_ylim(0.0, 1.0)
                 ax.set_yticks([(index + 0.5) / float(count) for index in range(len(blocks))] if named_rows else [])
