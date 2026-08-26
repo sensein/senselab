@@ -55,8 +55,8 @@ def propose_spans(
     """Propose spans from an envelope, anchoring the onset to each event's own peak.
 
     Args:
-        envelope_db: Envelope in dBFS.
-        floor_db: Local floor, same length as ``envelope_db``.
+        envelope_db: Envelope in dBFS, ``nan`` at any sample that had no dB value.
+        floor_db: Local floor, same length as ``envelope_db``, ``nan`` where the window held nothing.
         sampling_rate: Samples per second.
         k_db: How far above the local floor a peak must rise to be proposed. Per reader: read it
             from ``spans.k_db.<reader>`` in the triage config.
@@ -71,26 +71,32 @@ def propose_spans(
             ``spans.min_separation_ms``.
 
     Returns:
-        Merged spans in time order, or :class:`NoContrast` when no peak clears ``k_db``.
+        Merged spans in time order, every extent bounded by measured samples, or
+        :class:`NoContrast` when no peak clears ``k_db`` or nothing was measurable at all.
     """
     above = envelope_db - floor_db
-    peaks, _ = find_peaks(above, height=k_db, distance=int(min_separation_ms * sampling_rate / 1000))
+    rise = np.where(np.isfinite(above), above, -np.inf)
+    measured = np.where(np.isfinite(envelope_db), envelope_db, -np.inf)
+    peaks, _ = find_peaks(rise, height=k_db, distance=int(min_separation_ms * sampling_rate / 1000))
     if len(peaks) == 0:
+        rises = above[np.isfinite(above)]
+        if rises.size == 0:
+            return NoContrast(reason="the envelope holds no sample measurable against its local floor")
         return NoContrast(
-            reason=f"no peak rose {k_db} dB above the local floor; the largest rose {float(above.max()):.1f} dB"
+            reason=f"no peak rose {k_db} dB above the local floor; the largest rose {float(rises.max()):.1f} dB"
         )
     hang = int(hangover_ms * sampling_rate / 1000)
     found: list[Span] = []
     for p in peaks:
         peak = float(envelope_db[p])
         i = int(p)
-        while i > 0 and envelope_db[i] > peak - onset_drop_db:
+        while i > 0 and measured[i] > peak - onset_drop_db:
             i -= 1
         threshold = peak - offset_fraction * (peak - float(floor_db[p]))
         j = int(p)
         while j < len(envelope_db) - 1:
-            window = envelope_db[j : j + hang]
-            if len(window) and window.max() <= threshold:
+            window = measured[j : j + hang]
+            if len(window) == 0 or window.max() <= threshold:
                 break
             j += 1
         if (j - i) >= min_duration_ms * sampling_rate / 1000:

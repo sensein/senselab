@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -118,3 +120,40 @@ class TestTheMergeRate:
         out = _propose(env, np.full_like(env, -55.0))
         assert isinstance(out, list)
         assert [span.merged_proposals for span in out] == [1, 1]
+
+
+class TestAnUnmeasurableEnvelope:
+    """The envelope carries NaN where the filtered signal had no dB value; a span extent may not."""
+
+    def test_scattered_unmeasurable_samples_do_not_stretch_the_span_to_the_end(self) -> None:
+        """The hangover asks whether the envelope stayed low; a NaN is not evidence that it rose."""
+        env = _envelope([(2.0, 2.5, -20.0)])
+        env[int(2.5 * SR) :: SR // 20] = np.nan
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        (span,) = out
+        assert span.end == pytest.approx(2.5, abs=0.15), "the offset must close on the measured samples"
+
+    def test_no_span_extent_or_contrast_is_nan(self) -> None:
+        """A NaN reaching an extent becomes a bar of unknown width and a dB label reading nan."""
+        env = _envelope([(2.0, 2.5, -20.0), (8.0, 8.5, -20.0)])
+        env[int(1.0 * SR) : int(1.2 * SR)] = np.nan
+        env[int(2.5 * SR) : int(2.7 * SR)] = np.nan
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        for span in out:
+            assert np.isfinite([span.start, span.end, span.peak_over_floor_db]).all()
+
+    def test_an_envelope_with_no_measurable_sample_is_no_contrast(self) -> None:
+        """Nothing was measured, so nothing rose above anything; the reason may not read "nan"."""
+        env = np.full(int(3.0 * SR), np.nan)
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, NoContrast)
+        assert "nan" not in out.reason.lower()
+
+    def test_an_unmeasurable_envelope_raises_no_warning(self) -> None:
+        """NoContrast is the answer, not a RuntimeWarning from an empty reduction."""
+        env = np.full(int(3.0 * SR), np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert isinstance(_propose(env, np.full_like(env, -55.0)), NoContrast)
