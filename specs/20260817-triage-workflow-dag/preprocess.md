@@ -30,15 +30,16 @@ gives a false assurance where a stated cap gives a known bound. The page and the
 element ids and inherit the store's sensitivity, so neither is a release artifact; the bound is what
 keeps an absence record from becoming a second transcript.
 
-PREPROCESS runs **every model that answers a whole-file question**. No later node re-runs YAMNet, AST
-or HeAR over the file: [`TAXONOMY`](taxonomy.md) and the branches read the window classifications from
-here. See [`routing.md`](routing.md) for the pass this node opens.
+PREPROCESS runs every model that answers a whole-file question. No later node re-runs YAMNet or AST;
+[`TAXONOMY`](taxonomy.md) reads their window classifications from here. AIRWAY does **not** use these
+whole-file HeAR windows to label a candidate: it re-evaluates each eligible span in its own isolated
+HeAR input. See [`routing.md`](routing.md) for the pass this node opens.
 
 ## Conditioning
 
 ```
                                      +--> plain ------> squim, level, ASR x2, consensus, silence,
-                                     |                  yamnet/ast/hear windows
+                                     |                  yamnet/ast/hear windows (taxonomy)
 recording (as supplied) --> resample-+
      |                     16 kHz    +--> pre-emphasis --> envelope --> spans
      |                                    a = 0.97          spectrograms, gammatone
@@ -61,7 +62,7 @@ recording (as supplied) --> resample-+
 | `silence` | YAMNet `Silence` per window, threshold from `windows.yamnet` | plain | the local floor; airway negative evidence |
 | `yamnet_windows` | per-window **set** of confident AudioSet labels | plain | TAXONOMY; AIRWAY confirm/contest; SPEECH corroboration |
 | `ast_windows` | per-window **set** of confident AudioSet labels | plain | TAXONOMY |
-| `hear_windows` | per-window **set** of confident health-acoustic labels | plain | TAXONOMY; **AIRWAY only** among the branches |
+| `hear_windows` | per-window **set** of confident health-acoustic labels | plain | TAXONOMY; AIRWAY re-evaluates candidates instead |
 | `spans` | see below | pre-emph | AIRWAY classifies. **SPEECH derives its own spans from word timings and does not read this** |
 | `phonation_spans` | sustained-phonation and glide spans, see below | pre-emph | TAXONOMY's voice kind; VOICE measures on them |
 | `formant_tracks` | F1–F4 by Burg over each `phonation_spans` extent | pre-emph | TAXONOMY's voice kind; VOICE |

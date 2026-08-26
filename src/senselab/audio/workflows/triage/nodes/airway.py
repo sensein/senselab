@@ -1,15 +1,18 @@
-"""AIRWAY — interpret PREPROCESS's spans. It runs no classifier: it labels, confirms and contests.
-
-Every window classification this branch reads was written by PREPROCESS. HeAR confirms a span rather
-than finding one, a contest must be co-located in the same HeAR window, and the gate is per task.
-"""
+"""AIRWAY — re-evaluate PREPROCESS's candidate spans with HeAR, then confirm or contest them."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.data_structures import AudioHints
+from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
+from senselab.audio.tasks.health_acoustics.hear import (
+    HEAR_MODEL_ID,
+    HEAR_REVISION,
+    HEAR_WINDOW_SECONDS,
+    span_to_hear_buffer,
+)
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -62,6 +65,26 @@ def _windows_covering(store: ProvStore, classifier: str, extent: tuple[float, fl
         for window in find_measurements(store, f"{classifier}_window")
         if window.extent is not None and window.extent[0] < extent[1] and window.extent[1] > extent[0]
     ]
+
+
+def _confident_labels(window: dict[str, Any], default_threshold: float, thresholds: dict[str, float]) -> list[str]:
+    """Return the labels whose individual scores clear the configured threshold."""
+    labels: list[str] = []
+    for pair in window["label_scores"]:
+        for label, score in pair.items():
+            if float(score) >= float(thresholds.get(str(label), default_threshold)):
+                labels.append(str(label))
+    return labels
+
+
+def _span_hear_input(audio: Audio, extent: tuple[float, float]) -> Audio:
+    """Return an isolated candidate for HeAR, preserving a long candidate's internal windows."""
+    start, end = extent
+    if end - start <= HEAR_WINDOW_SECONDS:
+        return span_to_hear_buffer(audio, start, end)
+    start_sample = int(round(start * audio.sampling_rate))
+    end_sample = int(round(end * audio.sampling_rate))
+    return Audio(waveform=audio.waveform[..., start_sample:end_sample].clone(), sampling_rate=audio.sampling_rate)
 
 
 def _is_transcribed(store: ProvStore, extent: tuple[float, float]) -> bool:
@@ -170,7 +193,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
     k_db, k_margin_db = _gate(config, hint)
 
     software = software_agent(store)
-    stream_id, _ = resolve_stream(store, run_dir, source)
+    stream_id, audio = resolve_stream(store, run_dir, source)
 
     spans = [e for e in live_entities(store, "span") if e.attributes.get("k_db") == k_db]
     spans.sort(key=lambda e: e.extent or (0.0, 0.0))
@@ -207,20 +230,26 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         )
         return NodeResult(verdict=verdict, view=(verdict_id,), verdict_entity_id=verdict_id)
 
-    # Step 1 — HeAR confirms a span: the label is the labels_of_interest member the span's stored
-    # windows carry. A span overlapping consensus words is transcribed content and is not offered.
+    # Step 1 — re-evaluate every eligible candidate. Whole-file HeAR windows are deliberately not
+    # evidence here: a short buffered input contains the proposed span and silence only.
     classify = store.activity(
         node=NODE,
         step="classify",
         parameters={"k_db": k_db, "labels_of_interest": labels_of_interest, "n_spans": len(spans)},
     )
     store.was_associated_with(classify, software)
+    hear_agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
+    store.was_associated_with(classify, hear_agent)
     store.used(classify, stream_id)
     for span in spans:
         store.used(classify, span.id)
     if silence is not None:
         store.used(classify, silence.id)
 
+    default_threshold = float(config.require("windows.hear.default_threshold"))
+    thresholds = {
+        str(label): float(value) for label, value in (config.get("windows.hear.label_thresholds") or {}).items()
+    }
     labels_by_span: dict[str, list[tuple[str, str, list[str]]]] = {}
     by_label: dict[str, int] = {}
     near_gate_n = 0
@@ -230,11 +259,31 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         extent = span.extent or (0.0, 0.0)
         if _is_transcribed(store, extent):
             continue
+        input_audio = _span_hear_input(audio, extent)
+        reevaluated = detect_health_acoustic_events([input_audio], hop_length=HEAR_WINDOW_SECONDS, top_k=None)[0]
         members: dict[str, list[str]] = {}
-        for hear_window in _windows_covering(store, "hear", extent):
-            for label in _labels_of(hear_window):
+        for raw_window in reevaluated:
+            labels = _confident_labels(raw_window, default_threshold, thresholds)
+            window_id = store.entity(
+                prov_type="measurement",
+                extent=extent,
+                attributes={
+                    "name": "hear_span_window",
+                    "classifier": "hear",
+                    "signal": source,
+                    "span_id": span.id,
+                    "labels": labels,
+                    "scores": {label: score for pair in raw_window["label_scores"] for label, score in pair.items()},
+                    "input_window_s": HEAR_WINDOW_SECONDS,
+                    "isolated_span": True,
+                },
+            )
+            store.was_generated_by(window_id, classify)
+            store.was_attributed_to(window_id, hear_agent)
+            store.was_derived_from(window_id, span.id)
+            for label in labels:
                 if label in labels_of_interest:
-                    members.setdefault(label, []).append(hear_window.id)
+                    members.setdefault(label, []).append(window_id)
         if not members:
             continue
         merged_proposals = int(span.attributes.get("merged_proposals", 1))
@@ -263,7 +312,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
             labels_by_span.setdefault(span.id, []).append((assertion_id, label, window_ids))
             by_label[label] = by_label.get(label, 0) + 1
 
-    # Step 2 — YAMNet answers each label from inside the very window that carried it (V21).
+    # Step 2 — YAMNet answers the independently re-evaluated candidate over the same span extent.
     confirm_activity = store.activity(node=NODE, step="confirm", parameters={"contest_labels": sorted(contest_labels)})
     store.was_associated_with(confirm_activity, software)
     contested_n = 0
@@ -276,13 +325,6 @@ def airway(  # noqa: C901 — the branch's four steps, in order
             for hear_window_id in window_ids:
                 hear_extent = store.get_entity(hear_window_id).extent or (0.0, 0.0)
                 for yamnet_window in _windows_covering(store, "yamnet", hear_extent):
-                    inside = (
-                        yamnet_window.extent is not None
-                        and yamnet_window.extent[0] >= hear_extent[0]
-                        and yamnet_window.extent[1] <= hear_extent[1]
-                    )
-                    if not inside:
-                        continue
                     colocated.append(yamnet_window.id)
                     store.used(confirm_activity, yamnet_window.id)
                     for yamnet_label in _labels_of(yamnet_window):

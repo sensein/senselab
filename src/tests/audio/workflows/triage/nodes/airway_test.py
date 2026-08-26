@@ -26,6 +26,33 @@ from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
 from senselab.utils.prov_store import Entity, ProvStore
 
 _CLASSIFIER_GRID = {"hear": (2.0, 2.0), "yamnet": (0.96, 0.48)}
+_HEAR_CODES = {(): 0.0, ("Breathe",): 0.2, ("Cough",): 0.1, ("Laugh",): 0.3, ("Breathe", "Cough"): 0.4}
+_HEAR_LABELS_BY_CODE = {code: labels for labels, code in _HEAR_CODES.items()}
+
+
+@pytest.fixture(autouse=True)
+def fake_span_hear(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Return the label code embedded in each isolated test span instead of loading HeAR."""
+
+    def _detect(audios: list, **_: object) -> list[list[dict[str, Any]]]:
+        results = []
+        for audio in audios:
+            code = round(float(np.abs(audio.waveform.detach().cpu().numpy()).max()), 1)
+            labels = _HEAR_LABELS_BY_CODE.get(code, ())
+            results.append(
+                [
+                    {
+                        "start": 0.0,
+                        "end": 2.0,
+                        "label_scores": [{label: 0.9} for label in labels],
+                        "win_length": 2.0,
+                        "hop_length": 2.0,
+                    }
+                ]
+            )
+        return results
+
+    monkeypatch.setattr(airway_module, "detect_health_acoustic_events", _detect)
 
 
 def _override(tmp_path: Path, body: str) -> TriageConfig:
@@ -39,7 +66,7 @@ def _override(tmp_path: Path, body: str) -> TriageConfig:
         The merged configuration.
     """
     path = tmp_path / f"airway-{hashlib.sha256(body.encode()).hexdigest()[:12]}.yaml"
-    path.write_text(body)
+    path.write_text("windows:\n  hear:\n    default_threshold: 0.5\n    label_thresholds: {}\n" + body)
     return load_triage_config(path)
 
 
@@ -98,7 +125,7 @@ def _seed_airway_store(  # noqa: C901 — one independent block per derivative, 
     """
     (tmp_path / "streams").mkdir(exist_ok=True)
     name = f"plain-{store.run_id}.wav"
-    sf.write(str(tmp_path / "streams" / name), np.zeros(int(duration_s * 16000), dtype=np.float32), 16000)
+    samples = np.zeros(int(duration_s * 16000), dtype=np.float32)
     activity = store.activity(node="PREPROCESS", step="seed", parameters={})
     agent = store.agent(agent_type="software", version="senselab test-seed")
     store.was_associated_with(activity, agent)
@@ -187,6 +214,19 @@ def _seed_airway_store(  # noqa: C901 — one independent block per derivative, 
             )
         )
 
+        labels = sorted(
+            {
+                label
+                for (window_start, window_end), window_labels in hear_windows or []
+                if window_start < end and window_end > start
+                for label in window_labels
+            }
+        )
+        code = _HEAR_CODES.get(tuple(labels), 0.0)
+        samples[int(start * 16000) : int(end * 16000)] = code
+
+    sf.write(str(tmp_path / "streams" / name), samples, 16000)
+
     for text, extent in events if events is not None else []:
         ids["events"].append(
             _write(
@@ -255,23 +295,44 @@ def _assertions(store: ProvStore, verb: str) -> list[Entity]:
     return [e for e in live_entities(store, "assertion") if e.attributes.get("verb") == verb]
 
 
-class TestItRunsNoClassifier:
-    """Every window classification was written by PREPROCESS."""
+class TestItReevaluatesEachCandidate:
+    """AIRWAY runs the event detector over the isolated candidate, not PREPROCESS's labels."""
 
-    def test_the_module_calls_no_detector(self) -> None:
-        """HeAR confirms a span; running it here would make it find one."""
-        for name in ("detect_health_acoustic_events", "span_to_hear_buffer", "classify_audios"):
-            assert not hasattr(airway_module, name)
+    def test_the_module_has_the_span_detector(self) -> None:
+        """The branch owns its candidate-level HeAR pass."""
+        assert hasattr(airway_module, "detect_health_acoustic_events")
+        assert hasattr(airway_module, "span_to_hear_buffer")
 
-    def test_it_writes_no_activity_naming_a_model_agent_it_ran(
+    def test_a_fresh_span_result_overrides_an_old_whole_file_label(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        store: ProvStore,
+        airway_config: TriageConfig,
+        tmp_path: Path,
+    ) -> None:
+        """A PREPROCESS HeAR label is not AIRWAY evidence after the candidate re-evaluation."""
+        inputs: list[Any] = []
+
+        def _fresh(audios: list, **_: object) -> list[list[dict[str, Any]]]:
+            """Return a Cough independently of the old whole-file window."""
+            inputs.extend(audios)
+            return [[{"start": 0.0, "end": 2.0, "label_scores": [{"Cough": 0.9}]}] for _ in audios]
+
+        monkeypatch.setattr(airway_module, "detect_health_acoustic_events", _fresh)
+        _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Laugh"])])
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+        assert _verdict_entity(store, "AIRWAY").attributes["by_label"] == {"Cough": 1}
+        assert inputs[0].waveform.shape[-1] / inputs[0].sampling_rate == pytest.approx(2.0)
+
+    def test_it_records_the_model_agent_it_ran(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The HeAR and YAMNet agents it associates with are the ones PREPROCESS's windows carry."""
+        """The fresh HeAR pass is visible in the branch's provenance."""
         _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
         airway(store, "plain", airway_config, run_dir=tmp_path)
         assert {a.step for a in store.activities("AIRWAY")} <= {"classify", "confirm", "lexical"}
         associated = {agent_id for a in store.activities("AIRWAY") for agent_id in store.associated_with(a.id)}
-        assert all(store.get_agent(agent_id).agent_type == "software" for agent_id in associated)
+        assert {store.get_agent(agent_id).agent_type for agent_id in associated} == {"software", "model"}
 
 
 class TestHearConfirmsRatherThanFinds:
@@ -292,8 +353,13 @@ class TestHearConfirmsRatherThanFinds:
         ids = _seed_airway_store(store, tmp_path, spans=[(1.0, 1.3, 30.0)], hear_windows=[((0.0, 2.0), ["Cough"])])
         airway(store, "plain", airway_config, run_dir=tmp_path)
         [label] = _assertions(store, "label")
-        assert label.attributes["hear_window_ids"] == ids["hear"]
-        assert set(store.derived_from(label.id)) == {ids["spans"][0], ids["hear"][0]}
+        [hear] = [
+            entity
+            for entity in live_entities(store, "measurement")
+            if entity.attributes.get("name") == "hear_span_window"
+        ]
+        assert label.attributes["hear_window_ids"] == [hear.id]
+        assert set(store.derived_from(label.id)) == {ids["spans"][0], hear.id}
 
     def test_a_window_carrying_two_labels_of_interest_labels_the_span_twice(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
@@ -406,7 +472,10 @@ class TestContestRequiresColocation:
         airway(store, "plain", airway_config, run_dir=tmp_path)
         [contest] = _assertions(store, "contest")
         assert contest.attributes["yamnet_window_ids"] == ids["yamnet"]
-        assert contest.attributes["hear_window_ids"] == ids["hear"]
+        assert all(
+            store.get_entity(window_id).attributes["name"] == "hear_span_window"
+            for window_id in contest.attributes["hear_window_ids"]
+        )
 
     def test_a_contest_label_outside_that_window_does_not(
         self, store: ProvStore, airway_config: TriageConfig, tmp_path: Path
