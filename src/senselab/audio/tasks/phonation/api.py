@@ -355,15 +355,18 @@ def propose_phonation_spans(  # noqa: C901 — one branch per member and per off
     hangover_ms: float,
     voicing_strength_floor: float,
     mixed_voiced_fraction: float,
+    unvoiced_max_formant_bandwidth_hz: float,
 ) -> list[PhonationSpan]:
     """Sustained-phonation and glide spans over tracks measured once on the whole stream.
 
     A frame continues the criterion when its F0 moved less than ``f0_stability_cents`` across one hop
     — a frame with no F0 never satisfies this limb — **or** when F1 and F2 both moved less than
-    ``formant_stability_hz``. A maximal run of continuing frames, closed by ``hangover_ms`` of
-    continuous failure, is a ``"sustained"`` span. A maximal run outside every such span whose
-    defined F0 values, or F1 where none is defined, are monotone with an excursion at or over
-    ``glide_min_excursion_cents`` is a ``"glide"`` span. No periodicity floor opens or closes a span.
+    ``formant_stability_hz`` and their fitted bandwidths are at or below
+    ``unvoiced_max_formant_bandwidth_hz``. A maximal run of continuing frames, closed by
+    ``hangover_ms`` of continuous failure, is a ``"sustained"`` span. A maximal run outside every
+    such span whose defined F0 values, or F1 where none is defined, are monotone with an excursion
+    at or over ``glide_min_excursion_cents`` is a ``"glide"`` span. No periodicity floor opens or
+    closes a span, but broad/unresolved LPC poles cannot by themselves admit non-periodic material.
 
     Args:
         times: The F0 track's frame times, in seconds. Every span is placed on this grid.
@@ -383,6 +386,9 @@ def propose_phonation_spans(  # noqa: C901 — one branch per member and per off
             from ``phonation_spans.voicing_strength_floor``.
         mixed_voiced_fraction: The voiced-frame fraction separating the three productions. Read it
             from ``phonation_spans.mixed_voiced_fraction``.
+        unvoiced_max_formant_bandwidth_hz: The widest F1/F2 pole admitted as non-periodic resonant
+            evidence. Read it from ``phonation_spans.unvoiced_max_formant_bandwidth_hz``. This is a
+            screening condition, not a diagnosis of phonation.
 
     Returns:
         The spans in time order. Empty when no run satisfies either member.
@@ -393,6 +399,8 @@ def propose_phonation_spans(  # noqa: C901 — one branch per member and per off
     f0 = np.asarray(f0_hz, dtype=np.float64)
     f1 = _on_grid(formants.times_s, formants.f_hz[0], times)
     f2 = _on_grid(formants.times_s, formants.f_hz[1], times)
+    f1_bandwidth = _on_grid(formants.times_s, formants.bandwidth_hz[0], times)
+    f2_bandwidth = _on_grid(formants.times_s, formants.bandwidth_hz[1], times)
 
     f0_ok = np.zeros(n, dtype=bool)
     formant_ok = np.zeros(n, dtype=bool)
@@ -404,8 +412,16 @@ def propose_phonation_spans(  # noqa: C901 — one branch per member and per off
             and np.isfinite(f1[index])
             and np.isfinite(f2[index - 1])
             and np.isfinite(f2[index])
+            and np.isfinite(f1_bandwidth[index - 1])
+            and np.isfinite(f1_bandwidth[index])
+            and np.isfinite(f2_bandwidth[index - 1])
+            and np.isfinite(f2_bandwidth[index])
             and abs(f1[index] - f1[index - 1]) < formant_stability_hz
             and abs(f2[index] - f2[index - 1]) < formant_stability_hz
+            and f1_bandwidth[index - 1] <= unvoiced_max_formant_bandwidth_hz
+            and f1_bandwidth[index] <= unvoiced_max_formant_bandwidth_hz
+            and f2_bandwidth[index - 1] <= unvoiced_max_formant_bandwidth_hz
+            and f2_bandwidth[index] <= unvoiced_max_formant_bandwidth_hz
         )
     continues = f0_ok | formant_ok
 
@@ -480,4 +496,70 @@ def propose_phonation_spans(  # noqa: C901 — one branch per member and per off
             )
         )
     spans.sort(key=lambda span: span.start)
+    return spans
+
+
+def propose_word_aligned_phonation_spans(
+    *,
+    times: np.ndarray,
+    f0_hz: np.ndarray,
+    strength: np.ndarray,
+    formants: FormantTrack,
+    word_extents: list[tuple[float, float]],
+    voicing_strength_floor: float,
+    mixed_voiced_fraction: float,
+    unvoiced_max_formant_bandwidth_hz: float,
+    min_evidence_fraction: float,
+) -> list[PhonationSpan]:
+    """Return word-bounded spans supported by acoustic phonation evidence alone.
+
+    Timed words contribute boundaries, not lexical evidence: a segment is positive when the required
+    fraction of its frames has either periodic F0 evidence or narrow, resolved F1/F2 resonances.
+    This complementary path deliberately does not reject recordings with no consensus words.
+    """
+    f0 = np.asarray(f0_hz, dtype=np.float64)
+    pitch_strength = np.asarray(strength, dtype=np.float64)
+    f1 = _on_grid(formants.times_s, formants.f_hz[0], times)
+    f2 = _on_grid(formants.times_s, formants.f_hz[1], times)
+    f1_bandwidth = _on_grid(formants.times_s, formants.bandwidth_hz[0], times)
+    f2_bandwidth = _on_grid(formants.times_s, formants.bandwidth_hz[1], times)
+    periodic = np.isfinite(f0) & (pitch_strength >= voicing_strength_floor)
+    resonant = (
+        np.isfinite(f1)
+        & np.isfinite(f2)
+        & np.isfinite(f1_bandwidth)
+        & np.isfinite(f2_bandwidth)
+        & (f1_bandwidth <= unvoiced_max_formant_bandwidth_hz)
+        & (f2_bandwidth <= unvoiced_max_formant_bandwidth_hz)
+    )
+    spans: list[PhonationSpan] = []
+    for start, end in word_extents:
+        frames = (times >= start) & (times < end)
+        if not np.any(frames) or float(np.mean((periodic | resonant)[frames])) < min_evidence_fraction:
+            continue
+        voiced = periodic[frames]
+        fraction = float(np.mean(voiced))
+        production = (
+            "voiced"
+            if fraction > mixed_voiced_fraction
+            else "unvoiced"
+            if fraction < 1.0 - mixed_voiced_fraction
+            else "mixed"
+        )
+        placed = f0[frames][voiced]
+        spans.append(
+            PhonationSpan(
+                start=start,
+                end=end,
+                member="word_aligned",
+                production=production,
+                voiced_fraction=fraction,
+                f0_median_hz=float(np.median(placed)) if len(placed) else None,
+                f0_start_hz=float(placed[0]) if len(placed) else None,
+                f0_end_hz=float(placed[-1]) if len(placed) else None,
+                glide_direction=None,
+                glide_extent_cents=None,
+                offset_criterion="word_boundary",
+            )
+        )
     return spans

@@ -33,7 +33,12 @@ from senselab.audio.tasks.forced_alignment.forced_alignment import align_transcr
 from senselab.audio.tasks.gammatone.api import gammatone_filterbank
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
 from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION
-from senselab.audio.tasks.phonation.api import f0_track, formant_track, propose_phonation_spans
+from senselab.audio.tasks.phonation.api import (
+    f0_track,
+    formant_track,
+    propose_phonation_spans,
+    propose_word_aligned_phonation_spans,
+)
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
 from senselab.audio.tasks.spans.api import NoContrast, propose_spans
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
@@ -742,7 +747,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.append(entity_id)
         view.extend(word_ids)
         view.extend(event_ids)
-        state.update(consensus=kept, consensus_id=entity_id)
+        state.update(consensus=kept, consensus_id=entity_id, consensus_word_ids=word_ids)
 
     def _alignment() -> None:
         """Forced alignment of the consensus transcript, on the plain signal."""
@@ -791,6 +796,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "hangover_ms": float(config.require("phonation_spans.hangover_ms")),
             "voicing_strength_floor": float(config.require("phonation_spans.voicing_strength_floor")),
             "mixed_voiced_fraction": float(config.require("phonation_spans.mixed_voiced_fraction")),
+            "unvoiced_max_formant_bandwidth_hz": float(
+                config.require("phonation_spans.unvoiced_max_formant_bandwidth_hz")
+            ),
+            "word_aligned_min_evidence_fraction": float(
+                config.require("phonation_spans.word_aligned_min_evidence_fraction")
+            ),
             "max_formants": int(config.require("phonation_spans.max_formants")),
             "formant_max_hz": float(config.require("phonation_spans.formant_max_hz")),
             "formant_window_s": float(config.require("phonation_spans.formant_window_s")),
@@ -820,6 +831,28 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             hangover_ms=parameters["hangover_ms"],
             voicing_strength_floor=parameters["voicing_strength_floor"],
             mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
+            unvoiced_max_formant_bandwidth_hz=parameters["unvoiced_max_formant_bandwidth_hz"],
+        )
+        word_ids = list(state.get("consensus_word_ids") or [])
+        word_extents = [store.get_entity(word_id).extent for word_id in word_ids]
+        word_spans = propose_word_aligned_phonation_spans(
+            times=times,
+            f0_hz=f0_hz,
+            strength=strength,
+            formants=formants,
+            word_extents=[extent for extent in word_extents if extent is not None],
+            voicing_strength_floor=parameters["voicing_strength_floor"],
+            mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
+            unvoiced_max_formant_bandwidth_hz=parameters["unvoiced_max_formant_bandwidth_hz"],
+            min_evidence_fraction=parameters["word_aligned_min_evidence_fraction"],
+        )
+        word_sources = {
+            extent: word_id for word_id, extent in zip(word_ids, word_extents, strict=True) if extent is not None
+        }
+        proposals.extend(
+            proposal
+            for proposal in word_spans
+            if not any(existing.start <= proposal.start and proposal.end <= existing.end for existing in proposals)
         )
         span_ids: list[str] = []
         for proposal in proposals:
@@ -845,6 +878,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             store.was_generated_by(span_id, activity)
             store.was_attributed_to(span_id, software)
             store.was_derived_from(span_id, sharp_id)
+            if proposal.member == "word_aligned":
+                store.was_derived_from(span_id, word_sources[(proposal.start, proposal.end)])
             span_ids.append(span_id)
             inside = (formants.times_s >= proposal.start) & (formants.times_s < proposal.end)
             track_id = _measurement(
