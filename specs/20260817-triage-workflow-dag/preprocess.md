@@ -126,8 +126,8 @@ merge     = overlapping spans across the broadband envelope and each gammatone p
 | `K` | `spans.k_db` | per reader; AIRWAY reads at its own setting and may adjust it — [`branch-airway.md`](branch-airway.md) |
 | `hangover` | 120 ms | per consumer; must be shorter than the shortest event to be bounded |
 
-The three gammatone proposal bands are `breathing` (80–750 Hz), `speech` (750–3000 Hz), and `cough`
-(3000–7800 Hz). They are **candidate generators, not classifiers**: every surviving span is still
+The three gammatone proposal bands are `speech` (80–1000 Hz), `breathing` (500–2500 Hz), and `cough`
+(2000–8000 Hz). They overlap by design and are **candidate generators, not classifiers**: every surviving span is still
 unlabelled and AIRWAY re-evaluates it with HeAR. The band envelopes are a power-domain average of
 their selected ERB channels, then converted to dBFS; each gets its own local floor and uses the same
 contrast rule as the broadband envelope. A merged span records `proposal_sources` and

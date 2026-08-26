@@ -423,7 +423,7 @@ class TestSpansCarryTheirMergeRate:
         assert {"gammatone:breathing", "gammatone:speech", "gammatone:cough"} <= sources
         gammatone = find_measurement(store, "gammatone")
         assert gammatone is not None
-        assert gammatone.attributes["span_bands_hz"]["speech"] == [750.0, 3000.0]
+        assert gammatone.attributes["span_bands_hz"]["speech"] == [80.0, 1000.0]
 
 
 class TestThePackagedConfigStillRunsEveryClassifier:
