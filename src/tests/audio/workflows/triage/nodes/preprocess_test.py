@@ -181,11 +181,6 @@ def _stub_models(
         seen.setdefault("transcribe", []).append(str(model.path_or_uri))
         return [(crisper if str(model.path_or_uri) == CRISPERWHISPER_ID else qwen) or _line("")]
 
-    def fake_align(items: list, **kwargs: Any) -> list:  # noqa: ANN401
-        """One aligned line per input tuple."""
-        seen["align"] = len(items)
-        return [[ScriptLine(text="hello", start=0.5, end=0.7)] for _ in items]
-
     def fake_squim(audios: list, device: Any = None) -> list:  # noqa: ANN401
         """One objective-head dict per input."""
         return [{"stoi": 0.91, "pesq": 1.8, "si_sdr": 7.5} for _ in audios]
@@ -196,7 +191,6 @@ def _stub_models(
     monkeypatch.setattr(preprocess_module, "classify_audios", fake_classify)
     monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
     monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
-    monkeypatch.setattr(preprocess_module, "align_transcriptions", fake_align)
     monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
 
 
@@ -692,6 +686,7 @@ class TestTheConsensusTranscript:
         assert sorted(consensus.attributes["systems"]) == sorted([CRISPERWHISPER_ID, QWEN_ID])
         assert consensus.attributes["provenance"]["operator"] == "consensus_words/resample"
         assert consensus.attributes["text"] == "hello world"
+        assert consensus.attributes["timing_authority"] == "consensus_asr"
 
     def test_word_entities_are_the_consensus_words_only(
         self,
@@ -706,6 +701,36 @@ class TestTheConsensusTranscript:
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         assert len(live_entities(store, "word")) == 2
+
+    def test_consensus_word_times_and_uncertainty_are_authoritative(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No second aligner is written; downstream timing evidence stays on consensus words."""
+        _seed_admit(store, tmp_path, wav_writer)
+        seen: dict[str, Any] = {}
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"), record=seen)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        assert "align" not in seen
+        assert find_measurement(store, "alignment") is None
+        assert not (tmp_path / "derivatives" / "alignment.json").exists()
+        words = live_entities(store, "word")
+        assert len(words) == 2
+        for word in words:
+            assert word.extent is not None
+            assert set(word.attributes) >= {
+                "confidence",
+                "existence_confidence",
+                "temporal_confidence",
+                "coverage",
+                "recognizers",
+                "timing_sources",
+            }
 
     def test_the_per_recognizer_hypotheses_stay_as_measurements(
         self,

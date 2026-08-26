@@ -31,7 +31,6 @@ is already there** — the store is append-only, so redaction cannot unmake the 
 | --- | --- | --- |
 | `pii` findings | SPEECH step 7 | what to redact |
 | `consensus_transcript` and its `word` elements | PREPROCESS | the text redaction is planned and verified on |
-| `alignment` | PREPROCESS | the extents to silence |
 | `recording`, `plain` streams | PREPROCESS | the audio the fill is written into |
 
 ## What it redacts
@@ -47,11 +46,11 @@ safe to release, and a non-target speaker naming the participant is exactly as u
 
 ## Redaction is conservative at the edges
 
-Word edges come from `alignment` and carry error. A boundary off by 100 ms either leaves a fragment of
-a name audible or clips the neighbouring word, and only one of those two failures is recoverable. So
-every redacted extent is **padded outward** by `policy.padding_ms`, chosen to exceed the worst
-measured edge error rather than the median. Two words whose padded extents overlap are merged into
-one redaction.
+Word edges are the consensus ASR word extents and carry their own temporal confidence and timing
+source count. A boundary off by 100 ms either leaves a fragment of a name audible or clips the
+neighbouring word, and only one of those two failures is recoverable. So every redacted extent is
+**padded outward** by `policy.padding_ms`, chosen to exceed the worst measured consensus-word edge
+error rather than the median. Two words whose padded extents overlap are merged into one redaction.
 
 ## The fill is configurable
 
@@ -82,7 +81,7 @@ the consensus transcript, the same PII detectors are re-run over the redacted te
 
 **The audio claim is explicitly bounded.** Verification establishes that the redacted *text* no longer
 carries the finding. It establishes nothing about the audio: the fill was written over an extent
-derived from alignment, and whether intelligible speech survives outside that extent is not something
+derived from consensus ASR timing, and whether intelligible speech survives outside that extent is not something
 a text re-scan can answer. `audio_check` is the constant `"bounded"` on every path, and no consumer
 may read a `pass` as a claim about the recording.
 
@@ -151,4 +150,4 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | key | what is owed |
 | --- | --- |
 | `redaction.fill` | which of `silence`, `noise`, `bleep` is least damaging to downstream measurement; **deferred**, no default |
-| `redaction.padding_ms` | a positive floor exceeding the worst measured alignment edge error; **null** |
+| `redaction.padding_ms` | a positive floor exceeding the worst measured consensus-word edge error; **null** |
