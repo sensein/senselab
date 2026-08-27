@@ -1180,12 +1180,9 @@ def _timeline_windows(duration_s: float) -> list[tuple[float, float]]:
 
 
 def _timeline_title(title: str, window: tuple[float, float], total_windows: int) -> str:
-    """Add a recording-time range only when a report needs more than one evidence page."""
-    if total_windows == 1:
-        return title
-    start_s, end_s = window
-    line = f"{' '.join(title.splitlines())}{_TITLE_SEPARATOR}timeline {start_s:g}-{end_s:g} s"
-    return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
+    """Keep a stable title across evidence pages; their x-axis states each page's time window."""
+    del window, total_windows
+    return title
 
 
 def _header(document: dict[str, Any]) -> dict[str, str]:
