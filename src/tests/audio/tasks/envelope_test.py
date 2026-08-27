@@ -103,6 +103,11 @@ class TestAnUnmeasurableSampleHasNoDecibelValue:
         audio = _burst()
         assert _env(audio).shape == (audio.waveform.shape[1],)
 
+    def test_filter_residue_below_the_input_resolution_is_not_a_false_floor(self) -> None:
+        """Sub-resolution ringing is a missing level, rather than an extreme dBFS observation."""
+        quiet = _tone(1.0, 1e-9)
+        assert np.isnan(_env(quiet)[SR // 4 : -SR // 4]).all()
+
 
 class TestTheFloorOverAnUnmeasurableEnvelope:
     """The floor is a percentile of what was measured, and says nothing where nothing was."""

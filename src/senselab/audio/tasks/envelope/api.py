@@ -21,15 +21,22 @@ def hilbert_envelope_dbfs(audio: Audio, *, lowpass_hz: float, filter_order: int)
 
     Returns:
         One value per input sample, in dBFS, absolute and never normalised by the input's maximum.
-        A sample whose filtered envelope is non-positive has no dB value and reads ``nan``.
+        A sample whose filtered envelope is non-positive or below the input representation's
+        resolution has no dB value and reads ``nan``.
     """
-    x = np.asarray(audio.waveform, dtype=np.float64)
+    source = np.asarray(audio.waveform)
+    source_dtype = source.dtype if np.issubdtype(source.dtype, np.floating) else np.dtype(np.float32)
+    resolution = float(np.finfo(source_dtype).eps)
+    x = np.asarray(source, dtype=np.float64)
     if x.ndim > 1:
         x = x.mean(axis=0)
     b, a = butter(filter_order, lowpass_hz / (audio.sampling_rate / 2), "low")
     env = np.asarray(filtfilt(b, a, np.abs(hilbert(x))), dtype=np.float64)
     out = np.full(env.shape, np.nan)
-    measurable = env > 0.0
+    # A zero-phase lowpass can ring through zero after a transient. Tiny positive values on that
+    # crossing are numerical residue, not a measurable acoustic level; admitting them into a local
+    # percentile creates implausible downward floor spikes and inflated span contrast.
+    measurable = env >= resolution
     out[measurable] = 20.0 * np.log10(env[measurable])
     return out
 

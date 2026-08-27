@@ -1192,20 +1192,26 @@ def _pdf_pages(path: Path) -> int:
     return len(re.findall(rb"/Type\s*/Page[^s]", path.read_bytes()))
 
 
-class TestThePdfIsTwoPages:
-    """The PDF keeps evidence legible, then gives its decision prose a dedicated page."""
+def _pdf_letter_landscape_pages(path: Path) -> int:
+    """How many PDF pages declare the US Letter landscape media box, in points."""
+    return len(re.findall(rb"/MediaBox\s*\[\s*0\s+0\s+792\s+612\s*\]", path.read_bytes()))
+
+
+class TestThePdfPagination:
+    """The PDF keeps evidence legible, then gives its decision prose a dedicated Letter page."""
 
     def test_the_packaged_format_is_the_pdf(self, config: TriageConfig) -> None:
-        """The form the packaged config ships is the two-page document, not the tall image."""
+        """The form the packaged config ships is the paginated document, not the tall image."""
         assert config.require("report.format") == "pdf"
 
     def test_a_full_run_renders_exactly_two_pages(self, store: ProvStore, tmp_path: Path) -> None:
-        """Page one is the aligned panels; page two is every block."""
+        """Page one is the aligned panels; page two is the concise decision record."""
         _seed_report_store(store, tmp_path, full=True)
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         artifacts = report(store, tmp_path / "summary", pdf_config)
         assert artifacts["summary"].suffix == ".pdf"
         assert _pdf_pages(artifacts["summary"]) == 2
+        assert _pdf_letter_landscape_pages(artifacts["summary"]) == 2
 
     def test_a_refusal_renders_exactly_two_pages_too(self, store: ProvStore, tmp_path: Path) -> None:
         """A file with no readable stream has no axis to draw, and still owes both pages."""
@@ -1213,6 +1219,7 @@ class TestThePdfIsTwoPages:
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         artifacts = report(store, tmp_path / "summary", pdf_config)
         assert _pdf_pages(artifacts["summary"]) == 2
+        assert _pdf_letter_landscape_pages(artifacts["summary"]) == 2
 
     def test_a_long_recording_gets_one_ten_second_evidence_page_per_interval(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1252,22 +1259,23 @@ class TestThePdfIsTwoPages:
     def test_the_second_page_carries_every_block(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Nothing the single image said may be lost on the way to two pages."""
+        """The decision page contains the reader-facing findings while JSON retains the full audit."""
         from senselab.audio.workflows.triage.nodes import report as report_module
 
         drawn: list[list[str]] = []
         real = report_module._text_figure
 
-        def _spy(lines: list[str], title: str) -> Any:  # noqa: ANN401
+        def _spy(lines: list[str], title: str, **kwargs: Any) -> Any:  # noqa: ANN401
             drawn.append(list(lines))
-            return real(lines, title)
+            return real(lines, title, **kwargs)
 
         monkeypatch.setattr(report_module, "_text_figure", _spy)
         _seed_report_store(store, tmp_path, full=True, words=["hello", "world"])
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         report(store, tmp_path / "summary", pdf_config)
         blocks = "\n".join(drawn[-1])
-        assert "DECISION SUMMARY" in blocks and "TAXONOMY" in blocks and "hello world" in blocks
+        assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "hello world" in blocks
+        assert "ANALYTIC RECORD" in blocks and "summary.json" in blocks
 
     def test_the_png_stays_one_image_with_the_blocks_on_it(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1476,15 +1484,16 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         _, panels = self._render(store, tmp_path, words=["hello", "world"])
         lane = [panel for panel in panels if panel.get("report_lane") == "words"]
         assert [panel["type"] for panel in lane] == ["tokens"]
-        assert lane[0]["name"] == "words (report-only context)"
+        assert lane[0]["name"] == "consensus ASR"
         assert [token["text"] for token in lane[0]["tokens"]] == ["hello", "world"]
+        assert all(token["color"].startswith("#") for token in lane[0]["tokens"])
 
     def test_every_word_is_drawn_on_the_bar_and_in_a_small_cycling_lane(self, store: ProvStore, tmp_path: Path) -> None:
         """The reader sees timed artists; compact lane ids never become token labels."""
         figure, panels = self._render(store, tmp_path, words=["hello", "world"])
         axis = self._words_axis(figure, panels)
         assert [text.get_text() for text in axis.texts] == ["hello", "world"]
-        assert [tick.get_text() for tick in axis.get_yticklabels()] == ["1", "2"]
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == []
 
     def test_short_timed_consensus_words_remain_visible(self, store: ProvStore, tmp_path: Path) -> None:
         """The timing bar stays short, but its cycling row gives every normal word readable label space."""
@@ -1508,8 +1517,8 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         """The rendered failure: 40+ overlapping tick labels beside unlabelled coloured dashes."""
         figure, panels = self._render(store, tmp_path, words=[f"word{index}" for index in range(40)])
         axis = self._words_axis(figure, panels)
-        assert len(axis.patches) == 40
-        assert [tick.get_text() for tick in axis.get_yticklabels()] == ["1", "2", "3"]
+        assert 0 < len(axis.patches) < 40, "off-page words are not artists on this timeline"
+        assert [tick.get_text() for tick in axis.get_yticklabels()] == []
 
     def test_a_marked_word_renders_its_category_on_the_bar(self, store: ProvStore, tmp_path: Path) -> None:
         """The redaction discipline is unchanged by the move: the bar carries the placeholder."""
