@@ -52,6 +52,7 @@ _WORDS_LANE_LABEL = "words (report-only context)"
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
 _RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
+_TIMELINE_PAGE_SECONDS = 10.0
 
 _ABSENCE_BY_CLASS = {
     "ValueError": "unfitted (a config key it reads is null)",
@@ -361,8 +362,20 @@ def _window_presentations(store: ProvStore) -> dict[str, dict[str, Any]]:
     }
 
 
-def _window_lane(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
-    """One classifier's label lane: one segment per window that carried a label set.
+def _window_label_scores(window: Entity) -> dict[str, float]:
+    """The thresholded label-to-probability pairs a classifier window retained."""
+    raw_scores = window.attributes.get("scores") or {}
+    if not isinstance(raw_scores, dict):
+        return {}
+    return {
+        str(label): float(raw_scores[label])
+        for label in window.attributes.get("labels") or []
+        if label in raw_scores and isinstance(raw_scores[label], (int, float))
+    }
+
+
+def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
+    """One classifier's fixed-row top-K probability raster over its native windows.
 
     Args:
         store: The provenance store.
@@ -373,14 +386,49 @@ def _window_lane(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
     """
     if _window_presentation(store, classifier)["mode"] == "summary_only":
         return []
-    entries = []
+    windows: list[tuple[Entity, dict[str, float]]] = []
+    peaks: dict[str, float] = {}
     for window in live_entities(store, "measurement"):
         if window.attributes.get("name") != f"{classifier}_window" or window.extent is None:
             continue
-        labels = [str(label) for label in (window.attributes.get("labels") or [])]
-        if labels:
-            entries.append((window.extent, ", ".join(labels)))
-    return _lane(f"{classifier} labels", _segments(entries))
+        scores = _window_label_scores(window)
+        if not scores:
+            continue
+        windows.append((window, scores))
+        for label, score in scores.items():
+            peaks[label] = max(peaks.get(label, 0.0), score)
+    rows = [label for label, _ in sorted(peaks.items(), key=lambda item: (-item[1], item[0]))[:_TOP_CATEGORIES]]
+    if not rows:
+        return []
+    return [
+        {
+            "type": "score_raster",
+            "name": f"{classifier} labels",
+            "rows": rows,
+            "windows": [
+                {"start": window.extent[0], "end": window.extent[1], "scores": scores}
+                for window, scores in windows
+            ],
+        }
+    ]
+
+
+def _classifier_windows(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
+    """The thresholded classifier probabilities, retained in the JSON beside the timeline."""
+    findings: dict[str, list[dict[str, Any]]] = {classifier: [] for classifier in _CLASSIFIERS}
+    for window in live_entities(store, "measurement"):
+        classifier = str(window.attributes.get("classifier") or "")
+        if classifier not in findings or window.attributes.get("name") != f"{classifier}_window":
+            continue
+        findings[classifier].append(
+            {
+                "entity_id": window.id,
+                "timing": _timing(window),
+                "label_scores": _window_label_scores(window),
+                "thresholded_labels": list(window.attributes.get("labels") or []),
+            }
+        )
+    return findings
 
 
 def _label_counts(store: ProvStore, classifier: str) -> dict[str, int]:
@@ -484,7 +532,7 @@ def _panels(
         ),
     )
     for classifier in _CLASSIFIERS:
-        panels += _window_lane(store, classifier)
+        panels += _window_raster(store, classifier)
     panels += _lane(
         "speech spans",
         _segments(
@@ -992,6 +1040,7 @@ def _report_document(
         "evidence": {
             "branches": _branch_evidence(store, marks),
             "label_presentations": _window_presentations(store),
+            "classifier_windows": _classifier_windows(store),
             "transcript_tokens": [
                 {
                     "entity_id": word.id,
@@ -1086,6 +1135,32 @@ def _title(run_id: str, verdict: dict[str, Any]) -> str:
         (_run_label(run_id), f"triage: {_shown(verdict['triage'])}", f"release: {_shown(verdict['release'])}")
     )
     return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
+
+
+def _timeline_windows(duration_s: float) -> list[tuple[float, float]]:
+    """Partition a recording timeline into legible report pages of at most ten seconds.
+
+    Args:
+        duration_s: Duration of the conditioned recording, in seconds.
+
+    Returns:
+        Contiguous recording-time windows. A non-positive duration has no window; the caller uses
+        the report-only page for that exceptional case.
+    """
+    if duration_s <= 0.0:
+        return []
+    return [
+        (start_s, min(start_s + _TIMELINE_PAGE_SECONDS, duration_s))
+        for start_s in np.arange(0.0, duration_s, _TIMELINE_PAGE_SECONDS)
+    ]
+
+
+def _timeline_title(title: str, window: tuple[float, float], total_windows: int) -> str:
+    """Add a recording-time range only when a report needs more than one evidence page."""
+    if total_windows == 1:
+        return title
+    start_s, end_s = window
+    return f"{title}{_TITLE_SEPARATOR}timeline {start_s:g}-{end_s:g} s"
 
 
 def _header(document: dict[str, Any]) -> dict[str, str]:
@@ -1407,8 +1482,8 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
         document: The structured report object also written as JSON.
         title: The figure's title, carrying the decision.
         path: Where the rendered summary goes.
-        fmt: ``pdf`` for two pages — the panels, then the blocks — or ``png`` for one image
-            carrying both.
+        fmt: ``pdf`` for one <=10-second evidence page per recording-time window followed by the
+            blocks, or ``png`` for one image carrying the full timeline and blocks.
     """
     from matplotlib import pyplot
     from matplotlib.backends.backend_pdf import PdfPages
@@ -1419,13 +1494,23 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     header = _header(document)
 
     if fmt == "pdf":
-        lanes = (
-            _text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title)
-            if audio is None
-            else plot_aligned_panels(audio, panels, title=title, header=header)
-        )
+        if audio is None:
+            lanes = [_text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title)]
+        else:
+            duration_s = audio.waveform.shape[-1] / audio.sampling_rate
+            windows = _timeline_windows(duration_s)
+            lanes = [
+                plot_aligned_panels(
+                    audio,
+                    panels,
+                    title=_timeline_title(title, window, len(windows)),
+                    header=header,
+                    time_limits=window,
+                )
+                for window in windows
+            ]
         with PdfPages(path) as pages:
-            for figure in (lanes, _text_figure(blocks, title)):
+            for figure in [*lanes, _text_figure(blocks, title)]:
                 pages.savefig(figure, bbox_inches="tight")
                 pyplot.close(figure)
         return

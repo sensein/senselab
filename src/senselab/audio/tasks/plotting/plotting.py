@@ -882,6 +882,7 @@ def plot_aligned_panels(
     figsize: Tuple[float, float] | None = None,
     spectrogram_params: Dict[str, Any] | None = None,
     context: _Context = "auto",
+    time_limits: Tuple[float, float] | None = None,
 ) -> Figure:
     """Create a multi-panel time-aligned visualization from an Audio object.
 
@@ -914,6 +915,10 @@ def plot_aligned_panels(
       up to ``R`` times its bar when the row's neighbours leave the space — and one that does not fit
       at ``fontsize`` is shrunk towards ``floor_fontsize`` and dropped if it does not fit there
       either. The bar is never dropped.
+    - ``{"type": "score_raster", "rows": [str, ...], "windows": [{"start": float,
+      "end": float, "scores": {str: float}}], "name": str}`` -- one fixed row per selected
+      label, with each native classifier window colored by its score. Missing cells mean the label
+      did not clear the caller's reporting threshold, not that the classifier was never run.
     - ``{"type": "overlay_on_spectrogram", "mel": True/False, "overlays": [...]}`` --
       spectrogram with scatter overlays (each overlay is a dict with keys
       ``times``, ``values``, ``label``, ``color``, and optional ``size``).
@@ -936,6 +941,9 @@ def plot_aligned_panels(
         spectrogram_params: Parameters forwarded to torchaudio spectrogram transforms.
             Defaults to ``{"n_fft": 256, "hop_length": 80, "win_length": 160}``.
         context: Size preset or numeric scale.
+        time_limits: Optional ``(start_s, end_s)`` interval to display. The audio and every panel
+            retain their recording-time coordinates, but the shared axis is restricted to this
+            interval. Both values must be within the recording duration.
 
     Returns:
         matplotlib.figure.Figure: The created figure.
@@ -956,6 +964,15 @@ def plot_aligned_panels(
 
     sr = audio.sampling_rate
     duration = audio.waveform.shape[1] / sr
+    if time_limits is None:
+        x_limits = (0.0, duration)
+    else:
+        start_s, end_s = (float(value) for value in time_limits)
+        if not 0.0 <= start_s < end_s <= duration:
+            raise ValueError(
+                f"time_limits must satisfy 0 <= start < end <= {duration:g}; received ({start_s:g}, {end_s:g})"
+            )
+        x_limits = (start_s, end_s)
 
     # Height ratios
     ratio_map = {
@@ -964,6 +981,7 @@ def plot_aligned_panels(
         "features": 1,
         "segments": 1,
         "tokens": 1,
+        "score_raster": 1,
         "overlay_on_spectrogram": 2,
     }
 
@@ -974,6 +992,8 @@ def plot_aligned_panels(
             return max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(panel.get("lines", []))) / _INCHES_PER_RATIO
         if ptype == "waveform" and (panel.get("twin") or panel.get("spans")):
             return 2.0
+        if ptype == "score_raster":
+            return max(1.0, 0.45 * len(panel.get("rows") or []))
         return float(ratio_map.get(ptype, 1))
 
     height_ratios = [_ratio(p) for p in panels]
@@ -1129,6 +1149,36 @@ def plot_aligned_panels(
                 ax.set_ylabel(panel.get("name") or "Tokens")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
 
+            elif ptype == "score_raster":
+                rows = [str(label) for label in panel.get("rows") or []]
+                windows = panel.get("windows") or []
+                cmap = plt.get_cmap("viridis")
+                for row_index, label in enumerate(rows):
+                    for window in windows:
+                        scores = window.get("scores") or {}
+                        if label not in scores:
+                            continue
+                        score = float(scores[label])
+                        start, end = float(window["start"]), float(window["end"])
+                        ax.add_patch(
+                            Rectangle(
+                                (start, row_index - 0.42),
+                                end - start,
+                                0.84,
+                                facecolor=cmap(np.clip(score, 0.0, 1.0)),
+                                edgecolor="none",
+                            )
+                        )
+                ax.set_ylim(-0.5, max(len(rows) - 0.5, 0.5))
+                ax.set_yticks(range(len(rows)))
+                ax.set_yticklabels(rows, fontsize=7)
+                ax.set_ylabel(panel.get("name") or "Label probability")
+                ax.grid(axis="x", linestyle="--", alpha=0.3)
+                image = ax.imshow(np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False)
+                colorbar = fig.colorbar(image, ax=ax, pad=0.01, fraction=0.03)
+                colorbar.set_label("Probability", fontsize=7)
+                colorbar.ax.tick_params(labelsize=6)
+
             elif ptype == "overlay_on_spectrogram":
                 mel = panel.get("mel", False)
                 spec_db, f0, f1 = _get_spec(mel)
@@ -1174,7 +1224,7 @@ def plot_aligned_panels(
             else:
                 raise ValueError(
                     f"unknown panel type {ptype!r}; plot_aligned_panels supports "
-                    "waveform, spectrogram, features, segments, tokens, overlay_on_spectrogram and text"
+                    "waveform, spectrogram, features, segments, tokens, score_raster, overlay_on_spectrogram and text"
                 )
 
         # Shared x-axis config. The scale belongs to the last panel that USES it: a text panel has
@@ -1183,7 +1233,7 @@ def plot_aligned_panels(
         bottom = timed[-1] if timed else axes_list[-1]
         bottom.set_xlabel("Time (seconds)")
         bottom.tick_params(labelbottom=True)
-        axes_list[0].set_xlim(0, duration)
+        axes_list[0].set_xlim(*x_limits)
 
         plain_header = [str(line) for line in (header_lines or ()) if str(line)]
         if title:

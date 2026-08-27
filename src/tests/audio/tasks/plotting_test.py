@@ -88,6 +88,40 @@ class TestTheTextPanel:
         assert figure.axes[1].get_xlabel() == "Time (seconds)"
         assert any(tick.get_text() for tick in figure.axes[1].get_xticklabels())
 
+    def test_time_limits_restrict_the_shared_axis_without_retiming_data(self) -> None:
+        """A report page may show one recording-time slice while its annotations stay globally timed."""
+        figure = plot_aligned_panels(
+            _tone(30.0),
+            [{"type": "waveform"}, {"type": "segments", "segments": [], "name": "airway"}],
+            time_limits=(10.0, 20.0),
+        )
+        assert figure.axes[0].get_xlim() == pytest.approx((10.0, 20.0))
+        assert figure.axes[1].get_xlim() == pytest.approx((10.0, 20.0))
+
+    def test_time_limits_reject_an_interval_outside_the_recording(self) -> None:
+        """A misleading evidence page is worse than a rendering error."""
+        with pytest.raises(ValueError, match="time_limits"):
+            plot_aligned_panels(_tone(), [{"type": "waveform"}], time_limits=(0.0, 2.0))
+
+    def test_score_raster_uses_fixed_label_rows_and_a_probability_legend(self) -> None:
+        """Classifier scores should read as a heat map, not an unstable comma-separated label list."""
+        figure = plot_aligned_panels(
+            _tone(10.0),
+            [
+                {
+                    "type": "score_raster",
+                    "name": "yamnet labels",
+                    "rows": ["Speech", "Music"],
+                    "windows": [
+                        {"start": 0.0, "end": 1.0, "scores": {"Speech": 0.8, "Music": 0.6}},
+                        {"start": 1.0, "end": 2.0, "scores": {"Speech": 0.9}},
+                    ],
+                }
+            ],
+        )
+        assert [tick.get_text() for tick in figure.axes[0].get_yticklabels()] == ["Speech", "Music"]
+        assert figure.axes[1].get_ylabel() == "Probability"
+
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""
         figure = plot_aligned_panels(
