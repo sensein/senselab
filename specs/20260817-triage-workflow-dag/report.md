@@ -50,9 +50,9 @@ On a single shared time axis, one row each:
 | spectrogram | the conditioned stream |
 
 The waveform, the envelope and the envelope spans are three readings of one signal and share one
-row: the right-hand y-label names both the envelope's dBFS scale and the span overlay, since the
-overlay has no scale of its own. A lane that shares that row is still a **declared lane**, and the
-ABSENT block reports it as drawn.
+row. The right-hand y-label is simply `dBFS`; each span carries its own dB-over-floor annotation,
+so the axis does not repeat a second, unrelated label. A lane that shares that row is still a
+**declared lane**, and the ABSENT block reports it as drawn.
 
 AST's packaged 10.24 s window and hop are intentionally rendered as a summary rather than a timeline:
 each fired label is a property of that broad acoustic context, not a local event boundary. The JSON
@@ -77,7 +77,9 @@ The final PDF page, the foot of the PNG. One block per step:
   elements;
 - **each branch's conclusion and its flags**;
 - **TAXONOMY's classification beside the resolved kinds**, with the per-kind agreement or mismatch
-  and the per-kind hint reading — the row of verdict.md's hint table this kind fell on;
+  and the per-kind hint reading — the row of verdict.md's hint table this kind fell on. The decision
+  page also gives each kind's explicit evidence path (line evidence, floor and line state), naming
+  the consensus lexical line as decisive for speech and acoustic labels as corroboration;
 - **the verdict**: `triage`, `release`, and every reason, with a REDACT non-pass shown whatever the
   triage axis says.
 
@@ -94,6 +96,7 @@ embedded rather than referenced**:
 {
   file:        { path, duration_s, sample_rate, channels },
   verdict:     { triage, release, reasons[], kinds{}, screened{}, agreement{}, hints{} },
+  screening:   { screened_kinds{}, resolved_kinds{}, agreement{}, decision_paths{} },
   branches:    { branch: { will_run, forced_by_hint, kind_state, verdict?, flags[] } },
   steps:       { step: { summary fields, element_ids[] } },
   provenance:  {
