@@ -528,7 +528,7 @@ def _draw_waveform_overlays(
             time_values, value_values = time_values[visible], value_values[visible]
         twin.plot(time_values, value_values, color=color, label=label, linewidth=0.9, alpha=0.9)
     names = [str(name) for name in (twin_spec.get("name"), spans.get("name")) if name]
-    twin.set_ylabel(" · ".join(names) or "Value")
+    twin.set_ylabel(str(twin_spec.get("axis_label")) if twin_spec.get("axis_label") else " · ".join(names) or "Value")
     if twin_spec.get("data"):
         twin.legend(loc="upper right", fontsize=7)
 

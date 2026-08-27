@@ -1356,8 +1356,8 @@ class TestTheSpansAreAnOverlayNotALane:
         assert overlay["segments"]
         assert all(segment["label"].endswith(" dB") for segment in overlay["segments"])
 
-    def test_the_drawn_figure_names_the_overlay_on_its_right_hand_scale(self, store: ProvStore, tmp_path: Path) -> None:
-        """Whatever the panel dict says, the reader sees the axis; the axis must name the overlay."""
+    def test_the_drawn_figure_keeps_the_right_hand_scale_compact(self, store: ProvStore, tmp_path: Path) -> None:
+        """Span labels stay on their spans; the shared scale needs only its unit."""
         from senselab.audio.workflows.triage.nodes import report as report_module
 
         drawn: list[Any] = []
@@ -1373,7 +1373,7 @@ class TestTheSpansAreAnOverlayNotALane:
             _seed_report_store(store, tmp_path, full=True)
             report(store, tmp_path / "summary", _png(tmp_path))
         labels = [axis.get_ylabel() for axis in drawn[0].axes]
-        assert any("spans (dB over floor)" in label for label in labels)
+        assert "dBFS" in labels
 
     def test_the_spans_lane_still_reads_as_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

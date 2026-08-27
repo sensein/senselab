@@ -180,6 +180,26 @@ def _fold_two_lines(lines: dict[str, dict[str, Any]]) -> str:
     return UNCERTAIN
 
 
+def _fold_speech_lines(lines: dict[str, dict[str, Any]]) -> str:
+    """Classify lexical speech from the authoritative consensus transcript.
+
+    The consensus is the workflow's authoritative ASR product. A completed consensus with no
+    words therefore rules out lexical speech, even if an AudioSet model emitted an isolated speech
+    label; the acoustic line remains recorded as corroborating evidence. A missing or unfitted
+    lexical line is genuinely unknown and remains uncertain.
+
+    Args:
+        lines: The speech acoustic and lexical evidence lines.
+
+    Returns:
+        ``present`` or ``absent`` when the lexical line is measured, otherwise ``uncertain``.
+    """
+    lexical_state = str(lines["lexical"]["state"])
+    if lexical_state == UNAVAILABLE:
+        return UNCERTAIN
+    return lexical_state
+
+
 def _voice_line(spans: list[Entity] | None, min_s: Any, uncertain_s: Any) -> tuple[dict[str, Any], str]:  # noqa: ANN401
     """The voice kind's single line, from the longest phonation span's duration alone.
 
@@ -273,7 +293,7 @@ def taxonomy(
     lines["voice"] = {"phonation": voice_line}
 
     states = {
-        "speech": _fold_two_lines(lines["speech"]),
+        "speech": _fold_speech_lines(lines["speech"]),
         "airway": _fold_two_lines(lines["airway"]),
         "voice": voice_state,
     }

@@ -31,7 +31,7 @@ classification that called itself a prediction would invite being scored as one.
 | `consensus_transcript`, `word` elements | PREPROCESS | lexical evidence for the speech kind |
 | `phonation_spans` | PREPROCESS | sustained-phonation and glide spans with their `duration_s` |
 
-**Hints are not an input.** TAXONOMY classifies from acoustics alone. A hint may force a branch to run
+**Hints are not an input.** TAXONOMY classifies from PREPROCESS's stored evidence alone. A hint may force a branch to run
 ([`routing.md`](routing.md)) and may be compared against the branches' conclusions
 ([`verdict.md`](verdict.md)), but it never enters the classification, because a classification that
 reads the declaration cannot disagree with it.
@@ -40,7 +40,7 @@ reads the declaration cannot disagree with it.
 
 | kind | what it is | classified from |
 | --- | --- | --- |
-| **speech** | lexical content | YAMNet/AST speech-family labels present in the window sets, **and** lexical words |
+| **speech** | lexical content | authoritative consensus words; YAMNet/AST speech-family labels are retained as corroboration |
 | **airway** | non-voice, non-speech vocal-tract sound: cough, breath, throat clear | HeAR cough/breath windows, **and** YAMNet/AST airway-family labels |
 | **voice** | phonation that is neither: sustained vowels, humming, glides | `phonation_spans` of long duration |
 
@@ -53,8 +53,24 @@ Two evidence lines, both read from the store:
 | acoustic | a window whose set contains a member of `taxonomy.speech_labels`, from `yamnet_windows` or `ast_windows` |
 | lexical | `word` entities from the consensus transcript. **Bracketed and onomatopoeic events are not words** and carry no lexical evidence — see [`preprocess.md`](preprocess.md) |
 
-Present when both lines carry evidence at or above their configured floors; absent when neither does;
-uncertain otherwise.
+The consensus transcript is the authoritative ASR product. When its lexical line is available, speech
+is present when its word count reaches the lexical floor and absent when it does not. The acoustic line
+is retained in the `kind` element as corroboration, but an isolated classifier label cannot overrule a
+completed empty consensus. Speech is uncertain only when the lexical derivative or its floor is
+unavailable.
+
+#### Decision tree
+
+```mermaid
+flowchart TD
+    A[Speech taxonomy] --> B{Consensus transcript and lexical floor available?}
+    B -->|no| U[uncertain]
+    B -->|yes| C{Consensus words >= lexical floor?}
+    C -->|yes| P[present]
+    C -->|no| N[absent]
+    D[YAMNet/AST speech-family windows] -. recorded as corroboration .-> P
+    D -. recorded as corroboration .-> N
+```
 
 ### airway
 
@@ -80,8 +96,8 @@ phonation span at all it is absent.
 | state | meaning |
 | --- | --- |
 | **present** | the kind's rule is met |
-| **absent** | every line the rule names carries evidence below its floor |
-| **uncertain** | the lines disagree, or evidence sits between the floors, or a line's evidence is missing from the store |
+| **absent** | for speech, the available authoritative lexical line is below its floor; for airway, both evidence lines are below their floors; for voice, no span reaches its shorter floor |
+| **uncertain** | a required decision line is missing from the store or its floor is unavailable; for airway, its two evidence lines can also disagree |
 
 **A missing derivative is not absence evidence.** A classifier that wrote no windows, or a Praat pass
 that produced no spans because it did not run, leaves the line `unavailable`, and a kind whose only

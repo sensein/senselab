@@ -70,13 +70,21 @@ class TestTheThreeKinds:
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "present"
 
-    def test_speech_with_windows_but_no_words_is_uncertain(
+    def test_an_empty_authoritative_consensus_makes_speech_absent_despite_an_acoustic_label(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """One line present and one absent is disagreement, which is uncertain, not present."""
+        """One false-positive acoustic window cannot overrule a completed empty consensus."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=[])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
-        assert result.kinds["speech"] == "uncertain"
+        assert result.kinds["speech"] == "absent"
+
+    def test_consensus_words_make_speech_present_without_an_acoustic_label(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """The consensus transcript is the authority for lexical speech, not an acoustic vote."""
+        seed_preprocess_store(store, yamnet_labels=[["Music"]], words=["one"])
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["speech"] == "present"
 
     def test_speech_with_neither_line_is_absent(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
@@ -89,10 +97,10 @@ class TestTheThreeKinds:
     def test_a_bracketed_event_carries_no_lexical_evidence(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """PREPROCESS wrote it as an event, so nothing here counts it toward the word floor."""
+        """PREPROCESS wrote only events, so the authoritative consensus remains lexically empty."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=[], events=["[COUGH]", "[COUGH]", "ahem"])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
-        assert result.kinds["speech"] == "uncertain"
+        assert result.kinds["speech"] == "absent"
 
     def test_airway_needs_hear_and_audioset(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
@@ -203,9 +211,14 @@ class TestTheOutcome:
     def test_any_uncertain_flags(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """One kind the lines disagree about is enough."""
+        """One genuinely indeterminate kind is enough."""
         seed_preprocess_store(
-            store, yamnet_labels=[["Speech"]], hear_labels=[[]], ast_labels=[[]], words=[], phonation=[]
+            store,
+            yamnet_labels=[["Music"]],
+            hear_labels=[[]],
+            ast_labels=[[]],
+            words=[],
+            phonation=[(0.0, 0.5, "voiced")],
         )
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FLAG
 
