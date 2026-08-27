@@ -530,7 +530,7 @@ def _panels(
 
     envelope = _envelope_curves(store, run_dir, config)
     if envelope is not None:
-        waveform["twin"] = {"name": _ENVELOPE_AXIS, "data": envelope}
+        waveform["twin"] = {"name": _ENVELOPE_AXIS, "axis_label": "dBFS", "data": envelope}
         drawn.add("envelope")
 
     spans = _envelope_spans(store)

@@ -292,15 +292,17 @@ derivation: |
 
   taxonomy v2 -- taxonomy.md. TAXONOMY runs no models and folds stored evidence only, so the v1
   min_families committee and its per-detector floors are deleted rather than re-derived. Each kind now
-  has named evidence LINES with their own floors: speech has acoustic (window count) and lexical (word
-  count); airway has health_acoustic (HeAR window count) and acoustic (AudioSet window count); voice has
-  neither, being classified from phonation-span duration alone. presence_floor values are counts, not
-  scores, and all four are null. voice_min_duration_s and voice_uncertain_duration_s are the two
+  has named evidence LINES with their own floors: speech has authoritative lexical (word count) evidence
+  plus an acoustic (window count) corroboration line; airway has health_acoustic (HeAR window count) and
+  acoustic (AudioSet window count); voice has neither, being classified from phonation-span duration alone.
+  presence_floor values are counts, not scores, and all four are null. voice_min_duration_s and
+  voice_uncertain_duration_s are the two
   duration cutoffs, both null, both owed a fit across voiced, unvoiced and mixed production.
   taxonomy.speech_labels replaces audioset_speech_labels and is null because the v2 spec owes it the
-  AudioSet speech FAMILY and the v1 list carried one member. lexical_airway_tokens is deleted: airway's
-  lexical evidence line no longer exists, because a bracketed event is not a word and carries no
-  lexical evidence at all.
+  AudioSet speech FAMILY and the v1 list carried one member. The consensus transcript is authoritative
+  for speech presence: a completed empty consensus remains speech-absent despite an isolated acoustic
+  label, which is retained as corroboration. lexical_airway_tokens is deleted: airway's lexical evidence
+  line no longer exists, because a bracketed event is not a word and carries no lexical evidence at all.
 
   routing.hint_kind_map -- which may_contain tags and which metadata.speech_type values force which
   kind's branch. A vocabulary, null, owed the corpus it was drawn from. A tag matching no entry forces
