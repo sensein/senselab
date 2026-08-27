@@ -33,7 +33,7 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "REPORT"
 SUMMARY_STEM = "summary"
 FORMATS = ("png", "pdf")
-REPORT_SCHEMA_VERSION = "triage-summary/v1"
+REPORT_SCHEMA_VERSION = "triage-summary/v2"
 
 _CONDITIONED_STREAM = "plain"
 _SOURCE_STREAM = "recording"
@@ -204,7 +204,23 @@ def _words(store: ProvStore) -> list[Entity]:
     )
 
 
-def _transcript(store: ProvStore, marks: dict[str, list[Entity]]) -> str:
+def _consensus_transcript(store: ProvStore) -> str:
+    """The authoritative, unmodified consensus transcript.
+
+    The report is an audit artifact beside the provenance store, not a released derivative. Keeping
+    this text distinct from the redacted view means a reviewer can assess the ASR evidence without
+    mistaking a PII placeholder for a recognizer output.
+
+    Args:
+        store: The provenance store holding PREPROCESS consensus words.
+
+    Returns:
+        The consensus words joined in their stored order, or an empty string when none were written.
+    """
+    return " ".join(str(word.attributes.get("text") or "") for word in _words(store))
+
+
+def _redacted_transcript(store: ProvStore, marks: dict[str, list[Entity]]) -> str:
     """The consensus transcript with every marked word replaced by its category.
 
     Args:
@@ -565,16 +581,16 @@ def _panels(
             if span.extent is not None
         ),
     )
+    words = [word for word in _words(store) if word.extent is not None]
     panels += _token_lane(
         _WORDS_LANE_LABEL,
         (
             (
                 word.extent,
-                _redacted_text(marks, word, scanned=scanned),
+                str(word.attributes.get("text") or ""),
                 word.attributes.get("existence_confidence"),
             )
-            for word in _words(store)
-            if word.extent is not None
+            for word in words
         ),
         report_lane="words",
         expand_label_slots=True,
@@ -595,14 +611,17 @@ def _panels(
             if span.extent is not None
         ),
     )
-    panels += _lane(
-        "redacted",
-        _segments(
-            (span.extent, str(span.attributes.get("category")))
-            for span in live_entities(store, "span")
-            if span.attributes.get("name") == "redaction" and span.extent is not None
-        ),
-    )
+    redacted_words = [
+        (word.extent, _redacted_text(marks, word, scanned=scanned), word.attributes.get("existence_confidence"))
+        for word in words
+    ]
+    if any(text != str(word.attributes.get("text") or "") for word, (_, text, _) in zip(words, redacted_words)):
+        panels += _token_lane(
+            "redacted transcript",
+            redacted_words,
+            report_lane="redacted",
+            expand_label_slots=True,
+        )
     panels.append({"type": "spectrogram", "height_ratio": 1.25})
     return panels, drawn | {str(panel.get("report_lane") or panel["name"]) for panel in panels if "name" in panel}
 
@@ -1082,6 +1101,22 @@ def _report_document(
     transcript_words = _words(store)
     scanned, scan_note = _scan_state(store)
     reasons = list(verdict.get("reasons") or [])
+
+    def _token_record(word: Entity, text: str) -> dict[str, Any]:
+        return {
+            "entity_id": word.id,
+            "text": text,
+            "timing": _timing(word),
+            "timing_authority": "consensus",
+            "confidence": word.attributes.get("confidence"),
+            "existence_confidence": word.attributes.get("existence_confidence"),
+            "temporal_confidence": word.attributes.get("temporal_confidence"),
+            "coverage": word.attributes.get("coverage"),
+            "recognizers": list(word.attributes.get("recognizers") or []),
+            "timing_sources": word.attributes.get("timing_sources"),
+            "provenance": {"node": "PREPROCESS", "step": "consensus_transcript"},
+        }
+
     document: dict[str, Any] = {
         "schema_version": REPORT_SCHEMA_VERSION,
         "recording": {**_file(store), **_task_context(store.run_id, verdict)},
@@ -1103,21 +1138,11 @@ def _report_document(
             "branches": _branch_evidence(store, marks),
             "label_presentations": _window_presentations(store),
             "classifier_windows": _classifier_windows(store),
-            "transcript_tokens": [
-                {
-                    "entity_id": word.id,
-                    "text": _redacted_text(marks, word, scanned=scanned),
-                    "timing": _timing(word),
-                    "timing_authority": "consensus",
-                    "confidence": word.attributes.get("confidence"),
-                    "existence_confidence": word.attributes.get("existence_confidence"),
-                    "temporal_confidence": word.attributes.get("temporal_confidence"),
-                    "coverage": word.attributes.get("coverage"),
-                    "recognizers": list(word.attributes.get("recognizers") or []),
-                    "timing_sources": word.attributes.get("timing_sources"),
-                    "provenance": {"node": "PREPROCESS", "step": "consensus_transcript"},
-                }
-                for word in transcript_words
+            "consensus_transcript_tokens": [
+                _token_record(word, str(word.attributes.get("text") or "")) for word in transcript_words
+            ],
+            "redacted_transcript_tokens": [
+                _token_record(word, _redacted_text(marks, word, scanned=scanned)) for word in transcript_words
             ],
             "transcript_scan": {"complete": scanned, "note": scan_note or None},
             "preprocess_absences": _absences(store),
@@ -1131,7 +1156,11 @@ def _report_document(
         "verdict": verdict,
         "branches": branches,
         "steps": steps,
-        "transcript": {"text": _transcript(store, marks), "words_n": len(transcript_words)},
+        "transcript": {
+            "text": _consensus_transcript(store),
+            "redacted_text": _redacted_transcript(store, marks),
+            "words_n": len(transcript_words),
+        },
         "categories": _categories(store),
         "provenance": _provenance(store, config, store.run_id),
     }
@@ -1237,8 +1266,31 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
     reasons = decisions.get("reasons") or []
     redact_reasons = [reason for reason in reasons if reason.get("node") == "REDACT"]
     evidence = decisions.get("flags") or redact_reasons or reasons[-1:]
+    decision_paths = screening.get("decision_paths") or {}
+
+    def _taxonomy_reason() -> str | None:
+        for kind, path in decision_paths.items():
+            if path.get("state") != "uncertain":
+                continue
+            if kind == "voice":
+                phonation = (path.get("lines") or {}).get("phonation") or {}
+                evidence_s = phonation.get("evidence")
+                floor_s = phonation.get("floor")
+                uncertain_s = phonation.get("uncertain_floor")
+                if all(isinstance(value, (int, float)) for value in (evidence_s, floor_s, uncertain_s)):
+                    return (
+                        "TAXONOMY: voice uncertain: longest phonation span "
+                        f"{float(evidence_s):.2f} s (present >= {float(floor_s):.2f} s; "
+                        f"uncertain >= {float(uncertain_s):.2f} s)"
+                    )
+            return f"TAXONOMY: {kind} is uncertain; see taxonomy decision path"
+        return None
+
+    taxonomy_reason = _taxonomy_reason()
     evidence_text = "; ".join(
-        f"{reason.get('node')}: {reason.get('why')}" for reason in evidence[:2]
+        taxonomy_reason if reason.get("node") == "TAXONOMY" and taxonomy_reason is not None
+        else f"{reason.get('node')}: {reason.get('why')}"
+        for reason in evidence[:2]
     ) or "no contributing reason"
     screened = "; ".join(
         f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items())
@@ -1448,17 +1500,16 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
         lines.append("  every declared lane was drawn or summarized above")
 
     scan = document["evidence"]["transcript_scan"]
-    transcript_heading = (
-        "TRANSCRIPT (marked words rendered as their category)"
-        if scan["complete"]
-        else "TRANSCRIPT (WITHHELD — every word rendered as [unscanned])"
-    )
-    lines += ["", transcript_heading]
+    consensus = document["transcript"]["text"]
+    redacted = document["transcript"].get("redacted_text") or ""
+    lines += ["", "CONSENSUS TRANSCRIPT"]
+    display_consensus = consensus or "no consensus transcript is in the store"
+    lines += ["  " + wrapped for wrapped in textwrap.wrap(display_consensus, width=_BLOCK_COLUMNS)]
+    if redacted != consensus:
+        lines += ["", "REDACTED TRANSCRIPT"]
+        lines += ["  " + wrapped for wrapped in textwrap.wrap(redacted, width=_BLOCK_COLUMNS)]
     if not scan["complete"]:
-        lines.append(f"  {scan['note']}; an unscanned transcript is not a clean one")
-    transcript = document["transcript"]["text"]
-    display_transcript = transcript or "no consensus transcript is in the store"
-    lines += ["  " + wrapped for wrapped in textwrap.wrap(display_transcript, width=_BLOCK_COLUMNS)]
+        lines.append(f"  PII scan incomplete: {scan['note']}; the redacted representation withholds every word")
 
     lines += ["", "AUDIT", f"  run: {_shown(provenance['run_id'])}", f"  file: {_shown(described['path'])}"]
     lines.append(

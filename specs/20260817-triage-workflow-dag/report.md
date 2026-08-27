@@ -43,10 +43,10 @@ On a single shared time axis, one row each:
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
 | YAMNet and HeAR as fixed-row top-K probability rasters over their own native grids; a cell's color is the thresholded score retained for that classifier window, and an empty cell means below the reporting threshold. AST is a raster only when its stored hop is under 8 s, otherwise it is a coarse-window summary in Supporting Evidence | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
-| consensus ASR words, redacted by the PII marking — a compact multi-row token lane: one bar per word at its own extent with its renderable text drawn on a light confidence-ordered fill, never as a y-tick. The colors are presentation only; the authoritative numeric confidence remains in JSON. | SPEECH |
+| consensus ASR words — a compact multi-row token lane: one bar per fused consensus word at its own extent with the authoritative word text drawn on a light confidence-ordered fill, never as a y-tick. The colors are presentation only; the authoritative numeric confidence remains in JSON. | PREPROCESS |
 | airway-labelled spans with their labels and confirmations | AIRWAY |
 | voiced runs and their extents | VOICE |
-| redacted extents | REDACT |
+| redacted transcript words, when PII marking changed at least one consensus word — a parallel compact token lane whose placeholders show exactly what a released transcript would replace | REDACT |
 | spectrogram | the conditioned stream |
 
 The waveform, the envelope and the envelope spans are three readings of one signal and share one
@@ -83,9 +83,11 @@ The final PDF page, the foot of the PNG. One block per step:
 - **the verdict**: `triage`, `release`, and every reason, with a REDACT non-pass shown whatever the
   triage axis says.
 
-**The summary respects the PII marking.** A `word` element the scan marked is rendered redacted, and
-no matched text appears anywhere in either product. Neither product is a **released artifact**: both
-carry element ids, which are a join key back into the store.
+**The summary distinguishes evidence from release presentation.** The consensus lane and
+`evidence.consensus_transcript_tokens` preserve PREPROCESS's authoritative words. The separate
+redacted lane and `evidence.redacted_transcript_tokens` apply the PII marking. The summary remains
+sensitive because its consensus text and provenance identifiers can identify the recording; it is not
+a release artifact. Both products carry element ids, which are a join key back into the store.
 
 ## The summary JSON
 

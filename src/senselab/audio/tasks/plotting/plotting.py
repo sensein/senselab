@@ -2,6 +2,7 @@
 
 import math
 import os
+import textwrap
 from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple, Union, cast
 
 # Use non-interactive backend when not in a notebook (e.g., papermill, CI)
@@ -1289,17 +1290,39 @@ def plot_aligned_panels(
         if title:
             fig.suptitle(title, y=0.997, fontsize=11)
         if header:
-            fig.text(0.015, 0.972, header["context_label"], va="top", ha="left", fontsize=8, weight="bold")
-            fig.text(0.015, 0.958, header["context"], va="top", ha="left", fontsize=9)
-            fig.text(0.015, 0.930, header["decision_label"], va="top", ha="left", fontsize=8, weight="bold")
-            fig.text(0.015, 0.912, header["decision"], va="top", ha="left", fontsize=15, weight="bold")
-            fig.text(0.015, 0.885, header["evidence_label"], va="top", ha="left", fontsize=8, weight="bold")
-            fig.text(0.015, 0.871, header["evidence"], va="top", ha="left", fontsize=10)
-            fig.text(0.015, 0.845, header["support_label"], va="top", ha="left", fontsize=8, weight="bold")
-            fig.text(0.015, 0.831, header["support"], va="top", ha="left", fontsize=8.5, linespacing=1.4)
+            def _header_lines(value: object, width: int) -> list[str]:
+                return [
+                    line
+                    for paragraph in str(value).splitlines() or [""]
+                    for line in (textwrap.wrap(paragraph, width=width, break_long_words=True) or [""])
+                ]
+
+            # Header text is figure-relative rather than axis-relative. Reserve its measured line
+            # count before tight_layout so it never clips into the right margin or over the first lane.
+            y = 0.972
+            for label_key, value_key, fontsize, width, weight in (
+                ("context_label", "context", 9.0, 168, "normal"),
+                ("decision_label", "decision", 15.0, 104, "bold"),
+                ("evidence_label", "evidence", 10.0, 150, "normal"),
+                ("support_label", "support", 8.5, 168, "normal"),
+            ):
+                fig.text(0.015, y, header[label_key], va="top", ha="left", fontsize=8, weight="bold")
+                y -= 0.016
+                lines = _header_lines(header[value_key], width)
+                fig.text(
+                    0.015,
+                    y,
+                    "\n".join(lines),
+                    va="top",
+                    ha="left",
+                    fontsize=fontsize,
+                    weight=weight,
+                    linespacing=1.25,
+                )
+                y -= 0.003 + len(lines) * (fontsize / 520.0)
         elif plain_header:
             fig.text(0.015, 0.972, "\n".join(plain_header), va="top", ha="left", fontsize=8, family="sans-serif")
-        top = 0.79 if header else (0.90 if plain_header else (0.96 if title else 1.0))
+        top = max(0.48, y - 0.006) if header else (0.90 if plain_header else (0.96 if title else 1.0))
         fig.tight_layout(rect=(0, 0, 1, top))
         plt.show(block=False)
         return fig
