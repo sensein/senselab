@@ -1219,7 +1219,9 @@ def plot_aligned_panels(
                 ax.set_yticklabels(rows, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Label probability")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
-                image = ax.imshow(np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False)
+                image = ax.imshow(
+                    np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False, aspect="auto"
+                )
                 color_axis = ax.inset_axes([1.01, 0.0, 0.018, 1.0])
                 colorbar = fig.colorbar(image, cax=color_axis)
                 colorbar.set_label("Probability", fontsize=7)
