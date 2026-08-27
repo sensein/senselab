@@ -20,13 +20,16 @@ fact the store does not already hold.
 | **summary** | one paginated PDF **or** one image per file | a human reading one recording |
 | **summary JSON** | one JSON per file | a consumer reading many |
 
-The two carry the same claims, and so do the summary's own two forms: the choice is the config key
-`report.format` and it does not change the content.
+The PDF is the concise human view and the JSON is the complete analytic record. They agree on the
+decision claims; the choice is the config key `report.format` and does not alter the workflow's
+stored evidence.
 
-- **`pdf`, the packaged form, uses one aligned evidence page per 10 seconds of recording, followed
-  by one text-only decision page.** Each evidence page shares its fixed 10-second recording-time
-  axis across all panels; the final page holds every block. The blocks share no axis with the
-  panels, so paginating there breaks no alignment.
+- **`pdf`, the packaged form, uses one aligned US Letter landscape evidence page per 10 seconds of
+  recording, followed by concise US Letter landscape decision page(s).** Each evidence page shares
+  its fixed 10-second recording-time axis across all panels. Every artist is filtered to that page's
+  time window before it is drawn, so an off-page label can never alter the printed page dimensions.
+  The complete audit record remains in the accompanying JSON rather than turning the decision page
+  into a diagnostic dump.
 - **`png` is one image** carrying the panels and the blocks together, for a viewer that scrolls
   rather than pages.
 
@@ -36,11 +39,11 @@ On a single shared time axis, one row each:
 
 | layer | drawn from |
 | --- | --- |
-| waveform amplitude on the left y-axis, energy envelope and its floor in dBFS on a twin right axis, and every `span` as a translucent overlay annotated with its `peak_over_floor_db` — **one row** | PREPROCESS |
+| waveform amplitude on the left y-axis, energy envelope and its floor in dBFS on a twin right axis, and every `span` as a translucent overlay annotated with its `peak_over_floor_db` — **one row**. Sub-resolution post-filter values are gaps rather than dBFS readings, so numerical ringing cannot pull the displayed floor downward. | PREPROCESS |
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
 | YAMNet and HeAR as fixed-row top-K probability rasters over their own native grids; a cell's color is the thresholded score retained for that classifier window, and an empty cell means below the reporting threshold. AST is a raster only when its stored hop is under 8 s, otherwise it is a coarse-window summary in Supporting Evidence | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
-| words, redacted by the PII marking — a token lane: one bar per word at its own extent with its renderable text drawn on the bar, never as a y-tick | SPEECH |
+| consensus ASR words, redacted by the PII marking — a compact multi-row token lane: one bar per word at its own extent with its renderable text drawn on a light confidence-ordered fill, never as a y-tick. The colors are presentation only; the authoritative numeric confidence remains in JSON. | SPEECH |
 | airway-labelled spans with their labels and confirmations | AIRWAY |
 | voiced runs and their extents | VOICE |
 | redacted extents | REDACT |
@@ -121,7 +124,7 @@ embedded rather than referenced**:
     streams/  derivatives/            # the sidecars measurements point at
     run.json                          # the runner's own record
   summary/
-    summary.pdf | summary.png             # pdf: <=10 s evidence pages, then decision blocks
+    summary.pdf | summary.png             # pdf: Letter <=10 s evidence pages, then decision pages
     summary.json
   released/                           # REDACT's artifacts, only on a REDACT pass
 ```

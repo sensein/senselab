@@ -89,7 +89,7 @@ class TestTheTextPanel:
         assert any(tick.get_text() for tick in figure.axes[1].get_xticklabels())
 
     def test_time_limits_restrict_the_shared_axis_without_retiming_data(self) -> None:
-        """A report page may show one recording-time slice while its annotations stay globally timed."""
+        """A report page may show one recording-time slice without retiming the recording."""
         figure = plot_aligned_panels(
             _tone(30.0),
             [{"type": "waveform"}, {"type": "segments", "segments": [], "name": "airway"}],
@@ -97,6 +97,32 @@ class TestTheTextPanel:
         )
         assert figure.axes[0].get_xlim() == pytest.approx((10.0, 20.0))
         assert figure.axes[1].get_xlim() == pytest.approx((10.0, 20.0))
+
+    def test_time_limits_draw_only_waveform_and_span_labels_on_the_visible_page(self) -> None:
+        """An off-page label must not be rendered or expand a fixed-size PDF page."""
+        figure = plot_aligned_panels(
+            _tone(30.0),
+            [
+                {
+                    "type": "waveform",
+                    "spans": {
+                        "name": "proposals",
+                        "segments": [
+                            {"label": "early", "start": 1.0, "end": 2.0},
+                            {"label": "visible", "start": 11.0, "end": 12.0},
+                        ],
+                    },
+                },
+                {"type": "spectrogram"},
+            ],
+            time_limits=(10.0, 20.0),
+        )
+        waveform = figure.axes[0]
+        assert waveform.lines[0].get_xdata().min() >= 10.0
+        assert waveform.lines[0].get_xdata().max() < 20.0
+        assert [text.get_text() for text in waveform.texts] == ["visible"]
+        spectrogram = next(axis for axis in figure.axes if axis.get_ylabel() == "Frequency (Hz)")
+        assert spectrogram.images[0].get_extent()[:2] == [10.0, 20.0]
 
     def test_time_limits_reject_an_interval_outside_the_recording(self) -> None:
         """A misleading evidence page is worse than a rendering error."""
@@ -120,7 +146,26 @@ class TestTheTextPanel:
             ],
         )
         assert [tick.get_text() for tick in figure.axes[0].get_yticklabels()] == ["Speech", "Music"]
-        assert figure.axes[1].get_ylabel() == "Probability"
+        assert figure.axes[0].child_axes[0].get_ylabel() == "Probability"
+
+    def test_a_probability_colorbar_does_not_narrow_its_shared_time_axis(self) -> None:
+        """The raster must align horizontally with the waveform it explains."""
+        figure = plot_aligned_panels(
+            _tone(10.0),
+            [
+                {"type": "waveform"},
+                {
+                    "type": "score_raster",
+                    "name": "yamnet labels",
+                    "rows": ["Speech"],
+                    "windows": [{"start": 0.0, "end": 1.0, "scores": {"Speech": 0.8}}],
+                },
+            ],
+        )
+        waveform_position = figure.axes[0].get_position()
+        raster_position = figure.axes[1].get_position()
+        assert raster_position.x0 == pytest.approx(waveform_position.x0)
+        assert raster_position.x1 == pytest.approx(waveform_position.x1)
 
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""

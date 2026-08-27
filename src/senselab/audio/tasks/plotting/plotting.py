@@ -485,7 +485,9 @@ def _as_numpy(values: Any) -> np.ndarray:  # noqa: ANN401 — a tensor, a sequen
     return values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
 
 
-def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any]) -> None:
+def _draw_waveform_overlays(
+    ax: Axes, panel: Dict[str, Any], *, time_limits: Tuple[float, float] | None = None
+) -> None:
     """Draw a waveform panel's span overlay and its twin-axis curves.
 
     The spans go on the waveform's own axis, behind everything, so the twin's curves stay on top of
@@ -494,16 +496,23 @@ def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any]) -> None:
     Args:
         ax: The waveform panel's own axis, carrying amplitude on the left.
         panel: The panel specification, read for its optional ``spans`` and ``twin`` blocks.
+        time_limits: Optional recording-time interval. Span labels outside it are not drawn: an
+            evidence page must contain only evidence visible on its time axis.
     """
     spans = panel.get("spans") or {}
     twin_spec = panel.get("twin") or {}
     if not spans and not twin_spec:
         return
     for segment in spans.get("segments", []):
-        ax.axvspan(segment["start"], segment["end"], color="darkorange", alpha=0.18, linewidth=0, zorder=0)
+        start, end = float(segment["start"]), float(segment["end"])
+        if time_limits is not None and (end <= time_limits[0] or start >= time_limits[1]):
+            continue
+        visible_start = max(start, time_limits[0]) if time_limits is not None else start
+        visible_end = min(end, time_limits[1]) if time_limits is not None else end
+        ax.axvspan(visible_start, visible_end, color="darkorange", alpha=0.18, linewidth=0, zorder=0)
         ax.annotate(
             str(segment["label"]),
-            xy=((float(segment["start"]) + float(segment["end"])) / 2.0, 0.99),
+            xy=((visible_start + visible_end) / 2.0, 0.99),
             xycoords=("data", "axes fraction"),
             ha="center",
             va="top",
@@ -513,7 +522,11 @@ def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any]) -> None:
         )
     twin = ax.twinx()
     for times, values, label, color in twin_spec.get("data", []):
-        twin.plot(_as_numpy(times), _as_numpy(values), color=color, label=label, linewidth=0.9, alpha=0.9)
+        time_values, value_values = _as_numpy(times), _as_numpy(values)
+        if time_limits is not None:
+            visible = (time_values >= time_limits[0]) & (time_values <= time_limits[1])
+            time_values, value_values = time_values[visible], value_values[visible]
+        twin.plot(time_values, value_values, color=color, label=label, linewidth=0.9, alpha=0.9)
     names = [str(name) for name in (twin_spec.get("name"), spans.get("name")) if name]
     twin.set_ylabel(" · ".join(names) or "Value")
     if twin_spec.get("data"):
@@ -987,6 +1000,8 @@ def plot_aligned_panels(
 
     def _ratio(panel: Dict[str, Any]) -> float:
         """One panel's share of the figure's height."""
+        if "height_ratio" in panel:
+            return float(panel["height_ratio"])
         ptype = panel.get("type", "waveform")
         if ptype == "text":
             return max(1.0, TEXT_PANEL_INCHES_PER_LINE * len(panel.get("lines", []))) / _INCHES_PER_RATIO
@@ -1007,20 +1022,31 @@ def plot_aligned_panels(
         base = figsize
     scaled_size = (base[0] * scale, base[1] * scale)
 
-    # Helper: compute spectrogram tensor (cached across panels in this call)
+    start_sample = int(round(x_limits[0] * sr))
+    end_sample = int(round(x_limits[1] * sr))
+    waveform = audio.waveform.squeeze().cpu()[start_sample:end_sample]
+    waveform_np = waveform.numpy()
+    time_wav = np.arange(start_sample, end_sample, dtype=float) / sr
+
+    def _visible_interval(start: float, end: float) -> tuple[float, float] | None:
+        """The portion of one timed artist that belongs on this page."""
+        start, end = max(start, x_limits[0]), min(end, x_limits[1])
+        return (start, end) if end > start else None
+
+    # Compute a spectrogram only for the page window. Rendering a 10-second page must not allocate
+    # a full-recording spectrogram, particularly for long recordings on the batch runner.
     _spec_cache: Dict[str, np.ndarray] = {}
 
     def _get_spec(mel: bool) -> Tuple[np.ndarray, float, float]:
         key = "mel" if mel else "linear"
         if key not in _spec_cache:
-            wf = audio.waveform.squeeze().cpu()
             # Filter out sample_rate from params for non-mel transforms
             filtered_params = {k: v for k, v in spectrogram_params.items() if k != "sample_rate"}
             if mel:
                 transform = T.MelSpectrogram(sample_rate=sr, **filtered_params)
             else:
                 transform = T.Spectrogram(**filtered_params)
-            spec_tensor = transform(wf)
+            spec_tensor = transform(waveform)
             _spec_cache[key] = _power_to_db(spec_tensor.cpu().numpy())
         spec_db = _spec_cache[key]
         if mel:
@@ -1039,9 +1065,6 @@ def plot_aligned_panels(
         )
         axes_list = [axes[i, 0] for i in range(len(panels))]
 
-        waveform_np = audio.waveform.squeeze().cpu().numpy()
-        time_wav = np.linspace(0, duration, len(waveform_np), endpoint=False)
-
         for ax, panel in zip(axes_list, panels):
             ptype = panel.get("type", "waveform")
 
@@ -1049,7 +1072,7 @@ def plot_aligned_panels(
                 ax.plot(time_wav, waveform_np, linewidth=0.3, color="0.45")
                 ax.set_ylabel("Amplitude")
                 ax.grid(True, alpha=0.2)
-                _draw_waveform_overlays(ax, panel)
+                _draw_waveform_overlays(ax, panel, time_limits=x_limits)
 
             elif ptype == "spectrogram":
                 mel = panel.get("mel", False)
@@ -1058,7 +1081,7 @@ def plot_aligned_panels(
                     spec_db,
                     aspect="auto",
                     origin="lower",
-                    extent=[0, duration, f0, f1],
+                    extent=[x_limits[0], x_limits[1], f0, f1],
                     cmap="magma",
                 )
                 ax.set_ylabel("Mel bins" if mel else "Frequency (Hz)")
@@ -1069,6 +1092,8 @@ def plot_aligned_panels(
                 for times, values, label, color in data:
                     t_np = times.cpu().numpy() if torch.is_tensor(times) else np.asarray(times)
                     v_np = values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
+                    visible = (t_np >= x_limits[0]) & (t_np <= x_limits[1])
+                    t_np, v_np = t_np[visible], v_np[visible]
                     if style == "line":
                         ax.plot(t_np, v_np, color=color, label=label, linewidth=0.8, alpha=0.8)
                     else:
@@ -1078,14 +1103,21 @@ def plot_aligned_panels(
                 ax.grid(True, alpha=0.3)
 
             elif ptype == "segments":
-                seg_list = panel.get("segments", [])
+                seg_list = [
+                    seg
+                    for seg in panel.get("segments", [])
+                    if _visible_interval(float(seg["start"]), float(seg["end"])) is not None
+                ]
                 unique_labels = sorted({s["label"] for s in seg_list})
                 y_map = {lbl: i for i, lbl in enumerate(unique_labels)}
                 cmap = plt.get_cmap("tab20", max(len(unique_labels), 1))
                 for seg in seg_list:
                     y = y_map[seg["label"]]
-                    w = seg["end"] - seg["start"]
-                    ax.barh(y, w, left=seg["start"], height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
+                    visible = _visible_interval(float(seg["start"]), float(seg["end"]))
+                    if visible is None:
+                        continue
+                    start, end = visible
+                    ax.barh(y, end - start, left=start, height=0.7, color=cmap(y), alpha=0.85, edgecolor="none")
                 ax.set_yticks(range(len(unique_labels)))
                 ax.set_yticklabels(unique_labels, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Segment")
@@ -1105,11 +1137,16 @@ def plot_aligned_panels(
                 for token in tokens:
                     block = block_of[str(token.get("row") or "")]
                     start, end = float(token["start"]), float(token["end"])
+                    visible = _visible_interval(start, end)
+                    if visible is None:
+                        continue
+                    start, end = visible
                     width = end - start
                     height = TOKEN_BAR_HEIGHT_FRACTION / float(count)
                     centre = (block + 0.5) / float(count)
+                    color = token.get("color") or cmap(block)
                     bars = ax.barh(
-                        centre, width, left=start, height=height, color=cmap(block), alpha=0.85, edgecolor="none"
+                        centre, width, left=start, height=height, color=color, alpha=0.92, edgecolor="none"
                     )
                     text = str(token.get("text") or "")
                     label = None
@@ -1143,8 +1180,13 @@ def plot_aligned_panels(
                         )
                     )
                 ax.set_ylim(0.0, 1.0)
-                ax.set_yticks([(index + 0.5) / float(count) for index in range(len(blocks))] if named_rows else [])
-                if named_rows:
+                show_row_labels = bool(panel.get("show_row_labels", True))
+                ax.set_yticks(
+                    [(index + 0.5) / float(count) for index in range(len(blocks))]
+                    if named_rows and show_row_labels
+                    else []
+                )
+                if named_rows and show_row_labels:
                     ax.set_yticklabels(blocks, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Tokens")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
@@ -1159,7 +1201,10 @@ def plot_aligned_panels(
                         if label not in scores:
                             continue
                         score = float(scores[label])
-                        start, end = float(window["start"]), float(window["end"])
+                        visible = _visible_interval(float(window["start"]), float(window["end"]))
+                        if visible is None:
+                            continue
+                        start, end = visible
                         ax.add_patch(
                             Rectangle(
                                 (start, row_index - 0.42),
@@ -1175,7 +1220,8 @@ def plot_aligned_panels(
                 ax.set_ylabel(panel.get("name") or "Label probability")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
                 image = ax.imshow(np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False)
-                colorbar = fig.colorbar(image, ax=ax, pad=0.01, fraction=0.03)
+                color_axis = ax.inset_axes([1.01, 0.0, 0.018, 1.0])
+                colorbar = fig.colorbar(image, cax=color_axis)
                 colorbar.set_label("Probability", fontsize=7)
                 colorbar.ax.tick_params(labelsize=6)
 
@@ -1186,7 +1232,7 @@ def plot_aligned_panels(
                     spec_db,
                     aspect="auto",
                     origin="lower",
-                    extent=[0, duration, f0, f1],
+                    extent=[x_limits[0], x_limits[1], f0, f1],
                     cmap="magma",
                     alpha=0.9,
                 )
@@ -1194,6 +1240,8 @@ def plot_aligned_panels(
                 for ov in overlays:
                     t_np = ov["times"].cpu().numpy() if torch.is_tensor(ov["times"]) else np.asarray(ov["times"])
                     v_np = ov["values"].cpu().numpy() if torch.is_tensor(ov["values"]) else np.asarray(ov["values"])
+                    visible = (t_np >= x_limits[0]) & (t_np <= x_limits[1])
+                    t_np, v_np = t_np[visible], v_np[visible]
                     ax.scatter(
                         t_np,
                         v_np,

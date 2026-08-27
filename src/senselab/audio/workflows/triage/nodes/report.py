@@ -48,11 +48,13 @@ _SHOWN_DECIMALS = 4
 _TOP_CATEGORIES = 6
 _TOKEN_CYCLE_ROWS = ("1", "2", "3")
 _EVIDENCE_BRANCHES = (*BRANCHES, "REDACT")
-_WORDS_LANE_LABEL = "words (report-only context)"
+_WORDS_LANE_LABEL = "consensus ASR"
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
 _RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
 _TIMELINE_PAGE_SECONDS = 10.0
+_LETTER_LANDSCAPE_IN = (11.0, 8.5)
+_DECISION_PAGE_LINES = 42
 
 _ABSENCE_BY_CLASS = {
     "ValueError": "unfitted (a config key it reads is null)",
@@ -297,12 +299,12 @@ def _lane(name: str, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     Returns:
         A one-element list holding the panel, or an empty list.
     """
-    return [{"type": "segments", "segments": entries, "name": name}] if entries else []
+    return [{"type": "segments", "segments": entries, "name": name, "height_ratio": 0.6}] if entries else []
 
 
 def _token_lane(
     name: str,
-    entries: Iterable[tuple[tuple[float, float], str]],
+    entries: Iterable[tuple[tuple[float, float], str, object]],
     *,
     report_lane: str | None = None,
     expand_label_slots: bool = False,
@@ -311,7 +313,7 @@ def _token_lane(
 
     Args:
         name: The lane's name, drawn as the panel's y-label.
-        entries: ``(extent, text)`` pairs, one per token, in the order they are drawn.
+        entries: ``(extent, text, confidence)`` tuples, one per token, in the order they are drawn.
         report_lane: The semantic lane key when its reader-facing label carries a context qualifier.
         expand_label_slots: Whether short labels may use unused horizontal room in their cycling row.
 
@@ -324,8 +326,9 @@ def _token_lane(
             "start": float(extent[0]),
             "end": float(extent[1]),
             "row": _TOKEN_CYCLE_ROWS[index % len(_TOKEN_CYCLE_ROWS)],
+            "color": _consensus_word_color(confidence),
         }
-        for index, (extent, text) in enumerate(entries)
+        for index, (extent, text, confidence) in enumerate(entries)
     ]
     return [
         {
@@ -334,8 +337,24 @@ def _token_lane(
             "name": name,
             "report_lane": report_lane,
             "expand_label_slots": expand_label_slots,
+            "height_ratio": 0.8,
+            "show_row_labels": False,
         }
     ] if tokens else []
+
+
+def _consensus_word_color(confidence: object) -> str:
+    """A light, confidence-ordered fill for an authoritative consensus word.
+
+    This is presentation only: word confidence remains a numeric field in the summary JSON and is
+    never thresholded or used to change the transcript.
+    """
+    if not isinstance(confidence, (int, float)):
+        return "#e5e7eb"
+    value = float(np.clip(confidence, 0.0, 1.0))
+    low, high = (254, 242, 242), (220, 252, 231)
+    channels = [round(low[channel] + (high[channel] - low[channel]) * value) for channel in range(3)]
+    return "#" + "".join(f"{channel:02x}" for channel in channels)
 
 
 def _window_presentation(store: ProvStore, classifier: str) -> dict[str, Any]:
@@ -409,6 +428,7 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
                 {"start": window.extent[0], "end": window.extent[1], "scores": scores}
                 for window, scores in windows
             ],
+            "height_ratio": max(0.9, 0.2 * len(rows)),
         }
     ]
 
@@ -503,7 +523,7 @@ def _panels(
         waveform's row and are named by that row's right-hand scale rather than by a panel ``name``
         of their own.
     """
-    waveform: dict[str, Any] = {"type": "waveform"}
+    waveform: dict[str, Any] = {"type": "waveform", "height_ratio": 1.35}
     panels: list[dict[str, Any]] = [waveform]
     drawn: set[str] = set()
     scanned, _ = _scan_state(store)
@@ -548,7 +568,11 @@ def _panels(
     panels += _token_lane(
         _WORDS_LANE_LABEL,
         (
-            (word.extent, _redacted_text(marks, word, scanned=scanned))
+            (
+                word.extent,
+                _redacted_text(marks, word, scanned=scanned),
+                word.attributes.get("existence_confidence"),
+            )
             for word in _words(store)
             if word.extent is not None
         ),
@@ -579,7 +603,7 @@ def _panels(
             if span.attributes.get("name") == "redaction" and span.extent is not None
         ),
     )
-    panels.append({"type": "spectrogram"})
+    panels.append({"type": "spectrogram", "height_ratio": 1.25})
     return panels, drawn | {str(panel.get("report_lane") or panel["name"]) for panel in panels if "name" in panel}
 
 
@@ -1410,6 +1434,91 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
     return _wrapped(lines)
 
 
+def _decision_blocks(document: dict[str, Any]) -> list[str]:
+    """Give the PDF a concise, clinician-readable decision page.
+
+    The complete structured report, including every provenance id and branch evidence item, remains
+    in ``summary.json``. The PDF carries the decision, its primary support, and the measured branch
+    outcomes rather than a debug-style dump of that same record.
+    """
+    decisions, screening, routing = document["decisions"], document["screening"], document["routing"]
+    lines = ["DECISION SUMMARY"]
+    lines.append(
+        f"  triage: {_shown(decisions['file_triage'])}   release: {_shown(decisions['release'])}   "
+        f"discard ground: {_shown(decisions.get('discard_ground'))}"
+    )
+    lines += ["", "PRIMARY EVIDENCE"]
+    reasons = decisions.get("reasons") or []
+    if reasons:
+        lines += [
+            f"  {reason.get('node')}: {reason.get('outcome')}"
+            + (f" ({reason.get('kind')})" if reason.get("kind") else "")
+            + f" - {reason.get('why')}"
+            for reason in reasons
+        ]
+    else:
+        lines.append("  no node contributed a decision reason")
+
+    lines += ["", "SCREENING AND ROUTING"]
+    screened = "; ".join(f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items()))
+    lines.append("  screened: " + (screened or "not screened"))
+    for branch in sorted(routing, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
+        decision = routing[branch]
+        outcome = _shown(decision.get("verdict")) if decision["will_run"] else "not run"
+        lines.append(
+            f"  {branch}: {outcome}; {decision['why']}"
+            + ("; forced by task hint" if decision["forced_by_hint"] else "")
+        )
+
+    lines += ["", "MEASURED BRANCH FINDINGS"]
+    findings_start = len(lines)
+    for branch in sorted(routing, key=lambda name: BRANCHES.index(name) if name in BRANCHES else len(BRANCHES)):
+        decision, detail = routing[branch], document["steps"].get(branch, {})
+        if not decision["will_run"]:
+            continue
+        measures = [f"{key}={_shown(detail[key])}" for key in _BRANCH_MEASURES.get(branch, ()) if key in detail]
+        flags = [str(flag) for flag in decision.get("flags") or []]
+        if measures or flags:
+            lines.append(f"  {branch}: " + "; ".join([*measures, *flags]))
+    if len(lines) == findings_start:
+        lines.append("  no branch-specific measurement was retained")
+
+    lines += ["", "SUPPORTING EVIDENCE"]
+    for classifier, counts in document["categories"].items():
+        top = list(counts.items())[:_TOP_CATEGORIES]
+        if top:
+            lines.append(f"  {classifier}: " + ", ".join(f"{label} ({count})" for label, count in top))
+    transcript = str(document["transcript"].get("text") or "")
+    if transcript:
+        lines += ["", "CONSENSUS TRANSCRIPT"]
+        lines += ["  " + line for line in textwrap.wrap(transcript, width=_BLOCK_COLUMNS - 2)]
+
+    lines += ["", "ANALYTIC RECORD"]
+    lines.append(
+        "  Complete branch evidence, classifier probabilities, transcript details, and provenance: summary.json"
+    )
+    return _wrapped(lines)
+
+
+def _text_pages(lines: list[str]) -> list[list[str]]:
+    """Split a decision record across fixed-size Letter pages without losing a section boundary."""
+    if not lines:
+        return [[]]
+    pages: list[list[str]] = []
+    remaining = list(lines)
+    while remaining:
+        stop = min(_DECISION_PAGE_LINES, len(remaining))
+        if stop < len(remaining):
+            blank_before_stop = [index for index in range(1, stop) if not remaining[index].strip()]
+            if blank_before_stop:
+                stop = blank_before_stop[-1]
+        pages.append(remaining[:stop])
+        remaining = remaining[stop:]
+        while remaining and not remaining[0].strip():
+            remaining.pop(0)
+    return pages
+
+
 def report(
     store: ProvStore, summary_dir: Path, config: TriageConfig, *, run_dir: Path | None = None
 ) -> dict[str, Path]:
@@ -1482,8 +1591,9 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
         document: The structured report object also written as JSON.
         title: The figure's title, carrying the decision.
         path: Where the rendered summary goes.
-        fmt: ``pdf`` for one <=10-second evidence page per recording-time window followed by the
-            blocks, or ``png`` for one image carrying the full timeline and blocks.
+        fmt: ``pdf`` for one fixed-size Letter evidence page per <=10-second recording-time window
+            followed by concise decision page(s), or ``png`` for one image carrying the full
+            timeline and blocks.
     """
     from matplotlib import pyplot
     from matplotlib.backends.backend_pdf import PdfPages
@@ -1495,7 +1605,11 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
 
     if fmt == "pdf":
         if audio is None:
-            lanes = [_text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title)]
+            lanes = [
+                _text_figure(
+                    [*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title, figsize=_LETTER_LANDSCAPE_IN
+                )
+            ]
         else:
             duration_s = audio.waveform.shape[-1] / audio.sampling_rate
             windows = _timeline_windows(duration_s)
@@ -1506,12 +1620,17 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
                     title=_timeline_title(title, window, len(windows)),
                     header=header,
                     time_limits=window,
+                    figsize=_LETTER_LANDSCAPE_IN,
                 )
                 for window in windows
             ]
         with PdfPages(path) as pages:
-            for figure in [*lanes, _text_figure(blocks, title)]:
-                pages.savefig(figure, bbox_inches="tight")
+            decision_pages = [
+                _text_figure(page, title, figsize=_LETTER_LANDSCAPE_IN)
+                for page in _text_pages(_decision_blocks(document))
+            ]
+            for figure in [*lanes, *decision_pages]:
+                pages.savefig(figure)
                 pyplot.close(figure)
         return
 
@@ -1524,23 +1643,27 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     pyplot.close(figure)
 
 
-def _text_figure(lines: list[str], title: str) -> Figure:
+def _text_figure(
+    lines: list[str], title: str, *, figsize: tuple[float, float] | None = None
+) -> Figure:
     """One text-only figure, tall enough for every line it carries.
 
     Args:
         lines: The lines, drawn monospaced from the top left.
         title: The figure's title.
+        figsize: Optional physical figure size in inches. PDF pages pass US Letter landscape.
 
     Returns:
-        The figure, not yet saved and not yet closed.
+        The figure, not yet saved and not yet closed. An explicit size keeps PDF pages physically
+        fixed; the PNG form still grows to carry a long diagnostic record.
     """
     from matplotlib import pyplot
 
     height = max(MIN_FIGURE_HEIGHT_IN, TEXT_PANEL_INCHES_PER_LINE * len(lines))
-    figure = pyplot.figure(figsize=(14.0, height))
+    figure = pyplot.figure(figsize=figsize or (14.0, height))
     axis = figure.add_subplot(111)
     axis.axis("off")
-    axis.text(0.01, 0.98, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=8)
+    axis.text(0.03, 0.94, "\n".join(lines), va="top", ha="left", family="monospace", fontsize=8)
     figure.suptitle(title)
     return figure
 
