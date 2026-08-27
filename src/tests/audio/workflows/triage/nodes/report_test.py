@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from senselab.audio.data_structures import AudioHints
+from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
 from senselab.audio.workflows.triage.nodes.report import ReportRenderError, report
@@ -654,12 +654,13 @@ class TestTheSummaryLayers:
     def test_the_shared_axis_carries_every_layer_the_store_holds(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Waveform, envelope with floor, spans, phonation spans, the three label lanes, the branches."""
+        """Waveform, envelope with floor, spans, phonation, probability rasters and branch evidence."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True)
         report(store, tmp_path / "summary", _png(tmp_path))
         kinds = [panel["type"] for panel in panels[0]]
-        assert kinds.count("segments") >= 5
+        assert kinds.count("segments") >= 4
+        assert kinds.count("score_raster") == 2
         assert "waveform" in kinds
         assert panels[0][0]["twin"]["data"]
 
@@ -734,6 +735,21 @@ class TestTheSummaryLayers:
         assert "ast labels" in {panel.get("name") for panel in panels[0]}
         payload = json.loads(artifacts["json"].read_text())
         assert payload["evidence"]["label_presentations"]["ast"]["mode"] == "timeline"
+
+    def test_classifier_rasters_and_json_keep_labels_paired_with_probabilities(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Comma-separated classes alone discard the magnitude that made each one relevant."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+
+        raster = next(panel for panel in panels[0] if panel.get("name") == "yamnet labels")
+        assert raster["type"] == "score_raster"
+        assert raster["rows"] == ["Speech"]
+        assert raster["windows"][0]["scores"] == {"Speech": 0.9}
+        assert payload["evidence"]["classifier_windows"]["yamnet"][0]["label_scores"] == {"Speech": 0.9}
 
     def test_labelled_and_unlabelled_spans_are_distinguishable(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1177,7 +1193,7 @@ def _pdf_pages(path: Path) -> int:
 
 
 class TestThePdfIsTwoPages:
-    """One 32-inch image was the objection; the pdf answers it with panels then prose."""
+    """The PDF keeps evidence legible, then gives its decision prose a dedicated page."""
 
     def test_the_packaged_format_is_the_pdf(self, config: TriageConfig) -> None:
         """The form the packaged config ships is the two-page document, not the tall image."""
@@ -1197,6 +1213,31 @@ class TestThePdfIsTwoPages:
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         artifacts = report(store, tmp_path / "summary", pdf_config)
         assert _pdf_pages(artifacts["summary"]) == 2
+
+    def test_a_long_recording_gets_one_ten_second_evidence_page_per_interval(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Long timelines are paginated rather than compressed into unreadable labels."""
+        from matplotlib import pyplot
+
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        windows: list[tuple[float, float]] = []
+
+        def _plot(*_args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            windows.append(tuple(kwargs["time_limits"]))
+            return pyplot.figure()
+
+        _seed_report_store(store, tmp_path, full=True)
+        long_audio = Audio(waveform=np.zeros((1, 25 * _RATE), dtype=np.float32), sampling_rate=_RATE)
+        monkeypatch.setattr(report_module, "_stream", lambda *_args: long_audio)
+        monkeypatch.setattr(report_module, "plot_aligned_panels", _plot)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+
+        assert windows == [(0.0, 10.0), (10.0, 20.0), (20.0, 25.0)]
+        assert _pdf_pages(artifacts["summary"]) == 4
 
     def test_the_first_page_carries_no_text_block(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

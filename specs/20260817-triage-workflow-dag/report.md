@@ -17,15 +17,16 @@ fact the store does not already hold.
 
 | product | form | what it is for |
 | --- | --- | --- |
-| **summary** | one two-page PDF **or** one image per file | a human reading one recording |
+| **summary** | one paginated PDF **or** one image per file | a human reading one recording |
 | **summary JSON** | one JSON per file | a consumer reading many |
 
 The two carry the same claims, and so do the summary's own two forms: the choice is the config key
 `report.format` and it does not change the content.
 
-- **`pdf`, the packaged form, is two pages.** Page one is the aligned panels and nothing else; page
-  two is every block, typeset on a text-only page. The blocks share no axis with the panels, so
-  paginating on that seam breaks no alignment, and the panels stay one uncut canvas.
+- **`pdf`, the packaged form, uses one aligned evidence page per 10 seconds of recording, followed
+  by one text-only decision page.** Each evidence page shares its fixed 10-second recording-time
+  axis across all panels; the final page holds every block. The blocks share no axis with the
+  panels, so paginating there breaks no alignment.
 - **`png` is one image** carrying the panels and the blocks together, for a viewer that scrolls
   rather than pages.
 
@@ -37,7 +38,7 @@ On a single shared time axis, one row each:
 | --- | --- |
 | waveform amplitude on the left y-axis, energy envelope and its floor in dBFS on a twin right axis, and every `span` as a translucent overlay annotated with its `peak_over_floor_db` — **one row** | PREPROCESS |
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
-| YAMNet and HeAR window label sets as label lanes over their own grids; AST as a label lane only when its stored hop is under 8 s, otherwise as a coarse-window summary in Supporting Evidence | PREPROCESS |
+| YAMNet and HeAR as fixed-row top-K probability rasters over their own native grids; a cell's color is the thresholded score retained for that classifier window, and an empty cell means below the reporting threshold. AST is a raster only when its stored hop is under 8 s, otherwise it is a coarse-window summary in Supporting Evidence | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
 | words, redacted by the PII marking — a token lane: one bar per word at its own extent with its renderable text drawn on the bar, never as a y-tick | SPEECH |
 | airway-labelled spans with their labels and confirmations | AIRWAY |
@@ -54,7 +55,11 @@ AST's packaged 10.24 s window and hop are intentionally rendered as a summary ra
 each fired label is a property of that broad acoustic context, not a local event boundary. The JSON
 records `evidence.label_presentations.ast` with the stored window and hop plus `mode: summary_only`,
 so an analytical consumer receives the same distinction as the human reader. A run whose stored AST
-hop is below 8 s retains its time-aligned label lane; new configs reject such a hop.
+hop is below 8 s retains its time-aligned probability raster; new configs reject such a hop.
+
+The JSON mirrors every drawn YAMNet, HeAR and time-resolved AST window in
+`evidence.classifier_windows`. Each item carries its provenance entity id, timing, retained
+`label_scores` and `thresholded_labels`; the report never makes a page-only probability claim.
 
 **The title is short.** The task token the run id names, the date, and the two verdict axes —
 `task-… · 2026-08-25 · triage: flag · release: not_assessed`. The full run id and the file path are
@@ -63,7 +68,7 @@ off the page.
 
 ## The summary — the blocks
 
-Page two of the PDF, the foot of the PNG. One block per step:
+The final PDF page, the foot of the PNG. One block per step:
 
 - **which branches ran, which were skipped, and which a hint forced** — the `branch_decision`
   elements;
@@ -116,7 +121,7 @@ embedded rather than referenced**:
     streams/  derivatives/            # the sidecars measurements point at
     run.json                          # the runner's own record
   summary/
-    summary.pdf | summary.png             # pdf: page 1 panels, page 2 blocks
+    summary.pdf | summary.png             # pdf: <=10 s evidence pages, then decision blocks
     summary.json
   released/                           # REDACT's artifacts, only on a REDACT pass
 ```
