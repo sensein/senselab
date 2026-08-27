@@ -225,6 +225,25 @@ class TestTheTextPanel:
         assert all(box.x0 >= 0.0 and box.x1 <= figure.bbox.x1 for box in header_boxes)
         assert max(axis.get_window_extent(renderer).y1 for axis in figure.axes) < min(box.y0 for box in header_boxes)
 
+    def test_a_structured_header_is_the_only_figure_heading(self) -> None:
+        """A PDF report must not clip a second, legacy title above its structured header."""
+        figure = plot_aligned_panels(
+            _tone(1.0),
+            [{"type": "waveform"}],
+            title="A legacy title that belongs in the structured report header",
+            header={
+                "context_label": "TASK / CONTEXT",
+                "context": "task: sustained phonation",
+                "decision_label": "PRIMARY FILE DECISION",
+                "decision": "TRIAGE: REVIEW",
+                "evidence_label": "LEADING DECISION EVIDENCE",
+                "evidence": "voice review selected",
+                "support_label": "SCREENING / ROUTING",
+                "support": "voice=present; VOICE run",
+            },
+        )
+        assert figure._suptitle is None
+
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""
         figure = plot_aligned_panels(
