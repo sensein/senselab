@@ -167,6 +167,35 @@ class TestTheTextPanel:
         assert raster_position.x0 == pytest.approx(waveform_position.x0)
         assert raster_position.x1 == pytest.approx(waveform_position.x1)
 
+    def test_every_timed_panel_uses_the_same_time_to_pixel_transform(self) -> None:
+        """A timestamp must land on the same pixel in every report row, not merely share x-limits."""
+        figure = plot_aligned_panels(
+            _tone(10.0),
+            [
+                {
+                    "type": "waveform",
+                    "twin": {"name": "dBFS", "data": [([2.0, 8.0], [-40.0, -30.0], "floor", "firebrick")]},
+                },
+                {"type": "segments", "name": "airway", "segments": [{"label": "Breathe", "start": 2.0, "end": 8.0}]},
+                {"type": "tokens", "name": "consensus ASR", "tokens": [{"text": "word", "start": 2.0, "end": 8.0}]},
+                {
+                    "type": "score_raster",
+                    "name": "yamnet labels",
+                    "rows": ["Breathing"],
+                    "windows": [{"start": 2.0, "end": 8.0, "scores": {"Breathing": 0.8}}],
+                },
+                {"type": "spectrogram"},
+            ],
+            time_limits=(1.0, 9.0),
+        )
+        figure.canvas.draw()
+        timed_axes = [axis for axis in figure.axes if axis.axison and axis.get_xlim() == pytest.approx((1.0, 9.0))]
+        reference = timed_axes[0].transData.transform([(2.0, 0.0), (8.0, 0.0)])[:, 0]
+        assert len(timed_axes) == 6  # Five rows plus the waveform's twin dBFS axis.
+        for axis in timed_axes[1:]:
+            pixels = axis.transData.transform([(2.0, 0.0), (8.0, 0.0)])[:, 0]
+            assert pixels == pytest.approx(reference)
+
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""
         figure = plot_aligned_panels(
