@@ -52,6 +52,7 @@ _WORDS_LANE_LABEL = "consensus ASR"
 _TITLE_SEPARATOR = " · "
 _TASK_PREFIX = "task-"
 _RUN_STAMP = re.compile(r"^(\d{4})(\d{2})(\d{2})-\d{6}(?:-\d+)?$")
+_SPAN_FLAG_REASON = re.compile(r"^(?P<label>.+?) in range for span at [0-9.]+s$")
 _TIMELINE_PAGE_SECONDS = 10.0
 _LETTER_LANDSCAPE_IN = (11.0, 8.5)
 _DECISION_PAGE_LINES = 42
@@ -1286,12 +1287,22 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
             return f"TAXONOMY: {kind} is uncertain; see taxonomy decision path"
         return None
 
+    def _header_reason(reason: dict[str, Any]) -> str:
+        node = str(reason.get("node") or "decision")
+        why = str(reason.get("why") or "no detail retained")
+        if node == "TAXONOMY" and taxonomy_reason is not None:
+            return taxonomy_reason
+        clauses = [clause for clause in why.split("; ") if clause]
+        span_matches = [_SPAN_FLAG_REASON.fullmatch(clause) for clause in clauses]
+        if clauses and all(match is not None for match in span_matches):
+            labels = sorted({str(match.group("label")) for match in span_matches if match is not None})
+            return f"{node}: {', '.join(labels)} flagged in {len(clauses)} span(s); see summary.json"
+        if len(clauses) > 3:
+            return f"{node}: {clauses[0]}; +{len(clauses) - 1} additional detail(s) in summary.json"
+        return f"{node}: {why}"
+
     taxonomy_reason = _taxonomy_reason()
-    evidence_text = "; ".join(
-        taxonomy_reason if reason.get("node") == "TAXONOMY" and taxonomy_reason is not None
-        else f"{reason.get('node')}: {reason.get('why')}"
-        for reason in evidence[:2]
-    ) or "no contributing reason"
+    evidence_text = "; ".join(_header_reason(reason) for reason in evidence[:2]) or "no contributing reason"
     screened = "; ".join(
         f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items())
     ) or "not screened"

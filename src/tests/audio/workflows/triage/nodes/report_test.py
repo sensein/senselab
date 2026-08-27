@@ -15,7 +15,7 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
-from senselab.audio.workflows.triage.nodes.report import ReportRenderError, report
+from senselab.audio.workflows.triage.nodes.report import ReportRenderError, _header, report
 from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
@@ -697,6 +697,31 @@ class TestTheSummaryLayers:
         assert header["evidence_label"] == "LEADING DECISION EVIDENCE"
         assert header["context_label"].endswith("(context only)")
         assert header["support_label"].endswith("(report-only summary)")
+
+    def test_the_header_compacts_repeated_span_flags(self) -> None:
+        """The page header summarizes repeated events while JSON retains each event."""
+        document = {
+            "recording": {"task_type": "prolonged vowel", "declared_hints": {}},
+            "decisions": {
+                "reasons": [],
+                "flags": [
+                    {
+                        "node": "VOICE",
+                        "why": (
+                            "period_doubling_alias in range for span at 0.072s; "
+                            "period_doubling_alias in range for span at 0.719s; "
+                            "period_doubling_alias in range for span at 1.028s"
+                        ),
+                    }
+                ],
+                "file_triage": "flag",
+                "release": "withheld",
+            },
+            "screening": {"screened_kinds": {}, "decision_paths": {}},
+            "routing": {},
+        }
+        header = _header(document)
+        assert header["evidence"] == "VOICE: period_doubling_alias flagged in 3 span(s); see summary.json"
 
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
