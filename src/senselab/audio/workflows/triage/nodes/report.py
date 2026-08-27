@@ -908,6 +908,43 @@ def _categories(store: ProvStore) -> dict[str, dict[str, int]]:
     return {classifier: counts for classifier, counts in found.items() if counts}
 
 
+def _taxonomy_decision_paths(store: ProvStore) -> dict[str, dict[str, Any]]:
+    """The evidence lines TAXONOMY used for each kind, in report-friendly form.
+
+    The kind entities retain the full provenance ids. The report adds a small rendering and analysis
+    view so a classifier label that did not decide a state is visibly distinct from the decisive
+    evidence line.
+
+    Args:
+        store: The provenance store holding TAXONOMY's live kind entities.
+
+    Returns:
+        ``{kind: {state, lines}}`` in the taxonomy's stable kind order.
+    """
+    by_kind = {str(entity.attributes.get("kind")): entity for entity in live_entities(store, "kind")}
+    paths: dict[str, dict[str, Any]] = {}
+    for kind in ("speech", "airway", "voice"):
+        entity = by_kind.get(kind)
+        if entity is None:
+            continue
+        lines = entity.attributes.get("lines") or {}
+        paths[kind] = {
+            "state": entity.attributes.get("state"),
+            "lines": {
+                str(name): {
+                    "state": values.get("state"),
+                    "evidence": values.get("evidence"),
+                    "unit": values.get("unit"),
+                    "floor": values.get("floor"),
+                    "uncertain_floor": values.get("uncertain_floor"),
+                }
+                for name, values in lines.items()
+                if isinstance(values, dict)
+            },
+        }
+    return paths
+
+
 def _task_context(run_id: str, verdict: dict[str, Any]) -> dict[str, Any]:
     """The recording/task context the report puts ahead of the evidence lanes.
 
@@ -1059,6 +1096,7 @@ def _report_document(
             "screened_kinds": verdict.get("screened") or (steps.get("TAXONOMY", {}).get("kinds") or {}),
             "resolved_kinds": verdict.get("kinds") or {},
             "agreement": verdict.get("agreement") or {},
+            "decision_paths": _taxonomy_decision_paths(store),
         },
         "routing": branches,
         "evidence": {
@@ -1467,6 +1505,20 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
             f"  {branch}: {outcome}; {decision['why']}"
             + ("; forced by task hint" if decision["forced_by_hint"] else "")
         )
+
+    decision_paths = screening.get("decision_paths") or {}
+    if decision_paths:
+        lines += ["", "TAXONOMY DECISION PATH"]
+        for kind, path in decision_paths.items():
+            evidence_lines = path.get("lines") or {}
+            rendered = "; ".join(
+                f"{name}={_shown(line.get('evidence'))} {_shown(line.get('unit'))} "
+                f"(floor={_shown(line.get('floor'))}, {line.get('state')})"
+                for name, line in evidence_lines.items()
+            )
+            if kind == "speech" and "lexical" in evidence_lines:
+                rendered += "; lexical consensus decides; acoustic is corroboration"
+            lines.append(f"  {kind}: {rendered} -> {_shown(path.get('state'))}")
 
     lines += ["", "MEASURED BRANCH FINDINGS"]
     findings_start = len(lines)

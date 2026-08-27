@@ -266,8 +266,19 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
 
     fold = store.activity(node="TAXONOMY", step="fold", parameters={})
     store.was_associated_with(fold, software)
+    kind_lines = {
+        "speech": {
+            "acoustic": {"state": "present", "evidence": 1, "unit": "windows", "floor": 1},
+            "lexical": {"state": "present", "evidence": len(words), "unit": "words", "floor": 1},
+        },
+        "airway": {
+            "health_acoustic": {"state": "present", "evidence": 1, "unit": "windows", "floor": 1},
+            "acoustic": {"state": "present", "evidence": 1, "unit": "windows", "floor": 1},
+        },
+        "voice": {"phonation": {"state": "present", "evidence": 0.8, "unit": "seconds", "floor": 0.5}},
+    }
     for kind, state in (("speech", "present"), ("airway", "present"), ("voice", "present")):
-        _entity("kind", None, {"kind": kind, "state": state, "lines": {}, "stream": "plain"})
+        _entity("kind", None, {"kind": kind, "state": state, "lines": kind_lines[kind], "stream": "plain"})
     write_verdict(
         store,
         fold,
@@ -1275,6 +1286,7 @@ class TestThePdfPagination:
         report(store, tmp_path / "summary", pdf_config)
         blocks = "\n".join(drawn[-1])
         assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "hello world" in blocks
+        assert "TAXONOMY DECISION PATH" in blocks and "lexical consensus decides" in blocks
         assert "ANALYTIC RECORD" in blocks and "summary.json" in blocks
 
     def test_the_png_stays_one_image_with_the_blocks_on_it(
