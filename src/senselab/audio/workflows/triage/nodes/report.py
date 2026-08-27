@@ -1184,7 +1184,8 @@ def _timeline_title(title: str, window: tuple[float, float], total_windows: int)
     if total_windows == 1:
         return title
     start_s, end_s = window
-    return f"{title}{_TITLE_SEPARATOR}timeline {start_s:g}-{end_s:g} s"
+    line = f"{' '.join(title.splitlines())}{_TITLE_SEPARATOR}timeline {start_s:g}-{end_s:g} s"
+    return "\n".join(textwrap.wrap(line, width=_TITLE_COLUMNS, break_long_words=True, break_on_hyphens=False) or [line])
 
 
 def _header(document: dict[str, Any]) -> dict[str, str]:
