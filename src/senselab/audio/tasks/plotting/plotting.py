@@ -1287,7 +1287,9 @@ def plot_aligned_panels(
         axes_list[0].set_xlim(*x_limits)
 
         plain_header = [str(line) for line in (header_lines or ()) if str(line)]
-        if title:
+        # A structured report header owns the page's heading hierarchy. Drawing the legacy centered
+        # title as well makes two competing headings and can clip it at the fixed PDF page boundary.
+        if title and not header:
             fig.suptitle(title, y=0.997, fontsize=11)
         if header:
             def _header_lines(value: object, width: int) -> list[str]:
