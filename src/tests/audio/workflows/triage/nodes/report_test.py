@@ -559,7 +559,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v1"
+        assert payload["schema_version"] == "triage-summary/v2"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -574,43 +574,52 @@ class TestTheStructuredJsonCompanion:
         assert payload["routing"]["SPEECH"]["verdict"] is not None
         speech_items = payload["evidence"]["branches"]["SPEECH"]
         assert any(item["timing"] and item["provenance"]["node"] for item in speech_items)
-        token = payload["evidence"]["transcript_tokens"][0]
+        token = payload["evidence"]["consensus_transcript_tokens"][0]
         assert token["timing_authority"] == "consensus"
         assert token["confidence"] == 0.9
         assert token["existence_confidence"] == 0.88 and token["temporal_confidence"] == 0.86
         assert token["coverage"] == 1.0
         assert token["recognizers"] == ["crisperwhisper", "qwen"]
         assert token["timing_sources"] == ["native", "bundled_aligner"]
-        assert all("entity_id" in item for item in payload["evidence"]["transcript_tokens"])
+        assert all("entity_id" in item for item in payload["evidence"]["consensus_transcript_tokens"])
+        assert all("entity_id" in item for item in payload["evidence"]["redacted_transcript_tokens"])
 
 
-class TestItRespectsThePiiMarking:
-    """No matched text appears anywhere in either product."""
+class TestItSeparatesConsensusAndRedactedTranscript:
+    """The audit transcript and the redacted release representation stay visibly distinct."""
 
-    def test_a_marked_word_is_rendered_redacted_in_the_json(self, store: ProvStore, tmp_path: Path) -> None:
-        """The store holds PII by design; every artifact must respect the marking."""
+    def test_a_marked_word_is_preserved_in_consensus_and_replaced_in_redacted_json(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """A placeholder is a REDACT result, never a claim about what ASR emitted."""
         _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
-        text = artifacts["json"].read_text()
-        assert "alice" not in text
-        assert "[PERSON]" in text
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["transcript"]["text"].endswith("alice")
+        assert payload["transcript"]["redacted_text"].endswith("[PERSON]")
+        assert payload["evidence"]["consensus_transcript_tokens"][-1]["text"] == "alice"
+        assert payload["evidence"]["redacted_transcript_tokens"][-1]["text"] == "[PERSON]"
 
-    def test_an_unmarked_word_is_rendered_verbatim(self, store: ProvStore, tmp_path: Path) -> None:
-        """The marking is what redacts, not a blanket refusal to render words."""
-        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[])
-        artifacts = report(store, tmp_path / "summary", _png(tmp_path))
-        assert "hello" in artifacts["json"].read_text()
-
-    def test_the_marked_word_never_reaches_the_drawn_lanes(
+    def test_an_unmarked_transcript_does_not_draw_a_duplicate_redacted_lane(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The summary is redacted by the same rule as the JSON, not only the JSON."""
+        """A second identical token lane would add clutter without communicating a redaction."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert not any(panel.get("report_lane") == "redacted" for panel in panels[0])
+
+    def test_the_marked_word_uses_distinct_consensus_and_redacted_lanes(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Readers can distinguish a PII replacement from the word ASR and consensus supplied."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, marked_words=[("alice", "PERSON")])
         report(store, tmp_path / "summary", _png(tmp_path))
-        drawn = json.dumps(panels[0], default=str)
-        assert "alice" not in drawn
-        assert "[PERSON]" in drawn
+        consensus = next(panel for panel in panels[0] if panel.get("report_lane") == "words")
+        redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
+        assert [token["text"] for token in consensus["tokens"]][-1] == "alice"
+        assert [token["text"] for token in redacted["tokens"]][-1] == "[PERSON]"
 
 
 class TestTheProvenanceIsEmbedded:
@@ -1105,27 +1114,29 @@ class TestElementIdsNameLiveEvidenceOnly:
 class TestAnUnscannedTranscriptIsNotACleanOne:
     """The marking is what redacts, so no marking is only reassuring if something looked."""
 
-    def test_a_transcript_nobody_scanned_is_withheld(
+    def test_a_transcript_nobody_scanned_keeps_consensus_and_marks_the_redacted_view(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Routing declining SPEECH must not turn every word into a word cleared for rendering."""
+        """A missing PII scan changes only the redacted representation, never consensus ASR evidence."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, words=["hello", "world"], scan="absent")
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
-        text = artifacts["json"].read_text()
-        assert "hello" not in text
-        assert "[unscanned]" in text
+        payload = json.loads(artifacts["json"].read_text())
+        assert payload["transcript"]["text"] == "hello world"
+        assert {token["text"] for token in payload["evidence"]["redacted_transcript_tokens"]} == {"[unscanned]"}
         blocks = "\n".join(panels[0][-1]["lines"])
-        assert "TRANSCRIPT (WITHHELD" in blocks
+        assert "CONSENSUS TRANSCRIPT" in blocks
         assert "no pii scan is in the store" in blocks
 
-    def test_an_incomplete_scan_is_withheld_and_names_the_detector(
+    def test_an_incomplete_scan_marks_the_redacted_view_and_names_the_detector(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A scan that lost a detector is REDACT's own N15 case, and the page reads it the same way."""
+        """A scan that lost a detector leaves consensus intact and marks the redacted form as unscanned."""
         panels = _capture_panels(monkeypatch)
         _seed_report_store(store, tmp_path, full=True, words=["hello"], scan="incomplete")
-        assert "hello" not in report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text()
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        assert payload["transcript"]["text"] == "hello"
+        assert payload["transcript"]["redacted_text"] == "[unscanned]"
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "detectors failed: presidio" in blocks
 
@@ -1135,7 +1146,7 @@ class TestAnUnscannedTranscriptIsNotACleanOne:
         text = report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text()
         assert "hello" in text
         assert "[PERSON]" in text
-        assert "alice" not in text
+        assert "alice" in text
         assert "[unscanned]" not in text
 
 
@@ -1522,7 +1533,7 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
             "two",
             "three",
             "four",
-            "[PERSON]",
+            "five",
         }
 
     def test_forty_words_do_not_become_forty_ticks(self, store: ProvStore, tmp_path: Path) -> None:
@@ -1532,36 +1543,44 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         assert 0 < len(axis.patches) < 40, "off-page words are not artists on this timeline"
         assert [tick.get_text() for tick in axis.get_yticklabels()] == []
 
-    def test_a_marked_word_renders_its_category_on_the_bar(self, store: ProvStore, tmp_path: Path) -> None:
-        """The redaction discipline is unchanged by the move: the bar carries the placeholder."""
+    def test_a_marked_word_stays_in_consensus_and_is_replaced_in_the_redacted_lane(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The two lanes make clear that a replacement is not an ASR token."""
         figure, panels = self._render(store, tmp_path, words=["hello"], marked_words=[("alice", "PERSON")])
         drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
-        assert "[PERSON]" in drawn
-        assert "alice" not in drawn
+        redacted_index = next(index for index, panel in enumerate(panels) if panel.get("report_lane") == "redacted")
+        redacted = [text.get_text() for text in figure.axes[redacted_index].texts]
+        assert "alice" in drawn
+        assert "[PERSON]" in redacted
 
-    def test_an_unscanned_transcript_withholds_every_bar(self, store: ProvStore, tmp_path: Path) -> None:
-        """No complete scan stands behind the words, so no page may render one verbatim."""
+    def test_an_unscanned_transcript_keeps_consensus_and_withholds_the_redacted_lane(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The ASR evidence remains visible while the release representation declares its uncertainty."""
         figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
         drawn = [text.get_text() for text in self._words_axis(figure, panels).texts]
-        assert drawn == ["[unscanned]", "[unscanned]"]
+        redacted_index = next(index for index, panel in enumerate(panels) if panel.get("report_lane") == "redacted")
+        redacted = [text.get_text() for text in figure.axes[redacted_index].texts]
+        assert drawn == ["hello", "world"]
+        assert redacted == ["[unscanned]", "[unscanned]"]
 
     @staticmethod
     def _placed(axis: Any) -> list[Any]:  # noqa: ANN401
         """The labels the saved page actually drew, the fit having been decided against its renderer."""
         return [text for text in axis.texts if text.get_visible()]
 
-    def test_a_marked_word_is_never_drawn_verbatim(self, store: ProvStore, tmp_path: Path) -> None:
-        """The fit decides how much of the lane is legible; it never decides what may be legible."""
+    def test_a_marked_word_is_drawn_verbatim_only_in_the_consensus_lane(self, store: ProvStore, tmp_path: Path) -> None:
+        """The fit decides legibility, while the lane decides whether the text is raw or redacted."""
         figure, panels = self._render(store, tmp_path, words=["hello"], marked_words=[("alice", "PERSON")])
         drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
-        assert "alice" not in drawn
-        assert drawn <= {"hello", "[PERSON]"}
+        assert drawn <= {"hello", "alice"}
 
-    def test_an_unscanned_page_draws_no_word_it_did_not_clear(self, store: ProvStore, tmp_path: Path) -> None:
-        """A label too wide for its bar is dropped whole; what it is dropped in favour of is nothing."""
+    def test_an_unscanned_page_keeps_the_consensus_words(self, store: ProvStore, tmp_path: Path) -> None:
+        """ASR evidence is not silently rewritten because the independent PII scan failed."""
         figure, panels = self._render(store, tmp_path, words=["hello", "world"], scan="absent")
         drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
-        assert drawn <= {"[unscanned]"}
+        assert drawn <= {"hello", "world"}
 
     def test_no_two_words_collide_on_the_rendered_page(self, store: ProvStore, tmp_path: Path) -> None:
         """The defect as the reader met it: adjacent labels ran into one another's glyphs."""
@@ -1590,8 +1609,8 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         assert len({round(float(patch.get_y()), 6) for patch in axis.patches}) == 3
         assert self._placed(axis)
 
-    def test_the_staggered_page_still_draws_only_what_redaction_permits(self, store: ProvStore, tmp_path: Path) -> None:
-        """More rows widen the slot a label is measured in; they never widen what may be drawn."""
+    def test_the_staggered_page_keeps_the_consensus_words(self, store: ProvStore, tmp_path: Path) -> None:
+        """More rows widen label slots but do not turn consensus evidence into placeholders."""
         figure, panels = self._render(
             store,
             tmp_path,
@@ -1599,5 +1618,4 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
             marked_words=[("alice", "PERSON"), ("bob", "PERSON")],
         )
         drawn = {text.get_text() for text in self._placed(self._words_axis(figure, panels))}
-        assert drawn <= {f"word{index}" for index in range(40)} | {"[PERSON]"}
-        assert not drawn & {"alice", "bob"}
+        assert drawn <= {f"word{index}" for index in range(40)} | {"alice", "bob"}

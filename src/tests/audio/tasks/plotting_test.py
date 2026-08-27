@@ -196,6 +196,35 @@ class TestTheTextPanel:
             pixels = axis.transData.transform([(2.0, 0.0), (8.0, 0.0)])[:, 0]
             assert pixels == pytest.approx(reference)
 
+    def test_a_long_structured_header_wraps_inside_the_figure_above_the_timeline(self) -> None:
+        """A decision sentence must not be cut off at the page edge or overlap evidence lanes."""
+        figure = plot_aligned_panels(
+            _tone(10.0),
+            [{"type": "waveform"}, {"type": "spectrogram"}],
+            header={
+                "context_label": "TASK / CONTEXT",
+                "context": "task: narrative recall | declared hints: speech=claimed_and_found; voice=no_claim",
+                "decision_label": "PRIMARY FILE DECISION",
+                "decision": "TRIAGE: FLAG · RELEASE: WITHHELD",
+                "evidence_label": "LEADING DECISION EVIDENCE",
+                "evidence": (
+                    "TAXONOMY: voice uncertain because the longest phonation span falls below the present "
+                    "threshold but above the uncertainty threshold; SPEECH: a long supporting explanation follows."
+                ),
+                "support_label": "SCREENING / ROUTING",
+                "support": (
+                    "screened: airway=absent; speech=present; voice=uncertain\n"
+                    "routing: AIRWAY skipped; SPEECH run; VOICE run"
+                ),
+            },
+        )
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        header_boxes = [text.get_window_extent(renderer) for text in figure.texts if text.get_text()]
+        assert any("\n" in text.get_text() for text in figure.texts)
+        assert all(box.x0 >= 0.0 and box.x1 <= figure.bbox.x1 for box in header_boxes)
+        assert max(axis.get_window_extent(renderer).y1 for axis in figure.axes) < min(box.y0 for box in header_boxes)
+
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""
         figure = plot_aligned_panels(
