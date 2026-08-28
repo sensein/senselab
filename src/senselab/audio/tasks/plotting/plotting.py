@@ -39,6 +39,9 @@ TOKEN_LABEL_FLOOR_FONTSIZE = 4.0  # the smallest point size a token label is shr
 TOKEN_LABEL_PADDING_PT = 1.0  # points of the bar kept clear of its label, shared by the two ends
 TOKEN_ROW_PITCH_EM = 2.0  # the least pitch a staggered row is given, in multiples of the label's point size
 TOKEN_BAR_HEIGHT_FRACTION = 0.7  # the share of its row's pitch a token's bar fills
+REPORT_LANE_GUTTER_MIN_IN = 0.72  # a separate left column for a panel's descriptive lane title
+REPORT_LANE_GUTTER_MAX_IN = 1.45  # long names wrap rather than taking time pixels from the report
+REPORT_COLORBAR_GUTTER_IN = 0.72  # a shared right column for score-raster probability scales
 
 
 def _fitted_token_fontsize(
@@ -160,6 +163,20 @@ def _token_label_slots(
         reach = max(0.0, reach)
         slots.append((centre - reach, centre + reach))
     return slots
+
+
+def _lane_title_lines(title: str, *, width: int = 18, max_lines: int = 2) -> List[str]:
+    """Wrap one report lane title to its dedicated, bounded gutter.
+
+    A panel title is descriptive metadata, not an axis value. Keeping it to two lines means a
+    short lane cannot paint across the panel above or below it when a report page is dense.
+    """
+    lines = textwrap.wrap(title, width=width, break_long_words=True, break_on_hyphens=False) or [title]
+    if len(lines) <= max_lines:
+        return lines
+    clipped = lines[:max_lines]
+    clipped[-1] = f"{clipped[-1].rstrip()}..."
+    return clipped
 
 
 class _FittedTokenLabel(Text):
@@ -1223,7 +1240,9 @@ def plot_aligned_panels(
                 image = ax.imshow(
                     np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False, aspect="auto"
                 )
-                color_axis = ax.inset_axes([1.01, 0.0, 0.018, 1.0])
+                # Every timed row ends at the same x coordinate. The figure reserves a right
+                # gutter for this scale, so it never steals width from just this raster row.
+                color_axis = ax.inset_axes([1.025, 0.0, 0.022, 1.0])
                 colorbar = fig.colorbar(image, cax=color_axis)
                 colorbar.set_label("Probability", fontsize=7)
                 colorbar.ax.tick_params(labelsize=6)
@@ -1325,7 +1344,49 @@ def plot_aligned_panels(
         elif plain_header:
             fig.text(0.015, 0.972, "\n".join(plain_header), va="top", ha="left", fontsize=8, family="sans-serif")
         top = max(0.48, y - 0.006) if header else (0.90 if plain_header else (0.96 if title else 1.0))
-        fig.tight_layout(rect=(0, 0, 1, top))
+
+        # The y tick labels live in the automatic inner gutter that tight_layout measures. Lane
+        # names get a distinct outer gutter, rather than sharing a rotated ylabel with tick text.
+        # Score rasters additionally get a fixed right gutter for their colour scale. This keeps
+        # time pixels aligned across all panels and makes the page plan independent of row count.
+        lane_titles = [
+            ax.get_ylabel() if panel.get("type", "waveform") != "text" else ""
+            for ax, panel in zip(axes_list, panels)
+        ]
+        longest_lane_line = max(
+            (len(line) for title in lane_titles for line in _lane_title_lines(title)),
+            default=0,
+        )
+        lane_gutter_in = min(
+            REPORT_LANE_GUTTER_MAX_IN,
+            max(REPORT_LANE_GUTTER_MIN_IN, 0.18 + 0.055 * float(longest_lane_line)),
+        )
+        for ax, title in zip(axes_list, lane_titles):
+            if title:
+                # Preserve ylabel metadata for callers that use it to identify an axis, but draw
+                # its visible representation in the dedicated report lane-title gutter below.
+                ax.yaxis.label.set_visible(False)
+        fig.tight_layout(
+            rect=(lane_gutter_in / scaled_size[0], 0.0, 1.0 - REPORT_COLORBAR_GUTTER_IN / scaled_size[0], top),
+            pad=0.6,
+            h_pad=0.8,
+        )
+        for ax, title in zip(axes_list, lane_titles):
+            if not title:
+                continue
+            position = ax.get_position()
+            available_height_pt = position.height * scaled_size[1] * 72.0
+            max_lines = max(1, int(available_height_pt // (8.0 * 1.35)))
+            lane_text = fig.text(
+                lane_gutter_in / (2.0 * scaled_size[0]),
+                (position.y0 + position.y1) / 2.0,
+                "\n".join(_lane_title_lines(title, max_lines=max_lines)),
+                va="center",
+                ha="center",
+                fontsize=8,
+                linespacing=1.2,
+            )
+            lane_text.set_gid("senselab-lane-title")
         plt.show(block=False)
         return fig
 

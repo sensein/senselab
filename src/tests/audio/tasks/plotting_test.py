@@ -220,10 +220,69 @@ class TestTheTextPanel:
         )
         figure.canvas.draw()
         renderer = figure.canvas.get_renderer()
-        header_boxes = [text.get_window_extent(renderer) for text in figure.texts if text.get_text()]
+        header_boxes = [
+            text.get_window_extent(renderer)
+            for text in figure.texts
+            if text.get_text() and text.get_gid() != "senselab-lane-title"
+        ]
         assert any("\n" in text.get_text() for text in figure.texts)
         assert all(box.x0 >= 0.0 and box.x1 <= figure.bbox.x1 for box in header_boxes)
         assert max(axis.get_window_extent(renderer).y1 for axis in figure.axes) < min(box.y0 for box in header_boxes)
+
+    def test_report_lane_titles_and_eight_row_raster_labels_stay_in_separate_gutters(self) -> None:
+        """A dense classifier lane must not paint either descriptive or row text into another panel."""
+        labels = [
+            "Breathe",
+            "Cough",
+            "Speech",
+            "Sneeze",
+            "Throat clear",
+            "Wheeze",
+            "Snore",
+            "Silence",
+        ]
+        figure = plot_aligned_panels(
+            _tone(10.0),
+            [
+                {"type": "waveform", "name": "recording amplitude and dBFS envelope"},
+                {
+                    "type": "score_raster",
+                    "name": "HEAR candidate probabilities within evaluated airway spans",
+                    "rows": labels,
+                    "windows": [
+                        {
+                            "start": 0.0,
+                            "end": 2.0,
+                            "scores": {label: index / float(len(labels) - 1) for index, label in enumerate(labels)},
+                        }
+                    ],
+                },
+                {"type": "segments", "name": "long airway candidate review decisions", "segments": []},
+            ],
+        )
+        figure.canvas.draw()
+        renderer = figure.canvas.get_renderer()
+        data_axes = [axis for axis in figure.axes if axis.axison]
+        lane_titles = [text for text in figure.texts if text.get_gid() == "senselab-lane-title"]
+        assert len(lane_titles) == len(data_axes)
+
+        axis_boxes = [axis.get_window_extent(renderer) for axis in data_axes]
+        lane_boxes = [text.get_window_extent(renderer) for text in lane_titles]
+        assert all(lane_box.x1 < min(axis_box.x0 for axis_box in axis_boxes) for lane_box in lane_boxes)
+        for lane_box, axis_box in zip(lane_boxes, axis_boxes):
+            assert lane_box.y0 >= axis_box.y0
+            assert lane_box.y1 <= axis_box.y1
+
+        raster = next(axis for axis in data_axes if axis.get_ylabel().startswith("HEAR candidate"))
+        raster_box = raster.get_window_extent(renderer)
+        row_boxes = [tick.get_window_extent(renderer) for tick in raster.get_yticklabels()]
+        assert len(row_boxes) == len(labels)
+        assert all(box.x1 < raster_box.x0 and box.y0 >= raster_box.y0 and box.y1 <= raster_box.y1 for box in row_boxes)
+
+        colorbar = raster.child_axes[0]
+        colorbar_box = colorbar.get_window_extent(renderer)
+        assert colorbar_box.x0 > raster_box.x1
+        assert colorbar_box.x1 <= figure.bbox.x1
 
     def test_a_structured_header_is_the_only_figure_heading(self) -> None:
         """A PDF report must not clip a second, legacy title above its structured header."""
