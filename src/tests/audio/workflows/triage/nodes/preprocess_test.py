@@ -253,6 +253,29 @@ class TestWindowClassificationsAreSets:
         assert pooled is not None
         assert pooled.attributes["n_windows"] == 2
 
+    def test_an_all_subthreshold_hear_window_retains_its_raw_scores(
+        self,
+        store: ProvStore,
+        windows_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """HeAR display evidence survives even when no label joins the decision set."""
+        _seed_admit(store, tmp_path, wav_writer)
+        raw_scores = {"Speech": 0.49, "Breathe": 0.35, "Cough": 0.12}
+        _stub_models(monkeypatch, hear=[window(0.0, 2.0, raw_scores)])
+
+        preprocess(store, _audio(tmp_path), windows_config, run_dir=tmp_path)
+
+        [hear_window] = find_measurements(store, "hear_window")
+        assert hear_window.attributes["raw_scores"] == raw_scores
+        assert hear_window.attributes["labels"] == []
+        assert hear_window.attributes["scores"] == {}
+        pooled = find_measurement(store, "hear_windows")
+        assert pooled is not None
+        assert pooled.attributes["labels"] == []
+
     def test_pooling_is_union_and_the_windows_are_retained(
         self,
         store: ProvStore,

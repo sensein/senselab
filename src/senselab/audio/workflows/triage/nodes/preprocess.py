@@ -154,6 +154,16 @@ def _confident_labels(
     return dict(sorted(members.items(), key=lambda item: -item[1]))
 
 
+def _raw_label_scores(window: dict[str, Any]) -> dict[str, float]:
+    """Return every valid classifier probability in its native ranked order.
+
+    ``scores`` on a stored ``*_window`` measurement remains the thresholded decision subset.
+    ``raw_scores`` is the complete model output for that same window, so presentation and later
+    analysis do not reuse a decision threshold as a data-retention threshold.
+    """
+    return {label: score for pair in label_scores(window) for label, score in pair.items()}
+
+
 def _measurement(
     store: ProvStore,
     activity_id: str,
@@ -423,6 +433,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         windows_by_label: dict[str, list[str]] = {}
         fired: dict[str, float] = {}
         for raw_window in raw:
+            raw_scores = _raw_label_scores(raw_window)
             members = _confident_labels(raw_window, default_threshold, label_thresholds)
             window_id = store.entity(
                 prov_type="measurement",
@@ -433,6 +444,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     "signal": "plain",
                     "labels": list(members),
                     "scores": members,
+                    "raw_scores": raw_scores,
                 },
             )
             store.was_generated_by(window_id, activity)
