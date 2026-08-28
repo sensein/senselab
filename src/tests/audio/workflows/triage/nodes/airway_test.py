@@ -1,9 +1,9 @@
-"""AIRWAY confirms PREPROCESS's spans and runs no classifier of its own.
+"""AIRWAY re-evaluates PREPROCESS's candidate spans with HeAR.
 
-Every window classification here is one PREPROCESS wrote: HeAR confirms that a span carries cough or
-breath, YAMNet may contest it only from inside the very window that carried the label, the gate is
-per task with a band around it, and a hint conditions only what an absence means. Nothing here loads
-weights, and the seeder writes the store schema PREPROCESS ships rather than a shape of its own.
+HeAR confirms whether an isolated candidate carries cough or breath, YAMNet may contest it only
+from inside the HeAR window that carried the label, the gate is per task with a band around it, and
+a hint conditions only what an absence means. The seeder writes the PREPROCESS-shaped provenance
+surface the branch consumes.
 """
 
 import hashlib
@@ -333,6 +333,74 @@ class TestItReevaluatesEachCandidate:
         assert {a.step for a in store.activities("AIRWAY")} <= {"classify", "confirm", "lexical"}
         associated = {agent_id for a in store.activities("AIRWAY") for agent_id in store.associated_with(a.id)}
         assert {store.get_agent(agent_id).agent_type for agent_id in associated} == {"software", "model"}
+
+    def test_long_candidate_windows_keep_native_times_and_all_raw_scores(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        store: ProvStore,
+        airway_config: TriageConfig,
+        tmp_path: Path,
+    ) -> None:
+        """A long candidate maps each relative HeAR window back onto the recording timeline."""
+
+        def _long_result(_: list, **__: object) -> list[list[dict[str, Any]]]:
+            return [
+                [
+                    {
+                        "start": 0.0,
+                        "end": 2.0,
+                        "label_scores": [
+                            {"Cough": 0.9},
+                            {"Snore": 0.1},
+                            {"Baby Cough": 0.2},
+                            {"Breathe": 0.4},
+                            {"Sneeze": 0.3},
+                            {"Throat Clear": 0.05},
+                            {"Laugh": 0.15},
+                            {"Speech": 0.25},
+                        ],
+                    },
+                    {
+                        "start": 2.0,
+                        "end": 4.0,
+                        "label_scores": [
+                            {"Cough": 0.2},
+                            {"Snore": 0.1},
+                            {"Baby Cough": 0.05},
+                            {"Breathe": 0.8},
+                            {"Sneeze": 0.3},
+                            {"Throat Clear": 0.4},
+                            {"Laugh": 0.15},
+                            {"Speech": 0.25},
+                        ],
+                    },
+                ]
+            ]
+
+        monkeypatch.setattr(airway_module, "detect_health_acoustic_events", _long_result)
+        ids = _seed_airway_store(store, tmp_path, spans=[(10.0, 14.0, 30.0)], duration_s=15.0)
+        airway(store, "plain", airway_config, run_dir=tmp_path)
+
+        windows = [
+            entity
+            for entity in live_entities(store, "measurement")
+            if entity.attributes.get("name") == "hear_span_window"
+        ]
+        assert [window.extent for window in windows] == [(10.0, 12.0), (12.0, 14.0)]
+        assert all(window.attributes["span_id"] == ids["spans"][0] for window in windows)
+        assert all(window.attributes["isolated_span"] is True for window in windows)
+        assert windows[0].attributes["labels"] == ["Cough"]
+        assert windows[1].attributes["labels"] == ["Breathe"]
+        assert windows[0].attributes["scores"] == {
+            "Cough": 0.9,
+            "Snore": 0.1,
+            "Baby Cough": 0.2,
+            "Breathe": 0.4,
+            "Sneeze": 0.3,
+            "Throat Clear": 0.05,
+            "Laugh": 0.15,
+            "Speech": 0.25,
+        }
 
 
 class TestHearConfirmsRatherThanFinds:

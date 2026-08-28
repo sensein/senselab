@@ -87,6 +87,22 @@ def _span_hear_input(audio: Audio, extent: tuple[float, float]) -> Audio:
     return Audio(waveform=audio.waveform[..., start_sample:end_sample].clone(), sampling_rate=audio.sampling_rate)
 
 
+def _hear_window_extent(
+    candidate_extent: tuple[float, float], raw_window: dict[str, Any]
+) -> tuple[float, float]:
+    """Place a native detector window on the recording timeline.
+
+    A short candidate is embedded in an isolated two-second buffer, so its only detector result
+    describes the candidate itself. A long candidate is passed through unchanged and HeAR returns
+    one or more native windows relative to that candidate; those windows must be offset to the
+    source recording rather than all being written over the parent span.
+    """
+    start, end = candidate_extent
+    if end - start <= HEAR_WINDOW_SECONDS:
+        return candidate_extent
+    return start + float(raw_window["start"]), start + float(raw_window["end"])
+
+
 def _is_transcribed(store: ProvStore, extent: tuple[float, float]) -> bool:
     """Whether a consensus word overlaps this span, which makes it transcribed content.
 
@@ -264,9 +280,10 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         members: dict[str, list[str]] = {}
         for raw_window in reevaluated:
             labels = _confident_labels(raw_window, default_threshold, thresholds)
+            window_extent = _hear_window_extent(extent, raw_window)
             window_id = store.entity(
                 prov_type="measurement",
-                extent=extent,
+                extent=window_extent,
                 attributes={
                     "name": "hear_span_window",
                     "classifier": "hear",
