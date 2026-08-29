@@ -63,7 +63,7 @@ the benchmark recording lacked it).
 **S7 — REDACT's verification is a second sample from the hallucination process on a DIFFERENT
 signal.** Known half: planner scans consensus words, verifier re-transcribes (F-E). Unstated half:
 PREPROCESS transcribes `plain` (mono, 16 kHz, peak-normalised) while REDACT re-transcribes
-`recording` (original rate and level) — and `model-to-branch.md:49-57` already documents that this
+`recording` (original rate and level) — and `model-to-branch.md:60-67` already documents that this
 exact difference changes CrisperWhisper's output. Part of the verification's false-positive rate
 is a preprocessing artefact; verify on the same conditioned stream.
 

@@ -69,6 +69,15 @@ every-kind-absent, and verdict.md's "acoustically empty → discard" would then 
 fold reads `will_run` off the decisions and takes that decision against the hints
 ([`verdict.md`](verdict.md)).
 
+## When ROUTING itself fails
+
+This is a runner failure, not a classification outcome, and it is handled separately from the rule
+above. When `routing()` raises or returns no result, the runner records ROUTING as `errored` and does
+not run AIRWAY, SPEECH, VOICE, or REDACT — they are recorded `skipped`, since running them without the
+decisions that authorise them would create unaudited conclusions. VERDICT folds that recorded failure
+and the absence of decisions into a file `flag` naming the routing failure; it must not discard the
+file merely because every kind happened to classify `absent` before ROUTING raised.
+
 ## The pass is encapsulated
 
 `PREPROCESS → TAXONOMY → routing` is one unit over **one input stream**. The unit's input type is a
