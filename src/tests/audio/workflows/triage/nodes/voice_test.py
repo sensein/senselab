@@ -350,8 +350,17 @@ class TestMptRecoverableProducts:
         assert _verdict_entity(store, "VOICE").attributes["task_range"] == "not_evaluated"
 
 
-class TestTheHalfFrameTolerance:
-    """A frame stands for a hop-wide interval centred on its time (V20)."""
+class TestTheShortSpanGuardMatchesTheRealCall:
+    """The V20 half-frame tolerance is retired: it padded the guard but not the call it gated.
+
+    ``period_marks`` receives a span's clamped ``(start, end)`` verbatim, with no widening to match
+    any frame-centred reasoning. A span the old, padded guard let through on the strength of a
+    one-hop tolerance reached Praat's own point-process call one hop short of what it required and
+    raised ``parselmouth.PraatError`` instead of being recorded ``shorter_than_mark_window``. Measured
+    against a real campaign run: a 0.03 s span (exactly ``min_marks_s - hop_s`` at ``f0_min_hz=75``)
+    crossed the old guard and then failed Praat's own "minimum pitch must not be less than 100 Hz"
+    check, which is ``3 / 0.03``.
+    """
 
     def test_a_span_of_exactly_min_marks_s_is_measured(
         self,
@@ -360,41 +369,46 @@ class TestTheHalfFrameTolerance:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Without the tolerance this span reads one hop short and its marks are skipped."""
+        """The real threshold is the literal span duration passed to period_marks, with no slack added."""
         hop_s = 0.01
         min_marks_s = 3.0 / 75.0
-        start, end = 1.0, 1.0 + min_marks_s - hop_s
+        start, end = 1.0, 1.0 + min_marks_s
         _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
         calls = _stub_period_marks(monkeypatch, marks=4)
         voice(store, "plain", voice_config, run_dir=tmp_path)
-        assert calls, "the frame-edge tolerance is one hop; this span reaches min_marks_s with it"
+        assert calls, "a span of exactly min_marks_s must be measured"
         assert _verdict_entity(store, "VOICE").attributes["marks_skipped_short_n"] == 0
 
-    def test_a_span_one_hop_shorter_still_is_skipped(
+    def test_a_span_one_hop_shorter_is_skipped_not_crashed(
         self,
         store: ProvStore,
         voice_config: TriageConfig,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The tolerance is one hop, not an open-ended slack."""
+        """This is exactly the duration the retired tolerance let through onto a call that could not take it."""
         hop_s = 0.01
         min_marks_s = 3.0 / 75.0
-        _seed_voice_store(store, tmp_path, phonation=[(1.0, 1.0 + min_marks_s - 2 * hop_s, "voiced")], hop_s=hop_s)
+        start, end = 1.0, 1.0 + min_marks_s - hop_s
+        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
         calls = _stub_period_marks(monkeypatch, marks=4)
         voice(store, "plain", voice_config, run_dir=tmp_path)
         assert calls == []
         marks = find_measurements(store, "period_marks")
         assert marks[0].attributes["unmeasured"] == "shorter_than_mark_window"
 
-    def test_the_tolerance_is_recorded_as_the_hop_not_a_constant(
+    def test_the_real_praat_call_never_sees_the_previously_dangerous_span(
         self, store: ProvStore, voice_config: TriageConfig, tmp_path: Path
     ) -> None:
-        """The activity's parameters must show where the tolerance came from."""
-        _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "voiced")], hop_s=0.01)
-        voice(store, "plain", voice_config, run_dir=tmp_path)
-        analyze = next(a for a in store.activities("VOICE") if a.step == "analyze")
-        assert analyze.parameters["frame_edge_tolerance_s"] == pytest.approx(0.01)
+        """Regression, unstubbed: the real point-process call must never receive this duration again."""
+        hop_s = 0.01
+        min_marks_s = 3.0 / 75.0
+        start, end = 1.0, 1.0 + min_marks_s - hop_s
+        _seed_voice_store(store, tmp_path, phonation=[(start, end, "voiced")], hop_s=hop_s)
+        result = voice(store, "plain", voice_config, run_dir=tmp_path)
+        assert result.verdict.outcome is not Outcome.FAIL
+        marks = find_measurements(store, "period_marks")
+        assert marks[0].attributes["unmeasured"] == "shorter_than_mark_window"
 
 
 class TestTheF0RangeServesAPopulation:
