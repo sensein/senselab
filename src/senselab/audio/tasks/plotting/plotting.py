@@ -503,9 +503,7 @@ def _as_numpy(values: Any) -> np.ndarray:  # noqa: ANN401 — a tensor, a sequen
     return values.cpu().numpy() if torch.is_tensor(values) else np.asarray(values)
 
 
-def _draw_waveform_overlays(
-    ax: Axes, panel: Dict[str, Any], *, time_limits: Tuple[float, float] | None = None
-) -> None:
+def _draw_waveform_overlays(ax: Axes, panel: Dict[str, Any], *, time_limits: Tuple[float, float] | None = None) -> None:
     """Draw a waveform panel's span overlay and its twin-axis curves.
 
     The spans go on the waveform's own axis, behind everything, so the twin's curves stay on top of
@@ -523,10 +521,10 @@ def _draw_waveform_overlays(
         return
     for segment in spans.get("segments", []):
         start, end = float(segment["start"]), float(segment["end"])
-        if time_limits is not None and (end <= time_limits[0] or start >= time_limits[1]):
-            continue
         visible_start = max(start, time_limits[0]) if time_limits is not None else start
         visible_end = min(end, time_limits[1]) if time_limits is not None else end
+        if visible_end <= visible_start:
+            continue
         ax.axvspan(visible_start, visible_end, color="darkorange", alpha=0.18, linewidth=0, zorder=0)
         ax.annotate(
             str(segment["label"]),
@@ -1163,9 +1161,7 @@ def plot_aligned_panels(
                     height = TOKEN_BAR_HEIGHT_FRACTION / float(count)
                     centre = (block + 0.5) / float(count)
                     color = token.get("color") or cmap(block)
-                    bars = ax.barh(
-                        centre, width, left=start, height=height, color=color, alpha=0.92, edgecolor="none"
-                    )
+                    bars = ax.barh(centre, width, left=start, height=height, color=color, alpha=0.92, edgecolor="none")
                     text = str(token.get("text") or "")
                     label = None
                     if text:
@@ -1237,9 +1233,7 @@ def plot_aligned_panels(
                 ax.set_yticklabels(rows, fontsize=7)
                 ax.set_ylabel(panel.get("name") or "Label probability")
                 ax.grid(axis="x", linestyle="--", alpha=0.3)
-                image = ax.imshow(
-                    np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False, aspect="auto"
-                )
+                image = ax.imshow(np.array([[0.0, 1.0]]), cmap=cmap, vmin=0.0, vmax=1.0, visible=False, aspect="auto")
                 # Every timed row ends at the same x coordinate. The figure reserves a right
                 # gutter for this scale, so it never steals width from just this raster row.
                 color_axis = ax.inset_axes([1.025, 0.0, 0.022, 1.0])
@@ -1311,6 +1305,7 @@ def plot_aligned_panels(
         if title and not header:
             fig.suptitle(title, y=0.997, fontsize=11)
         if header:
+
             def _header_lines(value: object, width: int) -> list[str]:
                 return [
                     line
@@ -1318,18 +1313,28 @@ def plot_aligned_panels(
                     for line in (textwrap.wrap(paragraph, width=width, break_long_words=True) or [""])
                 ]
 
+            def _line_height_fraction(point_size: float, *, linespacing: float = 1.25) -> float:
+                """One text line's height, as a fraction of this figure's actual height.
+
+                No renderer exists yet to measure against at this point in the draw, so the step is
+                derived from the figure's real physical height in inches rather than a constant tuned
+                only for one figsize; it stays correct when figsize or the context scale changes.
+                """
+                return (point_size * linespacing) / 72.0 / scaled_size[1]
+
             # Header text is figure-relative rather than axis-relative. Reserve its measured line
             # count before tight_layout so it never clips into the right margin or over the first lane.
             y = 0.972
+            label_gap = _line_height_fraction(8.0) + 0.003
             for label_key, value_key, fontsize, width, weight in (
                 ("context_label", "context", 9.0, 168, "normal"),
                 ("decision_label", "decision", 15.0, 104, "bold"),
                 ("evidence_label", "evidence", 10.0, 150, "normal"),
                 ("support_label", "support", 8.5, 168, "normal"),
             ):
-                fig.text(0.015, y, header[label_key], va="top", ha="left", fontsize=8, weight="bold")
-                y -= 0.016
-                lines = _header_lines(header[value_key], width)
+                fig.text(0.015, y, header.get(label_key, ""), va="top", ha="left", fontsize=8, weight="bold")
+                y -= label_gap
+                lines = _header_lines(header.get(value_key, ""), width)
                 fig.text(
                     0.015,
                     y,
@@ -1340,7 +1345,7 @@ def plot_aligned_panels(
                     weight=weight,
                     linespacing=1.25,
                 )
-                y -= 0.003 + len(lines) * (fontsize / 520.0)
+                y -= 0.003 + len(lines) * _line_height_fraction(fontsize)
         elif plain_header:
             fig.text(0.015, 0.972, "\n".join(plain_header), va="top", ha="left", fontsize=8, family="sans-serif")
         top = max(0.48, y - 0.006) if header else (0.90 if plain_header else (0.96 if title else 1.0))
@@ -1350,8 +1355,7 @@ def plot_aligned_panels(
         # Score rasters additionally get a fixed right gutter for their colour scale. This keeps
         # time pixels aligned across all panels and makes the page plan independent of row count.
         lane_titles = [
-            ax.get_ylabel() if panel.get("type", "waveform") != "text" else ""
-            for ax, panel in zip(axes_list, panels)
+            ax.get_ylabel() if panel.get("type", "waveform") != "text" else "" for ax, panel in zip(axes_list, panels)
         ]
         longest_lane_line = max(
             (len(line) for title in lane_titles for line in _lane_title_lines(title)),

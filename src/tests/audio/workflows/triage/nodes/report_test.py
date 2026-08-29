@@ -15,7 +15,15 @@ import soundfile as sf
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes.common import software_agent, write_verdict
-from senselab.audio.workflows.triage.nodes.report import ReportRenderError, _header, report
+from senselab.audio.workflows.triage.nodes.report import (
+    ReportRenderError,
+    _consensus_word_color,
+    _decision_blocks,
+    _header,
+    _paginate_panels,
+    _window_label_scores,
+    report,
+)
 from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
@@ -585,6 +593,27 @@ class TestTheStructuredJsonCompanion:
         assert all("entity_id" in item for item in payload["evidence"]["redacted_transcript_tokens"])
 
 
+class TestConsensusWordColorIsRobust:
+    """A confidence outside [0, 1], including non-finite, must not take rendering down with it."""
+
+    def test_a_nan_confidence_falls_back_to_the_neutral_fill(self) -> None:
+        """A NaN passes the numeric isinstance check, so it needs its own finiteness guard."""
+        assert _consensus_word_color(float("nan")) == "#e5e7eb"
+
+    def test_an_infinite_confidence_falls_back_to_the_neutral_fill(self) -> None:
+        """An infinite value is finite-looking arithmetic that still breaks the color channel math."""
+        assert _consensus_word_color(float("inf")) == "#e5e7eb"
+        assert _consensus_word_color(float("-inf")) == "#e5e7eb"
+
+    def test_a_missing_confidence_falls_back_to_the_same_neutral_fill(self) -> None:
+        """The non-finite fallback must match the existing missing-value fallback exactly."""
+        assert _consensus_word_color(None) == "#e5e7eb"
+
+    def test_an_ordinary_confidence_still_interpolates(self) -> None:
+        """The finiteness guard must not turn every ordinary confidence into the same fill."""
+        assert _consensus_word_color(0.0) != _consensus_word_color(1.0)
+
+
 class TestItSeparatesConsensusAndRedactedTranscript:
     """The audit transcript and the redacted release representation stay visibly distinct."""
 
@@ -620,6 +649,21 @@ class TestItSeparatesConsensusAndRedactedTranscript:
         redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
         assert [token["text"] for token in consensus["tokens"]][-1] == "alice"
         assert [token["text"] for token in redacted["tokens"]][-1] == "[PERSON]"
+
+    def test_the_redacted_placeholder_does_not_borrow_the_original_words_confidence(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A placeholder's fill must not read as confidence evidence for text the lane no longer shows."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        consensus = next(panel for panel in panels[0] if panel.get("report_lane") == "words")
+        redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
+        placeholder = next(token for token in redacted["tokens"] if token["text"] == "[PERSON]")
+        unredacted = next(token for token in redacted["tokens"] if token["text"] == "hello")
+        original_hello = next(token for token in consensus["tokens"] if token["text"] == "hello")
+        assert placeholder["color"] == _consensus_word_color(None)
+        assert unredacted["color"] == original_hello["color"]
 
 
 class TestTheProvenanceIsEmbedded:
@@ -723,6 +767,41 @@ class TestTheSummaryLayers:
         header = _header(document)
         assert header["evidence"] == "VOICE: period_doubling_alias flagged in 3 span(s); see summary.json"
 
+    def test_the_header_context_carries_the_run_label(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The plain title is suppressed whenever a header is drawn, so the run label must live here."""
+        headers = _capture_headers(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        report(store, tmp_path / "summary", _png(tmp_path))
+        assert headers[0]["context"].startswith("test-run")
+
+    def test_the_header_reports_every_uncertain_kind_not_only_the_first(self) -> None:
+        """Speech and voice can both be uncertain; the header must not shadow the second."""
+        document = {
+            "recording": {"task_type": "cough", "declared_hints": {}},
+            "decisions": {
+                "reasons": [{"node": "TAXONOMY", "why": "n/a"}],
+                "flags": [],
+                "file_triage": "flag",
+                "release": "withheld",
+            },
+            "screening": {
+                "screened_kinds": {},
+                "decision_paths": {
+                    "speech": {"state": "uncertain", "lines": {}},
+                    "voice": {
+                        "state": "uncertain",
+                        "lines": {"phonation": {"evidence": 0.4, "floor": 0.5, "uncertain_floor": 0.3}},
+                    },
+                },
+            },
+            "routing": {},
+        }
+        header = _header(document)
+        assert "speech is uncertain" in header["evidence"]
+        assert "voice uncertain: longest phonation span 0.40 s" in header["evidence"]
+
     def test_the_spectrogram_and_the_blocks_are_both_drawn(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -795,6 +874,21 @@ class TestTheSummaryLayers:
         assert raster["rows"] == ["Speech"]
         assert raster["windows"][0]["scores"] == {"Speech": 0.9}
         assert payload["evidence"]["classifier_windows"]["yamnet"][0]["label_scores"] == {"Speech": 0.9}
+
+    def test_a_non_finite_score_is_dropped_rather_than_rendered_or_crashed_on(self, store: ProvStore) -> None:
+        """A NaN or infinite score is not a probability; a missing cell is honest, a wrong one is not."""
+        entity_id = store.entity(
+            prov_type="measurement",
+            extent=(0.0, 2.0),
+            attributes={
+                "name": "hear_window",
+                "labels": [],
+                "scores": {},
+                "raw_scores": {"Cough": float("nan"), "Breathe": float("inf"), "Speech": 0.4},
+            },
+        )
+        window = store.get_entity(entity_id)
+        assert _window_label_scores(window, raw=True) == {"Speech": 0.4}
 
     def test_hear_raster_keeps_all_raw_probabilities_separate_from_decision_membership(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1394,6 +1488,105 @@ class TestThePdfPagination:
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         assert artifacts["summary"].suffix == ".png"
         assert panels[0][-1]["type"] == "text"
+
+    def test_an_incomplete_scan_is_flagged_on_the_pdf_decision_page_too(self, store: ProvStore, tmp_path: Path) -> None:
+        """The PDF decision page is the standalone reviewed document; the caveat must live there."""
+        _seed_report_store(store, tmp_path, full=True, words=["hello"], scan="incomplete")
+        payload = json.loads(report(store, tmp_path / "png", _png(tmp_path))["json"].read_text())
+        blocks = "\n".join(_decision_blocks(payload))
+        assert "PII scan incomplete" in blocks
+
+    def test_a_non_positive_duration_gets_a_report_only_page_not_a_silent_empty_one(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A zero-length stream has no window to page; the PDF must say so, not say nothing."""
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        drawn: list[list[str]] = []
+        real = report_module._text_figure
+
+        def _spy(lines: list[str], title: str, **kwargs: Any) -> Any:  # noqa: ANN401
+            drawn.append(list(lines))
+            return real(lines, title, **kwargs)
+
+        _seed_report_store(store, tmp_path, full=True)
+        empty_audio = Audio(waveform=np.zeros((1, 0), dtype=np.float32), sampling_rate=_RATE)
+        monkeypatch.setattr(report_module, "_stream", lambda *_args: empty_audio)
+        monkeypatch.setattr(report_module, "_text_figure", _spy)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+
+        artifacts = report(store, tmp_path / "summary", pdf_config)
+
+        assert _pdf_pages(artifacts["summary"]) == 2
+        assert any("REPORT-ONLY" in line for line in drawn[0])
+
+    def test_every_page_is_saved_and_closed_before_the_next_is_built(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Building every page before saving any would hold one live Figure per page at peak."""
+        from matplotlib import pyplot
+
+        pyplot.close("all")
+        open_before_this_page: list[int] = []
+        _seed_report_store(store, tmp_path, full=True)
+        long_audio = Audio(waveform=np.zeros((1, 25 * _RATE), dtype=np.float32), sampling_rate=_RATE)
+
+        from senselab.audio.workflows.triage.nodes import report as report_module
+
+        real = report_module.plot_aligned_panels
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            # Captured before this page's Figure is even created: any prior page still counted
+            # here was never closed, which is exactly what eager, all-at-once materialization does.
+            open_before_this_page.append(len(pyplot.get_fignums()))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(report_module, "_stream", lambda *_args: long_audio)
+        monkeypatch.setattr(report_module, "plot_aligned_panels", _spy)
+        pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
+
+        report(store, tmp_path / "summary", pdf_config)
+
+        assert len(open_before_this_page) > 1  # multiple evidence pages were actually built
+        assert open_before_this_page == [0] * len(open_before_this_page)
+
+
+class TestPanelPagination:
+    """Panels are bucketed onto pages once, so a PDF page never rescans the whole recording."""
+
+    def test_an_item_lands_only_on_the_page_it_overlaps(self) -> None:
+        """An item wholly inside one page must not be handed to every other page's render call."""
+        panels = [{"type": "segments", "segments": [{"start": 3.0, "end": 4.0, "label": "x"}]}]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert pages[0][0]["segments"] == panels[0]["segments"]
+        assert pages[1][0]["segments"] == []
+
+    def test_an_item_straddling_a_page_boundary_lands_on_both(self) -> None:
+        """A conservative superset is safe; plot_aligned_panels still clips to the page it draws."""
+        panels = [{"type": "tokens", "tokens": [{"start": 9.5, "end": 10.5, "text": "x"}]}]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert len(pages[0][0]["tokens"]) == 1
+        assert len(pages[1][0]["tokens"]) == 1
+
+    def test_a_score_raster_windows_list_is_bucketed_the_same_way(self) -> None:
+        """The nested rows x windows loop is the expensive one; its windows must be filtered too."""
+        panels = [
+            {
+                "type": "score_raster",
+                "rows": ["Cough"],
+                "windows": [{"start": 0.0, "end": 2.0, "scores": {"Cough": 0.5}}],
+            }
+        ]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert pages[0][0]["windows"] and not pages[1][0]["windows"]
+        assert pages[0][0]["rows"] == ["Cough"]  # every other field is preserved unchanged
+
+    def test_an_untimed_panel_type_is_copied_onto_every_page(self) -> None:
+        """A waveform or spectrogram panel has no item list to bucket; every page still gets it."""
+        panels = [{"type": "waveform"}]
+        pages = _paginate_panels(panels, [(0.0, 10.0), (10.0, 20.0)])
+        assert pages[0] == [{"type": "waveform"}]
+        assert pages[1] == [{"type": "waveform"}]
 
 
 class TestTheWaveformAndTheEnvelopeShareOneRow:
