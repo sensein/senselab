@@ -9,6 +9,12 @@ Scope: senselab-internal capability. Orchestration is out of scope and lives in 
 Read with [`store.md`](store.md) — several rows are "the measurement exists, the *provenance* the
 store requires does not", and that distinction is where most of the work is.
 
+This is a pre-implementation gap analysis, dated to when the nine nodes were still specification, not
+code — every "MISSING" row below asks "does senselab have this yet", not "does this branch have this
+now". The nodes exist and most of these gaps have been closed since. For the current call graph —
+which node calls which, and under what condition — see [`dag.md`](dag.md), generated from `run.py`
+rather than from design intent.
+
 ---
 
 ## 1. Capability map
