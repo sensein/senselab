@@ -96,7 +96,6 @@ def _required(config: TriageConfig, hint: AudioHints | None) -> dict[str, Any]:
         "silence_threshold": float(config.require("phonation.silence_threshold")),
         "periods_per_window": float(config.require("phonation.periods_per_window")),
         "doubling": float(config.require("phonation.period_doubling_factor")),
-        "span_hop_s": float(config.require("phonation_spans.hop_s")),
     }
 
 
@@ -194,10 +193,6 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     f0_min_hz, f0_max_hz = params["f0_min_hz"], params["f0_max_hz"]
     window_s = params["periods_per_window"] / f0_min_hz
     min_marks_s = _MARK_PERIODS / f0_min_hz
-    # A frame stands for a hop-wide interval centred on its time, so a span's measurable extent runs
-    # from half a hop before its first frame to half a hop after its last: the tolerance is the hop,
-    # an identity of the analysis grid.
-    frame_edge_tolerance_s = params["span_hop_s"]
 
     stream_id, plain = resolve_stream(store, run_dir, source)
     sr = int(plain.sampling_rate)
@@ -211,7 +206,6 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
             "hop_s": params["hop_s"],
             "window_s": window_s,
             "min_marks_s": min_marks_s,
-            "frame_edge_tolerance_s": frame_edge_tolerance_s,
             "period_doubling_factor": params["doubling"],
             "gate_interval": gate_interval,
         },
@@ -308,7 +302,7 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
         production = str(span.attributes["production"])
         production_counts[production] = production_counts.get(production, 0) + 1
 
-        measurable_s = (span.extent[1] - span.extent[0]) + frame_edge_tolerance_s
+        measurable_s = end - start
         marks: list[PeriodMark] = []
         marks_attributes: dict[str, Any] = {"name": "period_marks", "signal": source}
         if production == "unvoiced":
