@@ -796,6 +796,66 @@ class TestTheSummaryLayers:
         assert raster["windows"][0]["scores"] == {"Speech": 0.9}
         assert payload["evidence"]["classifier_windows"]["yamnet"][0]["label_scores"] == {"Speech": 0.9}
 
+    def test_hear_raster_keeps_all_raw_probabilities_separate_from_decision_membership(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A HEAR display row is not erased merely because no decision threshold fired."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        hear_windows = [
+            entity for entity in store.entities("measurement") if entity.attributes.get("name") == "hear_window"
+        ]
+        assert hear_windows
+        hear_windows[0].attributes["labels"] = []
+        hear_windows[0].attributes["scores"] = {}
+        hear_windows[0].attributes["raw_scores"] = {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
+
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+
+        raster = next(panel for panel in panels[0] if panel.get("name") == "hear labels")
+        assert raster["rows"] == [
+            "Cough",
+            "Snore",
+            "Baby Cough",
+            "Breathe",
+            "Sneeze",
+            "Throat Clear",
+            "Laugh",
+            "Speech",
+        ]
+        assert raster["windows"][0]["scores"] == {"Cough": 0.12, "Breathe": 0.31, "Speech": 0.44}
+        first_window = payload["evidence"]["classifier_windows"]["hear"][0]
+        assert first_window["label_scores"] == {}
+        assert first_window["raw_label_scores"] == {"Breathe": 0.31, "Cough": 0.12, "Speech": 0.44}
+
+    def test_airway_hear_probabilities_are_a_separate_candidate_span_lane(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fresh AIRWAY span evaluations must not be conflated with PREPROCESS HEAR windows."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True)
+        store.entity(
+            prov_type="measurement",
+            extent=(1.0, 3.0),
+            attributes={
+                "name": "hear_span_window",
+                "classifier": "hear",
+                "span_id": "span-airway",
+                "labels": ["Breathe"],
+                "scores": {"Breathe": 0.82},
+                "raw_scores": {"Cough": 0.12, "Breathe": 0.82, "Speech": 0.09},
+                "input_window_s": 2.0,
+            },
+        )
+
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+
+        raster = next(panel for panel in panels[0] if panel.get("name") == "airway HeAR probabilities")
+        assert raster["rows"][0] == "Cough" and raster["windows"][0]["span_id"] == "span-airway"
+        candidate = payload["evidence"]["airway_hear_span_windows"][0]
+        assert candidate["timing"] == {"start_s": 1.0, "end_s": 3.0}
+        assert candidate["raw_label_scores"]["Breathe"] == 0.82
+
     def test_labelled_and_unlabelled_spans_are_distinguishable(
         self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1622,9 +1682,7 @@ class TestTheWordsLaneFollowsTheConsensusStyle:
         ]
         assert collisions == []
 
-    def test_words_cycle_through_three_inspectable_rows(
-        self, store: ProvStore, tmp_path: Path
-    ) -> None:
+    def test_words_cycle_through_three_inspectable_rows(self, store: ProvStore, tmp_path: Path) -> None:
         """Row cycling makes dense consensus timing inspectable without a label pileup."""
         prose = (
             "grandfather remembered everything about wandering along riverbanks collecting interesting pebbles".split()

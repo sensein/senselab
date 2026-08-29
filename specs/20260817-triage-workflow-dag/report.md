@@ -41,10 +41,10 @@ On a single shared time axis, one row each:
 | --- | --- |
 | waveform amplitude on the left y-axis, energy envelope and its floor in dBFS on a twin right axis, and every `span` as a translucent overlay annotated with its `peak_over_floor_db` — **one row**. Sub-resolution post-filter values are gaps rather than dBFS readings, so numerical ringing cannot pull the displayed floor downward. | PREPROCESS |
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
-| YAMNet and HeAR as fixed-row top-K probability rasters over their own native grids; a cell's color is the thresholded score retained for that classifier window, and an empty cell means below the reporting threshold. AST is a raster only when its stored hop is under 8 s, otherwise it is a coarse-window summary in Supporting Evidence | PREPROCESS |
+| YAMNet as a fixed-row top-K raster of thresholded decision scores; HeAR as a fixed eight-row raster of every raw independent presence probability over its native 2 s grid. AST is a raster only when its stored hop is under 8 s, otherwise it is a coarse-window summary in Supporting Evidence | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
 | consensus ASR words — a compact multi-row token lane: one bar per fused consensus word at its own extent with the authoritative word text drawn on a light confidence-ordered fill, never as a y-tick. The colors are presentation only; the authoritative numeric confidence remains in JSON. | PREPROCESS |
-| airway-labelled spans with their labels and confirmations | AIRWAY |
+| airway-labelled spans with their compact decision annotations, plus a separate fixed eight-row HeAR raster when AIRWAY re-evaluated a candidate span | AIRWAY |
 | voiced runs and their extents | VOICE |
 | redacted transcript words, when PII marking changed at least one consensus word — a parallel compact token lane whose placeholders show exactly what a released transcript would replace | REDACT |
 | spectrogram | the conditioned stream |
@@ -61,8 +61,10 @@ so an analytical consumer receives the same distinction as the human reader. A r
 hop is below 8 s retains its time-aligned probability raster; new configs reject such a hop.
 
 The JSON mirrors every drawn YAMNet, HeAR and time-resolved AST window in
-`evidence.classifier_windows`. Each item carries its provenance entity id, timing, retained
-`label_scores` and `thresholded_labels`; the report never makes a page-only probability claim.
+`evidence.classifier_windows`. Each item carries its provenance entity id, timing, thresholded
+`label_scores`, `thresholded_labels`, and `raw_label_scores` when the model supplied them. Fresh
+candidate-span evaluations are separate in `evidence.airway_hear_span_windows`; the report never
+makes a page-only probability claim or confuses the two evidence scopes.
 
 **The title is short.** The task token the run id names, the date, and the two verdict axes —
 `task-… · 2026-08-25 · triage: flag · release: not_assessed`. The full run id and the file path are

@@ -20,6 +20,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.health_acoustics import HEAR_EVENT_LABELS
 from senselab.audio.tasks.plotting.plotting import (
     MIN_FIGURE_HEIGHT_IN,
     TEXT_PANEL_INCHES_PER_LINE,
@@ -347,17 +348,21 @@ def _token_lane(
         }
         for index, (extent, text, confidence) in enumerate(entries)
     ]
-    return [
-        {
-            "type": "tokens",
-            "tokens": tokens,
-            "name": name,
-            "report_lane": report_lane,
-            "expand_label_slots": expand_label_slots,
-            "height_ratio": 0.8,
-            "show_row_labels": False,
-        }
-    ] if tokens else []
+    return (
+        [
+            {
+                "type": "tokens",
+                "tokens": tokens,
+                "name": name,
+                "report_lane": report_lane,
+                "expand_label_slots": expand_label_slots,
+                "height_ratio": 0.8,
+                "show_row_labels": False,
+            }
+        ]
+        if tokens
+        else []
+    )
 
 
 def _consensus_word_color(confidence: object) -> str:
@@ -398,16 +403,22 @@ def _window_presentations(store: ProvStore) -> dict[str, dict[str, Any]]:
     }
 
 
-def _window_label_scores(window: Entity) -> dict[str, float]:
-    """The thresholded label-to-probability pairs a classifier window retained."""
-    raw_scores = window.attributes.get("scores") or {}
+def _window_label_scores(window: Entity, *, raw: bool = False) -> dict[str, float]:
+    """One classifier window's display or thresholded label-to-probability pairs.
+
+    Args:
+        window: A PREPROCESS classifier-window measurement.
+        raw: Return every model score retained for display. Falls back to the thresholded decision
+            subset for historical stores that predate ``raw_scores``.
+    """
+    raw_scores = window.attributes.get("raw_scores" if raw else "scores")
+    if raw_scores is None and raw:
+        raw_scores = window.attributes.get("scores")
+    raw_scores = raw_scores or {}
     if not isinstance(raw_scores, dict):
         return {}
-    return {
-        str(label): float(raw_scores[label])
-        for label in window.attributes.get("labels") or []
-        if label in raw_scores and isinstance(raw_scores[label], (int, float))
-    }
+    labels = raw_scores if raw else {label: raw_scores[label] for label in window.attributes.get("labels") or []}
+    return {str(label): float(score) for label, score in labels.items() if isinstance(score, (int, float))}
 
 
 def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
@@ -422,18 +433,23 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
     """
     if _window_presentation(store, classifier)["mode"] == "summary_only":
         return []
+    use_raw_scores = classifier == "hear"
     windows: list[tuple[Entity, dict[str, float]]] = []
     peaks: dict[str, float] = {}
     for window in live_entities(store, "measurement"):
         if window.attributes.get("name") != f"{classifier}_window" or window.extent is None:
             continue
-        scores = _window_label_scores(window)
+        scores = _window_label_scores(window, raw=use_raw_scores)
         if not scores:
             continue
         windows.append((window, scores))
         for label, score in scores.items():
             peaks[label] = max(peaks.get(label, 0.0), score)
-    rows = [label for label, _ in sorted(peaks.items(), key=lambda item: (-item[1], item[0]))[:_TOP_CATEGORIES]]
+    rows = (
+        list(HEAR_EVENT_LABELS)
+        if classifier == "hear" and any("raw_scores" in window.attributes for window, _ in windows)
+        else [label for label, _ in sorted(peaks.items(), key=lambda item: (-item[1], item[0]))[:_TOP_CATEGORIES]]
+    )
     if not rows:
         return []
     return [
@@ -442,16 +458,43 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
             "name": f"{classifier} labels",
             "rows": rows,
             "windows": [
-                {"start": window.extent[0], "end": window.extent[1], "scores": scores}
-                for window, scores in windows
+                {"start": window.extent[0], "end": window.extent[1], "scores": scores} for window, scores in windows
             ],
             "height_ratio": max(0.9, 0.2 * len(rows)),
         }
     ]
 
 
+def _airway_hear_raster(store: ProvStore) -> list[dict[str, Any]]:
+    """The full-probability HeAR windows AIRWAY freshly evaluated inside candidate spans."""
+    windows = [
+        (window, _window_label_scores(window, raw=True))
+        for window in live_entities(store, "measurement")
+        if window.attributes.get("name") == "hear_span_window" and window.extent is not None
+    ]
+    if not windows:
+        return []
+    return [
+        {
+            "type": "score_raster",
+            "name": "airway HeAR probabilities",
+            "rows": list(HEAR_EVENT_LABELS),
+            "windows": [
+                {
+                    "start": window.extent[0],
+                    "end": window.extent[1],
+                    "scores": scores,
+                    "span_id": window.attributes.get("span_id"),
+                }
+                for window, scores in windows
+            ],
+            "height_ratio": max(1.6, 0.2 * len(HEAR_EVENT_LABELS)),
+        }
+    ]
+
+
 def _classifier_windows(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
-    """The thresholded classifier probabilities, retained in the JSON beside the timeline."""
+    """The decision and raw classifier probabilities, retained in JSON beside the timeline."""
     findings: dict[str, list[dict[str, Any]]] = {classifier: [] for classifier in _CLASSIFIERS}
     for window in live_entities(store, "measurement"):
         classifier = str(window.attributes.get("classifier") or "")
@@ -462,10 +505,28 @@ def _classifier_windows(store: ProvStore) -> dict[str, list[dict[str, Any]]]:
                 "entity_id": window.id,
                 "timing": _timing(window),
                 "label_scores": _window_label_scores(window),
+                "raw_label_scores": _window_label_scores(window, raw=True),
                 "thresholded_labels": list(window.attributes.get("labels") or []),
             }
         )
     return findings
+
+
+def _airway_hear_windows(store: ProvStore) -> list[dict[str, Any]]:
+    """The raw HeAR probabilities AIRWAY evaluated within proposed candidate spans."""
+    return [
+        {
+            "entity_id": window.id,
+            "span_id": window.attributes.get("span_id"),
+            "timing": _timing(window),
+            "raw_label_scores": _window_label_scores(window, raw=True),
+            "label_scores": _window_label_scores(window),
+            "thresholded_labels": list(window.attributes.get("labels") or []),
+            "input_window_s": window.attributes.get("input_window_s"),
+        }
+        for window in live_entities(store, "measurement")
+        if window.attributes.get("name") == "hear_span_window"
+    ]
 
 
 def _label_counts(store: ProvStore, classifier: str) -> dict[str, int]:
@@ -570,6 +631,7 @@ def _panels(
     )
     for classifier in _CLASSIFIERS:
         panels += _window_raster(store, classifier)
+    panels += _airway_hear_raster(store)
     panels += _lane(
         "speech spans",
         _segments(
@@ -1139,6 +1201,7 @@ def _report_document(
             "branches": _branch_evidence(store, marks),
             "label_presentations": _window_presentations(store),
             "classifier_windows": _classifier_windows(store),
+            "airway_hear_span_windows": _airway_hear_windows(store),
             "consensus_transcript_tokens": [
                 _token_record(word, str(word.attributes.get("text") or "")) for word in transcript_words
             ],
@@ -1303,28 +1366,34 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
 
     taxonomy_reason = _taxonomy_reason()
     evidence_text = "; ".join(_header_reason(reason) for reason in evidence[:2]) or "no contributing reason"
-    screened = "; ".join(
-        f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items())
-    ) or "not screened"
-    route = "; ".join(
-        f"{branch} {'run' if decision['will_run'] else 'skipped'} ({decision['why']})"
-        for branch, decision in sorted(
-            routing.items(),
-            key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES),
+    screened = (
+        "; ".join(f"{kind}={state}" for kind, state in sorted(screening["screened_kinds"].items())) or "not screened"
+    )
+    route = (
+        "; ".join(
+            f"{branch} {'run' if decision['will_run'] else 'skipped'} ({decision['why']})"
+            for branch, decision in sorted(
+                routing.items(),
+                key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES),
+            )
         )
-    ) or "routing did not run"
-    outcomes = "; ".join(
-        f"{branch}={_shown(decision.get('verdict'))}" for branch, decision in sorted(
-            routing.items(), key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES)
+        or "routing did not run"
+    )
+    outcomes = (
+        "; ".join(
+            f"{branch}={_shown(decision.get('verdict'))}"
+            for branch, decision in sorted(
+                routing.items(), key=lambda item: BRANCHES.index(item[0]) if item[0] in BRANCHES else len(BRANCHES)
+            )
         )
-    ) or "no branch outcome"
+        or "no branch outcome"
+    )
     return {
         "context_label": "TASK / CONTEXT (context only)",
         "context": f"task: {task}  |  declared hints: {hint_text}",
         "decision_label": "PRIMARY FILE DECISION",
         "decision": (
-            f"TRIAGE: {_shown(decisions['file_triage']).upper()}  ·  "
-            f"RELEASE: {_shown(decisions['release']).upper()}"
+            f"TRIAGE: {_shown(decisions['file_triage']).upper()}  ·  RELEASE: {_shown(decisions['release']).upper()}"
         ),
         "evidence_label": "LEADING DECISION EVIDENCE",
         "evidence": evidence_text,
@@ -1421,8 +1490,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
     )
     for reason in decisions.get("reasons") or []:
         lines.append(
-            f"  reason: {reason.get('node')} {reason.get('outcome')} "
-            f"[{reason.get('kind')}] {reason.get('why')}"
+            f"  reason: {reason.get('node')} {reason.get('outcome')} [{reason.get('kind')}] {reason.get('why')}"
         )
     if not decisions.get("reasons"):
         lines.append("  no node contributed a reason")
@@ -1447,9 +1515,7 @@ def _blocks(document: dict[str, Any], drawn: set[str]) -> list[str]:  # noqa: C9
         for item in items[:4]:
             timing = item.get("timing") or {}
             extent = (
-                "no time extent"
-                if not timing
-                else f"{_shown(timing.get('start_s'))}-{_shown(timing.get('end_s'))} s"
+                "no time extent" if not timing else f"{_shown(timing.get('start_s'))}-{_shown(timing.get('end_s'))} s"
             )
             lines.append(f"    evidence: {item['description']} [{extent}; {item['entity_id']}]")
         if len(items) > 4:
@@ -1718,9 +1784,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     if fmt == "pdf":
         if audio is None:
             lanes = [
-                _text_figure(
-                    [*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title, figsize=_LETTER_LANDSCAPE_IN
-                )
+                _text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title, figsize=_LETTER_LANDSCAPE_IN)
             ]
         else:
             duration_s = audio.waveform.shape[-1] / audio.sampling_rate
@@ -1755,9 +1819,7 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     pyplot.close(figure)
 
 
-def _text_figure(
-    lines: list[str], title: str, *, figsize: tuple[float, float] | None = None
-) -> Figure:
+def _text_figure(lines: list[str], title: str, *, figsize: tuple[float, float] | None = None) -> Figure:
     """One text-only figure, tall enough for every line it carries.
 
     Args:

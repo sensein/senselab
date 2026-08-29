@@ -391,7 +391,8 @@ class TestItReevaluatesEachCandidate:
         assert all(window.attributes["isolated_span"] is True for window in windows)
         assert windows[0].attributes["labels"] == ["Cough"]
         assert windows[1].attributes["labels"] == ["Breathe"]
-        assert windows[0].attributes["scores"] == {
+        assert windows[0].attributes["scores"] == {"Cough": 0.9}
+        assert windows[0].attributes["raw_scores"] == {
             "Cough": 0.9,
             "Snore": 0.1,
             "Baby Cough": 0.2,
