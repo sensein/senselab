@@ -87,9 +87,7 @@ def _span_hear_input(audio: Audio, extent: tuple[float, float]) -> Audio:
     return Audio(waveform=audio.waveform[..., start_sample:end_sample].clone(), sampling_rate=audio.sampling_rate)
 
 
-def _hear_window_extent(
-    candidate_extent: tuple[float, float], raw_window: dict[str, Any]
-) -> tuple[float, float]:
+def _hear_window_extent(candidate_extent: tuple[float, float], raw_window: dict[str, Any]) -> tuple[float, float]:
     """Place a native detector window on the recording timeline.
 
     A short candidate is embedded in an isolated two-second buffer, so its only detector result
@@ -280,6 +278,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         members: dict[str, list[str]] = {}
         for raw_window in reevaluated:
             labels = _confident_labels(raw_window, default_threshold, thresholds)
+            raw_scores = {label: score for pair in raw_window["label_scores"] for label, score in pair.items()}
             window_extent = _hear_window_extent(extent, raw_window)
             window_id = store.entity(
                 prov_type="measurement",
@@ -290,7 +289,8 @@ def airway(  # noqa: C901 — the branch's four steps, in order
                     "signal": source,
                     "span_id": span.id,
                     "labels": labels,
-                    "scores": {label: score for pair in raw_window["label_scores"] for label, score in pair.items()},
+                    "scores": {label: raw_scores[label] for label in labels},
+                    "raw_scores": raw_scores,
                     "input_window_s": HEAR_WINDOW_SECONDS,
                     "isolated_span": True,
                 },
