@@ -124,6 +124,24 @@ class TestTheTextPanel:
         spectrogram = next(axis for axis in figure.axes if axis.get_ylabel() == "Frequency (Hz)")
         assert spectrogram.images[0].get_extent()[:2] == [10.0, 20.0]
 
+    def test_a_zero_width_span_inside_the_page_is_not_drawn(self) -> None:
+        """A degenerate span must not draw a label with nothing visible behind it."""
+        figure = plot_aligned_panels(
+            _tone(30.0),
+            [
+                {
+                    "type": "waveform",
+                    "spans": {
+                        "name": "proposals",
+                        "segments": [{"label": "instant", "start": 15.0, "end": 15.0}],
+                    },
+                },
+            ],
+            time_limits=(10.0, 20.0),
+        )
+        waveform = figure.axes[0]
+        assert [text.get_text() for text in waveform.texts] == []
+
     def test_time_limits_reject_an_interval_outside_the_recording(self) -> None:
         """A misleading evidence page is worse than a rendering error."""
         with pytest.raises(ValueError, match="time_limits"):
@@ -302,6 +320,15 @@ class TestTheTextPanel:
             },
         )
         assert figure._suptitle is None
+
+    def test_a_partial_header_degrades_instead_of_raising(self) -> None:
+        """A caller supplying only some header fields must not crash the render with a KeyError."""
+        figure = plot_aligned_panels(
+            _tone(1.0),
+            [{"type": "waveform"}],
+            header={"decision_label": "PRIMARY FILE DECISION", "decision": "TRIAGE: FLAG"},
+        )
+        assert figure is not None
 
     def test_a_segments_panel_can_name_its_lane(self) -> None:
         """A figure stacking several segment lanes is unreadable if every one says "Segment"."""

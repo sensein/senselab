@@ -64,6 +64,7 @@ _ABSENCE_BY_CLASS = {
 }
 _ABSENCE_ERRORED = "errored"
 _NO_AXIS = "no time axis: the store holds no readable stream, so there is no shared axis to draw over"
+_NO_POSITIVE_DURATION = "the conditioned stream has no positive duration, so there is no time axis to page"
 _ENVELOPE_AXIS = "envelope dBFS"
 _SPANS_OVERLAY = "spans (dB over floor)"
 
@@ -170,8 +171,9 @@ def _scan_state(store: ProvStore) -> tuple[bool, str]:
 def _redacted_text(marks: dict[str, list[Entity]], word: Entity, *, scanned: bool = True) -> str:
     """A word's renderable text: its category placeholder when the scan marked it, else the word.
 
-    The store holds PII by design and the report carries element ids, so the report is not a released
-    artifact — but no matched text may appear in it either way.
+    Governs only the redacted transcript and its token lane. The consensus transcript and its own
+    token lane deliberately render every word's raw text, matched or not, since they exist to let a
+    reviewer audit the ASR evidence itself; the report is not a released artifact.
 
     Args:
         marks: :func:`_assertions_by_source`'s index, so the answer costs one dictionary lookup
@@ -371,7 +373,7 @@ def _consensus_word_color(confidence: object) -> str:
     This is presentation only: word confidence remains a numeric field in the summary JSON and is
     never thresholded or used to change the transcript.
     """
-    if not isinstance(confidence, (int, float)):
+    if not isinstance(confidence, (int, float)) or not np.isfinite(confidence):
         return "#e5e7eb"
     value = float(np.clip(confidence, 0.0, 1.0))
     low, high = (254, 242, 242), (220, 252, 231)
@@ -418,7 +420,11 @@ def _window_label_scores(window: Entity, *, raw: bool = False) -> dict[str, floa
     if not isinstance(raw_scores, dict):
         return {}
     labels = raw_scores if raw else {label: raw_scores[label] for label in window.attributes.get("labels") or []}
-    return {str(label): float(score) for label, score in labels.items() if isinstance(score, (int, float))}
+    return {
+        str(label): float(score)
+        for label, score in labels.items()
+        if isinstance(score, (int, float)) and np.isfinite(score)
+    }
 
 
 def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
@@ -674,10 +680,14 @@ def _panels(
             if span.extent is not None
         ),
     )
-    redacted_words = [
-        (word.extent, _redacted_text(marks, word, scanned=scanned), word.attributes.get("existence_confidence"))
-        for word in words
-    ]
+    redacted_words = []
+    for word in words:
+        original = str(word.attributes.get("text") or "")
+        text = _redacted_text(marks, word, scanned=scanned)
+        # A placeholder's fill must not borrow the confidence of the word it replaced: that
+        # confidence describes ASR evidence for text this lane no longer shows.
+        confidence = word.attributes.get("existence_confidence") if text == original else None
+        redacted_words.append((word.extent, text, confidence))
     if any(text != str(word.attributes.get("text") or "") for word, (_, text, _) in zip(words, redacted_words)):
         panels += _token_lane(
             "redacted transcript",
@@ -1310,6 +1320,45 @@ def _timeline_windows(duration_s: float) -> list[tuple[float, float]]:
     ]
 
 
+_PAGED_PANEL_ITEMS = {"segments": "segments", "tokens": "tokens", "score_raster": "windows"}
+
+
+def _paginate_panels(panels: list[dict[str, Any]], windows: list[tuple[float, float]]) -> list[list[dict[str, Any]]]:
+    """Bucket every panel's timed items onto report pages in one linear pass.
+
+    ``plot_aligned_panels`` is called once per PDF page over the same full-recording panel list.
+    Without this, every per-item visibility check inside it re-scans the whole recording's items on
+    every page — O(pages x items) instead of O(items). ``windows`` are the fixed, contiguous
+    ``_TIMELINE_PAGE_SECONDS`` pages :func:`_timeline_windows` built, so an item's page index is
+    arithmetic rather than a search; an item straddling a page boundary is placed on both pages, and
+    ``plot_aligned_panels`` still clips it to the one it draws.
+
+    Args:
+        panels: The full-recording panel specifications from :func:`_panels`.
+        windows: The pages, in order, as returned by :func:`_timeline_windows`.
+
+    Returns:
+        One panel list per page, in ``windows`` order, with every other panel field preserved.
+    """
+    page_count = len(windows)
+    paged: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
+    for panel in panels:
+        key = _PAGED_PANEL_ITEMS.get(str(panel.get("type")))
+        if key is None:
+            for page in paged:
+                page.append(panel)
+            continue
+        buckets: list[list[dict[str, Any]]] = [[] for _ in range(page_count)]
+        for item in panel.get(key) or []:
+            start_page = min(page_count - 1, max(0, int(float(item["start"]) // _TIMELINE_PAGE_SECONDS)))
+            end_page = min(page_count - 1, max(0, int(float(item["end"]) // _TIMELINE_PAGE_SECONDS)))
+            for index in range(start_page, end_page + 1):
+                buckets[index].append(item)
+        for index, page in enumerate(paged):
+            page.append({**panel, key: buckets[index]})
+    return paged
+
+
 def _timeline_title(title: str, window: tuple[float, float], total_windows: int) -> str:
     """Keep a stable title across evidence pages; their x-axis states each page's time window."""
     del window, total_windows
@@ -1325,6 +1374,7 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
         document["routing"],
     )
     task = recording.get("task_type") or "no task token declared"
+    run_label = recording.get("run_label") or "no run label"
     hints = recording.get("declared_hints") or {}
     hint_text = "; ".join(f"{kind}={value}" for kind, value in sorted(hints.items())) or "no declared hint"
     reasons = decisions.get("reasons") or []
@@ -1333,6 +1383,7 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
     decision_paths = screening.get("decision_paths") or {}
 
     def _taxonomy_reason() -> str | None:
+        messages: list[str] = []
         for kind, path in decision_paths.items():
             if path.get("state") != "uncertain":
                 continue
@@ -1342,13 +1393,14 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
                 floor_s = phonation.get("floor")
                 uncertain_s = phonation.get("uncertain_floor")
                 if all(isinstance(value, (int, float)) for value in (evidence_s, floor_s, uncertain_s)):
-                    return (
+                    messages.append(
                         "TAXONOMY: voice uncertain: longest phonation span "
                         f"{float(evidence_s):.2f} s (present >= {float(floor_s):.2f} s; "
                         f"uncertain >= {float(uncertain_s):.2f} s)"
                     )
-            return f"TAXONOMY: {kind} is uncertain; see taxonomy decision path"
-        return None
+                    continue
+            messages.append(f"TAXONOMY: {kind} is uncertain; see taxonomy decision path")
+        return "; ".join(messages) if messages else None
 
     def _header_reason(reason: dict[str, Any]) -> str:
         node = str(reason.get("node") or "decision")
@@ -1390,7 +1442,7 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
     )
     return {
         "context_label": "TASK / CONTEXT (context only)",
-        "context": f"task: {task}  |  declared hints: {hint_text}",
+        "context": f"{run_label}  |  task: {task}  |  declared hints: {hint_text}",
         "decision_label": "PRIMARY FILE DECISION",
         "decision": (
             f"TRIAGE: {_shown(decisions['file_triage']).upper()}  ·  RELEASE: {_shown(decisions['release']).upper()}"
@@ -1670,6 +1722,9 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
     if transcript:
         lines += ["", "CONSENSUS TRANSCRIPT"]
         lines += ["  " + line for line in textwrap.wrap(transcript, width=_BLOCK_COLUMNS - 2)]
+    scan = document["evidence"]["transcript_scan"]
+    if not scan["complete"]:
+        lines.append(f"  PII scan incomplete: {scan['note']}; the redacted representation withholds every word")
 
     lines += ["", "ANALYTIC RECORD"]
     lines.append(
@@ -1782,32 +1837,44 @@ def _render(  # noqa: PLR0913 — every argument is one thing the page needs and
     header = _header(document)
 
     if fmt == "pdf":
-        if audio is None:
-            lanes = [
-                _text_figure([*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title, figsize=_LETTER_LANDSCAPE_IN)
-            ]
-        else:
-            duration_s = audio.waveform.shape[-1] / audio.sampling_rate
-            windows = _timeline_windows(duration_s)
-            lanes = [
-                plot_aligned_panels(
-                    audio,
-                    panels,
-                    title=_timeline_title(title, window, len(windows)),
-                    header=header,
-                    time_limits=window,
-                    figsize=_LETTER_LANDSCAPE_IN,
-                )
-                for window in windows
-            ]
         with PdfPages(path) as pages:
-            decision_pages = [
-                _text_figure(page, title, figsize=_LETTER_LANDSCAPE_IN)
-                for page in _text_pages(_decision_blocks(document))
-            ]
-            for figure in [*lanes, *decision_pages]:
+
+            def _save(figure: Figure) -> None:
+                """Save and close one page immediately, so only one figure is ever live at once."""
                 pages.savefig(figure)
                 pyplot.close(figure)
+
+            if audio is None:
+                _save(
+                    _text_figure(
+                        [*header.values(), "", "REPORT-ONLY: " + _NO_AXIS], title, figsize=_LETTER_LANDSCAPE_IN
+                    )
+                )
+            else:
+                duration_s = audio.waveform.shape[-1] / audio.sampling_rate
+                windows = _timeline_windows(duration_s)
+                if not windows:
+                    _save(
+                        _text_figure(
+                            [*header.values(), "", "REPORT-ONLY: " + _NO_POSITIVE_DURATION],
+                            title,
+                            figsize=_LETTER_LANDSCAPE_IN,
+                        )
+                    )
+                else:
+                    for window, page_panels in zip(windows, _paginate_panels(panels, windows)):
+                        _save(
+                            plot_aligned_panels(
+                                audio,
+                                page_panels,
+                                title=_timeline_title(title, window, len(windows)),
+                                header=header,
+                                time_limits=window,
+                                figsize=_LETTER_LANDSCAPE_IN,
+                            )
+                        )
+            for page in _text_pages(_decision_blocks(document)):
+                _save(_text_figure(page, title, figsize=_LETTER_LANDSCAPE_IN))
         return
 
     if audio is None:

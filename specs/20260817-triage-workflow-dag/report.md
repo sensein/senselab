@@ -66,10 +66,11 @@ The JSON mirrors every drawn YAMNet, HeAR and time-resolved AST window in
 candidate-span evaluations are separate in `evidence.airway_hear_span_windows`; the report never
 makes a page-only probability claim or confuses the two evidence scopes.
 
-**The title is short.** The task token the run id names, the date, and the two verdict axes —
-`task-… · 2026-08-25 · triage: flag · release: not_assessed`. The full run id and the file path are
-provenance and appear in the blocks; every block line is folded to the block width, so nothing runs
-off the page.
+**The title is short.** A structured header replaces the plain figure title on every page that carries
+one, so the run label — the task token the run id names, and the date — lives in the header's context
+line rather than in a suppressed title: `task-… · 2026-08-25  |  task: …  |  declared hints: …`. The
+full run id and the file path are provenance and appear in the blocks; every block line is folded to
+the block width, so nothing runs off the page.
 
 ## The summary — the blocks
 
