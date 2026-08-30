@@ -437,7 +437,17 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         state["clip_span_extents"] = extents
 
     def _normalized_envelope() -> None:
-        """The dynamically-normalized signal's own envelope and floor, over the pre-emphasised signal."""
+        """The dynamically-normalized signal's own envelope and floor, over the pre-emphasised signal.
+
+        The floor window is ``normalization.floor_*``, deliberately its own key rather than a reuse
+        of ``floor.*``: that window (3 s, per its own derivation) is fitted for the airway-scale
+        envelope spans block, and the target-span pass this feeds is meant to isolate events as short
+        as a single word surrounded by silence. A 3 s, +/-1.5 s window blends in whatever sits up to
+        1.5 s away — which for a single word is very likely another word, or a scene boundary,
+        rather than that word's own immediate silence. Carrying the airway window over here would be
+        exactly the "fitted for one population, applied to another" mistake this graph's own
+        convention refuses elsewhere (see spans.k_db.target's derivation).
+        """
         parameters: dict[str, Any] = {
             "macro_lowpass_hz": float(config.require("normalization.macro_lowpass_hz")),
             "micro_lowpass_hz": float(config.require("normalization.micro_lowpass_hz")),
@@ -451,9 +461,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "ceiling": float(config.require("normalization.ceiling")),
             "lowpass_hz": float(config.require("envelope.lowpass_hz")),
             "filter_order": int(config.require("envelope.filter_order")),
-            "floor_window_s": float(config.require("floor.window_s")),
-            "floor_percentile": float(config.require("floor.percentile")),
-            "floor_eval_grid_s": float(config.require("floor.eval_grid_s")),
+            "floor_window_s": float(config.require("normalization.floor_window_s")),
+            "floor_percentile": float(config.require("normalization.floor_percentile")),
+            "floor_eval_grid_s": float(config.require("normalization.floor_eval_grid_s")),
         }
         activity = _step("normalized_envelope", parameters, (sharp_id,), software)
         normalized = dynamic_range_normalize(
