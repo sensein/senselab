@@ -98,6 +98,36 @@ def phonation_config(tmp_path: Path) -> TriageConfig:
     return load_triage_config(override)
 
 
+@pytest.fixture
+def target_spans_config(tmp_path: Path) -> TriageConfig:
+    """The packaged config with the clip-grouping and normalization keys supplied.
+
+    The values are a test fixture, not a fit: the packaged file leaves each of them null, and this
+    is the override mechanism a caller would use to state them for a real campaign.
+    """
+    override = tmp_path / "target_spans.yaml"
+    override.write_text(
+        "clipping:\n"
+        "  min_duration_ms: 0.5\n"
+        "  merge_gap_ms: 50.0\n"
+        "normalization:\n"
+        "  macro_lowpass_hz: 0.2\n"
+        "  micro_lowpass_hz: 20.0\n"
+        "  envelope_filter_order: 2\n"
+        "  target_dr_db: 15.0\n"
+        "  compression_ratio: 2.0\n"
+        "  macro_target_dbfs: -6.0\n"
+        "  gain_smooth_hz: 10.0\n"
+        "  gain_filter_order: 1\n"
+        "  floor_dbfs: -100.0\n"
+        "  ceiling: 0.95\n"
+        "spans:\n"
+        "  k_db:\n"
+        "    target: 12.0\n"
+    )
+    return load_triage_config(override)
+
+
 def window(start: float, end: float, scores: dict[str, float]) -> dict[str, Any]:
     """One classifier window in the shape ``label_scores`` reads."""
     ordered = sorted(scores.items(), key=lambda pair: -pair[1])

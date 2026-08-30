@@ -22,8 +22,9 @@ import torch
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.tasks.clipping.api import detect_clip_events
 from senselab.audio.tasks.disruptions.api import detect_disruptions
-from senselab.audio.tasks.envelope.api import hilbert_envelope_dbfs, rolling_floor_dbfs
+from senselab.audio.tasks.envelope.api import dynamic_range_normalize, hilbert_envelope_dbfs, rolling_floor_dbfs
 from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
@@ -385,6 +386,195 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives["spans"] = span_ids
         view.extend(span_ids)
         state["span_ids"] = span_ids
+
+    def _clip_spans() -> None:
+        """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs."""
+        if not recording_ids:
+            raise LookupError("no recording stream in the store")
+        parameters: dict[str, Any] = {
+            "near_threshold": float(config.require("clipping.near_threshold")),
+            "leniency_samples": int(config.require("clipping.leniency_samples")),
+            "minimum_extreme": float(config.require("clipping.minimum_extreme")),
+            "min_duration_ms": float(config.require("clipping.min_duration_ms")),
+            "merge_gap_ms": float(config.require("clipping.merge_gap_ms")),
+        }
+        activity = _step("clip_spans", parameters, (recording_ids[-1],), software)
+        sr = int(source.sampling_rate)
+        events = detect_clip_events(
+            source,
+            near_threshold=parameters["near_threshold"],
+            leniency_samples=parameters["leniency_samples"],
+            minimum_extreme=parameters["minimum_extreme"],
+        )
+        min_samples = parameters["min_duration_ms"] * sr / 1000.0
+        merge_gap_samples = parameters["merge_gap_ms"] * sr / 1000.0
+        kept = sorted(
+            (event for event in events if (event.end_sample - event.start_sample + 1) >= min_samples),
+            key=lambda event: event.start_sample,
+        )
+        merged: list[list[int]] = []
+        for event in kept:
+            if merged and event.start_sample - merged[-1][1] <= merge_gap_samples:
+                merged[-1][1] = max(merged[-1][1], event.end_sample)
+            else:
+                merged.append([event.start_sample, event.end_sample])
+        span_ids: list[str] = []
+        extents: list[tuple[float, float]] = []
+        for start_sample, end_sample in merged:
+            extent = (start_sample / sr, (end_sample + 1) / sr)
+            span_id = store.entity(
+                prov_type="span",
+                extent=extent,
+                attributes={"family": "clip", "signal": "recording"},
+            )
+            store.was_generated_by(span_id, activity)
+            store.was_attributed_to(span_id, software)
+            store.was_derived_from(span_id, recording_ids[-1])
+            span_ids.append(span_id)
+            extents.append(extent)
+        derivatives["clip_spans"] = span_ids
+        view.extend(span_ids)
+        state["clip_span_extents"] = extents
+
+    def _normalized_envelope() -> None:
+        """The dynamically-normalized signal's own envelope and floor, over the pre-emphasised signal."""
+        parameters: dict[str, Any] = {
+            "macro_lowpass_hz": float(config.require("normalization.macro_lowpass_hz")),
+            "micro_lowpass_hz": float(config.require("normalization.micro_lowpass_hz")),
+            "envelope_filter_order": int(config.require("normalization.envelope_filter_order")),
+            "target_dr_db": float(config.require("normalization.target_dr_db")),
+            "compression_ratio": float(config.require("normalization.compression_ratio")),
+            "macro_target_dbfs": float(config.require("normalization.macro_target_dbfs")),
+            "gain_smooth_hz": float(config.require("normalization.gain_smooth_hz")),
+            "gain_filter_order": int(config.require("normalization.gain_filter_order")),
+            "floor_dbfs": float(config.require("normalization.floor_dbfs")),
+            "ceiling": float(config.require("normalization.ceiling")),
+            "lowpass_hz": float(config.require("envelope.lowpass_hz")),
+            "filter_order": int(config.require("envelope.filter_order")),
+            "floor_window_s": float(config.require("floor.window_s")),
+            "floor_percentile": float(config.require("floor.percentile")),
+            "floor_eval_grid_s": float(config.require("floor.eval_grid_s")),
+        }
+        activity = _step("normalized_envelope", parameters, (sharp_id,), software)
+        normalized = dynamic_range_normalize(
+            sharp,
+            macro_lowpass_hz=parameters["macro_lowpass_hz"],
+            micro_lowpass_hz=parameters["micro_lowpass_hz"],
+            envelope_filter_order=parameters["envelope_filter_order"],
+            target_dr_db=parameters["target_dr_db"],
+            compression_ratio=parameters["compression_ratio"],
+            macro_target_dbfs=parameters["macro_target_dbfs"],
+            gain_smooth_hz=parameters["gain_smooth_hz"],
+            gain_filter_order=parameters["gain_filter_order"],
+            floor_dbfs=parameters["floor_dbfs"],
+            ceiling=parameters["ceiling"],
+        )
+        normalized.save_to_file(str(run_dir / "streams" / "normalized.wav"))
+        normalized_id = store.entity(
+            prov_type="stream",
+            extent=(0.0, duration_s),
+            attributes={
+                "name": "normalized",
+                "path": "streams/normalized.wav",
+                "sampling_rate": target_hz,
+                "channels": 1,
+            },
+        )
+        store.was_generated_by(normalized_id, activity)
+        store.was_attributed_to(normalized_id, software)
+        store.was_derived_from(normalized_id, sharp_id)
+        envelope = hilbert_envelope_dbfs(
+            normalized, lowpass_hz=parameters["lowpass_hz"], filter_order=parameters["filter_order"]
+        )
+        floor = rolling_floor_dbfs(
+            envelope,
+            target_hz,
+            window_s=parameters["floor_window_s"],
+            percentile=parameters["floor_percentile"],
+            eval_grid_s=parameters["floor_eval_grid_s"],
+        )
+        np.savez(run_dir / "derivatives" / "normalized_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name="normalized_envelope",
+            signal="normalized",
+            attributes={"path": "derivatives/normalized_envelope.npz", "sampling_rate": target_hz},
+            derived_from=(normalized_id,),
+        )
+        derivatives["normalized_envelope"] = entity_id
+        view.append(normalized_id)
+        view.append(entity_id)
+        state.update(normalized_id=normalized_id, normalized_envelope=envelope, normalized_floor=floor)
+
+    def _target_spans() -> None:
+        """Foreground-energy candidate spans over the normalized envelope, flagged where they overlap a clip.
+
+        Generalizes ``_spans`` beyond the airway-only K: any duration over which foreground acoustic
+        energy exists is a candidate here, for any vocal task (breathing, speaking, phonation), not
+        only airway events. A target span is measured independently of whether it contains a clip
+        span; overlap is recorded as a flag rather than an exclusion, so a real vocal event is not
+        discarded merely because part of it clipped.
+        """
+        if "normalized_envelope" not in state:
+            raise LookupError("normalized_envelope is absent")
+        k_db = float(config.require("spans.k_db.target"))
+        parameters: dict[str, Any] = {
+            "k_db": k_db,
+            "onset_drop_db": float(config.require("spans.onset_drop_db")),
+            "offset_fraction": float(config.require("spans.offset_fraction")),
+            "hangover_ms": int(config.require("spans.hangover_ms")),
+            "min_duration_ms": int(config.require("spans.min_duration_ms")),
+            "min_separation_ms": int(config.require("spans.min_separation_ms")),
+        }
+        activity = _step("target_spans", parameters, (state["normalized_id"],), software)
+        proposed = propose_spans(
+            state["normalized_envelope"],
+            state["normalized_floor"],
+            target_hz,
+            k_db=k_db,
+            onset_drop_db=parameters["onset_drop_db"],
+            offset_fraction=parameters["offset_fraction"],
+            hangover_ms=parameters["hangover_ms"],
+            min_duration_ms=parameters["min_duration_ms"],
+            min_separation_ms=parameters["min_separation_ms"],
+        )
+        if isinstance(proposed, NoContrast):
+            entity_id = _measurement(
+                store,
+                activity,
+                software,
+                name="target_spans_no_contrast",
+                signal="normalized",
+                attributes={"k_db": k_db, "reason": proposed.reason},
+                derived_from=(state["normalized_id"],),
+            )
+            derivatives["target_spans_no_contrast"] = entity_id
+            view.append(entity_id)
+            return
+        clip_extents = state.get("clip_span_extents") or []
+        span_ids: list[str] = []
+        for span in proposed:
+            contains_clip = any(span.start < end and span.end > start for start, end in clip_extents)
+            span_id = store.entity(
+                prov_type="span",
+                extent=(span.start, span.end),
+                attributes={
+                    "family": "target",
+                    "peak_over_floor_db": span.peak_over_floor_db,
+                    "k_db": k_db,
+                    "signal": "normalized",
+                    "merged_proposals": span.merged_proposals,
+                    "contains_clip": contains_clip,
+                },
+            )
+            store.was_generated_by(span_id, activity)
+            store.was_attributed_to(span_id, software)
+            store.was_derived_from(span_id, state["normalized_id"])
+            span_ids.append(span_id)
+        derivatives["target_spans"] = span_ids
+        view.extend(span_ids)
 
     def _scores(name: str, agent_id: str, activity_step: str, run: Callable[[], list[dict[str, Any]]]) -> None:
         """Run one classifier and store its verbatim windows; no threshold is read here (V3)."""
@@ -940,6 +1130,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     blocks: list[tuple[str, Callable[[], None]]] = [
         ("energy_envelope", _envelope),
         ("spans", _spans),
+        ("clip_spans", _clip_spans),
         ("yamnet_scores", _yamnet_scores),
         ("yamnet_windows", lambda: _windows("yamnet")),
         ("silence", _silence),
@@ -957,6 +1148,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ),
         ("consensus_transcript", _consensus),
         ("phonation_spans", _phonation_spans),
+        ("normalized_envelope", _normalized_envelope),
+        ("target_spans", _target_spans),
         ("spectrogram_wideband", lambda: _spectrogram("spectrogram_wideband", "spectrogram.wideband_window_ms")),
         (
             "spectrogram_narrowband",

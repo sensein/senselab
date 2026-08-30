@@ -422,6 +422,89 @@ class TestSpansCarryTheirMergeRate:
         assert [e.attributes["merged_proposals"] for e in spans] == [1]
 
 
+def _burst_that_also_clips() -> np.ndarray:
+    """A quiet bed with one loud, hard-clipped burst and one loud, clean burst elsewhere."""
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(4.0 * SR)) * 1e-4).astype(np.float32)
+    grid = np.arange(int(0.15 * SR)) / SR
+    tone = (0.5 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    clipped_i0 = int(1.5 * SR)
+    samples[clipped_i0 : clipped_i0 + len(tone)] += np.clip(3.0 * tone, -1.0, 1.0)
+    clean_i0 = int(3.0 * SR)
+    samples[clean_i0 : clean_i0 + len(tone)] += tone
+    return samples
+
+
+class TestClipAndTargetSpans:
+    """ClipDaT-derived clip spans, and the generalized target spans that flag overlap with one."""
+
+    def test_a_hard_clipped_recording_yields_a_clip_span(
+        self,
+        store: ProvStore,
+        target_spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A recording driven past full scale produces a family=clip span over the plateau."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_clipped_at_44k(), sampling_rate=44100)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        clips = [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
+        assert clips
+        assert clips[0].attributes["signal"] == "recording"
+
+    def test_a_clean_recording_has_no_clip_spans(
+        self,
+        store: ProvStore,
+        target_spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A quiet bed and one ordinary burst never touch the recording's own extreme repeatedly."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
+
+    def test_a_burst_yields_a_target_span_over_the_normalized_signal(
+        self,
+        store: ProvStore,
+        target_spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The generalized target span exists independently of the airway-only spans block."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
+        assert targets
+        assert targets[0].attributes["signal"] == "normalized"
+
+    def test_a_target_span_containing_a_clip_is_flagged_not_excluded(
+        self,
+        store: ProvStore,
+        target_spans_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Overlap with a clip span is recorded on the target span; it is still measured, not dropped."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_burst_that_also_clips())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        clips = [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
+        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
+        assert clips and targets
+        flagged = [e for e in targets if e.attributes["contains_clip"]]
+        clean = [e for e in targets if not e.attributes["contains_clip"]]
+        assert flagged, "the clipped burst's own target span must be flagged"
+        assert clean, "the untouched burst elsewhere must not be flagged"
+
+
 class TestThePackagedConfigStillRunsEveryClassifier:
     """V3's split, for all three classifiers: the model runs, the threshold fold is what goes absent."""
 
@@ -453,7 +536,15 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             assert find_measurement(store, name) is not None, name
         for name in ("yamnet_windows", "ast_windows", "hear_windows"):
             assert find_measurement(store, name) is None, name
-        assert set(result.absent) == {"yamnet_windows", "ast_windows", "hear_windows", "phonation_spans"}
+        assert set(result.absent) == {
+            "yamnet_windows",
+            "ast_windows",
+            "hear_windows",
+            "phonation_spans",
+            "clip_spans",
+            "normalized_envelope",
+            "target_spans",
+        }
 
     def test_the_shipped_hops_are_non_overlapping(
         self,
