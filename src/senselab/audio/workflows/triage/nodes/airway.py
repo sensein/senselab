@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from senselab.audio.data_structures import Audio, AudioHints
+from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
 from senselab.audio.tasks.health_acoustics.hear import (
     HEAR_MODEL_ID,
     HEAR_REVISION,
     HEAR_WINDOW_SECONDS,
-    span_to_hear_buffer,
+    hear_window_extent,
+    span_hear_input,
 )
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
@@ -75,30 +76,6 @@ def _confident_labels(window: dict[str, Any], default_threshold: float, threshol
             if float(score) >= float(thresholds.get(str(label), default_threshold)):
                 labels.append(str(label))
     return labels
-
-
-def _span_hear_input(audio: Audio, extent: tuple[float, float]) -> Audio:
-    """Return an isolated candidate for HeAR, preserving a long candidate's internal windows."""
-    start, end = extent
-    if end - start <= HEAR_WINDOW_SECONDS:
-        return span_to_hear_buffer(audio, start, end)
-    start_sample = int(round(start * audio.sampling_rate))
-    end_sample = int(round(end * audio.sampling_rate))
-    return Audio(waveform=audio.waveform[..., start_sample:end_sample].clone(), sampling_rate=audio.sampling_rate)
-
-
-def _hear_window_extent(candidate_extent: tuple[float, float], raw_window: dict[str, Any]) -> tuple[float, float]:
-    """Place a native detector window on the recording timeline.
-
-    A short candidate is embedded in an isolated two-second buffer, so its only detector result
-    describes the candidate itself. A long candidate is passed through unchanged and HeAR returns
-    one or more native windows relative to that candidate; those windows must be offset to the
-    source recording rather than all being written over the parent span.
-    """
-    start, end = candidate_extent
-    if end - start <= HEAR_WINDOW_SECONDS:
-        return candidate_extent
-    return start + float(raw_window["start"]), start + float(raw_window["end"])
 
 
 def _is_transcribed(store: ProvStore, extent: tuple[float, float]) -> bool:
@@ -273,13 +250,13 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         extent = span.extent or (0.0, 0.0)
         if _is_transcribed(store, extent):
             continue
-        input_audio = _span_hear_input(audio, extent)
+        input_audio = span_hear_input(audio, extent)
         reevaluated = detect_health_acoustic_events([input_audio], hop_length=HEAR_WINDOW_SECONDS, top_k=None)[0]
         members: dict[str, list[str]] = {}
         for raw_window in reevaluated:
             labels = _confident_labels(raw_window, default_threshold, thresholds)
             raw_scores = {label: score for pair in raw_window["label_scores"] for label, score in pair.items()}
-            window_extent = _hear_window_extent(extent, raw_window)
+            window_extent = hear_window_extent(extent, raw_window)
             window_id = store.entity(
                 prov_type="measurement",
                 extent=window_extent,

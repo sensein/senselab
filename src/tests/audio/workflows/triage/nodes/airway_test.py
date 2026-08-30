@@ -301,7 +301,7 @@ class TestItReevaluatesEachCandidate:
     def test_the_module_has_the_span_detector(self) -> None:
         """The branch owns its candidate-level HeAR pass."""
         assert hasattr(airway_module, "detect_health_acoustic_events")
-        assert hasattr(airway_module, "span_to_hear_buffer")
+        assert hasattr(airway_module, "span_hear_input")
 
     def test_a_fresh_span_result_overrides_an_old_whole_file_label(
         self,
