@@ -423,6 +423,51 @@ def span_to_hear_buffer(audio: Audio, start_s: float, end_s: float, *, placement
     return Audio(waveform=buffer[None, :], sampling_rate=sr)
 
 
+def span_hear_input(audio: Audio, extent: Tuple[float, float]) -> Audio:
+    """Return an isolated candidate for the event detector, preserving a long span's own windows.
+
+    A span shorter than :data:`HEAR_WINDOW_SECONDS` is placed in a silent 2 s buffer via
+    :func:`span_to_hear_buffer`, so its only detector result describes the span itself. A longer
+    span is passed through unchanged; the detector then returns one or more native windows over
+    it, which :func:`hear_window_extent` places back on the source recording's own timeline.
+
+    Args:
+        audio: The recording the span was proposed over, at the detector's sampling rate.
+        extent: The span's ``(start, end)`` in seconds.
+
+    Returns:
+        Audio ready to pass to the event detector.
+    """
+    start, end = extent
+    if end - start <= HEAR_WINDOW_SECONDS:
+        return span_to_hear_buffer(audio, start, end)
+    start_sample = int(round(start * audio.sampling_rate))
+    end_sample = int(round(end * audio.sampling_rate))
+    return Audio(waveform=audio.waveform[..., start_sample:end_sample].clone(), sampling_rate=audio.sampling_rate)
+
+
+def hear_window_extent(candidate_extent: Tuple[float, float], raw_window: Dict[str, Any]) -> Tuple[float, float]:
+    """Place one native detector window back on the recording's own timeline.
+
+    A short candidate is embedded in an isolated 2 s buffer (see :func:`span_hear_input`), so its
+    only detector result describes the candidate itself. A long candidate is passed through
+    unchanged and the detector returns one or more native windows relative to it; those windows
+    must be offset to the source recording rather than all being written over the parent span.
+
+    Args:
+        candidate_extent: The span's own ``(start, end)`` in seconds.
+        raw_window: One raw window the detector returned, carrying ``"start"``/``"end"`` relative
+            to whatever :func:`span_hear_input` gave it.
+
+    Returns:
+        The window's ``(start, end)`` on the source recording's timeline.
+    """
+    start, end = candidate_extent
+    if end - start <= HEAR_WINDOW_SECONDS:
+        return candidate_extent
+    return start + float(raw_window["start"]), start + float(raw_window["end"])
+
+
 def stage_hear_snapshot() -> Tuple[str, Path]:
     """Stage the pinned ``google/hear`` commit and return ``(sha, snapshot_dir)``.
 

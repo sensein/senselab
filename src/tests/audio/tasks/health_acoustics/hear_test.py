@@ -588,3 +588,37 @@ def test_a_span_longer_than_two_seconds_is_refused() -> None:
     audio = Audio(waveform=np.zeros((1, 5 * sr), dtype="float32"), sampling_rate=sr)
     with pytest.raises(ValueError, match="longer than the 2 s"):
         hear.span_to_hear_buffer(audio, 1.0, 4.0)
+
+
+class TestSpanHearInput:
+    """The shared per-span windowing helper AIRWAY and PREPROCESS both isolate a candidate with."""
+
+    def test_a_short_span_comes_back_as_a_two_second_buffer(self) -> None:
+        """A candidate at or under the window is embedded, never passed through raw."""
+        sr = 16000
+        audio = Audio(waveform=np.ones((1, 5 * sr), dtype="float32"), sampling_rate=sr)
+        result = hear.span_hear_input(audio, (1.0, 1.35))
+        assert result.waveform.shape[-1] == 2 * sr
+
+    def test_a_long_span_is_passed_through_unchanged(self) -> None:
+        """A candidate longer than the window is sliced, not buffered."""
+        sr = 16000
+        x = np.arange(5 * sr, dtype="float32")[None, :]
+        audio = Audio(waveform=x, sampling_rate=sr)
+        result = hear.span_hear_input(audio, (1.0, 4.0))
+        assert result.waveform.shape[-1] == 3 * sr
+        assert np.array_equal(np.asarray(result.waveform).squeeze(), x.squeeze()[sr : 4 * sr])
+
+
+class TestHearWindowExtent:
+    """Placing one native detector window back on the source recording's own timeline."""
+
+    def test_a_short_candidates_window_is_the_candidate_itself(self) -> None:
+        """A buffered candidate has exactly one result, describing the candidate, not the buffer."""
+        extent = hear.hear_window_extent((1.0, 1.35), {"start": 0.0, "end": 2.0})
+        assert extent == (1.0, 1.35)
+
+    def test_a_long_candidates_window_is_offset_to_the_recording(self) -> None:
+        """A native window relative to the candidate is placed on the recording's own timeline."""
+        extent = hear.hear_window_extent((10.0, 14.0), {"start": 1.0, "end": 3.0})
+        assert extent == (11.0, 13.0)
