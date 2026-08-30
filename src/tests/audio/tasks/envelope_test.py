@@ -6,9 +6,16 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.signal import hilbert
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.envelope import dynamic_range_normalize, hilbert_envelope_dbfs, rolling_floor_dbfs
+from senselab.audio.tasks.envelope import (
+    ButterworthSmoothing,
+    MedianSmoothing,
+    dynamic_range_normalize,
+    hilbert_envelope_dbfs,
+    rolling_floor_dbfs,
+)
 
 SR = 16000
 
@@ -20,7 +27,7 @@ def _tone(seconds: float, amp: float, freq: float = 200.0) -> Audio:
 
 def _env(audio: Audio) -> np.ndarray:
     """Run the envelope with the config's measured values; the fixture supplies the literals."""
-    return hilbert_envelope_dbfs(audio, lowpass_hz=40.0, filter_order=4)
+    return hilbert_envelope_dbfs(audio, smoothing=ButterworthSmoothing(cutoff_hz=40.0, order=4))
 
 
 class TestEnvelopeIsAbsolute:
@@ -109,6 +116,30 @@ class TestAnUnmeasurableSampleHasNoDecibelValue:
         assert np.isnan(_env(quiet)[SR // 4 : -SR // 4]).all()
 
 
+class TestSmoothingStrategiesAreInterchangeable:
+    """hilbert_envelope_dbfs is agnostic to which EnvelopeSmoothing it is given."""
+
+    def test_median_smoothing_also_reads_the_absolute_reference(self) -> None:
+        """Swapping the strategy does not change the dBFS contract itself."""
+        env = hilbert_envelope_dbfs(_tone(1.0, 0.5), smoothing=MedianSmoothing(window_s=0.01))
+        mid = env[SR // 4 : -SR // 4]
+        assert -7.5 < float(np.median(mid)) < -4.5
+
+    def test_median_smoothing_never_undershoots_below_zero(self) -> None:
+        """A median can only output a value the rectified envelope already took, so it can't go negative."""
+        audio = _burst()
+        x = np.asarray(audio.waveform, dtype=np.float64)[0]
+        smoothed = MedianSmoothing(window_s=0.01).apply(np.abs(hilbert(x)), SR)
+        assert np.all(smoothed >= 0.0)
+
+    def test_butterworth_does_undershoot_on_the_same_burst(self) -> None:
+        """Contrast case: the exact overshoot mechanism the median strategy structurally avoids."""
+        audio = _burst()
+        x = np.asarray(audio.waveform, dtype=np.float64)[0]
+        smoothed = ButterworthSmoothing(cutoff_hz=40.0, order=4).apply(np.abs(hilbert(x)), SR)
+        assert np.any(smoothed < 0.0)
+
+
 class TestTheFloorOverAnUnmeasurableEnvelope:
     """The floor is a percentile of what was measured, and says nothing where nothing was."""
 
@@ -147,9 +178,8 @@ def _normalize(audio: Audio) -> Audio:
     """Run dynamic_range_normalize with the reference implementation's own literal values."""
     return dynamic_range_normalize(
         audio,
-        macro_lowpass_hz=0.2,
-        micro_lowpass_hz=20.0,
-        envelope_filter_order=2,
+        macro_smoothing=MedianSmoothing(window_s=0.5),
+        micro_smoothing=MedianSmoothing(window_s=0.05),
         target_dr_db=15.0,
         compression_ratio=2.0,
         macro_target_dbfs=-6.0,

@@ -2,26 +2,82 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Protocol
+
 import numpy as np
-from scipy.signal import butter, filtfilt, hilbert
+from scipy.signal import butter, filtfilt, hilbert, medfilt
 
 from senselab.audio.data_structures import Audio
 
 
-def hilbert_envelope_dbfs(audio: Audio, *, lowpass_hz: float, filter_order: int) -> np.ndarray:
-    """The analytic-signal magnitude, lowpassed, in dBFS.
+class EnvelopeSmoothing(Protocol):
+    """A strategy for smoothing a rectified envelope, pluggable into :func:`hilbert_envelope_dbfs`.
 
-    The filter is zero-phase, so the envelope is offline-only.
+    An implementation takes the envelope's linear magnitude and returns a same-length smoothed
+    magnitude; the caller never sees which concrete strategy ran.
+    """
+
+    def apply(self, x: np.ndarray, sampling_rate: int) -> np.ndarray:
+        """Smooth ``x``, sampled at ``sampling_rate``."""
+        ...
+
+
+@dataclass(frozen=True)
+class ButterworthSmoothing:
+    """A zero-phase Butterworth lowpass (forward-and-backward ``filtfilt``).
+
+    Being a resonant IIR design, its impulse response rings; a sharp onset in ``x`` can make it
+    overshoot past a level the signal never took, including below zero on a rectified envelope, and
+    zero-phase filtering spreads that ringing to both sides of the onset (a real, load-bearing
+    property demonstrated in ``TestAnUnmeasurableSampleHasNoDecibelValue``, not a bug in this code).
+
+    Attributes:
+        cutoff_hz: Lowpass cutoff.
+        order: Butterworth order; doubled in effect by the forward-and-backward pass.
+    """
+
+    cutoff_hz: float
+    order: int
+
+    def apply(self, x: np.ndarray, sampling_rate: int) -> np.ndarray:
+        """Zero-phase lowpass ``x`` at this instance's cutoff."""
+        b, a = butter(self.order, self.cutoff_hz / (sampling_rate / 2), "low")
+        return np.asarray(filtfilt(b, a, x), dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class MedianSmoothing:
+    """A sliding median.
+
+    Its output is always one of the values already present in the window, so unlike
+    :class:`ButterworthSmoothing` it cannot overshoot past a transient.
+
+    Attributes:
+        window_s: Width of the sliding window.
+    """
+
+    window_s: float
+
+    def apply(self, x: np.ndarray, sampling_rate: int) -> np.ndarray:
+        """Median-filter ``x`` over this instance's window."""
+        kernel = max(1, int(round(self.window_s * sampling_rate)) | 1)
+        return np.asarray(medfilt(x, kernel_size=kernel), dtype=np.float64)
+
+
+def hilbert_envelope_dbfs(audio: Audio, *, smoothing: EnvelopeSmoothing) -> np.ndarray:
+    """The analytic-signal magnitude, smoothed, in dBFS.
+
+    A resonant smoothing strategy is offline-only if it is zero-phase; :class:`MedianSmoothing` has
+    no phase response to speak of.
 
     Args:
         audio: Mono audio. A multi-channel input is averaged.
-        lowpass_hz: Cutoff of the zero-phase Butterworth lowpass. Read it from
-            ``envelope.lowpass_hz`` in the triage config.
-        filter_order: Order of the Butterworth design. Read it from ``envelope.filter_order``.
+        smoothing: Strategy applied to ``|hilbert(x)|`` before it is read in dB.
 
     Returns:
         One value per input sample, in dBFS, absolute and never normalised by the input's maximum.
-        A sample whose filtered envelope is non-positive or below the input representation's
+        A sample whose smoothed envelope is non-positive or below the input representation's
         resolution has no dB value and reads ``nan``.
     """
     source = np.asarray(audio.waveform)
@@ -30,12 +86,11 @@ def hilbert_envelope_dbfs(audio: Audio, *, lowpass_hz: float, filter_order: int)
     x = np.asarray(source, dtype=np.float64)
     if x.ndim > 1:
         x = x.mean(axis=0)
-    b, a = butter(filter_order, lowpass_hz / (audio.sampling_rate / 2), "low")
-    env = np.asarray(filtfilt(b, a, np.abs(hilbert(x))), dtype=np.float64)
+    env = smoothing.apply(np.abs(hilbert(x)), int(audio.sampling_rate))
     out = np.full(env.shape, np.nan)
-    # A zero-phase lowpass can ring through zero after a transient. Tiny positive values on that
-    # crossing are numerical residue, not a measurable acoustic level; admitting them into a local
-    # percentile creates implausible downward floor spikes and inflated span contrast.
+    # A resonant smoothing (Butterworth) can ring through zero after a transient. Tiny positive
+    # values on that crossing are numerical residue, not a measurable acoustic level; admitting them
+    # into a local percentile creates implausible downward floor spikes and inflated span contrast.
     measurable = env >= resolution
     out[measurable] = 20.0 * np.log10(env[measurable])
     return out
@@ -84,9 +139,8 @@ def _zero_phase_lowpass(x: np.ndarray, cutoff_hz: float, sampling_rate: int, *, 
 def dynamic_range_normalize(
     audio: Audio,
     *,
-    macro_lowpass_hz: float,
-    micro_lowpass_hz: float,
-    envelope_filter_order: int,
+    macro_smoothing: EnvelopeSmoothing,
+    micro_smoothing: EnvelopeSmoothing,
     target_dr_db: float,
     compression_ratio: float,
     macro_target_dbfs: float,
@@ -106,28 +160,29 @@ def dynamic_range_normalize(
     it introduces no discontinuity a later disruption detector could mistake for one in the recording
     itself.
 
-    Reuses :func:`hilbert_envelope_dbfs` for both envelopes, at two cutoffs: a slow one for the
-    scene's macro loudness context and a fast one for the passage's own micro dynamics. The two are
-    already in dB, so the local dynamic range is their plain difference rather than a ratio.
+    Reuses :func:`hilbert_envelope_dbfs` for both envelopes, each with its own smoothing strategy: a
+    slow one for the scene's macro loudness context and a fast one for the passage's own micro
+    dynamics. The two are already in dB, so the local dynamic range is their plain difference rather
+    than a ratio.
 
     Args:
         audio: The recording, already known to be clipping-free at the point this runs — this
             function only redistributes level, so a genuinely clipped sample stays clipped.
-        macro_lowpass_hz: Cutoff for the slow, scene-level envelope. Read it from
-            ``normalization.macro_lowpass_hz``.
-        micro_lowpass_hz: Cutoff for the fast, passage-level envelope. Read it from
-            ``normalization.micro_lowpass_hz``.
-        envelope_filter_order: Butterworth order shared by both envelopes, forwarded to
-            :func:`hilbert_envelope_dbfs`. Read it from ``normalization.envelope_filter_order``.
+        macro_smoothing: Strategy for the slow, scene-level envelope. Construct from
+            ``normalization.macro_smoothing``.
+        micro_smoothing: Strategy for the fast, passage-level envelope. Construct from
+            ``normalization.micro_smoothing``.
         target_dr_db: The local dynamic range, in dB, a passage may carry before its excess is
             compressed toward the macro level. Read it from ``normalization.target_dr_db``.
         compression_ratio: How much of the excess above ``target_dr_db`` is removed;
             ``compression_ratio=2`` removes half. Read it from ``normalization.compression_ratio``.
         macro_target_dbfs: The reference level every scene's macro envelope is brought toward. Read
             it from ``normalization.macro_target_dbfs``.
-        gain_smooth_hz: Cutoff of the final zero-phase smoothing pass over the combined gain curve,
-            the identity that keeps the applied gain itself free of any discontinuity. Read it from
-            ``normalization.gain_smooth_hz``.
+        gain_smooth_hz: Cutoff of the final zero-phase Butterworth smoothing pass over the combined
+            gain curve, the identity that keeps the applied gain itself free of any discontinuity —
+            unlike the envelopes above, this smooths a gain multiplier applied to raw samples, where
+            a discontinuity (not an onset overshoot) is the failure mode, so it stays Butterworth
+            rather than taking a pluggable strategy. Read it from ``normalization.gain_smooth_hz``.
         gain_filter_order: Butterworth order for that smoothing pass. Read it from
             ``normalization.gain_filter_order``.
         floor_dbfs: The dB value substituted wherever an envelope has no measurable value (silence,
@@ -146,8 +201,8 @@ def dynamic_range_normalize(
     mono = x.mean(axis=0) if x.ndim > 1 else x
     mono_audio = Audio(waveform=mono[None, :], sampling_rate=audio.sampling_rate)
 
-    macro_db = hilbert_envelope_dbfs(mono_audio, lowpass_hz=macro_lowpass_hz, filter_order=envelope_filter_order)
-    micro_db = hilbert_envelope_dbfs(mono_audio, lowpass_hz=micro_lowpass_hz, filter_order=envelope_filter_order)
+    macro_db = hilbert_envelope_dbfs(mono_audio, smoothing=macro_smoothing)
+    micro_db = hilbert_envelope_dbfs(mono_audio, smoothing=micro_smoothing)
     macro_db = np.where(np.isfinite(macro_db), macro_db, floor_dbfs)
     micro_db = np.where(np.isfinite(micro_db), micro_db, floor_dbfs)
 
