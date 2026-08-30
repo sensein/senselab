@@ -368,6 +368,17 @@ derivation: |
   merge nearby ones before treating a clip event as a genuine plateau, exactly as spans.min_duration_ms
   and spans.min_separation_ms already do for envelope-peak spans. Neither has a corpus behind it yet.
 
+  normalization.floor_window_s, .floor_percentile, .floor_eval_grid_s -- the local floor
+  rolling_floor_dbfs computes over the NORMALIZED envelope, feeding target_spans. Deliberately not a
+  reuse of floor.window_s/percentile/eval_grid_s: that 3 s window is fitted for the airway-scale
+  envelope spans block (spans.k_db.airway's own events), and target_spans is meant to isolate an
+  event as short as one word surrounded by silence. A +/-1.5 s window blends in whatever sits up to
+  1.5 s away -- for a single word, very likely another word or a scene boundary, not that word's own
+  immediate silence -- so the airway floor's window would misrepresent a much shorter timescale.
+  Null until a corpus fixes what "immediate" means at word scale; comparable in spirit to
+  speech.word_gap_ms, which is the same "how much silence separates two events" question asked by a
+  different mechanism (word timestamps rather than a floor window) and is equally null.
+
   normalization.* -- audio/tasks/envelope.dynamic_range_normalize. Every key is null. The function's
   own reference implementation (a pasted sketch reviewed and reworked to reuse hilbert_envelope_dbfs
   for both its macro and micro envelopes instead of a bespoke rectify-and-filter) carried illustrative
@@ -422,6 +433,9 @@ normalization:
   gain_filter_order: null
   floor_dbfs: null
   ceiling: null
+  floor_window_s: null
+  floor_percentile: null
+  floor_eval_grid_s: null
 
 spectrogram:
   wideband_window_ms: 5.0
