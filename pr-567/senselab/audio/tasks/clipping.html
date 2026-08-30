@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="pdoc 16.0.0"/>
-    <title>senselab.audio.tasks API documentation</title>
+    <title>senselab.audio.tasks.clipping API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -17,54 +17,42 @@
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
         <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
-        <div>            <a class="pdoc-button module-list-button" href="../audio.html">
+        <div>            <a class="pdoc-button module-list-button" href="../tasks.html">
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
   <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
   <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
-</svg>                &nbsp;senselab.audio</a>
+</svg>                &nbsp;senselab.audio.tasks</a>
 
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="tasks/classification.html">classification</a></li>
-                    <li><a href="tasks/clearvoice.html">clearvoice</a></li>
-                    <li><a href="tasks/clipping.html">clipping</a></li>
-                    <li><a href="tasks/data_augmentation.html">data_augmentation</a></li>
-                    <li><a href="tasks/disruptions.html">disruptions</a></li>
-                    <li><a href="tasks/envelope.html">envelope</a></li>
-                    <li><a href="tasks/features_extraction.html">features_extraction</a></li>
-                    <li><a href="tasks/forced_alignment.html">forced_alignment</a></li>
-                    <li><a href="tasks/gammatone.html">gammatone</a></li>
-                    <li><a href="tasks/health_acoustics.html">health_acoustics</a></li>
-                    <li><a href="tasks/input_output.html">input_output</a></li>
-                    <li><a href="tasks/phonation.html">phonation</a></li>
-                    <li><a href="tasks/pii_detection.html">pii_detection</a></li>
-                    <li><a href="tasks/plotting.html">plotting</a></li>
-                    <li><a href="tasks/preprocessing.html">preprocessing</a></li>
-                    <li><a href="tasks/quality_control.html">quality_control</a></li>
-                    <li><a href="tasks/redaction.html">redaction</a></li>
-                    <li><a href="tasks/scene_quality.html">scene_quality</a></li>
-                    <li><a href="tasks/source_separation.html">source_separation</a></li>
-                    <li><a href="tasks/spans.html">spans</a></li>
-                    <li><a href="tasks/speaker_diarization.html">speaker_diarization</a></li>
-                    <li><a href="tasks/speaker_diarization_evaluation.html">speaker_diarization_evaluation</a></li>
-                    <li><a href="tasks/speaker_embeddings.html">speaker_embeddings</a></li>
-                    <li><a href="tasks/speaker_verification.html">speaker_verification</a></li>
-                    <li><a href="tasks/speech_enhancement.html">speech_enhancement</a></li>
-                    <li><a href="tasks/speech_super_resolution.html">speech_super_resolution</a></li>
-                    <li><a href="tasks/speech_to_text.html">speech_to_text</a></li>
-                    <li><a href="tasks/speech_to_text_ensemble.html">speech_to_text_ensemble</a></li>
-                    <li><a href="tasks/speech_to_text_evaluation.html">speech_to_text_evaluation</a></li>
-                    <li><a href="tasks/ssl_embeddings.html">ssl_embeddings</a></li>
-                    <li><a href="tasks/target_speaker_extraction.html">target_speaker_extraction</a></li>
-                    <li><a href="tasks/text_to_speech.html">text_to_speech</a></li>
-                    <li><a href="tasks/voice_activity_detection.html">voice_activity_detection</a></li>
-                    <li><a href="tasks/voice_cloning.html">voice_cloning</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="class" href="#ClipEvent">ClipEvent</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#ClipEvent.__init__">ClipEvent</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ClipEvent.start_sample">start_sample</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ClipEvent.end_sample">end_sample</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#ClipEvent.polarity">polarity</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
+                    <a class="function" href="#detect_clip_events">detect_clip_events</a>
+            </li>
+    </ul>
 
 
 
@@ -78,20 +66,259 @@
     <main class="pdoc">
             <section class="module-info">
                     <h1 class="modulename">
-<a href="./../../senselab.html">senselab</a><wbr>.<a href="./../audio.html">audio</a><wbr>.tasks    </h1>
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.clipping    </h1>
 
-                        <div class="docstring"><p>Tasks for audio processing.</p>
+                        <div class="docstring"><p>Clip-event detection (ClipDaT).</p>
 </div>
 
-                        <input id="mod-tasks-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+                        <input id="mod-clipping-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
-                        <label class="view-source-button" for="mod-tasks-view-source"><span>View Source</span></label>
+                        <label class="view-source-button" for="mod-clipping-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Tasks for audio processing.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Clip-event detection (ClipDaT).&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.clipping.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">ClipEvent</span><span class="p">,</span> <span class="n">detect_clip_events</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos">6</span></a>    <span class="s2">&quot;ClipEvent&quot;</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos">7</span></a>    <span class="s2">&quot;detect_clip_events&quot;</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos">8</span></a><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="ClipEvent">
+                            <input id="ClipEvent-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+                    <div class="decorator decorator-dataclass">@dataclass(frozen=True)</div>
+
+    <span class="def">class</span>
+    <span class="name">ClipEvent</span>:
+
+                <label class="view-source-button" for="ClipEvent-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#ClipEvent"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ClipEvent-13"><a href="#ClipEvent-13"><span class="linenos">13</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="ClipEvent-14"><a href="#ClipEvent-14"><span class="linenos">14</span></a><span class="k">class</span><span class="w"> </span><span class="nc">ClipEvent</span><span class="p">:</span>
+</span><span id="ClipEvent-15"><a href="#ClipEvent-15"><span class="linenos">15</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One run of samples pinned near the recording&#39;s own amplitude extreme.</span>
+</span><span id="ClipEvent-16"><a href="#ClipEvent-16"><span class="linenos">16</span></a>
+</span><span id="ClipEvent-17"><a href="#ClipEvent-17"><span class="linenos">17</span></a><span class="sd">    Attributes:</span>
+</span><span id="ClipEvent-18"><a href="#ClipEvent-18"><span class="linenos">18</span></a><span class="sd">        start_sample: First sample of the run, inclusive.</span>
+</span><span id="ClipEvent-19"><a href="#ClipEvent-19"><span class="linenos">19</span></a><span class="sd">        end_sample: Last sample counted as part of the run, inclusive — including any trailing</span>
+</span><span id="ClipEvent-20"><a href="#ClipEvent-20"><span class="linenos">20</span></a><span class="sd">            samples tolerated by the leniency window.</span>
+</span><span id="ClipEvent-21"><a href="#ClipEvent-21"><span class="linenos">21</span></a><span class="sd">        polarity: ``&quot;positive&quot;`` when the run tracks the file&#39;s global maximum, ``&quot;negative&quot;`` when</span>
+</span><span id="ClipEvent-22"><a href="#ClipEvent-22"><span class="linenos">22</span></a><span class="sd">            it tracks the global minimum.</span>
+</span><span id="ClipEvent-23"><a href="#ClipEvent-23"><span class="linenos">23</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="ClipEvent-24"><a href="#ClipEvent-24"><span class="linenos">24</span></a>
+</span><span id="ClipEvent-25"><a href="#ClipEvent-25"><span class="linenos">25</span></a>    <span class="n">start_sample</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="ClipEvent-26"><a href="#ClipEvent-26"><span class="linenos">26</span></a>    <span class="n">end_sample</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="ClipEvent-27"><a href="#ClipEvent-27"><span class="linenos">27</span></a>    <span class="n">polarity</span><span class="p">:</span> <span class="nb">str</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>One run of samples pinned near the recording's own amplitude extreme.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>start_sample:</strong>  First sample of the run, inclusive.</li>
+<li><strong>end_sample:</strong>  Last sample counted as part of the run, inclusive — including any trailing
+samples tolerated by the leniency window.</li>
+<li><strong>polarity:</strong>  <code>"positive"</code> when the run tracks the file's global maximum, <code>"negative"</code> when
+it tracks the global minimum.</li>
+</ul>
+</div>
+
+
+                            <div id="ClipEvent.__init__" class="classattr">
+                                <div class="attr function">
+            
+        <span class="name">ClipEvent</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">start_sample</span><span class="p">:</span> <span class="nb">int</span>, </span><span class="param"><span class="n">end_sample</span><span class="p">:</span> <span class="nb">int</span>, </span><span class="param"><span class="n">polarity</span><span class="p">:</span> <span class="nb">str</span></span>)</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ClipEvent.__init__"></a>
+    
+    
+
+                            </div>
+                            <div id="ClipEvent.start_sample" class="classattr">
+                                <div class="attr variable">
+            <span class="name">start_sample</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ClipEvent.start_sample"></a>
+    
+    
+
+                            </div>
+                            <div id="ClipEvent.end_sample" class="classattr">
+                                <div class="attr variable">
+            <span class="name">end_sample</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ClipEvent.end_sample"></a>
+    
+    
+
+                            </div>
+                            <div id="ClipEvent.polarity" class="classattr">
+                                <div class="attr variable">
+            <span class="name">polarity</span><span class="annotation">: str</span>
+
+        
+    </div>
+    <a class="headerlink" href="#ClipEvent.polarity"></a>
+    
+    
+
+                            </div>
+                </section>
+                <section id="detect_clip_events">
+                            <input id="detect_clip_events-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">detect_clip_events</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">near_threshold</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">leniency_samples</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">minimum_extreme</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">list</span><span class="p">[</span><span class="n"><a href="#ClipEvent">ClipEvent</a></span><span class="p">]</span>:</span></span>
+
+                <label class="view-source-button" for="detect_clip_events-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#detect_clip_events"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_clip_events-30"><a href="#detect_clip_events-30"><span class="linenos"> 30</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_clip_events</span><span class="p">(</span>
+</span><span id="detect_clip_events-31"><a href="#detect_clip_events-31"><span class="linenos"> 31</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="detect_clip_events-32"><a href="#detect_clip_events-32"><span class="linenos"> 32</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="detect_clip_events-33"><a href="#detect_clip_events-33"><span class="linenos"> 33</span></a>    <span class="n">near_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_clip_events-34"><a href="#detect_clip_events-34"><span class="linenos"> 34</span></a>    <span class="n">leniency_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="detect_clip_events-35"><a href="#detect_clip_events-35"><span class="linenos"> 35</span></a>    <span class="n">minimum_extreme</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_clip_events-36"><a href="#detect_clip_events-36"><span class="linenos"> 36</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ClipEvent</span><span class="p">]:</span>
+</span><span id="detect_clip_events-37"><a href="#detect_clip_events-37"><span class="linenos"> 37</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;ClipDaT: tag runs of samples pinned near the recording&#39;s own amplitude extreme.</span>
+</span><span id="detect_clip_events-38"><a href="#detect_clip_events-38"><span class="linenos"> 38</span></a>
+</span><span id="detect_clip_events-39"><a href="#detect_clip_events-39"><span class="linenos"> 39</span></a><span class="sd">    Hansen, Stauffer &amp; Xia, &quot;Nonlinear waveform distortion: Assessment and detection of clipping on</span>
+</span><span id="detect_clip_events-40"><a href="#detect_clip_events-40"><span class="linenos"> 40</span></a><span class="sd">    speech data and systems&quot;, Speech Communication 134 (2021) 20-31, section 3 (&quot;ClipDaT&quot;), Fig. 9.</span>
+</span><span id="detect_clip_events-41"><a href="#detect_clip_events-41"><span class="linenos"> 41</span></a><span class="sd">    The threshold is the file&#39;s own max/min rather than a fixed full-scale value, because pre-amp</span>
+</span><span id="detect_clip_events-42"><a href="#detect_clip_events-42"><span class="linenos"> 42</span></a><span class="sd">    saturation does not always produce a perfectly flat top — the paper&#39;s Fig. 10b/10c show wavering</span>
+</span><span id="detect_clip_events-43"><a href="#detect_clip_events-43"><span class="linenos"> 43</span></a><span class="sd">    near-clip amplitudes — and a gain change applied after clipping still leaves a run pinned at</span>
+</span><span id="detect_clip_events-44"><a href="#detect_clip_events-44"><span class="linenos"> 44</span></a><span class="sd">    whatever became this file&#39;s own extreme.</span>
+</span><span id="detect_clip_events-45"><a href="#detect_clip_events-45"><span class="linenos"> 45</span></a>
+</span><span id="detect_clip_events-46"><a href="#detect_clip_events-46"><span class="linenos"> 46</span></a><span class="sd">    Algorithm: find the file&#39;s global max and min once; then walk the signal, and whenever a sample</span>
+</span><span id="detect_clip_events-47"><a href="#detect_clip_events-47"><span class="linenos"> 47</span></a><span class="sd">    equals the max or the min, open a clip event and keep extending it while subsequent samples stay</span>
+</span><span id="detect_clip_events-48"><a href="#detect_clip_events-48"><span class="linenos"> 48</span></a><span class="sd">    within ``near_threshold`` of that same extreme, tolerating up to ``leniency_samples`` consecutive</span>
+</span><span id="detect_clip_events-49"><a href="#detect_clip_events-49"><span class="linenos"> 49</span></a><span class="sd">    samples that dip below it before closing the event at the sample where the tolerance was</span>
+</span><span id="detect_clip_events-50"><a href="#detect_clip_events-50"><span class="linenos"> 50</span></a><span class="sd">    exceeded — the paper&#39;s own mechanism for surviving the amplitude wobble Fig. 10 documents,</span>
+</span><span id="detect_clip_events-51"><a href="#detect_clip_events-51"><span class="linenos"> 51</span></a><span class="sd">    rather than fragmenting one clipped burst into many.</span>
+</span><span id="detect_clip_events-52"><a href="#detect_clip_events-52"><span class="linenos"> 52</span></a>
+</span><span id="detect_clip_events-53"><a href="#detect_clip_events-53"><span class="linenos"> 53</span></a><span class="sd">    Args:</span>
+</span><span id="detect_clip_events-54"><a href="#detect_clip_events-54"><span class="linenos"> 54</span></a><span class="sd">        audio: The recording. A multi-channel input is averaged, matching</span>
+</span><span id="detect_clip_events-55"><a href="#detect_clip_events-55"><span class="linenos"> 55</span></a><span class="sd">            ``disruptions.detect_disruptions``&#39;s convention elsewhere in this graph.</span>
+</span><span id="detect_clip_events-56"><a href="#detect_clip_events-56"><span class="linenos"> 56</span></a><span class="sd">        near_threshold: Fraction of the file&#39;s own max/min a sample must reach to still count as</span>
+</span><span id="detect_clip_events-57"><a href="#detect_clip_events-57"><span class="linenos"> 57</span></a><span class="sd">            part of the run. The paper&#39;s own reported constant is ``0.995``.</span>
+</span><span id="detect_clip_events-58"><a href="#detect_clip_events-58"><span class="linenos"> 58</span></a><span class="sd">        leniency_samples: How many consecutive samples may fall below ``near_threshold`` before the</span>
+</span><span id="detect_clip_events-59"><a href="#detect_clip_events-59"><span class="linenos"> 59</span></a><span class="sd">            run closes. The paper&#39;s own reported constant is ``3``.</span>
+</span><span id="detect_clip_events-60"><a href="#detect_clip_events-60"><span class="linenos"> 60</span></a><span class="sd">        minimum_extreme: Below this absolute sample value, the file&#39;s global max/min is treated as</span>
+</span><span id="detect_clip_events-61"><a href="#detect_clip_events-61"><span class="linenos"> 61</span></a><span class="sd">            noise floor rather than a genuine peak, and no event is ever opened. Not part of the</span>
+</span><span id="detect_clip_events-62"><a href="#detect_clip_events-62"><span class="linenos"> 62</span></a><span class="sd">            paper&#39;s algorithm, which assumes a real recording&#39;s peak is meaningfully above zero; a</span>
+</span><span id="detect_clip_events-63"><a href="#detect_clip_events-63"><span class="linenos"> 63</span></a><span class="sd">            near-silent file would otherwise open a spurious event at every sample near 0.0, since</span>
+</span><span id="detect_clip_events-64"><a href="#detect_clip_events-64"><span class="linenos"> 64</span></a><span class="sd">            ``near_threshold`` of an extreme near 0.0 excludes almost nothing.</span>
+</span><span id="detect_clip_events-65"><a href="#detect_clip_events-65"><span class="linenos"> 65</span></a>
+</span><span id="detect_clip_events-66"><a href="#detect_clip_events-66"><span class="linenos"> 66</span></a><span class="sd">    Returns:</span>
+</span><span id="detect_clip_events-67"><a href="#detect_clip_events-67"><span class="linenos"> 67</span></a><span class="sd">        The tagged clip events, in sample order. Empty when the file&#39;s peak amplitude never repeats</span>
+</span><span id="detect_clip_events-68"><a href="#detect_clip_events-68"><span class="linenos"> 68</span></a><span class="sd">        — nothing is &quot;clipped&quot; if the extreme sample value occurs only once — or when the file&#39;s</span>
+</span><span id="detect_clip_events-69"><a href="#detect_clip_events-69"><span class="linenos"> 69</span></a><span class="sd">        peak never clears ``minimum_extreme``.</span>
+</span><span id="detect_clip_events-70"><a href="#detect_clip_events-70"><span class="linenos"> 70</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="detect_clip_events-71"><a href="#detect_clip_events-71"><span class="linenos"> 71</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="detect_clip_events-72"><a href="#detect_clip_events-72"><span class="linenos"> 72</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="detect_clip_events-73"><a href="#detect_clip_events-73"><span class="linenos"> 73</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="detect_clip_events-74"><a href="#detect_clip_events-74"><span class="linenos"> 74</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="detect_clip_events-75"><a href="#detect_clip_events-75"><span class="linenos"> 75</span></a>    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="detect_clip_events-76"><a href="#detect_clip_events-76"><span class="linenos"> 76</span></a>        <span class="k">return</span> <span class="p">[]</span>
+</span><span id="detect_clip_events-77"><a href="#detect_clip_events-77"><span class="linenos"> 77</span></a>    <span class="n">global_max</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+</span><span id="detect_clip_events-78"><a href="#detect_clip_events-78"><span class="linenos"> 78</span></a>    <span class="n">global_min</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
+</span><span id="detect_clip_events-79"><a href="#detect_clip_events-79"><span class="linenos"> 79</span></a>    <span class="c1"># Each extreme is guarded on its own magnitude, not the pair&#39;s: a one-sided clip against a</span>
+</span><span id="detect_clip_events-80"><a href="#detect_clip_events-80"><span class="linenos"> 80</span></a>    <span class="c1"># zero baseline has a genuine positive peak but global_min == 0.0, which every baseline sample</span>
+</span><span id="detect_clip_events-81"><a href="#detect_clip_events-81"><span class="linenos"> 81</span></a>    <span class="c1"># matches exactly — treating 0.0 as a real &quot;negative extreme&quot; would open a clip event on the</span>
+</span><span id="detect_clip_events-82"><a href="#detect_clip_events-82"><span class="linenos"> 82</span></a>    <span class="c1"># entire baseline.</span>
+</span><span id="detect_clip_events-83"><a href="#detect_clip_events-83"><span class="linenos"> 83</span></a>    <span class="n">watch_max</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">global_max</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">minimum_extreme</span>
+</span><span id="detect_clip_events-84"><a href="#detect_clip_events-84"><span class="linenos"> 84</span></a>    <span class="n">watch_min</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">global_min</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">minimum_extreme</span>
+</span><span id="detect_clip_events-85"><a href="#detect_clip_events-85"><span class="linenos"> 85</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">watch_max</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">watch_min</span><span class="p">:</span>
+</span><span id="detect_clip_events-86"><a href="#detect_clip_events-86"><span class="linenos"> 86</span></a>        <span class="k">return</span> <span class="p">[]</span>
+</span><span id="detect_clip_events-87"><a href="#detect_clip_events-87"><span class="linenos"> 87</span></a>
+</span><span id="detect_clip_events-88"><a href="#detect_clip_events-88"><span class="linenos"> 88</span></a>    <span class="n">events</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ClipEvent</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="detect_clip_events-89"><a href="#detect_clip_events-89"><span class="linenos"> 89</span></a>    <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="detect_clip_events-90"><a href="#detect_clip_events-90"><span class="linenos"> 90</span></a>    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">:</span>
+</span><span id="detect_clip_events-91"><a href="#detect_clip_events-91"><span class="linenos"> 91</span></a>        <span class="n">at_max</span> <span class="o">=</span> <span class="n">watch_max</span> <span class="ow">and</span> <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="n">global_max</span>
+</span><span id="detect_clip_events-92"><a href="#detect_clip_events-92"><span class="linenos"> 92</span></a>        <span class="n">at_min</span> <span class="o">=</span> <span class="n">watch_min</span> <span class="ow">and</span> <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="n">global_min</span>
+</span><span id="detect_clip_events-93"><a href="#detect_clip_events-93"><span class="linenos"> 93</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">at_max</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">at_min</span><span class="p">:</span>
+</span><span id="detect_clip_events-94"><a href="#detect_clip_events-94"><span class="linenos"> 94</span></a>            <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-95"><a href="#detect_clip_events-95"><span class="linenos"> 95</span></a>            <span class="k">continue</span>
+</span><span id="detect_clip_events-96"><a href="#detect_clip_events-96"><span class="linenos"> 96</span></a>        <span class="n">polarity</span> <span class="o">=</span> <span class="s2">&quot;positive&quot;</span> <span class="k">if</span> <span class="n">at_max</span> <span class="k">else</span> <span class="s2">&quot;negative&quot;</span>
+</span><span id="detect_clip_events-97"><a href="#detect_clip_events-97"><span class="linenos"> 97</span></a>        <span class="n">extreme</span> <span class="o">=</span> <span class="n">global_max</span> <span class="k">if</span> <span class="n">polarity</span> <span class="o">==</span> <span class="s2">&quot;positive&quot;</span> <span class="k">else</span> <span class="n">global_min</span>
+</span><span id="detect_clip_events-98"><a href="#detect_clip_events-98"><span class="linenos"> 98</span></a>        <span class="n">band</span> <span class="o">=</span> <span class="n">near_threshold</span> <span class="o">*</span> <span class="n">extreme</span>
+</span><span id="detect_clip_events-99"><a href="#detect_clip_events-99"><span class="linenos"> 99</span></a>        <span class="n">below_run</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="detect_clip_events-100"><a href="#detect_clip_events-100"><span class="linenos">100</span></a>        <span class="n">end</span> <span class="o">=</span> <span class="n">i</span>
+</span><span id="detect_clip_events-101"><a href="#detect_clip_events-101"><span class="linenos">101</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-102"><a href="#detect_clip_events-102"><span class="linenos">102</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">:</span>
+</span><span id="detect_clip_events-103"><a href="#detect_clip_events-103"><span class="linenos">103</span></a>            <span class="n">within</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">band</span><span class="p">)</span> <span class="k">if</span> <span class="n">polarity</span> <span class="o">==</span> <span class="s2">&quot;positive&quot;</span> <span class="k">else</span> <span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">band</span><span class="p">)</span>
+</span><span id="detect_clip_events-104"><a href="#detect_clip_events-104"><span class="linenos">104</span></a>            <span class="n">end</span> <span class="o">=</span> <span class="n">j</span>
+</span><span id="detect_clip_events-105"><a href="#detect_clip_events-105"><span class="linenos">105</span></a>            <span class="k">if</span> <span class="n">within</span><span class="p">:</span>
+</span><span id="detect_clip_events-106"><a href="#detect_clip_events-106"><span class="linenos">106</span></a>                <span class="n">below_run</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="detect_clip_events-107"><a href="#detect_clip_events-107"><span class="linenos">107</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="detect_clip_events-108"><a href="#detect_clip_events-108"><span class="linenos">108</span></a>                <span class="n">below_run</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-109"><a href="#detect_clip_events-109"><span class="linenos">109</span></a>                <span class="k">if</span> <span class="n">below_run</span> <span class="o">&gt;</span> <span class="n">leniency_samples</span><span class="p">:</span>
+</span><span id="detect_clip_events-110"><a href="#detect_clip_events-110"><span class="linenos">110</span></a>                    <span class="k">break</span>
+</span><span id="detect_clip_events-111"><a href="#detect_clip_events-111"><span class="linenos">111</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-112"><a href="#detect_clip_events-112"><span class="linenos">112</span></a>        <span class="n">events</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ClipEvent</span><span class="p">(</span><span class="n">start_sample</span><span class="o">=</span><span class="n">i</span><span class="p">,</span> <span class="n">end_sample</span><span class="o">=</span><span class="n">end</span><span class="p">,</span> <span class="n">polarity</span><span class="o">=</span><span class="n">polarity</span><span class="p">))</span>
+</span><span id="detect_clip_events-113"><a href="#detect_clip_events-113"><span class="linenos">113</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="n">end</span> <span class="o">+</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-114"><a href="#detect_clip_events-114"><span class="linenos">114</span></a>    <span class="k">return</span> <span class="n">events</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>ClipDaT: tag runs of samples pinned near the recording's own amplitude extreme.</p>
+
+<p>Hansen, Stauffer &amp; Xia, "Nonlinear waveform distortion: Assessment and detection of clipping on
+speech data and systems", Speech Communication 134 (2021) 20-31, section 3 ("ClipDaT"), Fig. 9.
+The threshold is the file's own max/min rather than a fixed full-scale value, because pre-amp
+saturation does not always produce a perfectly flat top — the paper's Fig. 10b/10c show wavering
+near-clip amplitudes — and a gain change applied after clipping still leaves a run pinned at
+whatever became this file's own extreme.</p>
+
+<p>Algorithm: find the file's global max and min once; then walk the signal, and whenever a sample
+equals the max or the min, open a clip event and keep extending it while subsequent samples stay
+within <code>near_threshold</code> of that same extreme, tolerating up to <code>leniency_samples</code> consecutive
+samples that dip below it before closing the event at the sample where the tolerance was
+exceeded — the paper's own mechanism for surviving the amplitude wobble Fig. 10 documents,
+rather than fragmenting one clipped burst into many.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio:</strong>  The recording. A multi-channel input is averaged, matching
+<code>disruptions.detect_disruptions</code>'s convention elsewhere in this graph.</li>
+<li><strong>near_threshold:</strong>  Fraction of the file's own max/min a sample must reach to still count as
+part of the run. The paper's own reported constant is <code>0.995</code>.</li>
+<li><strong>leniency_samples:</strong>  How many consecutive samples may fall below <code>near_threshold</code> before the
+run closes. The paper's own reported constant is <code>3</code>.</li>
+<li><strong>minimum_extreme:</strong>  Below this absolute sample value, the file's global max/min is treated as
+noise floor rather than a genuine peak, and no event is ever opened. Not part of the
+paper's algorithm, which assumes a real recording's peak is meaningfully above zero; a
+near-silent file would otherwise open a spurious event at every sample near 0.0, since
+<code>near_threshold</code> of an extreme near 0.0 excludes almost nothing.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The tagged clip events, in sample order. Empty when the file's peak amplitude never repeats
+  — nothing is "clipped" if the extreme sample value occurs only once — or when the file's
+  peak never clears <code>minimum_extreme</code>.</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {
@@ -145,7 +372,7 @@
                 script.async = true;
                 script.onload = () => resolve(window.pdocSearch);
                 script.onerror = (e) => reject(e);
-                script.src = "../../search.js";
+                script.src = "../../../search.js";
                 document.getElementsByTagName("head")[0].appendChild(script);
             });
         } catch (e) {
@@ -187,7 +414,7 @@
             }
             for (let result of results.slice(0, 10)) {
                 let doc = result.doc;
-                let url = `../../${doc.modulename.replaceAll(".", "/")}.html`;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
                 if (doc.qualname) {
                     url += `#${doc.qualname}`;
                 }
