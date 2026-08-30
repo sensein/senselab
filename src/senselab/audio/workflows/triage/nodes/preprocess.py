@@ -24,7 +24,13 @@ from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.clipping.api import detect_clip_events
 from senselab.audio.tasks.disruptions.api import detect_disruptions
-from senselab.audio.tasks.envelope.api import dynamic_range_normalize, hilbert_envelope_dbfs, rolling_floor_dbfs
+from senselab.audio.tasks.envelope.api import (
+    ButterworthSmoothing,
+    MedianSmoothing,
+    dynamic_range_normalize,
+    hilbert_envelope_dbfs,
+    rolling_floor_dbfs,
+)
 from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
     extract_objective_quality_features_from_audios,
@@ -306,7 +312,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         }
         activity = _step("envelope", parameters, (sharp_id,), software)
         envelope = hilbert_envelope_dbfs(
-            sharp, lowpass_hz=parameters["lowpass_hz"], filter_order=int(parameters["filter_order"])
+            sharp,
+            smoothing=ButterworthSmoothing(cutoff_hz=parameters["lowpass_hz"], order=int(parameters["filter_order"])),
         )
         floor = rolling_floor_dbfs(
             envelope,
@@ -447,11 +454,17 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         rather than that word's own immediate silence. Carrying the airway window over here would be
         exactly the "fitted for one population, applied to another" mistake this graph's own
         convention refuses elsewhere (see spans.k_db.target's derivation).
+
+        Every envelope here — macro, micro and the final one this measurement stores — is smoothed
+        with :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing` rather than the airway
+        block's :class:`~senselab.audio.tasks.envelope.api.ButterworthSmoothing`: a median cannot
+        overshoot past a transient the way a resonant Butterworth does, which is what a word's onset
+        is to this envelope. ``envelope.lowpass_hz``/``.filter_order`` stay Butterworth-only for the
+        airway block above, which has its own fitted derivation this pass does not carry over.
         """
         parameters: dict[str, Any] = {
-            "macro_lowpass_hz": float(config.require("normalization.macro_lowpass_hz")),
-            "micro_lowpass_hz": float(config.require("normalization.micro_lowpass_hz")),
-            "envelope_filter_order": int(config.require("normalization.envelope_filter_order")),
+            "macro_smoothing_window_s": float(config.require("normalization.macro_smoothing.window_s")),
+            "micro_smoothing_window_s": float(config.require("normalization.micro_smoothing.window_s")),
             "target_dr_db": float(config.require("normalization.target_dr_db")),
             "compression_ratio": float(config.require("normalization.compression_ratio")),
             "macro_target_dbfs": float(config.require("normalization.macro_target_dbfs")),
@@ -459,8 +472,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "gain_filter_order": int(config.require("normalization.gain_filter_order")),
             "floor_dbfs": float(config.require("normalization.floor_dbfs")),
             "ceiling": float(config.require("normalization.ceiling")),
-            "lowpass_hz": float(config.require("envelope.lowpass_hz")),
-            "filter_order": int(config.require("envelope.filter_order")),
+            "envelope_smoothing_window_s": float(config.require("normalization.envelope_smoothing.window_s")),
             "floor_window_s": float(config.require("normalization.floor_window_s")),
             "floor_percentile": float(config.require("normalization.floor_percentile")),
             "floor_eval_grid_s": float(config.require("normalization.floor_eval_grid_s")),
@@ -468,9 +480,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         activity = _step("normalized_envelope", parameters, (sharp_id,), software)
         normalized = dynamic_range_normalize(
             sharp,
-            macro_lowpass_hz=parameters["macro_lowpass_hz"],
-            micro_lowpass_hz=parameters["micro_lowpass_hz"],
-            envelope_filter_order=parameters["envelope_filter_order"],
+            macro_smoothing=MedianSmoothing(window_s=parameters["macro_smoothing_window_s"]),
+            micro_smoothing=MedianSmoothing(window_s=parameters["micro_smoothing_window_s"]),
             target_dr_db=parameters["target_dr_db"],
             compression_ratio=parameters["compression_ratio"],
             macro_target_dbfs=parameters["macro_target_dbfs"],
@@ -494,7 +505,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         store.was_attributed_to(normalized_id, software)
         store.was_derived_from(normalized_id, sharp_id)
         envelope = hilbert_envelope_dbfs(
-            normalized, lowpass_hz=parameters["lowpass_hz"], filter_order=parameters["filter_order"]
+            normalized, smoothing=MedianSmoothing(window_s=parameters["envelope_smoothing_window_s"])
         )
         floor = rolling_floor_dbfs(
             envelope,

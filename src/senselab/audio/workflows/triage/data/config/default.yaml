@@ -389,6 +389,23 @@ derivation: |
   envelope and the target spans built from it are absent, which is the honest state until a campaign
   measures and supplies all ten.
 
+  normalization.macro_smoothing.window_s, .micro_smoothing.window_s, .envelope_smoothing.window_s --
+  audio/tasks/envelope.MedianSmoothing, plugged into hilbert_envelope_dbfs wherever this pipeline
+  builds an envelope for target-span detection. These three replaced the macro/micro cutoffs and the
+  shared Butterworth order after comparing a zero-phase Butterworth (envelope.lowpass_hz's own
+  ButterworthSmoothing) against a median filter on the same word-burst composite used to validate
+  normalization.floor_window_s: the Butterworth showed a clear overshoot at a word's onset -- a dip
+  past the pre-onset baseline that a forward-and-backward filtfilt spreads to both sides of the
+  transient it is reacting to -- because its output is a resonant filter's response and can take a
+  value the signal never did. A median's output is always one of the window's own samples, so it
+  cannot overshoot; that is good enough for what this pipeline needs an envelope for (whether
+  foreground energy is present, not audio quality). envelope.lowpass_hz/.filter_order keep their own
+  fitted derivation above and stay Butterworth-only for the airway block, which this change does not
+  touch. gain_smooth_hz/.gain_filter_order also stay Butterworth: they smooth a gain multiplier
+  applied to raw samples, where the failure mode is a discontinuity, not an onset overshoot, so the
+  same argument for switching does not apply there. All three window_s keys are null; nobody has
+  fit a window size to a corpus, only compared the two strategies' qualitative behavior on one file.
+
 resample:
   target_hz: 16000
 
@@ -423,9 +440,12 @@ clipping:
   merge_gap_ms: null
 
 normalization:
-  macro_lowpass_hz: null
-  micro_lowpass_hz: null
-  envelope_filter_order: null
+  macro_smoothing:
+    window_s: null
+  micro_smoothing:
+    window_s: null
+  envelope_smoothing:
+    window_s: null
   target_dr_db: null
   compression_ratio: null
   macro_target_dbfs: null
