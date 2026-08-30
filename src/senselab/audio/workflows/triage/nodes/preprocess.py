@@ -37,7 +37,13 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
 )
 from senselab.audio.tasks.gammatone.api import gammatone_filterbank
 from senselab.audio.tasks.health_acoustics.api import detect_health_acoustic_events
-from senselab.audio.tasks.health_acoustics.hear import HEAR_MODEL_ID, HEAR_REVISION
+from senselab.audio.tasks.health_acoustics.hear import (
+    HEAR_MODEL_ID,
+    HEAR_REVISION,
+    HEAR_WINDOW_SECONDS,
+    hear_window_extent,
+    span_hear_input,
+)
 from senselab.audio.tasks.phonation.api import (
     f0_track,
     formant_track,
@@ -58,7 +64,7 @@ from senselab.audio.workflows.triage.nodes.common import (
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import HFModel
-from senselab.utils.prov_store import ProvStore
+from senselab.utils.prov_store import Entity, ProvStore
 
 NODE = "PREPROCESS"
 CRISPERWHISPER_ID = "nyralabs/CrisperWhisper2.0_turbo"
@@ -527,7 +533,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives["normalized_envelope"] = entity_id
         view.append(normalized_id)
         view.append(entity_id)
-        state.update(normalized_id=normalized_id, normalized_envelope=envelope, normalized_floor=floor)
+        state.update(
+            normalized_id=normalized_id,
+            normalized_audio=normalized,
+            normalized_envelope=envelope,
+            normalized_floor=floor,
+        )
 
     def _target_spans() -> None:
         """Foreground-energy candidate spans over the normalized envelope, flagged where they overlap a clip.
@@ -596,6 +607,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             span_ids.append(span_id)
         derivatives["target_spans"] = span_ids
         view.extend(span_ids)
+        state["target_span_ids"] = span_ids
 
     def _scores(name: str, agent_id: str, activity_step: str, run: Callable[[], list[dict[str, Any]]]) -> None:
         """Run one classifier and store its verbatim windows; no threshold is read here (V3)."""
@@ -803,18 +815,18 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         derivatives["disruptions_file"] = entity_id
         view.append(entity_id)
 
-    def _squim() -> None:
-        """One objective-head measure assertion per envelope span; refusals recorded, never padded."""
-        if not state.get("span_ids"):
+    def _squim_for(name: str, span_ids: list[str]) -> None:
+        """One objective-head measure assertion per span in ``span_ids``; refusals recorded, never padded."""
+        if not span_ids:
             raise LookupError("spans are absent")
         agent = store.agent(
             agent_type="model",
             model_id="torchaudio SQUIM_OBJECTIVE",
             unresolved_reason=f"bundled torchaudio weights, version {_dist_version('torchaudio')}",
         )
-        activity = _step("squim", {}, tuple(state["span_ids"]), agent)
+        activity = _step(name, {}, tuple(span_ids), agent)
         assertion_ids: list[str] = []
-        for span_id in state["span_ids"]:
+        for span_id in span_ids:
             span = store.get_entity(span_id)
             start, end = span.extent or (0.0, 0.0)
             segment = Audio(
@@ -825,20 +837,167 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 [scores] = extract_objective_quality_features_from_audios([segment])
                 attributes: dict[str, Any] = {
                     "verb": "measure",
-                    "name": "squim",
+                    "name": name,
                     "stoi": float(scores["stoi"]),
                     "pesq": float(scores["pesq"]),
                     "si_sdr": float(scores["si_sdr"]),
                 }
             except Exception as err:  # noqa: BLE001 — a span SQUIM refuses is unmeasured, not padded
-                attributes = {"verb": "measure", "name": "squim", "unmeasured": type(err).__name__}
+                attributes = {"verb": "measure", "name": name, "unmeasured": type(err).__name__}
             assertion_id = store.entity(prov_type="assertion", extent=span.extent, attributes=attributes)
             store.was_generated_by(assertion_id, activity)
             store.was_attributed_to(assertion_id, agent)
             store.was_derived_from(assertion_id, span_id)
             assertion_ids.append(assertion_id)
-        derivatives["squim"] = assertion_ids
+        derivatives[name] = assertion_ids
         view.extend(assertion_ids)
+
+    def _squim() -> None:
+        """SQUIM over the airway-K envelope spans."""
+        _squim_for("squim", state.get("span_ids") or [])
+
+    def _target_span_squim() -> None:
+        """SQUIM over the target spans, on the plain signal.
+
+        Measures recording quality, not the dynamically-normalized gain this pass applied to find
+        the spans in the first place.
+        """
+        _squim_for("target_span_squim", state.get("target_span_ids") or [])
+
+    def _mark_unmeasured(activity: str, agent_id: str, span: Entity, name: str, reason: str) -> str:
+        """Record one span as attempted but unmeasured, so its absence is a fact, not a silence."""
+        assertion_id = store.entity(
+            prov_type="assertion",
+            extent=span.extent,
+            attributes={"verb": "measure", "name": name, "unmeasured": reason},
+        )
+        store.was_generated_by(assertion_id, activity)
+        store.was_attributed_to(assertion_id, agent_id)
+        store.was_derived_from(assertion_id, span.id)
+        return assertion_id
+
+    def _target_span_hear() -> None:
+        """Per-span HeAR re-evaluation of the target spans, raw scores only — no labelling decision.
+
+        Reuses the same per-span windowing AIRWAY uses for its own candidates (a short span is
+        centred in a silent 2 s buffer; a long span is passed through and HeAR's native windows are
+        placed back on the recording's own timeline) for the reason AIRWAY's own docstring already
+        gives: a whole-file HeAR window is the wrong instrument for an isolated candidate. Runs over
+        the NORMALIZED signal, the one target spans were proposed over, so a quiet event this pass
+        boosted to be detectable is not handed back to the classifier at its original level.
+        """
+        span_ids = state.get("target_span_ids") or []
+        if not span_ids:
+            raise LookupError("target spans are absent")
+        normalized_audio = state["normalized_audio"]
+        agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
+        activity = _step("target_span_hear", {}, tuple(span_ids), agent)
+        default_threshold = float(config.require("windows.hear.default_threshold"))
+        label_thresholds = {
+            str(label): float(value) for label, value in (config.get("windows.hear.label_thresholds") or {}).items()
+        }
+        result_ids: list[str] = []
+        for span_id in span_ids:
+            span = store.get_entity(span_id)
+            extent = span.extent or (0.0, 0.0)
+            try:
+                input_audio = span_hear_input(normalized_audio, extent)
+                raw_windows = detect_health_acoustic_events([input_audio], hop_length=HEAR_WINDOW_SECONDS, top_k=None)[
+                    0
+                ]
+            except Exception as err:  # noqa: BLE001 — a span HeAR refuses is unmeasured, not padded
+                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_hear", type(err).__name__))
+                continue
+            if not raw_windows:
+                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_hear", "no_native_window"))
+                continue
+            for raw_window in raw_windows:
+                members = _confident_labels(raw_window, default_threshold, label_thresholds)
+                raw_scores = _raw_label_scores(raw_window)
+                window_extent = hear_window_extent(extent, raw_window)
+                window_id = store.entity(
+                    prov_type="measurement",
+                    extent=window_extent,
+                    attributes={
+                        "name": "target_span_hear",
+                        "classifier": "hear",
+                        "signal": "normalized",
+                        "span_id": span_id,
+                        "labels": list(members),
+                        "scores": members,
+                        "raw_scores": raw_scores,
+                        "input_window_s": HEAR_WINDOW_SECONDS,
+                        "isolated_span": True,
+                    },
+                )
+                store.was_generated_by(window_id, activity)
+                store.was_attributed_to(window_id, agent)
+                store.was_derived_from(window_id, span_id)
+                result_ids.append(window_id)
+        derivatives["target_span_hear"] = result_ids
+        view.extend(result_ids)
+
+    def _target_span_yamnet() -> None:
+        """Per-span YAMNet over the target spans, raw scores only — no labelling decision.
+
+        Unlike HeAR, YAMNet has no fixed-window constraint (its own native ~0.96 s grid runs over
+        whatever length it is given), so a span is classified directly rather than buffered.
+        """
+        span_ids = state.get("target_span_ids") or []
+        if not span_ids:
+            raise LookupError("target spans are absent")
+        normalized_audio = state["normalized_audio"]
+        agent = store.agent(
+            agent_type="model",
+            model_id=YAMNET_MODEL_URI,
+            unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
+        )
+        activity = _step("target_span_yamnet", {}, tuple(span_ids), agent)
+        default_threshold = float(config.require("windows.yamnet.default_threshold"))
+        label_thresholds = {
+            str(label): float(value) for label, value in (config.get("windows.yamnet.label_thresholds") or {}).items()
+        }
+        top_k = int(config.require("yamnet.top_k"))
+        result_ids: list[str] = []
+        for span_id in span_ids:
+            span = store.get_entity(span_id)
+            start, end = span.extent or (0.0, 0.0)
+            segment = Audio(
+                waveform=normalized_audio.waveform[:, int(start * target_hz) : int(end * target_hz)],
+                sampling_rate=target_hz,
+            )
+            try:
+                raw_windows = classify_audios([segment], model="yamnet", top_k=top_k)[0]
+            except Exception as err:  # noqa: BLE001 — a span YAMNet refuses is unmeasured, not padded
+                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_yamnet", type(err).__name__))
+                continue
+            if not raw_windows:
+                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_yamnet", "no_native_window"))
+                continue
+            for raw_window in raw_windows:
+                members = _confident_labels(raw_window, default_threshold, label_thresholds)
+                raw_scores = _raw_label_scores(raw_window)
+                window_extent = (start + float(raw_window["start"]), start + float(raw_window["end"]))
+                window_id = store.entity(
+                    prov_type="measurement",
+                    extent=window_extent,
+                    attributes={
+                        "name": "target_span_yamnet",
+                        "classifier": "yamnet",
+                        "signal": "normalized",
+                        "span_id": span_id,
+                        "labels": list(members),
+                        "scores": members,
+                        "raw_scores": raw_scores,
+                        "isolated_span": True,
+                    },
+                )
+                store.was_generated_by(window_id, activity)
+                store.was_attributed_to(window_id, agent)
+                store.was_derived_from(window_id, span_id)
+                result_ids.append(window_id)
+        derivatives["target_span_yamnet"] = result_ids
+        view.extend(result_ids)
 
     def _asr(
         name: str,
@@ -1171,6 +1330,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("phonation_spans", _phonation_spans),
         ("normalized_envelope", _normalized_envelope),
         ("target_spans", _target_spans),
+        ("target_span_squim", _target_span_squim),
+        ("target_span_hear", _target_span_hear),
+        ("target_span_yamnet", _target_span_yamnet),
         ("spectrogram_wideband", lambda: _spectrogram("spectrogram_wideband", "spectrogram.wideband_window_ms")),
         (
             "spectrogram_narrowband",

@@ -505,6 +505,94 @@ class TestClipAndTargetSpans:
         assert clean, "the untouched burst elsewhere must not be flagged"
 
 
+class TestTargetSpanQuality:
+    """Per-target-span SQUIM, HeAR and YAMNet: raw measurements, no labelling decision."""
+
+    def test_squim_measures_one_assertion_per_target_span(
+        self,
+        store: ProvStore,
+        target_span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SQUIM's objective scores land on the plain signal, one assertion per target span."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
+        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
+        measured = find_measurements(store, "target_span_squim")
+        assertions = [e for e in live_entities(store, "assertion") if e.attributes.get("name") == "target_span_squim"]
+        assert targets
+        assert len(assertions) == len(targets)
+        assert not measured, "SQUIM writes assertions, not measurements"
+        assert assertions[0].attributes["stoi"] == pytest.approx(0.91)
+
+    def test_hear_measures_the_normalized_signal_with_raw_and_thresholded_scores(
+        self,
+        store: ProvStore,
+        target_span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A target span's HeAR window carries the full raw distribution, not only what cleared."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch, hear=[window(0.0, 2.0, {"Cough": 0.9, "Breathe": 0.2})])
+        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
+        windows = find_measurements(store, "target_span_hear")
+        assert windows
+        assert windows[0].attributes["signal"] == "normalized"
+        assert windows[0].attributes["labels"] == ["Cough"]
+        assert set(windows[0].attributes["raw_scores"]) == {"Cough", "Breathe"}
+        assert windows[0].attributes["span_id"] in {
+            e.id for e in live_entities(store, "span") if e.attributes.get("family") == "target"
+        }
+
+    def test_yamnet_windows_a_target_span_directly_with_no_buffering(
+        self,
+        store: ProvStore,
+        target_span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Unlike HeAR, YAMNet's window sits inside the span's own extent, not a 2 s buffer."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.9})])
+        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
+        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
+        windows = find_measurements(store, "target_span_yamnet")
+        assert windows
+        assert windows[0].attributes["signal"] == "normalized"
+        assert windows[0].attributes["labels"] == ["Speech"]
+        span_start = min(e.extent[0] for e in targets if e.extent is not None)
+        assert windows[0].extent is not None
+        assert windows[0].extent[0] == pytest.approx(span_start, abs=1e-3)
+
+    def test_a_span_yamnet_never_scores_never_labels_falls_back_to_unmeasured(
+        self,
+        store: ProvStore,
+        target_span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An empty native-window result is a recorded fact, not a silently missing span."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch, yamnet=[])
+        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
+        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
+        unmeasured = [
+            e
+            for e in live_entities(store, "assertion")
+            if e.attributes.get("name") == "target_span_yamnet" and e.attributes.get("unmeasured")
+        ]
+        assert targets
+        assert len(unmeasured) == len(targets)
+        assert unmeasured[0].attributes["unmeasured"] == "no_native_window"
+
+
 class TestThePackagedConfigStillRunsEveryClassifier:
     """V3's split, for all three classifiers: the model runs, the threshold fold is what goes absent."""
 
@@ -544,6 +632,9 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "clip_spans",
             "normalized_envelope",
             "target_spans",
+            "target_span_squim",
+            "target_span_hear",
+            "target_span_yamnet",
         }
 
     def test_the_shipped_hops_are_non_overlapping(

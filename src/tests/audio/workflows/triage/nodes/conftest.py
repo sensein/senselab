@@ -134,6 +134,50 @@ def target_spans_config(tmp_path: Path) -> TriageConfig:
     return load_triage_config(override)
 
 
+@pytest.fixture
+def target_span_quality_config(tmp_path: Path) -> TriageConfig:
+    """``target_spans_config`` plus the HeAR/YAMNet thresholds the per-span quality blocks read.
+
+    A separate fixture rather than folding these into ``target_spans_config``: most target-span
+    tests have no reason to exercise HeAR/YAMNet at all, and stubbing models they never call would
+    only obscure what a given test is actually about.
+    """
+    override = tmp_path / "target_span_quality.yaml"
+    override.write_text(
+        "clipping:\n"
+        "  min_duration_ms: 0.5\n"
+        "  merge_gap_ms: 50.0\n"
+        "normalization:\n"
+        "  macro_smoothing:\n"
+        "    window_s: 0.5\n"
+        "  micro_smoothing:\n"
+        "    window_s: 0.05\n"
+        "  envelope_smoothing:\n"
+        "    window_s: 0.025\n"
+        "  target_dr_db: 15.0\n"
+        "  compression_ratio: 2.0\n"
+        "  macro_target_dbfs: -6.0\n"
+        "  gain_smooth_hz: 10.0\n"
+        "  gain_filter_order: 1\n"
+        "  floor_dbfs: -100.0\n"
+        "  ceiling: 0.95\n"
+        "  floor_window_s: 0.3\n"
+        "  floor_percentile: 10.0\n"
+        "  floor_eval_grid_s: 0.01\n"
+        "spans:\n"
+        "  k_db:\n"
+        "    target: 12.0\n"
+        "windows:\n"
+        "  hear:\n"
+        "    default_threshold: 0.5\n"
+        "    label_thresholds: {}\n"
+        "  yamnet:\n"
+        "    default_threshold: 0.5\n"
+        "    label_thresholds: {Speech: 0.4}\n"
+    )
+    return load_triage_config(override)
+
+
 def window(start: float, end: float, scores: dict[str, float]) -> dict[str, Any]:
     """One classifier window in the shape ``label_scores`` reads."""
     ordered = sorted(scores.items(), key=lambda pair: -pair[1])
