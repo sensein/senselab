@@ -16,7 +16,11 @@ disorders. Concretely, a file should be flagged when:
 2. **it contains other speakers within target-speaker-specific spans**;
 3. **the spoken speech contains PII not included in the task itself.**
 
-> SG: this could include foreground and background acoustic events (people talking, other sound sources) 
+Goal 2 is no longer airway/speaker-specific by construction: PREPROCESS's `target_spans` block (see
+node 2 below) generalizes span detection to any duration carrying foreground acoustic energy — other
+people talking, other sound sources, not only the target speaker — and `target_span_hear`/
+`target_span_yamnet` attach classifier evidence to each one. Verified against
+`nodes/preprocess.py`'s `_target_spans`/`_target_span_hear`/`_target_span_yamnet`.
 
 The graph's job is to sort every file into exactly one of three outcomes: **pass** it through (needs
 no further review), **flag** it (the workflow cannot determine cleanly, a person should look), or
@@ -104,105 +108,43 @@ Each block below is independent (one try/except each), with its own config:
 |---|---|
 | resample + downmix | `resample.target_hz` |
 | pre-emphasis | `preemphasis.enabled`, `preemphasis.coefficient` |
-| energy envelope + floor | `envelope.lowpass_hz`, `envelope.filter_order`, `floor.window_s`, `floor.percentile`, `floor.eval_grid_s` |
-| envelope-peak span proposals | `spans.k_db.airway`, `spans.onset_drop_db`, `spans.offset_fraction`, `spans.hangover_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` |
-| YAMNet / AST / HeAR window scores | `yamnet.top_k`; `windows.ast.win_length_s`/`hop_s`/`top_k`; `windows.hear.hop_s` |
+| energy envelope + floor (airway signal) | `envelope.lowpass_hz`, `envelope.filter_order` (`ButterworthSmoothing`, fitted — see this file's own derivation), `floor.window_s`, `floor.percentile`, `floor.eval_grid_s` |
+| envelope-peak span proposals (`family=None`, airway K) | `spans.k_db.airway`, `spans.onset_drop_db`, `spans.offset_fraction`, `spans.hangover_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` |
+| clip-event spans (`family="clip"`), ClipDaT over the *original* recording | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme`, `clipping.min_duration_ms`, `clipping.merge_gap_ms` — the last two null in the packaged config |
+| dynamically-normalized signal + its own envelope/floor | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s`, `.envelope_smoothing.window_s` (all `MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset — see `envelope/api.py`'s `EnvelopeSmoothing` docstrings), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smooth_hz` (still `ButterworthSmoothing` — smooths a gain multiplier, not an envelope), `.gain_filter_order`, `.floor_dbfs`, `.ceiling`, `.floor_window_s`, `.floor_percentile`, `.floor_eval_grid_s` — **every key here is null in the packaged config** |
+| target-span proposals (`family="target"`, general foreground-energy K), flagged `contains_clip` on overlap with a clip span | `spans.k_db.target` (null) plus the shared `spans.*` keys above |
+| per-target-span quality: `target_span_squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
+| per-target-span quality: `target_span_hear` (on the *normalized* signal, AIRWAY's own per-span buffer/native-window split, raw scores only) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
+| per-target-span quality: `target_span_yamnet` (on the *normalized* signal, no buffering — YAMNet has no fixed-window constraint) | `windows.yamnet.default_threshold`, `windows.yamnet.label_thresholds`, `yamnet.top_k` |
+| YAMNet / AST / HeAR window scores | `yamnet.top_k`; `windows.ast.win_length_s`/`hop_s`/`top_k`; `windows.hear.hop_s` — verified against `default.yaml`: `windows.ast.win_length_s`/`hop_s` are AST's owner-directed 10.24 s window, `windows.hear.hop_s` is HeAR's fixed 2 s window, both already model-native |
 | per-window label membership | `windows.{yamnet,ast,hear}.default_threshold`, `windows.{yamnet,ast,hear}.label_thresholds` — **all six null in the packaged config**, so every window's label set is empty until an override supplies at least one |
 | silence | `yamnet.silence_threshold` |
 | **file-level quality: `level`** (peak/RMS dBFS, LUFS) | none — plain measurement |
 | **file-level quality: `disruptions_file`** (clipping, dropouts, discontinuities), on the *original* recording | `disruptions.clip_headroom`, `disruptions.min_clip_run`, `disruptions.min_dropout_ms`, `disruptions.discontinuity_local_factor`, `disruptions.discontinuity_window_ms` |
-| **per-envelope-span quality: `squim`** (STOI/PESQ/SI-SDR) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
+| **per-envelope-span quality: `squim`** (STOI/PESQ/SI-SDR, airway spans) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
 | both ASR recognizers' own transcripts | none decision-relevant |
-| consensus transcript (`fuse_consensus_words`) + `word`/`event` entities | `words.onomatopoeic_tokens` (null; only already-bracketed tokens become non-word `event`s while it is) |
+| consensus transcript (`fuse_consensus_words`) + `word`/`event` entities | `words.onomatopoeic_tokens` (null). A recognizer that brackets a non-lexical event (e.g. CrisperWhisper's `[COUGH]`) and one that transcribes it as a plain word (Qwen's `cough`) already vote as one word — `_normalize_word` strips brackets as punctuation — and the fused text now deterministically keeps the bracketed form regardless of which recognizer the fold visits first (`speech_to_text_ensemble/api.py`'s `_is_bracketed_token`); only a wholly-unbracketed reading still depends on `words.onomatopoeic_tokens` to become an `event` |
 | phonation spans (sustained/glide) | `voice.f0_range_hz` plus eight `phonation_spans.*` criterion keys, six of them null |
 | spectrograms (wideband/narrowband), gammatone | fixed window/hop keys, none decision-relevant |
 
-> SG: for preprocessing the windows/hops should be the defaults of these models. downstream branches can rerun some of these after span refinement. . also onomatopoeic tokens can't be evaluated here. crisper-whisper puts them in brackets, qwen-asr may not. so concensus transcript should rely on crisper-whisper when fusing [cough] with cough and retain the brackets. preprocess could simply generate continuity signals. 
+Dynamic-range normalization is `envelope.dynamic_range_normalize` — a slow (`macro_smoothing`) and a
+fast (`micro_smoothing`) envelope of the same signal via `hilbert_envelope_dbfs`, their difference
+compressed toward `target_dr_db`, macro-leveled toward `macro_target_dbfs`, smoothed once more
+(`gain_smooth_hz`) and applied to the original waveform with a `ceiling` safety clamp. Clip detection
+(`clipping.*`, ClipDaT) runs on the *original* recording before this, on the stated assumption that
+gain was fixed during recording — normalization only redistributes level, so a genuinely clipped
+sample stays clipped through it rather than being smoothed away.
 
-
-> SG: add new preprocess step for span detection after other derivatives are computed. this step would generate candidate spans based on computed derivatives. envelop spans are not just about airway they can be applied to any duration over which foreground acoustic energy exists. similar to envelope, phonation spans should be based on detecting spectral continuity whether voiced or unvoiced over certain durations. there could have been a loud sound (someone fiddling with microphone, external sound source, etc), so span detection should be a bit more dynamic over audio recordings. this should include things like clipped spans (implement a task based on the pseudo-algorithm in this paper: https://www.sciencedirect.com/science/article/pii/S0167639321000832) and then have a threshold to group clip spans, or other larger energy spans. the following code is attempting to do dynamic normalization. review the code and reuse hilbert envelope function. note that the original audio may have clipping, so clip detection should be used prior to this. (assume gain was fixed during recording). compute envelopes based on the dynamically normalized audio, and determine spans based on continuity, RMS, and ASR and also keeping in mind we are looking at vocal tasks (breathing, speaking, phonation). clipped spans are a separate set of spans from the target spans. for any target span that contains a clip add a flag that this is a clipped span. then compute per span quality metrics, HeAR, yamnet. for hear with spans centered in a 2s silence when less than 2s, and adjusted hops when greater than 2s.
-
-```python
-import numpy as np
-from scipy.signal import filtfilt, butter
-
-def butter_lowpass_coefficients(cutoff_hz, sample_rate, order=2):
-    """Generates coefficients for a lowpass filter."""
-    nyquist = 0.5 * sample_rate
-    normal_cutoff = cutoff_hz / nyquist
-    b, a = butter(order, normal_cutoff, btype='low', analog=False)
-    return b, a
-
-def smooth_envelope(signal, cutoff_hz, sample_rate):
-    """
-    Extracts a perfectly smooth, continuous envelope using zero-phase filtering.
-    Filtfilt processes forward and backward, eliminating phase distortion and clicks.
-    """
-    rectified = np.abs(signal)
-    b, a = butter_lowpass_coefficients(cutoff_hz, sample_rate, order=2)
-    # filtfilt ensures zero-phase delay and smooth transitions at boundaries
-    envelope = filtfilt(b, a, rectified)
-    # Clip to a tiny floor to prevent log10 division-by-zero errors
-    return np.maximum(envelope, 1e-5)
-
-def uniform_dynamic_range_normalizer(audio_signal, sample_rate, target_dr_db=15.0, compression_ratio=2.0):
-    """
-    Normalizes audio to a uniform dynamic range independent of local macro loudness.
-    Guarantees no discontinuities and minimal harmonic distortion.
-    """
-    # 1. Extract the Macro Envelope (The overall scene loudness context: very slow)
-    # A 0.2 Hz cutoff corresponds roughly to a 2.5-second smoothing window
-    macro_env = smooth_envelope(audio_signal, cutoff_hz=0.2, sample_rate=sample_rate)
-    
-    # 2. Extract the Micro Envelope (The actual musical/speech dynamics: faster)
-    # A 20 Hz cutoff corresponds to a clean ~25ms tracking window
-    micro_env = smooth_envelope(audio_signal, cutoff_hz=20.0, sample_rate=sample_rate)
-    
-    # 3. Calculate local dynamic range profile (independent of absolute volume)
-    # This measures how far individual notes/words deviate from the local macro average
-    local_dr_db = 20 * np.log10(micro_env / macro_env)
-    
-    # 4. Compute target gain curve in the log (dB) domain
-    # If the local dynamics exceed our target dynamic range range, compress them.
-    # If they fall significantly below, apply soft upward expansion/compression.
-    gain_db = np.zeros_like(local_dr_db)
-    
-    # Downward compression mask for transients pushing past target range
-    over_target = local_dr_db > 0
-    gain_db[over_target] = - (local_dr_db[over_target]) * (1.0 - 1.0 / compression_ratio)
-    
-    # Upward compression mask for soft sounds drifting too far below the macro context
-    under_target = local_dr_db < -target_dr_db
-    gain_db[under_target] = (-target_dr_db - local_dr_db[under_target]) * (1.0 - 1.0 / compression_ratio)
-    
-    # 5. Convert gain back to linear scale
-    linear_gain = 10 ** (gain_db / 20)
-    
-    # 6. Apply macro-level leveling
-    # This brings the soft scenes and loud scenes to a uniform baseline peak envelope
-    macro_target_linear = 0.5  # Target reference level for macro peaks
-    normalization_gain = macro_target_linear / macro_env
-    
-    # 7. Combine gains and smooth the final gain curve one last time to ensure absolute continuity
-    combined_gain = linear_gain * normalization_gain
-    b_gain, a_gain = butter_lowpass_coefficients(cutoff_hz=10.0, sample_rate=sample_rate, order=1)
-    smooth_final_gain = filtfilt(b_gain, a_gain, combined_gain)
-    
-    # 8. Apply the continuous gain curve directly to the original waveform
-    processed_audio = audio_signal * smooth_final_gain
-    
-    # Final safety ceiling to guarantee no clipping (+/- 1.0 peak)
-    max_peak = np.max(np.abs(processed_audio))
-    if max_peak > 0.95:
-        processed_audio = (processed_audio / max_peak) * 0.95
-        
-    return processed_audio
-```
+Still open, not implemented: the idea that PREPROCESS "could simply generate continuity signals"
+instead of relying on consensus-transcript text for onomatopoeic detection — a larger architectural
+question than the bracket-preservation fix above, and not pursued here.
 
 **Serves the stated goals:** this is where **all** the raw evidence for goal 1 (`level`,
-`disruptions_file`, per-span `squim`) is measured — but PREPROCESS itself makes no judgment on any of
-it. It is where goal 3's substrate (the consensus transcript SPEECH will scan) is produced. It plays
-no role in goal 2.
+`disruptions_file`, per-span `squim`/`target_span_squim`) is measured — but PREPROCESS itself makes no
+judgment on any of it. It is where goal 3's substrate (the consensus transcript SPEECH will scan) is
+produced. Goal 2 is now served directly here too: `target_spans`, `clip_spans` and their
+`target_span_hear`/`target_span_yamnet` evidence are the general foreground-acoustic-event mechanism
+referenced above — still unjudged (PREPROCESS decides nothing), but no longer airway-only.
 
 ### 3. TAXONOMY — fold PREPROCESS's evidence into speech/airway/voice presence
 
