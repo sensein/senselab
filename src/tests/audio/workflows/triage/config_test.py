@@ -147,7 +147,7 @@ class TestOverridesMayExtendADataMap:
         override = tmp_path / "o.yaml"
         override.write_text("spans:\n  k_db:\n    speech: 12.0\n")
         cfg = load_triage_config(override)
-        assert cfg.require("spans.k_db") == {"airway": 18.0, "speech": 12.0}
+        assert cfg.require("spans.k_db") == {"airway": 18.0, "target": None, "speech": 12.0}
 
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""

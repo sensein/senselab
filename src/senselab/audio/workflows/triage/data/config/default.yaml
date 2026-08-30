@@ -347,6 +347,37 @@ derivation: |
   and carries identical claims, with the blocks back on the canvas; it is the better choice for a
   viewer that scrolls rather than pages.
 
+  spans.k_db.target -- the general "foreground acoustic energy present" span, distinct from
+  spans.k_db.airway: airway's 18.0 dB was fitted against airway events specifically (53-57 dB above
+  floor per the span-K derivation above) and does not transfer to an arbitrary vocal-task span --
+  breathing, speaking, phonation -- which the target pass must also admit. Null until measured on
+  this broader event set; using airway's own fitted number for a different population would be
+  carrying a measurement past what it measured.
+
+  clipping.* -- audio/tasks/clipping, ClipDaT (Hansen, Stauffer & Xia, Speech Communication 134
+  (2021) 20-31, section 3). near_threshold 0.995 and leniency_samples 3 are the paper's own two
+  reported constants, not fitted here -- the algorithm has no others. minimum_extreme 1e-4 is not
+  from the paper: it guards a degenerate case the paper does not address, where the file's global
+  max or min sits at or near exact zero (a one-sided clip against a silent baseline, or true
+  silence) and the 99.5% band of that near-zero value excludes almost nothing, opening a spurious
+  event across the whole baseline. A numerical guard against a divide-by-near-zero class of input,
+  not a perceptual threshold. clipping.min_duration_ms and clipping.merge_gap_ms are null: the
+  detector's own leniency mechanism means a lone sample at the file's extreme always opens a short
+  event (measured: this is a real, load-bearing property of the algorithm, not a bug in this
+  implementation of it -- see clipping_test.py), so a caller must filter trivially short events and
+  merge nearby ones before treating a clip event as a genuine plateau, exactly as spans.min_duration_ms
+  and spans.min_separation_ms already do for envelope-peak spans. Neither has a corpus behind it yet.
+
+  normalization.* -- audio/tasks/envelope.dynamic_range_normalize. Every key is null. The function's
+  own reference implementation (a pasted sketch reviewed and reworked to reuse hilbert_envelope_dbfs
+  for both its macro and micro envelopes instead of a bespoke rectify-and-filter) carried illustrative
+  literals -- 0.2 Hz / 20 Hz cutoffs, 15 dB target range, a compression ratio of 2, a -6 dBFS
+  reference, a 10 Hz gain-smoothing cutoff, a 0.95 ceiling -- and none of them is a measurement: they
+  are the shape of a reasonable algorithm, not a fitted one. Carrying them over as defaults here would
+  be exactly the trap this file exists to avoid. While every key is null, PREPROCESS's normalized
+  envelope and the target spans built from it are absent, which is the honest state until a campaign
+  measures and supplies all ten.
+
 resample:
   target_hz: 16000
 
@@ -371,6 +402,26 @@ spans:
   min_separation_ms: 150
   k_db:
     airway: 18.0
+    target: null
+
+clipping:
+  near_threshold: 0.995
+  leniency_samples: 3
+  minimum_extreme: 0.0001
+  min_duration_ms: null
+  merge_gap_ms: null
+
+normalization:
+  macro_lowpass_hz: null
+  micro_lowpass_hz: null
+  envelope_filter_order: null
+  target_dr_db: null
+  compression_ratio: null
+  macro_target_dbfs: null
+  gain_smooth_hz: null
+  gain_filter_order: null
+  floor_dbfs: null
+  ceiling: null
 
 spectrogram:
   wideband_window_ms: 5.0
