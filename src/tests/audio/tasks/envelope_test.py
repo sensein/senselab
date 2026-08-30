@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.envelope import hilbert_envelope_dbfs, rolling_floor_dbfs
+from senselab.audio.tasks.envelope import dynamic_range_normalize, hilbert_envelope_dbfs, rolling_floor_dbfs
 
 SR = 16000
 
@@ -135,3 +135,79 @@ class TestTheFloorOverAnUnmeasurableEnvelope:
             warnings.simplefilter("error")
             fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
         assert np.isnan(fl).all()
+
+
+def _raw_tone(seconds: float, amp: float, freq: float = 200.0) -> np.ndarray:
+    """A tone as a plain array, for building multi-segment or multi-channel fixtures by hand."""
+    t = np.arange(int(seconds * SR)) / SR
+    return amp * np.sin(2 * np.pi * freq * t)
+
+
+def _normalize(audio: Audio) -> Audio:
+    """Run dynamic_range_normalize with the reference implementation's own literal values."""
+    return dynamic_range_normalize(
+        audio,
+        macro_lowpass_hz=0.2,
+        micro_lowpass_hz=20.0,
+        envelope_filter_order=2,
+        target_dr_db=15.0,
+        compression_ratio=2.0,
+        macro_target_dbfs=-6.0,
+        gain_smooth_hz=10.0,
+        gain_filter_order=1,
+        floor_dbfs=-100.0,
+        ceiling=0.95,
+    )
+
+
+def _rms_dbfs(waveform: np.ndarray) -> float:
+    rms = float(np.sqrt(np.mean(np.square(waveform))))
+    return 20.0 * np.log10(max(rms, 1e-12))
+
+
+class TestDynamicRangeNormalizeEvensOutScenes:
+    """A quiet scene and a loud scene of the same file are brought toward one reference level."""
+
+    def test_a_quiet_scene_is_boosted_and_a_loud_one_is_not_boosted_further(self) -> None:
+        """Two four-second tones at very different levels end up much closer together."""
+        quiet = _raw_tone(4.0, amp=0.01)
+        loud = _raw_tone(4.0, amp=0.5)
+        x = np.concatenate([quiet, loud])
+        audio = Audio(waveform=x.astype(np.float32)[None, :], sampling_rate=SR)
+        processed = _normalize(audio).waveform.squeeze(0).numpy()
+
+        before_gap = _rms_dbfs(loud) - _rms_dbfs(quiet)
+        mid = SR * 4
+        after_gap = _rms_dbfs(processed[mid + SR : mid + 3 * SR]) - _rms_dbfs(processed[SR : 3 * SR])
+        assert abs(after_gap) < abs(before_gap)
+
+    def test_output_never_exceeds_the_ceiling(self) -> None:
+        """The final safety clamp is absolute, regardless of how much gain compression applied."""
+        x = _raw_tone(2.0, amp=0.01)
+        audio = Audio(waveform=x.astype(np.float32)[None, :], sampling_rate=SR)
+        processed = _normalize(audio).waveform.numpy()
+        assert float(np.abs(processed).max()) <= 0.95 + 1e-6
+
+    def test_shape_rate_and_channel_count_are_preserved(self) -> None:
+        """A stereo input comes back stereo, at the same length and rate."""
+        x = np.stack([_raw_tone(1.0, amp=0.2), _raw_tone(1.0, amp=0.2, freq=300.0)])
+        audio = Audio(waveform=x.astype(np.float32), sampling_rate=SR)
+        processed = _normalize(audio)
+        assert processed.waveform.shape == audio.waveform.shape
+        assert processed.sampling_rate == audio.sampling_rate
+
+    def test_a_stereo_input_applies_one_shared_gain_curve(self) -> None:
+        """The gain is derived from the downmix, then applied identically to every channel."""
+        base = _raw_tone(1.0, amp=0.05)
+        x = np.stack([base, 0.5 * base])
+        audio = Audio(waveform=x.astype(np.float32), sampling_rate=SR)
+        processed = _normalize(audio).waveform.numpy()
+        ratio = processed[0][SR // 4 : -SR // 4] / processed[1][SR // 4 : -SR // 4]
+        assert np.allclose(ratio, 2.0, atol=1e-3)
+
+    def test_silence_produces_a_finite_not_nan_result(self) -> None:
+        """floor_dbfs stands in wherever the envelope has no measurable value."""
+        x = np.zeros(SR)
+        audio = Audio(waveform=x.astype(np.float32)[None, :], sampling_rate=SR)
+        processed = _normalize(audio).waveform.numpy()
+        assert np.isfinite(processed).all()
