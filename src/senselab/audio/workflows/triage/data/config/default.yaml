@@ -23,7 +23,14 @@ derivation: |
   single 30 ms click. Normalising the envelope by its own maximum is the fault both share.
 
   Span onset drop 15 dB, peak-anchored -- benchmarks/spans.md. 5 of 6 labelled onsets inside their
-  declared windows, against 2 of 6 for a floor-referenced threshold on the same envelope.
+  declared windows, against 2 of 6 for a floor-referenced threshold on the same envelope. Since
+  extended (propose_spans) to also walk back while the sample is >= k_db above its own local floor,
+  additive to the peak-anchored rule rather than a replacement: a sustained target-span event whose
+  envelope dips internally more than 15 dB below its own peak -- measured on a gain-curve settling
+  artifact, but the same shape any two-syllable amplitude modulation could produce -- was read as
+  already ended by the peak-anchored rule alone, though every sample in the dip stayed >25 dB above
+  the local floor. The added clause only ever extends the walk further back, never less far, so it
+  cannot change any of the 5 onsets the original benchmark already placed correctly.
 
   Span offset 0.7 of each event's own range, 120 ms hangover -- benchmarks/spans.md. Median offset
   error 84.3 ms against 573.9 ms for a fixed peak-10 dB. A fixed drop cannot serve both a 20 dB
@@ -399,10 +406,26 @@ derivation: |
   response and can take a value the signal never did. A median's output is always one of the
   window's own samples, so it cannot overshoot. envelope.lowpass_hz/.filter_order keep their own
   fitted derivation above and stay Butterworth-only for the airway block, which this change does not
-  touch. gain_smooth_hz/.gain_filter_order also stay Butterworth: they smooth a gain multiplier
-  applied to raw samples, where the failure mode is a discontinuity, not an onset overshoot, so the
-  same argument for switching does not apply there. Both window_s keys are null; nobody has fit a
-  window size to a corpus, only compared the two strategies' qualitative behavior on one file.
+  touch. Both window_s keys are null; nobody has fit a window size to a corpus, only compared the
+  two strategies' qualitative behavior on one file.
+
+  normalization.gain_smoothing.window_s -- audio/tasks/envelope.MedianSmoothing, replacing what this
+  file used to call gain_smooth_hz/.gain_filter_order (a Butterworth), on reasoning this file
+  originally rejected for the *envelope* case above but had not yet re-examined for the *gain curve*
+  case. The original argument was that a gain multiplier's failure mode is a discontinuity, not an
+  onset overshoot, so Butterworth's smoothness was worth keeping there even though it was rejected
+  for envelopes. Measured directly and found wrong: on a ~150 ms tone burst, the pre-smoothing gain
+  curve is already a clean, correct step (huge gain in silence, a flat and correct value for the
+  entire burst) -- Butterworth's own resonance still could not settle to that flat value within the
+  burst, applying several-hundred-percent excess gain for most of the event's duration rather than a
+  brief, edge-localized ringing artifact. Raising the cutoff to 200 Hz (20x the original 10 Hz)
+  still left the mid-burst gain ~3.5x too high; the residual is the filter's lag behind the
+  *upstream* macro-level transition, not a bandwidth problem a higher cutoff can buy down. A median
+  settles to the correct plateau almost immediately regardless of window width (5-50 ms all measured
+  within a few percent of the correct value), at the cost of the discontinuity-avoidance the original
+  reasoning wanted -- a real trade, made because the measured failure (wrong gain for most of a short
+  event) is worse than the risk it re-accepts (a bounded rather than ramped transition at the edges).
+  Null; not corpus-fit, only compared on one file the same way the keys above were.
 
   normalization.envelope_smoothing.window_s, .percentile -- audio/tasks/envelope.PercentileSmoothing,
   the envelope actually used for target-span detection (the two keys above only feed the internal
@@ -474,8 +497,8 @@ normalization:
   target_dr_db: null
   compression_ratio: null
   macro_target_dbfs: null
-  gain_smooth_hz: null
-  gain_filter_order: null
+  gain_smoothing:
+    window_s: null
   floor_dbfs: null
   ceiling: null
   floor_window_s: null

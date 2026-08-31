@@ -475,6 +475,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         speech in this session's own diagnostics. ``envelope.lowpass_hz``/``.filter_order`` stay
         Butterworth-only for the airway block above, which has its own fitted derivation this pass
         does not carry over.
+
+        The gain curve's own smoothing (``gain_smoothing``) is median too, not the Butterworth it
+        shipped with: a resonant lowpass cannot settle to a short event's own correct gain within
+        the event, so a ~150 ms burst spent most of its duration at several-hundred-percent excess
+        gain rather than at a brief, edge-localized ringing artifact — raising the cutoff did not
+        fix it, since the residual is the filter's own lag behind the macro-level transition
+        upstream of it, not insufficient bandwidth. A short median settles to the correct plateau
+        immediately, at the cost of a bounded transition rather than a ramped one.
         """
         parameters: dict[str, Any] = {
             "macro_smoothing_window_s": float(config.require("normalization.macro_smoothing.window_s")),
@@ -482,8 +490,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "target_dr_db": float(config.require("normalization.target_dr_db")),
             "compression_ratio": float(config.require("normalization.compression_ratio")),
             "macro_target_dbfs": float(config.require("normalization.macro_target_dbfs")),
-            "gain_smooth_hz": float(config.require("normalization.gain_smooth_hz")),
-            "gain_filter_order": int(config.require("normalization.gain_filter_order")),
+            "gain_smoothing_window_s": float(config.require("normalization.gain_smoothing.window_s")),
             "floor_dbfs": float(config.require("normalization.floor_dbfs")),
             "ceiling": float(config.require("normalization.ceiling")),
             "envelope_smoothing_window_s": float(config.require("normalization.envelope_smoothing.window_s")),
@@ -500,8 +507,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             target_dr_db=parameters["target_dr_db"],
             compression_ratio=parameters["compression_ratio"],
             macro_target_dbfs=parameters["macro_target_dbfs"],
-            gain_smooth_hz=parameters["gain_smooth_hz"],
-            gain_filter_order=parameters["gain_filter_order"],
+            gain_smoothing=MedianSmoothing(window_s=parameters["gain_smoothing_window_s"]),
             floor_dbfs=parameters["floor_dbfs"],
             ceiling=parameters["ceiling"],
         )

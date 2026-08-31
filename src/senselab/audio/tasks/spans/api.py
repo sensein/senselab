@@ -59,8 +59,19 @@ def propose_spans(
         floor_db: Local floor, same length as ``envelope_db``, ``nan`` where the window held nothing.
         sampling_rate: Samples per second.
         k_db: How far above the local floor a peak must rise to be proposed. Per reader: read it
-            from ``spans.k_db.<reader>`` in the triage config.
-        onset_drop_db: Walk back from the peak to ``peak - onset_drop_db``. Read it from
+            from ``spans.k_db.<reader>`` in the triage config. Also floors the onset walk (see
+            ``onset_drop_db``): a sample still ``k_db`` above its own local floor counts as inside
+            the event even where it falls more than ``onset_drop_db`` below the chosen peak.
+        onset_drop_db: Walk back from the peak while still within ``onset_drop_db`` of it, *or*
+            while still ``k_db`` above the local floor at that sample — measured onsets fitted this
+            peak-anchored rule alone against a labelled benchmark (5 of 6 correct against 2 of 6 for
+            a floor-referenced rule), so it stays the primary criterion; the floor-relative half is
+            additive, not a replacement, added after a different benchmark: a sustained event whose
+            envelope dips internally (a gain curve settling too slowly across a short event, or
+            ordinary two-syllable amplitude modulation) can dip more than onset_drop_db below its own
+            peak while remaining far above the local floor, which peak-anchored alone read as the
+            event having already ended. The floor-relative half can only extend the walk further, so
+            it cannot occur where the peak-anchored rule already fits the benchmark. Read it from
             ``spans.onset_drop_db``.
         offset_fraction: Walk forward to ``peak - offset_fraction * (peak - floor)``. Read it from
             ``spans.offset_fraction``.
@@ -90,7 +101,7 @@ def propose_spans(
     for p in peaks:
         peak = float(envelope_db[p])
         i = int(p)
-        while i > 0 and measured[i] > peak - onset_drop_db:
+        while i > 0 and (measured[i] > peak - onset_drop_db or rise[i] >= k_db):
             i -= 1
         threshold = peak - offset_fraction * (peak - float(floor_db[p]))
         j = int(p)

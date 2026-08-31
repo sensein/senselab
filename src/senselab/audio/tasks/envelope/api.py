@@ -157,12 +157,6 @@ def rolling_floor_dbfs(
     return np.interp(np.arange(n), centres, vals)
 
 
-def _zero_phase_lowpass(x: np.ndarray, cutoff_hz: float, sampling_rate: int, *, order: int) -> np.ndarray:
-    """A forward-and-backward Butterworth lowpass, for smoothing a gain curve rather than audio."""
-    b, a = butter(order, cutoff_hz / (sampling_rate / 2), "low")
-    return np.asarray(filtfilt(b, a, x), dtype=np.float64)
-
-
 def dynamic_range_normalize(
     audio: Audio,
     *,
@@ -171,8 +165,7 @@ def dynamic_range_normalize(
     target_dr_db: float,
     compression_ratio: float,
     macro_target_dbfs: float,
-    gain_smooth_hz: float,
-    gain_filter_order: int,
+    gain_smoothing: EnvelopeSmoothing,
     floor_dbfs: float,
     ceiling: float,
 ) -> Audio:
@@ -183,9 +176,6 @@ def dynamic_range_normalize(
     passage's own macro level exceeds ``target_dr_db`` is compressed back toward it — so a loud
     transient in a quiet scene, or a quiet word in a loud scene, is not read as clipping or as
     silence by an instrument downstream that assumes one stable dynamic range for the whole file.
-    The whole operation is one continuous, zero-phase gain curve applied to the original waveform, so
-    it introduces no discontinuity a later disruption detector could mistake for one in the recording
-    itself.
 
     Reuses :func:`hilbert_envelope_dbfs` for both envelopes, each with its own smoothing strategy: a
     slow one for the scene's macro loudness context and a fast one for the passage's own micro
@@ -205,13 +195,16 @@ def dynamic_range_normalize(
             ``compression_ratio=2`` removes half. Read it from ``normalization.compression_ratio``.
         macro_target_dbfs: The reference level every scene's macro envelope is brought toward. Read
             it from ``normalization.macro_target_dbfs``.
-        gain_smooth_hz: Cutoff of the final zero-phase Butterworth smoothing pass over the combined
-            gain curve, the identity that keeps the applied gain itself free of any discontinuity —
-            unlike the envelopes above, this smooths a gain multiplier applied to raw samples, where
-            a discontinuity (not an onset overshoot) is the failure mode, so it stays Butterworth
-            rather than taking a pluggable strategy. Read it from ``normalization.gain_smooth_hz``.
-        gain_filter_order: Butterworth order for that smoothing pass. Read it from
-            ``normalization.gain_filter_order``.
+        gain_smoothing: Strategy that keeps the final gain curve continuous before it multiplies the
+            waveform. A zero-phase Butterworth was tried here first and measured to fail on short
+            events: its own resonance means it cannot settle to a brief event's correct gain within
+            the event, injecting several-hundred-percent excess gain for most of a ~150 ms burst's
+            duration rather than a short, localized ringing artifact at its edges — raising the
+            cutoff did not fix it (still ~3.5x too high at the burst's centre with a 200 Hz cutoff),
+            because the residual is the filter's own lagging response to the *macro* transition it
+            is downstream of, not insufficient bandwidth. A short median settles to the correct
+            plateau almost immediately regardless of window width, at the cost of a bounded rather
+            than a ramped transition — construct from ``normalization.gain_smoothing``.
         floor_dbfs: The dB value substituted wherever an envelope has no measurable value (silence,
             or below the input's numeric resolution — see :func:`hilbert_envelope_dbfs`), so the gain
             curve stays finite through a silent stretch instead of propagating ``nan``. Read it from
@@ -242,7 +235,7 @@ def dynamic_range_normalize(
 
     combined_gain_db = gain_db + (macro_target_dbfs - macro_db)
     combined_gain = np.power(10.0, combined_gain_db / 20.0)
-    smooth_gain = _zero_phase_lowpass(combined_gain, gain_smooth_hz, int(audio.sampling_rate), order=gain_filter_order)
+    smooth_gain = gain_smoothing.apply(combined_gain, int(audio.sampling_rate))
 
     processed = x * smooth_gain
     peak = float(np.abs(processed).max()) if processed.size else 0.0
