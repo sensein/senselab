@@ -228,8 +228,7 @@ def _normalize(audio: Audio) -> Audio:
         target_dr_db=15.0,
         compression_ratio=2.0,
         macro_target_dbfs=-6.0,
-        gain_smooth_hz=10.0,
-        gain_filter_order=1,
+        gain_smoothing=MedianSmoothing(window_s=0.025),
         floor_dbfs=-100.0,
         ceiling=0.95,
     )
@@ -286,3 +285,22 @@ class TestDynamicRangeNormalizeEvensOutScenes:
         audio = Audio(waveform=x.astype(np.float32)[None, :], sampling_rate=SR)
         processed = _normalize(audio).waveform.numpy()
         assert np.isfinite(processed).all()
+
+    def test_a_short_constant_amplitude_burst_stays_flat_not_dipping_mid_event(self) -> None:
+        """The gain curve must settle to a short event's own correct gain within the event.
+
+        A zero-phase Butterworth measured to fail this exact case: its own resonance cannot settle
+        within a ~150 ms burst, so the applied gain stays elevated for most of the event and only
+        dips toward the correct value near its centre -- multiplied against a genuinely
+        constant-amplitude tone, that reads as the tone itself fading out and back in (ratio 0.18
+        here), which is not something the burst ever did.
+        """
+        x = (np.random.default_rng(0).standard_normal(int(2.0 * SR)) * 1e-4).astype(np.float64)
+        burst = _raw_tone(0.15, amp=0.5, freq=440.0)
+        start = int(0.9 * SR)
+        x[start : start + len(burst)] += burst
+        audio = Audio(waveform=x.astype(np.float32)[None, :], sampling_rate=SR)
+        processed = _normalize(audio).waveform.squeeze(0).numpy()
+        edge_peak = np.abs(processed[start : start + int(0.01 * SR)]).max()
+        mid_peak = np.abs(processed[start + int(0.07 * SR) : start + int(0.08 * SR)]).max()
+        assert mid_peak / edge_peak > 0.8, "the mid-burst amplitude must not dip far below the edges"

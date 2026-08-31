@@ -122,6 +122,44 @@ class TestTheMergeRate:
         assert [span.merged_proposals for span in out] == [1, 1]
 
 
+class TestOnsetIsAlsoFloorRelative:
+    """Onset walks back past a dip that is still far above the floor, not just close to the peak.
+
+    Peak-anchored alone (walk back only while within onset_drop_db of the peak) is the fitted,
+    benchmarked rule and stays the primary criterion; this only covers the case the benchmark did
+    not exercise: an event whose envelope dips internally more than onset_drop_db below its own
+    peak while remaining well above the local floor (a gain-curve settling artifact on a short
+    burst, or ordinary two-syllable amplitude modulation, produce the same shape).
+    """
+
+    def test_an_onset_ramp_more_than_onset_drop_db_below_the_peak_is_included(self) -> None:
+        """A single peak, so offset/hangover/merge cannot be doing this — isolates the onset walk.
+
+        The onset ramp sits 16 dB below the peak (> onset_drop_db=15, so peak-anchored alone stops
+        at its far edge, t=2.05) but 19 dB above the floor (>= k_db=18, so the floor-relative clause
+        walks through it to the true onset at t=2.0).
+        """
+        env = _envelope([(2.05, 2.5, -20.0)])
+        env[int(2.0 * SR) : int(2.05 * SR)] = -36.0
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        (span,) = out
+        assert span.merged_proposals == 1, "one peak, one proposal -- offset/merge are not involved"
+        assert span.start == pytest.approx(2.0, abs=0.005), "peak-anchored alone would stop at 2.05"
+
+    def test_a_gap_at_the_floor_still_stays_two_spans(self) -> None:
+        """The floor-relative clause extends the walk; it does not make it walk through real silence.
+
+        The gap is wider than ``hangover_ms`` (150 ms vs. 120 ms), so the offset side's own hangover
+        mechanism cannot be what keeps these separate — this isolates the onset change specifically.
+        """
+        env = _envelope([(2.0, 2.5, -20.0)])
+        env[int(2.2 * SR) : int(2.35 * SR)] = -55.0  # genuinely back at the floor, not just a dip
+        out = _propose(env, np.full_like(env, -55.0))
+        assert isinstance(out, list)
+        assert len(out) == 2, "a gap that reaches the floor is two events, not one bridged span"
+
+
 class TestAnUnmeasurableEnvelope:
     """The envelope carries NaN where the filtered signal had no dB value; a span extent may not."""
 
