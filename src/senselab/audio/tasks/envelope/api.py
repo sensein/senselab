@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
+from scipy.ndimage import percentile_filter
 from scipy.signal import butter, filtfilt, hilbert, medfilt
 
 from senselab.audio.data_structures import Audio
@@ -63,6 +64,32 @@ class MedianSmoothing:
         """Median-filter ``x`` over this instance's window."""
         kernel = max(1, int(round(self.window_s * sampling_rate)) | 1)
         return np.asarray(medfilt(x, kernel_size=kernel), dtype=np.float64)
+
+
+@dataclass(frozen=True)
+class PercentileSmoothing:
+    """A rolling percentile of the rectified magnitude.
+
+    Generalizes :class:`MedianSmoothing` (its 50th-percentile case) toward the peak: a high
+    percentile sits close to the local maximum within its window without being pinned to a single
+    outlier sample the way a rolling maximum is — a fraction of the window (``100 - percentile``
+    percent) may still exceed it, so one lone spike cannot drag the whole window's output up to its
+    own height and hold it there after the spike has already passed.
+
+    Attributes:
+        window_s: Width of the sliding window.
+        percentile: Which percentile within the window to report, in ``[0, 100]``.
+    """
+
+    window_s: float
+    percentile: float
+
+    def apply(self, x: np.ndarray, sampling_rate: int) -> np.ndarray:
+        """Percentile-filter ``x`` over this instance's window."""
+        kernel = max(1, int(round(self.window_s * sampling_rate)))
+        return np.asarray(
+            percentile_filter(x, percentile=self.percentile, size=kernel, mode="reflect"), dtype=np.float64
+        )
 
 
 def hilbert_envelope_dbfs(audio: Audio, *, smoothing: EnvelopeSmoothing) -> np.ndarray:

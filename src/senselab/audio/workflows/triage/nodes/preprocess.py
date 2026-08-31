@@ -27,6 +27,7 @@ from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.envelope.api import (
     ButterworthSmoothing,
     MedianSmoothing,
+    PercentileSmoothing,
     dynamic_range_normalize,
     hilbert_envelope_dbfs,
     rolling_floor_dbfs,
@@ -461,12 +462,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         exactly the "fitted for one population, applied to another" mistake this graph's own
         convention refuses elsewhere (see spans.k_db.target's derivation).
 
-        Every envelope here — macro, micro and the final one this measurement stores — is smoothed
-        with :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing` rather than the airway
-        block's :class:`~senselab.audio.tasks.envelope.api.ButterworthSmoothing`: a median cannot
-        overshoot past a transient the way a resonant Butterworth does, which is what a word's onset
-        is to this envelope. ``envelope.lowpass_hz``/``.filter_order`` stay Butterworth-only for the
-        airway block above, which has its own fitted derivation this pass does not carry over.
+        The macro and micro envelopes inside ``dynamic_range_normalize`` are smoothed with
+        :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing` rather than the airway block's
+        :class:`~senselab.audio.tasks.envelope.api.ButterworthSmoothing`: a median cannot overshoot
+        past a transient the way a resonant Butterworth does, which is what a word's onset is to
+        this envelope. The final envelope this measurement stores goes one step further and uses
+        :class:`~senselab.audio.tasks.envelope.api.PercentileSmoothing`: a median (its 50th
+        percentile) still averages a real peak down toward the window's centre, and a plain rolling
+        maximum overcorrects the other way — one loud sample pins the whole window to its height and
+        holds it there after the sound has already ended, smearing a peak sideways in time. A high
+        percentile (90th) sits close to the true peak without either failure, verified on real
+        speech in this session's own diagnostics. ``envelope.lowpass_hz``/``.filter_order`` stay
+        Butterworth-only for the airway block above, which has its own fitted derivation this pass
+        does not carry over.
         """
         parameters: dict[str, Any] = {
             "macro_smoothing_window_s": float(config.require("normalization.macro_smoothing.window_s")),
@@ -479,6 +487,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "floor_dbfs": float(config.require("normalization.floor_dbfs")),
             "ceiling": float(config.require("normalization.ceiling")),
             "envelope_smoothing_window_s": float(config.require("normalization.envelope_smoothing.window_s")),
+            "envelope_smoothing_percentile": float(config.require("normalization.envelope_smoothing.percentile")),
             "floor_window_s": float(config.require("normalization.floor_window_s")),
             "floor_percentile": float(config.require("normalization.floor_percentile")),
             "floor_eval_grid_s": float(config.require("normalization.floor_eval_grid_s")),
@@ -511,7 +520,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         store.was_attributed_to(normalized_id, software)
         store.was_derived_from(normalized_id, sharp_id)
         envelope = hilbert_envelope_dbfs(
-            normalized, smoothing=MedianSmoothing(window_s=parameters["envelope_smoothing_window_s"])
+            normalized,
+            smoothing=PercentileSmoothing(
+                window_s=parameters["envelope_smoothing_window_s"],
+                percentile=parameters["envelope_smoothing_percentile"],
+            ),
         )
         floor = rolling_floor_dbfs(
             envelope,
