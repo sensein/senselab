@@ -389,22 +389,46 @@ derivation: |
   envelope and the target spans built from it are absent, which is the honest state until a campaign
   measures and supplies all ten.
 
-  normalization.macro_smoothing.window_s, .micro_smoothing.window_s, .envelope_smoothing.window_s --
-  audio/tasks/envelope.MedianSmoothing, plugged into hilbert_envelope_dbfs wherever this pipeline
-  builds an envelope for target-span detection. These three replaced the macro/micro cutoffs and the
-  shared Butterworth order after comparing a zero-phase Butterworth (envelope.lowpass_hz's own
-  ButterworthSmoothing) against a median filter on the same word-burst composite used to validate
-  normalization.floor_window_s: the Butterworth showed a clear overshoot at a word's onset -- a dip
-  past the pre-onset baseline that a forward-and-backward filtfilt spreads to both sides of the
-  transient it is reacting to -- because its output is a resonant filter's response and can take a
-  value the signal never did. A median's output is always one of the window's own samples, so it
-  cannot overshoot; that is good enough for what this pipeline needs an envelope for (whether
-  foreground energy is present, not audio quality). envelope.lowpass_hz/.filter_order keep their own
+  normalization.macro_smoothing.window_s, .micro_smoothing.window_s --
+  audio/tasks/envelope.MedianSmoothing, plugged into hilbert_envelope_dbfs for the two internal
+  envelopes dynamic_range_normalize derives its gain curve from. Chosen over a zero-phase Butterworth
+  (envelope.lowpass_hz's own ButterworthSmoothing) after comparing the two on the same word-burst
+  composite used to validate normalization.floor_window_s: the Butterworth showed a clear overshoot
+  at a word's onset -- a dip past the pre-onset baseline that a forward-and-backward filtfilt spreads
+  to both sides of the transient it is reacting to -- because its output is a resonant filter's
+  response and can take a value the signal never did. A median's output is always one of the
+  window's own samples, so it cannot overshoot. envelope.lowpass_hz/.filter_order keep their own
   fitted derivation above and stay Butterworth-only for the airway block, which this change does not
   touch. gain_smooth_hz/.gain_filter_order also stay Butterworth: they smooth a gain multiplier
   applied to raw samples, where the failure mode is a discontinuity, not an onset overshoot, so the
-  same argument for switching does not apply there. All three window_s keys are null; nobody has
-  fit a window size to a corpus, only compared the two strategies' qualitative behavior on one file.
+  same argument for switching does not apply there. Both window_s keys are null; nobody has fit a
+  window size to a corpus, only compared the two strategies' qualitative behavior on one file.
+
+  normalization.envelope_smoothing.window_s, .percentile -- audio/tasks/envelope.PercentileSmoothing,
+  the envelope actually used for target-span detection (the two keys above only feed the internal
+  gain curve). Started as the same MedianSmoothing as macro/micro, on the reasoning directly above --
+  but a median is a central-tendency statistic, and plotted against the raw, unsmoothed
+  |hilbert(x)| on real speech, it reads 3-4x quieter than the signal's own true local peaks (e.g.
+  0.15-0.2 where the raw envelope reaches 0.6-1.0), because a median deliberately reports the middle
+  of its window, not the top. Where this pipeline needs to know "is foreground energy present", that
+  gap directly reduces the contrast target-span detection depends on. A plain rolling maximum was
+  tried next and rejected the opposite way: one loud sample pins the entire window to its own height
+  and holds it there, both before and after the sound occurred, because the statistic has no notion
+  of *how far away* the peak it is reporting sits -- verified directly (t=4.85s on the same
+  composite: the held value read 0.68 while the envelope's own value at that exact instant was
+  0.105, sourced from a peak 4.4 ms away) and it does not improve by widening or narrowing the
+  window, only by changing which single sample dominates. window_s=0.025 s, percentile=90.0 is what
+  a direct three-way comparison (median / rolling max / percentile, at several window widths, on the
+  same real speech) converged on: high enough to sit close to the true local peak, but a percentile
+  rather than a maximum, so one outlier sample sixty milliseconds away cannot govern a window it
+  barely overlaps. The window stays at 25 ms, not the 5 ms the visual peak-hugging comparison alone
+  favoured: on the existing clip/target-span regression fixture (a clean tone burst against a near-
+  silent noise floor), a 5 ms window drops a real burst entirely and it is not the percentile causing
+  it -- the 50th-percentile (median) case at the same 5 ms window drops the identical burst, while
+  90th-percentile at 25 ms recovers all three spans a median at 25 ms already found. So the window
+  width, not the statistic, is what this content is sensitive to; 25 ms is the width already
+  exercised without incident. This is a chosen value from that comparison, not a corpus fit --
+  unlike the null keys throughout this file, whose fits still remain to be done.
 
 resample:
   target_hz: 16000
@@ -445,7 +469,8 @@ normalization:
   micro_smoothing:
     window_s: null
   envelope_smoothing:
-    window_s: null
+    window_s: 0.025
+    percentile: 90.0
   target_dr_db: null
   compression_ratio: null
   macro_target_dbfs: null

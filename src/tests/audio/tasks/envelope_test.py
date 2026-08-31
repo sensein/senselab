@@ -12,6 +12,7 @@ from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.envelope import (
     ButterworthSmoothing,
     MedianSmoothing,
+    PercentileSmoothing,
     dynamic_range_normalize,
     hilbert_envelope_dbfs,
     rolling_floor_dbfs,
@@ -138,6 +139,50 @@ class TestSmoothingStrategiesAreInterchangeable:
         x = np.asarray(audio.waveform, dtype=np.float64)[0]
         smoothed = ButterworthSmoothing(cutoff_hz=40.0, order=4).apply(np.abs(hilbert(x)), SR)
         assert np.any(smoothed < 0.0)
+
+
+class TestPercentileSmoothingHugsThePeak:
+    """A high percentile sits close to the true local peak without a maximum's smearing."""
+
+    def test_also_reads_the_absolute_reference(self) -> None:
+        """Swapping the strategy still does not change the dBFS contract itself."""
+        env = hilbert_envelope_dbfs(_tone(1.0, 0.5), smoothing=PercentileSmoothing(window_s=0.01, percentile=90.0))
+        mid = env[SR // 4 : -SR // 4]
+        assert -7.5 < float(np.median(mid)) < -4.5
+
+    def test_never_undershoots_below_zero(self) -> None:
+        """Like a median, its output is always a value the rectified envelope already took."""
+        audio = _burst()
+        x = np.asarray(audio.waveform, dtype=np.float64)[0]
+        smoothed = PercentileSmoothing(window_s=0.01, percentile=90.0).apply(np.abs(hilbert(x)), SR)
+        assert np.all(smoothed >= 0.0)
+
+    def test_a_higher_percentile_sits_closer_to_the_peak_than_the_median(self) -> None:
+        """The whole point: a 90th percentile reads closer to the window's true top than a median."""
+        audio = _burst()
+        x = np.asarray(audio.waveform, dtype=np.float64)[0]
+        mag = np.abs(hilbert(x))
+        median = MedianSmoothing(window_s=0.01).apply(mag, SR)
+        p90 = PercentileSmoothing(window_s=0.01, percentile=90.0).apply(mag, SR)
+        voiced = slice(int(0.55 * SR), int(0.95 * SR))
+        assert float(np.mean(p90[voiced])) > float(np.mean(median[voiced]))
+
+    def test_a_lone_spike_does_not_govern_a_window_it_barely_overlaps(self) -> None:
+        """Unlike a rolling maximum, one outlier near the window's edge cannot dominate its output.
+
+        A window whose lone tall sample sits at one edge has that sample in the extreme percentile
+        band (fewer than ``100 - percentile`` percent of the window), so a 90th percentile must
+        still report something below it -- the failure mode measured for a plain rolling maximum in
+        this session's own diagnostics (a value read from 4.4 ms away, not the local signal).
+        """
+        sr = SR
+        x = np.zeros(int(0.2 * sr))
+        spike_index = 10  # near the very start of a 3200-sample array: an edge case, not the centre
+        x[spike_index] = 1.0
+        window_s = 0.05  # 800 samples: the spike is one sample out of a window this wide
+        smoothed = PercentileSmoothing(window_s=window_s, percentile=90.0).apply(x, sr)
+        centre = int(0.1 * sr)
+        assert smoothed[centre] < 1.0, "a single distant sample must not be reported as the local level"
 
 
 class TestTheFloorOverAnUnmeasurableEnvelope:
