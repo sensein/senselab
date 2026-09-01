@@ -414,12 +414,18 @@ class TestSpansCarryTheirMergeRate:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The contrast the merged case needs: one burst absorbs one proposal, never zero."""
+        """The contrast the merged case needs: one burst absorbs a small, non-zero proposal count.
+
+        Two, not one: the tone's abrupt onset and offset each ring the zero-phase Butterworth
+        envelope (the same overshoot ``TestAnUnmeasurableSampleHasNoDecibelValue`` documents),
+        producing two local maxima 164 ms apart -- over min_separation_ms's 150 ms gate, so both
+        survive as distinct peaks, then merge into the one span their walked extents overlap in.
+        """
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
-        assert [e.attributes["merged_proposals"] for e in spans] == [1]
+        assert [e.attributes["merged_proposals"] for e in spans] == [2]
 
 
 def _burst_that_also_clips() -> np.ndarray:
@@ -1133,7 +1139,7 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
         assert np.isnan(envelope).any(), "digital silence and the offset undershoot are unmeasurable"
         assert float(np.nanmax(envelope)) > -20.0
 
-    def test_the_written_floor_is_absent_where_nothing_was_measured(
+    def test_the_written_floor_never_reads_as_unmeasurably_low(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -1141,7 +1147,7 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A percentile over a window of nothing is not a floor; the sidecar must say so."""
+        """Mostly digital silence makes the 10th percentile of |samples| exactly 0; the floor must not be -inf."""
         _seed_admit(store, tmp_path, wav_writer, samples=_burst_with_a_sharp_offset())
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)

@@ -1,4 +1,4 @@
-"""The Hilbert envelope in dBFS and its rolling local floor."""
+"""The Hilbert envelope in dBFS and the recording's own global floor."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from senselab.audio.tasks.envelope import (
     MedianSmoothing,
     PercentileSmoothing,
     dynamic_range_normalize,
+    global_floor_dbfs,
     hilbert_envelope_dbfs,
-    rolling_floor_dbfs,
 )
 
 SR = 16000
@@ -57,20 +57,39 @@ class TestEnvelopeIsAbsolute:
         assert float(np.median(b[early])) == pytest.approx(float(np.median(a[early])), abs=0.5)
 
 
-class TestRollingFloor:
-    """The floor tracks the recording rather than summarising it."""
+class TestGlobalFloor:
+    """One floor value for the whole recording -- a percentile of the envelope, not a rolling one."""
 
-    def test_the_floor_tracks_a_level_change_rather_than_averaging_it(self) -> None:
-        """A -60 to -30 dB step moves the floor to each level, not to their mean."""
-        env = np.concatenate([np.full(5 * SR, -60.0), np.full(5 * SR, -30.0)])
-        fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
-        assert fl[SR] == pytest.approx(-60.0, abs=1.0)
-        assert fl[9 * SR] == pytest.approx(-30.0, abs=1.0)
+    def test_the_floor_matches_a_known_percentile_of_the_envelope(self) -> None:
+        """The floor is exactly the 10th percentile of the envelope's own values."""
+        rng = np.random.default_rng(0)
+        env = rng.uniform(-90.0, -10.0, size=10_000)
+        floor = global_floor_dbfs(env, percentile=10.0)
+        assert floor == pytest.approx(float(np.percentile(env, 10.0)), abs=1e-9)
 
-    def test_the_floor_is_one_value_per_sample(self) -> None:
-        """The floor track has the envelope's own shape."""
-        env = np.full(3 * SR, -50.0)
-        assert rolling_floor_dbfs(env, SR, window_s=3.0, percentile=10.0, eval_grid_s=0.1).shape == env.shape
+    def test_the_floor_is_computed_over_the_finite_samples(self) -> None:
+        """A scatter of NaN does not skew the percentile of what remains."""
+        env = np.full(6 * SR, -50.0)
+        env[:: SR // 100] = np.nan
+        assert global_floor_dbfs(env, percentile=10.0) == pytest.approx(-50.0, abs=0.5)
+
+    def test_an_entirely_unmeasurable_envelope_is_nan_not_a_fabricated_number(self) -> None:
+        """Nothing was measured, so there is no percentile of it to report."""
+        env = np.full(3 * SR, np.nan)
+        assert np.isnan(global_floor_dbfs(env, percentile=10.0))
+
+    def test_an_unmeasurable_envelope_raises_no_warning(self) -> None:
+        """A run that prints a RuntimeWarning for an empty reduction is a run nobody reads the output of."""
+        env = np.full(3 * SR, np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            global_floor_dbfs(env, percentile=10.0)
+
+    def test_a_brief_loud_event_does_not_move_a_low_percentile_floor(self) -> None:
+        """A short burst is a small fraction of the recording; a low percentile ignores it."""
+        env = np.full(4 * SR, -80.0)
+        env[SR : SR + int(0.15 * SR)] = -20.0
+        assert global_floor_dbfs(env, percentile=10.0) == pytest.approx(-80.0, abs=0.5)
 
 
 def _burst(seconds: float = 2.0, amp: float = 0.6, freq: float = 220.0) -> Audio:
@@ -183,34 +202,6 @@ class TestPercentileSmoothingHugsThePeak:
         smoothed = PercentileSmoothing(window_s=window_s, percentile=90.0).apply(x, sr)
         centre = int(0.1 * sr)
         assert smoothed[centre] < 1.0, "a single distant sample must not be reported as the local level"
-
-
-class TestTheFloorOverAnUnmeasurableEnvelope:
-    """The floor is a percentile of what was measured, and says nothing where nothing was."""
-
-    def test_the_floor_is_computed_over_the_finite_samples(self) -> None:
-        """A scatter of NaN inside a level window leaves the floor at that level."""
-        env = np.full(6 * SR, -50.0)
-        env[:: SR // 100] = np.nan
-        fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
-        assert fl[3 * SR] == pytest.approx(-50.0, abs=0.5)
-
-    def test_a_window_with_no_finite_sample_has_no_floor(self) -> None:
-        """Nothing was measured there, so there is no percentile of it to report."""
-        env = np.full(9 * SR, -50.0)
-        env[3 * SR : 6 * SR] = np.nan
-        fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
-        assert np.isnan(fl[int(4.5 * SR)])
-        assert np.isfinite(fl[SR])
-        assert np.isfinite(fl[8 * SR])
-
-    def test_an_unmeasurable_window_raises_no_warning(self) -> None:
-        """A run that prints a RuntimeWarning per window is a run nobody reads the output of."""
-        env = np.full(3 * SR, np.nan)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            fl = rolling_floor_dbfs(env, SR, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
-        assert np.isnan(fl).all()
 
 
 def _raw_tone(seconds: float, amp: float, freq: float = 200.0) -> np.ndarray:

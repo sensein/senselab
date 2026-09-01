@@ -15,7 +15,7 @@ class Span:
     Attributes:
         start: Onset in seconds.
         end: Offset in seconds.
-        peak_over_floor_db: The span's peak, referenced to the local floor.
+        peak_over_floor_db: The span's peak, referenced to the recording's floor.
         merged_proposals: How many proposals this span absorbed. One for a span the merge rule left
             alone — a span is its own proposal — so zero is never a valid value, and a span covering
             several events is legible as one rather than indistinguishable from a single event.
@@ -42,41 +42,40 @@ class NoContrast:
 
 def propose_spans(
     envelope_db: np.ndarray,
-    floor_db: np.ndarray,
+    floor_db: float,
     sampling_rate: int,
     *,
     k_db: float,
-    onset_drop_db: float,
-    offset_fraction: float,
-    hangover_ms: int,
+    floor_margin_db: float,
+    transition_window_ms: int,
     min_duration_ms: int,
     min_separation_ms: int,
 ) -> list[Span] | NoContrast:
-    """Propose spans from an envelope, anchoring the onset to each event's own peak.
+    """Propose spans from an envelope, against one floor for the whole recording.
+
+    Onset and offset walk by the identical rule, in opposite directions: neither can close for a
+    reason the other would not also close for, unlike the peak-anchored/floor-fraction pair this
+    replaced, whose asymmetry (see ``floor_margin_db``) let a real multi-scene recording collapse
+    into one merged span once an unrelated bug stopped masking it.
 
     Args:
         envelope_db: Envelope in dBFS, ``nan`` at any sample that had no dB value.
-        floor_db: Local floor, same length as ``envelope_db``, ``nan`` where the window held nothing.
+        floor_db: The recording's own global floor — see
+            :func:`~senselab.audio.tasks.envelope.api.global_floor_dbfs` — one value for the whole
+            signal, not a local, time-varying one.
         sampling_rate: Samples per second.
-        k_db: How far above the local floor a peak must rise to be proposed. Per reader: read it
-            from ``spans.k_db.<reader>`` in the triage config. Also floors the onset walk (see
-            ``onset_drop_db``): a sample still ``k_db`` above its own local floor counts as inside
-            the event even where it falls more than ``onset_drop_db`` below the chosen peak.
-        onset_drop_db: Walk back from the peak while still within ``onset_drop_db`` of it, *or*
-            while still ``k_db`` above the local floor at that sample — measured onsets fitted this
-            peak-anchored rule alone against a labelled benchmark (5 of 6 correct against 2 of 6 for
-            a floor-referenced rule), so it stays the primary criterion; the floor-relative half is
-            additive, not a replacement, added after a different benchmark: a sustained event whose
-            envelope dips internally (a gain curve settling too slowly across a short event, or
-            ordinary two-syllable amplitude modulation) can dip more than onset_drop_db below its own
-            peak while remaining far above the local floor, which peak-anchored alone read as the
-            event having already ended. The floor-relative half can only extend the walk further, so
-            it cannot occur where the peak-anchored rule already fits the benchmark. Read it from
-            ``spans.onset_drop_db``.
-        offset_fraction: Walk forward to ``peak - offset_fraction * (peak - floor)``. Read it from
-            ``spans.offset_fraction``.
-        hangover_ms: The offset closes only after this long continuously below threshold. Must be
-            shorter than the shortest event to be bounded. Read it from ``spans.hangover_ms``.
+        k_db: How far above the floor a peak must rise to be proposed. Per reader: read it from
+            ``spans.k_db.<reader>`` in the triage config.
+        floor_margin_db: A walk stops once the envelope has fallen within this many dB of the floor,
+            sustained for ``transition_window_ms`` — the same rule for onset (walking backward) and
+            offset (walking forward). Replaces a peak-anchored onset (walk back while within a fixed
+            drop of the peak) paired with a floor-fraction offset (walk forward to a threshold fixed
+            once at the peak's own floor value): that pair's asymmetry is what let an offset's stale,
+            peak-anchored threshold outlive the walk's own progress across a scene. Read it from
+            ``spans.floor_margin_db``.
+        transition_window_ms: How long the envelope must stay within ``floor_margin_db`` of the floor,
+            continuously, before a walk closes. Must be shorter than the shortest event to be
+            bounded. Read it from ``spans.transition_window_ms``.
         min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.
         min_separation_ms: Minimum distance between two proposed peaks. Read it from
             ``spans.min_separation_ms``.
@@ -92,28 +91,29 @@ def propose_spans(
     if len(peaks) == 0:
         rises = above[np.isfinite(above)]
         if rises.size == 0:
-            return NoContrast(reason="the envelope holds no sample measurable against its local floor")
+            return NoContrast(reason="the envelope holds no sample measurable against its floor")
         return NoContrast(
-            reason=f"no peak rose {k_db} dB above the local floor; the largest rose {float(rises.max()):.1f} dB"
+            reason=f"no peak rose {k_db} dB above the floor; the largest rose {float(rises.max()):.1f} dB"
         )
-    hang = int(hangover_ms * sampling_rate / 1000)
+    threshold = floor_db + floor_margin_db
+    win = int(transition_window_ms * sampling_rate / 1000)
     found: list[Span] = []
     for p in peaks:
         peak = float(envelope_db[p])
         i = int(p)
-        while i > 0 and (measured[i] > peak - onset_drop_db or rise[i] >= k_db):
+        while i > 0:
+            window = measured[max(0, i - win) : i]
+            if len(window) == 0 or window.max() <= threshold:
+                break
             i -= 1
-        threshold = peak - offset_fraction * (peak - float(floor_db[p]))
         j = int(p)
         while j < len(envelope_db) - 1:
-            window = measured[j : j + hang]
+            window = measured[j : j + win]
             if len(window) == 0 or window.max() <= threshold:
                 break
             j += 1
         if (j - i) >= min_duration_ms * sampling_rate / 1000:
-            found.append(
-                Span(start=i / sampling_rate, end=j / sampling_rate, peak_over_floor_db=peak - float(floor_db[p]))
-            )
+            found.append(Span(start=i / sampling_rate, end=j / sampling_rate, peak_over_floor_db=peak - floor_db))
     found.sort(key=lambda s: s.start)
     merged: list[Span] = []
     for span in found:

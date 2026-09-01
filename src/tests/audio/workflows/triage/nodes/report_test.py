@@ -1699,7 +1699,7 @@ class TestTheEnvelopePanelsScaleIsTheSignals:
         fabricated. This is the real producer feeding the real panel.
         """
         from senselab.audio.data_structures import Audio
-        from senselab.audio.tasks.envelope import ButterworthSmoothing, hilbert_envelope_dbfs, rolling_floor_dbfs
+        from senselab.audio.tasks.envelope import ButterworthSmoothing, global_floor_dbfs, hilbert_envelope_dbfs
 
         grid = np.arange(int(_DURATION_S * _RATE)) / _RATE
         samples = np.zeros_like(grid)
@@ -1707,8 +1707,12 @@ class TestTheEnvelopePanelsScaleIsTheSignals:
         samples[voiced] = 0.6 * np.sin(2 * np.pi * 220.0 * grid[voiced])
         audio = Audio(waveform=samples.astype(np.float32)[None, :], sampling_rate=_RATE)
         envelope = hilbert_envelope_dbfs(audio, smoothing=ButterworthSmoothing(cutoff_hz=40.0, order=4))
-        floor = rolling_floor_dbfs(envelope, _RATE, window_s=1.0, percentile=10.0, eval_grid_s=0.1)
-        np.savez(tmp_path / "derivatives" / "energy_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
+        floor = global_floor_dbfs(envelope, percentile=10.0)
+        np.savez(
+            tmp_path / "derivatives" / "energy_envelope.npz",
+            envelope_dbfs=envelope,
+            floor_dbfs=np.full_like(envelope, floor),
+        )
         return envelope
 
     def test_the_twin_axis_stays_inside_the_measured_range(self, store: ProvStore, tmp_path: Path) -> None:

@@ -29,8 +29,8 @@ from senselab.audio.tasks.envelope.api import (
     MedianSmoothing,
     PercentileSmoothing,
     dynamic_range_normalize,
+    global_floor_dbfs,
     hilbert_envelope_dbfs,
-    rolling_floor_dbfs,
 )
 from senselab.audio.tasks.features_extraction.torchaudio import extract_spectrogram_from_audios
 from senselab.audio.tasks.features_extraction.torchaudio_squim import (
@@ -313,23 +313,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         parameters = {
             "lowpass_hz": float(config.require("envelope.lowpass_hz")),
             "filter_order": int(config.require("envelope.filter_order")),
-            "floor_window_s": float(config.require("floor.window_s")),
             "floor_percentile": float(config.require("floor.percentile")),
-            "floor_eval_grid_s": float(config.require("floor.eval_grid_s")),
         }
         activity = _step("envelope", parameters, (sharp_id,), software)
         envelope = hilbert_envelope_dbfs(
             sharp,
             smoothing=ButterworthSmoothing(cutoff_hz=parameters["lowpass_hz"], order=int(parameters["filter_order"])),
         )
-        floor = rolling_floor_dbfs(
-            envelope,
-            target_hz,
-            window_s=parameters["floor_window_s"],
-            percentile=parameters["floor_percentile"],
-            eval_grid_s=parameters["floor_eval_grid_s"],
+        floor = global_floor_dbfs(envelope, percentile=parameters["floor_percentile"])
+        np.savez(
+            run_dir / "derivatives" / "energy_envelope.npz",
+            envelope_dbfs=envelope,
+            floor_dbfs=np.full_like(envelope, floor),
         )
-        np.savez(run_dir / "derivatives" / "energy_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
         entity_id = _measurement(
             store,
             activity,
@@ -350,9 +346,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         k_db = float(config.require("spans.k_db.airway"))
         parameters: dict[str, Any] = {
             "k_db": k_db,
-            "onset_drop_db": float(config.require("spans.onset_drop_db")),
-            "offset_fraction": float(config.require("spans.offset_fraction")),
-            "hangover_ms": int(config.require("spans.hangover_ms")),
+            "floor_margin_db": float(config.require("spans.floor_margin_db")),
+            "transition_window_ms": int(config.require("spans.transition_window_ms")),
             "min_duration_ms": int(config.require("spans.min_duration_ms")),
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
         }
@@ -362,9 +357,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             state["floor"],
             target_hz,
             k_db=k_db,
-            onset_drop_db=parameters["onset_drop_db"],
-            offset_fraction=parameters["offset_fraction"],
-            hangover_ms=parameters["hangover_ms"],
+            floor_margin_db=parameters["floor_margin_db"],
+            transition_window_ms=parameters["transition_window_ms"],
             min_duration_ms=parameters["min_duration_ms"],
             min_separation_ms=parameters["min_separation_ms"],
         )
@@ -453,14 +447,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _normalized_envelope() -> None:
         """The dynamically-normalized signal's own envelope and floor, over the pre-emphasised signal.
 
-        The floor window is ``normalization.floor_*``, deliberately its own key rather than a reuse
-        of ``floor.*``: that window (3 s, per its own derivation) is fitted for the airway-scale
-        envelope spans block, and the target-span pass this feeds is meant to isolate events as short
-        as a single word surrounded by silence. A 3 s, +/-1.5 s window blends in whatever sits up to
-        1.5 s away — which for a single word is very likely another word, or a scene boundary,
-        rather than that word's own immediate silence. Carrying the airway window over here would be
-        exactly the "fitted for one population, applied to another" mistake this graph's own
-        convention refuses elsewhere (see spans.k_db.target's derivation).
+        The floor is ``floor.percentile`` over the normalized waveform's own samples — the same key
+        the airway block reads, now that the floor is one global number rather than a rolling window:
+        a global floor has no window whose width could be fitted to one population and misapplied to
+        another, which is what made the two blocks carry separate, differently-tuned floor windows
+        before this session's change.
 
         The macro and micro envelopes inside ``dynamic_range_normalize`` are smoothed with
         :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing` rather than the airway block's
@@ -495,9 +486,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "ceiling": float(config.require("normalization.ceiling")),
             "envelope_smoothing_window_s": float(config.require("normalization.envelope_smoothing.window_s")),
             "envelope_smoothing_percentile": float(config.require("normalization.envelope_smoothing.percentile")),
-            "floor_window_s": float(config.require("normalization.floor_window_s")),
-            "floor_percentile": float(config.require("normalization.floor_percentile")),
-            "floor_eval_grid_s": float(config.require("normalization.floor_eval_grid_s")),
+            "floor_percentile": float(config.require("floor.percentile")),
         }
         activity = _step("normalized_envelope", parameters, (sharp_id,), software)
         normalized = dynamic_range_normalize(
@@ -532,14 +521,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 percentile=parameters["envelope_smoothing_percentile"],
             ),
         )
-        floor = rolling_floor_dbfs(
-            envelope,
-            target_hz,
-            window_s=parameters["floor_window_s"],
-            percentile=parameters["floor_percentile"],
-            eval_grid_s=parameters["floor_eval_grid_s"],
+        floor = global_floor_dbfs(envelope, percentile=parameters["floor_percentile"])
+        np.savez(
+            run_dir / "derivatives" / "normalized_envelope.npz",
+            envelope_dbfs=envelope,
+            floor_dbfs=np.full_like(envelope, floor),
         )
-        np.savez(run_dir / "derivatives" / "normalized_envelope.npz", envelope_dbfs=envelope, floor_dbfs=floor)
         entity_id = _measurement(
             store,
             activity,
@@ -573,9 +560,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         k_db = float(config.require("spans.k_db.target"))
         parameters: dict[str, Any] = {
             "k_db": k_db,
-            "onset_drop_db": float(config.require("spans.onset_drop_db")),
-            "offset_fraction": float(config.require("spans.offset_fraction")),
-            "hangover_ms": int(config.require("spans.hangover_ms")),
+            "floor_margin_db": float(config.require("spans.floor_margin_db")),
+            "transition_window_ms": int(config.require("spans.transition_window_ms")),
             "min_duration_ms": int(config.require("spans.min_duration_ms")),
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
         }
@@ -585,9 +571,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             state["normalized_floor"],
             target_hz,
             k_db=k_db,
-            onset_drop_db=parameters["onset_drop_db"],
-            offset_fraction=parameters["offset_fraction"],
-            hangover_ms=parameters["hangover_ms"],
+            floor_margin_db=parameters["floor_margin_db"],
+            transition_window_ms=parameters["transition_window_ms"],
             min_duration_ms=parameters["min_duration_ms"],
             min_separation_ms=parameters["min_separation_ms"],
         )

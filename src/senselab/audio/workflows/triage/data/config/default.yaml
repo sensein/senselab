@@ -17,31 +17,52 @@ derivation: |
   modulation bandwidth the envelope is for, not an onset-precision choice. Zero-phase beats causal,
   63.5 ms against 90.1 ms median, which makes the envelope offline-only.
 
-  Floor: rolling 3 s window, 10th percentile, in dBFS -- benchmarks/spans.md. Local and absolute
-  because a global anchor fails two ways: a floor-anchored gate loses the quieter event as noise
-  raises the floor, and a peak-anchored one moves 49.1 dB within one recording and is destroyed by a
-  single 30 ms click. Normalising the envelope by its own maximum is the fault both share.
+  Floor: a single global value per recording, in dBFS -- the 10th percentile of the ENVELOPE (not the
+  raw waveform), one number for the whole file rather than a rolling one. Owner-directed this
+  session, replacing a rolling 3 s / 10th-percentile-of-the-envelope floor (benchmarks/spans.md),
+  which on continuous real speech with no genuine internal silence tracked whichever moment happened
+  to be quietest inside whatever 3 s window currently surrounded the walk -- a swing of 20+ dB across
+  one uninterrupted utterance, verified on had_that_curiosity.wav, because "the 10th percentile of
+  recent speech" is not "the background noise floor" when there is no pause long enough to expose
+  one. It also fed a span's offset threshold from the floor at the peak's own sample, never re-read
+  as the walk advanced away from it, so a peak sitting where that rolling floor happened to read low
+  produced an unusually permissive threshold far from where the walk ended up -- the mechanism behind
+  a real multi-scene composite collapsing into one merged span once an unrelated gain-curve bug
+  stopped masking it. A single global number removes the staleness entirely: there is no longer a
+  floor value tied to one sample's position for a later sample to have drifted away from. The
+  percentile is read from the envelope specifically, not the raw waveform, so it stays the same
+  statistic ``rise`` (envelope minus floor) already compares -- a first attempt read it from
+  ``|samples|`` instead and was caught before shipping: a stationary noise floor's raw-sample 10th
+  percentile and its own Hilbert-envelope median differ by a fixed ~19.8 dB regardless of the noise's
+  actual level (the Rayleigh-vs-half-normal ratio of the same process), which put ordinary background
+  noise above both spans.k_db values with no real event present at all -- verified directly: a plain
+  noise-bed-plus-one-burst fixture measured a median ``rise`` of 19.4 dB with no burst in sight. 10.0
+  is carried over from the retired rolling floor's own percentile, not re-derived for the new
+  definition.
 
-  Span onset drop 15 dB, peak-anchored -- benchmarks/spans.md. 5 of 6 labelled onsets inside their
-  declared windows, against 2 of 6 for a floor-referenced threshold on the same envelope. Since
-  extended (propose_spans) to also walk back while the sample is >= k_db above its own local floor,
-  additive to the peak-anchored rule rather than a replacement: a sustained target-span event whose
-  envelope dips internally more than 15 dB below its own peak -- measured on a gain-curve settling
-  artifact, but the same shape any two-syllable amplitude modulation could produce -- was read as
-  already ended by the peak-anchored rule alone, though every sample in the dip stayed >25 dB above
-  the local floor. The added clause only ever extends the walk further back, never less far, so it
-  cannot change any of the 5 onsets the original benchmark already placed correctly.
+  Span walk-stop: 12 dB above the floor, sustained for 300 ms, the same rule for onset (walking
+  backward) and offset (walking forward) -- owner-directed this session, replacing the asymmetric
+  pair this file previously carried: a peak-anchored onset (benchmarked at 5 of 6 correct against
+  2 of 6 for a floor-referenced rule) paired with a 0.7-of-range offset and a 120 ms hangover
+  (median offset error 84.3 ms against 573.9 ms for a fixed peak-10 dB threshold), both
+  benchmarks/spans.md, both measured against the rolling local floor retired above. That pair's
+  asymmetry -- onset checked one sample against two thresholds, offset required a sustained window
+  against a threshold fixed once at the peak's own (rolling) floor value -- is what let a
+  multi-scene recording over-merge once the floor's own staleness stopped being masked by an
+  unrelated gain-curve bug. A floor that is now one global number removes the motivation for a
+  peak-anchored rule at all: neither walk can close for a reason the other would not also close for.
+  12 dB and 300 ms are this session's chosen values, not a corpus fit -- the prior benchmark measured
+  a different rule against a different floor and does not carry over; both numbers are provisional
+  and expected to be refit.
 
-  Span offset 0.7 of each event's own range, 120 ms hangover -- benchmarks/spans.md. Median offset
-  error 84.3 ms against 573.9 ms for a fixed peak-10 dB. A fixed drop cannot serve both a 20 dB
-  mouth sound and a 57 dB cough. The hangover must be shorter than the shortest event to be bounded:
-  at 250 ms it overshoots a 202 ms click by 418 ms.
-
-  Span propose K, per reader -- benchmarks/spans.md and snr.md. 18 dB for airway, whose events stand
-  53-57 dB above the floor. 12 dB detects a speech span to +10 dB SNR and still survives an injected
-  click; 8 dB collapses the clean-file span set from six to two by merging, so lower is not freely
-  better. SPEECH no longer reads these spans -- it derives its own from word timings -- so only the
-  airway value is in use.
+  Span propose K, per reader -- benchmarks/spans.md and snr.md. 18 dB for airway, whose events stood
+  53-57 dB above the (then-rolling, now-global) floor. 12 dB detects a speech span to +10 dB SNR and
+  still survives an injected click; 8 dB collapses the clean-file span set from six to two by
+  merging, so lower is not freely better. Both remain the same statistic against the floor
+  (envelope percentile vs. envelope, see Floor above) rather than a rolling vs. a global window of
+  it, so the numbers carry over more directly than a change of floor definition usually would;
+  neither has been re-verified against the global floor specifically. SPEECH no longer reads these
+  spans -- it derives its own from word timings -- so only the airway value is in use.
 
   Pre-emphasis 0.97 -- conventional in speech analysis, not fitted here. It raises event-to-floor
   contrast on every labelled event and most on the two hardest, cough 1 by +10.95 dB and the mouth
@@ -72,9 +93,6 @@ derivation: |
   than this. VOICE skips period_marks for such a run and counts it in marks_skipped_short_n; the
   run's marks measurement records unmeasured rather than a count of zero, because nobody looked.
 
-  Floor evaluation grid 0.1 s -- a granularity rather than a threshold: the percentile is evaluated
-  every 100 ms and interpolated between, which is finer than the 3 s window it summarises.
-
   Resample target 16000 Hz -- benchmarks/preprocess-params.md. Every downstream model is 16 kHz
   native (YAMNet, HeAR, AST, CrisperWhisper, SQUIM), so the choice is one named resample here or N
   inside N backends. At least 96.3% of every labelled event's energy survives an 8 kHz Nyquist; the
@@ -86,7 +104,7 @@ derivation: |
 
   Span min_duration_ms 50 and min_separation_ms 150 -- conventional. The first discards a proposal
   shorter than anything the instruments here localise; the second stops one event yielding several
-  peaks. Neither is fitted, and both are weaker than the three rules above them.
+  peaks. Neither is fitted, and both are weaker than the rules above them.
 
   HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
   length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
@@ -375,17 +393,6 @@ derivation: |
   merge nearby ones before treating a clip event as a genuine plateau, exactly as spans.min_duration_ms
   and spans.min_separation_ms already do for envelope-peak spans. Neither has a corpus behind it yet.
 
-  normalization.floor_window_s, .floor_percentile, .floor_eval_grid_s -- the local floor
-  rolling_floor_dbfs computes over the NORMALIZED envelope, feeding target_spans. Deliberately not a
-  reuse of floor.window_s/percentile/eval_grid_s: that 3 s window is fitted for the airway-scale
-  envelope spans block (spans.k_db.airway's own events), and target_spans is meant to isolate an
-  event as short as one word surrounded by silence. A +/-1.5 s window blends in whatever sits up to
-  1.5 s away -- for a single word, very likely another word or a scene boundary, not that word's own
-  immediate silence -- so the airway floor's window would misrepresent a much shorter timescale.
-  Null until a corpus fixes what "immediate" means at word scale; comparable in spirit to
-  speech.word_gap_ms, which is the same "how much silence separates two events" question asked by a
-  different mechanism (word timestamps rather than a floor window) and is equally null.
-
   normalization.* -- audio/tasks/envelope.dynamic_range_normalize. Every key is null. The function's
   own reference implementation (a pasted sketch reviewed and reworked to reuse hilbert_envelope_dbfs
   for both its macro and micro envelopes instead of a bespoke rectify-and-filter) carried illustrative
@@ -394,13 +401,13 @@ derivation: |
   are the shape of a reasonable algorithm, not a fitted one. Carrying them over as defaults here would
   be exactly the trap this file exists to avoid. While every key is null, PREPROCESS's normalized
   envelope and the target spans built from it are absent, which is the honest state until a campaign
-  measures and supplies all ten.
+  measures and supplies all eight.
 
   normalization.macro_smoothing.window_s, .micro_smoothing.window_s --
   audio/tasks/envelope.MedianSmoothing, plugged into hilbert_envelope_dbfs for the two internal
   envelopes dynamic_range_normalize derives its gain curve from. Chosen over a zero-phase Butterworth
   (envelope.lowpass_hz's own ButterworthSmoothing) after comparing the two on the same word-burst
-  composite used to validate normalization.floor_window_s: the Butterworth showed a clear overshoot
+  composite used elsewhere in this session's work on the target-span block: the Butterworth showed a clear overshoot
   at a word's onset -- a dip past the pre-onset baseline that a forward-and-backward filtfilt spreads
   to both sides of the transient it is reacting to -- because its output is a resonant filter's
   response and can take a value the signal never did. A median's output is always one of the
@@ -465,14 +472,11 @@ envelope:
   filter_order: 4
 
 floor:
-  window_s: 3.0
   percentile: 10.0
-  eval_grid_s: 0.1
 
 spans:
-  onset_drop_db: 15.0
-  offset_fraction: 0.7
-  hangover_ms: 120
+  floor_margin_db: 12.0
+  transition_window_ms: 300
   min_duration_ms: 50
   min_separation_ms: 150
   k_db:
@@ -501,9 +505,6 @@ normalization:
     window_s: null
   floor_dbfs: null
   ceiling: null
-  floor_window_s: null
-  floor_percentile: null
-  floor_eval_grid_s: null
 
 spectrogram:
   wideband_window_ms: 5.0

@@ -108,10 +108,10 @@ Each block below is independent (one try/except each), with its own config:
 |---|---|
 | resample + downmix | `resample.target_hz` |
 | pre-emphasis | `preemphasis.enabled`, `preemphasis.coefficient` |
-| energy envelope + floor (airway signal) | `envelope.lowpass_hz`, `envelope.filter_order` (`ButterworthSmoothing`, fitted — see this file's own derivation), `floor.window_s`, `floor.percentile`, `floor.eval_grid_s` |
-| envelope-peak span proposals (`family=None`, airway K) | `spans.k_db.airway`, `spans.onset_drop_db`, `spans.offset_fraction`, `spans.hangover_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` |
+| energy envelope + floor (airway signal) | `envelope.lowpass_hz`, `envelope.filter_order` (`ButterworthSmoothing`, fitted — see this file's own derivation), `floor.percentile` — the floor is a single global value for the whole recording (10th percentile of the envelope itself), not a rolling window; shared with the normalized-signal floor below rather than each block carrying its own window |
+| envelope-peak span proposals (`family=None`, airway K) | `spans.k_db.airway`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` — onset and offset walk by the identical rule (stop within `floor_margin_db` of the floor, sustained for `transition_window_ms`), replacing an asymmetric peak-anchored-onset/floor-fraction-offset pair |
 | clip-event spans (`family="clip"`), ClipDaT over the *original* recording | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme`, `clipping.min_duration_ms`, `clipping.merge_gap_ms` — the last two null in the packaged config |
-| dynamically-normalized signal + its own envelope/floor | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s`, `.envelope_smoothing.window_s` (all `MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset — see `envelope/api.py`'s `EnvelopeSmoothing` docstrings), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smooth_hz` (still `ButterworthSmoothing` — smooths a gain multiplier, not an envelope), `.gain_filter_order`, `.floor_dbfs`, `.ceiling`, `.floor_window_s`, `.floor_percentile`, `.floor_eval_grid_s` — **every key here is null in the packaged config** |
+| dynamically-normalized signal + its own envelope/floor | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, the envelope actually used for target-span detection), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling` — the floor itself reuses `floor.percentile` above, computed over this block's own (normalized) envelope |
 | target-span proposals (`family="target"`, general foreground-energy K), flagged `contains_clip` on overlap with a clip span | `spans.k_db.target` (null) plus the shared `spans.*` keys above |
 | per-target-span quality: `target_span_squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
 | per-target-span quality: `target_span_hear` (on the *normalized* signal, AIRWAY's own per-span buffer/native-window split, raw scores only) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
@@ -130,7 +130,8 @@ Each block below is independent (one try/except each), with its own config:
 Dynamic-range normalization is `envelope.dynamic_range_normalize` — a slow (`macro_smoothing`) and a
 fast (`micro_smoothing`) envelope of the same signal via `hilbert_envelope_dbfs`, their difference
 compressed toward `target_dr_db`, macro-leveled toward `macro_target_dbfs`, smoothed once more
-(`gain_smooth_hz`) and applied to the original waveform with a `ceiling` safety clamp. Clip detection
+(`gain_smoothing.window_s`, `MedianSmoothing`) and applied to the original waveform with a `ceiling`
+safety clamp. Clip detection
 (`clipping.*`, ClipDaT) runs on the *original* recording before this, on the stated assumption that
 gain was fixed during recording — normalization only redistributes level, so a genuinely clipped
 sample stays clipped through it rather than being smoothed away.
