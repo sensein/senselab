@@ -19,11 +19,11 @@ class TestMeasuredValues:
         """Each measured value reads back exactly as the file states it."""
         cfg = load_triage_config()
         assert cfg.require("envelope.lowpass_hz") == 40.0
-        assert cfg.require("spans.onset_drop_db") == 15.0
-        assert cfg.require("spans.offset_fraction") == 0.7
+        assert cfg.require("spans.floor_margin_db") == 12.0
+        assert cfg.require("spans.transition_window_ms") == 300
         assert cfg.require("spans.k_db.airway") == 18.0
         assert cfg.require("preemphasis.coefficient") == 0.97
-        assert cfg.require("floor.eval_grid_s") == 0.1
+        assert cfg.require("floor.percentile") == 10.0
         assert cfg.require("phonation.periods_per_window") == 4.5
 
     def test_the_required_detectors_are_the_pii_modules_own_inventory(self) -> None:
@@ -107,14 +107,14 @@ class TestOverrides:
     def test_an_override_changes_the_hash(self, tmp_path: Path) -> None:
         """Two different merged mappings never share a hash."""
         override = tmp_path / "o.yaml"
-        override.write_text("spans:\n  onset_drop_db: 12.0\n")
+        override.write_text("spans:\n  floor_margin_db: 8.0\n")
         assert load_triage_config(override).config_hash != load_triage_config().config_hash
 
     def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path: Path) -> None:
         """A typo in an override key is an error, not a no-op."""
         override = tmp_path / "o.yaml"
-        override.write_text("spans:\n  onset_drpo_db: 12.0\n")
-        with pytest.raises(ValueError, match="onset_drpo_db"):
+        override.write_text("spans:\n  floor_margni_db: 8.0\n")
+        with pytest.raises(ValueError, match="floor_margni_db"):
             load_triage_config(override)
 
 

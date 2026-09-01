@@ -1,4 +1,4 @@
-"""Amplitude envelope, local floor, and dynamic-range normalization built on both."""
+"""Amplitude envelope, global floor, and dynamic-range normalization built on both."""
 
 from senselab.audio.tasks.envelope.api import (
     ButterworthSmoothing,
@@ -6,8 +6,8 @@ from senselab.audio.tasks.envelope.api import (
     MedianSmoothing,
     PercentileSmoothing,
     dynamic_range_normalize,
+    global_floor_dbfs,
     hilbert_envelope_dbfs,
-    rolling_floor_dbfs,
 )
 
 __all__ = [
@@ -16,6 +16,6 @@ __all__ = [
     "MedianSmoothing",
     "PercentileSmoothing",
     "dynamic_range_normalize",
+    "global_floor_dbfs",
     "hilbert_envelope_dbfs",
-    "rolling_floor_dbfs",
 ]

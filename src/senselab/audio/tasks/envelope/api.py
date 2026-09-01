@@ -1,4 +1,4 @@
-"""The broadband amplitude envelope, in dBFS, and a floor that tracks the recording."""
+"""The broadband amplitude envelope, in dBFS, and the recording's own global floor."""
 
 from __future__ import annotations
 
@@ -123,38 +123,32 @@ def hilbert_envelope_dbfs(audio: Audio, *, smoothing: EnvelopeSmoothing) -> np.n
     return out
 
 
-def rolling_floor_dbfs(
-    envelope_db: np.ndarray,
-    sampling_rate: int,
-    *,
-    window_s: float,
-    percentile: float,
-    eval_grid_s: float,
-) -> np.ndarray:
-    """A low percentile of the envelope over a sliding window.
+def global_floor_dbfs(envelope_db: np.ndarray, *, percentile: float) -> float:
+    """A single low percentile of the envelope, over the whole recording.
+
+    One number for the whole signal, not a rolling one: a rolling percentile of the envelope tracked
+    whichever moment happened to be quietest inside whatever window currently surrounded the walk,
+    which on continuous real speech with no genuine internal silence swings by 20+ dB across one
+    uninterrupted utterance — "quietest recent speech" is not "background noise" when there is no
+    pause long enough to expose one. It also fed a span's offset threshold from the floor at the
+    peak's own sample, never re-read as the walk advanced away from it. A single global value removes
+    both: there is no per-sample floor for a later sample to have drifted away from. Reading the
+    percentile from the envelope rather than the raw waveform keeps it directly comparable to
+    ``envelope_db`` in :func:`~senselab.audio.tasks.spans.api.propose_spans`'s ``rise``: a floor and
+    an envelope are the same statistic of the same underlying quantity, not two different summaries
+    of two different signals a fixed number of dB apart regardless of level.
 
     Args:
         envelope_db: Output of :func:`hilbert_envelope_dbfs`, ``nan`` where it had no dB value.
-        sampling_rate: Samples per second of ``envelope_db``.
-        window_s: Width of the sliding window. Read it from ``floor.window_s``.
-        percentile: Which percentile within the window is the floor. Config `floor.percentile`.
-        eval_grid_s: How often the percentile is evaluated before interpolation. Read it from
-            ``floor.eval_grid_s``.
+        percentile: Which percentile of the envelope is the floor. Read it from ``floor.percentile``.
 
     Returns:
-        One floor value per sample of ``envelope_db``, taken over that window's measured samples.
-        A window holding none reads ``nan``, and so does every sample interpolating from it.
+        One dBFS value for the whole recording, over its measured samples. ``nan`` when nothing in
+        the envelope was measurable at all — propagates cleanly to
+        :class:`~senselab.audio.tasks.spans.api.NoContrast` rather than a fabricated number.
     """
-    n = len(envelope_db)
-    half = int(window_s * sampling_rate) // 2
-    step = max(1, int(eval_grid_s * sampling_rate))
-    centres = range(0, n, step)
-    vals: list[float] = []
-    for c in centres:
-        window = envelope_db[max(0, c - half) : min(n, c + half)]
-        measured = window[np.isfinite(window)]
-        vals.append(float(np.percentile(measured, percentile)) if measured.size else float("nan"))
-    return np.interp(np.arange(n), centres, vals)
+    measured = envelope_db[np.isfinite(envelope_db)]
+    return float(np.percentile(measured, percentile)) if measured.size else float("nan")
 
 
 def dynamic_range_normalize(
