@@ -19,7 +19,7 @@ from senselab.audio.data_structures import AudioHints
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import airway as airway_module
 from senselab.audio.workflows.triage.nodes.airway import airway
-from senselab.audio.workflows.triage.nodes.common import live_entities
+from senselab.audio.workflows.triage.nodes.common import live_entities, write_verdict
 from senselab.audio.workflows.triage.nodes.routing import routing
 from senselab.audio.workflows.triage.nodes.verdict import verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome, Triage
@@ -129,6 +129,9 @@ def _seed_airway_store(  # noqa: C901 — one independent block per derivative, 
     activity = store.activity(node="PREPROCESS", step="seed", parameters={})
     agent = store.agent(agent_type="software", version="senselab test-seed")
     store.was_associated_with(activity, agent)
+    # PREPROCESS shipped this evidence, so the fold must read it as completed, not errored (N26):
+    # an activity with no concluding verdict reads as PREPROCESS having raised.
+    write_verdict(store, activity, agent, node="PREPROCESS", outcome=Outcome.PASS, kind=None, why="seeded", detail={})
     ids: dict[str, Any] = {"spans": [], "words": [], "events": [], "hear": [], "yamnet": []}
 
     def _write(prov_type: str, extent: tuple[float, float] | None, attributes: dict[str, Any]) -> str:

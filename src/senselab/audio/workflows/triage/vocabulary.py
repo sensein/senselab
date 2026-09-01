@@ -72,6 +72,7 @@ FOUND_UNCLAIMED = "found_unclaimed"
 NO_CLAIM = "no_claim"
 
 _ADMIT = "ADMIT"
+_PREPROCESS = "PREPROCESS"
 _REDACT = "REDACT"
 _VERDICT = "VERDICT"
 _ROUTING = "routing"
@@ -262,7 +263,10 @@ def fold_file_verdict(
 
     A branch is the authority on its own kind and on nothing else: its conclusion stands in ``kinds``
     whatever TAXONOMY classified, and the disagreement is recorded in ``agreement`` rather than
-    resolved by precedence. A branch ``fail`` is not a file ``discard``.
+    resolved by precedence. A branch ``fail`` is not a file ``discard``. PREPROCESS and ROUTING are
+    each a gate every later node depends on, so a raise there is folded from ``ran`` rather than a
+    verdict entity: a node that raised wrote none, so it is otherwise invisible to this fold, and a
+    silent, evidence-free ``pass`` would be a worse outcome than the flag reported here.
 
     Args:
         node_verdicts: Every node's conclusion, in graph order, one per node.
@@ -307,6 +311,15 @@ def fold_file_verdict(
         bad_map_values.update(recorded.bad_map_values)
 
     reasons = list(node_verdicts)
+    if ran.get(_PREPROCESS) is RunState.ERRORED:
+        reasons.append(
+            NodeVerdict(
+                _PREPROCESS,
+                Outcome.FLAG,
+                None,
+                "preprocess failed; no derivative was measured because conditioning itself did not complete",
+            )
+        )
     if ran.get(_ROUTING) is RunState.ERRORED:
         reasons.append(
             NodeVerdict(

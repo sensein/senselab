@@ -7,7 +7,7 @@ import warnings
 import numpy as np
 import pytest
 
-from senselab.audio.tasks.spans import NoContrast, Span, propose_spans
+from senselab.audio.tasks.spans import NoContrast, Span, group_extents_into_runs, propose_spans
 
 SR = 16000
 
@@ -105,9 +105,9 @@ class TestTheMergeRate:
         (span,) = out
         assert span.merged_proposals == 1
 
-    def test_two_overlapping_proposals_report_two(self) -> None:
-        """Two peaks over one shoulder propose two spans covering it; the survivor says so."""
-        env = _envelope([(2.0, 2.2, -20.0), (2.2, 2.4, -25.0), (2.4, 2.6, -20.0)])
+    def test_two_close_crossings_report_two(self) -> None:
+        """Two threshold-crossings nearer than min_separation_ms are one proposal, absorbed as two."""
+        env = _envelope([(2.0, 2.2, -20.0), (2.21, 2.4, -20.0)])
         out = _propose(env, -55.0)
         assert isinstance(out, list)
         assert len(out) == 1
@@ -212,3 +212,26 @@ class TestAnUnmeasurableEnvelope:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert isinstance(_propose(env, -55.0), NoContrast)
+
+
+class TestGroupExtentsIntoRuns:
+    """The generic word/extent grouper shared by PREPROCESS's ASR spans and SPEECH's own spans."""
+
+    def test_a_gap_over_the_threshold_starts_a_new_run(self) -> None:
+        """Two extents 200 ms apart, with a 150 ms gap threshold, stay two runs."""
+        runs = group_extents_into_runs([(0.0, 0.5), (0.7, 1.0)], gap_ms=150.0)
+        assert runs == [(0.0, 0.5, [0]), (0.7, 1.0, [1])]
+
+    def test_a_gap_under_the_threshold_merges_into_one_run(self) -> None:
+        """Two extents 100 ms apart, with a 150 ms gap threshold, merge into one run."""
+        runs = group_extents_into_runs([(0.0, 0.5), (0.6, 1.0)], gap_ms=150.0)
+        assert runs == [(0.0, 1.0, [0, 1])]
+
+    def test_input_order_does_not_matter(self) -> None:
+        """Extents are sorted by start before grouping; member indices still refer to the input."""
+        runs = group_extents_into_runs([(0.6, 1.0), (0.0, 0.5)], gap_ms=150.0)
+        assert runs == [(0.0, 1.0, [1, 0])]
+
+    def test_no_extents_is_no_runs(self) -> None:
+        """An empty input produces an empty output, not an error."""
+        assert group_extents_into_runs([], gap_ms=150.0) == []

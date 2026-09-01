@@ -17,6 +17,11 @@ def _steps(store: ProvStore) -> list[str | None]:
     return [activity.step for activity in store.activities("PREPROCESS")]
 
 
+def _taxonomy_steps(store: ProvStore) -> list[str | None]:
+    """Every TAXONOMY activity step the seeder recorded -- phonation-span detection's new home."""
+    return [activity.step for activity in store.activities("TAXONOMY")]
+
+
 class TestSeeder:
     """The shared seeder writes what the contract says it writes."""
 
@@ -39,7 +44,7 @@ class TestSeeder:
         pooled = find_measurement(store, "yamnet_windows")
         assert pooled is not None
         assert pooled.attributes["n_windows"] == 0
-        assert _steps(store).count("phonation_spans") == 1
+        assert _taxonomy_steps(store).count("phonation_spans") == 1
 
     def test_every_documented_argument_tells_none_from_empty(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None]

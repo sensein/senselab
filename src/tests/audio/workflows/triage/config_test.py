@@ -20,10 +20,10 @@ class TestMeasuredValues:
         cfg = load_triage_config()
         assert cfg.require("envelope.lowpass_hz") == 40.0
         assert cfg.require("spans.floor_margin_db") == 12.0
-        assert cfg.require("spans.transition_window_ms") == 300
-        assert cfg.require("spans.k_db.airway") == 18.0
+        assert cfg.require("spans.transition_window_ms") == 30
+        assert cfg.require("spans.k_db") == 6.0
         assert cfg.require("preemphasis.coefficient") == 0.97
-        assert cfg.require("floor.percentile") == 10.0
+        assert cfg.require("floor.percentile") == 5.0
         assert cfg.require("phonation.periods_per_window") == 4.5
 
     def test_the_required_detectors_are_the_pii_modules_own_inventory(self) -> None:
@@ -141,13 +141,6 @@ class TestOverridesMayExtendADataMap:
         override = tmp_path / "o.yaml"
         override.write_text("airway:\n  confirmation_map:\n    Breathe: [Breathing]\n")
         assert load_triage_config(override).require("airway.confirmation_map")["Breathe"] == ["Breathing"]
-
-    def test_a_new_span_gate_kind_is_accepted(self, tmp_path: Path) -> None:
-        """``spans.k_db`` is keyed by kind, and a kind is data the caller supplies."""
-        override = tmp_path / "o.yaml"
-        override.write_text("spans:\n  k_db:\n    speech: 12.0\n")
-        cfg = load_triage_config(override)
-        assert cfg.require("spans.k_db") == {"airway": 18.0, "target": None, "speech": 12.0}
 
     def test_a_null_data_map_still_takes_a_whole_mapping(self, tmp_path: Path) -> None:
         """The control: the paths that ship null must keep accepting the mapping that fills them."""

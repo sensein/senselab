@@ -107,6 +107,33 @@ def write_verdict(
     return entity_id, NodeVerdict(node=node, outcome=outcome, kind=kind, why=why)
 
 
+def write_measurement(
+    store: ProvStore,
+    activity_id: str,
+    agent_id: str,
+    *,
+    name: str,
+    signal: str,
+    attributes: dict[str, Any],
+    derived_from: tuple[str, ...] = (),
+    extent: tuple[float, float] | None = None,
+) -> str:
+    """Write one derivative measurement entity with its provenance.
+
+    Shared across nodes: PREPROCESS writes most measurements, but a node further downstream (e.g.
+    TAXONOMY proposing phonation spans from PREPROCESS's own track measurement) writes in the same
+    shape, so both call this rather than each keeping its own copy.
+    """
+    entity_id = store.entity(
+        prov_type="measurement", extent=extent, attributes={"name": name, "signal": signal, **attributes}
+    )
+    store.was_generated_by(entity_id, activity_id)
+    store.was_attributed_to(entity_id, agent_id)
+    for source_id in derived_from:
+        store.was_derived_from(entity_id, source_id)
+    return entity_id
+
+
 def clamp_extent(extent: tuple[float, float], audio: Audio) -> tuple[float, float]:
     """Bound an extent's end by the decoded audio, when the overshoot is under one sample period.
 

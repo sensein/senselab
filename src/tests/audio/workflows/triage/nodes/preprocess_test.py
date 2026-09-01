@@ -5,118 +5,24 @@ from typing import Any, Callable
 
 import numpy as np
 import pytest
-from scipy.signal import lfilter
+import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
-from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
 from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID, preprocess
 from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
-from tests.audio.workflows.triage.nodes.conftest import window
-
-SR = 16000
-
-
-class _FakeModel:
-    """A model spec stub carrying exactly what the node reads: path_or_uri and commit_sha."""
-
-    def __init__(self, path_or_uri: str) -> None:
-        """Stub a resolved model."""
-        self.path_or_uri = path_or_uri
-        self.commit_sha = "a" * 40
-
-
-def _resonate(excitation: np.ndarray, formants: np.ndarray, bandwidth: float = 80.0) -> np.ndarray:
-    """Pass an excitation through one two-pole resonator per column of ``formants``."""
-    out = excitation.astype(np.float64)
-    r = float(np.exp(-np.pi * bandwidth / SR))
-    for column in range(formants.shape[1]):
-        track = formants[:, column]
-        if float(track.min()) == float(track.max()):
-            centre = float(track[0])
-            out = lfilter([1.0 - r], [1.0, -2 * r * np.cos(2 * np.pi * centre / SR), r * r], out)
-            continue
-        filtered = np.zeros_like(out)
-        previous, before = 0.0, 0.0
-        for index, centre in enumerate(track):
-            filtered[index] = (
-                (1.0 - r) * out[index] + 2 * r * np.cos(2 * np.pi * centre / SR) * previous - r * r * before
-            )
-            before, previous = previous, filtered[index]
-        out = filtered
-    return np.asarray(out / (np.abs(out).max() + 1e-12), dtype=np.float64)
-
-
-def _pulses(rate_hz: np.ndarray) -> np.ndarray:
-    """A pulse train whose instantaneous rate follows ``rate_hz``."""
-    out = np.zeros(len(rate_hz))
-    phase = 0.0
-    for index, rate in enumerate(rate_hz):
-        phase += rate / SR
-        if phase >= 1.0:
-            phase -= 1.0
-            out[index] = 1.0
-    return out
-
-
-def _fixed(centres: tuple[float, ...], n_samples: int) -> np.ndarray:
-    """A constant formant track, one column per centre frequency."""
-    return np.tile(np.array([list(centres)]), (n_samples, 1))
-
-
-def _steady_vowel() -> np.ndarray:
-    """1.5 s of a 200 Hz buzz through fixed resonators: a sustained, voiced production."""
-    n_samples = int(1.5 * SR)
-    return _resonate(_pulses(np.full(n_samples, 200.0)), _fixed((700.0, 1200.0, 2600.0), n_samples))
-
-
-def _steady_noise() -> np.ndarray:
-    """1.5 s of noise through the same resonators: a sustain with no periodicity at all."""
-    n_samples = int(1.5 * SR)
-    excitation = np.random.default_rng(0).standard_normal(n_samples)
-    return _resonate(excitation, _fixed((700.0, 1200.0, 2600.0), n_samples))
-
-
-def _broadband_noise() -> np.ndarray:
-    """1.5 s of steady broadband noise, deliberately lacking vocal-tract resonances."""
-    return np.random.default_rng(0).standard_normal(int(1.5 * SR))
-
-
-def _rising_glide() -> np.ndarray:
-    """0.3 s in which F0 and the resonances both sweep upward faster than either limb tolerates."""
-    n_samples = int(0.3 * SR)
-    ramp = np.linspace(0.0, 1.0, n_samples)
-    resonances = np.stack([300.0 + 3300.0 * ramp, 900.0 + 3500.0 * ramp], axis=1)
-    swept = _resonate(_pulses(150.0 * (480.0 / 150.0) ** ramp), resonances)
-    return np.concatenate([swept, np.zeros(int(0.2 * SR))])
-
-
-def _line(text: str) -> ScriptLine:
-    """One recognizer's result: a chunk per whitespace-separated token, 0.3 s apart."""
-    tokens = [token for token in text.split() if token]
-    chunks = [
-        ScriptLine(text=token, start=0.5 + index * 0.3, end=0.5 + index * 0.3 + 0.2, score=0.9)
-        for index, token in enumerate(tokens)
-    ]
-    if not chunks:
-        return ScriptLine(text="", start=0.0, end=0.0, chunks=None, score=0.9)
-    return ScriptLine(text=text, start=chunks[0].start, end=chunks[-1].end, chunks=chunks, score=0.9)
-
-
-def _seed_admit(
-    store: ProvStore,
-    tmp_path: Path,
-    wav_writer: Callable[..., Path],
-    samples: np.ndarray | None = None,
-    sampling_rate: int = SR,
-) -> None:
-    """Write the fixture recording and run ADMIT over it, so the ``recording`` stream exists."""
-    path = wav_writer("input.wav", _default_samples() if samples is None else samples, sampling_rate)
-    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
-    assert admitted.audio is not None
+from tests.audio.workflows.triage.nodes.conftest import (
+    SR,
+    _audio,
+    _default_samples,
+    _line,
+    _seed_admit,
+    _stub_models,
+    window,
+)
 
 
 def _clipped_at_44k() -> np.ndarray:
@@ -125,73 +31,15 @@ def _clipped_at_44k() -> np.ndarray:
     return np.clip(1.5 * np.sin(2 * np.pi * 220.0 * grid), -1.0, 1.0).astype(np.float32)
 
 
-def _default_samples() -> np.ndarray:
-    """A quiet noise bed with one loud burst — enough contrast for one envelope span."""
-    rng = np.random.default_rng(0)
-    samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
-    start = int(1.5 * SR)
-    stop = start + int(0.15 * SR)
-    grid = np.arange(stop - start) / SR
-    samples[start:stop] += (0.5 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
-    return samples
-
-
 def _merging_bursts() -> np.ndarray:
     """Three tone bursts close enough that the offset rule merges all three into one span."""
     rng = np.random.default_rng(0)
     samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
-    for start, stop, amplitude in ((1.0, 1.15, 0.5), (1.25, 1.4, 0.3), (1.5, 1.65, 0.5)):
+    for start, stop, amplitude in ((1.0, 1.15, 0.5), (1.16, 1.31, 0.3), (1.32, 1.47, 0.5)):
         i0, i1 = int(start * SR), int(stop * SR)
         grid = np.arange(i1 - i0) / SR
         samples[i0:i1] += (amplitude * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
     return samples
-
-
-def _audio(tmp_path: Path) -> Audio:
-    """The fixture recording, as ADMIT returned it."""
-    return Audio(filepath=str(tmp_path / "input.wav"))
-
-
-def _stub_models(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    yamnet: list[dict[str, Any]] | None = None,
-    ast: list[dict[str, Any]] | None = None,
-    hear: list[dict[str, Any]] | None = None,
-    crisper: ScriptLine | None = None,
-    qwen: ScriptLine | None = None,
-    record: dict[str, Any] | None = None,
-) -> None:
-    """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs."""
-    seen = record if record is not None else {}
-
-    def fake_classify(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
-        """YAMNet or AST, told apart by the model the node passed."""
-        which = "yamnet" if model == "yamnet" else "ast"
-        seen[which] = {"model": model, **kwargs}
-        return [list(yamnet or []) if which == "yamnet" else list(ast or [])]
-
-    def fake_hear(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
-        """HeAR's event detector, on its fixed 2 s window."""
-        seen["hear"] = dict(kwargs)
-        return [list(hear or [])]
-
-    def fake_transcribe(audios: list, model: _FakeModel, **kwargs: Any) -> list:  # noqa: ANN401
-        """Whichever recognizer the node asked for."""
-        seen.setdefault("transcribe", []).append(str(model.path_or_uri))
-        return [(crisper if str(model.path_or_uri) == CRISPERWHISPER_ID else qwen) or _line("")]
-
-    def fake_squim(audios: list, device: Any = None) -> list:  # noqa: ANN401
-        """One objective-head dict per input."""
-        return [{"stoi": 0.91, "pesq": 1.8, "si_sdr": 7.5} for _ in audios]
-
-    monkeypatch.setattr(preprocess_module, "_crisperwhisper_model", lambda: _FakeModel(CRISPERWHISPER_ID))
-    monkeypatch.setattr(preprocess_module, "_qwen_model", lambda: _FakeModel(QWEN_ID))
-    monkeypatch.setattr(preprocess_module, "_ast_model", lambda: _FakeModel(preprocess_module.AST_ID))
-    monkeypatch.setattr(preprocess_module, "classify_audios", fake_classify)
-    monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
-    monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
-    monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
 
 
 class TestWindowClassificationsAreSets:
@@ -392,19 +240,26 @@ class TestSpansCarryTheirMergeRate:
     ) -> None:
         """Three bursts, one span, and the stored entity names every proposal that span absorbed.
 
-        The count is proposals rather than events: the three bursts and the envelope's ripple lobe in
-        the gap between the second and third each clear the gate, and one span covers all four. The
-        count is written by ``propose_spans`` and copied onto the entity by the node, so this is the
-        assertion that keeps sibling T6's merge-rate report reading production rather than a fixture.
-        Asserting the exact number is what makes it discriminating: a node that hard-coded the field,
-        or a fixture that supplied it, would read one.
+        The count is raw threshold-crossings rather than events: the three bursts' own inter-burst
+        gaps never drop the envelope back below k_db, so the three bursts alone read as one
+        continuous crossing, plus a brief pre-onset and post-offset ring each from the zero-phase
+        Butterworth envelope -- three crossings in total, close enough together (well under
+        min_separation_ms) to be absorbed as one proposal. The count is written by ``propose_spans``
+        and copied onto the entity by the node, so this is the assertion that keeps sibling T6's
+        merge-rate report reading production rather than a fixture. Asserting the exact number is
+        what makes it discriminating: a node that hard-coded the field, or a fixture that supplied
+        it, would read one.
         """
         _seed_admit(store, tmp_path, wav_writer, samples=_merging_bursts())
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        spans = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("family") is None and e.attributes.get("measure") == "amplitude"
+        ]
         assert len(spans) == 1
-        assert spans[0].attributes["merged_proposals"] == 4
+        assert spans[0].attributes["merged_proposals"] == 3
 
     def test_an_unmerged_span_reports_one(
         self,
@@ -416,16 +271,21 @@ class TestSpansCarryTheirMergeRate:
     ) -> None:
         """The contrast the merged case needs: one burst absorbs a small, non-zero proposal count.
 
-        Two, not one: the tone's abrupt onset and offset each ring the zero-phase Butterworth
+        Three, not one: the tone's abrupt onset and offset each ring the zero-phase Butterworth
         envelope (the same overshoot ``TestAnUnmeasurableSampleHasNoDecibelValue`` documents),
-        producing two local maxima 164 ms apart -- over min_separation_ms's 150 ms gate, so both
-        survive as distinct peaks, then merge into the one span their walked extents overlap in.
+        each ring briefly crossing k_db above the floor as its own ~12 ms run before and after the
+        166 ms sustained crossing the tone itself produces -- three raw crossings, all well under
+        min_separation_ms's 150 ms gate, absorbed as one proposal into the one span they produce.
         """
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
-        assert [e.attributes["merged_proposals"] for e in spans] == [2]
+        spans = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("family") is None and e.attributes.get("measure") == "amplitude"
+        ]
+        assert [e.attributes["merged_proposals"] for e in spans] == [3]
 
 
 def _burst_that_also_clips() -> np.ndarray:
@@ -441,13 +301,130 @@ def _burst_that_also_clips() -> np.ndarray:
     return samples
 
 
-class TestClipAndTargetSpans:
-    """ClipDaT-derived clip spans, and the generalized target spans that flag overlap with one."""
+def _quiet_sustained_tone() -> np.ndarray:
+    """A 500 ms tone too soft to clear the amplitude gate, in an otherwise quiet noise bed.
+
+    1e-3 amplitude against a 1e-4 noise bed: measured directly (through the same pre-emphasis
+    PREPROCESS applies), this stays below spans.k_db=6 on the pre-emphasised envelope -- no
+    amplitude span at all -- while its steady harmonic content clears spans.continuity_margin=0.03
+    easily. The scenario the continuity pass exists for.
+    """
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
+    start = int(1.0 * SR)
+    stop = start + int(0.5 * SR)
+    grid = np.arange(stop - start) / SR
+    samples[start:stop] += (1e-3 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    return samples
+
+
+class TestSpectralContinuitySpans:
+    """A third span source: a sustained tone too soft for either amplitude pass, caught on shape."""
+
+    def test_a_span_too_quiet_for_amplitude_is_found_by_continuity(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No amplitude span exists for this fixture; the continuity pass is what finds anything."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_quiet_sustained_tone())
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert spans
+        assert all(e.attributes["measure"] == "continuity" for e in spans)
+        assert "peak_over_floor_continuity" in spans[0].attributes
+        assert "k_db" not in spans[0].attributes
+
+
+class TestAsrSpans:
+    """A fourth span source: the consensus transcript's own word timings, no threshold at all."""
+
+    def test_asr_finds_a_span_neither_amplitude_nor_continuity_did(
+        self,
+        store: ProvStore,
+        asr_span_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A plain noise bed has broad continuity spans elsewhere; ASR alone covers its own gap.
+
+        A stationary noise bed's own spectral shape is steady enough that continuity claims most
+        of the recording (accepted, by-design behavior for background/silence, per the owner) --
+        verified directly against this exact seed and duration: continuity spans (0.10, 1.26),
+        (1.68, 2.01), (2.13, 2.45), (2.51, 2.90), leaving (1.26, 1.68) genuinely uncovered. Two
+        consensus words placed inside that one gap are what this test exercises.
+        """
+        samples = (np.random.default_rng(0).standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
+        _seed_admit(store, tmp_path, wav_writer, samples=samples)
+        first = ScriptLine(text="one", start=1.35, end=1.45, score=0.9)
+        second = ScriptLine(text="two", start=1.5, end=1.55, score=0.9)
+        line = ScriptLine(text="one two", start=1.35, end=1.55, chunks=[first, second], score=0.9)
+        _stub_models(monkeypatch, crisper=line, qwen=line)
+        preprocess(store, _audio(tmp_path), asr_span_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        asr_spans = [e for e in spans if e.attributes["measure"] == "asr"]
+        assert asr_spans
+        assert asr_spans[0].attributes["signal"] == "consensus"
+        assert asr_spans[0].extent == pytest.approx((1.35, 1.55), abs=1e-3)
+        assert asr_spans[0].attributes["merged_proposals"] == 2
+        assert "peak_over_floor_db" not in asr_spans[0].attributes
+        assert "peak_over_floor_continuity" not in asr_spans[0].attributes
+
+    def test_asr_fully_covered_by_an_existing_span_contributes_nothing(
+        self,
+        store: ProvStore,
+        asr_span_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A consensus word landing entirely inside the amplitude burst's span adds no ASR span."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        word = ScriptLine(text="word", start=1.5, end=1.6, score=0.9)
+        line = ScriptLine(text="word", start=1.5, end=1.6, chunks=[word], score=0.9)
+        _stub_models(monkeypatch, crisper=line, qwen=line)
+        preprocess(store, _audio(tmp_path), asr_span_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert spans
+        assert all(e.attributes["measure"] != "asr" for e in spans)
+        assert any(e.attributes["measure"] == "amplitude" for e in spans)
+
+    def test_asr_spans_are_absent_when_consensus_is_absent(
+        self,
+        store: ProvStore,
+        asr_span_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Both recognizers failing leaves no consensus_transcript; the amplitude span still exists."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        _stub_models(monkeypatch)
+
+        def _broken_transcribe(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise ValueError("no recognizer available")
+
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _broken_transcribe)
+        preprocess(store, _audio(tmp_path), asr_span_config, run_dir=tmp_path)
+        assert find_measurement(store, "consensus_transcript") is None
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert spans
+        assert all(e.attributes["measure"] != "asr" for e in spans)
+        assert any(e.attributes["measure"] == "amplitude" for e in spans)
+
+
+class TestClipAndSpans:
+    """ClipDaT-derived clip spans, and the foreground-event spans that flag overlap with one."""
 
     def test_a_hard_clipped_recording_yields_a_clip_span(
         self,
         store: ProvStore,
-        target_spans_config: TriageConfig,
+        spans_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -455,7 +432,7 @@ class TestClipAndTargetSpans:
         """A recording driven past full scale produces a family=clip span over the plateau."""
         _seed_admit(store, tmp_path, wav_writer, samples=_clipped_at_44k(), sampling_rate=44100)
         _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
         clips = [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
         assert clips
         assert clips[0].attributes["signal"] == "recording"
@@ -463,7 +440,7 @@ class TestClipAndTargetSpans:
     def test_a_clean_recording_has_no_clip_spans(
         self,
         store: ProvStore,
-        target_spans_config: TriageConfig,
+        spans_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -471,94 +448,136 @@ class TestClipAndTargetSpans:
         """A quiet bed and one ordinary burst never touch the recording's own extreme repeatedly."""
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
         assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
 
-    def test_a_burst_yields_a_target_span_over_the_normalized_signal(
+    def test_a_burst_yields_a_span_naming_which_signal_found_it(
         self,
         store: ProvStore,
-        target_spans_config: TriageConfig,
+        spans_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The generalized target span exists independently of the airway-only spans block."""
+        """A span carries no family beyond clip-overlap; it names which signal it was proposed over."""
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
-        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
-        assert targets
-        assert targets[0].attributes["signal"] == "normalized"
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert spans
+        assert spans[0].attributes["signal"] in {"preemphasised", "normalized"}
 
-    def test_a_target_span_containing_a_clip_is_flagged_not_excluded(
+    def test_a_span_containing_a_clip_is_flagged_not_excluded(
         self,
         store: ProvStore,
-        target_spans_config: TriageConfig,
+        spans_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Overlap with a clip span is recorded on the target span; it is still measured, not dropped."""
+        """Overlap with a clip span is recorded on the span; it is still measured, not dropped."""
         _seed_admit(store, tmp_path, wav_writer, samples=_burst_that_also_clips())
         _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), target_spans_config, run_dir=tmp_path)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
         clips = [e for e in live_entities(store, "span") if e.attributes.get("family") == "clip"]
-        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
-        assert clips and targets
-        flagged = [e for e in targets if e.attributes["contains_clip"]]
-        clean = [e for e in targets if not e.attributes["contains_clip"]]
-        assert flagged, "the clipped burst's own target span must be flagged"
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert clips and spans
+        flagged = [e for e in spans if e.attributes["contains_clip"]]
+        clean = [e for e in spans if not e.attributes["contains_clip"]]
+        assert flagged, "the clipped burst's own span must be flagged"
         assert clean, "the untouched burst elsewhere must not be flagged"
 
-
-class TestTargetSpanQuality:
-    """Per-target-span SQUIM, HeAR and YAMNet: raw measurements, no labelling decision."""
-
-    def test_squim_measures_one_assertion_per_target_span(
+    def test_a_supplementary_span_is_added_only_where_the_primary_pass_missed(
         self,
         store: ProvStore,
-        target_span_quality_config: TriageConfig,
+        spans_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """SQUIM's objective scores land on the plain signal, one assertion per target span."""
+        """A span the normalized pass finds is added only where it does not overlap a primary one.
+
+        ``dynamic_range_normalize`` is monkeypatched (real AGC parameters do not reliably boost a
+        short, isolated quiet blip enough to demonstrate this deterministically -- measured directly,
+        see the comment this replaces in git history) to a fixed transform: it amplifies a quiet
+        region the primary pass cannot see at all, leaving the rest of the recording, including the
+        main burst, untouched. Real envelope, floor and span-proposal code runs throughout; only the
+        normalization step itself is a stand-in.
+        """
+        samples = _default_samples()
+        quiet_start = int(0.3 * SR)
+        quiet_stop = quiet_start + int(0.1 * SR)
+        grid = np.arange(quiet_stop - quiet_start) / SR
+        samples[quiet_start:quiet_stop] = (1e-4 * np.sin(2 * np.pi * 300.0 * grid)).astype(np.float32)
+
+        def fake_normalize(audio: Audio, **kwargs: Any) -> Audio:  # noqa: ANN401
+            boosted = audio.waveform.clone()
+            tone = (0.5 * np.sin(2 * np.pi * 300.0 * grid)).astype(np.float32)
+            boosted[:, quiet_start:quiet_stop] = torch.as_tensor(tone, dtype=boosted.dtype)
+            return Audio(waveform=boosted, sampling_rate=audio.sampling_rate)
+
+        monkeypatch.setattr(preprocess_module, "dynamic_range_normalize", fake_normalize)
+        _seed_admit(store, tmp_path, wav_writer, samples=samples)
+        _stub_models(monkeypatch)
+        preprocess(store, _audio(tmp_path), spans_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        by_signal = {e.attributes["signal"] for e in spans}
+        assert "preemphasised" in by_signal, "the main burst must still be found by the primary pass"
+        assert "normalized" in by_signal, "the quiet burst must be added by the supplementary pass"
+        quiet_span = next(e for e in spans if e.attributes["signal"] == "normalized")
+        assert quiet_span.extent is not None
+        assert quiet_span.extent[0] < quiet_stop / SR
+        assert quiet_span.extent[1] > quiet_start / SR
+
+
+class TestSpanQuality:
+    """Per-span SQUIM, HeAR and YAMNet: raw measurements, no labelling decision."""
+
+    def test_squim_measures_one_assertion_per_span(
+        self,
+        store: ProvStore,
+        span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SQUIM's objective scores land on the plain signal, one assertion per span."""
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
-        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
-        measured = find_measurements(store, "target_span_squim")
-        assertions = [e for e in live_entities(store, "assertion") if e.attributes.get("name") == "target_span_squim"]
-        assert targets
-        assert len(assertions) == len(targets)
+        preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        measured = find_measurements(store, "squim")
+        assertions = [e for e in live_entities(store, "assertion") if e.attributes.get("name") == "squim"]
+        assert spans
+        assert len(assertions) == len(spans)
         assert not measured, "SQUIM writes assertions, not measurements"
         assert assertions[0].attributes["stoi"] == pytest.approx(0.91)
 
     def test_hear_measures_the_normalized_signal_with_raw_and_thresholded_scores(
         self,
         store: ProvStore,
-        target_span_quality_config: TriageConfig,
+        span_quality_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A target span's HeAR window carries the full raw distribution, not only what cleared."""
+        """A span's HeAR window carries the full raw distribution, not only what cleared."""
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch, hear=[window(0.0, 2.0, {"Cough": 0.9, "Breathe": 0.2})])
-        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
-        windows = find_measurements(store, "target_span_hear")
+        preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
+        windows = find_measurements(store, "span_hear")
         assert windows
         assert windows[0].attributes["signal"] == "normalized"
         assert windows[0].attributes["labels"] == ["Cough"]
         assert set(windows[0].attributes["raw_scores"]) == {"Cough", "Breathe"}
         assert windows[0].attributes["span_id"] in {
-            e.id for e in live_entities(store, "span") if e.attributes.get("family") == "target"
+            e.id for e in live_entities(store, "span") if e.attributes.get("family") is None
         }
 
-    def test_yamnet_windows_a_target_span_directly_with_no_buffering(
+    def test_yamnet_windows_a_span_directly_with_no_buffering(
         self,
         store: ProvStore,
-        target_span_quality_config: TriageConfig,
+        span_quality_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -566,20 +585,24 @@ class TestTargetSpanQuality:
         """Unlike HeAR, YAMNet's window sits inside the span's own extent, not a 2 s buffer."""
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.9})])
-        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
-        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
-        windows = find_measurements(store, "target_span_yamnet")
+        preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
+        spans = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("family") is None and e.attributes.get("measure") == "amplitude"
+        ]
+        windows = find_measurements(store, "span_yamnet")
         assert windows
         assert windows[0].attributes["signal"] == "normalized"
         assert windows[0].attributes["labels"] == ["Speech"]
-        span_start = min(e.extent[0] for e in targets if e.extent is not None)
+        span_start = min(e.extent[0] for e in spans if e.extent is not None)
         assert windows[0].extent is not None
         assert windows[0].extent[0] == pytest.approx(span_start, abs=1e-3)
 
     def test_a_span_yamnet_never_scores_never_labels_falls_back_to_unmeasured(
         self,
         store: ProvStore,
-        target_span_quality_config: TriageConfig,
+        span_quality_config: TriageConfig,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
@@ -587,15 +610,15 @@ class TestTargetSpanQuality:
         """An empty native-window result is a recorded fact, not a silently missing span."""
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch, yamnet=[])
-        preprocess(store, _audio(tmp_path), target_span_quality_config, run_dir=tmp_path)
-        targets = [e for e in live_entities(store, "span") if e.attributes.get("family") == "target"]
+        preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
         unmeasured = [
             e
             for e in live_entities(store, "assertion")
-            if e.attributes.get("name") == "target_span_yamnet" and e.attributes.get("unmeasured")
+            if e.attributes.get("name") == "span_yamnet" and e.attributes.get("unmeasured")
         ]
-        assert targets
-        assert len(unmeasured) == len(targets)
+        assert spans
+        assert len(unmeasured) == len(spans)
         assert unmeasured[0].attributes["unmeasured"] == "no_native_window"
 
 
@@ -634,13 +657,11 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "yamnet_windows",
             "ast_windows",
             "hear_windows",
-            "phonation_spans",
+            "phonation_tracks",
             "clip_spans",
             "normalized_envelope",
-            "target_spans",
-            "target_span_squim",
-            "target_span_hear",
-            "target_span_yamnet",
+            "span_hear",
+            "span_yamnet",
         }
 
     def test_the_shipped_hops_are_non_overlapping(
@@ -661,10 +682,15 @@ class TestThePackagedConfigStillRunsEveryClassifier:
         assert seen["hear"]["hop_length"] == pytest.approx(2.0)
 
 
-class TestPhonationSpans:
-    """Sustains and glides, voiced, unvoiced or mixed, with duration_s as the primary feature."""
+class TestPhonationTracks:
+    """F0 and formant tracks, measured once over the whole stream. No span, no boundary, no decision.
 
-    def test_a_sustained_vowel_yields_a_span_carrying_its_duration(
+    Detection over these tracks (sustained-phonation and glide spans) moved to TAXONOMY — see
+    ``TestPhonationSpans`` in ``taxonomy_test.py``, which runs PREPROCESS then TAXONOMY together and
+    asserts on the spans TAXONOMY proposes from what this node measures.
+    """
+
+    def test_the_tracks_are_measured_with_no_span_written(
         self,
         store: ProvStore,
         phonation_config: TriageConfig,
@@ -672,122 +698,20 @@ class TestPhonationSpans:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A 1.5 s steady tone is one sustained span whose duration_s is its extent."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
+        """A ``phonation_tracks`` measurement exists; no ``span`` of any family does."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        assert spans
-        best = max(spans, key=lambda e: e.attributes["duration_s"])
-        assert best.attributes["member"] == "sustained"
-        assert best.extent is not None
-        assert best.attributes["duration_s"] == pytest.approx(best.extent[1] - best.extent[0])
-        assert best.attributes["duration_s"] > 1.0
-
-    def test_an_unvoiced_sustain_is_a_span_like_any_other(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Steady band-limited noise sustains with no periodicity and is not refused."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_noise())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        assert spans
-        assert any(e.attributes["production"] in ("unvoiced", "mixed") for e in spans)
-
-    def test_broadband_noise_does_not_become_an_unvoiced_span(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Stable broad LPC poles are insufficient to claim phonation from ordinary noise."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_broadband_noise())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
+        tracks = find_measurement(store, "phonation_tracks")
+        assert tracks is not None
+        assert tracks.attributes["hop_s"] == pytest.approx(0.01)
+        npz = np.load(tmp_path / "derivatives" / "phonation_tracks.npz")
+        assert len(npz["f0_hz"]) == len(npz["times_s"])
+        assert len(npz["f1_hz"]) == len(npz["formant_times_s"])
         assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        assert not find_measurements(store, "formant_tracks")
 
-    def test_a_glide_is_a_span_with_a_direction_and_an_excursion(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A rising sweep is a glide, not a sustain, and carries where it went."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_rising_glide())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        glides = [
-            e
-            for e in live_entities(store, "span")
-            if e.attributes.get("family") == "phonation" and e.attributes["member"] == "glide"
-        ]
-        assert glides
-        assert glides[0].attributes["glide_direction"] == "rising"
-        assert glides[0].attributes["glide_extent_cents"] > 0.0
-
-    def test_formant_tracks_are_written_per_span_and_sliced_from_the_stream(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One formant_tracks measurement per span, each derived from the span it covers."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        tracks = find_measurements(store, "formant_tracks")
-        assert len(tracks) == len(spans)
-        assert set(store.derived_from(tracks[0].id)) & {e.id for e in spans}
-        assert len(tracks[0].attributes["f1_hz"]) == len(tracks[0].attributes["times_s"])
-
-    def test_the_formant_track_is_measured_once_over_the_whole_stream(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One call, over the whole stream, however many spans come out of it.
-
-        "Tracks are computed once on the stream and then sliced" is a property of the call graph, so
-        the call graph is what this asserts: a per-span re-fit produces identical stored attributes on
-        a steady fixture and is invisible to every other test in this file. The duration assertion is
-        the half that matters -- a re-fit would pass a span-length fragment, and a fragment
-        renormalises to its own maximum, which is the failure the rule exists to prevent.
-        """
-        seen_durations: list[float] = []
-        measure = preprocess_module.formant_track
-
-        def counting(audio: Audio, **kwargs: Any) -> Any:  # noqa: ANN401 — delegates to the real one
-            """Record what the tracker was handed, then track it for real."""
-            seen_durations.append(audio.waveform.shape[-1] / audio.sampling_rate)
-            return measure(audio, **kwargs)
-
-        monkeypatch.setattr(preprocess_module, "formant_track", counting)
-        samples = np.concatenate([_steady_vowel(), np.zeros(int(0.2 * SR)), _steady_vowel()])
-        _seed_admit(store, tmp_path, wav_writer, samples=samples)
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        assert len(spans) >= 2, "the fixture must yield several spans or a call count of one proves nothing"
-        assert len(seen_durations) == 1
-        assert seen_durations[0] == pytest.approx(3.2, abs=0.05)
-
-    def test_a_null_criterion_leaves_the_spans_absent(
+    def test_a_null_criterion_leaves_the_tracks_absent(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -795,12 +719,12 @@ class TestPhonationSpans:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The packaged config fits nothing, so the pass is absent rather than run on invented floors."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
+        """The packaged config leaves ``voice.f0_range_hz`` null, so the pass is absent, not guessed."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
         _stub_models(monkeypatch)
         result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        assert "phonation_spans" in result.absent
-        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
+        assert "phonation_tracks" in result.absent
+        assert find_measurement(store, "phonation_tracks") is None
 
 
 class TestAnAbsenceIsAttributedNotJustClassified:
@@ -1171,3 +1095,37 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
             assert span.extent is not None
             assert np.isfinite(span.extent).all()
             assert span.extent[1] < 2.9, "the burst ends at 1.5 s; a span to 3.0 s is the NaN hangover"
+
+
+class TestAnUnexpectedBlockFailureIsNotAbsorbed:
+    """A failure that is neither a null-config ValueError nor a missing-prerequisite LookupError."""
+
+    def test_every_other_block_still_runs_before_preprocess_raises(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The loop does not abort early: unrelated derivatives, before and after the break, survive."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+
+        def _broken(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("torchaudio blew up")
+
+        monkeypatch.setattr(preprocess_module, "extract_spectrogram_from_audios", _broken)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+        message = str(excinfo.value)
+        assert "spectrogram_wideband" in message
+        assert "spectrogram_narrowband" in message
+        # Before the failing blocks in `blocks`' own order:
+        assert find_measurement(store, "energy_envelope") is not None
+        # After the failing blocks: `spans` still proposes from the amplitude sources alone, and
+        # `gammatone` does not touch the spectrogram at all.
+        assert live_entities(store, "span")
+        assert find_measurement(store, "gammatone") is not None

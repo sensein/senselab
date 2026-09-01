@@ -220,6 +220,13 @@ def _drive_branches(
     raises is still recorded ``ERRORED`` and its siblings still run: none of them reads another's
     output. REDACT is a step of SPEECH and runs only when SPEECH ran and its scan found PII.
 
+    PREPROCESS is the one dependency every later node in this function shares — TAXONOMY reads its
+    stored derivatives, routing and the branches read TAXONOMY's fold, and none of that evidence
+    exists when PREPROCESS itself raised. So a failed PREPROCESS call skips everything else here
+    (TAXONOMY, routing, every branch, REDACT) rather than attempting nodes with nothing to read; the
+    file still reaches VERDICT, which folds "no evidence" from the all-``SKIPPED`` record the same
+    way it already does for an ADMIT failure.
+
     Args:
         store: The provenance store, already holding ADMIT's ``recording`` stream.
         audio: The audio ADMIT decoded.
@@ -233,7 +240,11 @@ def _drive_branches(
     Returns:
         REDACT's released pair, empty unless it cleared one.
     """
-    _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
+    preprocessed = _attempt(outcomes, "PREPROCESS", lambda: preprocess(store, audio, config, hint, run_dir=run_dir))
+    if preprocessed is None:
+        for node in GRAPH_ORDER[GRAPH_ORDER.index("PREPROCESS") + 1 : GRAPH_ORDER.index("VERDICT")]:
+            outcomes[node] = NodeOutcome(node=node, state=RunState.SKIPPED)
+        return {}
     _attempt(outcomes, "TAXONOMY", lambda: taxonomy(store, _CONDITIONED_STREAM, config, hint, run_dir=run_dir))
     routed = _attempt(outcomes, "routing", lambda: routing(store, None, config, hint, run_dir=run_dir))
     selected = set(routed.runs) if routed is not None else set()
@@ -323,8 +334,11 @@ def run_triage(
 
     ADMIT is the initial gate. A ``fail`` there means the recording was never measured, so every other
     node is recorded as ``skipped`` and only VERDICT runs, which is what makes "could not measure"
-    distinguishable from "measured, and found nothing". Every other node's failure is captured rather
-    than propagated and the store is persisted either way. ROUTING is the only later dependency gate:
+    distinguishable from "measured, and found nothing". PREPROCESS is the second gate, of a different
+    kind: it does not fail or flag, but it can raise (see its own docstring), and every node after it
+    reads what it measured, so a raise there likewise leaves TAXONOMY, routing, every branch and
+    REDACT ``skipped`` — see ``_drive_branches``. Every other node's failure is captured rather than
+    propagated and the store is persisted either way. ROUTING is the only remaining dependency gate:
     when it fails, its dependent branches are recorded ``skipped`` because no execution decision was
     written; other nodes' independent siblings still run.
 

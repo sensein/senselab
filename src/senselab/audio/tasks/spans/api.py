@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.signal import find_peaks
 
 
 @dataclass(frozen=True)
@@ -29,7 +28,7 @@ class Span:
 
 @dataclass(frozen=True)
 class NoContrast:
-    """No peak anywhere rose the required amount above the local floor.
+    """Nothing anywhere rose the required amount above the local floor.
 
     Distinct from an empty span list: an unmeasurable recording must not read as a quiet one.
 
@@ -53,10 +52,13 @@ def propose_spans(
 ) -> list[Span] | NoContrast:
     """Propose spans from an envelope, against one floor for the whole recording.
 
-    Onset and offset walk by the identical rule, in opposite directions: neither can close for a
-    reason the other would not also close for, unlike the peak-anchored/floor-fraction pair this
-    replaced, whose asymmetry (see ``floor_margin_db``) let a real multi-scene recording collapse
-    into one merged span once an unrelated bug stopped masking it.
+    The threshold crossing itself generates the candidate spans: every maximal run where the
+    envelope has risen ``k_db`` above the floor is one candidate, directly — not a peak later
+    expanded outward. Onset and offset then walk by the identical rule, in opposite directions,
+    from each candidate's own edges: neither can close for a reason the other would not also close
+    for, unlike the peak-anchored/floor-fraction pair this replaced, whose asymmetry (see
+    ``floor_margin_db``) let a real multi-scene recording collapse into one merged span once an
+    unrelated bug stopped masking it.
 
     Args:
         envelope_db: Envelope in dBFS, ``nan`` at any sample that had no dB value.
@@ -64,8 +66,8 @@ def propose_spans(
             :func:`~senselab.audio.tasks.envelope.api.global_floor_dbfs` — one value for the whole
             signal, not a local, time-varying one.
         sampling_rate: Samples per second.
-        k_db: How far above the floor a peak must rise to be proposed. Per reader: read it from
-            ``spans.k_db.<reader>`` in the triage config.
+        k_db: How far above the floor the envelope must cross to open a candidate span. Per reader:
+            read it from ``spans.k_db.<reader>`` in the triage config.
         floor_margin_db: A walk stops once the envelope has fallen within this many dB of the floor,
             sustained for ``transition_window_ms`` — the same rule for onset (walking backward) and
             offset (walking forward). Replaces a peak-anchored onset (walk back while within a fixed
@@ -77,43 +79,57 @@ def propose_spans(
             continuously, before a walk closes. Must be shorter than the shortest event to be
             bounded. Read it from ``spans.transition_window_ms``.
         min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.
-        min_separation_ms: Minimum distance between two proposed peaks. Read it from
-            ``spans.min_separation_ms``.
+        min_separation_ms: Two threshold-crossing candidates closer together than this are one
+            proposal, not two, before either is walked. Read it from ``spans.min_separation_ms``.
 
     Returns:
         Merged spans in time order, every extent bounded by measured samples, or
-        :class:`NoContrast` when no peak clears ``k_db`` or nothing was measurable at all.
+        :class:`NoContrast` when nothing crosses ``k_db`` or nothing was measurable at all.
     """
     above = envelope_db - floor_db
     rise = np.where(np.isfinite(above), above, -np.inf)
     measured = np.where(np.isfinite(envelope_db), envelope_db, -np.inf)
-    peaks, _ = find_peaks(rise, height=k_db, distance=int(min_separation_ms * sampling_rate / 1000))
-    if len(peaks) == 0:
+    crossings = _contiguous_true_runs(rise >= k_db)
+    if not crossings:
         rises = above[np.isfinite(above)]
         if rises.size == 0:
             return NoContrast(reason="the envelope holds no sample measurable against its floor")
         return NoContrast(
-            reason=f"no peak rose {k_db} dB above the floor; the largest rose {float(rises.max()):.1f} dB"
+            reason=f"nothing rose {k_db} dB above the floor; the largest rose {float(rises.max()):.1f} dB"
         )
+    separation = int(min_separation_ms * sampling_rate / 1000)
+    candidates: list[tuple[int, int, int]] = []
+    for start, end in crossings:
+        if candidates and start - candidates[-1][1] < separation:
+            candidates[-1] = (candidates[-1][0], end, candidates[-1][2] + 1)
+        else:
+            candidates.append((start, end, 1))
     threshold = floor_db + floor_margin_db
     win = int(transition_window_ms * sampling_rate / 1000)
     found: list[Span] = []
-    for p in peaks:
-        peak = float(envelope_db[p])
-        i = int(p)
+    for start, end, n_absorbed in candidates:
+        peak = float(measured[start:end].max())
+        i = start
         while i > 0:
             window = measured[max(0, i - win) : i]
             if len(window) == 0 or window.max() <= threshold:
                 break
             i -= 1
-        j = int(p)
+        j = end
         while j < len(envelope_db) - 1:
             window = measured[j : j + win]
             if len(window) == 0 or window.max() <= threshold:
                 break
             j += 1
         if (j - i) >= min_duration_ms * sampling_rate / 1000:
-            found.append(Span(start=i / sampling_rate, end=j / sampling_rate, peak_over_floor_db=peak - floor_db))
+            found.append(
+                Span(
+                    start=i / sampling_rate,
+                    end=j / sampling_rate,
+                    peak_over_floor_db=peak - floor_db,
+                    merged_proposals=n_absorbed,
+                )
+            )
     found.sort(key=lambda s: s.start)
     merged: list[Span] = []
     for span in found:
@@ -128,3 +144,38 @@ def propose_spans(
         else:
             merged.append(span)
     return merged
+
+
+def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    """Start/end (half-open) sample index pairs for each maximal run of ``True`` in ``mask``."""
+    if not mask.any():
+        return []
+    edges = np.flatnonzero(np.diff(np.concatenate(([False], mask, [False]))))
+    return [(int(edges[i]), int(edges[i + 1])) for i in range(0, len(edges), 2)]
+
+
+def group_extents_into_runs(extents: list[tuple[float, float]], gap_ms: float) -> list[tuple[float, float, list[int]]]:
+    """A run is the extent of a group of extents; a gap over ``gap_ms`` starts a new run.
+
+    Generic over any already-timed source (consensus ASR words, or any other list of
+    ``(start, end)`` extents already in seconds) — there is no envelope or floor here, unlike
+    :func:`propose_spans`: the caller's own extents are the ground truth being grouped, not a
+    measure needing a threshold to become one.
+
+    Args:
+        extents: ``(start, end)`` pairs in seconds, in any order.
+        gap_ms: The gap that starts a new run, in milliseconds.
+
+    Returns:
+        ``[(start, end, member indices), ...]``, in start order. Member indices refer to
+        positions in the input ``extents`` list.
+    """
+    runs: list[tuple[float, float, list[int]]] = []
+    for index in sorted(range(len(extents)), key=lambda i: extents[i][0]):
+        start, end = extents[index]
+        if runs and (start - runs[-1][1]) * 1000.0 <= gap_ms:
+            open_start, open_end, members = runs[-1]
+            runs[-1] = (open_start, max(open_end, end), [*members, index])
+        else:
+            runs.append((start, end, [index]))
+    return runs
