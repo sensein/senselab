@@ -30,6 +30,7 @@ from senselab.audio.tasks.features_extraction.torchaudio_squim import (
 )
 from senselab.audio.tasks.preprocessing.preprocessing import extract_segments
 from senselab.audio.tasks.source_separation.api import separate_audios
+from senselab.audio.tasks.spans.api import group_extents_into_runs
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.speaker_embeddings.api import extract_speaker_embeddings_from_audios
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -155,28 +156,6 @@ def _author_node(store: ProvStore, entity_id: str) -> str | None:
     """
     activity_id = store.generated_by(entity_id)
     return store.get_activity(activity_id).node if activity_id else None
-
-
-def _group_words_into_spans(words: list[Entity], gap_ms: float) -> list[tuple[float, float, list[int]]]:
-    """A span is the extent of a run of words; a gap over ``gap_ms`` starts a new run.
-
-    Args:
-        words: The consensus word entities.
-        gap_ms: The gap that starts a new run.
-
-    Returns:
-        ``[(start, end, member indices), ...]``.
-    """
-    spans: list[tuple[float, float, list[int]]] = []
-    extents = [word.extent or (0.0, 0.0) for word in words]
-    for index in sorted(range(len(words)), key=lambda i: extents[i][0]):
-        start, end = extents[index]
-        if spans and (start - spans[-1][1]) * 1000.0 <= gap_ms:
-            open_start, open_end, members = spans[-1]
-            spans[-1] = (open_start, max(open_end, end), [*members, index])
-        else:
-            spans.append((start, end, [index]))
-    return spans
 
 
 def _speech_coverage(windows: list[Entity], extent: tuple[float, float], family: set[str]) -> float | None:
@@ -531,7 +510,8 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         flags.append(f"{len(single_source)} single-recognizer word(s) survive as fabrication candidates")
 
     # Step 2 — speech spans from consensus word timings, in memory until corroborated.
-    grouped = _group_words_into_spans(words, values["word_gap_ms"])
+    word_extents = [word.extent or (0.0, 0.0) for word in words]
+    grouped = group_extents_into_runs(word_extents, values["word_gap_ms"])
     span_extents = [clamp_extent((start, end), plain) for start, end, _ in grouped]
     speech_s = sum(end - start for start, end in span_extents)
 

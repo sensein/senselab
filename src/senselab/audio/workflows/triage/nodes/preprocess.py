@@ -3,9 +3,16 @@
 Every model that answers a whole-file question runs here: YAMNet, AST and HeAR alike. No later node
 re-runs one. The recognizers, the aligner, SQUIM, level and the window classifiers read the plain
 resampled signal; the envelope, spans, spectrograms, gammatone and the phonation pass read the
-pre-emphasised one; ``disruptions_file`` reads the original recording. A derivative that cannot be
-computed is absent from the store, not an error. Every parameter's derivation is in
-``data/config/default.yaml``.
+pre-emphasised one; ``disruptions_file`` reads the original recording. This node takes no pass/flag/
+fail decision of its own — but it is not guaranteed to complete. Each block still runs in its own
+try/except, and a block whose config value is unmeasured (a null default) or whose own upstream
+prerequisite is missing from the store still records that derivative ``absent`` and moves on, exactly
+as before. Any other exception is different: every remaining block still runs (this pass is meant to
+be robust, not to abort early), but once the loop finishes, ``preprocess`` raises one exception
+summarizing every such failure instead of returning normally — steps here do not get to silently
+swallow a bug. ``run_triage`` treats that raise the same way it treats any other node erroring:
+TAXONOMY, routing and every branch are skipped, and the file goes straight to VERDICT with the
+failure as its reason. Every parameter's derivation is in ``data/config/default.yaml``.
 """
 
 from __future__ import annotations
@@ -45,14 +52,10 @@ from senselab.audio.tasks.health_acoustics.hear import (
     hear_window_extent,
     span_hear_input,
 )
-from senselab.audio.tasks.phonation.api import (
-    f0_track,
-    formant_track,
-    propose_phonation_spans,
-    propose_word_aligned_phonation_spans,
-)
+from senselab.audio.tasks.phonation.api import f0_track, formant_track
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
-from senselab.audio.tasks.spans.api import NoContrast, propose_spans
+from senselab.audio.tasks.spans.api import NoContrast, Span, group_extents_into_runs, propose_spans
+from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
 from senselab.audio.workflows.audio_analysis.level import integrated_lufs
@@ -62,6 +65,9 @@ from senselab.audio.workflows.triage.nodes.common import (
     describe_exception,
     software_agent,
     write_verdict,
+)
+from senselab.audio.workflows.triage.nodes.common import (
+    write_measurement as _measurement,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.data_structures import HFModel
@@ -178,28 +184,6 @@ def _raw_label_scores(window: dict[str, Any]) -> dict[str, float]:
     return {label: score for pair in label_scores(window) for label, score in pair.items()}
 
 
-def _measurement(
-    store: ProvStore,
-    activity_id: str,
-    agent_id: str,
-    *,
-    name: str,
-    signal: str,
-    attributes: dict[str, Any],
-    derived_from: tuple[str, ...] = (),
-    extent: tuple[float, float] | None = None,
-) -> str:
-    """Write one derivative measurement entity with its provenance."""
-    entity_id = store.entity(
-        prov_type="measurement", extent=extent, attributes={"name": name, "signal": signal, **attributes}
-    )
-    store.was_generated_by(entity_id, activity_id)
-    store.was_attributed_to(entity_id, agent_id)
-    for source_id in derived_from:
-        store.was_derived_from(entity_id, source_id)
-    return entity_id
-
-
 def preprocess(  # noqa: C901 — one block per derivative, each independent
     store: ProvStore,
     source: Audio,
@@ -220,6 +204,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     Returns:
         A pass verdict (PREPROCESS has no fail and no flag), the view over what was written, and the
         names of derivatives that are absent.
+
+    Raises:
+        RuntimeError: One or more blocks raised something other than a null-config ``ValueError`` or
+            a missing-prerequisite ``LookupError`` — every block was still attempted, but this
+            propagates instead of a normal return, once every block has had its turn.
     """
     software = software_agent(store)
     (run_dir / "streams").mkdir(parents=True, exist_ok=True)
@@ -308,93 +297,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             store.used(activity_id, entity_id)
         return activity_id
 
-    def _envelope() -> None:
-        """`energy_envelope` and its floor, over the pre-emphasised signal, to one npz sidecar."""
-        parameters = {
-            "lowpass_hz": float(config.require("envelope.lowpass_hz")),
-            "filter_order": int(config.require("envelope.filter_order")),
-            "floor_percentile": float(config.require("floor.percentile")),
-        }
-        activity = _step("envelope", parameters, (sharp_id,), software)
-        envelope = hilbert_envelope_dbfs(
-            sharp,
-            smoothing=ButterworthSmoothing(cutoff_hz=parameters["lowpass_hz"], order=int(parameters["filter_order"])),
-        )
-        floor = global_floor_dbfs(envelope, percentile=parameters["floor_percentile"])
-        np.savez(
-            run_dir / "derivatives" / "energy_envelope.npz",
-            envelope_dbfs=envelope,
-            floor_dbfs=np.full_like(envelope, floor),
-        )
-        entity_id = _measurement(
-            store,
-            activity,
-            software,
-            name="energy_envelope",
-            signal=sharp_signal,
-            attributes={"path": "derivatives/energy_envelope.npz", "sampling_rate": target_hz},
-            derived_from=(sharp_id,),
-        )
-        derivatives["energy_envelope"] = entity_id
-        view.append(entity_id)
-        state.update(envelope=envelope, floor=floor, envelope_id=entity_id)
-
-    def _spans() -> None:
-        """Span proposals at the airway K; `NoContrast` becomes a measurement, never an empty list."""
-        if "envelope" not in state:
-            raise LookupError("energy_envelope is absent")
-        k_db = float(config.require("spans.k_db.airway"))
-        parameters: dict[str, Any] = {
-            "k_db": k_db,
-            "floor_margin_db": float(config.require("spans.floor_margin_db")),
-            "transition_window_ms": int(config.require("spans.transition_window_ms")),
-            "min_duration_ms": int(config.require("spans.min_duration_ms")),
-            "min_separation_ms": int(config.require("spans.min_separation_ms")),
-        }
-        activity = _step("spans", parameters, (state["envelope_id"],), software)
-        proposed = propose_spans(
-            state["envelope"],
-            state["floor"],
-            target_hz,
-            k_db=k_db,
-            floor_margin_db=parameters["floor_margin_db"],
-            transition_window_ms=parameters["transition_window_ms"],
-            min_duration_ms=parameters["min_duration_ms"],
-            min_separation_ms=parameters["min_separation_ms"],
-        )
-        if isinstance(proposed, NoContrast):
-            entity_id = _measurement(
-                store,
-                activity,
-                software,
-                name="spans_no_contrast",
-                signal=sharp_signal,
-                attributes={"k_db": k_db, "reason": proposed.reason},
-                derived_from=(state["envelope_id"],),
-            )
-            derivatives["spans_no_contrast"] = entity_id
-            view.append(entity_id)
-            return
-        span_ids: list[str] = []
-        for span in proposed:
-            span_id = store.entity(
-                prov_type="span",
-                extent=(span.start, span.end),
-                attributes={
-                    "peak_over_floor_db": span.peak_over_floor_db,
-                    "k_db": k_db,
-                    "signal": sharp_signal,
-                    "merged_proposals": span.merged_proposals,
-                },
-            )
-            store.was_generated_by(span_id, activity)
-            store.was_attributed_to(span_id, software)
-            store.was_derived_from(span_id, state["envelope_id"])
-            span_ids.append(span_id)
-        derivatives["spans"] = span_ids
-        view.extend(span_ids)
-        state["span_ids"] = span_ids
-
     def _clip_spans() -> None:
         """Clip-event spans over the ORIGINAL recording (ClipDaT), before any normalization runs."""
         if not recording_ids:
@@ -444,28 +346,64 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(span_ids)
         state["clip_span_extents"] = extents
 
+    def _envelope() -> None:
+        """`energy_envelope` and its floor, over the pre-emphasised signal -- the primary span signal.
+
+        Primary rather than the normalized signal: AGC is an optional, unvalidated step
+        (`normalization.*` ships null), and measured directly on real recordings it can compress
+        local dynamic range enough that no peak clears any reasonable `k_db` at all (a five-breath
+        recording's rise-over-floor topped out at 9 dB post-normalization against 23 dB pre-). The
+        pre-emphasised envelope needs no optional step to exist, so `_spans` below always has a
+        signal to propose from; `_normalized_envelope`'s spans, where available, only ever add
+        candidates this pass missed, never replace it.
+        """
+        parameters = {
+            "lowpass_hz": float(config.require("envelope.lowpass_hz")),
+            "filter_order": int(config.require("envelope.filter_order")),
+            "floor_percentile": float(config.require("floor.percentile")),
+        }
+        activity = _step("energy_envelope", parameters, (sharp_id,), software)
+        envelope = hilbert_envelope_dbfs(
+            sharp,
+            smoothing=ButterworthSmoothing(cutoff_hz=parameters["lowpass_hz"], order=int(parameters["filter_order"])),
+        )
+        floor = global_floor_dbfs(envelope, percentile=parameters["floor_percentile"])
+        np.savez(
+            run_dir / "derivatives" / "energy_envelope.npz",
+            envelope_dbfs=envelope,
+            floor_dbfs=np.full_like(envelope, floor),
+        )
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name="energy_envelope",
+            signal=sharp_signal,
+            attributes={"path": "derivatives/energy_envelope.npz", "sampling_rate": target_hz},
+            derived_from=(sharp_id,),
+        )
+        derivatives["energy_envelope"] = entity_id
+        view.append(entity_id)
+        state.update(envelope=envelope, floor=floor, envelope_id=entity_id)
+
     def _normalized_envelope() -> None:
         """The dynamically-normalized signal's own envelope and floor, over the pre-emphasised signal.
 
-        The floor is ``floor.percentile`` over the normalized waveform's own samples — the same key
-        the airway block reads, now that the floor is one global number rather than a rolling window:
-        a global floor has no window whose width could be fitted to one population and misapplied to
-        another, which is what made the two blocks carry separate, differently-tuned floor windows
-        before this session's change.
+        Supplementary, not primary (see `_envelope` above): a quiet event AGC boosted to be
+        detectable is a real candidate `_spans` should not miss, so its spans are added wherever they
+        do not already overlap one the pre-emphasised pass found — never used to replace that pass,
+        because AGC can also destroy contrast the raw signal still carries.
 
         The macro and micro envelopes inside ``dynamic_range_normalize`` are smoothed with
-        :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing` rather than the airway block's
-        :class:`~senselab.audio.tasks.envelope.api.ButterworthSmoothing`: a median cannot overshoot
-        past a transient the way a resonant Butterworth does, which is what a word's onset is to
-        this envelope. The final envelope this measurement stores goes one step further and uses
+        :class:`~senselab.audio.tasks.envelope.api.MedianSmoothing`: a median cannot overshoot past a
+        transient the way a resonant Butterworth does, which is what a word's onset is to this
+        envelope. The final envelope this measurement stores goes one step further and uses
         :class:`~senselab.audio.tasks.envelope.api.PercentileSmoothing`: a median (its 50th
         percentile) still averages a real peak down toward the window's centre, and a plain rolling
         maximum overcorrects the other way — one loud sample pins the whole window to its height and
         holds it there after the sound has already ended, smearing a peak sideways in time. A high
         percentile (90th) sits close to the true peak without either failure, verified on real
-        speech in this session's own diagnostics. ``envelope.lowpass_hz``/``.filter_order`` stay
-        Butterworth-only for the airway block above, which has its own fitted derivation this pass
-        does not carry over.
+        speech in this session's own diagnostics.
 
         The gain curve's own smoothing (``gain_smoothing``) is median too, not the Butterworth it
         shipped with: a resonant lowpass cannot settle to a short event's own correct gain within
@@ -544,74 +482,174 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             normalized_audio=normalized,
             normalized_envelope=envelope,
             normalized_floor=floor,
+            normalized_envelope_id=entity_id,
         )
 
-    def _target_spans() -> None:
-        """Foreground-energy candidate spans over the normalized envelope, flagged where they overlap a clip.
+    def _spans() -> None:
+        """Foreground-energy candidate spans, flagged where they overlap a clip.
 
-        Generalizes ``_spans`` beyond the airway-only K: any duration over which foreground acoustic
-        energy exists is a candidate here, for any vocal task (breathing, speaking, phonation), not
-        only airway events. A target span is measured independently of whether it contains a clip
-        span; overlap is recorded as a flag rather than an exclusion, so a real vocal event is not
-        discarded merely because part of it clipped.
+        Primary: proposed from the pre-emphasised amplitude envelope, always available.
+        Supplementary: proposed from the normalized amplitude envelope where that derivative exists,
+        kept only where it does not already overlap a primary span. Continuity: proposed from
+        spectral_continuity's frame-to-frame spectral similarity over the wideband spectrogram
+        block's own magnitude output (reused directly, not recomputed at merely-matching parameters
+        -- see `_spectrogram`) -- wideband rather than narrowband for its shorter analysis window
+        (spectrogram.wideband_window_ms against .narrowband_window_ms, same shared hop_ms), giving
+        continuity finer temporal resolution to place an onset/offset transition against, at the cost
+        of frequency resolution continuity's own frame-to-frame comparison does not need as much as a
+        band-energy measurement would. Kept only where it does not already overlap a primary or
+        supplementary span -- a sustained tonal/harmonic production (a glide, a held vowel) can hold
+        a stable spectral shape well before its amplitude clears any gate. Absent whenever
+        `spectrogram_wideband` itself is, the same "each block is independent" contract every
+        other dependency in this node already follows. ASR: the consensus transcript's own word
+        timings (`_consensus`), grouped into runs by `speech.word_gap_ms` via
+        :func:`~senselab.audio.tasks.spans.api.group_extents_into_runs` -- the same grouping SPEECH
+        uses for its own word-timing spans, shared rather than duplicated. No threshold or floor: a
+        recognizer transcribing a stretch as speech is itself the evidence, not a measure needing a
+        gate. Kept only where it does not already overlap a primary, supplementary or continuity
+        span -- lowest priority of the four, filling in only a stretch every envelope- and
+        spectrum-based source missed but a recognizer still transcribed. Absent whenever `consensus`
+        itself is (both recognizers failed). Each source only ever adds a candidate no earlier source
+        already covers, never a second opinion on one already found. A span carries no notion of
+        which downstream branch it is "for"; `contains_clip` is the only flag this pass asserts.
         """
-        if "normalized_envelope" not in state:
-            raise LookupError("normalized_envelope is absent")
-        k_db = float(config.require("spans.k_db.target"))
+        if "envelope" not in state:
+            raise LookupError("energy_envelope is absent")
+        k_db = float(config.require("spans.k_db"))
         parameters: dict[str, Any] = {
             "k_db": k_db,
             "floor_margin_db": float(config.require("spans.floor_margin_db")),
             "transition_window_ms": int(config.require("spans.transition_window_ms")),
             "min_duration_ms": int(config.require("spans.min_duration_ms")),
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
+            "continuity_margin": float(config.require("spans.continuity_margin")),
+            "continuity_floor_margin": float(config.require("spans.continuity_floor_margin")),
+            "continuity_min_duration_ms": int(config.require("spans.continuity_min_duration_ms")),
+            "continuity_smoothing_window_s": float(config.require("spectral_continuity.smoothing.window_s")),
+            "floor_percentile": float(config.require("floor.percentile")),
         }
-        activity = _step("target_spans", parameters, (state["normalized_id"],), software)
-        proposed = propose_spans(
-            state["normalized_envelope"],
-            state["normalized_floor"],
-            target_hz,
-            k_db=k_db,
-            floor_margin_db=parameters["floor_margin_db"],
-            transition_window_ms=parameters["transition_window_ms"],
+        word_gap_ms = config.get("speech.word_gap_ms")
+        if word_gap_ms is not None:
+            parameters["word_gap_ms"] = float(word_gap_ms)
+        reads = [state["envelope_id"]]
+        if "normalized_envelope" in state:
+            reads.append(state["normalized_envelope_id"])
+        if "spectrogram_wideband_magnitude" in state:
+            reads.append(derivatives.get("spectrogram_wideband", state["envelope_id"]))
+        if "consensus" in state and word_gap_ms is not None:
+            reads.append(state["consensus_id"])
+        activity = _step("spans", parameters, tuple(reads), software)
+
+        def _propose(
+            envelope: np.ndarray, floor: float, *, gate: float, margin: float, min_duration_ms: int
+        ) -> list[Span]:
+            proposed = propose_spans(
+                envelope,
+                floor,
+                target_hz,
+                k_db=gate,
+                floor_margin_db=margin,
+                transition_window_ms=parameters["transition_window_ms"],
+                min_duration_ms=min_duration_ms,
+                min_separation_ms=parameters["min_separation_ms"],
+            )
+            return [] if isinstance(proposed, NoContrast) else proposed
+
+        def _not_yet_covered(candidates: list[Span], covered: list[Span]) -> list[Span]:
+            return [c for c in candidates if not any(c.start < o.end and c.end > o.start for o in covered)]
+
+        primary = _propose(
+            state["envelope"],
+            state["floor"],
+            gate=k_db,
+            margin=parameters["floor_margin_db"],
             min_duration_ms=parameters["min_duration_ms"],
-            min_separation_ms=parameters["min_separation_ms"],
         )
-        if isinstance(proposed, NoContrast):
+        supplement: list[Span] = []
+        if "normalized_envelope" in state:
+            secondary = _propose(
+                state["normalized_envelope"],
+                state["normalized_floor"],
+                gate=k_db,
+                margin=parameters["floor_margin_db"],
+                min_duration_ms=parameters["min_duration_ms"],
+            )
+            supplement = _not_yet_covered(secondary, primary)
+
+        continuity: list[Span] = []
+        if "spectrogram_wideband_magnitude" in state:
+            continuity_trace = spectral_continuity(
+                state["spectrogram_wideband_magnitude"],
+                hop_s=state["spectrogram_wideband_hop_s"],
+                sampling_rate=target_hz,
+                n_samples=len(state["envelope"]),
+                smoothing=MedianSmoothing(window_s=parameters["continuity_smoothing_window_s"]),
+            )
+            continuity_floor = global_floor_dbfs(continuity_trace, percentile=parameters["floor_percentile"])
+            continuity_candidates = _propose(
+                continuity_trace,
+                continuity_floor,
+                gate=parameters["continuity_margin"],
+                margin=parameters["continuity_floor_margin"],
+                min_duration_ms=parameters["continuity_min_duration_ms"],
+            )
+            continuity = _not_yet_covered(continuity_candidates, primary + supplement)
+
+        asr: list[Span] = []
+        if "consensus" in state and word_gap_ms is not None:
+            word_extents = [(float(word["start"]), float(word["end"])) for word in state["consensus"]]
+            asr_candidates = [
+                Span(start=start, end=end, peak_over_floor_db=float("nan"), merged_proposals=len(members))
+                for start, end, members in group_extents_into_runs(word_extents, parameters["word_gap_ms"])
+            ]
+            asr = _not_yet_covered(asr_candidates, primary + supplement + continuity)
+
+        combined: list[tuple[Span, str, str, str]] = [
+            (span, sharp_signal, state["envelope_id"], "amplitude") for span in primary
+        ]
+        combined += [(span, "normalized", state["normalized_envelope_id"], "amplitude") for span in supplement]
+        combined += [(span, sharp_signal, state["envelope_id"], "continuity") for span in continuity]
+        combined += [(span, "consensus", state["consensus_id"], "asr") for span in asr]
+
+        if not combined:
             entity_id = _measurement(
                 store,
                 activity,
                 software,
-                name="target_spans_no_contrast",
-                signal="normalized",
-                attributes={"k_db": k_db, "reason": proposed.reason},
-                derived_from=(state["normalized_id"],),
+                name="spans_no_contrast",
+                signal=sharp_signal,
+                attributes={"k_db": k_db, "reason": "no peak rose above any gate on any signal or measure"},
+                derived_from=(state["envelope_id"],),
             )
-            derivatives["target_spans_no_contrast"] = entity_id
+            derivatives["spans_no_contrast"] = entity_id
             view.append(entity_id)
             return
         clip_extents = state.get("clip_span_extents") or []
         span_ids: list[str] = []
-        for span in proposed:
+        for span, signal_name, source_id, measure in combined:
             contains_clip = any(span.start < end and span.end > start for start, end in clip_extents)
-            span_id = store.entity(
-                prov_type="span",
-                extent=(span.start, span.end),
-                attributes={
-                    "family": "target",
-                    "peak_over_floor_db": span.peak_over_floor_db,
-                    "k_db": k_db,
-                    "signal": "normalized",
-                    "merged_proposals": span.merged_proposals,
-                    "contains_clip": contains_clip,
-                },
-            )
+            attributes: dict[str, Any] = {
+                "signal": signal_name,
+                "measure": measure,
+                "merged_proposals": span.merged_proposals,
+                "contains_clip": contains_clip,
+            }
+            if measure == "amplitude":
+                attributes["peak_over_floor_db"] = span.peak_over_floor_db
+                attributes["k_db"] = k_db
+            elif measure == "continuity":
+                attributes["peak_over_floor_continuity"] = span.peak_over_floor_db
+                attributes["continuity_margin"] = parameters["continuity_margin"]
+            else:
+                attributes["word_gap_ms"] = parameters["word_gap_ms"]
+            span_id = store.entity(prov_type="span", extent=(span.start, span.end), attributes=attributes)
             store.was_generated_by(span_id, activity)
             store.was_attributed_to(span_id, software)
-            store.was_derived_from(span_id, state["normalized_id"])
+            store.was_derived_from(span_id, source_id)
             span_ids.append(span_id)
-        derivatives["target_spans"] = span_ids
+        derivatives["spans"] = span_ids
         view.extend(span_ids)
-        state["target_span_ids"] = span_ids
+        state["span_ids"] = span_ids
 
     def _scores(name: str, agent_id: str, activity_step: str, run: Callable[[], list[dict[str, Any]]]) -> None:
         """Run one classifier and store its verbatim windows; no threshold is read here (V3)."""
@@ -857,16 +895,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(assertion_ids)
 
     def _squim() -> None:
-        """SQUIM over the airway-K envelope spans."""
+        """SQUIM over the spans, on the plain signal -- recording quality, not any span's own gain."""
         _squim_for("squim", state.get("span_ids") or [])
-
-    def _target_span_squim() -> None:
-        """SQUIM over the target spans, on the plain signal.
-
-        Measures recording quality, not the dynamically-normalized gain this pass applied to find
-        the spans in the first place.
-        """
-        _squim_for("target_span_squim", state.get("target_span_ids") or [])
 
     def _mark_unmeasured(activity: str, agent_id: str, span: Entity, name: str, reason: str) -> str:
         """Record one span as attempted but unmeasured, so its absence is a fact, not a silence."""
@@ -880,22 +910,25 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         store.was_derived_from(assertion_id, span.id)
         return assertion_id
 
-    def _target_span_hear() -> None:
-        """Per-span HeAR re-evaluation of the target spans, raw scores only — no labelling decision.
+    def _span_hear() -> None:
+        """Per-span HeAR re-evaluation of the spans, raw scores only — no labelling decision.
 
         Reuses the same per-span windowing AIRWAY uses for its own candidates (a short span is
         centred in a silent 2 s buffer; a long span is passed through and HeAR's native windows are
         placed back on the recording's own timeline) for the reason AIRWAY's own docstring already
         gives: a whole-file HeAR window is the wrong instrument for an isolated candidate. Runs over
-        the NORMALIZED signal, the one target spans were proposed over, so a quiet event this pass
-        boosted to be detectable is not handed back to the classifier at its original level.
+        the normalized signal, so a quiet event that pass boosted to be detectable is not handed back
+        to the classifier at its original level; absent whenever normalization itself is, since there
+        is then no normalized signal to re-evaluate any span against.
         """
-        span_ids = state.get("target_span_ids") or []
+        span_ids = state.get("span_ids") or []
         if not span_ids:
-            raise LookupError("target spans are absent")
+            raise LookupError("spans are absent")
+        if "normalized_audio" not in state:
+            raise LookupError("normalized_envelope is absent")
         normalized_audio = state["normalized_audio"]
         agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
-        activity = _step("target_span_hear", {}, tuple(span_ids), agent)
+        activity = _step("span_hear", {}, tuple(span_ids), agent)
         default_threshold = float(config.require("windows.hear.default_threshold"))
         label_thresholds = {
             str(label): float(value) for label, value in (config.get("windows.hear.label_thresholds") or {}).items()
@@ -910,10 +943,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     0
                 ]
             except Exception as err:  # noqa: BLE001 — a span HeAR refuses is unmeasured, not padded
-                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_hear", type(err).__name__))
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", type(err).__name__))
                 continue
             if not raw_windows:
-                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_hear", "no_native_window"))
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", "no_native_window"))
                 continue
             for raw_window in raw_windows:
                 members = _confident_labels(raw_window, default_threshold, label_thresholds)
@@ -923,7 +956,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     prov_type="measurement",
                     extent=window_extent,
                     attributes={
-                        "name": "target_span_hear",
+                        "name": "span_hear",
                         "classifier": "hear",
                         "signal": "normalized",
                         "span_id": span_id,
@@ -938,25 +971,28 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 store.was_attributed_to(window_id, agent)
                 store.was_derived_from(window_id, span_id)
                 result_ids.append(window_id)
-        derivatives["target_span_hear"] = result_ids
+        derivatives["span_hear"] = result_ids
         view.extend(result_ids)
 
-    def _target_span_yamnet() -> None:
-        """Per-span YAMNet over the target spans, raw scores only — no labelling decision.
+    def _span_yamnet() -> None:
+        """Per-span YAMNet over the spans, raw scores only — no labelling decision.
 
         Unlike HeAR, YAMNet has no fixed-window constraint (its own native ~0.96 s grid runs over
-        whatever length it is given), so a span is classified directly rather than buffered.
+        whatever length it is given), so a span is classified directly rather than buffered. Runs
+        over the normalized signal; absent whenever normalization itself is.
         """
-        span_ids = state.get("target_span_ids") or []
+        span_ids = state.get("span_ids") or []
         if not span_ids:
-            raise LookupError("target spans are absent")
+            raise LookupError("spans are absent")
+        if "normalized_audio" not in state:
+            raise LookupError("normalized_envelope is absent")
         normalized_audio = state["normalized_audio"]
         agent = store.agent(
             agent_type="model",
             model_id=YAMNET_MODEL_URI,
             unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
         )
-        activity = _step("target_span_yamnet", {}, tuple(span_ids), agent)
+        activity = _step("span_yamnet", {}, tuple(span_ids), agent)
         default_threshold = float(config.require("windows.yamnet.default_threshold"))
         label_thresholds = {
             str(label): float(value) for label, value in (config.get("windows.yamnet.label_thresholds") or {}).items()
@@ -973,10 +1009,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             try:
                 raw_windows = classify_audios([segment], model="yamnet", top_k=top_k)[0]
             except Exception as err:  # noqa: BLE001 — a span YAMNet refuses is unmeasured, not padded
-                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_yamnet", type(err).__name__))
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", type(err).__name__))
                 continue
             if not raw_windows:
-                result_ids.append(_mark_unmeasured(activity, agent, span, "target_span_yamnet", "no_native_window"))
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "no_native_window"))
                 continue
             for raw_window in raw_windows:
                 members = _confident_labels(raw_window, default_threshold, label_thresholds)
@@ -986,7 +1022,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     prov_type="measurement",
                     extent=window_extent,
                     attributes={
-                        "name": "target_span_yamnet",
+                        "name": "span_yamnet",
                         "classifier": "yamnet",
                         "signal": "normalized",
                         "span_id": span_id,
@@ -1000,7 +1036,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 store.was_attributed_to(window_id, agent)
                 store.was_derived_from(window_id, span_id)
                 result_ids.append(window_id)
-        derivatives["target_span_yamnet"] = result_ids
+        derivatives["span_yamnet"] = result_ids
         view.extend(result_ids)
 
     def _asr(
@@ -1137,24 +1173,21 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(event_ids)
         state.update(consensus=kept, consensus_id=entity_id, consensus_word_ids=word_ids)
 
-    def _phonation_spans() -> None:
-        """Sustained-phonation and glide spans, from tracks computed once over the whole stream."""
+    def _phonation_tracks() -> None:
+        """F0 and formant tracks over the whole stream — measured once, localised nowhere.
+
+        Sustained-phonation and glide span *detection* used to happen here; it has moved to
+        TAXONOMY (owner-directed), which reads this measurement back and runs the same proposal
+        functions over it, so a decision about which stretch counts as phonation is no longer made
+        during conditioning. This block keeps only the part that is a measurement: F0 and the first
+        four formants and their bandwidths, per frame, over the whole pre-emphasised stream. It no
+        longer depends on the consensus transcript at all — word-aligned phonation proposal is
+        TAXONOMY's concern now, not a reason for this measurement to wait on ASR.
+        """
         f0_range = config.require("voice.f0_range_hz")
         f0_min_hz, f0_max_hz = float(f0_range[0]), float(f0_range[1])
         parameters: dict[str, Any] = {
             "hop_s": float(config.require("phonation_spans.hop_s")),
-            "f0_stability_cents": float(config.require("phonation_spans.f0_stability_cents")),
-            "formant_stability_hz": float(config.require("phonation_spans.formant_stability_hz")),
-            "glide_min_excursion_cents": float(config.require("phonation_spans.glide_min_excursion_cents")),
-            "hangover_ms": float(config.require("phonation_spans.hangover_ms")),
-            "voicing_strength_floor": float(config.require("phonation_spans.voicing_strength_floor")),
-            "mixed_voiced_fraction": float(config.require("phonation_spans.mixed_voiced_fraction")),
-            "unvoiced_max_formant_bandwidth_hz": float(
-                config.require("phonation_spans.unvoiced_max_formant_bandwidth_hz")
-            ),
-            "word_aligned_min_evidence_fraction": float(
-                config.require("phonation_spans.word_aligned_min_evidence_fraction")
-            ),
             "max_formants": int(config.require("phonation_spans.max_formants")),
             "formant_max_hz": float(config.require("phonation_spans.formant_max_hz")),
             "formant_window_s": float(config.require("phonation_spans.formant_window_s")),
@@ -1162,7 +1195,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "f0_min_hz": f0_min_hz,
             "f0_max_hz": f0_max_hz,
         }
-        activity = _step("phonation_spans", parameters, (sharp_id,), software)
+        activity = _step("phonation_tracks", parameters, (sharp_id,), software)
         times, f0_hz, strength = f0_track(sharp, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=parameters["hop_s"])
         formants = formant_track(
             sharp,
@@ -1172,90 +1205,42 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             window_s=parameters["formant_window_s"],
             preemphasis_hz=parameters["formant_preemphasis_hz"],
         )
-        proposals = propose_phonation_spans(
-            times=times,
+        np.savez(
+            run_dir / "derivatives" / "phonation_tracks.npz",
+            times_s=times,
             f0_hz=f0_hz,
             strength=strength,
-            formants=formants,
-            hop_s=parameters["hop_s"],
-            f0_stability_cents=parameters["f0_stability_cents"],
-            formant_stability_hz=parameters["formant_stability_hz"],
-            glide_min_excursion_cents=parameters["glide_min_excursion_cents"],
-            hangover_ms=parameters["hangover_ms"],
-            voicing_strength_floor=parameters["voicing_strength_floor"],
-            mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
-            unvoiced_max_formant_bandwidth_hz=parameters["unvoiced_max_formant_bandwidth_hz"],
+            formant_times_s=formants.times_s,
+            f1_hz=formants.f_hz[0],
+            f2_hz=formants.f_hz[1],
+            f3_hz=formants.f_hz[2],
+            f4_hz=formants.f_hz[3],
+            f1_bw_hz=formants.bandwidth_hz[0],
+            f2_bw_hz=formants.bandwidth_hz[1],
+            f3_bw_hz=formants.bandwidth_hz[2],
+            f4_bw_hz=formants.bandwidth_hz[3],
         )
-        word_ids = list(state.get("consensus_word_ids") or [])
-        word_extents = [store.get_entity(word_id).extent for word_id in word_ids]
-        word_spans = propose_word_aligned_phonation_spans(
-            times=times,
-            f0_hz=f0_hz,
-            strength=strength,
-            formants=formants,
-            word_extents=[extent for extent in word_extents if extent is not None],
-            voicing_strength_floor=parameters["voicing_strength_floor"],
-            mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
-            unvoiced_max_formant_bandwidth_hz=parameters["unvoiced_max_formant_bandwidth_hz"],
-            min_evidence_fraction=parameters["word_aligned_min_evidence_fraction"],
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name="phonation_tracks",
+            signal=sharp_signal,
+            attributes={"hop_s": parameters["hop_s"], "f0_min_hz": f0_min_hz, "f0_max_hz": f0_max_hz},
+            derived_from=(sharp_id,),
         )
-        word_sources = {
-            extent: word_id for word_id, extent in zip(word_ids, word_extents, strict=True) if extent is not None
-        }
-        proposals.extend(
-            proposal
-            for proposal in word_spans
-            if not any(existing.start <= proposal.start and proposal.end <= existing.end for existing in proposals)
-        )
-        span_ids: list[str] = []
-        for proposal in proposals:
-            span_id = store.entity(
-                prov_type="span",
-                extent=(proposal.start, proposal.end),
-                attributes={
-                    "family": "phonation",
-                    "member": proposal.member,
-                    "duration_s": proposal.end - proposal.start,
-                    "production": proposal.production,
-                    "voiced_fraction": proposal.voiced_fraction,
-                    "f0_median_hz": proposal.f0_median_hz,
-                    "f0_start_hz": proposal.f0_start_hz,
-                    "f0_end_hz": proposal.f0_end_hz,
-                    "glide_direction": proposal.glide_direction,
-                    "glide_extent_cents": proposal.glide_extent_cents,
-                    "offset_criterion": proposal.offset_criterion,
-                    "signal": sharp_signal,
-                    "hop_s": parameters["hop_s"],
-                },
-            )
-            store.was_generated_by(span_id, activity)
-            store.was_attributed_to(span_id, software)
-            store.was_derived_from(span_id, sharp_id)
-            if proposal.member == "word_aligned":
-                store.was_derived_from(span_id, word_sources[(proposal.start, proposal.end)])
-            span_ids.append(span_id)
-            inside = (formants.times_s >= proposal.start) & (formants.times_s < proposal.end)
-            track_id = _measurement(
-                store,
-                activity,
-                software,
-                name="formant_tracks",
-                signal=sharp_signal,
-                extent=(proposal.start, proposal.end),
-                attributes={
-                    "times_s": formants.times_s[inside].tolist(),
-                    "hop_s": parameters["hop_s"],
-                    **{f"f{order + 1}_hz": formants.f_hz[order][inside].tolist() for order in range(4)},
-                    **{f"f{order + 1}_bw_hz": formants.bandwidth_hz[order][inside].tolist() for order in range(4)},
-                },
-                derived_from=(span_id,),
-            )
-            view.append(track_id)
-        derivatives["phonation_spans"] = span_ids
-        view.extend(span_ids)
+        derivatives["phonation_tracks"] = entity_id
+        view.append(entity_id)
 
     def _spectrogram(name: str, window_key: str) -> None:
-        """One STFT magnitude, window and hop from the config, n_fft = win_length (decision N7)."""
+        """One STFT power spectrogram, window and hop from the config, n_fft = win_length (decision N7).
+
+        Stores the magnitude (``sqrt`` of this transform's power output) and the hop it was computed
+        at into ``state`` under this block's own name, alongside writing the usual npz/measurement --
+        so a later block (``_spans``'s continuity source, for the wideband case) can reuse the same
+        array rather than recomputing an independent STFT with merely matching parameters. Harmless
+        for the narrowband case, which nothing currently reads back out of ``state``.
+        """
         window_ms = float(config.require(window_key))
         hop_ms = float(config.require("spectrogram.hop_ms"))
         win_length = int(target_hz * window_ms / 1000.0)
@@ -1265,7 +1250,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         [result] = extract_spectrogram_from_audios(
             [sharp], n_fft=win_length, win_length=win_length, hop_length=hop_length
         )
-        np.savez(run_dir / "derivatives" / f"{name}.npz", spectrogram=result["spectrogram"].numpy())
+        power = result["spectrogram"].numpy()
+        np.savez(run_dir / "derivatives" / f"{name}.npz", spectrogram=power)
         entity_id = _measurement(
             store,
             activity,
@@ -1277,6 +1263,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         )
         derivatives[name] = entity_id
         view.append(entity_id)
+        state[f"{name}_magnitude"] = np.sqrt(np.maximum(power, 0.0))
+        state[f"{name}_hop_s"] = hop_ms / 1000.0
 
     def _gammatone() -> None:
         """The ERB-spaced filterbank energies, to one npz sidecar."""
@@ -1312,8 +1300,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.append(entity_id)
 
     blocks: list[tuple[str, Callable[[], None]]] = [
-        ("energy_envelope", _envelope),
-        ("spans", _spans),
         ("clip_spans", _clip_spans),
         ("yamnet_scores", _yamnet_scores),
         ("yamnet_windows", lambda: _windows("yamnet")),
@@ -1324,31 +1310,41 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         ("hear_windows", lambda: _windows("hear")),
         ("level", _level),
         ("disruptions_file", _disruptions_file),
-        ("squim", _squim),
         ("asr_crisperwhisper", lambda: _asr("asr_crisperwhisper", _crisperwhisper_model, "native", None)),
         (
             "asr_qwen",
             lambda: _asr("asr_qwen", _qwen_model, "bundled_aligner", QWEN_TIMESTAMP_MODEL, return_timestamps=True),
         ),
         ("consensus_transcript", _consensus),
-        ("phonation_spans", _phonation_spans),
+        ("phonation_tracks", _phonation_tracks),
+        ("energy_envelope", _envelope),
         ("normalized_envelope", _normalized_envelope),
-        ("target_spans", _target_spans),
-        ("target_span_squim", _target_span_squim),
-        ("target_span_hear", _target_span_hear),
-        ("target_span_yamnet", _target_span_yamnet),
         ("spectrogram_wideband", lambda: _spectrogram("spectrogram_wideband", "spectrogram.wideband_window_ms")),
         (
             "spectrogram_narrowband",
             lambda: _spectrogram("spectrogram_narrowband", "spectrogram.narrowband_window_ms"),
         ),
+        ("spans", _spans),
+        ("squim", _squim),
+        ("span_hear", _span_hear),
+        ("span_yamnet", _span_yamnet),
         ("gammatone", _gammatone),
     ]
+    hard_failures: list[tuple[str, str]] = []
     for name, block in blocks:
         try:
             block()
-        except Exception as err:  # noqa: BLE001 — an uncomputable derivative is absent, not an error
+        except (ValueError, LookupError) as err:
+            # A null/unmeasured config value, or a block's own missing upstream prerequisite —
+            # both are cascading absences, not new failures.
             absent[name] = describe_exception(err)
+        except Exception as err:  # noqa: BLE001 — classified below; every remaining block still runs
+            absent[name] = describe_exception(err)
+            hard_failures.append((name, describe_exception(err)))
+
+    if hard_failures:
+        summary = "; ".join(f"{name}: {message}" for name, message in hard_failures)
+        raise RuntimeError(f"PREPROCESS: {len(hard_failures)} block(s) failed unexpectedly: {summary}")
 
     verdict_id, verdict = write_verdict(
         store,

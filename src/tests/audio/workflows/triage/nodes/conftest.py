@@ -8,8 +8,107 @@ import numpy as np
 import pytest
 import soundfile as sf
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
+from senselab.audio.workflows.triage.nodes.admit import admit
+from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
+from senselab.utils.data_structures import ScriptLine
 from senselab.utils.prov_store import ProvStore
+
+SR = 16000
+
+
+class _FakeModel:
+    """A model spec stub carrying exactly what the node reads: path_or_uri and commit_sha."""
+
+    def __init__(self, path_or_uri: str) -> None:
+        """Stub a resolved model."""
+        self.path_or_uri = path_or_uri
+        self.commit_sha = "a" * 40
+
+
+def _line(text: str) -> ScriptLine:
+    """One recognizer's result: a chunk per whitespace-separated token, 0.3 s apart."""
+    tokens = [token for token in text.split() if token]
+    chunks = [
+        ScriptLine(text=token, start=0.5 + index * 0.3, end=0.5 + index * 0.3 + 0.2, score=0.9)
+        for index, token in enumerate(tokens)
+    ]
+    if not chunks:
+        return ScriptLine(text="", start=0.0, end=0.0, chunks=None, score=0.9)
+    return ScriptLine(text=text, start=chunks[0].start, end=chunks[-1].end, chunks=chunks, score=0.9)
+
+
+def _default_samples() -> np.ndarray:
+    """A quiet noise bed with one loud burst — enough contrast for one envelope span."""
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
+    start = int(1.5 * SR)
+    stop = start + int(0.15 * SR)
+    grid = np.arange(stop - start) / SR
+    samples[start:stop] += (0.5 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    return samples
+
+
+def _seed_admit(
+    store: ProvStore,
+    tmp_path: Path,
+    wav_writer: Callable[..., Path],
+    samples: np.ndarray | None = None,
+    sampling_rate: int = SR,
+) -> None:
+    """Write the fixture recording and run ADMIT over it, so the ``recording`` stream exists."""
+    path = wav_writer("input.wav", _default_samples() if samples is None else samples, sampling_rate)
+    admitted = admit(store, path, load_triage_config(), run_dir=tmp_path)
+    assert admitted.audio is not None
+
+
+def _audio(tmp_path: Path) -> Audio:
+    """The fixture recording, as ADMIT returned it."""
+    return Audio(filepath=str(tmp_path / "input.wav"))
+
+
+def _stub_models(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    yamnet: list[dict[str, Any]] | None = None,
+    ast: list[dict[str, Any]] | None = None,
+    hear: list[dict[str, Any]] | None = None,
+    crisper: ScriptLine | None = None,
+    qwen: ScriptLine | None = None,
+    record: dict[str, Any] | None = None,
+) -> None:
+    """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs."""
+    seen = record if record is not None else {}
+
+    def fake_classify(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+        """YAMNet or AST, told apart by the model the node passed."""
+        which = "yamnet" if model == "yamnet" else "ast"
+        seen[which] = {"model": model, **kwargs}
+        return [list(yamnet or []) if which == "yamnet" else list(ast or [])]
+
+    def fake_hear(audios: list, **kwargs: Any) -> list:  # noqa: ANN401
+        """HeAR's event detector, on its fixed 2 s window."""
+        seen["hear"] = dict(kwargs)
+        return [list(hear or [])]
+
+    def fake_transcribe(audios: list, model: _FakeModel, **kwargs: Any) -> list:  # noqa: ANN401
+        """Whichever recognizer the node asked for."""
+        seen.setdefault("transcribe", []).append(str(model.path_or_uri))
+        return [(crisper if str(model.path_or_uri) == CRISPERWHISPER_ID else qwen) or _line("")]
+
+    def fake_squim(audios: list, device: Any = None) -> list:  # noqa: ANN401
+        """One objective-head dict per input."""
+        return [{"stoi": 0.91, "pesq": 1.8, "si_sdr": 7.5} for _ in audios]
+
+    monkeypatch.setattr(preprocess_module, "_crisperwhisper_model", lambda: _FakeModel(CRISPERWHISPER_ID))
+    monkeypatch.setattr(preprocess_module, "_qwen_model", lambda: _FakeModel(QWEN_ID))
+    monkeypatch.setattr(preprocess_module, "_ast_model", lambda: _FakeModel(preprocess_module.AST_ID))
+    monkeypatch.setattr(preprocess_module, "classify_audios", fake_classify)
+    monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
+    monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
+    monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
 
 
 @pytest.fixture
@@ -99,13 +198,13 @@ def phonation_config(tmp_path: Path) -> TriageConfig:
 
 
 @pytest.fixture
-def target_spans_config(tmp_path: Path) -> TriageConfig:
+def spans_config(tmp_path: Path) -> TriageConfig:
     """The packaged config with the clip-grouping and normalization keys supplied.
 
     The values are a test fixture, not a fit: the packaged file leaves each of them null, and this
     is the override mechanism a caller would use to state them for a real campaign.
     """
-    override = tmp_path / "target_spans.yaml"
+    override = tmp_path / "spans.yaml"
     override.write_text(
         "clipping:\n"
         "  min_duration_ms: 0.5\n"
@@ -123,21 +222,19 @@ def target_spans_config(tmp_path: Path) -> TriageConfig:
         "  floor_dbfs: -100.0\n"
         "  ceiling: 0.95\n"
         "spans:\n"
-        "  k_db:\n"
-        "    target: 12.0\n"
+        "  k_db: 12.0\n"
     )
     return load_triage_config(override)
 
 
 @pytest.fixture
-def target_span_quality_config(tmp_path: Path) -> TriageConfig:
-    """``target_spans_config`` plus the HeAR/YAMNet thresholds the per-span quality blocks read.
+def asr_span_config(tmp_path: Path) -> TriageConfig:
+    """``spans_config`` plus ``speech.word_gap_ms``, so PREPROCESS's ASR span source is exercised.
 
-    A separate fixture rather than folding these into ``target_spans_config``: most target-span
-    tests have no reason to exercise HeAR/YAMNet at all, and stubbing models they never call would
-    only obscure what a given test is actually about.
+    The packaged file leaves ``speech.word_gap_ms`` null (unmeasured); this fixture states one for
+    tests that need the ASR span source itself present, not just absent-by-default.
     """
-    override = tmp_path / "target_span_quality.yaml"
+    override = tmp_path / "asr_spans.yaml"
     override.write_text(
         "clipping:\n"
         "  min_duration_ms: 0.5\n"
@@ -155,8 +252,40 @@ def target_span_quality_config(tmp_path: Path) -> TriageConfig:
         "  floor_dbfs: -100.0\n"
         "  ceiling: 0.95\n"
         "spans:\n"
-        "  k_db:\n"
-        "    target: 12.0\n"
+        "  k_db: 12.0\n"
+        "speech:\n"
+        "  word_gap_ms: 150.0\n"
+    )
+    return load_triage_config(override)
+
+
+@pytest.fixture
+def span_quality_config(tmp_path: Path) -> TriageConfig:
+    """``spans_config`` plus the HeAR/YAMNet thresholds the per-span quality blocks read.
+
+    A separate fixture rather than folding these into ``spans_config``: most span tests have no
+    reason to exercise HeAR/YAMNet at all, and stubbing models they never call would only obscure
+    what a given test is actually about.
+    """
+    override = tmp_path / "span_quality.yaml"
+    override.write_text(
+        "clipping:\n"
+        "  min_duration_ms: 0.5\n"
+        "  merge_gap_ms: 50.0\n"
+        "normalization:\n"
+        "  macro_smoothing:\n"
+        "    window_s: 0.5\n"
+        "  micro_smoothing:\n"
+        "    window_s: 0.05\n"
+        "  target_dr_db: 15.0\n"
+        "  compression_ratio: 2.0\n"
+        "  macro_target_dbfs: -6.0\n"
+        "  gain_smoothing:\n"
+        "    window_s: 0.025\n"
+        "  floor_dbfs: -100.0\n"
+        "  ceiling: 0.95\n"
+        "spans:\n"
+        "  k_db: 12.0\n"
         "windows:\n"
         "  hear:\n"
         "    default_threshold: 0.5\n"
@@ -231,8 +360,9 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         phonation: ``[(start, end, production), ...]`` or ``[(start, end, production, member), ...]``
             phonation spans -- ``member`` is ``"sustained"`` by default and ``"glide"`` gives the span
             a direction and an excursion, which T5 and T6 both need. Written with the
-            ``PREPROCESS``/``phonation_spans`` activity that says the pass ran. ``[]`` writes the
-            activity and no spans; ``None`` writes neither, which is the ``unavailable`` case.
+            ``TAXONOMY``/``phonation_spans`` activity that says the pass ran -- phonation-span
+            *detection* moved from PREPROCESS to TAXONOMY; this fixture matches that. ``[]`` writes
+            the activity and no spans; ``None`` writes neither, which is the ``unavailable`` case.
         spans: ``[(start, end, peak_over_floor_db), ...]`` envelope spans at ``span_k_db``. ``[]``
             writes the ``PREPROCESS``/``spans`` activity and no span -- the spans pass ran and
             proposed nothing -- while ``None`` writes neither.
@@ -405,7 +535,7 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
             )
 
         if phonation is not None:
-            store.was_associated_with(store.activity(node="PREPROCESS", step="phonation_spans", parameters={}), agent)
+            store.was_associated_with(store.activity(node="TAXONOMY", step="phonation_spans", parameters={}), agent)
             for entry in phonation:
                 start, end, production = entry[0], entry[1], entry[2]
                 member = entry[3] if len(entry) > 3 else "sustained"

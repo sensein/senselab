@@ -46,7 +46,6 @@ DATA_MAP_PATHS = frozenset(
         "airway.confirmation_map",
         "airway.k_db_by_task",
         "routing.hint_kind_map",
-        "spans.k_db",
         "voice.f0_range_by_population",
         "voice.task_duration_ranges",
         "windows.ast.label_thresholds",

@@ -472,15 +472,50 @@ class TestNodeErrorsAreCaptured:
         assert result.file_verdict is not None
         assert result.file_verdict.ran["VOICE"] is RunState.ERRORED
 
-    def test_a_raising_preprocess_does_not_stop_the_branches(
+    def test_a_raising_preprocess_skips_every_node_that_reads_its_output(
         self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
     ) -> None:
-        """Downstream nodes read the store, so an errored PREPROCESS does not skip them."""
+        """Every later node reads what PREPROCESS measured, so a raise there leaves them SKIPPED."""
         calls = graph(raising="PREPROCESS")
         result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
-        assert tuple(calls) == GRAPH
+        assert tuple(calls) == ("ADMIT", "PREPROCESS", "VERDICT")
         assert result.ran["PREPROCESS"] is RunState.ERRORED
-        assert result.ran["TAXONOMY"] is RunState.COMPLETED
+        assert result.ran["TAXONOMY"] is RunState.SKIPPED
+
+
+class TestPreprocessFailShortCircuits:
+    """PREPROCESS is the second gate: a raise skips every node that depends on its measurements."""
+
+    def test_taxonomy_routing_and_every_branch_are_skipped(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """None of them has any evidence to act on, so none of them is attempted."""
+        calls = graph(raising="PREPROCESS")
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        skipped = ("TAXONOMY", "routing", "AIRWAY", "SPEECH", "VOICE", "REDACT")
+        assert set(skipped).isdisjoint(calls)
+        assert [result.ran[node] for node in skipped] == [RunState.SKIPPED] * len(skipped)
+
+    def test_verdict_still_runs_and_flags_the_file_with_a_reason(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """The file reaches VERDICT rather than reading as a silent, evidence-free pass."""
+        graph(raising="PREPROCESS")
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.ran["VERDICT"] is RunState.COMPLETED
+        assert result.file_verdict is not None
+        assert result.file_verdict.triage is Triage.FLAG
+        assert any("preprocess failed" in reason.why for reason in result.file_verdict.reasons)
+
+    def test_the_store_is_still_persisted_and_report_still_runs(
+        self, graph: Callable[..., list[str]], config: TriageConfig, tmp_path: Path
+    ) -> None:
+        """REPORT runs on every outcome, including one this bare — the near-empty-store case."""
+        graph(raising="PREPROCESS")
+        result = run_triage(tmp_path / "recording.wav", tmp_path / "out", config)
+        assert result.store_path.is_file()
+        assert result.ran["REPORT"] is RunState.COMPLETED
+        assert sorted(result.summary) == ["json", "summary"]
 
 
 class TestAdmitFailShortCircuits:

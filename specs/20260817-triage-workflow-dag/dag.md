@@ -16,11 +16,11 @@ disorders. Concretely, a file should be flagged when:
 2. **it contains other speakers within target-speaker-specific spans**;
 3. **the spoken speech contains PII not included in the task itself.**
 
-Goal 2 is no longer airway/speaker-specific by construction: PREPROCESS's `target_spans` block (see
-node 2 below) generalizes span detection to any duration carrying foreground acoustic energy — other
-people talking, other sound sources, not only the target speaker — and `target_span_hear`/
-`target_span_yamnet` attach classifier evidence to each one. Verified against
-`nodes/preprocess.py`'s `_target_spans`/`_target_span_hear`/`_target_span_yamnet`.
+Goal 2 is no longer airway/speaker-specific by construction: PREPROCESS's span block (see node 2
+below) is one foreground-acoustic-event detector for any duration carrying foreground acoustic
+energy — other people talking, other sound sources, not only the target speaker — and `span_hear`/
+`span_yamnet` attach classifier evidence to each one. Verified against `nodes/preprocess.py`'s
+`_spans`/`_span_hear`/`_span_yamnet`.
 
 The graph's job is to sort every file into exactly one of three outcomes: **pass** it through (needs
 no further review), **flag** it (the workflow cannot determine cleanly, a person should look), or
@@ -98,34 +98,40 @@ path to `Triage.DISCARD` with `discard_ground: "unmeasurable"` (`vocabulary.py::
 ### 2. PREPROCESS — condition the audio, measure everything once, decide nothing
 
 **Role:** the one conditioning pass. Every model that answers a whole-file question runs exactly
-here (YAMNet, AST, HeAR, both ASR recognizers); no later node re-runs one. Outcome is unconditionally
-`PASS` — this node cannot flag or fail. A derivative that cannot be computed is recorded `absent`,
-never an error.
+here (YAMNet, AST, HeAR, both ASR recognizers); no later node re-runs one. It takes no pass/flag/fail
+decision of its own — but, since a real cross-block dependency exists (spectral continuity reuses the
+narrowband spectrogram block's own output, below), it is not guaranteed to complete. A derivative
+whose config value is unmeasured (a null default) or whose own upstream prerequisite is missing is
+recorded `absent`, exactly as before; anything else accumulates instead, and once every block has
+been attempted `preprocess` raises one exception summarizing all of them, rather than returning. That
+raise is caught the same way any other node's is (`run.py::_attempt`), and `_drive_branches` responds
+by skipping TAXONOMY, routing and every branch — none of them has anything to read — straight to
+VERDICT, which records the failure as a `flag` reason rather than an evidence-free `pass`.
 
-Each block below is independent (one try/except each), with its own config:
+Each block below still runs in its own try/except, with its own config, but "independent" now means
+only that a block's *soft* failure (the two kinds above) never reaches another block — one block's
+unexpected exception does not stop the rest of the loop from being attempted, but it does end the
+node's own run once the loop finishes:
 
 | derivative | config parameters |
 |---|---|
 | resample + downmix | `resample.target_hz` |
 | pre-emphasis | `preemphasis.enabled`, `preemphasis.coefficient` |
-| energy envelope + floor (airway signal) | `envelope.lowpass_hz`, `envelope.filter_order` (`ButterworthSmoothing`, fitted — see this file's own derivation), `floor.percentile` — the floor is a single global value for the whole recording (10th percentile of the envelope itself), not a rolling window; shared with the normalized-signal floor below rather than each block carrying its own window |
-| envelope-peak span proposals (`family=None`, airway K) | `spans.k_db.airway`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` — onset and offset walk by the identical rule (stop within `floor_margin_db` of the floor, sustained for `transition_window_ms`), replacing an asymmetric peak-anchored-onset/floor-fraction-offset pair |
 | clip-event spans (`family="clip"`), ClipDaT over the *original* recording | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme`, `clipping.min_duration_ms`, `clipping.merge_gap_ms` — the last two null in the packaged config |
-| dynamically-normalized signal + its own envelope/floor | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, the envelope actually used for target-span detection), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling` — the floor itself reuses `floor.percentile` above, computed over this block's own (normalized) envelope |
-| target-span proposals (`family="target"`, general foreground-energy K), flagged `contains_clip` on overlap with a clip span | `spans.k_db.target` (null) plus the shared `spans.*` keys above |
-| per-target-span quality: `target_span_squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
-| per-target-span quality: `target_span_hear` (on the *normalized* signal, AIRWAY's own per-span buffer/native-window split, raw scores only) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
-| per-target-span quality: `target_span_yamnet` (on the *normalized* signal, no buffering — YAMNet has no fixed-window constraint) | `windows.yamnet.default_threshold`, `windows.yamnet.label_thresholds`, `yamnet.top_k` |
+| dynamically-normalized signal + its own energy envelope/floor | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, the envelope actually used for span detection), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling`; floor is `floor.percentile`, the 10th percentile of this envelope, a single global value for the whole recording rather than a rolling window |
+| foreground-acoustic-event span proposals, flagged `contains_clip` on overlap with a clip span | `spans.k_db`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` for the amplitude sources (primary from the pre-emphasised envelope, always available; supplementary from the normalized envelope where it exists) — the threshold crossing itself generates each candidate directly (a maximal run where the envelope has risen `k_db` above the floor), not a peak later expanded outward; `spectral_continuity.smoothing.window_s` and `spans.continuity_margin`/`.continuity_floor_margin`/`.continuity_min_duration_ms` for a third source, spectral continuity over the wideband spectrogram block's own already-computed magnitude array (reused directly, not recomputed — see the spectrograms row below; wideband rather than narrowband for its shorter analysis window, giving continuity finer temporal resolution to place a transition against), added for sustained tonal/harmonic production (glides, phonation) an amplitude gate alone can miss — measured directly to work for glides and phonation-like sustains and NOT to discriminate breath from background on the one breathing recording tested. Absent whenever `spectrogram_wideband` itself is, a real cross-block dependency (see PREPROCESS's own role note above). A fourth source, ASR, reads the consensus transcript's own word timings (see the consensus-transcript row below) and groups them into runs by `speech.word_gap_ms` — no threshold or floor at all, since a recognizer transcribing a stretch as speech is itself the evidence; absent whenever `speech.word_gap_ms` is unmeasured (null in the packaged config) or `consensus_transcript` itself is. Each source only adds a candidate no earlier source already covers; onset and offset walk by the identical rule for every threshold-based source (stop within the source's own margin of its own floor, sustained for `transition_window_ms`) — ASR's own extents need no such walk. One span mechanism for any vocal task, no `family` distinguishing which downstream branch a span is "for" — `contains_clip` is the only per-span flag PREPROCESS itself asserts, alongside `measure` naming which source (`amplitude`, `continuity` or `asr`) proposed it |
+| per-span quality: `squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
+| per-span quality: `span_hear` (on the *normalized* signal, AIRWAY's own per-span buffer/native-window split, raw scores only) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
+| per-span quality: `span_yamnet` (on the *normalized* signal, no buffering — YAMNet has no fixed-window constraint) | `windows.yamnet.default_threshold`, `windows.yamnet.label_thresholds`, `yamnet.top_k` |
 | YAMNet / AST / HeAR window scores | `yamnet.top_k`; `windows.ast.win_length_s`/`hop_s`/`top_k`; `windows.hear.hop_s` — verified against `default.yaml`: `windows.ast.win_length_s`/`hop_s` are AST's owner-directed 10.24 s window, `windows.hear.hop_s` is HeAR's fixed 2 s window, both already model-native |
 | per-window label membership | `windows.{yamnet,ast,hear}.default_threshold`, `windows.{yamnet,ast,hear}.label_thresholds` — **all six null in the packaged config**, so every window's label set is empty until an override supplies at least one |
 | silence | `yamnet.silence_threshold` |
 | **file-level quality: `level`** (peak/RMS dBFS, LUFS) | none — plain measurement |
 | **file-level quality: `disruptions_file`** (clipping, dropouts, discontinuities), on the *original* recording | `disruptions.clip_headroom`, `disruptions.min_clip_run`, `disruptions.min_dropout_ms`, `disruptions.discontinuity_local_factor`, `disruptions.discontinuity_window_ms` |
-| **per-envelope-span quality: `squim`** (STOI/PESQ/SI-SDR, airway spans) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
 | both ASR recognizers' own transcripts | none decision-relevant |
 | consensus transcript (`fuse_consensus_words`) + `word`/`event` entities | `words.onomatopoeic_tokens` (null). A recognizer that brackets a non-lexical event (e.g. CrisperWhisper's `[COUGH]`) and one that transcribes it as a plain word (Qwen's `cough`) already vote as one word — `_normalize_word` strips brackets as punctuation — and the fused text now deterministically keeps the bracketed form regardless of which recognizer the fold visits first (`speech_to_text_ensemble/api.py`'s `_is_bracketed_token`); only a wholly-unbracketed reading still depends on `words.onomatopoeic_tokens` to become an `event` |
-| phonation spans (sustained/glide) | `voice.f0_range_hz` plus eight `phonation_spans.*` criterion keys, six of them null |
-| spectrograms (wideband/narrowband), gammatone | fixed window/hop keys, none decision-relevant |
+| F0/formant tracks (`phonation_tracks`) — measurement only, no boundary decided; sustained-phonation and glide span *detection* moved to TAXONOMY this session (owner-directed), which reads this measurement back — see TAXONOMY's own table below | `voice.f0_range_hz`, `phonation_spans.hop_s`/`.max_formants`/`.formant_max_hz`/`.formant_window_s`/`.formant_preemphasis_hz` |
+| spectrograms (wideband/narrowband), gammatone | fixed window/hop keys, none decision-relevant; wideband's own magnitude array is also read directly by the spans block above, so it now runs before `spans` in block order |
 
 Dynamic-range normalization is `envelope.dynamic_range_normalize` — a slow (`macro_smoothing`) and a
 fast (`micro_smoothing`) envelope of the same signal via `hilbert_envelope_dbfs`, their difference
@@ -141,23 +147,29 @@ instead of relying on consensus-transcript text for onomatopoeic detection — a
 question than the bracket-preservation fix above, and not pursued here.
 
 **Serves the stated goals:** this is where **all** the raw evidence for goal 1 (`level`,
-`disruptions_file`, per-span `squim`/`target_span_squim`) is measured — but PREPROCESS itself makes no
-judgment on any of it. It is where goal 3's substrate (the consensus transcript SPEECH will scan) is
-produced. Goal 2 is now served directly here too: `target_spans`, `clip_spans` and their
-`target_span_hear`/`target_span_yamnet` evidence are the general foreground-acoustic-event mechanism
-referenced above — still unjudged (PREPROCESS decides nothing), but no longer airway-only.
+`disruptions_file`, per-span `squim`) is measured — but PREPROCESS itself makes no judgment on any of
+it. It is where goal 3's substrate (the consensus transcript SPEECH will scan) is produced. Goal 2 is
+served directly here too: `spans`, `clip_spans` and their `span_hear`/`span_yamnet` evidence are the
+general foreground-acoustic-event mechanism referenced above — one span mechanism for any vocal task,
+still unjudged (PREPROCESS decides nothing), never airway-only.
 
 ### 3. TAXONOMY — fold PREPROCESS's evidence into speech/airway/voice presence
 
 **Role:** the first real classification. Pure fold over stored evidence — runs no model, reads no
-hint. Each kind reads named evidence **lines**, each line counts stored elements against its own
-floor:
+hint — with one localising exception: sustained-phonation/glide span *detection*, moved here from
+PREPROCESS this session (owner-directed). PREPROCESS measures F0 and formant tracks over the whole
+stream and decides no boundary (`phonation_tracks`, see PREPROCESS's own table above); TAXONOMY reads
+that measurement back and runs the same detector (`propose_phonation_spans`,
+`propose_word_aligned_phonation_spans`, unchanged) over it, writing `family="phonation"` spans exactly
+as PREPROCESS used to. VOICE reads those spans by `family` alone and does not care which node wrote
+them. Every other kind reads named evidence **lines**, each line counting stored elements against its
+own floor:
 
 | kind | lines | decision parameters |
 |---|---|---|
 | speech | `lexical` (consensus word count) — **authoritative**; `acoustic` (YAMNet+AST windows carrying a speech-family label) — corroboration only | `taxonomy.presence_floor.speech.lexical`, `taxonomy.presence_floor.speech.acoustic`, `taxonomy.speech_labels` — **all three null** |
 | airway | `health_acoustic` (HeAR windows), `acoustic` (YAMNet+AST windows) — both must agree to resolve | `taxonomy.presence_floor.airway.health_acoustic`, `taxonomy.presence_floor.airway.acoustic`, `taxonomy.audioset_airway_labels`, `taxonomy.hear_airway_labels` |
-| voice | `phonation` (longest phonation span duration alone) | `taxonomy.voice_min_duration_s`, `taxonomy.voice_uncertain_duration_s` — **both null** |
+| voice | `phonation` (longest phonation span duration alone, over the spans TAXONOMY itself just localised) | `taxonomy.voice_min_duration_s`, `taxonomy.voice_uncertain_duration_s` — **both null**; span detection itself reads `phonation_spans.*` (seven of eight keys null) |
 
 A line whose derivative never reached the store, or whose floor is null, reads `unavailable` — which
 makes the *line* uncertain, never absent; a kind is `absent` only when every one of its lines
@@ -213,9 +225,20 @@ inside the labelled interval), conclude.
 
 **Decision parameters:** `airway.labels_of_interest`, `airway.confirmation_map` (which YAMNet labels
 confirm which HeAR label), `airway.k_db`/`airway.k_db_by_task` (falls back to the shared
-`spans.k_db.airway` = 18.0 dB), `airway.k_margin_db` (null — the near-gate flag is inert while null),
+`spans.k_db` = 18.0 dB), `airway.k_margin_db` (null — the near-gate flag is inert while null),
 `airway.contest_labels` (null; refused at load if it ever overlaps `taxonomy.audioset_airway_labels`),
 `windows.hear.default_threshold`/`label_thresholds`.
+
+AIRWAY still selects its input by matching the stored `k_db` attribute value on PREPROCESS's spans
+(`airway.py:189`), not by any span-level "family" — a mechanism this session's PREPROCESS change did
+not touch. Two consequences, deliberately left as the next stage's decisions rather than folded into
+this one: PREPROCESS's one span mechanism now runs entirely inside the `normalization.*`-dependent
+block, so under the packaged default config (every `normalization.*` key null) PREPROCESS emits no
+spans at all and AIRWAY has nothing to match against; and value-matching itself assumes exactly one
+k_db was used file-wide, which stops being true the moment `airway.k_db`/`airway.k_db_by_task`
+diverges from the shared `spans.k_db` PREPROCESS proposed at. AIRWAY re-deriving its own gate from
+`peak_over_floor_db` on the generic spans, rather than re-matching a threshold PREPROCESS happened to
+propose at, is the fix; not made here.
 
 **Serves the stated goals: none.** AIRWAY is entirely about cough/breath event detection and
 label-conflict resolution — a content-classification concern, orthogonal to quality, other speakers,
@@ -287,9 +310,10 @@ missing mechanism.
 
 ### 5c. VOICE — phonation measurement, not one of the three goals
 
-**Role:** measures HNR, F0, and glottal period marks over PREPROCESS's phonation spans; classifies
-nothing new (it measures the `voice` kind TAXONOMY already classified). Runs no model AIRWAY/SPEECH
-share.
+**Role:** measures HNR, F0, and glottal period marks over the phonation spans in the store (TAXONOMY
+proposes them now, not PREPROCESS — see TAXONOMY's own section above; VOICE reads by `family` alone
+and does not care which node wrote them); classifies nothing new (it measures the `voice` kind
+TAXONOMY already classified). Runs no model AIRWAY/SPEECH share.
 
 **Decision parameters:** `voice.f0_range_hz`/`voice.f0_range_by_population` (population-selectable —
 `hint.metadata["population"]` picks an override key), `voice.f0_range_ratio_max` (refused at load,

@@ -17,7 +17,7 @@ derivation: |
   modulation bandwidth the envelope is for, not an onset-precision choice. Zero-phase beats causal,
   63.5 ms against 90.1 ms median, which makes the envelope offline-only.
 
-  Floor: a single global value per recording, in dBFS -- the 10th percentile of the ENVELOPE (not the
+  Floor: a single global value per recording, in dBFS -- the 5th percentile of the ENVELOPE (not the
   raw waveform), one number for the whole file rather than a rolling one. Owner-directed this
   session, replacing a rolling 3 s / 10th-percentile-of-the-envelope floor (benchmarks/spans.md),
   which on continuous real speech with no genuine internal silence tracked whichever moment happened
@@ -37,10 +37,14 @@ derivation: |
   actual level (the Rayleigh-vs-half-normal ratio of the same process), which put ordinary background
   noise above both spans.k_db values with no real event present at all -- verified directly: a plain
   noise-bed-plus-one-burst fixture measured a median ``rise`` of 19.4 dB with no burst in sight. 10.0
-  is carried over from the retired rolling floor's own percentile, not re-derived for the new
-  definition.
+  was carried over from the retired rolling floor's own percentile, not re-derived for the new
+  definition; lowered to 5.0 this session, owner-directed, tightening the floor toward the true
+  quietest stretch of the recording rather than a broader low-decile band -- shared as-is by
+  spectral_continuity's own floor (spans.continuity_margin/.continuity_floor_margin are the
+  continuity-specific thresholds; the percentile itself is one number for both measures). Not
+  re-derived from a corpus fit either.
 
-  Span walk-stop: 12 dB above the floor, sustained for 300 ms, the same rule for onset (walking
+  Span walk-stop: 12 dB above the floor, sustained for 30 ms, the same rule for onset (walking
   backward) and offset (walking forward) -- owner-directed this session, replacing the asymmetric
   pair this file previously carried: a peak-anchored onset (benchmarked at 5 of 6 correct against
   2 of 6 for a floor-referenced rule) paired with a 0.7-of-range offset and a 120 ms hangover
@@ -51,18 +55,96 @@ derivation: |
   multi-scene recording over-merge once the floor's own staleness stopped being masked by an
   unrelated gain-curve bug. A floor that is now one global number removes the motivation for a
   peak-anchored rule at all: neither walk can close for a reason the other would not also close for.
-  12 dB and 300 ms are this session's chosen values, not a corpus fit -- the prior benchmark measured
+  12 dB and 30 ms are this session's chosen values, not a corpus fit -- the prior benchmark measured
   a different rule against a different floor and does not carry over; both numbers are provisional
-  and expected to be refit.
+  and expected to be refit. 30 ms (owner-directed, tightened from an initial 300 ms) is short enough
+  that a walk does not keep bridging past a real gap between two nearby events on this narrower
+  duration -- shorter than spans.min_duration_ms (50 ms) and spans.min_separation_ms (150 ms), so it
+  cannot itself force a span past either.
 
-  Span propose K, per reader -- benchmarks/spans.md and snr.md. 18 dB for airway, whose events stood
-  53-57 dB above the (then-rolling, now-global) floor. 12 dB detects a speech span to +10 dB SNR and
-  still survives an injected click; 8 dB collapses the clean-file span set from six to two by
-  merging, so lower is not freely better. Both remain the same statistic against the floor
-  (envelope percentile vs. envelope, see Floor above) rather than a rolling vs. a global window of
-  it, so the numbers carry over more directly than a change of floor definition usually would;
-  neither has been re-verified against the global floor specifically. SPEECH no longer reads these
-  spans -- it derives its own from word timings -- so only the airway value is in use.
+  Span propose K, one shared value, 6 dB -- owner-directed this session, provisional and expected to
+  be refit. PREPROCESS proposes one set of foreground-acoustic-event spans, not an airway-specific
+  set and a separately-thresholded general set side by side -- a span carries no notion of which
+  downstream branch it is "for", only whether it overlaps a clip. Two prior values are retired
+  rather than kept as second keys: 18 dB (benchmarks/spans.md, events at 53-57 dB above the
+  then-rolling floor) was fitted for airway events specifically and does not serve a quiet breath or
+  a soft word; 12 dB was tried for a general "any vocal task" gate but never measured against this
+  floor definition. Neither carries over cleanly to a shared, population-general threshold, so 6 dB
+  is a deliberately permissive placeholder -- low enough that the pre-emphasised primary pass (see
+  the envelope/floor derivation) rarely misses a real event, at the cost of also passing more of the
+  background than a fitted value would. Population-specific refinement belongs to the branch that
+  needs it, not to PREPROCESS: see airway.k_db's own derivation below. SPEECH no longer reads these
+  spans at all -- it derives its own from word timings.
+
+  Span source: primary, supplementary, continuity and ASR -- owner-directed this session. PREPROCESS
+  proposes spans up to four times, from four different measures of the same recording, and keeps
+  the union, each source only ever adding a candidate none of the earlier sources already cover:
+  primary from the pre-emphasised signal's amplitude envelope (envelope.lowpass_hz/.filter_order,
+  ButterworthSmoothing, ``energy_envelope`` below), supplementary from the dynamically-normalized
+  signal's own amplitude envelope (``normalization.envelope_smoothing``, PercentileSmoothing,
+  ``normalized_envelope`` below), and continuity from spectral_continuity.spectral_continuity over
+  the pre-emphasised signal (see the paragraph below). Primary rather than the normalized signal,
+  reversing this session's own earlier design: normalization is optional (every `normalization.*`
+  key ships null) and, measured directly, its AGC can compress a real recording's local dynamic
+  range enough that no span-gate value clears it at all -- a five-breath recording's rise-over-floor
+  topped out at 9 dB after normalization against 23 dB on the same recording pre-normalization, with
+  the same k_db and floor definition throughout. The pre-emphasised signal needs no optional step to
+  exist, so spans are never entirely absent for want of a normalization fit; the normalized and
+  continuity passes, where either finds something, only ever add a candidate no earlier pass found
+  (typically a quiet event AGC boosted into range, or a sustained tonal/harmonic production too soft
+  to clear any amplitude gate), never replace or override one.
+
+  Spectral continuity -- owner-directed this session, added specifically to catch breathing and
+  glides that an amplitude-only gate can miss. Originally its own window_s/hop_s pair; now reuses
+  spectrogram_wideband's own magnitude array directly (spectrogram.wideband_window_ms/.hop_ms,
+  5 ms / 5 ms) rather than computing a second STFT at merely-matching parameters -- one recording
+  put through one STFT for both purposes, and `_spans` reads spectrogram_wideband's output from
+  `state` instead of recomputing it. Wideband rather than narrowband, owner-directed: the shorter
+  analysis window gives continuity finer temporal resolution to place a transition against, at the
+  cost of frequency resolution its own frame-to-frame comparison does not need as much as a
+  band-energy measurement would. The only key this measure still owns is
+  spectral_continuity.smoothing.window_s (0.2 s), the MedianSmoothing window applied to the
+  frame-to-frame trace via the same EnvelopeSmoothing protocol hilbert_envelope_dbfs already uses
+  (not a bespoke moving average) -- chosen the same way the gain curve's own smoothing is, because a
+  median cannot overshoot past a transient the way a moving average or resonant filter can.
+  spans.continuity_margin/.continuity_floor_margin (0.03 / 0.02) are unchanged and re-validated
+  against this session's reused-array pipeline -- a first working set from a direct comparison of
+  measures, not a corpus fit, provisional and expected to be refit, the same status as
+  spans.floor_margin_db/.transition_window_ms. The measure itself (frame-to-frame cosine similarity
+  of log-magnitude spectra, smoothed) works well for sustained tonal/harmonic production: on a
+  High-to-Low glide it reads 0.95-0.99 through the voiced glide against 0.86-0.92 in the silence
+  flanking it, and on a held vowel it separates the same way, both re-confirmed on the actual reused
+  torchaudio magnitude array (previously validated via an independent scipy STFT at matching
+  parameters; the two agree to within one hop). Measured directly and found NOT to work for breath
+  specifically: on a five-breath recording, the measure reads 0.85-0.90 with no separation tracking
+  the breaths' own timing at all -- turbulent broadband noise does not carry the frame-to-frame
+  spectral coherence a harmonic sound does, so this mechanism helps glides and phonation-like
+  sustains on the evidence gathered so far, and does not, on the one breathing recording tested, help
+  breath detection the way it was asked to. Left in as a general continuity detector rather than
+  restricted to glides specifically, because nothing about the mechanism is glide-specific and a
+  future corpus may show it earning its keep on other sustained productions; the breath gap is
+  recorded here rather than hidden so it is not mistaken for a working detector later. Reuses the
+  shared spans.transition_window_ms and spans.min_separation_ms rather than declaring its own;
+  spans.continuity_min_duration_ms (300 ms) is its own key because continuity events (a glide, a
+  sustained vowel) are typically much longer than the 50 ms amplitude spans.min_duration_ms admits,
+  and reusing the shorter value let noise-length blips through in testing. Absent whenever
+  spectrogram_narrowband itself is, since continuity now has a hard data dependency on that block's
+  output rather than computing its own.
+
+  ASR spans -- owner-directed this session, the fourth and lowest-priority source. Unlike the three
+  above, this one measures nothing and needs no floor or gate: the consensus transcript's own word
+  timings (fuse_consensus_words, see ``_consensus`` below) are the evidence directly -- a recognizer
+  transcribing a stretch as speech already says something an envelope or a spectral-shape measure
+  would otherwise have to infer from the acoustics. Consecutive consensus words are grouped into runs
+  by speech.word_gap_ms, the identical mechanism and the identical config key SPEECH already uses for
+  its own word-timing spans (group_extents_into_runs, shared rather than duplicated so the two
+  branches cannot drift onto two different notions of "one utterance"). speech.word_gap_ms ships null
+  in the packaged config -- "any value is a claim about what makes one utterance," per its own
+  derivation below -- so the ASR span source is absent by default alongside every other place that
+  reads the same key, not a special case. Also absent whenever consensus_transcript itself is (both
+  recognizers failed). Kept only where it does not already overlap a primary, supplementary or
+  continuity span: a stretch of real speech an amplitude gate and a spectral-shape gate both missed,
+  filled in by the one measure that read it directly rather than inferring it.
 
   Pre-emphasis 0.97 -- conventional in speech analysis, not fitted here. It raises event-to-floor
   contrast on every labelled event and most on the two hardest, cough 1 by +10.95 dB and the mouth
@@ -103,8 +185,9 @@ derivation: |
   so the effective order is doubled and the phase response is exactly flat.
 
   Span min_duration_ms 50 and min_separation_ms 150 -- conventional. The first discards a proposal
-  shorter than anything the instruments here localise; the second stops one event yielding several
-  peaks. Neither is fitted, and both are weaker than the rules above them.
+  shorter than anything the instruments here localise; the second absorbs threshold-crossings this
+  close together into one proposal before either is walked, so one event's own brief dips below
+  k_db do not read as several. Neither is fitted, and both are weaker than the rules above them.
 
   HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
   length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
@@ -270,7 +353,11 @@ derivation: |
   deleted likewise: branch-speech.md replaces the aggregate-agreement flag with per-word recognizer
   membership, so there is no aggregate for a floor to gate.
 
-  phonation_spans -- preprocess.md's sustained-phonation and glide detector. Its seven criterion
+  phonation_spans -- the sustained-phonation and glide detector, moved from PREPROCESS to TAXONOMY
+  this session (owner-directed): PREPROCESS now only measures F0 and formant tracks over the whole
+  stream (``phonation_tracks``, no boundary decided); TAXONOMY reads that measurement back and
+  proposes the spans over it, the same functions and the same ``phonation_spans.*`` keys as before,
+  just applied by a different node. Its seven criterion
   parameters are null; the five described at the end of this paragraph -- hop_s, formant_max_hz,
   max_formants, formant_window_s and formant_preemphasis_hz -- ship declared defaults.
   f0_stability_cents and formant_stability_hz are the two limbs of the continuity criterion (a frame
@@ -294,8 +381,8 @@ derivation: |
   is Praat's documented time_step default, the same value phonation.hop_s already carries.
 
   voice.f0_range_hz replaces phonation.f0_min_hz and phonation.f0_max_hz. One range, as [min, max],
-  read by both PREPROCESS's phonation pass and the VOICE branch, so the two cannot hold ranges that
-  drift. It is null for the reason the two scalars were: no single search range serves both a low adult
+  read by both PREPROCESS's F0-track measurement and the VOICE branch, so the two cannot hold ranges
+  that drift. It is null for the reason the two scalars were: no single search range serves both a low adult
   male fundamental and an infant voice, so the caller must state which population it is measuring.
 
   voice v2 -- branch-voice.md. voice.f0_range_by_population overrides voice.f0_range_hz per declared
@@ -335,7 +422,7 @@ derivation: |
 
   airway v2 -- branch-airway.md. airway.k_db and airway.k_db_by_task override spans.k_db for this
   branch and are null: an airway event is level-limited and one value fitted on coughs does not serve
-  quiet breaths, so the 18.0 dB spans.k_db.airway value is retained as the shared default while the
+  quiet breaths, so the 18.0 dB spans.k_db value is retained as the shared default while the
   branch's own override waits for a fit that represents both. airway.k_margin_db is how close to the
   gate a labelled span must sit to flag, null. airway.contest_labels is the declared set of YAMNet
   labels that may contest a HeAR label; it is null and, when supplied, is refused at load if it
@@ -372,13 +459,6 @@ derivation: |
   and carries identical claims, with the blocks back on the canvas; it is the better choice for a
   viewer that scrolls rather than pages.
 
-  spans.k_db.target -- the general "foreground acoustic energy present" span, distinct from
-  spans.k_db.airway: airway's 18.0 dB was fitted against airway events specifically (53-57 dB above
-  floor per the span-K derivation above) and does not transfer to an arbitrary vocal-task span --
-  breathing, speaking, phonation -- which the target pass must also admit. Null until measured on
-  this broader event set; using airway's own fitted number for a different population would be
-  carrying a measurement past what it measured.
-
   clipping.* -- audio/tasks/clipping, ClipDaT (Hansen, Stauffer & Xia, Speech Communication 134
   (2021) 20-31, section 3). near_threshold 0.995 and leniency_samples 3 are the paper's own two
   reported constants, not fitted here -- the algorithm has no others. minimum_extreme 1e-4 is not
@@ -399,9 +479,11 @@ derivation: |
   literals -- 0.2 Hz / 20 Hz cutoffs, 15 dB target range, a compression ratio of 2, a -6 dBFS
   reference, a 10 Hz gain-smoothing cutoff, a 0.95 ceiling -- and none of them is a measurement: they
   are the shape of a reasonable algorithm, not a fitted one. Carrying them over as defaults here would
-  be exactly the trap this file exists to avoid. While every key is null, PREPROCESS's normalized
-  envelope and the target spans built from it are absent, which is the honest state until a campaign
-  measures and supplies all eight.
+  be exactly the trap this file exists to avoid. While every key is null, PREPROCESS's
+  normalized_envelope measurement and its supplementary spans are absent -- the primary,
+  pre-emphasised span pass does not depend on this block at all, so spans are never entirely absent
+  for want of a normalization fit -- which is the honest state until a campaign measures and supplies
+  all eight.
 
   normalization.macro_smoothing.window_s, .micro_smoothing.window_s --
   audio/tasks/envelope.MedianSmoothing, plugged into hilbert_envelope_dbfs for the two internal
@@ -472,16 +554,21 @@ envelope:
   filter_order: 4
 
 floor:
-  percentile: 10.0
+  percentile: 5.0
 
 spans:
   floor_margin_db: 12.0
-  transition_window_ms: 300
+  transition_window_ms: 30
   min_duration_ms: 50
   min_separation_ms: 150
-  k_db:
-    airway: 18.0
-    target: null
+  k_db: 6.0
+  continuity_margin: 0.03
+  continuity_floor_margin: 0.02
+  continuity_min_duration_ms: 300
+
+spectral_continuity:
+  smoothing:
+    window_s: 0.2
 
 clipping:
   near_threshold: 0.995

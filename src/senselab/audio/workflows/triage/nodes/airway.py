@@ -121,7 +121,7 @@ def _gate(config: TriageConfig, hint: AudioHints | None) -> tuple[float, float |
     task = str(hint.metadata.get("task")) if hint is not None and hint.metadata.get("task") else None
     by_task = config.get("airway.k_db_by_task") or {}
     for_task = by_task.get(task) if task is not None else None
-    branch = config.get("airway.k_db", config.require("spans.k_db.airway"))
+    branch = config.get("airway.k_db", config.require("spans.k_db"))
     k_db = float(branch if for_task is None else for_task)
     band = config.get("airway.k_margin_db")
     return k_db, None if band is None else float(band)

@@ -1,12 +1,14 @@
-"""VOICE — the phonation spans PREPROCESS detected, measured. It measures; it does not classify.
+"""VOICE — the phonation spans in the store, measured. It measures; it does not classify.
 
-The subject is a store read: every live ``span`` whose ``family`` is ``phonation``. Nothing another
-branch claimed is removed from it, and no span is refused for being unvoiced. The HNR, F0 and RMS
-tracks are measured once over the whole stream and sliced per span by time, each on its own frame
-grid; only the point process is queried per span, and it is absent outside voiced and mixed spans.
-The onset is a period where one exists and the offset is always a criterion, named apart in the span
-attributes; the criterion itself is PREPROCESS's, reported verbatim. A span shorter than the window
-the point process needs has no marks measured and is counted in ``marks_skipped_short_n``.
+The subject is a store read: every live ``span`` whose ``family`` is ``phonation``, whichever node
+proposed it (TAXONOMY, currently — this branch does not care and reads by attribute value alone).
+Nothing another branch claimed is removed from it, and no span is refused for being unvoiced. The
+HNR, F0 and RMS tracks are measured once over the whole stream and sliced per span by time, each on
+its own frame grid; only the point process is queried per span, and it is absent outside voiced and
+mixed spans. The onset is a period where one exists and the offset is always a criterion, named
+apart in the span attributes; the criterion itself is the phonation detector's, reported verbatim.
+A span shorter than the window the point process needs has no marks measured and is counted in
+``marks_skipped_short_n``.
 """
 
 from __future__ import annotations
@@ -162,10 +164,11 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     *,
     run_dir: Path,
 ) -> NodeResult:
-    """Measure the phonation spans PREPROCESS detected.
+    """Measure the phonation spans in the store.
 
     Args:
-        store: The provenance store, holding PREPROCESS's streams and phonation spans.
+        store: The provenance store, holding PREPROCESS's streams and the phonation spans
+            whichever node proposed them.
         source: The store-held stream name the audio is sliced from, ``"plain"``.
         config: The triage configuration.
         hint: What the recording was declared to contain; read for the population and the task. A
@@ -226,7 +229,7 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     for span in spans:
         store.used(activity, span.id)
     if not spans:
-        why = "PREPROCESS detected no phonation span"
+        why = "no phonation span in the store"
         outcome = Outcome.FAIL
         verdict_id, verdict = write_verdict(
             store,

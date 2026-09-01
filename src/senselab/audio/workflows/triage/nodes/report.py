@@ -71,7 +71,7 @@ _SPANS_OVERLAY = "spans (dB over floor)"
 _LANE_SOURCE = {
     "envelope": "energy_envelope",
     "spans (dB over floor)": "spans",
-    "phonation": "phonation_spans",
+    "phonation": "phonation_tracks",
     "yamnet labels": "yamnet_windows",
     "ast labels": "ast_windows",
     "hear labels": "hear_windows",
@@ -253,15 +253,15 @@ def _envelope_spans(store: ProvStore) -> list[Entity]:
 
 
 def _spans_of_family(store: ProvStore, family: str, *, voice: bool | None = None) -> list[Entity]:
-    """Spans of one family, optionally only those VOICE re-timed or only those PREPROCESS proposed.
+    """Spans of one family, optionally only those VOICE re-timed or only those the detector proposed.
 
-    ``onset_kind`` is what tells the two phonation populations apart: VOICE writes it and PREPROCESS
-    does not.
+    ``onset_kind`` is what tells the two phonation populations apart: VOICE writes it and the
+    detector that proposed the span (TAXONOMY, for the phonation family) does not.
 
     Args:
         store: The provenance store.
         family: The span family.
-        voice: True for VOICE's spans only, False for PREPROCESS's only, None for both.
+        voice: True for VOICE's spans only, False for the detector's own only, None for both.
 
     Returns:
         The spans, earliest first.
