@@ -65,6 +65,9 @@
 
             </li>
             <li>
+                    <a class="function" href="#group_extents_into_runs">group_extents_into_runs</a>
+            </li>
+            <li>
                     <a class="function" href="#propose_spans">propose_spans</a>
             </li>
     </ul>
@@ -90,15 +93,16 @@
 
                         <label class="view-source-button" for="mod-spans-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Span proposal from an envelope.&quot;&quot;&quot;</span>
-</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
-</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.spans.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">NoContrast</span><span class="p">,</span> <span class="n">Span</span><span class="p">,</span> <span class="n">propose_spans</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
-</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos">6</span></a>    <span class="s2">&quot;NoContrast&quot;</span><span class="p">,</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos">7</span></a>    <span class="s2">&quot;Span&quot;</span><span class="p">,</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos">8</span></a>    <span class="s2">&quot;propose_spans&quot;</span><span class="p">,</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos">9</span></a><span class="p">]</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Span proposal from an envelope.&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.spans.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">NoContrast</span><span class="p">,</span> <span class="n">Span</span><span class="p">,</span> <span class="n">group_extents_into_runs</span><span class="p">,</span> <span class="n">propose_spans</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="s2">&quot;NoContrast&quot;</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="s2">&quot;Span&quot;</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="s2">&quot;group_extents_into_runs&quot;</span><span class="p">,</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="s2">&quot;propose_spans&quot;</span><span class="p">,</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a><span class="p">]</span>
 </span></pre></div>
 
 
@@ -115,21 +119,21 @@
 
     </div>
     <a class="headerlink" href="#NoContrast"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="NoContrast-31"><a href="#NoContrast-31"><span class="linenos">31</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="NoContrast-32"><a href="#NoContrast-32"><span class="linenos">32</span></a><span class="k">class</span><span class="w"> </span><span class="nc">NoContrast</span><span class="p">:</span>
-</span><span id="NoContrast-33"><a href="#NoContrast-33"><span class="linenos">33</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;No peak anywhere rose the required amount above the local floor.</span>
-</span><span id="NoContrast-34"><a href="#NoContrast-34"><span class="linenos">34</span></a>
-</span><span id="NoContrast-35"><a href="#NoContrast-35"><span class="linenos">35</span></a><span class="sd">    Distinct from an empty span list: an unmeasurable recording must not read as a quiet one.</span>
-</span><span id="NoContrast-36"><a href="#NoContrast-36"><span class="linenos">36</span></a>
-</span><span id="NoContrast-37"><a href="#NoContrast-37"><span class="linenos">37</span></a><span class="sd">    Attributes:</span>
-</span><span id="NoContrast-38"><a href="#NoContrast-38"><span class="linenos">38</span></a><span class="sd">        reason: What was required and what was found.</span>
-</span><span id="NoContrast-39"><a href="#NoContrast-39"><span class="linenos">39</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="NoContrast-40"><a href="#NoContrast-40"><span class="linenos">40</span></a>
-</span><span id="NoContrast-41"><a href="#NoContrast-41"><span class="linenos">41</span></a>    <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="NoContrast-30"><a href="#NoContrast-30"><span class="linenos">30</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="NoContrast-31"><a href="#NoContrast-31"><span class="linenos">31</span></a><span class="k">class</span><span class="w"> </span><span class="nc">NoContrast</span><span class="p">:</span>
+</span><span id="NoContrast-32"><a href="#NoContrast-32"><span class="linenos">32</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Nothing anywhere rose the required amount above the local floor.</span>
+</span><span id="NoContrast-33"><a href="#NoContrast-33"><span class="linenos">33</span></a>
+</span><span id="NoContrast-34"><a href="#NoContrast-34"><span class="linenos">34</span></a><span class="sd">    Distinct from an empty span list: an unmeasurable recording must not read as a quiet one.</span>
+</span><span id="NoContrast-35"><a href="#NoContrast-35"><span class="linenos">35</span></a>
+</span><span id="NoContrast-36"><a href="#NoContrast-36"><span class="linenos">36</span></a><span class="sd">    Attributes:</span>
+</span><span id="NoContrast-37"><a href="#NoContrast-37"><span class="linenos">37</span></a><span class="sd">        reason: What was required and what was found.</span>
+</span><span id="NoContrast-38"><a href="#NoContrast-38"><span class="linenos">38</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="NoContrast-39"><a href="#NoContrast-39"><span class="linenos">39</span></a>
+</span><span id="NoContrast-40"><a href="#NoContrast-40"><span class="linenos">40</span></a>    <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span>
 </span></pre></div>
 
 
-            <div class="docstring"><p>No peak anywhere rose the required amount above the local floor.</p>
+            <div class="docstring"><p>Nothing anywhere rose the required amount above the local floor.</p>
 
 <p>Distinct from an empty span list: an unmeasurable recording must not read as a quiet one.</p>
 
@@ -177,23 +181,23 @@
 
     </div>
     <a class="headerlink" href="#Span"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="Span-12"><a href="#Span-12"><span class="linenos">12</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="Span-13"><a href="#Span-13"><span class="linenos">13</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Span</span><span class="p">:</span>
-</span><span id="Span-14"><a href="#Span-14"><span class="linenos">14</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One proposed span.</span>
-</span><span id="Span-15"><a href="#Span-15"><span class="linenos">15</span></a>
-</span><span id="Span-16"><a href="#Span-16"><span class="linenos">16</span></a><span class="sd">    Attributes:</span>
-</span><span id="Span-17"><a href="#Span-17"><span class="linenos">17</span></a><span class="sd">        start: Onset in seconds.</span>
-</span><span id="Span-18"><a href="#Span-18"><span class="linenos">18</span></a><span class="sd">        end: Offset in seconds.</span>
-</span><span id="Span-19"><a href="#Span-19"><span class="linenos">19</span></a><span class="sd">        peak_over_floor_db: The span&#39;s peak, referenced to the recording&#39;s floor.</span>
-</span><span id="Span-20"><a href="#Span-20"><span class="linenos">20</span></a><span class="sd">        merged_proposals: How many proposals this span absorbed. One for a span the merge rule left</span>
-</span><span id="Span-21"><a href="#Span-21"><span class="linenos">21</span></a><span class="sd">            alone — a span is its own proposal — so zero is never a valid value, and a span covering</span>
-</span><span id="Span-22"><a href="#Span-22"><span class="linenos">22</span></a><span class="sd">            several events is legible as one rather than indistinguishable from a single event.</span>
-</span><span id="Span-23"><a href="#Span-23"><span class="linenos">23</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="Span-24"><a href="#Span-24"><span class="linenos">24</span></a>
-</span><span id="Span-25"><a href="#Span-25"><span class="linenos">25</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Span-26"><a href="#Span-26"><span class="linenos">26</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Span-27"><a href="#Span-27"><span class="linenos">27</span></a>    <span class="n">peak_over_floor_db</span><span class="p">:</span> <span class="nb">float</span>
-</span><span id="Span-28"><a href="#Span-28"><span class="linenos">28</span></a>    <span class="n">merged_proposals</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="Span-11"><a href="#Span-11"><span class="linenos">11</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="Span-12"><a href="#Span-12"><span class="linenos">12</span></a><span class="k">class</span><span class="w"> </span><span class="nc">Span</span><span class="p">:</span>
+</span><span id="Span-13"><a href="#Span-13"><span class="linenos">13</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One proposed span.</span>
+</span><span id="Span-14"><a href="#Span-14"><span class="linenos">14</span></a>
+</span><span id="Span-15"><a href="#Span-15"><span class="linenos">15</span></a><span class="sd">    Attributes:</span>
+</span><span id="Span-16"><a href="#Span-16"><span class="linenos">16</span></a><span class="sd">        start: Onset in seconds.</span>
+</span><span id="Span-17"><a href="#Span-17"><span class="linenos">17</span></a><span class="sd">        end: Offset in seconds.</span>
+</span><span id="Span-18"><a href="#Span-18"><span class="linenos">18</span></a><span class="sd">        peak_over_floor_db: The span&#39;s peak, referenced to the recording&#39;s floor.</span>
+</span><span id="Span-19"><a href="#Span-19"><span class="linenos">19</span></a><span class="sd">        merged_proposals: How many proposals this span absorbed. One for a span the merge rule left</span>
+</span><span id="Span-20"><a href="#Span-20"><span class="linenos">20</span></a><span class="sd">            alone — a span is its own proposal — so zero is never a valid value, and a span covering</span>
+</span><span id="Span-21"><a href="#Span-21"><span class="linenos">21</span></a><span class="sd">            several events is legible as one rather than indistinguishable from a single event.</span>
+</span><span id="Span-22"><a href="#Span-22"><span class="linenos">22</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="Span-23"><a href="#Span-23"><span class="linenos">23</span></a>
+</span><span id="Span-24"><a href="#Span-24"><span class="linenos">24</span></a>    <span class="n">start</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-25"><a href="#Span-25"><span class="linenos">25</span></a>    <span class="n">end</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-26"><a href="#Span-26"><span class="linenos">26</span></a>    <span class="n">peak_over_floor_db</span><span class="p">:</span> <span class="nb">float</span>
+</span><span id="Span-27"><a href="#Span-27"><span class="linenos">27</span></a>    <span class="n">merged_proposals</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
 </span></pre></div>
 
 
@@ -270,6 +274,69 @@ several events is legible as one rather than indistinguishable from a single eve
 
                             </div>
                 </section>
+                <section id="group_extents_into_runs">
+                            <input id="group_extents_into_runs-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">group_extents_into_runs</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">extents</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]]</span>,</span><span class="param">	<span class="n">gap_ms</span><span class="p">:</span> <span class="nb">float</span></span><span class="return-annotation">) -> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]]</span>:</span></span>
+
+                <label class="view-source-button" for="group_extents_into_runs-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#group_extents_into_runs"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="group_extents_into_runs-158"><a href="#group_extents_into_runs-158"><span class="linenos">158</span></a><span class="k">def</span><span class="w"> </span><span class="nf">group_extents_into_runs</span><span class="p">(</span><span class="n">extents</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span> <span class="n">gap_ms</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]]:</span>
+</span><span id="group_extents_into_runs-159"><a href="#group_extents_into_runs-159"><span class="linenos">159</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A run is the extent of a group of extents; a gap over ``gap_ms`` starts a new run.</span>
+</span><span id="group_extents_into_runs-160"><a href="#group_extents_into_runs-160"><span class="linenos">160</span></a>
+</span><span id="group_extents_into_runs-161"><a href="#group_extents_into_runs-161"><span class="linenos">161</span></a><span class="sd">    Generic over any already-timed source (consensus ASR words, or any other list of</span>
+</span><span id="group_extents_into_runs-162"><a href="#group_extents_into_runs-162"><span class="linenos">162</span></a><span class="sd">    ``(start, end)`` extents already in seconds) — there is no envelope or floor here, unlike</span>
+</span><span id="group_extents_into_runs-163"><a href="#group_extents_into_runs-163"><span class="linenos">163</span></a><span class="sd">    :func:`propose_spans`: the caller&#39;s own extents are the ground truth being grouped, not a</span>
+</span><span id="group_extents_into_runs-164"><a href="#group_extents_into_runs-164"><span class="linenos">164</span></a><span class="sd">    measure needing a threshold to become one.</span>
+</span><span id="group_extents_into_runs-165"><a href="#group_extents_into_runs-165"><span class="linenos">165</span></a>
+</span><span id="group_extents_into_runs-166"><a href="#group_extents_into_runs-166"><span class="linenos">166</span></a><span class="sd">    Args:</span>
+</span><span id="group_extents_into_runs-167"><a href="#group_extents_into_runs-167"><span class="linenos">167</span></a><span class="sd">        extents: ``(start, end)`` pairs in seconds, in any order.</span>
+</span><span id="group_extents_into_runs-168"><a href="#group_extents_into_runs-168"><span class="linenos">168</span></a><span class="sd">        gap_ms: The gap that starts a new run, in milliseconds.</span>
+</span><span id="group_extents_into_runs-169"><a href="#group_extents_into_runs-169"><span class="linenos">169</span></a>
+</span><span id="group_extents_into_runs-170"><a href="#group_extents_into_runs-170"><span class="linenos">170</span></a><span class="sd">    Returns:</span>
+</span><span id="group_extents_into_runs-171"><a href="#group_extents_into_runs-171"><span class="linenos">171</span></a><span class="sd">        ``[(start, end, member indices), ...]``, in start order. Member indices refer to</span>
+</span><span id="group_extents_into_runs-172"><a href="#group_extents_into_runs-172"><span class="linenos">172</span></a><span class="sd">        positions in the input ``extents`` list.</span>
+</span><span id="group_extents_into_runs-173"><a href="#group_extents_into_runs-173"><span class="linenos">173</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="group_extents_into_runs-174"><a href="#group_extents_into_runs-174"><span class="linenos">174</span></a>    <span class="n">runs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">float</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="group_extents_into_runs-175"><a href="#group_extents_into_runs-175"><span class="linenos">175</span></a>    <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">extents</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="n">extents</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="mi">0</span><span class="p">]):</span>
+</span><span id="group_extents_into_runs-176"><a href="#group_extents_into_runs-176"><span class="linenos">176</span></a>        <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="o">=</span> <span class="n">extents</span><span class="p">[</span><span class="n">index</span><span class="p">]</span>
+</span><span id="group_extents_into_runs-177"><a href="#group_extents_into_runs-177"><span class="linenos">177</span></a>        <span class="k">if</span> <span class="n">runs</span> <span class="ow">and</span> <span class="p">(</span><span class="n">start</span> <span class="o">-</span> <span class="n">runs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">1</span><span class="p">])</span> <span class="o">*</span> <span class="mf">1000.0</span> <span class="o">&lt;=</span> <span class="n">gap_ms</span><span class="p">:</span>
+</span><span id="group_extents_into_runs-178"><a href="#group_extents_into_runs-178"><span class="linenos">178</span></a>            <span class="n">open_start</span><span class="p">,</span> <span class="n">open_end</span><span class="p">,</span> <span class="n">members</span> <span class="o">=</span> <span class="n">runs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="group_extents_into_runs-179"><a href="#group_extents_into_runs-179"><span class="linenos">179</span></a>            <span class="n">runs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">open_start</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="n">open_end</span><span class="p">,</span> <span class="n">end</span><span class="p">),</span> <span class="p">[</span><span class="o">*</span><span class="n">members</span><span class="p">,</span> <span class="n">index</span><span class="p">])</span>
+</span><span id="group_extents_into_runs-180"><a href="#group_extents_into_runs-180"><span class="linenos">180</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="group_extents_into_runs-181"><a href="#group_extents_into_runs-181"><span class="linenos">181</span></a>            <span class="n">runs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="p">[</span><span class="n">index</span><span class="p">]))</span>
+</span><span id="group_extents_into_runs-182"><a href="#group_extents_into_runs-182"><span class="linenos">182</span></a>    <span class="k">return</span> <span class="n">runs</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>A run is the extent of a group of extents; a gap over <code>gap_ms</code> starts a new run.</p>
+
+<p>Generic over any already-timed source (consensus ASR words, or any other list of
+<code>(start, end)</code> extents already in seconds) — there is no envelope or floor here, unlike
+<code><a href="#propose_spans">propose_spans()</a></code>: the caller's own extents are the ground truth being grouped, not a
+measure needing a threshold to become one.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>extents:</strong>  <code>(start, end)</code> pairs in seconds, in any order.</li>
+<li><strong>gap_ms:</strong>  The gap that starts a new run, in milliseconds.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p><code>[(start, end, member indices), ...]</code>, in start order. Member indices refer to
+  positions in the input <code>extents</code> list.</p>
+</blockquote>
+</div>
+
+
+                </section>
                 <section id="propose_spans">
                             <input id="propose_spans-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
@@ -281,103 +348,123 @@ several events is legible as one rather than indistinguishable from a single eve
 
     </div>
     <a class="headerlink" href="#propose_spans"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="propose_spans-44"><a href="#propose_spans-44"><span class="linenos"> 44</span></a><span class="k">def</span><span class="w"> </span><span class="nf">propose_spans</span><span class="p">(</span>
-</span><span id="propose_spans-45"><a href="#propose_spans-45"><span class="linenos"> 45</span></a>    <span class="n">envelope_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-</span><span id="propose_spans-46"><a href="#propose_spans-46"><span class="linenos"> 46</span></a>    <span class="n">floor_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="propose_spans-47"><a href="#propose_spans-47"><span class="linenos"> 47</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-48"><a href="#propose_spans-48"><span class="linenos"> 48</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="propose_spans-49"><a href="#propose_spans-49"><span class="linenos"> 49</span></a>    <span class="n">k_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="propose_spans-50"><a href="#propose_spans-50"><span class="linenos"> 50</span></a>    <span class="n">floor_margin_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="propose_spans-51"><a href="#propose_spans-51"><span class="linenos"> 51</span></a>    <span class="n">transition_window_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-52"><a href="#propose_spans-52"><span class="linenos"> 52</span></a>    <span class="n">min_duration_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-53"><a href="#propose_spans-53"><span class="linenos"> 53</span></a>    <span class="n">min_separation_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="propose_spans-54"><a href="#propose_spans-54"><span class="linenos"> 54</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">|</span> <span class="n">NoContrast</span><span class="p">:</span>
-</span><span id="propose_spans-55"><a href="#propose_spans-55"><span class="linenos"> 55</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Propose spans from an envelope, against one floor for the whole recording.</span>
-</span><span id="propose_spans-56"><a href="#propose_spans-56"><span class="linenos"> 56</span></a>
-</span><span id="propose_spans-57"><a href="#propose_spans-57"><span class="linenos"> 57</span></a><span class="sd">    Onset and offset walk by the identical rule, in opposite directions: neither can close for a</span>
-</span><span id="propose_spans-58"><a href="#propose_spans-58"><span class="linenos"> 58</span></a><span class="sd">    reason the other would not also close for, unlike the peak-anchored/floor-fraction pair this</span>
-</span><span id="propose_spans-59"><a href="#propose_spans-59"><span class="linenos"> 59</span></a><span class="sd">    replaced, whose asymmetry (see ``floor_margin_db``) let a real multi-scene recording collapse</span>
-</span><span id="propose_spans-60"><a href="#propose_spans-60"><span class="linenos"> 60</span></a><span class="sd">    into one merged span once an unrelated bug stopped masking it.</span>
-</span><span id="propose_spans-61"><a href="#propose_spans-61"><span class="linenos"> 61</span></a>
-</span><span id="propose_spans-62"><a href="#propose_spans-62"><span class="linenos"> 62</span></a><span class="sd">    Args:</span>
-</span><span id="propose_spans-63"><a href="#propose_spans-63"><span class="linenos"> 63</span></a><span class="sd">        envelope_db: Envelope in dBFS, ``nan`` at any sample that had no dB value.</span>
-</span><span id="propose_spans-64"><a href="#propose_spans-64"><span class="linenos"> 64</span></a><span class="sd">        floor_db: The recording&#39;s own global floor — see</span>
-</span><span id="propose_spans-65"><a href="#propose_spans-65"><span class="linenos"> 65</span></a><span class="sd">            :func:`~senselab.audio.tasks.envelope.api.global_floor_dbfs` — one value for the whole</span>
-</span><span id="propose_spans-66"><a href="#propose_spans-66"><span class="linenos"> 66</span></a><span class="sd">            signal, not a local, time-varying one.</span>
-</span><span id="propose_spans-67"><a href="#propose_spans-67"><span class="linenos"> 67</span></a><span class="sd">        sampling_rate: Samples per second.</span>
-</span><span id="propose_spans-68"><a href="#propose_spans-68"><span class="linenos"> 68</span></a><span class="sd">        k_db: How far above the floor a peak must rise to be proposed. Per reader: read it from</span>
-</span><span id="propose_spans-69"><a href="#propose_spans-69"><span class="linenos"> 69</span></a><span class="sd">            ``spans.k_db.&lt;reader&gt;`` in the triage config.</span>
-</span><span id="propose_spans-70"><a href="#propose_spans-70"><span class="linenos"> 70</span></a><span class="sd">        floor_margin_db: A walk stops once the envelope has fallen within this many dB of the floor,</span>
-</span><span id="propose_spans-71"><a href="#propose_spans-71"><span class="linenos"> 71</span></a><span class="sd">            sustained for ``transition_window_ms`` — the same rule for onset (walking backward) and</span>
-</span><span id="propose_spans-72"><a href="#propose_spans-72"><span class="linenos"> 72</span></a><span class="sd">            offset (walking forward). Replaces a peak-anchored onset (walk back while within a fixed</span>
-</span><span id="propose_spans-73"><a href="#propose_spans-73"><span class="linenos"> 73</span></a><span class="sd">            drop of the peak) paired with a floor-fraction offset (walk forward to a threshold fixed</span>
-</span><span id="propose_spans-74"><a href="#propose_spans-74"><span class="linenos"> 74</span></a><span class="sd">            once at the peak&#39;s own floor value): that pair&#39;s asymmetry is what let an offset&#39;s stale,</span>
-</span><span id="propose_spans-75"><a href="#propose_spans-75"><span class="linenos"> 75</span></a><span class="sd">            peak-anchored threshold outlive the walk&#39;s own progress across a scene. Read it from</span>
-</span><span id="propose_spans-76"><a href="#propose_spans-76"><span class="linenos"> 76</span></a><span class="sd">            ``spans.floor_margin_db``.</span>
-</span><span id="propose_spans-77"><a href="#propose_spans-77"><span class="linenos"> 77</span></a><span class="sd">        transition_window_ms: How long the envelope must stay within ``floor_margin_db`` of the floor,</span>
-</span><span id="propose_spans-78"><a href="#propose_spans-78"><span class="linenos"> 78</span></a><span class="sd">            continuously, before a walk closes. Must be shorter than the shortest event to be</span>
-</span><span id="propose_spans-79"><a href="#propose_spans-79"><span class="linenos"> 79</span></a><span class="sd">            bounded. Read it from ``spans.transition_window_ms``.</span>
-</span><span id="propose_spans-80"><a href="#propose_spans-80"><span class="linenos"> 80</span></a><span class="sd">        min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.</span>
-</span><span id="propose_spans-81"><a href="#propose_spans-81"><span class="linenos"> 81</span></a><span class="sd">        min_separation_ms: Minimum distance between two proposed peaks. Read it from</span>
-</span><span id="propose_spans-82"><a href="#propose_spans-82"><span class="linenos"> 82</span></a><span class="sd">            ``spans.min_separation_ms``.</span>
-</span><span id="propose_spans-83"><a href="#propose_spans-83"><span class="linenos"> 83</span></a>
-</span><span id="propose_spans-84"><a href="#propose_spans-84"><span class="linenos"> 84</span></a><span class="sd">    Returns:</span>
-</span><span id="propose_spans-85"><a href="#propose_spans-85"><span class="linenos"> 85</span></a><span class="sd">        Merged spans in time order, every extent bounded by measured samples, or</span>
-</span><span id="propose_spans-86"><a href="#propose_spans-86"><span class="linenos"> 86</span></a><span class="sd">        :class:`NoContrast` when no peak clears ``k_db`` or nothing was measurable at all.</span>
-</span><span id="propose_spans-87"><a href="#propose_spans-87"><span class="linenos"> 87</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="propose_spans-88"><a href="#propose_spans-88"><span class="linenos"> 88</span></a>    <span class="n">above</span> <span class="o">=</span> <span class="n">envelope_db</span> <span class="o">-</span> <span class="n">floor_db</span>
-</span><span id="propose_spans-89"><a href="#propose_spans-89"><span class="linenos"> 89</span></a>    <span class="n">rise</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">above</span><span class="p">),</span> <span class="n">above</span><span class="p">,</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
-</span><span id="propose_spans-90"><a href="#propose_spans-90"><span class="linenos"> 90</span></a>    <span class="n">measured</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">),</span> <span class="n">envelope_db</span><span class="p">,</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
-</span><span id="propose_spans-91"><a href="#propose_spans-91"><span class="linenos"> 91</span></a>    <span class="n">peaks</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">find_peaks</span><span class="p">(</span><span class="n">rise</span><span class="p">,</span> <span class="n">height</span><span class="o">=</span><span class="n">k_db</span><span class="p">,</span> <span class="n">distance</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">min_separation_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">))</span>
-</span><span id="propose_spans-92"><a href="#propose_spans-92"><span class="linenos"> 92</span></a>    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">peaks</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="propose_spans-93"><a href="#propose_spans-93"><span class="linenos"> 93</span></a>        <span class="n">rises</span> <span class="o">=</span> <span class="n">above</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">above</span><span class="p">)]</span>
-</span><span id="propose_spans-94"><a href="#propose_spans-94"><span class="linenos"> 94</span></a>        <span class="k">if</span> <span class="n">rises</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="propose_spans-95"><a href="#propose_spans-95"><span class="linenos"> 95</span></a>            <span class="k">return</span> <span class="n">NoContrast</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;the envelope holds no sample measurable against its floor&quot;</span><span class="p">)</span>
-</span><span id="propose_spans-96"><a href="#propose_spans-96"><span class="linenos"> 96</span></a>        <span class="k">return</span> <span class="n">NoContrast</span><span class="p">(</span>
-</span><span id="propose_spans-97"><a href="#propose_spans-97"><span class="linenos"> 97</span></a>            <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;no peak rose </span><span class="si">{</span><span class="n">k_db</span><span class="si">}</span><span class="s2"> dB above the floor; the largest rose </span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">rises</span><span class="o">.</span><span class="n">max</span><span class="p">())</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> dB&quot;</span>
-</span><span id="propose_spans-98"><a href="#propose_spans-98"><span class="linenos"> 98</span></a>        <span class="p">)</span>
-</span><span id="propose_spans-99"><a href="#propose_spans-99"><span class="linenos"> 99</span></a>    <span class="n">threshold</span> <span class="o">=</span> <span class="n">floor_db</span> <span class="o">+</span> <span class="n">floor_margin_db</span>
-</span><span id="propose_spans-100"><a href="#propose_spans-100"><span class="linenos">100</span></a>    <span class="n">win</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">transition_window_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
-</span><span id="propose_spans-101"><a href="#propose_spans-101"><span class="linenos">101</span></a>    <span class="n">found</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="propose_spans-102"><a href="#propose_spans-102"><span class="linenos">102</span></a>    <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">peaks</span><span class="p">:</span>
-</span><span id="propose_spans-103"><a href="#propose_spans-103"><span class="linenos">103</span></a>        <span class="n">peak</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">[</span><span class="n">p</span><span class="p">])</span>
-</span><span id="propose_spans-104"><a href="#propose_spans-104"><span class="linenos">104</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
-</span><span id="propose_spans-105"><a href="#propose_spans-105"><span class="linenos">105</span></a>        <span class="k">while</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="propose_spans-106"><a href="#propose_spans-106"><span class="linenos">106</span></a>            <span class="n">window</span> <span class="o">=</span> <span class="n">measured</span><span class="p">[</span><span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">i</span> <span class="o">-</span> <span class="n">win</span><span class="p">)</span> <span class="p">:</span> <span class="n">i</span><span class="p">]</span>
-</span><span id="propose_spans-107"><a href="#propose_spans-107"><span class="linenos">107</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">window</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">window</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">threshold</span><span class="p">:</span>
-</span><span id="propose_spans-108"><a href="#propose_spans-108"><span class="linenos">108</span></a>                <span class="k">break</span>
-</span><span id="propose_spans-109"><a href="#propose_spans-109"><span class="linenos">109</span></a>            <span class="n">i</span> <span class="o">-=</span> <span class="mi">1</span>
-</span><span id="propose_spans-110"><a href="#propose_spans-110"><span class="linenos">110</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">p</span><span class="p">)</span>
-</span><span id="propose_spans-111"><a href="#propose_spans-111"><span class="linenos">111</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="propose_spans-112"><a href="#propose_spans-112"><span class="linenos">112</span></a>            <span class="n">window</span> <span class="o">=</span> <span class="n">measured</span><span class="p">[</span><span class="n">j</span> <span class="p">:</span> <span class="n">j</span> <span class="o">+</span> <span class="n">win</span><span class="p">]</span>
-</span><span id="propose_spans-113"><a href="#propose_spans-113"><span class="linenos">113</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">window</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">window</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">threshold</span><span class="p">:</span>
-</span><span id="propose_spans-114"><a href="#propose_spans-114"><span class="linenos">114</span></a>                <span class="k">break</span>
-</span><span id="propose_spans-115"><a href="#propose_spans-115"><span class="linenos">115</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
-</span><span id="propose_spans-116"><a href="#propose_spans-116"><span class="linenos">116</span></a>        <span class="k">if</span> <span class="p">(</span><span class="n">j</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">min_duration_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">:</span>
-</span><span id="propose_spans-117"><a href="#propose_spans-117"><span class="linenos">117</span></a>            <span class="n">found</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">Span</span><span class="p">(</span><span class="n">start</span><span class="o">=</span><span class="n">i</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="n">j</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span> <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="n">peak</span> <span class="o">-</span> <span class="n">floor_db</span><span class="p">))</span>
-</span><span id="propose_spans-118"><a href="#propose_spans-118"><span class="linenos">118</span></a>    <span class="n">found</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">s</span><span class="o">.</span><span class="n">start</span><span class="p">)</span>
-</span><span id="propose_spans-119"><a href="#propose_spans-119"><span class="linenos">119</span></a>    <span class="n">merged</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="propose_spans-120"><a href="#propose_spans-120"><span class="linenos">120</span></a>    <span class="k">for</span> <span class="n">span</span> <span class="ow">in</span> <span class="n">found</span><span class="p">:</span>
-</span><span id="propose_spans-121"><a href="#propose_spans-121"><span class="linenos">121</span></a>        <span class="k">if</span> <span class="n">merged</span> <span class="ow">and</span> <span class="n">span</span><span class="o">.</span><span class="n">start</span> <span class="o">&lt;=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">end</span><span class="p">:</span>
-</span><span id="propose_spans-122"><a href="#propose_spans-122"><span class="linenos">122</span></a>            <span class="n">last</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
-</span><span id="propose_spans-123"><a href="#propose_spans-123"><span class="linenos">123</span></a>            <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">Span</span><span class="p">(</span>
-</span><span id="propose_spans-124"><a href="#propose_spans-124"><span class="linenos">124</span></a>                <span class="n">start</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">start</span><span class="p">,</span>
-</span><span id="propose_spans-125"><a href="#propose_spans-125"><span class="linenos">125</span></a>                <span class="n">end</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">end</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">end</span><span class="p">),</span>
-</span><span id="propose_spans-126"><a href="#propose_spans-126"><span class="linenos">126</span></a>                <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">),</span>
-</span><span id="propose_spans-127"><a href="#propose_spans-127"><span class="linenos">127</span></a>                <span class="n">merged_proposals</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">merged_proposals</span> <span class="o">+</span> <span class="n">span</span><span class="o">.</span><span class="n">merged_proposals</span><span class="p">,</span>
-</span><span id="propose_spans-128"><a href="#propose_spans-128"><span class="linenos">128</span></a>            <span class="p">)</span>
-</span><span id="propose_spans-129"><a href="#propose_spans-129"><span class="linenos">129</span></a>        <span class="k">else</span><span class="p">:</span>
-</span><span id="propose_spans-130"><a href="#propose_spans-130"><span class="linenos">130</span></a>            <span class="n">merged</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">span</span><span class="p">)</span>
-</span><span id="propose_spans-131"><a href="#propose_spans-131"><span class="linenos">131</span></a>    <span class="k">return</span> <span class="n">merged</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="propose_spans-43"><a href="#propose_spans-43"><span class="linenos"> 43</span></a><span class="k">def</span><span class="w"> </span><span class="nf">propose_spans</span><span class="p">(</span>
+</span><span id="propose_spans-44"><a href="#propose_spans-44"><span class="linenos"> 44</span></a>    <span class="n">envelope_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+</span><span id="propose_spans-45"><a href="#propose_spans-45"><span class="linenos"> 45</span></a>    <span class="n">floor_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_spans-46"><a href="#propose_spans-46"><span class="linenos"> 46</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-47"><a href="#propose_spans-47"><span class="linenos"> 47</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="propose_spans-48"><a href="#propose_spans-48"><span class="linenos"> 48</span></a>    <span class="n">k_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_spans-49"><a href="#propose_spans-49"><span class="linenos"> 49</span></a>    <span class="n">floor_margin_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="propose_spans-50"><a href="#propose_spans-50"><span class="linenos"> 50</span></a>    <span class="n">transition_window_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-51"><a href="#propose_spans-51"><span class="linenos"> 51</span></a>    <span class="n">min_duration_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-52"><a href="#propose_spans-52"><span class="linenos"> 52</span></a>    <span class="n">min_separation_ms</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="propose_spans-53"><a href="#propose_spans-53"><span class="linenos"> 53</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">|</span> <span class="n">NoContrast</span><span class="p">:</span>
+</span><span id="propose_spans-54"><a href="#propose_spans-54"><span class="linenos"> 54</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Propose spans from an envelope, against one floor for the whole recording.</span>
+</span><span id="propose_spans-55"><a href="#propose_spans-55"><span class="linenos"> 55</span></a>
+</span><span id="propose_spans-56"><a href="#propose_spans-56"><span class="linenos"> 56</span></a><span class="sd">    The threshold crossing itself generates the candidate spans: every maximal run where the</span>
+</span><span id="propose_spans-57"><a href="#propose_spans-57"><span class="linenos"> 57</span></a><span class="sd">    envelope has risen ``k_db`` above the floor is one candidate, directly — not a peak later</span>
+</span><span id="propose_spans-58"><a href="#propose_spans-58"><span class="linenos"> 58</span></a><span class="sd">    expanded outward. Onset and offset then walk by the identical rule, in opposite directions,</span>
+</span><span id="propose_spans-59"><a href="#propose_spans-59"><span class="linenos"> 59</span></a><span class="sd">    from each candidate&#39;s own edges: neither can close for a reason the other would not also close</span>
+</span><span id="propose_spans-60"><a href="#propose_spans-60"><span class="linenos"> 60</span></a><span class="sd">    for, unlike the peak-anchored/floor-fraction pair this replaced, whose asymmetry (see</span>
+</span><span id="propose_spans-61"><a href="#propose_spans-61"><span class="linenos"> 61</span></a><span class="sd">    ``floor_margin_db``) let a real multi-scene recording collapse into one merged span once an</span>
+</span><span id="propose_spans-62"><a href="#propose_spans-62"><span class="linenos"> 62</span></a><span class="sd">    unrelated bug stopped masking it.</span>
+</span><span id="propose_spans-63"><a href="#propose_spans-63"><span class="linenos"> 63</span></a>
+</span><span id="propose_spans-64"><a href="#propose_spans-64"><span class="linenos"> 64</span></a><span class="sd">    Args:</span>
+</span><span id="propose_spans-65"><a href="#propose_spans-65"><span class="linenos"> 65</span></a><span class="sd">        envelope_db: Envelope in dBFS, ``nan`` at any sample that had no dB value.</span>
+</span><span id="propose_spans-66"><a href="#propose_spans-66"><span class="linenos"> 66</span></a><span class="sd">        floor_db: The recording&#39;s own global floor — see</span>
+</span><span id="propose_spans-67"><a href="#propose_spans-67"><span class="linenos"> 67</span></a><span class="sd">            :func:`~senselab.audio.tasks.envelope.api.global_floor_dbfs` — one value for the whole</span>
+</span><span id="propose_spans-68"><a href="#propose_spans-68"><span class="linenos"> 68</span></a><span class="sd">            signal, not a local, time-varying one.</span>
+</span><span id="propose_spans-69"><a href="#propose_spans-69"><span class="linenos"> 69</span></a><span class="sd">        sampling_rate: Samples per second.</span>
+</span><span id="propose_spans-70"><a href="#propose_spans-70"><span class="linenos"> 70</span></a><span class="sd">        k_db: How far above the floor the envelope must cross to open a candidate span. Per reader:</span>
+</span><span id="propose_spans-71"><a href="#propose_spans-71"><span class="linenos"> 71</span></a><span class="sd">            read it from ``spans.k_db.&lt;reader&gt;`` in the triage config.</span>
+</span><span id="propose_spans-72"><a href="#propose_spans-72"><span class="linenos"> 72</span></a><span class="sd">        floor_margin_db: A walk stops once the envelope has fallen within this many dB of the floor,</span>
+</span><span id="propose_spans-73"><a href="#propose_spans-73"><span class="linenos"> 73</span></a><span class="sd">            sustained for ``transition_window_ms`` — the same rule for onset (walking backward) and</span>
+</span><span id="propose_spans-74"><a href="#propose_spans-74"><span class="linenos"> 74</span></a><span class="sd">            offset (walking forward). Replaces a peak-anchored onset (walk back while within a fixed</span>
+</span><span id="propose_spans-75"><a href="#propose_spans-75"><span class="linenos"> 75</span></a><span class="sd">            drop of the peak) paired with a floor-fraction offset (walk forward to a threshold fixed</span>
+</span><span id="propose_spans-76"><a href="#propose_spans-76"><span class="linenos"> 76</span></a><span class="sd">            once at the peak&#39;s own floor value): that pair&#39;s asymmetry is what let an offset&#39;s stale,</span>
+</span><span id="propose_spans-77"><a href="#propose_spans-77"><span class="linenos"> 77</span></a><span class="sd">            peak-anchored threshold outlive the walk&#39;s own progress across a scene. Read it from</span>
+</span><span id="propose_spans-78"><a href="#propose_spans-78"><span class="linenos"> 78</span></a><span class="sd">            ``spans.floor_margin_db``.</span>
+</span><span id="propose_spans-79"><a href="#propose_spans-79"><span class="linenos"> 79</span></a><span class="sd">        transition_window_ms: How long the envelope must stay within ``floor_margin_db`` of the floor,</span>
+</span><span id="propose_spans-80"><a href="#propose_spans-80"><span class="linenos"> 80</span></a><span class="sd">            continuously, before a walk closes. Must be shorter than the shortest event to be</span>
+</span><span id="propose_spans-81"><a href="#propose_spans-81"><span class="linenos"> 81</span></a><span class="sd">            bounded. Read it from ``spans.transition_window_ms``.</span>
+</span><span id="propose_spans-82"><a href="#propose_spans-82"><span class="linenos"> 82</span></a><span class="sd">        min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.</span>
+</span><span id="propose_spans-83"><a href="#propose_spans-83"><span class="linenos"> 83</span></a><span class="sd">        min_separation_ms: Two threshold-crossing candidates closer together than this are one</span>
+</span><span id="propose_spans-84"><a href="#propose_spans-84"><span class="linenos"> 84</span></a><span class="sd">            proposal, not two, before either is walked. Read it from ``spans.min_separation_ms``.</span>
+</span><span id="propose_spans-85"><a href="#propose_spans-85"><span class="linenos"> 85</span></a>
+</span><span id="propose_spans-86"><a href="#propose_spans-86"><span class="linenos"> 86</span></a><span class="sd">    Returns:</span>
+</span><span id="propose_spans-87"><a href="#propose_spans-87"><span class="linenos"> 87</span></a><span class="sd">        Merged spans in time order, every extent bounded by measured samples, or</span>
+</span><span id="propose_spans-88"><a href="#propose_spans-88"><span class="linenos"> 88</span></a><span class="sd">        :class:`NoContrast` when nothing crosses ``k_db`` or nothing was measurable at all.</span>
+</span><span id="propose_spans-89"><a href="#propose_spans-89"><span class="linenos"> 89</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="propose_spans-90"><a href="#propose_spans-90"><span class="linenos"> 90</span></a>    <span class="n">above</span> <span class="o">=</span> <span class="n">envelope_db</span> <span class="o">-</span> <span class="n">floor_db</span>
+</span><span id="propose_spans-91"><a href="#propose_spans-91"><span class="linenos"> 91</span></a>    <span class="n">rise</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">above</span><span class="p">),</span> <span class="n">above</span><span class="p">,</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
+</span><span id="propose_spans-92"><a href="#propose_spans-92"><span class="linenos"> 92</span></a>    <span class="n">measured</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">),</span> <span class="n">envelope_db</span><span class="p">,</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span>
+</span><span id="propose_spans-93"><a href="#propose_spans-93"><span class="linenos"> 93</span></a>    <span class="n">crossings</span> <span class="o">=</span> <span class="n">_contiguous_true_runs</span><span class="p">(</span><span class="n">rise</span> <span class="o">&gt;=</span> <span class="n">k_db</span><span class="p">)</span>
+</span><span id="propose_spans-94"><a href="#propose_spans-94"><span class="linenos"> 94</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">crossings</span><span class="p">:</span>
+</span><span id="propose_spans-95"><a href="#propose_spans-95"><span class="linenos"> 95</span></a>        <span class="n">rises</span> <span class="o">=</span> <span class="n">above</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">above</span><span class="p">)]</span>
+</span><span id="propose_spans-96"><a href="#propose_spans-96"><span class="linenos"> 96</span></a>        <span class="k">if</span> <span class="n">rises</span><span class="o">.</span><span class="n">size</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="propose_spans-97"><a href="#propose_spans-97"><span class="linenos"> 97</span></a>            <span class="k">return</span> <span class="n">NoContrast</span><span class="p">(</span><span class="n">reason</span><span class="o">=</span><span class="s2">&quot;the envelope holds no sample measurable against its floor&quot;</span><span class="p">)</span>
+</span><span id="propose_spans-98"><a href="#propose_spans-98"><span class="linenos"> 98</span></a>        <span class="k">return</span> <span class="n">NoContrast</span><span class="p">(</span>
+</span><span id="propose_spans-99"><a href="#propose_spans-99"><span class="linenos"> 99</span></a>            <span class="n">reason</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;nothing rose </span><span class="si">{</span><span class="n">k_db</span><span class="si">}</span><span class="s2"> dB above the floor; the largest rose </span><span class="si">{</span><span class="nb">float</span><span class="p">(</span><span class="n">rises</span><span class="o">.</span><span class="n">max</span><span class="p">())</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> dB&quot;</span>
+</span><span id="propose_spans-100"><a href="#propose_spans-100"><span class="linenos">100</span></a>        <span class="p">)</span>
+</span><span id="propose_spans-101"><a href="#propose_spans-101"><span class="linenos">101</span></a>    <span class="n">separation</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">min_separation_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
+</span><span id="propose_spans-102"><a href="#propose_spans-102"><span class="linenos">102</span></a>    <span class="n">candidates</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="propose_spans-103"><a href="#propose_spans-103"><span class="linenos">103</span></a>    <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="ow">in</span> <span class="n">crossings</span><span class="p">:</span>
+</span><span id="propose_spans-104"><a href="#propose_spans-104"><span class="linenos">104</span></a>        <span class="k">if</span> <span class="n">candidates</span> <span class="ow">and</span> <span class="n">start</span> <span class="o">-</span> <span class="n">candidates</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">separation</span><span class="p">:</span>
+</span><span id="propose_spans-105"><a href="#propose_spans-105"><span class="linenos">105</span></a>            <span class="n">candidates</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">candidates</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">end</span><span class="p">,</span> <span class="n">candidates</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+</span><span id="propose_spans-106"><a href="#propose_spans-106"><span class="linenos">106</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="propose_spans-107"><a href="#propose_spans-107"><span class="linenos">107</span></a>            <span class="n">candidates</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>
+</span><span id="propose_spans-108"><a href="#propose_spans-108"><span class="linenos">108</span></a>    <span class="n">threshold</span> <span class="o">=</span> <span class="n">floor_db</span> <span class="o">+</span> <span class="n">floor_margin_db</span>
+</span><span id="propose_spans-109"><a href="#propose_spans-109"><span class="linenos">109</span></a>    <span class="n">win</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">transition_window_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
+</span><span id="propose_spans-110"><a href="#propose_spans-110"><span class="linenos">110</span></a>    <span class="n">found</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="propose_spans-111"><a href="#propose_spans-111"><span class="linenos">111</span></a>    <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="n">n_absorbed</span> <span class="ow">in</span> <span class="n">candidates</span><span class="p">:</span>
+</span><span id="propose_spans-112"><a href="#propose_spans-112"><span class="linenos">112</span></a>        <span class="n">peak</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">measured</span><span class="p">[</span><span class="n">start</span><span class="p">:</span><span class="n">end</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+</span><span id="propose_spans-113"><a href="#propose_spans-113"><span class="linenos">113</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="n">start</span>
+</span><span id="propose_spans-114"><a href="#propose_spans-114"><span class="linenos">114</span></a>        <span class="k">while</span> <span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="propose_spans-115"><a href="#propose_spans-115"><span class="linenos">115</span></a>            <span class="n">window</span> <span class="o">=</span> <span class="n">measured</span><span class="p">[</span><span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">i</span> <span class="o">-</span> <span class="n">win</span><span class="p">)</span> <span class="p">:</span> <span class="n">i</span><span class="p">]</span>
+</span><span id="propose_spans-116"><a href="#propose_spans-116"><span class="linenos">116</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">window</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">window</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">threshold</span><span class="p">:</span>
+</span><span id="propose_spans-117"><a href="#propose_spans-117"><span class="linenos">117</span></a>                <span class="k">break</span>
+</span><span id="propose_spans-118"><a href="#propose_spans-118"><span class="linenos">118</span></a>            <span class="n">i</span> <span class="o">-=</span> <span class="mi">1</span>
+</span><span id="propose_spans-119"><a href="#propose_spans-119"><span class="linenos">119</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="n">end</span>
+</span><span id="propose_spans-120"><a href="#propose_spans-120"><span class="linenos">120</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="nb">len</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="propose_spans-121"><a href="#propose_spans-121"><span class="linenos">121</span></a>            <span class="n">window</span> <span class="o">=</span> <span class="n">measured</span><span class="p">[</span><span class="n">j</span> <span class="p">:</span> <span class="n">j</span> <span class="o">+</span> <span class="n">win</span><span class="p">]</span>
+</span><span id="propose_spans-122"><a href="#propose_spans-122"><span class="linenos">122</span></a>            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">window</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">window</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">&lt;=</span> <span class="n">threshold</span><span class="p">:</span>
+</span><span id="propose_spans-123"><a href="#propose_spans-123"><span class="linenos">123</span></a>                <span class="k">break</span>
+</span><span id="propose_spans-124"><a href="#propose_spans-124"><span class="linenos">124</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="propose_spans-125"><a href="#propose_spans-125"><span class="linenos">125</span></a>        <span class="k">if</span> <span class="p">(</span><span class="n">j</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">min_duration_ms</span> <span class="o">*</span> <span class="n">sampling_rate</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">:</span>
+</span><span id="propose_spans-126"><a href="#propose_spans-126"><span class="linenos">126</span></a>            <span class="n">found</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+</span><span id="propose_spans-127"><a href="#propose_spans-127"><span class="linenos">127</span></a>                <span class="n">Span</span><span class="p">(</span>
+</span><span id="propose_spans-128"><a href="#propose_spans-128"><span class="linenos">128</span></a>                    <span class="n">start</span><span class="o">=</span><span class="n">i</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span>
+</span><span id="propose_spans-129"><a href="#propose_spans-129"><span class="linenos">129</span></a>                    <span class="n">end</span><span class="o">=</span><span class="n">j</span> <span class="o">/</span> <span class="n">sampling_rate</span><span class="p">,</span>
+</span><span id="propose_spans-130"><a href="#propose_spans-130"><span class="linenos">130</span></a>                    <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="n">peak</span> <span class="o">-</span> <span class="n">floor_db</span><span class="p">,</span>
+</span><span id="propose_spans-131"><a href="#propose_spans-131"><span class="linenos">131</span></a>                    <span class="n">merged_proposals</span><span class="o">=</span><span class="n">n_absorbed</span><span class="p">,</span>
+</span><span id="propose_spans-132"><a href="#propose_spans-132"><span class="linenos">132</span></a>                <span class="p">)</span>
+</span><span id="propose_spans-133"><a href="#propose_spans-133"><span class="linenos">133</span></a>            <span class="p">)</span>
+</span><span id="propose_spans-134"><a href="#propose_spans-134"><span class="linenos">134</span></a>    <span class="n">found</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">s</span><span class="p">:</span> <span class="n">s</span><span class="o">.</span><span class="n">start</span><span class="p">)</span>
+</span><span id="propose_spans-135"><a href="#propose_spans-135"><span class="linenos">135</span></a>    <span class="n">merged</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Span</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="propose_spans-136"><a href="#propose_spans-136"><span class="linenos">136</span></a>    <span class="k">for</span> <span class="n">span</span> <span class="ow">in</span> <span class="n">found</span><span class="p">:</span>
+</span><span id="propose_spans-137"><a href="#propose_spans-137"><span class="linenos">137</span></a>        <span class="k">if</span> <span class="n">merged</span> <span class="ow">and</span> <span class="n">span</span><span class="o">.</span><span class="n">start</span> <span class="o">&lt;=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">end</span><span class="p">:</span>
+</span><span id="propose_spans-138"><a href="#propose_spans-138"><span class="linenos">138</span></a>            <span class="n">last</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+</span><span id="propose_spans-139"><a href="#propose_spans-139"><span class="linenos">139</span></a>            <span class="n">merged</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">Span</span><span class="p">(</span>
+</span><span id="propose_spans-140"><a href="#propose_spans-140"><span class="linenos">140</span></a>                <span class="n">start</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">start</span><span class="p">,</span>
+</span><span id="propose_spans-141"><a href="#propose_spans-141"><span class="linenos">141</span></a>                <span class="n">end</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">end</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">end</span><span class="p">),</span>
+</span><span id="propose_spans-142"><a href="#propose_spans-142"><span class="linenos">142</span></a>                <span class="n">peak_over_floor_db</span><span class="o">=</span><span class="nb">max</span><span class="p">(</span><span class="n">last</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">,</span> <span class="n">span</span><span class="o">.</span><span class="n">peak_over_floor_db</span><span class="p">),</span>
+</span><span id="propose_spans-143"><a href="#propose_spans-143"><span class="linenos">143</span></a>                <span class="n">merged_proposals</span><span class="o">=</span><span class="n">last</span><span class="o">.</span><span class="n">merged_proposals</span> <span class="o">+</span> <span class="n">span</span><span class="o">.</span><span class="n">merged_proposals</span><span class="p">,</span>
+</span><span id="propose_spans-144"><a href="#propose_spans-144"><span class="linenos">144</span></a>            <span class="p">)</span>
+</span><span id="propose_spans-145"><a href="#propose_spans-145"><span class="linenos">145</span></a>        <span class="k">else</span><span class="p">:</span>
+</span><span id="propose_spans-146"><a href="#propose_spans-146"><span class="linenos">146</span></a>            <span class="n">merged</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">span</span><span class="p">)</span>
+</span><span id="propose_spans-147"><a href="#propose_spans-147"><span class="linenos">147</span></a>    <span class="k">return</span> <span class="n">merged</span>
 </span></pre></div>
 
 
             <div class="docstring"><p>Propose spans from an envelope, against one floor for the whole recording.</p>
 
-<p>Onset and offset walk by the identical rule, in opposite directions: neither can close for a
-reason the other would not also close for, unlike the peak-anchored/floor-fraction pair this
-replaced, whose asymmetry (see <code>floor_margin_db</code>) let a real multi-scene recording collapse
-into one merged span once an unrelated bug stopped masking it.</p>
+<p>The threshold crossing itself generates the candidate spans: every maximal run where the
+envelope has risen <code>k_db</code> above the floor is one candidate, directly — not a peak later
+expanded outward. Onset and offset then walk by the identical rule, in opposite directions,
+from each candidate's own edges: neither can close for a reason the other would not also close
+for, unlike the peak-anchored/floor-fraction pair this replaced, whose asymmetry (see
+<code>floor_margin_db</code>) let a real multi-scene recording collapse into one merged span once an
+unrelated bug stopped masking it.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
@@ -387,8 +474,8 @@ into one merged span once an unrelated bug stopped masking it.</p>
 <code>~<a href="envelope.html#global_floor_dbfs">senselab.audio.tasks.envelope.api.global_floor_dbfs()</a></code> — one value for the whole
 signal, not a local, time-varying one.</li>
 <li><strong>sampling_rate:</strong>  Samples per second.</li>
-<li><strong>k_db:</strong>  How far above the floor a peak must rise to be proposed. Per reader: read it from
-<code>spans.k_db.&lt;reader&gt;</code> in the triage config.</li>
+<li><strong>k_db:</strong>  How far above the floor the envelope must cross to open a candidate span. Per reader:
+read it from <code>spans.k_db.&lt;reader&gt;</code> in the triage config.</li>
 <li><strong>floor_margin_db:</strong>  A walk stops once the envelope has fallen within this many dB of the floor,
 sustained for <code>transition_window_ms</code> — the same rule for onset (walking backward) and
 offset (walking forward). Replaces a peak-anchored onset (walk back while within a fixed
@@ -400,15 +487,15 @@ peak-anchored threshold outlive the walk's own progress across a scene. Read it 
 continuously, before a walk closes. Must be shorter than the shortest event to be
 bounded. Read it from <code>spans.transition_window_ms</code>.</li>
 <li><strong>min_duration_ms:</strong>  Discard spans shorter than this. Read it from <code>spans.min_duration_ms</code>.</li>
-<li><strong>min_separation_ms:</strong>  Minimum distance between two proposed peaks. Read it from
-<code>spans.min_separation_ms</code>.</li>
+<li><strong>min_separation_ms:</strong>  Two threshold-crossing candidates closer together than this are one
+proposal, not two, before either is walked. Read it from <code>spans.min_separation_ms</code>.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
   <p>Merged spans in time order, every extent bounded by measured samples, or
-  <code><a href="#NoContrast">NoContrast</a></code> when no peak clears <code>k_db</code> or nothing was measurable at all.</p>
+  <code><a href="#NoContrast">NoContrast</a></code> when nothing crosses <code>k_db</code> or nothing was measurable at all.</p>
 </blockquote>
 </div>
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="generator" content="pdoc 16.0.0"/>
-    <title>senselab.audio.tasks API documentation</title>
+    <title>senselab.audio.tasks.spectral_continuity API documentation</title>
             <link rel="icon" href="https://readthedocs.org/favicon.ico"/>
 
     <style>/*! * Bootstrap Reboot v5.0.0 (https://getbootstrap.com/) * Copyright 2011-2021 The Bootstrap Authors * Copyright 2011-2021 Twitter, Inc. * Licensed under MIT (https://github.com/twbs/bootstrap/blob/main/LICENSE) * Forked from Normalize.css, licensed MIT (https://github.com/necolas/normalize.css/blob/master/LICENSE.md) */*,::after,::before{box-sizing:border-box}@media (prefers-reduced-motion:no-preference){:root{scroll-behavior:smooth}}body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";font-size:1rem;font-weight:400;line-height:1.5;color:#212529;background-color:#fff;-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent}hr{margin:1rem 0;color:inherit;background-color:currentColor;border:0;opacity:.25}hr:not([size]){height:1px}h1,h2,h3,h4,h5,h6{margin-top:0;margin-bottom:.5rem;font-weight:500;line-height:1.2}h1{font-size:calc(1.375rem + 1.5vw)}@media (min-width:1200px){h1{font-size:2.5rem}}h2{font-size:calc(1.325rem + .9vw)}@media (min-width:1200px){h2{font-size:2rem}}h3{font-size:calc(1.3rem + .6vw)}@media (min-width:1200px){h3{font-size:1.75rem}}h4{font-size:calc(1.275rem + .3vw)}@media (min-width:1200px){h4{font-size:1.5rem}}h5{font-size:1.25rem}h6{font-size:1rem}p{margin-top:0;margin-bottom:1rem}abbr[data-bs-original-title],abbr[title]{-webkit-text-decoration:underline dotted;text-decoration:underline dotted;cursor:help;-webkit-text-decoration-skip-ink:none;text-decoration-skip-ink:none}address{margin-bottom:1rem;font-style:normal;line-height:inherit}ol,ul{padding-left:2rem}dl,ol,ul{margin-top:0;margin-bottom:1rem}ol ol,ol ul,ul ol,ul ul{margin-bottom:0}dt{font-weight:700}dd{margin-bottom:.5rem;margin-left:0}blockquote{margin:0 0 1rem}b,strong{font-weight:bolder}small{font-size:.875em}mark{padding:.2em;background-color:#fcf8e3}sub,sup{position:relative;font-size:.75em;line-height:0;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}a{color:#0d6efd;text-decoration:underline}a:hover{color:#0a58ca}a:not([href]):not([class]),a:not([href]):not([class]):hover{color:inherit;text-decoration:none}code,kbd,pre,samp{font-family:SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:1em;direction:ltr;unicode-bidi:bidi-override}pre{display:block;margin-top:0;margin-bottom:1rem;overflow:auto;font-size:.875em}pre code{font-size:inherit;color:inherit;word-break:normal}code{font-size:.875em;color:#d63384;word-wrap:break-word}a>code{color:inherit}kbd{padding:.2rem .4rem;font-size:.875em;color:#fff;background-color:#212529;border-radius:.2rem}kbd kbd{padding:0;font-size:1em;font-weight:700}figure{margin:0 0 1rem}img,svg{vertical-align:middle}table{caption-side:bottom;border-collapse:collapse}caption{padding-top:.5rem;padding-bottom:.5rem;color:#6c757d;text-align:left}th{text-align:inherit;text-align:-webkit-match-parent}tbody,td,tfoot,th,thead,tr{border-color:inherit;border-style:solid;border-width:0}label{display:inline-block}button{border-radius:0}button:focus:not(:focus-visible){outline:0}button,input,optgroup,select,textarea{margin:0;font-family:inherit;font-size:inherit;line-height:inherit}button,select{text-transform:none}[role=button]{cursor:pointer}select{word-wrap:normal}select:disabled{opacity:1}[list]::-webkit-calendar-picker-indicator{display:none}[type=button],[type=reset],[type=submit],button{-webkit-appearance:button}[type=button]:not(:disabled),[type=reset]:not(:disabled),[type=submit]:not(:disabled),button:not(:disabled){cursor:pointer}::-moz-focus-inner{padding:0;border-style:none}textarea{resize:vertical}fieldset{min-width:0;padding:0;margin:0;border:0}legend{float:left;width:100%;padding:0;margin-bottom:.5rem;font-size:calc(1.275rem + .3vw);line-height:inherit}@media (min-width:1200px){legend{font-size:1.5rem}}legend+*{clear:left}::-webkit-datetime-edit-day-field,::-webkit-datetime-edit-fields-wrapper,::-webkit-datetime-edit-hour-field,::-webkit-datetime-edit-minute,::-webkit-datetime-edit-month-field,::-webkit-datetime-edit-text,::-webkit-datetime-edit-year-field{padding:0}::-webkit-inner-spin-button{height:auto}[type=search]{outline-offset:-2px;-webkit-appearance:textfield}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-color-swatch-wrapper{padding:0}::file-selector-button{font:inherit}::-webkit-file-upload-button{font:inherit;-webkit-appearance:button}output{display:inline-block}iframe{border:0}summary{display:list-item;cursor:pointer}progress{vertical-align:baseline}[hidden]{display:none!important}</style>
@@ -17,55 +17,24 @@
     <nav class="pdoc">
         <label id="navtoggle" for="togglestate" class="pdoc-button"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'><path stroke-linecap='round' stroke="currentColor" stroke-miterlimit='10' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/></svg></label>
         <input id="togglestate" type="checkbox" aria-hidden="true" tabindex="-1">
-        <div>            <a class="pdoc-button module-list-button" href="../audio.html">
+        <div>            <a class="pdoc-button module-list-button" href="../tasks.html">
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-in-left" viewBox="0 0 16 16">
   <path fill-rule="evenodd" d="M10 3.5a.5.5 0 0 0-.5-.5h-8a.5.5 0 0 0-.5.5v9a.5.5 0 0 0 .5.5h8a.5.5 0 0 0 .5-.5v-2a.5.5 0 0 1 1 0v2A1.5 1.5 0 0 1 9.5 14h-8A1.5 1.5 0 0 1 0 12.5v-9A1.5 1.5 0 0 1 1.5 2h8A1.5 1.5 0 0 1 11 3.5v2a.5.5 0 0 1-1 0v-2z"/>
   <path fill-rule="evenodd" d="M4.146 8.354a.5.5 0 0 1 0-.708l3-3a.5.5 0 1 1 .708.708L5.707 7.5H14.5a.5.5 0 0 1 0 1H5.707l2.147 2.146a.5.5 0 0 1-.708.708l-3-3z"/>
-</svg>                &nbsp;senselab.audio</a>
+</svg>                &nbsp;senselab.audio.tasks</a>
 
 
             <input type="search" placeholder="Search..." role="searchbox" aria-label="search"
                    pattern=".+" required>
 
 
-            <h2>Submodules</h2>
-            <ul>
-                    <li><a href="tasks/classification.html">classification</a></li>
-                    <li><a href="tasks/clearvoice.html">clearvoice</a></li>
-                    <li><a href="tasks/clipping.html">clipping</a></li>
-                    <li><a href="tasks/data_augmentation.html">data_augmentation</a></li>
-                    <li><a href="tasks/disruptions.html">disruptions</a></li>
-                    <li><a href="tasks/envelope.html">envelope</a></li>
-                    <li><a href="tasks/features_extraction.html">features_extraction</a></li>
-                    <li><a href="tasks/forced_alignment.html">forced_alignment</a></li>
-                    <li><a href="tasks/gammatone.html">gammatone</a></li>
-                    <li><a href="tasks/health_acoustics.html">health_acoustics</a></li>
-                    <li><a href="tasks/input_output.html">input_output</a></li>
-                    <li><a href="tasks/phonation.html">phonation</a></li>
-                    <li><a href="tasks/pii_detection.html">pii_detection</a></li>
-                    <li><a href="tasks/plotting.html">plotting</a></li>
-                    <li><a href="tasks/preprocessing.html">preprocessing</a></li>
-                    <li><a href="tasks/quality_control.html">quality_control</a></li>
-                    <li><a href="tasks/redaction.html">redaction</a></li>
-                    <li><a href="tasks/scene_quality.html">scene_quality</a></li>
-                    <li><a href="tasks/source_separation.html">source_separation</a></li>
-                    <li><a href="tasks/spans.html">spans</a></li>
-                    <li><a href="tasks/speaker_diarization.html">speaker_diarization</a></li>
-                    <li><a href="tasks/speaker_diarization_evaluation.html">speaker_diarization_evaluation</a></li>
-                    <li><a href="tasks/speaker_embeddings.html">speaker_embeddings</a></li>
-                    <li><a href="tasks/speaker_verification.html">speaker_verification</a></li>
-                    <li><a href="tasks/spectral_continuity.html">spectral_continuity</a></li>
-                    <li><a href="tasks/speech_enhancement.html">speech_enhancement</a></li>
-                    <li><a href="tasks/speech_super_resolution.html">speech_super_resolution</a></li>
-                    <li><a href="tasks/speech_to_text.html">speech_to_text</a></li>
-                    <li><a href="tasks/speech_to_text_ensemble.html">speech_to_text_ensemble</a></li>
-                    <li><a href="tasks/speech_to_text_evaluation.html">speech_to_text_evaluation</a></li>
-                    <li><a href="tasks/ssl_embeddings.html">ssl_embeddings</a></li>
-                    <li><a href="tasks/target_speaker_extraction.html">target_speaker_extraction</a></li>
-                    <li><a href="tasks/text_to_speech.html">text_to_speech</a></li>
-                    <li><a href="tasks/voice_activity_detection.html">voice_activity_detection</a></li>
-                    <li><a href="tasks/voice_cloning.html">voice_cloning</a></li>
-            </ul>
+
+            <h2>API Documentation</h2>
+                <ul class="memberlist">
+            <li>
+                    <a class="function" href="#spectral_continuity">spectral_continuity</a>
+            </li>
+    </ul>
 
 
 
@@ -79,20 +48,157 @@
     <main class="pdoc">
             <section class="module-info">
                     <h1 class="modulename">
-<a href="./../../senselab.html">senselab</a><wbr>.<a href="./../audio.html">audio</a><wbr>.tasks    </h1>
+<a href="./../../../senselab.html">senselab</a><wbr>.<a href="./../../audio.html">audio</a><wbr>.<a href="./../tasks.html">tasks</a><wbr>.spectral_continuity    </h1>
 
-                        <div class="docstring"><p>Tasks for audio processing.</p>
+                        <div class="docstring"><p>Frame-to-frame spectral continuity.</p>
 </div>
 
-                        <input id="mod-tasks-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+                        <input id="mod-spectral_continuity-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 
-                        <label class="view-source-button" for="mod-tasks-view-source"><span>View Source</span></label>
+                        <label class="view-source-button" for="mod-spectral_continuity-view-source"><span>View Source</span></label>
 
-                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Tasks for audio processing.&quot;&quot;&quot;</span>
+                        <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos">1</span></a><span class="sd">&quot;&quot;&quot;Frame-to-frame spectral continuity.&quot;&quot;&quot;</span>
+</span><span id="L-2"><a href="#L-2"><span class="linenos">2</span></a>
+</span><span id="L-3"><a href="#L-3"><span class="linenos">3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.spectral_continuity.api</span><span class="w"> </span><span class="kn">import</span> <span class="n">spectral_continuity</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos">4</span></a>
+</span><span id="L-5"><a href="#L-5"><span class="linenos">5</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;spectral_continuity&quot;</span><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="spectral_continuity">
+                            <input id="spectral_continuity-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">spectral_continuity</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">magnitude</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span>,</span><span class="param">	<span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">n_samples</span><span class="p">:</span> <span class="nb">int</span>,</span><span class="param">	<span class="n">smoothing</span><span class="p">:</span> <span class="n"><a href="envelope.html#EnvelopeSmoothing">senselab.audio.tasks.envelope.EnvelopeSmoothing</a></span></span><span class="return-annotation">) -> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>:</span></span>
+
+                <label class="view-source-button" for="spectral_continuity-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#spectral_continuity"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="spectral_continuity-11"><a href="#spectral_continuity-11"><span class="linenos">11</span></a><span class="k">def</span><span class="w"> </span><span class="nf">spectral_continuity</span><span class="p">(</span>
+</span><span id="spectral_continuity-12"><a href="#spectral_continuity-12"><span class="linenos">12</span></a>    <span class="n">magnitude</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">hop_s</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">n_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span>
+</span><span id="spectral_continuity-13"><a href="#spectral_continuity-13"><span class="linenos">13</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="spectral_continuity-14"><a href="#spectral_continuity-14"><span class="linenos">14</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Cosine similarity between consecutive log-magnitude spectra, smoothed and resampled to samples.</span>
+</span><span id="spectral_continuity-15"><a href="#spectral_continuity-15"><span class="linenos">15</span></a>
+</span><span id="spectral_continuity-16"><a href="#spectral_continuity-16"><span class="linenos">16</span></a><span class="sd">    A sustained, spectrally stable sound -- a held tone, a glide&#39;s own slowly-moving harmonic</span>
+</span><span id="spectral_continuity-17"><a href="#spectral_continuity-17"><span class="linenos">17</span></a><span class="sd">    structure -- keeps a similar spectral shape from one analysis frame to the next, so this reads</span>
+</span><span id="spectral_continuity-18"><a href="#spectral_continuity-18"><span class="linenos">18</span></a><span class="sd">    high and steady through it. A transient (onset, offset, a plosive) changes the spectral shape</span>
+</span><span id="spectral_continuity-19"><a href="#spectral_continuity-19"><span class="linenos">19</span></a><span class="sd">    abruptly between frames, reading low right at the transition. Verified on real recordings this</span>
+</span><span id="spectral_continuity-20"><a href="#spectral_continuity-20"><span class="linenos">20</span></a><span class="sd">    session: a glide&#39;s voiced region reads continuity 0.95-0.99 against 0.86-0.92 for the silence</span>
+</span><span id="spectral_continuity-21"><a href="#spectral_continuity-21"><span class="linenos">21</span></a><span class="sd">    flanking it, a clean, well-separated signal. The same measure does not discriminate a breath from</span>
+</span><span id="spectral_continuity-22"><a href="#spectral_continuity-22"><span class="linenos">22</span></a><span class="sd">    the background noise around it on the recording tested (both read 0.85-0.90 with no separation</span>
+</span><span id="spectral_continuity-23"><a href="#spectral_continuity-23"><span class="linenos">23</span></a><span class="sd">    tracking the breath&#39;s own timing) -- turbulent broadband noise does not carry the frame-to-frame</span>
+</span><span id="spectral_continuity-24"><a href="#spectral_continuity-24"><span class="linenos">24</span></a><span class="sd">    bin-level coherence a harmonic sound does, so this measure is a real detector for sustained</span>
+</span><span id="spectral_continuity-25"><a href="#spectral_continuity-25"><span class="linenos">25</span></a><span class="sd">    tonal/harmonic production (glides, phonation, vowels) and not, on the evidence gathered so far,</span>
+</span><span id="spectral_continuity-26"><a href="#spectral_continuity-26"><span class="linenos">26</span></a><span class="sd">    for breath noise specifically.</span>
+</span><span id="spectral_continuity-27"><a href="#spectral_continuity-27"><span class="linenos">27</span></a>
+</span><span id="spectral_continuity-28"><a href="#spectral_continuity-28"><span class="linenos">28</span></a><span class="sd">    Takes an already-computed magnitude spectrogram rather than raw audio and its own STFT</span>
+</span><span id="spectral_continuity-29"><a href="#spectral_continuity-29"><span class="linenos">29</span></a><span class="sd">    parameters: the caller (PREPROCESS&#39;s ``_spans``) reuses the narrowband spectrogram block&#39;s own</span>
+</span><span id="spectral_continuity-30"><a href="#spectral_continuity-30"><span class="linenos">30</span></a><span class="sd">    output directly, so a recording is not put through two independent STFTs at merely-matching</span>
+</span><span id="spectral_continuity-31"><a href="#spectral_continuity-31"><span class="linenos">31</span></a><span class="sd">    parameters for two purposes that are both &quot;look at this recording&#39;s spectral structure&quot;. This</span>
+</span><span id="spectral_continuity-32"><a href="#spectral_continuity-32"><span class="linenos">32</span></a><span class="sd">    does mean a caller wanting its own analysis resolution must supply its own magnitude array;</span>
+</span><span id="spectral_continuity-33"><a href="#spectral_continuity-33"><span class="linenos">33</span></a><span class="sd">    nothing here computes one. ``smoothing`` reuses the same pluggable</span>
+</span><span id="spectral_continuity-34"><a href="#spectral_continuity-34"><span class="linenos">34</span></a><span class="sd">    :class:`~senselab.audio.tasks.envelope.api.EnvelopeSmoothing` strategy</span>
+</span><span id="spectral_continuity-35"><a href="#spectral_continuity-35"><span class="linenos">35</span></a><span class="sd">    :func:`~senselab.audio.tasks.envelope.api.hilbert_envelope_dbfs` already takes, applied to the</span>
+</span><span id="spectral_continuity-36"><a href="#spectral_continuity-36"><span class="linenos">36</span></a><span class="sd">    per-frame continuity trace as if it were a signal sampled at the frame rate (``1 / hop_s``) --</span>
+</span><span id="spectral_continuity-37"><a href="#spectral_continuity-37"><span class="linenos">37</span></a><span class="sd">    the same generic mechanism, not a bespoke moving average, and :class:`MedianSmoothing` for the</span>
+</span><span id="spectral_continuity-38"><a href="#spectral_continuity-38"><span class="linenos">38</span></a><span class="sd">    same reason it is used for the gain curve elsewhere: it cannot overshoot past a transient the way</span>
+</span><span id="spectral_continuity-39"><a href="#spectral_continuity-39"><span class="linenos">39</span></a><span class="sd">    a moving average or a resonant filter can.</span>
+</span><span id="spectral_continuity-40"><a href="#spectral_continuity-40"><span class="linenos">40</span></a>
+</span><span id="spectral_continuity-41"><a href="#spectral_continuity-41"><span class="linenos">41</span></a><span class="sd">    Args:</span>
+</span><span id="spectral_continuity-42"><a href="#spectral_continuity-42"><span class="linenos">42</span></a><span class="sd">        magnitude: A magnitude (not power) spectrogram, shape ``(n_freqs, n_frames)``.</span>
+</span><span id="spectral_continuity-43"><a href="#spectral_continuity-43"><span class="linenos">43</span></a><span class="sd">        hop_s: The hop between frames the spectrogram was computed at, in seconds -- needed to place</span>
+</span><span id="spectral_continuity-44"><a href="#spectral_continuity-44"><span class="linenos">44</span></a><span class="sd">            each frame&#39;s value back on the sample timeline.</span>
+</span><span id="spectral_continuity-45"><a href="#spectral_continuity-45"><span class="linenos">45</span></a><span class="sd">        sampling_rate: The original audio&#39;s sampling rate, in Hz -- together with ``hop_s`` this</span>
+</span><span id="spectral_continuity-46"><a href="#spectral_continuity-46"><span class="linenos">46</span></a><span class="sd">            gives the hop in samples.</span>
+</span><span id="spectral_continuity-47"><a href="#spectral_continuity-47"><span class="linenos">47</span></a><span class="sd">        n_samples: Length of the original audio, in samples, so the returned trace matches it exactly</span>
+</span><span id="spectral_continuity-48"><a href="#spectral_continuity-48"><span class="linenos">48</span></a><span class="sd">            (a spectrogram&#39;s own frame count does not by itself say how long the source signal was).</span>
+</span><span id="spectral_continuity-49"><a href="#spectral_continuity-49"><span class="linenos">49</span></a><span class="sd">        smoothing: Strategy applied to the per-frame continuity trace, at the frame rate ``1 / hop_s``,</span>
+</span><span id="spectral_continuity-50"><a href="#spectral_continuity-50"><span class="linenos">50</span></a><span class="sd">            before it is resampled to one value per input sample.</span>
+</span><span id="spectral_continuity-51"><a href="#spectral_continuity-51"><span class="linenos">51</span></a>
+</span><span id="spectral_continuity-52"><a href="#spectral_continuity-52"><span class="linenos">52</span></a><span class="sd">    Returns:</span>
+</span><span id="spectral_continuity-53"><a href="#spectral_continuity-53"><span class="linenos">53</span></a><span class="sd">        One continuity value per input sample, in ``[0, 1]``. Never ``nan``: a tiny epsilon in the</span>
+</span><span id="spectral_continuity-54"><a href="#spectral_continuity-54"><span class="linenos">54</span></a><span class="sd">        norm turns the ``0/0`` two all-zero frames would otherwise produce into ``0.0`` rather than</span>
+</span><span id="spectral_continuity-55"><a href="#spectral_continuity-55"><span class="linenos">55</span></a><span class="sd">        an undefined value -- true digital silence reads as the *least* continuous case, not the</span>
+</span><span id="spectral_continuity-56"><a href="#spectral_continuity-56"><span class="linenos">56</span></a><span class="sd">        most, which is what a span-proposal gate needs: a long silent stretch must never itself read</span>
+</span><span id="spectral_continuity-57"><a href="#spectral_continuity-57"><span class="linenos">57</span></a><span class="sd">        as a sustained, continuous event.</span>
+</span><span id="spectral_continuity-58"><a href="#spectral_continuity-58"><span class="linenos">58</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="spectral_continuity-59"><a href="#spectral_continuity-59"><span class="linenos">59</span></a>    <span class="n">log_mag</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">log1p</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">magnitude</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">))</span>
+</span><span id="spectral_continuity-60"><a href="#spectral_continuity-60"><span class="linenos">60</span></a>
+</span><span id="spectral_continuity-61"><a href="#spectral_continuity-61"><span class="linenos">61</span></a>    <span class="k">if</span> <span class="n">log_mag</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+</span><span id="spectral_continuity-62"><a href="#spectral_continuity-62"><span class="linenos">62</span></a>        <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">n_samples</span><span class="p">)</span>
+</span><span id="spectral_continuity-63"><a href="#spectral_continuity-63"><span class="linenos">63</span></a>
+</span><span id="spectral_continuity-64"><a href="#spectral_continuity-64"><span class="linenos">64</span></a>    <span class="n">norms</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">norm</span><span class="p">(</span><span class="n">log_mag</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="o">+</span> <span class="mf">1e-12</span>
+</span><span id="spectral_continuity-65"><a href="#spectral_continuity-65"><span class="linenos">65</span></a>    <span class="n">dots</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">log_mag</span><span class="p">[:,</span> <span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">log_mag</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">:],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="spectral_continuity-66"><a href="#spectral_continuity-66"><span class="linenos">66</span></a>    <span class="n">cos_sim</span> <span class="o">=</span> <span class="n">dots</span> <span class="o">/</span> <span class="p">(</span><span class="n">norms</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="n">norms</span><span class="p">[</span><span class="mi">1</span><span class="p">:])</span>
+</span><span id="spectral_continuity-67"><a href="#spectral_continuity-67"><span class="linenos">67</span></a>    <span class="n">cos_sim</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">cos_sim</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="n">cos_sim</span><span class="p">])</span>
+</span><span id="spectral_continuity-68"><a href="#spectral_continuity-68"><span class="linenos">68</span></a>
+</span><span id="spectral_continuity-69"><a href="#spectral_continuity-69"><span class="linenos">69</span></a>    <span class="n">frame_rate</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="mf">1.0</span> <span class="o">/</span> <span class="n">hop_s</span><span class="p">))</span>
+</span><span id="spectral_continuity-70"><a href="#spectral_continuity-70"><span class="linenos">70</span></a>    <span class="n">smoothed</span> <span class="o">=</span> <span class="n">smoothing</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">cos_sim</span><span class="p">,</span> <span class="n">frame_rate</span><span class="p">)</span>
+</span><span id="spectral_continuity-71"><a href="#spectral_continuity-71"><span class="linenos">71</span></a>
+</span><span id="spectral_continuity-72"><a href="#spectral_continuity-72"><span class="linenos">72</span></a>    <span class="n">hop_samples</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">hop_s</span> <span class="o">*</span> <span class="n">sampling_rate</span><span class="p">)))</span>
+</span><span id="spectral_continuity-73"><a href="#spectral_continuity-73"><span class="linenos">73</span></a>    <span class="n">frame_centers</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">smoothed</span><span class="p">))</span> <span class="o">*</span> <span class="n">hop_samples</span>
+</span><span id="spectral_continuity-74"><a href="#spectral_continuity-74"><span class="linenos">74</span></a>    <span class="n">resampled</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">interp</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n_samples</span><span class="p">),</span> <span class="n">frame_centers</span><span class="p">,</span> <span class="n">smoothed</span><span class="p">,</span> <span class="n">left</span><span class="o">=</span><span class="n">smoothed</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">right</span><span class="o">=</span><span class="n">smoothed</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+</span><span id="spectral_continuity-75"><a href="#spectral_continuity-75"><span class="linenos">75</span></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">resampled</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Cosine similarity between consecutive log-magnitude spectra, smoothed and resampled to samples.</p>
+
+<p>A sustained, spectrally stable sound -- a held tone, a glide's own slowly-moving harmonic
+structure -- keeps a similar spectral shape from one analysis frame to the next, so this reads
+high and steady through it. A transient (onset, offset, a plosive) changes the spectral shape
+abruptly between frames, reading low right at the transition. Verified on real recordings this
+session: a glide's voiced region reads continuity 0.95-0.99 against 0.86-0.92 for the silence
+flanking it, a clean, well-separated signal. The same measure does not discriminate a breath from
+the background noise around it on the recording tested (both read 0.85-0.90 with no separation
+tracking the breath's own timing) -- turbulent broadband noise does not carry the frame-to-frame
+bin-level coherence a harmonic sound does, so this measure is a real detector for sustained
+tonal/harmonic production (glides, phonation, vowels) and not, on the evidence gathered so far,
+for breath noise specifically.</p>
+
+<p>Takes an already-computed magnitude spectrogram rather than raw audio and its own STFT
+parameters: the caller (PREPROCESS's <code>_spans</code>) reuses the narrowband spectrogram block's own
+output directly, so a recording is not put through two independent STFTs at merely-matching
+parameters for two purposes that are both "look at this recording's spectral structure". This
+does mean a caller wanting its own analysis resolution must supply its own magnitude array;
+nothing here computes one. <code>smoothing</code> reuses the same pluggable
+<code>~<a href="envelope.html#EnvelopeSmoothing">senselab.audio.tasks.envelope.api.EnvelopeSmoothing</a></code> strategy
+<code>~<a href="envelope.html#hilbert_envelope_dbfs">senselab.audio.tasks.envelope.api.hilbert_envelope_dbfs()</a></code> already takes, applied to the
+per-frame continuity trace as if it were a signal sampled at the frame rate (<code>1 / hop_s</code>) --
+the same generic mechanism, not a bespoke moving average, and <code>MedianSmoothing</code> for the
+same reason it is used for the gain curve elsewhere: it cannot overshoot past a transient the way
+a moving average or a resonant filter can.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>magnitude:</strong>  A magnitude (not power) spectrogram, shape <code>(n_freqs, n_frames)</code>.</li>
+<li><strong>hop_s:</strong>  The hop between frames the spectrogram was computed at, in seconds -- needed to place
+each frame's value back on the sample timeline.</li>
+<li><strong>sampling_rate:</strong>  The original audio's sampling rate, in Hz -- together with <code>hop_s</code> this
+gives the hop in samples.</li>
+<li><strong>n_samples:</strong>  Length of the original audio, in samples, so the returned trace matches it exactly
+(a spectrogram's own frame count does not by itself say how long the source signal was).</li>
+<li><strong>smoothing:</strong>  Strategy applied to the per-frame continuity trace, at the frame rate <code>1 / hop_s</code>,
+before it is resampled to one value per input sample.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>One continuity value per input sample, in <code>[0, 1]</code>. Never <code>nan</code>: a tiny epsilon in the
+  norm turns the <code>0/0</code> two all-zero frames would otherwise produce into <code>0.0</code> rather than
+  an undefined value -- true digital silence reads as the <em>least</em> continuous case, not the
+  most, which is what a span-proposal gate needs: a long silent stretch must never itself read
+  as a sustained, continuous event.</p>
+</blockquote>
+</div>
+
+
+                </section>
     </main>
 <script>
     function escapeHTML(html) {
@@ -146,7 +252,7 @@
                 script.async = true;
                 script.onload = () => resolve(window.pdocSearch);
                 script.onerror = (e) => reject(e);
-                script.src = "../../search.js";
+                script.src = "../../../search.js";
                 document.getElementsByTagName("head")[0].appendChild(script);
             });
         } catch (e) {
@@ -188,7 +294,7 @@
             }
             for (let result of results.slice(0, 10)) {
                 let doc = result.doc;
-                let url = `../../${doc.modulename.replaceAll(".", "/")}.html`;
+                let url = `../../../${doc.modulename.replaceAll(".", "/")}.html`;
                 if (doc.qualname) {
                     url += `#${doc.qualname}`;
                 }
