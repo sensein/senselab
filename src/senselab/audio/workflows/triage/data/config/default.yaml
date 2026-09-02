@@ -88,15 +88,18 @@ derivation: |
   signal's own amplitude envelope (``normalization.envelope_smoothing``, PercentileSmoothing,
   ``normalized_envelope`` below), and continuity from spectral_continuity.spectral_continuity over
   the pre-emphasised signal (see the paragraph below). Primary rather than the normalized signal,
-  reversing this session's own earlier design: normalization is optional (every `normalization.*`
-  key ships null) and, measured directly, its AGC can compress a real recording's local dynamic
-  range enough that no span-gate value clears it at all -- a five-breath recording's rise-over-floor
-  topped out at 9 dB after normalization against 23 dB on the same recording pre-normalization, with
-  the same k_db and floor definition throughout. The pre-emphasised signal needs no optional step to
-  exist, so spans are never entirely absent for want of a normalization fit; the normalized and
-  continuity passes, where either finds something, only ever add a candidate no earlier pass found
-  (typically a quiet event AGC boosted into range, or a sustained tonal/harmonic production too soft
-  to clear any amplitude gate), never replace or override one.
+  reversing this session's own earlier design: measured directly, the AGC can compress a real
+  recording's local dynamic range enough that no span-gate value clears it at all -- a five-breath
+  recording's rise-over-floor topped out at 9 dB after normalization against 23 dB on the same
+  recording pre-normalization, with the same k_db and floor definition throughout. That risk is why
+  normalization stays supplementary and optional rather than the primary pass -- not a reason to
+  keep it off: the pre-emphasised signal needs no optional step to exist, so spans are never
+  entirely absent for want of a normalization fit, and normalization.* is now on by default (see
+  the normalization.* paragraph below) precisely because the supplementary and continuity passes,
+  where either finds something, only ever *add* a candidate no earlier pass found (typically a quiet
+  event AGC boosted into range, or a sustained tonal/harmonic production too soft to clear any
+  amplitude gate), never replace or override one -- so the AGC-compression failure mode can only ever
+  cost a missed addition, never a wrong primary span.
 
   Spectral continuity -- owner-directed this session, added specifically to catch breathing and
   glides that an amplitude-only gate can miss. Originally its own window_s/hop_s pair; now reuses
@@ -498,17 +501,30 @@ derivation: |
   merge nearby ones before treating a clip event as a genuine plateau, exactly as spans.min_duration_ms
   and spans.min_separation_ms already do for envelope-peak spans. Neither has a corpus behind it yet.
 
-  normalization.* -- audio/tasks/envelope.dynamic_range_normalize. Every key is null. The function's
-  own reference implementation (a pasted sketch reviewed and reworked to reuse hilbert_envelope_dbfs
-  for both its macro and micro envelopes instead of a bespoke rectify-and-filter) carried illustrative
-  literals -- 0.2 Hz / 20 Hz cutoffs, 15 dB target range, a compression ratio of 2, a -6 dBFS
-  reference, a 10 Hz gain-smoothing cutoff, a 0.95 ceiling -- and none of them is a measurement: they
-  are the shape of a reasonable algorithm, not a fitted one. Carrying them over as defaults here would
-  be exactly the trap this file exists to avoid. While every key is null, PREPROCESS's
-  normalized_envelope measurement and its supplementary spans are absent -- the primary,
-  pre-emphasised span pass does not depend on this block at all, so spans are never entirely absent
-  for want of a normalization fit -- which is the honest state until a campaign measures and supplies
-  all eight.
+  normalization.* -- audio/tasks/envelope.dynamic_range_normalize. Owner-directed this session: on by
+  default, all eight keys given real values, so PREPROCESS's normalized_envelope measurement and its
+  supplementary spans actually run under the packaged config -- some real content (a quiet event AGC
+  boosts into range) is only reachable through this pass, not through the pre-emphasised primary
+  pass alone. The function's own reference implementation (a pasted sketch reviewed and reworked to
+  reuse hilbert_envelope_dbfs for both its macro and micro envelopes instead of a bespoke
+  rectify-and-filter) carried illustrative literals -- 0.2 Hz / 20 Hz cutoffs, 15 dB target range, a
+  compression ratio of 2, a -6 dBFS reference, a 10 Hz gain-smoothing cutoff, a 0.95 ceiling -- and
+  none of them was a measurement, only the shape of a reasonable algorithm; the cutoff-based pair was
+  since replaced by MedianSmoothing(window_s=...) (see the two paragraphs below) for a measured
+  reason, so those two keys carry window_s values (0.5 s / 0.05 s) rather than the original cutoffs.
+  The remaining five values (target_dr_db 15.0, compression_ratio 2.0, macro_target_dbfs -6.0 dBFS,
+  gain_smoothing.window_s 0.025 s, floor_dbfs -100.0 dBFS, ceiling 0.95) are carried over from the
+  original illustrative sketch as-is -- owner-directed, provisional, not corpus-fit, the same status
+  as spans.k_db/floor.percentile/spans.transition_window_ms elsewhere in this file. Turning this on
+  does not relax the AGC-compression finding two paragraphs above (a real recording's rise-over-floor
+  can still collapse under this AGC); it is safe specifically because normalization stays a
+  supplementary, additive span source that can only add a candidate, never replace the primary
+  pre-emphasised pass or override one of its spans. Re-verified with these exact eight values across
+  all four FiveBreaths recordings in the same subject's session before shipping this as the default:
+  primary/normalized rise-over-floor was 25.9/11.2 dB, 56.2/26.9 dB, 32.0/12.2 dB and 55.0/26.4 dB --
+  the compression is real and consistent (roughly half, matching the original 23/9 dB report) but
+  every normalized value still clears spans.k_db (6 dB) with room to spare, so the supplementary
+  source keeps contributing rather than going silent.
 
   normalization.macro_smoothing.window_s, .micro_smoothing.window_s --
   audio/tasks/envelope.MedianSmoothing, plugged into hilbert_envelope_dbfs for the two internal
@@ -600,19 +616,19 @@ clipping:
 
 normalization:
   macro_smoothing:
-    window_s: null
+    window_s: 0.5
   micro_smoothing:
-    window_s: null
+    window_s: 0.05
   envelope_smoothing:
     window_s: 0.025
     percentile: 90.0
-  target_dr_db: null
-  compression_ratio: null
-  macro_target_dbfs: null
+  target_dr_db: 15.0
+  compression_ratio: 2.0
+  macro_target_dbfs: -6.0
   gain_smoothing:
-    window_s: null
-  floor_dbfs: null
-  ceiling: null
+    window_s: 0.025
+  floor_dbfs: -100.0
+  ceiling: 0.95
 
 spectrogram:
   wideband_window_ms: 5.0

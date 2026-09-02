@@ -249,6 +249,11 @@ class TestSpansCarryTheirMergeRate:
         merge-rate report reading production rather than a fixture. Asserting the exact number is
         what makes it discriminating: a node that hard-coded the field, or a fixture that supplied
         it, would read one.
+
+        Filtered to the pre-emphasised signal specifically: normalization is on by default now, and
+        its own AGC-boosted envelope genuinely finds two more standalone spans elsewhere in this
+        fixture's noise bed (its own quiet lead-in and tail, not the bursts this test is about) --
+        real, additive supplementary evidence, not a bug, but not what this assertion is testing.
         """
         _seed_admit(store, tmp_path, wav_writer, samples=_merging_bursts())
         _stub_models(monkeypatch)
@@ -256,7 +261,9 @@ class TestSpansCarryTheirMergeRate:
         spans = [
             e
             for e in live_entities(store, "span")
-            if e.attributes.get("family") is None and e.attributes.get("measure") == "amplitude"
+            if e.attributes.get("family") is None
+            and e.attributes.get("measure") == "amplitude"
+            and e.attributes.get("signal") == "preemphasised"
         ]
         assert len(spans) == 1
         assert spans[0].attributes["merged_proposals"] == 3
@@ -665,7 +672,6 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "hear_windows",
             "phonation_tracks",
             "clip_spans",
-            "normalized_envelope",
             "span_hear",
             "span_yamnet",
         }
