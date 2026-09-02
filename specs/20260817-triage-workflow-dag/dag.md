@@ -115,30 +115,50 @@ node's own run once the loop finishes:
 
 **PREPROCESS's own internal dependency graph** — re-derived directly from `preprocess.py`'s block
 list and every block's own `state` reads, not from the whole-workflow diagram above (which shows
-PREPROCESS as a single node). Most blocks read only the plain/pre-emphasised streams built once
-before the block loop runs and are otherwise independent of each other; the solid edges below are
-the genuine cross-block `state` dependencies (a block that raises `LookupError` when the upstream key
-is absent), and the dashed edges into `spans` are its four optional sources plus the `contains_clip`
-annotation, each present only when its own upstream block succeeded:
+PREPROCESS as a single node). The three source streams are themselves a linear derivation, built once
+before the block loop runs: the *original* recording is downmixed and resampled into `plain`
+(`mono = source.waveform.mean(...)`, then `resample_audios`), and `plain` is pre-emphasised into
+`sharp` (`x[:, 1:] - coefficient * x[:, :-1]`) when `preemphasis.enabled` is true — verified by reading
+`preprocess()`'s own conditioning code, not assumed from block names. Every block below reads exactly
+one of these three, verified per block by tracing the actual audio argument each one passes to its
+own computation (not its docstring or name): `clip_spans` and `disruptions_file` read the *original*
+recording, unresampled — both explicitly reject running without a live `recording` stream and read
+`source`/`recording_ids[-1]` directly, because clip detection and disruption detection want the
+recording's own sample rate and untouched samples, before resampling or pre-emphasis could reshape a
+transient. `yamnet_scores`, `ast_scores`, `hear_scores`, `level`, `asr_crisperwhisper`, `asr_qwen` all
+read `plain`. `energy_envelope`, `normalized_envelope`, `spectrogram_wideband`, `spectrogram_narrowband`,
+`gammatone`, `phonation_tracks` all read `sharp` (pre-emphasised) — including `normalized_envelope`,
+which is easy to assume runs on `plain` since normalization is a distinct, later step conceptually,
+but `dynamic_range_normalize` is actually called with `sharp` as its input directly. The solid edges
+below are the genuine cross-block `state` dependencies (a block that raises `LookupError` when the
+upstream key is absent), and the dashed edges into `spans` are its four optional sources plus the
+`contains_clip` annotation, each present only when its own upstream block succeeded:
 
 ```mermaid
 flowchart TD
-    streams["plain / pre-emphasised streams<br/>(resample + pre-emphasis, built once before any block)"]
+    original["original recording<br/>(as admitted, untouched)"]
+    plain["plain stream<br/>(downmix + resample to resample.target_hz)"]
+    preemphasised["pre-emphasised stream<br/>(preemphasis.coefficient over plain, when preemphasis.enabled)"]
 
-    streams --> clip_spans
-    streams --> yamnet_scores
-    streams --> ast_scores
-    streams --> hear_scores
-    streams --> level
-    streams --> disruptions_file
-    streams --> asr_crisperwhisper
-    streams --> asr_qwen
-    streams --> phonation_tracks
-    streams --> energy_envelope
-    streams --> normalized_envelope
-    streams --> spectrogram_wideband
-    streams --> spectrogram_narrowband
-    streams --> gammatone
+    original --> plain
+    plain --> preemphasised
+
+    original --> clip_spans
+    original --> disruptions_file
+
+    plain --> yamnet_scores
+    plain --> ast_scores
+    plain --> hear_scores
+    plain --> level
+    plain --> asr_crisperwhisper
+    plain --> asr_qwen
+
+    preemphasised --> phonation_tracks
+    preemphasised --> energy_envelope
+    preemphasised --> normalized_envelope
+    preemphasised --> spectrogram_wideband
+    preemphasised --> spectrogram_narrowband
+    preemphasised --> gammatone
 
     yamnet_scores --> yamnet_windows
     yamnet_scores --> silence
