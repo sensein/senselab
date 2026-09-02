@@ -100,7 +100,7 @@ path to `Triage.DISCARD` with `discard_ground: "unmeasurable"` (`vocabulary.py::
 **Role:** the one conditioning pass. Every model that answers a whole-file question runs exactly
 here (YAMNet, AST, HeAR, both ASR recognizers); no later node re-runs one. It takes no pass/flag/fail
 decision of its own — but, since a real cross-block dependency exists (spectral continuity reuses the
-narrowband spectrogram block's own output, below), it is not guaranteed to complete. A derivative
+wideband spectrogram block's own output, below), it is not guaranteed to complete. A derivative
 whose config value is unmeasured (a null default) or whose own upstream prerequisite is missing is
 recorded `absent`, exactly as before; anything else accumulates instead, and once every block has
 been attempted `preprocess` raises one exception summarizing all of them, rather than returning. That
@@ -113,13 +113,65 @@ only that a block's *soft* failure (the two kinds above) never reaches another b
 unexpected exception does not stop the rest of the loop from being attempted, but it does end the
 node's own run once the loop finishes:
 
+**PREPROCESS's own internal dependency graph** — re-derived directly from `preprocess.py`'s block
+list and every block's own `state` reads, not from the whole-workflow diagram above (which shows
+PREPROCESS as a single node). Most blocks read only the plain/pre-emphasised streams built once
+before the block loop runs and are otherwise independent of each other; the solid edges below are
+the genuine cross-block `state` dependencies (a block that raises `LookupError` when the upstream key
+is absent), and the dashed edges into `spans` are its four optional sources plus the `contains_clip`
+annotation, each present only when its own upstream block succeeded:
+
+```mermaid
+flowchart TD
+    streams["plain / pre-emphasised streams<br/>(resample + pre-emphasis, built once before any block)"]
+
+    streams --> clip_spans
+    streams --> yamnet_scores
+    streams --> ast_scores
+    streams --> hear_scores
+    streams --> level
+    streams --> disruptions_file
+    streams --> asr_crisperwhisper
+    streams --> asr_qwen
+    streams --> phonation_tracks
+    streams --> energy_envelope
+    streams --> normalized_envelope
+    streams --> spectrogram_wideband
+    streams --> spectrogram_narrowband
+    streams --> gammatone
+
+    yamnet_scores --> yamnet_windows
+    yamnet_scores --> silence
+    ast_scores --> ast_windows
+    hear_scores --> hear_windows
+
+    asr_crisperwhisper --> consensus_transcript
+    asr_qwen --> consensus_transcript
+
+    energy_envelope --> spans
+    normalized_envelope -.->|"optional: supplementary amplitude source"| spans
+    spectrogram_wideband -.->|"optional: continuity source, magnitude array reused directly"| spans
+    consensus_transcript -.->|"optional: ASR source, only if speech.word_gap_ms is set"| spans
+    clip_spans -.->|"optional: contains_clip flag only"| spans
+
+    spans --> squim
+    spans --> span_hear
+    spans --> span_yamnet
+```
+
+`spectrogram_narrowband` and `gammatone` currently have no downstream reader inside PREPROCESS itself
+(their own npz/measurement is still written, for later nodes or later analysis) — confirmed by
+`_spectrogram`'s own docstring ("harmless for the narrowband case, which nothing currently reads back
+out of `state`") and by `_gammatone` writing no `state` key at all. `level` and `disruptions_file`
+likewise write only their own measurement, nothing else in PREPROCESS reads them back.
+
 | derivative | config parameters |
 |---|---|
 | resample + downmix | `resample.target_hz` |
 | pre-emphasis | `preemphasis.enabled`, `preemphasis.coefficient` |
 | clip-event spans (`family="clip"`), ClipDaT over the *original* recording | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme`, `clipping.min_duration_ms`, `clipping.merge_gap_ms` — the last two null in the packaged config |
 | primary energy envelope/floor (`energy_envelope`), over the pre-emphasised signal — always available, the default span source | `envelope.lowpass_hz`/`.filter_order` (`ButterworthSmoothing`, zero-phase); floor is `floor.percentile`, a single global value for the whole recording rather than a rolling window |
-| dynamically-normalized signal + its own energy envelope/floor — optional, only where `normalization.*` is configured (every key ships null in the packaged config); its spans only ever add candidates the primary pass missed | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, this envelope's own smoothing — distinct from the primary envelope's Butterworth above), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling` |
+| dynamically-normalized signal + its own energy envelope/floor — on by default (all eight `normalization.*` keys now carry owner-directed, provisional values rather than null); its spans only ever add candidates the primary pass missed, never replace one, so it stays structurally optional (PREPROCESS's primary span pass does not depend on it) even though it now runs in the packaged config | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, this envelope's own smoothing — distinct from the primary envelope's Butterworth above), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling` |
 | foreground-acoustic-event span proposals, flagged `contains_clip` on overlap with a clip span | `spans.k_db`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` for the amplitude sources (primary from the pre-emphasised envelope, always available; supplementary from the normalized envelope where it exists) — the threshold crossing itself generates each candidate directly (a maximal run where the envelope has risen `k_db` above the floor), not a peak later expanded outward; `spans.continuity_margin`/`.continuity_floor_margin`/`.continuity_min_duration_ms` for a third source, spectral continuity over the wideband spectrogram block's own already-computed magnitude array (reused directly, not recomputed — see the spectrograms row below; wideband rather than narrowband for its shorter analysis window, giving continuity finer temporal resolution to place a transition against), smoothed with the same `envelope.lowpass_hz`/`.filter_order` `ButterworthSmoothing` the primary envelope uses (retired its own bespoke `spectral_continuity.smoothing.window_s` `MedianSmoothing`) — added for sustained tonal/harmonic production (glides, phonation) an amplitude gate alone can miss — measured directly to work for glides and phonation-like sustains and NOT to discriminate breath from background on the one breathing recording tested. Absent whenever `spectrogram_wideband` itself is, a real cross-block dependency (see PREPROCESS's own role note above). A fourth source, ASR, reads the consensus transcript's own word timings (see the consensus-transcript row below) and groups them into runs by `speech.word_gap_ms` — no threshold or floor at all, since a recognizer transcribing a stretch as speech is itself the evidence; absent whenever `speech.word_gap_ms` is unmeasured (null in the packaged config) or `consensus_transcript` itself is. Each source only adds a candidate no earlier source already covers; onset and offset walk by the identical rule for every threshold-based source (stop within the source's own margin of its own floor, sustained for `transition_window_ms`) — ASR's own extents need no such walk. One span mechanism for any vocal task, no `family` distinguishing which downstream branch a span is "for" — `contains_clip` is the only per-span flag PREPROCESS itself asserts, alongside `measure` naming which source (`amplitude`, `continuity` or `asr`) proposed it |
 | per-span quality: `squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
 | per-span quality: `span_hear` (on the *plain* signal, like `squim` — HeAR already carries its own internal preprocessing, so normalization on top would be redundant/distorting; AIRWAY's own per-span buffer/native-window split, raw scores only, no longer gated on normalization) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
