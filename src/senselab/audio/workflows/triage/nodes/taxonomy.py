@@ -8,6 +8,24 @@ extent rather than only counting against a floor. Every other kind's rule reads 
 lines, each line counts stored elements against its own configured floor, and a line whose
 derivative never reached the store is ``unavailable`` — which makes its kind uncertain, never
 absent.
+
+``airway``'s two lines read PREPROCESS's per-span ``span_hear``/``span_yamnet`` measurements
+directly (owner-directed this session), not the whole-file pooled windows the ``speech`` acoustic
+line still uses — a span already carrying a live consensus word is excluded from both, since ASR is
+strictly stronger content evidence than either classifier and an ASR-explained span is not airway
+evidence no matter what HeAR or YAMNet also say about it. The two lines are no longer folded by
+equal-weight agreement: ``health_acoustic`` (HeAR, the domain-specific detector) is authoritative,
+``acoustic`` (YAMNet alone — unlike ``speech``'s own ``acoustic`` line, which pools YAMNet+AST over
+whole-file windows; AST carries no per-span measurement for AIRWAY to read) only corroborates — the
+same authoritative-plus-corroboration shape ``speech`` already gave its lexical/acoustic pair,
+generalised in :func:`_fold_authoritative_line`. Corroboration count is never read as evidence strength: a span's
+``corroborated_by`` list says other *sources* also proposed something overlapping it, not that its
+*content* is more certain — a vanilla amplitude/continuity span corroborated ten times over still
+says nothing about content on its own, so it is not read here at all. A hint is never read here
+either (see ``taxonomy()``'s own docstring) — evidence must be found in what the spans actually
+show, since a single recording can genuinely carry more than one task's content (a counting task
+and a prolonged vowel in the same file), and a hint naming one must never suppress evidence for
+the other.
 """
 
 from __future__ import annotations
@@ -28,6 +46,7 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
+    find_measurements,
     live_entities,
     software_agent,
     write_measurement,
@@ -122,6 +141,116 @@ def _lexical_line(store: ProvStore) -> dict[str, Any]:
         return {"available": False, "n_words": 0, "element_ids": []}
     words = live_entities(store, "word")
     return {"available": True, "n_words": len(words), "element_ids": [w.id for w in words]}
+
+
+def _transcribed_span_ids(store: ProvStore) -> set[str]:
+    """Every live general span a live consensus word overlaps.
+
+    ASR is the strongest content evidence there is, stronger than any acoustic classifier — a span
+    a word already explains is lexical content, not an airway candidate, whatever HeAR or YAMNet
+    also fired on it. Mirrors AIRWAY's own ``_is_transcribed`` check exactly (same overlap rule),
+    kept here too so TAXONOMY's evidence and AIRWAY's branch never disagree about which spans are
+    already explained by the transcript.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        The ids of every live, family-less span overlapping at least one live ``word`` entity.
+    """
+    words = live_entities(store, "word")
+    if not words:
+        return set()
+    transcribed: set[str] = set()
+    for span in live_entities(store, "span"):
+        if span.attributes.get("family") is not None or span.extent is None:
+            continue
+        start, end = span.extent
+        if any(w.extent is not None and w.extent[0] < end and w.extent[1] > start for w in words):
+            transcribed.add(span.id)
+    return transcribed
+
+
+def _span_label_evidence(
+    store: ProvStore, classifier: str, family: set[str], exclude_span_ids: set[str]
+) -> dict[str, Any]:
+    """One per-span classifier line: how many non-transcribed spans carry a family label.
+
+    Reads PREPROCESS's ``span_hear``/``span_yamnet`` measurements directly — the same per-span
+    classification AIRWAY's own branch now reuses rather than re-deriving — instead of the
+    whole-file pooled windows the speech acoustic line still reads. A span already explained by a
+    live consensus word is never this line's evidence (see :func:`_transcribed_span_ids`): ASR
+    outranks both classifiers, so a transcribed span carries no airway content regardless of what
+    either model says about it.
+
+    Args:
+        store: The provenance store.
+        classifier: ``"hear"`` or ``"yamnet"`` — reads that classifier's ``span_<classifier>``
+            measurement.
+        family: The kind's label family for this classifier.
+        exclude_span_ids: Spans a live consensus word already explains.
+
+    Returns:
+        ``{available, n_spans, element_ids}``. ``available`` is False only when PREPROCESS's own
+        ``span_<classifier>`` pass never ran at all (checked by activity, not by measurement count,
+        the same distinction :func:`_phonation_spans` draws) — distinct from it running over zero
+        spans, or running and labelling none of them, both of which are "ran, found nothing".
+    """
+    if not [a for a in store.activities("PREPROCESS") if a.step == f"span_{classifier}"]:
+        return {"available": False, "n_spans": 0, "element_ids": []}
+    windows = find_measurements(store, f"span_{classifier}")
+    matched: dict[str, list[str]] = {}
+    for window in windows:
+        span_id = window.attributes.get("span_id")
+        if span_id is None or span_id in exclude_span_ids:
+            continue
+        labels = {str(label) for label in window.attributes.get("labels") or []}
+        if family & labels:
+            matched.setdefault(str(span_id), []).append(window.id)
+    element_ids = sorted(window_id for ids in matched.values() for window_id in ids)
+    return {"available": True, "n_spans": len(matched), "element_ids": element_ids}
+
+
+def _span_line(evidence: dict[str, Any], floor: Any) -> dict[str, Any]:  # noqa: ANN401
+    """One per-span-counting line, as it is written onto the kind element.
+
+    Args:
+        evidence: What :func:`_span_label_evidence` returned.
+        floor: The line's configured floor.
+
+    Returns:
+        The line's state, its evidence, its unit, its floor and the elements it read.
+    """
+    return {
+        "state": _line_state(evidence["available"], evidence["n_spans"], floor),
+        "evidence": evidence["n_spans"],
+        "unit": "spans",
+        "floor": floor,
+        "element_ids": evidence["element_ids"],
+    }
+
+
+def _fold_authoritative_line(lines: dict[str, dict[str, Any]], authoritative: str) -> str:
+    """The authoritative-plus-corroboration rule: the named line alone decides.
+
+    Generalises the rule ``speech`` already gave its lexical/acoustic pair (the consensus
+    transcript decides; an AudioSet label only corroborates) to any kind whose strongest evidence
+    source should decide alone, rather than needing independent agreement from a weaker,
+    merely-corroborating source. Two sources agreeing is not stronger evidence than one strong
+    source alone — HeAR finding a clear cough does not need YAMNet's independent agreement any more
+    than a consensus transcript needs an AudioSet speech label's.
+
+    Args:
+        lines: The kind's evidence lines, each carrying its own ``state``.
+        authoritative: Which line's state the kind's state is copied from.
+
+    Returns:
+        ``present`` or ``absent`` when the authoritative line is measured, otherwise ``uncertain``.
+    """
+    state = str(lines[authoritative]["state"])
+    if state == UNAVAILABLE:
+        return UNCERTAIN
+    return state
 
 
 def _propose_phonation_spans(store: ProvStore, config: TriageConfig, run_dir: Path, software: str) -> list[str]:
@@ -308,30 +437,14 @@ def _window_line(evidence: dict[str, Any], floor: Any) -> dict[str, Any]:  # noq
     }
 
 
-def _fold_two_lines(lines: dict[str, dict[str, Any]]) -> str:
-    """The two-line rule: present when both carry evidence, absent when neither does, else uncertain.
-
-    Args:
-        lines: The kind's evidence lines, each carrying its ``state``.
-
-    Returns:
-        ``present``, ``absent`` or ``uncertain``.
-    """
-    states = [line["state"] for line in lines.values()]
-    if all(state == PRESENT for state in states):
-        return PRESENT
-    if all(state == ABSENT for state in states):
-        return ABSENT
-    return UNCERTAIN
-
-
 def _fold_speech_lines(lines: dict[str, dict[str, Any]]) -> str:
     """Classify lexical speech from the authoritative consensus transcript.
 
     The consensus is the workflow's authoritative ASR product. A completed consensus with no
     words therefore rules out lexical speech, even if an AudioSet model emitted an isolated speech
     label; the acoustic line remains recorded as corroborating evidence. A missing or unfitted
-    lexical line is genuinely unknown and remains uncertain.
+    lexical line is genuinely unknown and remains uncertain. A thin, specifically-named wrapper over
+    :func:`_fold_authoritative_line` — kept separate for the docstring above, not a different rule.
 
     Args:
         lines: The speech acoustic and lexical evidence lines.
@@ -339,10 +452,7 @@ def _fold_speech_lines(lines: dict[str, dict[str, Any]]) -> str:
     Returns:
         ``present`` or ``absent`` when the lexical line is measured, otherwise ``uncertain``.
     """
-    lexical_state = str(lines["lexical"]["state"])
-    if lexical_state == UNAVAILABLE:
-        return UNCERTAIN
-    return lexical_state
+    return _fold_authoritative_line(lines, "lexical")
 
 
 def _voice_line(spans: list[Entity] | None, min_s: Any, uncertain_s: Any) -> tuple[dict[str, Any], str]:  # noqa: ANN401
@@ -412,6 +522,7 @@ def taxonomy(
     speech_acoustic = _acoustic_line(store, speech_family) if speech_family else _unavailable_windows()
     speech_lexical = _lexical_line(store)
     lexical_floor = floors[("speech", "lexical")]
+    transcribed = _transcribed_span_ids(store)
 
     lines: dict[str, dict[str, dict[str, Any]]] = {
         "speech": {
@@ -425,10 +536,14 @@ def taxonomy(
             },
         },
         "airway": {
-            "health_acoustic": _window_line(
-                _window_evidence(store, "hear", hear_airway), floors[("airway", "health_acoustic")]
+            "health_acoustic": _span_line(
+                _span_label_evidence(store, "hear", hear_airway, transcribed),
+                floors[("airway", "health_acoustic")],
             ),
-            "acoustic": _window_line(_acoustic_line(store, audioset_airway), floors[("airway", "acoustic")]),
+            "acoustic": _span_line(
+                _span_label_evidence(store, "yamnet", audioset_airway, transcribed),
+                floors[("airway", "acoustic")],
+            ),
         },
     }
     phonation_view = _propose_phonation_spans(store, config, run_dir, software)
@@ -441,7 +556,7 @@ def taxonomy(
 
     states = {
         "speech": _fold_speech_lines(lines["speech"]),
-        "airway": _fold_two_lines(lines["airway"]),
+        "airway": _fold_authoritative_line(lines["airway"], "health_acoustic"),
         "voice": voice_state,
     }
 

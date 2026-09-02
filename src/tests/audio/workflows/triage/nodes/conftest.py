@@ -368,6 +368,13 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
             proposed nothing -- while ``None`` writes neither.
         span_k_db: The ``k_db`` those spans were proposed at.
         span_merged: The ``merged_proposals`` count every seeded envelope span carries.
+        span_hear_labels: One label list per seeded ``spans`` entry, by index (same length as
+            ``spans`` when given) -- writes PREPROCESS's own per-span ``span_hear`` measurement for
+            each, the shape AIRWAY and TAXONOMY's airway kind now both read directly instead of a
+            whole-file pooled window. ``None`` writes none at all (the ``unavailable`` case); an
+            empty label list for a span writes the measurement with no label (the pass ran, found
+            nothing on that span).
+        span_yamnet_labels: The same, for PREPROCESS's per-span ``span_yamnet`` measurement.
         disruptions_file: Whether to write the file-level disruption measurement.
 
     Returns:
@@ -390,6 +397,8 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         spans: list[tuple[float, float, float]] | None = None,
         span_k_db: float = 18.0,
         span_merged: int = 1,
+        span_hear_labels: list[list[str]] | None = None,
+        span_yamnet_labels: list[list[str]] | None = None,
         disruptions_file: bool = False,
     ) -> None:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
@@ -561,17 +570,42 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
 
         if spans is not None:
             store.was_associated_with(store.activity(node="PREPROCESS", step="spans", parameters={}), agent)
+        span_ids: list[str] = []
         for start, end, peak in spans if spans is not None else []:
-            _write(
-                "span",
-                (start, end),
-                {
-                    "peak_over_floor_db": peak,
-                    "k_db": span_k_db,
-                    "signal": "preemphasised",
-                    "merged_proposals": span_merged,
-                },
+            span_ids.append(
+                _write(
+                    "span",
+                    (start, end),
+                    {
+                        "peak_over_floor_db": peak,
+                        "k_db": span_k_db,
+                        "signal": "preemphasised",
+                        "merged_proposals": span_merged,
+                    },
+                )
             )
+
+        for classifier, per_span_labels in (("hear", span_hear_labels), ("yamnet", span_yamnet_labels)):
+            if per_span_labels is None:
+                continue
+            store.was_associated_with(
+                store.activity(node="PREPROCESS", step=f"span_{classifier}", parameters={}), agent
+            )
+            for span_id, labels in zip(span_ids, per_span_labels, strict=True):
+                extent = store.get_entity(span_id).extent or (0.0, 0.0)
+                _write(
+                    "measurement",
+                    extent,
+                    {
+                        "name": f"span_{classifier}",
+                        "classifier": classifier,
+                        "signal": "plain",
+                        "span_id": span_id,
+                        "labels": list(labels),
+                        "scores": {label: 0.9 for label in labels},
+                        "raw_scores": {label: 0.9 for label in labels},
+                    },
+                )
 
         if disruptions_file:
             _write(

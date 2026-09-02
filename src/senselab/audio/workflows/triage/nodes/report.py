@@ -94,7 +94,7 @@ _LANES = (
 )
 
 _BRANCH_MEASURES = {
-    "AIRWAY": ("labelled_n", "contested_n", "near_gate_n", "merged_n", "k_db"),
+    "AIRWAY": ("labelled_n", "contested_n", "merged_n"),
     "SPEECH": ("speaker_count", "words_n", "speech_s", "nontarget_speech_s"),
     "VOICE": ("spans_n", "phonation_s", "longest_span_s"),
 }

@@ -351,26 +351,32 @@ class TestAsrSpans:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A plain noise bed has broad continuity spans elsewhere; ASR alone covers its own gap.
+        """A plain noise bed has one broad continuity span elsewhere; ASR alone covers its own gap.
 
-        A stationary noise bed's own spectral shape is steady enough that continuity claims most
-        of the recording (accepted, by-design behavior for background/silence, per the owner) --
-        verified directly against this exact seed and duration: continuity spans (0.10, 1.26),
-        (1.68, 2.01), (2.13, 2.45), (2.51, 2.90), leaving (1.26, 1.68) genuinely uncovered. Two
-        consensus words placed inside that one gap are what this test exercises.
+        A stationary noise bed's own spectral shape is steady enough that continuity claims nearly
+        the entire recording (accepted, by-design behavior for background/silence, per the owner) --
+        re-verified directly against this exact seed and duration after continuity's smoothing
+        switched from its own MedianSmoothing(0.2 s) to the shared ButterworthSmoothing(envelope.
+        lowpass_hz/.filter_order): continuity spans (0.0003, 2.089), (2.120, 2.993), leaving only
+        (2.089, 2.120) -- 31 ms -- genuinely uncovered. A proper Butterworth lowpass has a smoother
+        transient response than the retired median window, so it now bridges nearly every stochastic
+        dip in stationary noise; a sweep of seeds 0-7 found no wider gap anywhere. The two consensus
+        words below are placed, and sized, to fit entirely inside this real but narrow gap -- shorter
+        than a real spoken word, a direct consequence of how effectively the new smoothing closes
+        gaps in noise, not a choice made for its own sake.
         """
         samples = (np.random.default_rng(0).standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
         _seed_admit(store, tmp_path, wav_writer, samples=samples)
-        first = ScriptLine(text="one", start=1.35, end=1.45, score=0.9)
-        second = ScriptLine(text="two", start=1.5, end=1.55, score=0.9)
-        line = ScriptLine(text="one two", start=1.35, end=1.55, chunks=[first, second], score=0.9)
+        first = ScriptLine(text="one", start=2.093, end=2.100, score=0.9)
+        second = ScriptLine(text="two", start=2.104, end=2.111, score=0.9)
+        line = ScriptLine(text="one two", start=2.093, end=2.111, chunks=[first, second], score=0.9)
         _stub_models(monkeypatch, crisper=line, qwen=line)
         preprocess(store, _audio(tmp_path), asr_span_config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
         asr_spans = [e for e in spans if e.attributes["measure"] == "asr"]
         assert asr_spans
         assert asr_spans[0].attributes["signal"] == "consensus"
-        assert asr_spans[0].extent == pytest.approx((1.35, 1.55), abs=1e-3)
+        assert asr_spans[0].extent == pytest.approx((2.093, 2.111), abs=1e-3)
         assert asr_spans[0].attributes["merged_proposals"] == 2
         assert "peak_over_floor_db" not in asr_spans[0].attributes
         assert "peak_over_floor_continuity" not in asr_spans[0].attributes
@@ -553,7 +559,7 @@ class TestSpanQuality:
         assert not measured, "SQUIM writes assertions, not measurements"
         assert assertions[0].attributes["stoi"] == pytest.approx(0.91)
 
-    def test_hear_measures_the_normalized_signal_with_raw_and_thresholded_scores(
+    def test_hear_measures_the_plain_signal_with_raw_and_thresholded_scores(
         self,
         store: ProvStore,
         span_quality_config: TriageConfig,
@@ -567,7 +573,7 @@ class TestSpanQuality:
         preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
         windows = find_measurements(store, "span_hear")
         assert windows
-        assert windows[0].attributes["signal"] == "normalized"
+        assert windows[0].attributes["signal"] == "plain"
         assert windows[0].attributes["labels"] == ["Cough"]
         assert set(windows[0].attributes["raw_scores"]) == {"Cough", "Breathe"}
         assert windows[0].attributes["span_id"] in {
@@ -593,7 +599,7 @@ class TestSpanQuality:
         ]
         windows = find_measurements(store, "span_yamnet")
         assert windows
-        assert windows[0].attributes["signal"] == "normalized"
+        assert windows[0].attributes["signal"] == "plain"
         assert windows[0].attributes["labels"] == ["Speech"]
         span_start = min(e.extent[0] for e in spans if e.extent is not None)
         assert windows[0].extent is not None

@@ -59,8 +59,10 @@ derivation: |
   a different rule against a different floor and does not carry over; both numbers are provisional
   and expected to be refit. 30 ms (owner-directed, tightened from an initial 300 ms) is short enough
   that a walk does not keep bridging past a real gap between two nearby events on this narrower
-  duration -- shorter than spans.min_duration_ms (50 ms) and spans.min_separation_ms (150 ms), so it
-  cannot itself force a span past either.
+  duration -- shorter than spans.min_duration_ms (50 ms), so it cannot itself force a span past that
+  floor. spans.min_separation_ms must track it exactly (see that key's own entry below): a raw
+  threshold-crossing gap the pre-merge stage does not absorb has to be at least this long, or a real
+  gap could reach the walk already merged away, never getting a chance to stop it.
 
   Span propose K, one shared value, 6 dB -- owner-directed this session, provisional and expected to
   be refit. PREPROCESS proposes one set of foreground-acoustic-event spans, not an airway-specific
@@ -72,9 +74,11 @@ derivation: |
   floor definition. Neither carries over cleanly to a shared, population-general threshold, so 6 dB
   is a deliberately permissive placeholder -- low enough that the pre-emphasised primary pass (see
   the envelope/floor derivation) rarely misses a real event, at the cost of also passing more of the
-  background than a fitted value would. Population-specific refinement belongs to the branch that
-  needs it, not to PREPROCESS: see airway.k_db's own derivation below. SPEECH no longer reads these
-  spans at all -- it derives its own from word timings.
+  background than a fitted value would. AIRWAY no longer derives a population-specific gate of its
+  own either (retired this session, see the airway derivation below): it takes PREPROCESS's general
+  span set directly, at the one shared threshold, and reads PREPROCESS's own per-span HeAR/YAMNet
+  labels rather than re-deriving evidence at a second, separately-configured K. SPEECH no longer
+  reads these spans at all -- it derives its own from word timings.
 
   Span source: primary, supplementary, continuity and ASR -- owner-directed this session. PREPROCESS
   proposes spans up to four times, from four different measures of the same recording, and keeps
@@ -102,20 +106,26 @@ derivation: |
   `state` instead of recomputing it. Wideband rather than narrowband, owner-directed: the shorter
   analysis window gives continuity finer temporal resolution to place a transition against, at the
   cost of frequency resolution its own frame-to-frame comparison does not need as much as a
-  band-energy measurement would. The only key this measure still owns is
-  spectral_continuity.smoothing.window_s (0.2 s), the MedianSmoothing window applied to the
-  frame-to-frame trace via the same EnvelopeSmoothing protocol hilbert_envelope_dbfs already uses
-  (not a bespoke moving average) -- chosen the same way the gain curve's own smoothing is, because a
-  median cannot overshoot past a transient the way a moving average or resonant filter can.
-  spans.continuity_margin/.continuity_floor_margin (0.03 / 0.02) are unchanged and re-validated
-  against this session's reused-array pipeline -- a first working set from a direct comparison of
-  measures, not a corpus fit, provisional and expected to be refit, the same status as
+  band-energy measurement would. Owns no smoothing key of its own any more: the frame-to-frame trace
+  is smoothed with the identical ButterworthSmoothing(cutoff_hz=envelope.lowpass_hz,
+  order=envelope.filter_order) the primary amplitude envelope itself is built with, not a
+  separately-chosen scheme -- owner-directed, replacing an earlier MedianSmoothing(window_s=0.2)
+  picked independently for continuity alone. Continuity is compared against and deduplicated with
+  the amplitude envelope in the same `_spans` pass (see the priority-order paragraph above); sharing
+  the envelope's own filter means both measures agree on what counts as the same continuous event at
+  the same time-constant before that comparison happens, rather than each drawing its own boundary
+  on its own schedule. spans.continuity_margin/.continuity_floor_margin (0.03 / 0.02) are unchanged
+  numerically but not re-validated against the new smoothing -- they were fitted with
+  MedianSmoothing(0.2 s) in place, and the switch to ButterworthSmoothing changes the trace's own
+  transient response; carried over as the best available starting point, not a corpus fit either
+  way, provisional and expected to be refit, the same status as
   spans.floor_margin_db/.transition_window_ms. The measure itself (frame-to-frame cosine similarity
-  of log-magnitude spectra, smoothed) works well for sustained tonal/harmonic production: on a
-  High-to-Low glide it reads 0.95-0.99 through the voiced glide against 0.86-0.92 in the silence
-  flanking it, and on a held vowel it separates the same way, both re-confirmed on the actual reused
-  torchaudio magnitude array (previously validated via an independent scipy STFT at matching
-  parameters; the two agree to within one hop). Measured directly and found NOT to work for breath
+  of log-magnitude spectra, smoothed) worked well for sustained tonal/harmonic production under the
+  retired MedianSmoothing: on a High-to-Low glide it read 0.95-0.99 through the voiced glide against
+  0.86-0.92 in the silence flanking it, and on a held vowel it separated the same way, both
+  re-confirmed on the actual reused torchaudio magnitude array (previously validated via an
+  independent scipy STFT at matching parameters; the two agree to within one hop) -- not
+  re-measured under the new ButterworthSmoothing. Measured directly and found NOT to work for breath
   specifically: on a five-breath recording, the measure reads 0.85-0.90 with no separation tracking
   the breaths' own timing at all -- turbulent broadband noise does not carry the frame-to-frame
   spectral coherence a harmonic sound does, so this mechanism helps glides and phonation-like
@@ -184,10 +194,22 @@ derivation: |
   Envelope filter order 4 -- conventional Butterworth order, not fitted. Applied forward-and-backward,
   so the effective order is doubled and the phase response is exactly flat.
 
-  Span min_duration_ms 50 and min_separation_ms 150 -- conventional. The first discards a proposal
-  shorter than anything the instruments here localise; the second absorbs threshold-crossings this
-  close together into one proposal before either is walked, so one event's own brief dips below
-  k_db do not read as several. Neither is fitted, and both are weaker than the rules above them.
+  Span min_duration_ms 50, conventional and not fitted -- discards a proposal shorter than anything
+  the instruments here localise. min_separation_ms 30, changed this session from a conventional
+  150 ms and pinned equal to spans.transition_window_ms rather than left independent: it absorbs
+  threshold-crossings this close together into one proposal before either is walked, so one event's
+  own brief dips below k_db do not read as several, but at 150 ms it was absorbing more than that --
+  verified directly on a real recording (a DDK buttercup task) where a genuine ~149 ms gap, well
+  past floor_margin_db's own 30 ms sustain requirement and dipping below the floor itself, sat 0.6 ms
+  under the old 150 ms cutoff and got glued into one seven-second span the walk-stop rule would
+  otherwise have split. floor_margin_db(12) > k_db(6) makes this provable, not just observed: any
+  sample failing the k_db crossing test also clears the walk-stop's own, more permissive threshold,
+  so a raw gap of at least transition_window_ms is always long enough to stop a walk on its own once
+  it reaches it. Setting min_separation_ms to that same value closes the gap: nothing shorter than a
+  self-sufficient stop condition ever survives to the pre-merge stage un-merged, and nothing merged
+  away was ever going to stop a walk regardless. The two keys must move together -- if
+  transition_window_ms changes again, min_separation_ms should equal it, not sit independently at
+  whatever value was last fitted.
 
   HeAR window 2.0 s -- model-imposed, not chosen. The detector's graph rejects every other input
   length outright, which is why a shorter span is placed in a buffer rather than passed as-is.
@@ -420,14 +442,17 @@ derivation: |
   kind's branch. A vocabulary, null, owed the corpus it was drawn from. A tag matching no entry forces
   nothing and is recorded as unmapped; forcing only ever ADDS a branch.
 
-  airway v2 -- branch-airway.md. airway.k_db and airway.k_db_by_task override spans.k_db for this
-  branch and are null: an airway event is level-limited and one value fitted on coughs does not serve
-  quiet breaths, so the 18.0 dB spans.k_db value is retained as the shared default while the
-  branch's own override waits for a fit that represents both. airway.k_margin_db is how close to the
-  gate a labelled span must sit to flag, null. airway.contest_labels is the declared set of YAMNet
-  labels that may contest a HeAR label; it is null and, when supplied, is refused at load if it
-  intersects taxonomy.audioset_airway_labels -- a label cannot be both airway evidence and a contest of
-  airway evidence.
+  airway v2 -- branch-airway.md. airway.k_db, airway.k_db_by_task and airway.k_margin_db are retired
+  this session: they matched spans by a stored k_db attribute value, which PREPROCESS's spans no
+  longer carry uniformly (continuity and ASR spans carry none at all) and which no longer means
+  "the threshold this branch's own candidates were proposed at" now that PREPROCESS proposes one
+  general span set at one shared spans.k_db for every reader. AIRWAY now takes that general span set
+  directly and reads PREPROCESS's own per-span span_hear/span_yamnet measurements rather than
+  re-running HeAR itself at a second, separately-configured gate -- removing a redundant model pass
+  along with the stale threshold. airway.contest_labels is the declared set of YAMNet labels that may
+  contest a HeAR label; it is null and, when supplied, is refused at load if it intersects
+  taxonomy.audioset_airway_labels -- a label cannot be both airway evidence and a contest of airway
+  evidence.
 
   speech v2 -- branch-speech.md. speech.enrollment_model names the speaker-embedding model AND its
   revision that enrollment is estimated with; null, and while null an enrollment is refused rather than
@@ -560,15 +585,11 @@ spans:
   floor_margin_db: 12.0
   transition_window_ms: 30
   min_duration_ms: 50
-  min_separation_ms: 150
+  min_separation_ms: 30
   k_db: 6.0
   continuity_margin: 0.03
   continuity_floor_margin: 0.02
   continuity_min_duration_ms: 300
-
-spectral_continuity:
-  smoothing:
-    window_s: 0.2
 
 clipping:
   near_threshold: 0.995
@@ -650,9 +671,6 @@ airway:
   confirmation_map:
     Cough: [Cough]
     Breathe: [Breathing, Sigh, Gasp]
-  k_db: null
-  k_db_by_task: null
-  k_margin_db: null
   contest_labels: null
 
 phonation:

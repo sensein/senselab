@@ -113,21 +113,38 @@ class TestTheThreeKinds:
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["speech"] == "absent"
 
-    def test_airway_needs_hear_and_audioset(
+    def test_airway_is_present_from_hear_alone_without_yamnet_agreement(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """The health-acoustic and acoustic lines both carrying evidence makes airway present."""
-        seed_preprocess_store(store, hear_labels=[["Cough"]], yamnet_labels=[["Cough"]])
+        """HeAR is the domain-specific detector and decides airway alone; YAMNet need not agree.
+
+        Reads PREPROCESS's own per-span ``span_hear`` measurement, not a whole-file pooled window --
+        the same shape AIRWAY's branch now reuses instead of re-deriving.
+        """
+        seed_preprocess_store(store, spans=[(0.0, 1.0, 20.0)], span_hear_labels=[["Cough"]])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["airway"] == "present"
 
-    def test_ast_windows_serve_the_acoustic_line_beside_yamnet(
+    def test_yamnet_alone_does_not_establish_airway_presence(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """The acoustic line reads either grid; a label on AST alone is still acoustic evidence."""
-        seed_preprocess_store(store, hear_labels=[["Cough"]], ast_labels=[["Cough"]])
+        """YAMNet only corroborates; it cannot decide airway on its own without HeAR agreeing."""
+        seed_preprocess_store(store, spans=[(0.0, 1.0, 20.0)], span_hear_labels=[[]], span_yamnet_labels=[["Cough"]])
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
-        assert result.kinds["airway"] == "present"
+        assert result.kinds["airway"] == "absent"
+
+    def test_a_transcribed_span_is_not_airway_evidence_even_with_a_hear_label(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
+    ) -> None:
+        """ASR outranks HeAR: a span a consensus word overlaps is lexical content, not airway."""
+        seed_preprocess_store(
+            store,
+            spans=[(0.0, 1.0, 20.0)],
+            span_hear_labels=[["Cough"]],
+            words=[("cough", (0.2, 0.4))],
+        )
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.kinds["airway"] == "absent"
 
     def test_voice_is_classified_from_phonation_span_duration_alone(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
@@ -215,7 +232,12 @@ class TestTheOutcome:
     ) -> None:
         """Nothing is classified present."""
         seed_preprocess_store(
-            store, yamnet_labels=[["Music"]], hear_labels=[[]], ast_labels=[[]], words=[], phonation=[]
+            store,
+            yamnet_labels=[["Music"]],
+            words=[],
+            phonation=[],
+            spans=[(0.0, 1.0, 10.0)],
+            span_hear_labels=[[]],
         )
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FAIL
 
@@ -240,10 +262,11 @@ class TestTheOutcome:
         seed_preprocess_store(
             store,
             yamnet_labels=[["Speech"]],
-            hear_labels=[[]],
             ast_labels=[["Speech"]],
             words=["one", "two", "three"],
             phonation=[],
+            spans=[(0.0, 1.0, 10.0)],
+            span_hear_labels=[[]],
         )
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.PASS
 

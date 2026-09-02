@@ -497,7 +497,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         (spectrogram.wideband_window_ms against .narrowband_window_ms, same shared hop_ms), giving
         continuity finer temporal resolution to place an onset/offset transition against, at the cost
         of frequency resolution continuity's own frame-to-frame comparison does not need as much as a
-        band-energy measurement would. Kept only where it does not already overlap a primary or
+        band-energy measurement would. Smoothed with the same `ButterworthSmoothing(cutoff_hz=
+        envelope.lowpass_hz, order=envelope.filter_order)` the primary amplitude envelope itself
+        uses -- not a separately-chosen scheme -- so both measures agree on what counts as the same
+        continuous event at the same time-constant before either is compared against or deduplicated
+        with the other. Kept only where it does not already overlap a primary or
         supplementary span -- a sustained tonal/harmonic production (a glide, a held vowel) can hold
         a stable spectral shape well before its amplitude clears any gate. Absent whenever
         `spectrogram_wideband` itself is, the same "each block is independent" contract every
@@ -506,12 +510,20 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         :func:`~senselab.audio.tasks.spans.api.group_extents_into_runs` -- the same grouping SPEECH
         uses for its own word-timing spans, shared rather than duplicated. No threshold or floor: a
         recognizer transcribing a stretch as speech is itself the evidence, not a measure needing a
-        gate. Kept only where it does not already overlap a primary, supplementary or continuity
-        span -- lowest priority of the four, filling in only a stretch every envelope- and
-        spectrum-based source missed but a recognizer still transcribed. Absent whenever `consensus`
-        itself is (both recognizers failed). Each source only ever adds a candidate no earlier source
-        already covers, never a second opinion on one already found. A span carries no notion of
-        which downstream branch it is "for"; `contains_clip` is the only flag this pass asserts.
+        gate. Absent whenever `consensus` itself is (both recognizers failed).
+
+        Priority order is primary, then supplementary, then continuity, then ASR: each source only
+        ever adds a *new* span over ground no earlier source already covers -- one span entity per
+        covered stretch, never two near-duplicates for the same region. A later source's candidate
+        that overlaps an already-kept span is not silently dropped, though: it is recorded on that
+        span's own `corroborated_by` attribute (one entry per overlapping candidate, carrying that
+        candidate's own `measure`/`signal`/extent/its own contrast field), so agreement between
+        independent sources over the same stretch stays visible and queryable rather than being
+        implied only by which single source happened to propose first. `corroborated_by` is absent
+        (not an empty list) on a span nothing else corroborated. This is attribute metadata only --
+        no `was_derived_from` provenance edge is created for a corroborating candidate, since it
+        never becomes its own store entity. A span carries no notion of which downstream branch it
+        is "for"; `contains_clip` is the only flag this pass asserts.
         """
         if "envelope" not in state:
             raise LookupError("energy_envelope is absent")
@@ -525,7 +537,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "continuity_margin": float(config.require("spans.continuity_margin")),
             "continuity_floor_margin": float(config.require("spans.continuity_floor_margin")),
             "continuity_min_duration_ms": int(config.require("spans.continuity_min_duration_ms")),
-            "continuity_smoothing_window_s": float(config.require("spectral_continuity.smoothing.window_s")),
+            "envelope_lowpass_hz": float(config.require("envelope.lowpass_hz")),
+            "envelope_filter_order": int(config.require("envelope.filter_order")),
             "floor_percentile": float(config.require("floor.percentile")),
         }
         word_gap_ms = config.get("speech.word_gap_ms")
@@ -555,8 +568,44 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             )
             return [] if isinstance(proposed, NoContrast) else proposed
 
-        def _not_yet_covered(candidates: list[Span], covered: list[Span]) -> list[Span]:
-            return [c for c in candidates if not any(c.start < o.end and c.end > o.start for o in covered)]
+        def _measure_fields(span: Span, measure: str) -> dict[str, Any]:
+            if measure == "amplitude":
+                return {"peak_over_floor_db": span.peak_over_floor_db, "k_db": k_db}
+            if measure == "continuity":
+                return {
+                    "peak_over_floor_continuity": span.peak_over_floor_db,
+                    "continuity_margin": parameters["continuity_margin"],
+                }
+            return {"word_gap_ms": parameters["word_gap_ms"]}
+
+        corroboration: dict[int, list[dict[str, Any]]] = {}
+
+        def _novel(candidates: list[Span], covered: list[Span], *, measure: str, signal: str) -> list[Span]:
+            """Candidates over new ground, kept; candidates over already-covered ground, recorded.
+
+            A candidate that overlaps one or more spans in ``covered`` is not discarded: it is
+            attached to every span it overlaps as a ``corroborated_by`` entry (keyed by object
+            identity, since ``covered`` spans are freshly built each call and never value-equal by
+            accident), so a later source agreeing with an earlier one stays visible rather than
+            being silently thrown away. Only a candidate with zero overlap becomes a new span.
+            """
+            kept: list[Span] = []
+            for candidate in candidates:
+                overlapping = [o for o in covered if candidate.start < o.end and candidate.end > o.start]
+                if overlapping:
+                    record = {
+                        "measure": measure,
+                        "signal": signal,
+                        "start": candidate.start,
+                        "end": candidate.end,
+                        "merged_proposals": candidate.merged_proposals,
+                        **_measure_fields(candidate, measure),
+                    }
+                    for owner in overlapping:
+                        corroboration.setdefault(id(owner), []).append(record)
+                else:
+                    kept.append(candidate)
+            return kept
 
         primary = _propose(
             state["envelope"],
@@ -574,7 +623,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 margin=parameters["floor_margin_db"],
                 min_duration_ms=parameters["min_duration_ms"],
             )
-            supplement = _not_yet_covered(secondary, primary)
+            supplement = _novel(secondary, primary, measure="amplitude", signal="normalized")
 
         continuity: list[Span] = []
         if "spectrogram_wideband_magnitude" in state:
@@ -583,7 +632,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 hop_s=state["spectrogram_wideband_hop_s"],
                 sampling_rate=target_hz,
                 n_samples=len(state["envelope"]),
-                smoothing=MedianSmoothing(window_s=parameters["continuity_smoothing_window_s"]),
+                smoothing=ButterworthSmoothing(
+                    cutoff_hz=parameters["envelope_lowpass_hz"], order=parameters["envelope_filter_order"]
+                ),
             )
             continuity_floor = global_floor_dbfs(continuity_trace, percentile=parameters["floor_percentile"])
             continuity_candidates = _propose(
@@ -593,7 +644,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 margin=parameters["continuity_floor_margin"],
                 min_duration_ms=parameters["continuity_min_duration_ms"],
             )
-            continuity = _not_yet_covered(continuity_candidates, primary + supplement)
+            continuity = _novel(continuity_candidates, primary + supplement, measure="continuity", signal=sharp_signal)
 
         asr: list[Span] = []
         if "consensus" in state and word_gap_ms is not None:
@@ -602,7 +653,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 Span(start=start, end=end, peak_over_floor_db=float("nan"), merged_proposals=len(members))
                 for start, end, members in group_extents_into_runs(word_extents, parameters["word_gap_ms"])
             ]
-            asr = _not_yet_covered(asr_candidates, primary + supplement + continuity)
+            asr = _novel(asr_candidates, primary + supplement + continuity, measure="asr", signal="consensus")
 
         combined: list[tuple[Span, str, str, str]] = [
             (span, sharp_signal, state["envelope_id"], "amplitude") for span in primary
@@ -633,15 +684,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 "measure": measure,
                 "merged_proposals": span.merged_proposals,
                 "contains_clip": contains_clip,
+                **_measure_fields(span, measure),
             }
-            if measure == "amplitude":
-                attributes["peak_over_floor_db"] = span.peak_over_floor_db
-                attributes["k_db"] = k_db
-            elif measure == "continuity":
-                attributes["peak_over_floor_continuity"] = span.peak_over_floor_db
-                attributes["continuity_margin"] = parameters["continuity_margin"]
-            else:
-                attributes["word_gap_ms"] = parameters["word_gap_ms"]
+            corroborated_by = corroboration.get(id(span))
+            if corroborated_by:
+                attributes["corroborated_by"] = corroborated_by
             span_id = store.entity(prov_type="span", extent=(span.start, span.end), attributes=attributes)
             store.was_generated_by(span_id, activity)
             store.was_attributed_to(span_id, software)
@@ -917,16 +964,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         centred in a silent 2 s buffer; a long span is passed through and HeAR's native windows are
         placed back on the recording's own timeline) for the reason AIRWAY's own docstring already
         gives: a whole-file HeAR window is the wrong instrument for an isolated candidate. Runs over
-        the normalized signal, so a quiet event that pass boosted to be detectable is not handed back
-        to the classifier at its original level; absent whenever normalization itself is, since there
-        is then no normalized signal to re-evaluate any span against.
+        the plain signal, like ``_squim_for`` -- HeAR already carries its own internal preprocessing,
+        so handing it our own dynamic-range-normalized signal on top is redundant at best and
+        distorting at worst. No longer gated on normalization: this re-evaluation needs no normalized
+        signal to exist at all.
         """
         span_ids = state.get("span_ids") or []
         if not span_ids:
             raise LookupError("spans are absent")
-        if "normalized_audio" not in state:
-            raise LookupError("normalized_envelope is absent")
-        normalized_audio = state["normalized_audio"]
         agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
         activity = _step("span_hear", {}, tuple(span_ids), agent)
         default_threshold = float(config.require("windows.hear.default_threshold"))
@@ -938,7 +983,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             span = store.get_entity(span_id)
             extent = span.extent or (0.0, 0.0)
             try:
-                input_audio = span_hear_input(normalized_audio, extent)
+                input_audio = span_hear_input(plain, extent)
                 raw_windows = detect_health_acoustic_events([input_audio], hop_length=HEAR_WINDOW_SECONDS, top_k=None)[
                     0
                 ]
@@ -958,7 +1003,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     attributes={
                         "name": "span_hear",
                         "classifier": "hear",
-                        "signal": "normalized",
+                        "signal": "plain",
                         "span_id": span_id,
                         "labels": list(members),
                         "scores": members,
@@ -979,14 +1024,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
 
         Unlike HeAR, YAMNet has no fixed-window constraint (its own native ~0.96 s grid runs over
         whatever length it is given), so a span is classified directly rather than buffered. Runs
-        over the normalized signal; absent whenever normalization itself is.
+        over the plain signal, like ``_squim_for`` -- YAMNet already carries its own internal
+        preprocessing, so our own dynamic-range-normalized signal on top is redundant at best and
+        distorting at worst. No longer gated on normalization: this re-evaluation needs no
+        normalized signal to exist at all.
         """
         span_ids = state.get("span_ids") or []
         if not span_ids:
             raise LookupError("spans are absent")
-        if "normalized_audio" not in state:
-            raise LookupError("normalized_envelope is absent")
-        normalized_audio = state["normalized_audio"]
         agent = store.agent(
             agent_type="model",
             model_id=YAMNET_MODEL_URI,
@@ -1003,7 +1048,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             span = store.get_entity(span_id)
             start, end = span.extent or (0.0, 0.0)
             segment = Audio(
-                waveform=normalized_audio.waveform[:, int(start * target_hz) : int(end * target_hz)],
+                waveform=plain.waveform[:, int(start * target_hz) : int(end * target_hz)],
                 sampling_rate=target_hz,
             )
             try:
@@ -1024,7 +1069,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                     attributes={
                         "name": "span_yamnet",
                         "classifier": "yamnet",
-                        "signal": "normalized",
+                        "signal": "plain",
                         "span_id": span_id,
                         "labels": list(members),
                         "scores": members,

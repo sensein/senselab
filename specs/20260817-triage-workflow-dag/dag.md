@@ -118,11 +118,12 @@ node's own run once the loop finishes:
 | resample + downmix | `resample.target_hz` |
 | pre-emphasis | `preemphasis.enabled`, `preemphasis.coefficient` |
 | clip-event spans (`family="clip"`), ClipDaT over the *original* recording | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme`, `clipping.min_duration_ms`, `clipping.merge_gap_ms` — the last two null in the packaged config |
-| dynamically-normalized signal + its own energy envelope/floor | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, the envelope actually used for span detection), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling`; floor is `floor.percentile`, the 10th percentile of this envelope, a single global value for the whole recording rather than a rolling window |
-| foreground-acoustic-event span proposals, flagged `contains_clip` on overlap with a clip span | `spans.k_db`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` for the amplitude sources (primary from the pre-emphasised envelope, always available; supplementary from the normalized envelope where it exists) — the threshold crossing itself generates each candidate directly (a maximal run where the envelope has risen `k_db` above the floor), not a peak later expanded outward; `spectral_continuity.smoothing.window_s` and `spans.continuity_margin`/`.continuity_floor_margin`/`.continuity_min_duration_ms` for a third source, spectral continuity over the wideband spectrogram block's own already-computed magnitude array (reused directly, not recomputed — see the spectrograms row below; wideband rather than narrowband for its shorter analysis window, giving continuity finer temporal resolution to place a transition against), added for sustained tonal/harmonic production (glides, phonation) an amplitude gate alone can miss — measured directly to work for glides and phonation-like sustains and NOT to discriminate breath from background on the one breathing recording tested. Absent whenever `spectrogram_wideband` itself is, a real cross-block dependency (see PREPROCESS's own role note above). A fourth source, ASR, reads the consensus transcript's own word timings (see the consensus-transcript row below) and groups them into runs by `speech.word_gap_ms` — no threshold or floor at all, since a recognizer transcribing a stretch as speech is itself the evidence; absent whenever `speech.word_gap_ms` is unmeasured (null in the packaged config) or `consensus_transcript` itself is. Each source only adds a candidate no earlier source already covers; onset and offset walk by the identical rule for every threshold-based source (stop within the source's own margin of its own floor, sustained for `transition_window_ms`) — ASR's own extents need no such walk. One span mechanism for any vocal task, no `family` distinguishing which downstream branch a span is "for" — `contains_clip` is the only per-span flag PREPROCESS itself asserts, alongside `measure` naming which source (`amplitude`, `continuity` or `asr`) proposed it |
+| primary energy envelope/floor (`energy_envelope`), over the pre-emphasised signal — always available, the default span source | `envelope.lowpass_hz`/`.filter_order` (`ButterworthSmoothing`, zero-phase); floor is `floor.percentile`, a single global value for the whole recording rather than a rolling window |
+| dynamically-normalized signal + its own energy envelope/floor — optional, only where `normalization.*` is configured (every key ships null in the packaged config); its spans only ever add candidates the primary pass missed | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, this envelope's own smoothing — distinct from the primary envelope's Butterworth above), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling` |
+| foreground-acoustic-event span proposals, flagged `contains_clip` on overlap with a clip span | `spans.k_db`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` for the amplitude sources (primary from the pre-emphasised envelope, always available; supplementary from the normalized envelope where it exists) — the threshold crossing itself generates each candidate directly (a maximal run where the envelope has risen `k_db` above the floor), not a peak later expanded outward; `spans.continuity_margin`/`.continuity_floor_margin`/`.continuity_min_duration_ms` for a third source, spectral continuity over the wideband spectrogram block's own already-computed magnitude array (reused directly, not recomputed — see the spectrograms row below; wideband rather than narrowband for its shorter analysis window, giving continuity finer temporal resolution to place a transition against), smoothed with the same `envelope.lowpass_hz`/`.filter_order` `ButterworthSmoothing` the primary envelope uses (retired its own bespoke `spectral_continuity.smoothing.window_s` `MedianSmoothing`) — added for sustained tonal/harmonic production (glides, phonation) an amplitude gate alone can miss — measured directly to work for glides and phonation-like sustains and NOT to discriminate breath from background on the one breathing recording tested. Absent whenever `spectrogram_wideband` itself is, a real cross-block dependency (see PREPROCESS's own role note above). A fourth source, ASR, reads the consensus transcript's own word timings (see the consensus-transcript row below) and groups them into runs by `speech.word_gap_ms` — no threshold or floor at all, since a recognizer transcribing a stretch as speech is itself the evidence; absent whenever `speech.word_gap_ms` is unmeasured (null in the packaged config) or `consensus_transcript` itself is. Each source only adds a candidate no earlier source already covers; onset and offset walk by the identical rule for every threshold-based source (stop within the source's own margin of its own floor, sustained for `transition_window_ms`) — ASR's own extents need no such walk. One span mechanism for any vocal task, no `family` distinguishing which downstream branch a span is "for" — `contains_clip` is the only per-span flag PREPROCESS itself asserts, alongside `measure` naming which source (`amplitude`, `continuity` or `asr`) proposed it |
 | per-span quality: `squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
-| per-span quality: `span_hear` (on the *normalized* signal, AIRWAY's own per-span buffer/native-window split, raw scores only) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
-| per-span quality: `span_yamnet` (on the *normalized* signal, no buffering — YAMNet has no fixed-window constraint) | `windows.yamnet.default_threshold`, `windows.yamnet.label_thresholds`, `yamnet.top_k` |
+| per-span quality: `span_hear` (on the *plain* signal, like `squim` — HeAR already carries its own internal preprocessing, so normalization on top would be redundant/distorting; AIRWAY's own per-span buffer/native-window split, raw scores only, no longer gated on normalization) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
+| per-span quality: `span_yamnet` (on the *plain* signal, same reasoning as `span_hear`; no buffering — YAMNet has no fixed-window constraint; no longer gated on normalization) | `windows.yamnet.default_threshold`, `windows.yamnet.label_thresholds`, `yamnet.top_k` |
 | YAMNet / AST / HeAR window scores | `yamnet.top_k`; `windows.ast.win_length_s`/`hop_s`/`top_k`; `windows.hear.hop_s` — verified against `default.yaml`: `windows.ast.win_length_s`/`hop_s` are AST's owner-directed 10.24 s window, `windows.hear.hop_s` is HeAR's fixed 2 s window, both already model-native |
 | per-window label membership | `windows.{yamnet,ast,hear}.default_threshold`, `windows.{yamnet,ast,hear}.label_thresholds` — **all six null in the packaged config**, so every window's label set is empty until an override supplies at least one |
 | silence | `yamnet.silence_threshold` |
@@ -168,12 +169,20 @@ own floor:
 | kind | lines | decision parameters |
 |---|---|---|
 | speech | `lexical` (consensus word count) — **authoritative**; `acoustic` (YAMNet+AST windows carrying a speech-family label) — corroboration only | `taxonomy.presence_floor.speech.lexical`, `taxonomy.presence_floor.speech.acoustic`, `taxonomy.speech_labels` — **all three null** |
-| airway | `health_acoustic` (HeAR windows), `acoustic` (YAMNet+AST windows) — both must agree to resolve | `taxonomy.presence_floor.airway.health_acoustic`, `taxonomy.presence_floor.airway.acoustic`, `taxonomy.audioset_airway_labels`, `taxonomy.hear_airway_labels` |
+| airway | `health_acoustic` (PREPROCESS's own per-span `span_hear` labels, one shared span pool with speech and voice) — **authoritative**; `acoustic` (PREPROCESS's per-span `span_yamnet` labels) — corroboration only | `taxonomy.presence_floor.airway.health_acoustic`, `taxonomy.presence_floor.airway.acoustic`, `taxonomy.audioset_airway_labels`, `taxonomy.hear_airway_labels` |
 | voice | `phonation` (longest phonation span duration alone, over the spans TAXONOMY itself just localised) | `taxonomy.voice_min_duration_s`, `taxonomy.voice_uncertain_duration_s` — **both null**; span detection itself reads `phonation_spans.*` (seven of eight keys null) |
 
 A line whose derivative never reached the store, or whose floor is null, reads `unavailable` — which
 makes the *line* uncertain, never absent; a kind is `absent` only when every one of its lines
-genuinely counted evidence below floor.
+genuinely counted evidence below floor. `airway`'s two lines were an equal-weight AND-fold
+(`_fold_two_lines`, both had to independently resolve) until this session; owner-directed, HeAR — the
+domain-specific detector — now decides alone via the same authoritative-plus-corroboration shape
+`speech` already gave its lexical/acoustic pair (`_fold_authoritative_line`, shared by both kinds).
+Corroboration count is never read as evidence strength: a span's `corroborated_by` list says other
+*sources* also proposed something overlapping it, not that its *content* is more certain, so it plays
+no part in either fold. A span already overlapping a live consensus `word` is excluded from both
+`airway` lines entirely (`_transcribed_span_ids`) — ASR outranks both classifiers, so a
+transcribed span is lexical content, not airway evidence, whatever HeAR or YAMNet also say about it.
 
 **TAXONOMY's own outcome — the first place "any uncertain kind flags the file" happens:**
 
@@ -217,28 +226,26 @@ routing failure.
 all. If TAXONOMY classifies `speech` as `absent` and no hint claims it, SPEECH never runs and none of
 the three goals can be evaluated for that file.
 
-### 5a. AIRWAY — re-evaluate candidate spans with HeAR, confirm or contest
+### 5a. AIRWAY — read PREPROCESS's own per-span HeAR labels, confirm or contest
 
-**Role:** four steps — re-evaluate PREPROCESS's envelope-peak spans with HeAR in isolation, ask
-YAMNet to confirm or contest the same extent, check for lexical contamination (a consensus word
-inside the labelled interval), conclude.
+**Role:** four steps — read PREPROCESS's per-span `span_hear` labels over the general span set
+directly, ask YAMNet to confirm or contest the same extent, check for lexical contamination (a
+consensus word inside the labelled interval), conclude.
 
 **Decision parameters:** `airway.labels_of_interest`, `airway.confirmation_map` (which YAMNet labels
-confirm which HeAR label), `airway.k_db`/`airway.k_db_by_task` (falls back to the shared
-`spans.k_db` = 18.0 dB), `airway.k_margin_db` (null — the near-gate flag is inert while null),
-`airway.contest_labels` (null; refused at load if it ever overlaps `taxonomy.audioset_airway_labels`),
-`windows.hear.default_threshold`/`label_thresholds`.
+confirm which HeAR label), `airway.contest_labels` (null; refused at load if it ever overlaps
+`taxonomy.audioset_airway_labels`).
 
-AIRWAY still selects its input by matching the stored `k_db` attribute value on PREPROCESS's spans
-(`airway.py:189`), not by any span-level "family" — a mechanism this session's PREPROCESS change did
-not touch. Two consequences, deliberately left as the next stage's decisions rather than folded into
-this one: PREPROCESS's one span mechanism now runs entirely inside the `normalization.*`-dependent
-block, so under the packaged default config (every `normalization.*` key null) PREPROCESS emits no
-spans at all and AIRWAY has nothing to match against; and value-matching itself assumes exactly one
-k_db was used file-wide, which stops being true the moment `airway.k_db`/`airway.k_db_by_task`
-diverges from the shared `spans.k_db` PREPROCESS proposed at. AIRWAY re-deriving its own gate from
-`peak_over_floor_db` on the generic spans, rather than re-matching a threshold PREPROCESS happened to
-propose at, is the fix; not made here.
+Owner-directed this session: AIRWAY no longer derives a gate of its own. It used to select its input
+by matching the stored `k_db` attribute value on PREPROCESS's spans (`airway.k_db`/
+`airway.k_db_by_task`, falling back to the shared `spans.k_db`) and then re-run HeAR itself over each
+selected span — a second, redundant model pass over exactly what PREPROCESS's own `span_hear` already
+computed. Both are retired: AIRWAY now takes every span PREPROCESS proposed (`family is None`, no
+`k_db` filter — continuity and ASR spans, which never carried a `k_db` at all, are eligible candidates
+for the first time) and reads PREPROCESS's already-stored `span_hear` measurement for each one by
+`span_id`, the same measurement TAXONOMY's `airway` kind now reads too. `_is_transcribed` (a live
+consensus word overlapping the span) is unchanged and still the reason a span is skipped before HeAR
+evidence is even consulted — ASR outranks HeAR regardless of what label it carries.
 
 **Serves the stated goals: none.** AIRWAY is entirely about cough/breath event detection and
 label-conflict resolution — a content-classification concern, orthogonal to quality, other speakers,
