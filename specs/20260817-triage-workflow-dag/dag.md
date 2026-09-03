@@ -78,6 +78,12 @@ The exact triggering conditions are in `run.py::run_triage`/`_drive_branches` an
 `nodes/routing.py::routing` — see the earlier edge-by-edge account below the linear walk if you need
 the precise code citation for each arrow.
 
+**These are control-flow edges only.** Two nodes also read a PREPROCESS *derivative* back out of the
+store as data, which this graph does not draw: TAXONOMY and VOICE both load `phonation_tracks`
+(sections 3 and 5c). VOICE's is new — it used to recompute F0 itself — and it raises `LookupError`
+rather than falling back, so it is a genuine data dependency and not only the control-flow arrow
+shown above.
+
 ## The linear walk
 
 ### 1. ADMIT — is this file measurable at all
@@ -139,7 +145,7 @@ plain_id)`) and names them per track in its own attributes (`f0_signal`, `forman
 reader never has to guess which stream a given track came from. The solid edges
 below are the genuine cross-block `state` dependencies (a block that raises `LookupError` when the
 upstream key is absent), and the dashed edges into `spans` are its four optional sources plus the
-`contains_clip` annotation, each present only when its own upstream block succeeded. Three further
+`contains_clip` annotation, each present only when its own upstream block succeeded. Two further
 dashed edges are drawn to terminal nodes rather than to a block: one records that `gammatone` is
 computed and persisted but read by nothing, and one records the reporting figure's consumption of the
 wideband array from outside the package — the wideband spectrogram now has no `src/` reader at all.
@@ -264,8 +270,9 @@ invalidating no cache. Clip detection
 gain was fixed during recording — normalization only redistributes level, so a genuinely clipped
 sample stays clipped through it rather than being smoothed away.
 
-**Clip detection was inert until `clipping.min_duration_ms`/`.merge_gap_ms` were given values, and
-the `contains_clip` flag with it.** Both were `null` in `data/config/default.yaml`; `config.require`
+**Clip detection was inert while `clipping.min_duration_ms`/`.merge_gap_ms` were both null, and the
+`contains_clip` flag with it** — the block now runs, one key having been given a value and the other
+retired outright (below). Both were `null` in `data/config/default.yaml`; `config.require`
 raises on a null by design ("null because nobody has measured it"); the block loop caught that
 `ValueError` as a cascading absence and recorded `clip_spans` `absent`. Because
 `state["clip_span_extents"]` is only assigned at the *end* of `_clip_spans`, it was never set,
