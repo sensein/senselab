@@ -100,7 +100,7 @@ path to `Triage.DISCARD` with `discard_ground: "unmeasurable"` (`vocabulary.py::
 **Role:** the one conditioning pass. Every model that answers a whole-file question runs exactly
 here (YAMNet, AST, HeAR, both ASR recognizers); no later node re-runs one. It takes no pass/flag/fail
 decision of its own — but, since a real cross-block dependency exists (spectral continuity reuses the
-wideband spectrogram block's own output, below), it is not guaranteed to complete. A derivative
+narrowband spectrogram block's own output, below), it is not guaranteed to complete. A derivative
 whose config value is unmeasured (a null default) or whose own upstream prerequisite is missing is
 recorded `absent`, exactly as before; anything else accumulates instead, and once every block has
 been attempted `preprocess` raises one exception summarizing all of them, rather than returning. That
@@ -127,12 +127,23 @@ recording, unresampled — both explicitly reject running without a live `record
 recording's own sample rate and untouched samples, before resampling or pre-emphasis could reshape a
 transient. `yamnet_scores`, `ast_scores`, `hear_scores`, `level`, `asr_crisperwhisper`, `asr_qwen` all
 read `plain`. `energy_envelope`, `normalized_envelope`, `spectrogram_wideband`, `spectrogram_narrowband`,
-`gammatone`, `phonation_tracks` all read `sharp` (pre-emphasised) — including `normalized_envelope`,
+`gammatone` all read `sharp` (pre-emphasised) — including `normalized_envelope`,
 which is easy to assume runs on `plain` since normalization is a distinct, later step conceptually,
-but `dynamic_range_normalize` is actually called with `sharp` as its input directly. The solid edges
+but `dynamic_range_normalize` is actually called with `sharp` as its input directly.
+`phonation_tracks` is the one block reading **two** streams: its F0 track comes from `sharp`, its
+formant track from `plain`. That split is deliberate — `formant_track` passes `formant_preemphasis_hz`
+into Praat's `to_formant_burg(pre_emphasis_from=...)`, which assumes an un-pre-emphasised input, so
+feeding it `sharp` compounded the two and put roughly +12 dB/octave into the Burg LPC, biasing formant
+frequencies and especially bandwidths. The block records both streams (`derived_from=(sharp_id,
+plain_id)`) and names them per track in its own attributes (`f0_signal`, `formant_signal`), so a
+reader never has to guess which stream a given track came from. The solid edges
 below are the genuine cross-block `state` dependencies (a block that raises `LookupError` when the
 upstream key is absent), and the dashed edges into `spans` are its four optional sources plus the
-`contains_clip` annotation, each present only when its own upstream block succeeded:
+`contains_clip` annotation, each present only when its own upstream block succeeded. Three further
+dashed edges are drawn to terminal nodes rather than to a block: one records that `gammatone` is
+computed and persisted but read by nothing, and one records the reporting figure's consumption of the
+wideband array from outside the package — the wideband spectrogram now has no `src/` reader at all.
+See the wideband/narrowband note directly below the diagram:
 
 ```mermaid
 flowchart TD
@@ -153,11 +164,12 @@ flowchart TD
     plain --> asr_crisperwhisper
     plain --> asr_qwen
 
-    preemphasised --> phonation_tracks
+    preemphasised -->|"F0 track"| phonation_tracks
+    plain -->|"formant track"| phonation_tracks
     preemphasised --> energy_envelope
     preemphasised --> normalized_envelope
-    preemphasised --> spectrogram_wideband
-    preemphasised --> spectrogram_narrowband
+    preemphasised --> spectrogram_wideband["spectrogram_wideband<br/>5 ms window, 5 ms hop"]
+    preemphasised --> spectrogram_narrowband["spectrogram_narrowband<br/>20 ms window, 5 ms hop"]
     preemphasised --> gammatone
 
     yamnet_scores --> yamnet_windows
@@ -170,29 +182,61 @@ flowchart TD
 
     energy_envelope --> spans
     normalized_envelope -.->|"optional: supplementary amplitude source"| spans
-    spectrogram_wideband -.->|"optional: continuity source, magnitude array reused directly"| spans
+    spectrogram_narrowband -.->|"optional: continuity source — NARROWBAND magnitude array reused directly"| spans
     consensus_transcript -.->|"optional: ASR source, only if speech.word_gap_ms is set"| spans
-    clip_spans -.->|"optional: contains_clip flag only"| spans
+    clip_spans -.->|"contains_clip flag only"| spans
+
+    gammatone -.->|"no reader anywhere in src/ — tested as a continuity source and rejected"| nothing_gam["(no consumer)"]
+    spectrogram_wideband -.->|"no reader in src/ — displayed by the reporting figure only"| figure["reporting figure<br/>(external tool, not a src/ module)"]
 
     spans --> squim
     spans --> span_hear
     spans --> span_yamnet
 ```
 
-`spectrogram_narrowband` and `gammatone` currently have no downstream reader inside PREPROCESS itself
-(their own npz/measurement is still written, for later nodes or later analysis) — confirmed by
-`_spectrogram`'s own docstring ("harmless for the narrowband case, which nothing currently reads back
-out of `state`") and by `_gammatone` writing no `state` key at all. `level` and `disruptions_file`
-likewise write only their own measurement, nothing else in PREPROCESS reads them back.
+**Which spectrogram feeds what — the wideband/narrowband split, stated explicitly because it is easy
+to get wrong.** PREPROCESS computes two STFTs of the *same* pre-emphasised stream, differing only in
+window length (`spectrogram.wideband_window_ms` 5.0 against `.narrowband_window_ms` 20.0) over a
+shared `spectrogram.hop_ms` of 5.0. At the 16 kHz resample target that is an 80-sample versus a
+320-sample window, so the wideband array carries ~41 frequency bins (~200 Hz each) and the narrowband
+array ~161 (~50 Hz each) — the same recording at two resolutions, not two different signals.
+
+**The two swapped roles on 2026-09-03**, so anything written before that date has them the other way
+round.
+
+- **`spectrogram_narrowband` is the one with a `src/` consumer.** `_spans`'s continuity source reads
+  its magnitude array out of `state` directly (`state["spectrogram_narrowband_magnitude"]`, with
+  `..._hop_s` alongside), rather than running an independent STFT at merely-matching parameters.
+  Narrowband rather than wideband is measured, not stylistic: a 5 ms window is about one glottal
+  period, so the wideband array resolves the pulse train *in time* and its frame-to-frame comparison
+  swings on glottal phase during steady phonation, while the 20 ms window resolves the harmonics into
+  stable bands *in frequency* instead. See
+  [`preprocess-params.md`](benchmarks/preprocess-params.md#which-representation-feeds-continuity-and-why-the-gate-is-a-rank-cut).
+- **`spectrogram_wideband` now has no reader anywhere in `src/`.** Only the reporting figure
+  generator displays it — an external scratch tool, not a `src/` module, which is why it appears in
+  the diagram as a consumer without being part of the package. Its npz and measurement are still
+  written.
+- **`gammatone` has no reader anywhere in `src/`**, and `_gammatone` writes no `state` key at all. It
+  was the third candidate in the continuity comparison and it **lost**: its wide upper ERB channels
+  do not resolve individual harmonics, so those channel envelopes pulse at F0 and its dips scatter
+  through sustained phonation instead of concentrating at boundaries — the same failure as the 5 ms
+  STFT, not a separate one. Retained rather than deleted, but no longer an open question.
+
+Note the two arrays are stored differently: the npz holds the transform's **power** output, while
+`state[f"{name}_magnitude"]` holds `sqrt(power)`. Anything reading the persisted file rather than
+`state` has to square-root it to match what continuity is actually fed.
+
+`level` and `disruptions_file` likewise write only their own measurement, nothing else in PREPROCESS
+reads them back.
 
 | derivative | config parameters |
 |---|---|
 | resample + downmix | `resample.target_hz` |
 | pre-emphasis | `preemphasis.enabled`, `preemphasis.coefficient` |
-| clip-event spans (`family="clip"`), ClipDaT over the *original* recording | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme`, `clipping.min_duration_ms`, `clipping.merge_gap_ms` — the last two null in the packaged config |
+| clip-event spans (`family="clip"`), ClipDaT over the *original* recording — an event opens where the extreme repeats across 2 consecutive samples, or on a single sample at digital full scale; see the note below this table | `clipping.near_threshold`, `clipping.leniency_samples`, `clipping.minimum_extreme` (the paper's own constants plus a near-zero guard), `clipping.merge_gap_ms` 30 — coalesces per-period plateaus into one span, conventional, not corpus-fitted. `clipping.min_duration_ms` retired: it compensated for a detector defect since fixed |
 | primary energy envelope/floor (`energy_envelope`), over the pre-emphasised signal — always available, the default span source | `envelope.lowpass_hz`/`.filter_order` (`ButterworthSmoothing`, zero-phase); floor is `floor.percentile`, a single global value for the whole recording rather than a rolling window |
 | dynamically-normalized signal + its own energy envelope/floor — on by default (all eight `normalization.*` keys now carry owner-directed, provisional values rather than null); its spans only ever add candidates the primary pass missed, never replace one, so it stays structurally optional (PREPROCESS's primary span pass does not depend on it) even though it now runs in the packaged config | `normalization.macro_smoothing.window_s`, `.micro_smoothing.window_s` (`MedianSmoothing`, chosen over Butterworth because a zero-phase Butterworth rings on a word's onset), `.envelope_smoothing.window_s`/`.percentile` (`PercentileSmoothing`, this envelope's own smoothing — distinct from the primary envelope's Butterworth above), `.target_dr_db`, `.compression_ratio`, `.macro_target_dbfs`, `.gain_smoothing.window_s` (`MedianSmoothing` — a resonant Butterworth could not settle to a short event's own gain within the event), `.floor_dbfs`, `.ceiling` |
-| foreground-acoustic-event span proposals, flagged `contains_clip` on overlap with a clip span | `spans.k_db`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` for the amplitude sources (primary from the pre-emphasised envelope, always available; supplementary from the normalized envelope where it exists) — the threshold crossing itself generates each candidate directly (a maximal run where the envelope has risen `k_db` above the floor), not a peak later expanded outward; `spans.continuity_margin`/`.continuity_floor_margin`/`.continuity_min_duration_ms` for a third source, spectral continuity over the wideband spectrogram block's own already-computed magnitude array (reused directly, not recomputed — see the spectrograms row below; wideband rather than narrowband for its shorter analysis window, giving continuity finer temporal resolution to place a transition against), smoothed with the same `envelope.lowpass_hz`/`.filter_order` `ButterworthSmoothing` the primary envelope uses (retired its own bespoke `spectral_continuity.smoothing.window_s` `MedianSmoothing`) — added for sustained tonal/harmonic production (glides, phonation) an amplitude gate alone can miss — measured directly to work for glides and phonation-like sustains and NOT to discriminate breath from background on the one breathing recording tested. Absent whenever `spectrogram_wideband` itself is, a real cross-block dependency (see PREPROCESS's own role note above). A fourth source, ASR, reads the consensus transcript's own word timings (see the consensus-transcript row below) and groups them into runs by `speech.word_gap_ms` — no threshold or floor at all, since a recognizer transcribing a stretch as speech is itself the evidence; absent whenever `speech.word_gap_ms` is unmeasured (null in the packaged config) or `consensus_transcript` itself is. Each source only adds a candidate no earlier source already covers; onset and offset walk by the identical rule for every threshold-based source (stop within the source's own margin of its own floor, sustained for `transition_window_ms`) — ASR's own extents need no such walk. One span mechanism for any vocal task, no `family` distinguishing which downstream branch a span is "for" — `contains_clip` is the only per-span flag PREPROCESS itself asserts, alongside `measure` naming which source (`amplitude`, `continuity` or `asr`) proposed it |
+| foreground-acoustic-event span proposals, flagged `contains_clip` on overlap with a clip span | `spans.k_db`, `spans.floor_margin_db`, `spans.transition_window_ms`, `spans.min_duration_ms`, `spans.min_separation_ms` for the amplitude sources (primary from the pre-emphasised envelope, always available; supplementary from the normalized envelope where it exists) — the threshold crossing itself generates each candidate directly (a maximal run where the envelope has risen `k_db` above the floor), not a peak later expanded outward; `spans.continuity_cut_percentile`/`.continuity_min_duration_ms` for a third source, spectral continuity over the **narrowband** spectrogram block's own already-computed magnitude array (reused directly, not recomputed — see the spectrograms row below; narrowband rather than wideband because a 5 ms window resolves the glottal pulse train in time and makes the trace swing on pulse phase during steady phonation, measured), smoothed with the same `envelope.lowpass_hz`/`.filter_order` `ButterworthSmoothing` the primary envelope uses (retired its own bespoke `spectral_continuity.smoothing.window_s` `MedianSmoothing`) — added for sustained tonal/harmonic production (glides, phonation) an amplitude gate alone can miss — measured directly to work for glides and phonation-like sustains and NOT to discriminate breath from background on the one breathing recording tested. This source is read for its **dips**, not its plateaus: continuity is a novelty function, and a high value only says nothing changed, which is equally true of steady silence and steady phonation. The lowest `continuity_cut_percentile` of trace samples **by rank** are change points and the runs between them are the spans, so this source alone has no floor, no margin and no walk — the retired `spans.continuity_margin`/`.continuity_floor_margin` were absolute values on a scale that changes with the input array, which is what blocked changing the representation at all. Absent whenever `spectrogram_narrowband` itself is, a real cross-block dependency (see PREPROCESS's own role note above). A fourth source, ASR, reads the consensus transcript's own word timings (see the consensus-transcript row below) and groups them into runs by `speech.word_gap_ms` — no threshold or floor at all, since a recognizer transcribing a stretch as speech is itself the evidence; absent whenever `speech.word_gap_ms` is unmeasured (null in the packaged config) or `consensus_transcript` itself is. Each source only adds a candidate no earlier source already covers; onset and offset walk by the identical rule for every threshold-based source (stop within the source's own margin of its own floor, sustained for `transition_window_ms`) — ASR's own extents need no such walk, and neither do continuity's, whose edges are the change points themselves. One span mechanism for any vocal task, no `family` distinguishing which downstream branch a span is "for" — `contains_clip` is the only per-span flag PREPROCESS itself asserts, alongside `measure` naming which source (`amplitude`, `continuity` or `asr`) proposed it. `contains_clip` can now be `True`: its input `clip_spans` runs, and since the detector's repeat criterion replaced the caller-side duration floor it covers per-period clipping of voiced speech as well as sustained saturation — see the note below this table |
 | per-span quality: `squim` (STOI/PESQ/SI-SDR, on the *plain* signal) | none tunable; a span SQUIM refuses is recorded `unmeasured`, never padded |
 | per-span quality: `span_hear` (on the *plain* signal, like `squim` — HeAR already carries its own internal preprocessing, so normalization on top would be redundant/distorting; AIRWAY's own per-span buffer/native-window split, raw scores only, no longer gated on normalization) | `windows.hear.default_threshold`, `windows.hear.label_thresholds` |
 | per-span quality: `span_yamnet` (on the *plain* signal, same reasoning as `span_hear`; no buffering — YAMNet has no fixed-window constraint; no longer gated on normalization) | `windows.yamnet.default_threshold`, `windows.yamnet.label_thresholds`, `yamnet.top_k` |
@@ -203,17 +247,83 @@ likewise write only their own measurement, nothing else in PREPROCESS reads them
 | **file-level quality: `disruptions_file`** (clipping, dropouts, discontinuities), on the *original* recording | `disruptions.clip_headroom`, `disruptions.min_clip_run`, `disruptions.min_dropout_ms`, `disruptions.discontinuity_local_factor`, `disruptions.discontinuity_window_ms` |
 | both ASR recognizers' own transcripts | none decision-relevant |
 | consensus transcript (`fuse_consensus_words`) + `word`/`event` entities | `words.onomatopoeic_tokens` (null). A recognizer that brackets a non-lexical event (e.g. CrisperWhisper's `[COUGH]`) and one that transcribes it as a plain word (Qwen's `cough`) already vote as one word — `_normalize_word` strips brackets as punctuation — and the fused text now deterministically keeps the bracketed form regardless of which recognizer the fold visits first (`speech_to_text_ensemble/api.py`'s `_is_bracketed_token`); only a wholly-unbracketed reading still depends on `words.onomatopoeic_tokens` to become an `event` |
-| F0/formant tracks (`phonation_tracks`) — measurement only, no boundary decided; sustained-phonation and glide span *detection* moved to TAXONOMY this session (owner-directed), which reads this measurement back — see TAXONOMY's own table below | `voice.f0_range_hz`, `phonation_spans.hop_s`/`.max_formants`/`.formant_max_hz`/`.formant_window_s`/`.formant_preemphasis_hz` |
-| spectrograms (wideband/narrowband), gammatone | fixed window/hop keys, none decision-relevant; wideband's own magnitude array is also read directly by the spans block above, so it now runs before `spans` in block order |
+| F0/formant tracks (`phonation_tracks`) — measurement only, no boundary decided; sustained-phonation and glide span *detection* moved to TAXONOMY this session (owner-directed), which reads this measurement back — see TAXONOMY's own table below. **Two source streams**: F0 from the pre-emphasised `sharp`, formants from `plain`, because Praat's own `pre_emphasis_from` assumes an un-pre-emphasised input (see the stream prose above). VOICE now reads this measurement back too rather than recomputing F0 — see 5c | `voice.f0_range_hz` (**null in the packaged config**, so this block never runs there either), `phonation_spans.hop_s`/`.max_formants`/`.formant_max_hz`/`.formant_window_s`/`.formant_preemphasis_hz` (all five populated; the seven *detection* keys in `phonation_spans.*` that are null are read by TAXONOMY's proposal step, not by this measurement) |
+| spectrograms (wideband/narrowband), gammatone | fixed window/hop keys, none decision-relevant. **Narrowband** is the one with a `src/` consumer — its magnitude array is read directly out of `state` by the spans block's continuity source (so it runs before `spans` in block order), measured to beat wideband because its 20 ms window resolves harmonics in frequency rather than the glottal pulse train in time. **Wideband** now has no `src/` reader; it is only what the reporting figure displays. **Gammatone** has no reader either — it was the third candidate in that comparison and lost, by the same pulse-modulation mechanism as wideband. Both retained rather than deleted. See the wideband/narrowband note above the table |
 
 Dynamic-range normalization is `envelope.dynamic_range_normalize` — a slow (`macro_smoothing`) and a
-fast (`micro_smoothing`) envelope of the same signal via `hilbert_envelope_dbfs`, their difference
+fast (`micro_smoothing`) envelope of the same signal, their difference
 compressed toward `target_dr_db`, macro-leveled toward `macro_target_dbfs`, smoothed once more
 (`gain_smoothing.window_s`, `MedianSmoothing`) and applied to the original waveform with a `ceiling`
-safety clamp. Clip detection
+safety clamp. The two envelopes now share **one** analytic transform: `envelope.api` splits the
+rectified analytic magnitude (`analytic_magnitude` / `analytic_envelope`) from the smoothing-and-dB
+step (`envelope_dbfs`), so a caller wanting N smoothing strategies over one signal pays one Hilbert
+transform rather than N. `hilbert_envelope_dbfs` remains as the single-smoothing convenience wrapper
+over that pair, and the split is output-identical — a refactor for cost, changing no value and
+invalidating no cache. Clip detection
 (`clipping.*`, ClipDaT) runs on the *original* recording before this, on the stated assumption that
 gain was fixed during recording — normalization only redistributes level, so a genuinely clipped
 sample stays clipped through it rather than being smoothed away.
+
+**Clip detection was inert until `clipping.min_duration_ms`/`.merge_gap_ms` were given values, and
+the `contains_clip` flag with it.** Both were `null` in `data/config/default.yaml`; `config.require`
+raises on a null by design ("null because nobody has measured it"); the block loop caught that
+`ValueError` as a cascading absence and recorded `clip_spans` `absent`. Because
+`state["clip_span_extents"]` is only assigned at the *end* of `_clip_spans`, it was never set,
+`_spans` reads `state.get("clip_span_extents") or []`, and every span's `contains_clip` was `False`
+on every file — not because no clipping was found, but because the detector never ran.
+
+**`min_duration_ms` has since been retired entirely, because it was compensating for a defect in the
+detector rather than doing work of its own.** `detect_clip_events` documented that it returns nothing
+when the file's extreme never repeats, but never implemented the check: it opened an event at *any*
+sample equal to the global max or min, so a lone sample at a merely relative peak always produced a
+short event, and the caller needed a duration floor to suppress the resulting noise. The repeat
+requirement now lives in the detector where the contract always claimed it was, and the caller-side
+floor is gone. What opens an event is decided per extreme:
+
+- **Below digital full scale** — the extreme must repeat across at least `MINIMUM_EXTREME_RUN` (2)
+  *consecutive* samples. Measured at 16 kHz across 100 Hz–2 kHz, amplitudes 0.15–0.9, float32 and
+  int16, non-harmonic frequencies and noise: every clean signal's longest consecutive run at its own
+  extreme is **1**, while every resolvable clipped signal's is **≥ 3**. The repeat must be
+  consecutive — a periodic signal revisits the identical extreme once per period (a clean 200 Hz
+  float32 tone hits its exact max 600 times in 3 s), so a whole-file count separates nothing.
+- **At digital full scale** — a single sample opens an event, no repeat required, because reaching
+  the representable ceiling is itself evidence of saturation and a single-sample clip is undetectable
+  any other way. "At full scale" is `|extreme| >= 1.0 - 1/32768`, one int16 step, *not* an equality
+  test against 1.0: int16 audio decodes to a positive full scale of `32767/32768 ≈ 0.99997` against a
+  negative full scale of exactly `-1.0`, so an equality test would catch negative saturation and
+  silently miss positive.
+
+**This fixes the failure the duration floor could not.** Per-period clipping of voiced speech was
+previously invisible — its plateaus are ~1.5 ms against a 50 ms floor — and is now detected: a
+120 Hz sine hard-limited at 0.6 yields 720 raw events and a 200 Hz one 1200, where both previously
+yielded zero.
+
+**`merge_gap_ms` 30 survives, and its job is coalescing rather than suppression.** Those 720 and 1200
+per-period events are one plateau per glottal cycle; merging within 30 ms collapses each to a
+**single span covering the clipped region** (measured: 1 span, 2.999 s, for both), which is the
+correct description of one clipped vowel — without it a single clipped vowel would render as hundreds
+of adjacent spans. 30 ms comfortably exceeds one glottal period across the plausible F0 range while
+staying well below the separation of distinct clipping episodes: a 2 Hz sine hard-limited at 0.6,
+whose plateaus sit ~148 ms apart, still yields 12 separate spans totalling 1.778 s rather than being
+bridged into one. The value is conventional, not corpus-fitted, and is still owed a corpus.
+
+Clean signals stay at zero throughout: a half-scale 200 Hz sine, a 0.3-scale 440 Hz sine, noise
+scaled below full scale, a 0.9-amplitude 120 Hz sine, and a lone sub-full-scale 0.77 sample all
+yield no spans. A synthetic float signal whose samples *exceed* ±1.0 does open events, which is
+correct — real audio cannot exceed the ceiling, and a float signal that does is out of range. None of
+the three campaign recordings carries clipping (peaks 0.54, 0.26, 0.15), so they exercise only the
+negative case.
+
+Worth knowing while reading the above: **three different clipping detectors exist in this tree**,
+answering different questions — `detect_clip_events` (ClipDaT, used by `clip_spans`) locates runs
+pinned near the *file's own* extreme, which catches gain-reduced clipping but also fires on every
+peak of a clean periodic tone; `detect_disruptions` counts samples at *absolute* full scale
+(`disruptions.clip_headroom`), which is immune to clean tones but blind to gain-reduced clipping; and
+`quality_control/metrics.py` carries a third. They are not interchangeable, and consolidating them is
+not a plumbing exercise — the duration filter that makes ClipDaT safe on clean tones is exactly what
+blinds it to per-period speech clipping, so the three cover genuinely different ground. Recorded here
+only as context for that edge; the defect register at `specs/20260815-215106-analyze-audio-audit/register.md` is where a
+claim like this belongs as a tracked item, and this document is not that register.
 
 Still open, not implemented: the idea that PREPROCESS "could simply generate continuity signals"
 instead of relying on consensus-transcript text for onomatopoeic detection — a larger architectural
@@ -222,7 +332,7 @@ question than the bracket-preservation fix above, and not pursued here.
 **Serves the stated goals:** this is where **all** the raw evidence for goal 1 (`level`,
 `disruptions_file`, per-span `squim`) is measured — but PREPROCESS itself makes no judgment on any of
 it. It is where goal 3's substrate (the consensus transcript SPEECH will scan) is produced. Goal 2 is
-served directly here too: `spans`, `clip_spans` and their `span_hear`/`span_yamnet` evidence are the
+served directly here too: `spans` and their `span_hear`/`span_yamnet` evidence are the
 general foreground-acoustic-event mechanism referenced above — one span mechanism for any vocal task,
 still unjudged (PREPROCESS decides nothing), never airway-only.
 
@@ -389,10 +499,29 @@ missing mechanism.
 
 ### 5c. VOICE — phonation measurement, not one of the three goals
 
-**Role:** measures HNR, F0, and glottal period marks over the phonation spans in the store (TAXONOMY
-proposes them now, not PREPROCESS — see TAXONOMY's own section above; VOICE reads by `family` alone
-and does not care which node wrote them); classifies nothing new (it measures the `voice` kind
-TAXONOMY already classified). Runs no model AIRWAY/SPEECH share.
+**Role:** measures HNR and glottal period marks over the phonation spans in the store, and reads F0
+back rather than measuring it (TAXONOMY proposes the spans now, not PREPROCESS — see TAXONOMY's own
+section above; VOICE reads by `family` alone and does not care which node wrote them); classifies
+nothing new (it measures the `voice` kind TAXONOMY already classified). Runs no model AIRWAY/SPEECH
+share.
+
+**VOICE no longer recomputes F0 — a genuine cross-node data dependency.** It previously called
+`f0_track(plain, ...)` on the plain stream, duplicating a track PREPROCESS had already computed on
+the pre-emphasised stream; two F0 estimates for one recording, from two different signals, both
+persisted, and reached through two separate config keys free to drift apart. VOICE now loads
+PREPROCESS's `derivatives/phonation_tracks.npz` (`times_s`, `f0_hz`, `strength`), guarded by
+`find_measurement` and raising `LookupError` if it is absent — the same pattern TAXONOMY already used
+for the same derivative. HNR is still measured here on `plain` (`hnr_track`), which is VOICE's own
+measurement and not a duplicate of anything.
+
+Two consequences worth stating. First, PREPROCESS → VOICE is now a **data** edge, not only the
+control-flow edge the call graph at the top shows: if `phonation_tracks` is absent, VOICE raises
+where it used to proceed on its own recomputation. Second, that new failure mode is narrower than it
+looks, because both endpoints are gated by the *same* key — `voice.f0_range_hz` is required by
+`_phonation_tracks` and by VOICE's own `_required`, and it is **null in the packaged config**, so
+neither runs there. VOICE can only reach the load in a configuration where `_phonation_tracks` could
+also run, and the `LookupError` therefore fires only if that block failed for some *other* reason.
+No config key was retired: `phonation.hop_s` is still legitimately read by `hnr_track`.
 
 **Decision parameters:** `voice.f0_range_hz`/`voice.f0_range_by_population` (population-selectable —
 `hint.metadata["population"]` picks an override key), `voice.f0_range_ratio_max` (refused at load,
@@ -445,7 +574,7 @@ decision node. Out of scope for this document — see `report.md`.
 
 | Goal | Implementing step(s) | Decision parameters | Status |
 |---|---|---|---|
-| 1. Bad quality (low SNR, clipping in task-relevant regions) | SPEECH step 8 "quality" | `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max`, `quality.disruption_dropout_s_max` | **Not implemented.** Measured per span, never gates. Confirmed by grep: none of the four keys is read anywhere in the node code. |
+| 1. Bad quality (low SNR, clipping in task-relevant regions) | SPEECH step 8 "quality" | `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max`, `quality.disruption_dropout_s_max` | **Not implemented.** Measured per span, never gates. Confirmed by grep: none of the four keys is read anywhere in the node code. The "clipping in task-relevant regions" half now has a region-localised signal at last — `clip_spans` runs, so per-span `contains_clip` can be `True`, and since the detector's repeat criterion replaced the caller-side duration floor it covers per-period clipping of voiced speech as well as sustained saturation — but nothing gates on it either way. `disruptions_file`'s whole-file absolute-full-scale count remains the other, non-localised signal. |
 | 2. Other speaker(s) within target-specific spans | SPEECH steps 4, 6, 9 | Precise form: `speech.nontarget.level_db`/`tilt_db_per_octave`/`d_to_r_db` (all null → `nontarget_speech_s` is `None`). Live fallback: unconditional `speaker_count != 1` | **Partially implemented.** Only the coarse, target-agnostic signal is currently load-bearing. |
 | 3. PII not included in the task | SPEECH step 7 + REDACT | `pii.required_detectors` (populated); `redaction.padding_ms`/`redaction.fill` (both required, both null in the packaged default) | **Implemented for "any PII."** No task-awareness (`hint` is never read by `_decide_pii`), so "not included in the task itself" is not distinguished. REDACT itself is config-blocked under the packaged default until an override supplies padding/fill. |
 

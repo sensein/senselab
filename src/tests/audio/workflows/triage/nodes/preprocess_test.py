@@ -313,8 +313,8 @@ def _quiet_sustained_tone() -> np.ndarray:
 
     1e-3 amplitude against a 1e-4 noise bed: measured directly (through the same pre-emphasis
     PREPROCESS applies), this stays below spans.k_db=6 on the pre-emphasised envelope -- no
-    amplitude span at all -- while its steady harmonic content clears spans.continuity_margin=0.03
-    easily. The scenario the continuity pass exists for.
+    amplitude span at all -- while its steady harmonic content survives the continuity rank cut as
+    a run between change points. The scenario the continuity pass exists for.
     """
     rng = np.random.default_rng(0)
     samples = (rng.standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
@@ -343,8 +343,9 @@ class TestSpectralContinuitySpans:
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
         assert spans
         assert all(e.attributes["measure"] == "continuity" for e in spans)
-        assert "peak_over_floor_continuity" in spans[0].attributes
+        assert "continuity_cut_percentile" in spans[0].attributes
         assert "k_db" not in spans[0].attributes
+        assert "peak_over_floor_continuity" not in spans[0].attributes, "a rank cut references no floor"
 
 
 class TestAsrSpans:
@@ -386,7 +387,7 @@ class TestAsrSpans:
         assert asr_spans[0].extent == pytest.approx((2.093, 2.111), abs=1e-3)
         assert asr_spans[0].attributes["merged_proposals"] == 2
         assert "peak_over_floor_db" not in asr_spans[0].attributes
-        assert "peak_over_floor_continuity" not in asr_spans[0].attributes
+        assert "continuity_cut_percentile" not in asr_spans[0].attributes
 
     def test_asr_fully_covered_by_an_existing_span_contributes_nothing(
         self,
@@ -671,7 +672,6 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "ast_windows",
             "hear_windows",
             "phonation_tracks",
-            "clip_spans",
             "span_hear",
             "span_yamnet",
         }

@@ -8,6 +8,21 @@ import numpy as np
 
 from senselab.audio.data_structures import Audio
 
+MINIMUM_EXTREME_RUN = 2
+"""Consecutive samples at a *sub-full-scale* extreme required before a clip event opens.
+
+Two, because a clipped waveform holds its extreme while an unclipped one only touches it. Measured
+in ``benchmarks/preprocess-params.md``.
+"""
+
+FULL_SCALE_TOLERANCE = 1.0 / 32768.0
+"""How far below ``1.0`` an extreme may sit and still count as digital full scale.
+
+One int16 quantisation step, because int16 audio decodes to a positive full scale of
+``32767 / 32768`` against a negative full scale of exactly ``-1.0``; an equality test against
+``1.0`` would therefore catch negative saturation and miss positive.
+"""
+
 
 @dataclass(frozen=True)
 class ClipEvent:
@@ -26,6 +41,40 @@ class ClipEvent:
     polarity: str
 
 
+def _required_run(extreme: float) -> int:
+    """How many consecutive samples at ``extreme`` must occur before a clip event may open.
+
+    Args:
+        extreme: The file's global maximum or minimum.
+
+    Returns:
+        ``1`` when ``extreme`` sits at digital full scale, ``MINIMUM_EXTREME_RUN`` otherwise.
+    """
+    return 1 if abs(extreme) >= 1.0 - FULL_SCALE_TOLERANCE else MINIMUM_EXTREME_RUN
+
+
+def _held_extreme(x: np.ndarray, value: float, minimum_run: int) -> np.ndarray:
+    """Mark samples belonging to a run of ``minimum_run`` or more consecutive ``value``s.
+
+    Args:
+        x: The signal.
+        value: The exact value to look for runs of.
+        minimum_run: Shortest run that qualifies.
+
+    Returns:
+        A boolean mask over ``x``, true across every qualifying run and false elsewhere.
+    """
+    equal = x == value
+    if minimum_run <= 1:
+        return equal
+    held = np.zeros_like(equal)
+    edges = np.diff(np.concatenate(([False], equal, [False])).astype(np.int8))
+    for start, stop in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
+        if stop - start >= minimum_run:
+            held[start:stop] = True
+    return held
+
+
 def detect_clip_events(
     audio: Audio,
     *,
@@ -42,12 +91,25 @@ def detect_clip_events(
     near-clip amplitudes — and a gain change applied after clipping still leaves a run pinned at
     whatever became this file's own extreme.
 
-    Algorithm: find the file's global max and min once; then walk the signal, and whenever a sample
-    equals the max or the min, open a clip event and keep extending it while subsequent samples stay
-    within ``near_threshold`` of that same extreme, tolerating up to ``leniency_samples`` consecutive
-    samples that dip below it before closing the event at the sample where the tolerance was
-    exceeded — the paper's own mechanism for surviving the amplitude wobble Fig. 10 documents,
+    Algorithm: find the file's global max and min once; then walk the signal, and wherever an
+    extreme is *held* — see below — open a clip event and keep extending it while subsequent samples
+    stay within ``near_threshold`` of that same extreme, tolerating up to ``leniency_samples``
+    consecutive samples that dip below it before closing the event at the sample where the tolerance
+    was exceeded — the paper's own mechanism for surviving the amplitude wobble Fig. 10 documents,
     rather than fragmenting one clipped burst into many.
+
+    What counts as held depends on where the extreme sits, and is decided per extreme, so a file's
+    max and min may be treated differently:
+
+    * **Below digital full scale** — the extreme must repeat across at least
+      ``MINIMUM_EXTREME_RUN`` consecutive samples. A lone sample at a merely relative maximum is
+      where the waveform happened to peak and is no evidence of clipping, whereas a saturated
+      waveform holds its extreme. The repeat must be *consecutive*: a periodic signal revisits the
+      identical extreme value once per period, so a count across the whole file does not separate
+      the two cases.
+    * **At digital full scale** (within ``FULL_SCALE_TOLERANCE`` of ``1.0``) — a single sample opens
+      an event, no repeat required. Reaching the representable ceiling is itself evidence of
+      saturation, and a single-sample clip is only detectable at all in this case.
 
     Args:
         audio: The recording. A multi-channel input is averaged, matching
@@ -63,9 +125,10 @@ def detect_clip_events(
             ``near_threshold`` of an extreme near 0.0 excludes almost nothing.
 
     Returns:
-        The tagged clip events, in sample order. Empty when the file's peak amplitude never repeats
-        — nothing is "clipped" if the extreme sample value occurs only once — or when the file's
-        peak never clears ``minimum_extreme``.
+        The tagged clip events, in sample order. Empty when neither extreme is ever held — for a
+        sub-full-scale extreme that means it never repeats across ``MINIMUM_EXTREME_RUN``
+        consecutive samples, since a waveform that only touches its extreme in passing is not
+        clipped — or when the file's peak never clears ``minimum_extreme``.
     """
     x = np.asarray(audio.waveform, dtype=np.float64)
     if x.ndim > 1:
@@ -84,11 +147,14 @@ def detect_clip_events(
     if not watch_max and not watch_min:
         return []
 
+    held_max = _held_extreme(x, global_max, _required_run(global_max)) if watch_max else np.zeros(n, dtype=bool)
+    held_min = _held_extreme(x, global_min, _required_run(global_min)) if watch_min else np.zeros(n, dtype=bool)
+
     events: list[ClipEvent] = []
     i = 0
     while i < n:
-        at_max = watch_max and x[i] == global_max
-        at_min = watch_min and x[i] == global_min
+        at_max = bool(held_max[i])
+        at_min = bool(held_min[i])
         if not at_max and not at_min:
             i += 1
             continue

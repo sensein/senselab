@@ -19,7 +19,7 @@ events. These justify the *shape* of a rule. Every constant needs more files.
 | [`diarization.md`](diarization.md) | pyannote's count against its spans |
 | [`separation.md`](separation.md) | MossFormer separation and enhancement survival across SNR |
 | [`open.md`](open.md) | **what is still unmeasured**, and what died with the round-based workflow |
-| [`preprocess-params.md`](preprocess-params.md) | pre-emphasis, the two spectrograms, the envelope filter, the sample rate |
+| [`preprocess-params.md`](preprocess-params.md) | pre-emphasis, the two spectrograms, spectral continuity — which spectrogram feeds it, why the gate is a rank cut, and why IQR was the wrong metric — clip spans and what 50/30 does not catch, the envelope filter, the sample rate |
 | [`taxonomy.md`](taxonomy.md) | the screening set: what each detector contributes, and what it is barred from |
 | [`voice.md`](voice.md) | the phonation gate's interval, why the product is periods, the two boundary facts |
 | [`disruptions.md`](disruptions.md) | what stream disruptions are measured on, and the local discontinuity reference |

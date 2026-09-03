@@ -207,7 +207,6 @@ def spans_config(tmp_path: Path) -> TriageConfig:
     override = tmp_path / "spans.yaml"
     override.write_text(
         "clipping:\n"
-        "  min_duration_ms: 0.5\n"
         "  merge_gap_ms: 50.0\n"
         "normalization:\n"
         "  macro_smoothing:\n"
@@ -237,7 +236,6 @@ def asr_span_config(tmp_path: Path) -> TriageConfig:
     override = tmp_path / "asr_spans.yaml"
     override.write_text(
         "clipping:\n"
-        "  min_duration_ms: 0.5\n"
         "  merge_gap_ms: 50.0\n"
         "normalization:\n"
         "  macro_smoothing:\n"
@@ -270,7 +268,6 @@ def span_quality_config(tmp_path: Path) -> TriageConfig:
     override = tmp_path / "span_quality.yaml"
     override.write_text(
         "clipping:\n"
-        "  min_duration_ms: 0.5\n"
         "  merge_gap_ms: 50.0\n"
         "normalization:\n"
         "  macro_smoothing:\n"

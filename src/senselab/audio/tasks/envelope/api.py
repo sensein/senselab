@@ -92,11 +92,85 @@ class PercentileSmoothing:
         )
 
 
+def analytic_magnitude(signal: np.ndarray, *, axis: int = -1) -> np.ndarray:
+    """``|hilbert(signal)|`` -- the unsmoothed rectified analytic magnitude.
+
+    Args:
+        signal: Real-valued samples. Any shape; the transform runs along ``axis``.
+        axis: Axis the signal runs along.
+
+    Returns:
+        The analytic-signal magnitude, same shape as ``signal``.
+    """
+    return np.abs(hilbert(np.asarray(signal, dtype=np.float64), axis=axis))
+
+
+@dataclass(frozen=True)
+class AnalyticEnvelope:
+    """One recording's rectified analytic magnitude, with what reading it in dB requires.
+
+    Attributes:
+        magnitude: ``|hilbert(x)|`` over the mono-averaged signal, one value per input sample.
+        sampling_rate: Sampling rate of ``magnitude``, in Hz.
+        resolution: Smallest magnitude the input representation can express; anything below it has
+            no dB value.
+    """
+
+    magnitude: np.ndarray
+    sampling_rate: int
+    resolution: float
+
+
+def analytic_envelope(audio: Audio) -> AnalyticEnvelope:
+    """Transform once, so any number of smoothing strategies can be read off the same magnitude.
+
+    Args:
+        audio: Mono audio. A multi-channel input is averaged.
+
+    Returns:
+        The rectified analytic magnitude and what :func:`envelope_dbfs` needs to read it in dB.
+    """
+    source = np.asarray(audio.waveform)
+    source_dtype = source.dtype if np.issubdtype(source.dtype, np.floating) else np.dtype(np.float32)
+    x = np.asarray(source, dtype=np.float64)
+    if x.ndim > 1:
+        x = x.mean(axis=0)
+    return AnalyticEnvelope(
+        magnitude=analytic_magnitude(x),
+        sampling_rate=int(audio.sampling_rate),
+        resolution=float(np.finfo(source_dtype).eps),
+    )
+
+
+def envelope_dbfs(envelope: AnalyticEnvelope, *, smoothing: EnvelopeSmoothing) -> np.ndarray:
+    """Smooth an already-computed analytic magnitude and read it in dBFS.
+
+    Args:
+        envelope: The magnitude to smooth, from :func:`analytic_envelope`.
+        smoothing: Strategy applied to the magnitude before it is read in dB.
+
+    Returns:
+        One value per input sample, in dBFS, absolute and never normalised by the input's maximum.
+        A sample whose smoothed envelope is non-positive or below the input representation's
+        resolution has no dB value and reads ``nan``.
+    """
+    env = smoothing.apply(envelope.magnitude, envelope.sampling_rate)
+    out = np.full(env.shape, np.nan)
+    # A resonant smoothing (Butterworth) can ring through zero after a transient. Tiny positive
+    # values on that crossing are numerical residue, not a measurable acoustic level; admitting them
+    # into a local percentile creates implausible downward floor spikes and inflated span contrast.
+    measurable = env >= envelope.resolution
+    out[measurable] = 20.0 * np.log10(env[measurable])
+    return out
+
+
 def hilbert_envelope_dbfs(audio: Audio, *, smoothing: EnvelopeSmoothing) -> np.ndarray:
     """The analytic-signal magnitude, smoothed, in dBFS.
 
     A resonant smoothing strategy is offline-only if it is zero-phase; :class:`MedianSmoothing` has
-    no phase response to speak of.
+    no phase response to speak of. Reading two smoothings off one recording costs two transforms
+    through this entry point; call :func:`analytic_envelope` once and :func:`envelope_dbfs` per
+    strategy instead.
 
     Args:
         audio: Mono audio. A multi-channel input is averaged.
@@ -107,20 +181,7 @@ def hilbert_envelope_dbfs(audio: Audio, *, smoothing: EnvelopeSmoothing) -> np.n
         A sample whose smoothed envelope is non-positive or below the input representation's
         resolution has no dB value and reads ``nan``.
     """
-    source = np.asarray(audio.waveform)
-    source_dtype = source.dtype if np.issubdtype(source.dtype, np.floating) else np.dtype(np.float32)
-    resolution = float(np.finfo(source_dtype).eps)
-    x = np.asarray(source, dtype=np.float64)
-    if x.ndim > 1:
-        x = x.mean(axis=0)
-    env = smoothing.apply(np.abs(hilbert(x)), int(audio.sampling_rate))
-    out = np.full(env.shape, np.nan)
-    # A resonant smoothing (Butterworth) can ring through zero after a transient. Tiny positive
-    # values on that crossing are numerical residue, not a measurable acoustic level; admitting them
-    # into a local percentile creates implausible downward floor spikes and inflated span contrast.
-    measurable = env >= resolution
-    out[measurable] = 20.0 * np.log10(env[measurable])
-    return out
+    return envelope_dbfs(analytic_envelope(audio), smoothing=smoothing)
 
 
 def global_floor_dbfs(envelope_db: np.ndarray, *, percentile: float) -> float:
@@ -171,10 +232,10 @@ def dynamic_range_normalize(
     transient in a quiet scene, or a quiet word in a loud scene, is not read as clipping or as
     silence by an instrument downstream that assumes one stable dynamic range for the whole file.
 
-    Reuses :func:`hilbert_envelope_dbfs` for both envelopes, each with its own smoothing strategy: a
-    slow one for the scene's macro loudness context and a fast one for the passage's own micro
-    dynamics. The two are already in dB, so the local dynamic range is their plain difference rather
-    than a ratio.
+    Reads both envelopes off one :func:`analytic_envelope` through :func:`envelope_dbfs`, each with
+    its own smoothing strategy: a slow one for the scene's macro loudness context and a fast one for
+    the passage's own micro dynamics. The two are already in dB, so the local dynamic range is their
+    plain difference rather than a ratio.
 
     Args:
         audio: The recording, already known to be clipping-free at the point this runs — this
@@ -200,8 +261,8 @@ def dynamic_range_normalize(
             plateau almost immediately regardless of window width, at the cost of a bounded rather
             than a ramped transition — construct from ``normalization.gain_smoothing``.
         floor_dbfs: The dB value substituted wherever an envelope has no measurable value (silence,
-            or below the input's numeric resolution — see :func:`hilbert_envelope_dbfs`), so the gain
-            curve stays finite through a silent stretch instead of propagating ``nan``. Read it from
+            or below the input's numeric resolution — see :func:`envelope_dbfs`), so the gain curve
+            stays finite through a silent stretch instead of propagating ``nan``. Read it from
             ``normalization.floor_dbfs``.
         ceiling: The absolute peak the processed waveform is rescaled to if it would otherwise
             exceed it — a numeric safety bound on this operation's own output, not a perceptual
@@ -215,8 +276,9 @@ def dynamic_range_normalize(
     mono = x.mean(axis=0) if x.ndim > 1 else x
     mono_audio = Audio(waveform=mono[None, :], sampling_rate=audio.sampling_rate)
 
-    macro_db = hilbert_envelope_dbfs(mono_audio, smoothing=macro_smoothing)
-    micro_db = hilbert_envelope_dbfs(mono_audio, smoothing=micro_smoothing)
+    envelope = analytic_envelope(mono_audio)
+    macro_db = envelope_dbfs(envelope, smoothing=macro_smoothing)
+    micro_db = envelope_dbfs(envelope, smoothing=micro_smoothing)
     macro_db = np.where(np.isfinite(macro_db), macro_db, floor_dbfs)
     micro_db = np.where(np.isfinite(micro_db), micro_db, floor_dbfs)
 
