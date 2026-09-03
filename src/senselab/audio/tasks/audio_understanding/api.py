@@ -18,6 +18,8 @@ def describe_audios(
     model: Optional[HFModel] = None,
     device: Optional[DeviceType] = None,
     max_new_tokens: int = 500,
+    think: bool = False,
+    strip_prefix: bool = False,
 ) -> List[str]:
     """Answer ``prompt`` about each audio with an audio-language model.
 
@@ -31,6 +33,9 @@ def describe_audios(
             are **NVIDIA OneWay Noncommercial License — non-commercial research only**.
         device: CPU or CUDA. CUDA strongly recommended.
         max_new_tokens: Generation cap.
+        think: Load the AF-Think adapter. Set this for prompts that ask the model to
+            reason before answering; the base checkpoint is not a reasoning model.
+        strip_prefix: Drop the canned transcription wrapper from the answer.
 
     Returns:
         One generated string per input audio, in input order.
@@ -47,4 +52,6 @@ def describe_audios(
         model=model,
         device=device,
         max_new_tokens=max_new_tokens,
+        think=think,
+        strip_prefix=strip_prefix,
     )
