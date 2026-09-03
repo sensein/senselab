@@ -32,6 +32,24 @@
             <h2>API Documentation</h2>
                 <ul class="memberlist">
             <li>
+                    <a class="class" href="#AnalyticEnvelope">AnalyticEnvelope</a>
+                            <ul class="memberlist">
+                        <li>
+                                <a class="function" href="#AnalyticEnvelope.__init__">AnalyticEnvelope</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#AnalyticEnvelope.magnitude">magnitude</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#AnalyticEnvelope.sampling_rate">sampling_rate</a>
+                        </li>
+                        <li>
+                                <a class="variable" href="#AnalyticEnvelope.resolution">resolution</a>
+                        </li>
+                </ul>
+
+            </li>
+            <li>
                     <a class="class" href="#ButterworthSmoothing">ButterworthSmoothing</a>
                             <ul class="memberlist">
                         <li>
@@ -95,7 +113,16 @@
 
             </li>
             <li>
+                    <a class="function" href="#analytic_envelope">analytic_envelope</a>
+            </li>
+            <li>
+                    <a class="function" href="#analytic_magnitude">analytic_magnitude</a>
+            </li>
+            <li>
                     <a class="function" href="#dynamic_range_normalize">dynamic_range_normalize</a>
+            </li>
+            <li>
+                    <a class="function" href="#envelope_dbfs">envelope_dbfs</a>
             </li>
             <li>
                     <a class="function" href="#global_floor_dbfs">global_floor_dbfs</a>
@@ -129,28 +156,124 @@
                         <div class="pdoc-code codehilite"><pre><span></span><span id="L-1"><a href="#L-1"><span class="linenos"> 1</span></a><span class="sd">&quot;&quot;&quot;Amplitude envelope, global floor, and dynamic-range normalization built on both.&quot;&quot;&quot;</span>
 </span><span id="L-2"><a href="#L-2"><span class="linenos"> 2</span></a>
 </span><span id="L-3"><a href="#L-3"><span class="linenos"> 3</span></a><span class="kn">from</span><span class="w"> </span><span class="nn">senselab.audio.tasks.envelope.api</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>    <span class="n">ButterworthSmoothing</span><span class="p">,</span>
-</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>    <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
-</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">MedianSmoothing</span><span class="p">,</span>
-</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">PercentileSmoothing</span><span class="p">,</span>
-</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">dynamic_range_normalize</span><span class="p">,</span>
-</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">global_floor_dbfs</span><span class="p">,</span>
-</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">hilbert_envelope_dbfs</span><span class="p">,</span>
-</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a><span class="p">)</span>
-</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>
-</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="s2">&quot;ButterworthSmoothing&quot;</span><span class="p">,</span>
-</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a>    <span class="s2">&quot;EnvelopeSmoothing&quot;</span><span class="p">,</span>
-</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>    <span class="s2">&quot;MedianSmoothing&quot;</span><span class="p">,</span>
-</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a>    <span class="s2">&quot;PercentileSmoothing&quot;</span><span class="p">,</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="s2">&quot;dynamic_range_normalize&quot;</span><span class="p">,</span>
-</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="s2">&quot;global_floor_dbfs&quot;</span><span class="p">,</span>
-</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="s2">&quot;hilbert_envelope_dbfs&quot;</span><span class="p">,</span>
-</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a><span class="p">]</span>
+</span><span id="L-4"><a href="#L-4"><span class="linenos"> 4</span></a>    <span class="n">AnalyticEnvelope</span><span class="p">,</span>
+</span><span id="L-5"><a href="#L-5"><span class="linenos"> 5</span></a>    <span class="n">ButterworthSmoothing</span><span class="p">,</span>
+</span><span id="L-6"><a href="#L-6"><span class="linenos"> 6</span></a>    <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
+</span><span id="L-7"><a href="#L-7"><span class="linenos"> 7</span></a>    <span class="n">MedianSmoothing</span><span class="p">,</span>
+</span><span id="L-8"><a href="#L-8"><span class="linenos"> 8</span></a>    <span class="n">PercentileSmoothing</span><span class="p">,</span>
+</span><span id="L-9"><a href="#L-9"><span class="linenos"> 9</span></a>    <span class="n">analytic_envelope</span><span class="p">,</span>
+</span><span id="L-10"><a href="#L-10"><span class="linenos">10</span></a>    <span class="n">analytic_magnitude</span><span class="p">,</span>
+</span><span id="L-11"><a href="#L-11"><span class="linenos">11</span></a>    <span class="n">dynamic_range_normalize</span><span class="p">,</span>
+</span><span id="L-12"><a href="#L-12"><span class="linenos">12</span></a>    <span class="n">envelope_dbfs</span><span class="p">,</span>
+</span><span id="L-13"><a href="#L-13"><span class="linenos">13</span></a>    <span class="n">global_floor_dbfs</span><span class="p">,</span>
+</span><span id="L-14"><a href="#L-14"><span class="linenos">14</span></a>    <span class="n">hilbert_envelope_dbfs</span><span class="p">,</span>
+</span><span id="L-15"><a href="#L-15"><span class="linenos">15</span></a><span class="p">)</span>
+</span><span id="L-16"><a href="#L-16"><span class="linenos">16</span></a>
+</span><span id="L-17"><a href="#L-17"><span class="linenos">17</span></a><span class="n">__all__</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos">18</span></a>    <span class="s2">&quot;AnalyticEnvelope&quot;</span><span class="p">,</span>
+</span><span id="L-19"><a href="#L-19"><span class="linenos">19</span></a>    <span class="s2">&quot;ButterworthSmoothing&quot;</span><span class="p">,</span>
+</span><span id="L-20"><a href="#L-20"><span class="linenos">20</span></a>    <span class="s2">&quot;EnvelopeSmoothing&quot;</span><span class="p">,</span>
+</span><span id="L-21"><a href="#L-21"><span class="linenos">21</span></a>    <span class="s2">&quot;MedianSmoothing&quot;</span><span class="p">,</span>
+</span><span id="L-22"><a href="#L-22"><span class="linenos">22</span></a>    <span class="s2">&quot;PercentileSmoothing&quot;</span><span class="p">,</span>
+</span><span id="L-23"><a href="#L-23"><span class="linenos">23</span></a>    <span class="s2">&quot;analytic_envelope&quot;</span><span class="p">,</span>
+</span><span id="L-24"><a href="#L-24"><span class="linenos">24</span></a>    <span class="s2">&quot;analytic_magnitude&quot;</span><span class="p">,</span>
+</span><span id="L-25"><a href="#L-25"><span class="linenos">25</span></a>    <span class="s2">&quot;dynamic_range_normalize&quot;</span><span class="p">,</span>
+</span><span id="L-26"><a href="#L-26"><span class="linenos">26</span></a>    <span class="s2">&quot;envelope_dbfs&quot;</span><span class="p">,</span>
+</span><span id="L-27"><a href="#L-27"><span class="linenos">27</span></a>    <span class="s2">&quot;global_floor_dbfs&quot;</span><span class="p">,</span>
+</span><span id="L-28"><a href="#L-28"><span class="linenos">28</span></a>    <span class="s2">&quot;hilbert_envelope_dbfs&quot;</span><span class="p">,</span>
+</span><span id="L-29"><a href="#L-29"><span class="linenos">29</span></a><span class="p">]</span>
 </span></pre></div>
 
 
             </section>
+                <section id="AnalyticEnvelope">
+                            <input id="AnalyticEnvelope-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr class">
+                    <div class="decorator decorator-dataclass">@dataclass(frozen=True)</div>
+
+    <span class="def">class</span>
+    <span class="name">AnalyticEnvelope</span>:
+
+                <label class="view-source-button" for="AnalyticEnvelope-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#AnalyticEnvelope"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="AnalyticEnvelope-109"><a href="#AnalyticEnvelope-109"><span class="linenos">109</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="AnalyticEnvelope-110"><a href="#AnalyticEnvelope-110"><span class="linenos">110</span></a><span class="k">class</span><span class="w"> </span><span class="nc">AnalyticEnvelope</span><span class="p">:</span>
+</span><span id="AnalyticEnvelope-111"><a href="#AnalyticEnvelope-111"><span class="linenos">111</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One recording&#39;s rectified analytic magnitude, with what reading it in dB requires.</span>
+</span><span id="AnalyticEnvelope-112"><a href="#AnalyticEnvelope-112"><span class="linenos">112</span></a>
+</span><span id="AnalyticEnvelope-113"><a href="#AnalyticEnvelope-113"><span class="linenos">113</span></a><span class="sd">    Attributes:</span>
+</span><span id="AnalyticEnvelope-114"><a href="#AnalyticEnvelope-114"><span class="linenos">114</span></a><span class="sd">        magnitude: ``|hilbert(x)|`` over the mono-averaged signal, one value per input sample.</span>
+</span><span id="AnalyticEnvelope-115"><a href="#AnalyticEnvelope-115"><span class="linenos">115</span></a><span class="sd">        sampling_rate: Sampling rate of ``magnitude``, in Hz.</span>
+</span><span id="AnalyticEnvelope-116"><a href="#AnalyticEnvelope-116"><span class="linenos">116</span></a><span class="sd">        resolution: Smallest magnitude the input representation can express; anything below it has</span>
+</span><span id="AnalyticEnvelope-117"><a href="#AnalyticEnvelope-117"><span class="linenos">117</span></a><span class="sd">            no dB value.</span>
+</span><span id="AnalyticEnvelope-118"><a href="#AnalyticEnvelope-118"><span class="linenos">118</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="AnalyticEnvelope-119"><a href="#AnalyticEnvelope-119"><span class="linenos">119</span></a>
+</span><span id="AnalyticEnvelope-120"><a href="#AnalyticEnvelope-120"><span class="linenos">120</span></a>    <span class="n">magnitude</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+</span><span id="AnalyticEnvelope-121"><a href="#AnalyticEnvelope-121"><span class="linenos">121</span></a>    <span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="AnalyticEnvelope-122"><a href="#AnalyticEnvelope-122"><span class="linenos">122</span></a>    <span class="n">resolution</span><span class="p">:</span> <span class="nb">float</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>One recording's rectified analytic magnitude, with what reading it in dB requires.</p>
+
+<h6 id="attributes">Attributes:</h6>
+
+<ul>
+<li><strong>magnitude:</strong>  <code>|hilbert(x)|</code> over the mono-averaged signal, one value per input sample.</li>
+<li><strong>sampling_rate:</strong>  Sampling rate of <code><a href="#AnalyticEnvelope.magnitude">magnitude</a></code>, in Hz.</li>
+<li><strong>resolution:</strong>  Smallest magnitude the input representation can express; anything below it has
+no dB value.</li>
+</ul>
+</div>
+
+
+                            <div id="AnalyticEnvelope.__init__" class="classattr">
+                                <div class="attr function">
+            
+        <span class="name">AnalyticEnvelope</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">magnitude</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>, </span><span class="param"><span class="n">sampling_rate</span><span class="p">:</span> <span class="nb">int</span>, </span><span class="param"><span class="n">resolution</span><span class="p">:</span> <span class="nb">float</span></span>)</span>
+
+        
+    </div>
+    <a class="headerlink" href="#AnalyticEnvelope.__init__"></a>
+    
+    
+
+                            </div>
+                            <div id="AnalyticEnvelope.magnitude" class="classattr">
+                                <div class="attr variable">
+            <span class="name">magnitude</span><span class="annotation">: numpy.ndarray</span>
+
+        
+    </div>
+    <a class="headerlink" href="#AnalyticEnvelope.magnitude"></a>
+    
+    
+
+                            </div>
+                            <div id="AnalyticEnvelope.sampling_rate" class="classattr">
+                                <div class="attr variable">
+            <span class="name">sampling_rate</span><span class="annotation">: int</span>
+
+        
+    </div>
+    <a class="headerlink" href="#AnalyticEnvelope.sampling_rate"></a>
+    
+    
+
+                            </div>
+                            <div id="AnalyticEnvelope.resolution" class="classattr">
+                                <div class="attr variable">
+            <span class="name">resolution</span><span class="annotation">: float</span>
+
+        
+    </div>
+    <a class="headerlink" href="#AnalyticEnvelope.resolution"></a>
+    
+    
+
+                            </div>
+                </section>
                 <section id="ButterworthSmoothing">
                             <input id="ButterworthSmoothing-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr class">
@@ -566,6 +689,99 @@ own height and hold it there after the spike has already passed.</p>
 
                             </div>
                 </section>
+                <section id="analytic_envelope">
+                            <input id="analytic_envelope-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">analytic_envelope</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">audio</span><span class="p">:</span> <span class="n"><a href="../data_structures/audio.html#Audio">senselab.audio.data_structures.audio.Audio</a></span></span><span class="return-annotation">) -> <span class="n"><a href="#AnalyticEnvelope">AnalyticEnvelope</a></span>:</span></span>
+
+                <label class="view-source-button" for="analytic_envelope-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#analytic_envelope"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="analytic_envelope-125"><a href="#analytic_envelope-125"><span class="linenos">125</span></a><span class="k">def</span><span class="w"> </span><span class="nf">analytic_envelope</span><span class="p">(</span><span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">AnalyticEnvelope</span><span class="p">:</span>
+</span><span id="analytic_envelope-126"><a href="#analytic_envelope-126"><span class="linenos">126</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Transform once, so any number of smoothing strategies can be read off the same magnitude.</span>
+</span><span id="analytic_envelope-127"><a href="#analytic_envelope-127"><span class="linenos">127</span></a>
+</span><span id="analytic_envelope-128"><a href="#analytic_envelope-128"><span class="linenos">128</span></a><span class="sd">    Args:</span>
+</span><span id="analytic_envelope-129"><a href="#analytic_envelope-129"><span class="linenos">129</span></a><span class="sd">        audio: Mono audio. A multi-channel input is averaged.</span>
+</span><span id="analytic_envelope-130"><a href="#analytic_envelope-130"><span class="linenos">130</span></a>
+</span><span id="analytic_envelope-131"><a href="#analytic_envelope-131"><span class="linenos">131</span></a><span class="sd">    Returns:</span>
+</span><span id="analytic_envelope-132"><a href="#analytic_envelope-132"><span class="linenos">132</span></a><span class="sd">        The rectified analytic magnitude and what :func:`envelope_dbfs` needs to read it in dB.</span>
+</span><span id="analytic_envelope-133"><a href="#analytic_envelope-133"><span class="linenos">133</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="analytic_envelope-134"><a href="#analytic_envelope-134"><span class="linenos">134</span></a>    <span class="n">source</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">)</span>
+</span><span id="analytic_envelope-135"><a href="#analytic_envelope-135"><span class="linenos">135</span></a>    <span class="n">source_dtype</span> <span class="o">=</span> <span class="n">source</span><span class="o">.</span><span class="n">dtype</span> <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">issubdtype</span><span class="p">(</span><span class="n">source</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">floating</span><span class="p">)</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+</span><span id="analytic_envelope-136"><a href="#analytic_envelope-136"><span class="linenos">136</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="analytic_envelope-137"><a href="#analytic_envelope-137"><span class="linenos">137</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="analytic_envelope-138"><a href="#analytic_envelope-138"><span class="linenos">138</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="analytic_envelope-139"><a href="#analytic_envelope-139"><span class="linenos">139</span></a>    <span class="k">return</span> <span class="n">AnalyticEnvelope</span><span class="p">(</span>
+</span><span id="analytic_envelope-140"><a href="#analytic_envelope-140"><span class="linenos">140</span></a>        <span class="n">magnitude</span><span class="o">=</span><span class="n">analytic_magnitude</span><span class="p">(</span><span class="n">x</span><span class="p">),</span>
+</span><span id="analytic_envelope-141"><a href="#analytic_envelope-141"><span class="linenos">141</span></a>        <span class="n">sampling_rate</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">),</span>
+</span><span id="analytic_envelope-142"><a href="#analytic_envelope-142"><span class="linenos">142</span></a>        <span class="n">resolution</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">source_dtype</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">),</span>
+</span><span id="analytic_envelope-143"><a href="#analytic_envelope-143"><span class="linenos">143</span></a>    <span class="p">)</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Transform once, so any number of smoothing strategies can be read off the same magnitude.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>audio:</strong>  Mono audio. A multi-channel input is averaged.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The rectified analytic magnitude and what <code><a href="#envelope_dbfs">envelope_dbfs()</a></code> needs to read it in dB.</p>
+</blockquote>
+</div>
+
+
+                </section>
+                <section id="analytic_magnitude">
+                            <input id="analytic_magnitude-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">analytic_magnitude</span><span class="signature pdoc-code condensed">(<span class="param"><span class="n">signal</span><span class="p">:</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>, </span><span class="param"><span class="o">*</span>, </span><span class="param"><span class="n">axis</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span></span><span class="return-annotation">) -> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>:</span></span>
+
+                <label class="view-source-button" for="analytic_magnitude-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#analytic_magnitude"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="analytic_magnitude-96"><a href="#analytic_magnitude-96"><span class="linenos"> 96</span></a><span class="k">def</span><span class="w"> </span><span class="nf">analytic_magnitude</span><span class="p">(</span><span class="n">signal</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">axis</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="analytic_magnitude-97"><a href="#analytic_magnitude-97"><span class="linenos"> 97</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;``|hilbert(signal)|`` -- the unsmoothed rectified analytic magnitude.</span>
+</span><span id="analytic_magnitude-98"><a href="#analytic_magnitude-98"><span class="linenos"> 98</span></a>
+</span><span id="analytic_magnitude-99"><a href="#analytic_magnitude-99"><span class="linenos"> 99</span></a><span class="sd">    Args:</span>
+</span><span id="analytic_magnitude-100"><a href="#analytic_magnitude-100"><span class="linenos">100</span></a><span class="sd">        signal: Real-valued samples. Any shape; the transform runs along ``axis``.</span>
+</span><span id="analytic_magnitude-101"><a href="#analytic_magnitude-101"><span class="linenos">101</span></a><span class="sd">        axis: Axis the signal runs along.</span>
+</span><span id="analytic_magnitude-102"><a href="#analytic_magnitude-102"><span class="linenos">102</span></a>
+</span><span id="analytic_magnitude-103"><a href="#analytic_magnitude-103"><span class="linenos">103</span></a><span class="sd">    Returns:</span>
+</span><span id="analytic_magnitude-104"><a href="#analytic_magnitude-104"><span class="linenos">104</span></a><span class="sd">        The analytic-signal magnitude, same shape as ``signal``.</span>
+</span><span id="analytic_magnitude-105"><a href="#analytic_magnitude-105"><span class="linenos">105</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="analytic_magnitude-106"><a href="#analytic_magnitude-106"><span class="linenos">106</span></a>    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">hilbert</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="n">axis</span><span class="p">))</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p><code>|hilbert(signal)|</code> -- the unsmoothed rectified analytic magnitude.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>signal:</strong>  Real-valued samples. Any shape; the transform runs along <code>axis</code>.</li>
+<li><strong>axis:</strong>  Axis the signal runs along.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>The analytic-signal magnitude, same shape as <code>signal</code>.</p>
+</blockquote>
+</div>
+
+
+                </section>
                 <section id="dynamic_range_normalize">
                             <input id="dynamic_range_normalize-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
@@ -577,91 +793,92 @@ own height and hold it there after the spike has already passed.</p>
 
     </div>
     <a class="headerlink" href="#dynamic_range_normalize"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="dynamic_range_normalize-155"><a href="#dynamic_range_normalize-155"><span class="linenos">155</span></a><span class="k">def</span><span class="w"> </span><span class="nf">dynamic_range_normalize</span><span class="p">(</span>
-</span><span id="dynamic_range_normalize-156"><a href="#dynamic_range_normalize-156"><span class="linenos">156</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-157"><a href="#dynamic_range_normalize-157"><span class="linenos">157</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-158"><a href="#dynamic_range_normalize-158"><span class="linenos">158</span></a>    <span class="n">macro_smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-159"><a href="#dynamic_range_normalize-159"><span class="linenos">159</span></a>    <span class="n">micro_smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-160"><a href="#dynamic_range_normalize-160"><span class="linenos">160</span></a>    <span class="n">target_dr_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-161"><a href="#dynamic_range_normalize-161"><span class="linenos">161</span></a>    <span class="n">compression_ratio</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-162"><a href="#dynamic_range_normalize-162"><span class="linenos">162</span></a>    <span class="n">macro_target_dbfs</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-163"><a href="#dynamic_range_normalize-163"><span class="linenos">163</span></a>    <span class="n">gain_smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-164"><a href="#dynamic_range_normalize-164"><span class="linenos">164</span></a>    <span class="n">floor_dbfs</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-165"><a href="#dynamic_range_normalize-165"><span class="linenos">165</span></a>    <span class="n">ceiling</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="dynamic_range_normalize-166"><a href="#dynamic_range_normalize-166"><span class="linenos">166</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Audio</span><span class="p">:</span>
-</span><span id="dynamic_range_normalize-167"><a href="#dynamic_range_normalize-167"><span class="linenos">167</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Even out local dynamic range against the recording&#39;s own slow-moving loudness context.</span>
-</span><span id="dynamic_range_normalize-168"><a href="#dynamic_range_normalize-168"><span class="linenos">168</span></a>
-</span><span id="dynamic_range_normalize-169"><a href="#dynamic_range_normalize-169"><span class="linenos">169</span></a><span class="sd">    A quiet passage and a loud passage of the same recording are each brought toward</span>
-</span><span id="dynamic_range_normalize-170"><a href="#dynamic_range_normalize-170"><span class="linenos">170</span></a><span class="sd">    ``macro_target_dbfs``, and within each, a passage whose *local* excursion above or below that</span>
-</span><span id="dynamic_range_normalize-171"><a href="#dynamic_range_normalize-171"><span class="linenos">171</span></a><span class="sd">    passage&#39;s own macro level exceeds ``target_dr_db`` is compressed back toward it — so a loud</span>
-</span><span id="dynamic_range_normalize-172"><a href="#dynamic_range_normalize-172"><span class="linenos">172</span></a><span class="sd">    transient in a quiet scene, or a quiet word in a loud scene, is not read as clipping or as</span>
-</span><span id="dynamic_range_normalize-173"><a href="#dynamic_range_normalize-173"><span class="linenos">173</span></a><span class="sd">    silence by an instrument downstream that assumes one stable dynamic range for the whole file.</span>
-</span><span id="dynamic_range_normalize-174"><a href="#dynamic_range_normalize-174"><span class="linenos">174</span></a>
-</span><span id="dynamic_range_normalize-175"><a href="#dynamic_range_normalize-175"><span class="linenos">175</span></a><span class="sd">    Reuses :func:`hilbert_envelope_dbfs` for both envelopes, each with its own smoothing strategy: a</span>
-</span><span id="dynamic_range_normalize-176"><a href="#dynamic_range_normalize-176"><span class="linenos">176</span></a><span class="sd">    slow one for the scene&#39;s macro loudness context and a fast one for the passage&#39;s own micro</span>
-</span><span id="dynamic_range_normalize-177"><a href="#dynamic_range_normalize-177"><span class="linenos">177</span></a><span class="sd">    dynamics. The two are already in dB, so the local dynamic range is their plain difference rather</span>
-</span><span id="dynamic_range_normalize-178"><a href="#dynamic_range_normalize-178"><span class="linenos">178</span></a><span class="sd">    than a ratio.</span>
-</span><span id="dynamic_range_normalize-179"><a href="#dynamic_range_normalize-179"><span class="linenos">179</span></a>
-</span><span id="dynamic_range_normalize-180"><a href="#dynamic_range_normalize-180"><span class="linenos">180</span></a><span class="sd">    Args:</span>
-</span><span id="dynamic_range_normalize-181"><a href="#dynamic_range_normalize-181"><span class="linenos">181</span></a><span class="sd">        audio: The recording, already known to be clipping-free at the point this runs — this</span>
-</span><span id="dynamic_range_normalize-182"><a href="#dynamic_range_normalize-182"><span class="linenos">182</span></a><span class="sd">            function only redistributes level, so a genuinely clipped sample stays clipped.</span>
-</span><span id="dynamic_range_normalize-183"><a href="#dynamic_range_normalize-183"><span class="linenos">183</span></a><span class="sd">        macro_smoothing: Strategy for the slow, scene-level envelope. Construct from</span>
-</span><span id="dynamic_range_normalize-184"><a href="#dynamic_range_normalize-184"><span class="linenos">184</span></a><span class="sd">            ``normalization.macro_smoothing``.</span>
-</span><span id="dynamic_range_normalize-185"><a href="#dynamic_range_normalize-185"><span class="linenos">185</span></a><span class="sd">        micro_smoothing: Strategy for the fast, passage-level envelope. Construct from</span>
-</span><span id="dynamic_range_normalize-186"><a href="#dynamic_range_normalize-186"><span class="linenos">186</span></a><span class="sd">            ``normalization.micro_smoothing``.</span>
-</span><span id="dynamic_range_normalize-187"><a href="#dynamic_range_normalize-187"><span class="linenos">187</span></a><span class="sd">        target_dr_db: The local dynamic range, in dB, a passage may carry before its excess is</span>
-</span><span id="dynamic_range_normalize-188"><a href="#dynamic_range_normalize-188"><span class="linenos">188</span></a><span class="sd">            compressed toward the macro level. Read it from ``normalization.target_dr_db``.</span>
-</span><span id="dynamic_range_normalize-189"><a href="#dynamic_range_normalize-189"><span class="linenos">189</span></a><span class="sd">        compression_ratio: How much of the excess above ``target_dr_db`` is removed;</span>
-</span><span id="dynamic_range_normalize-190"><a href="#dynamic_range_normalize-190"><span class="linenos">190</span></a><span class="sd">            ``compression_ratio=2`` removes half. Read it from ``normalization.compression_ratio``.</span>
-</span><span id="dynamic_range_normalize-191"><a href="#dynamic_range_normalize-191"><span class="linenos">191</span></a><span class="sd">        macro_target_dbfs: The reference level every scene&#39;s macro envelope is brought toward. Read</span>
-</span><span id="dynamic_range_normalize-192"><a href="#dynamic_range_normalize-192"><span class="linenos">192</span></a><span class="sd">            it from ``normalization.macro_target_dbfs``.</span>
-</span><span id="dynamic_range_normalize-193"><a href="#dynamic_range_normalize-193"><span class="linenos">193</span></a><span class="sd">        gain_smoothing: Strategy that keeps the final gain curve continuous before it multiplies the</span>
-</span><span id="dynamic_range_normalize-194"><a href="#dynamic_range_normalize-194"><span class="linenos">194</span></a><span class="sd">            waveform. A zero-phase Butterworth was tried here first and measured to fail on short</span>
-</span><span id="dynamic_range_normalize-195"><a href="#dynamic_range_normalize-195"><span class="linenos">195</span></a><span class="sd">            events: its own resonance means it cannot settle to a brief event&#39;s correct gain within</span>
-</span><span id="dynamic_range_normalize-196"><a href="#dynamic_range_normalize-196"><span class="linenos">196</span></a><span class="sd">            the event, injecting several-hundred-percent excess gain for most of a ~150 ms burst&#39;s</span>
-</span><span id="dynamic_range_normalize-197"><a href="#dynamic_range_normalize-197"><span class="linenos">197</span></a><span class="sd">            duration rather than a short, localized ringing artifact at its edges — raising the</span>
-</span><span id="dynamic_range_normalize-198"><a href="#dynamic_range_normalize-198"><span class="linenos">198</span></a><span class="sd">            cutoff did not fix it (still ~3.5x too high at the burst&#39;s centre with a 200 Hz cutoff),</span>
-</span><span id="dynamic_range_normalize-199"><a href="#dynamic_range_normalize-199"><span class="linenos">199</span></a><span class="sd">            because the residual is the filter&#39;s own lagging response to the *macro* transition it</span>
-</span><span id="dynamic_range_normalize-200"><a href="#dynamic_range_normalize-200"><span class="linenos">200</span></a><span class="sd">            is downstream of, not insufficient bandwidth. A short median settles to the correct</span>
-</span><span id="dynamic_range_normalize-201"><a href="#dynamic_range_normalize-201"><span class="linenos">201</span></a><span class="sd">            plateau almost immediately regardless of window width, at the cost of a bounded rather</span>
-</span><span id="dynamic_range_normalize-202"><a href="#dynamic_range_normalize-202"><span class="linenos">202</span></a><span class="sd">            than a ramped transition — construct from ``normalization.gain_smoothing``.</span>
-</span><span id="dynamic_range_normalize-203"><a href="#dynamic_range_normalize-203"><span class="linenos">203</span></a><span class="sd">        floor_dbfs: The dB value substituted wherever an envelope has no measurable value (silence,</span>
-</span><span id="dynamic_range_normalize-204"><a href="#dynamic_range_normalize-204"><span class="linenos">204</span></a><span class="sd">            or below the input&#39;s numeric resolution — see :func:`hilbert_envelope_dbfs`), so the gain</span>
-</span><span id="dynamic_range_normalize-205"><a href="#dynamic_range_normalize-205"><span class="linenos">205</span></a><span class="sd">            curve stays finite through a silent stretch instead of propagating ``nan``. Read it from</span>
-</span><span id="dynamic_range_normalize-206"><a href="#dynamic_range_normalize-206"><span class="linenos">206</span></a><span class="sd">            ``normalization.floor_dbfs``.</span>
-</span><span id="dynamic_range_normalize-207"><a href="#dynamic_range_normalize-207"><span class="linenos">207</span></a><span class="sd">        ceiling: The absolute peak the processed waveform is rescaled to if it would otherwise</span>
-</span><span id="dynamic_range_normalize-208"><a href="#dynamic_range_normalize-208"><span class="linenos">208</span></a><span class="sd">            exceed it — a numeric safety bound on this operation&#39;s own output, not a perceptual</span>
-</span><span id="dynamic_range_normalize-209"><a href="#dynamic_range_normalize-209"><span class="linenos">209</span></a><span class="sd">            choice. Read it from ``normalization.ceiling``.</span>
-</span><span id="dynamic_range_normalize-210"><a href="#dynamic_range_normalize-210"><span class="linenos">210</span></a>
-</span><span id="dynamic_range_normalize-211"><a href="#dynamic_range_normalize-211"><span class="linenos">211</span></a><span class="sd">    Returns:</span>
-</span><span id="dynamic_range_normalize-212"><a href="#dynamic_range_normalize-212"><span class="linenos">212</span></a><span class="sd">        The gain-adjusted audio, same shape, sampling rate and channel count as the input (a</span>
-</span><span id="dynamic_range_normalize-213"><a href="#dynamic_range_normalize-213"><span class="linenos">213</span></a><span class="sd">        multi-channel input has the same mono gain curve applied to every channel).</span>
-</span><span id="dynamic_range_normalize-214"><a href="#dynamic_range_normalize-214"><span class="linenos">214</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="dynamic_range_normalize-215"><a href="#dynamic_range_normalize-215"><span class="linenos">215</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-216"><a href="#dynamic_range_normalize-216"><span class="linenos">216</span></a>    <span class="n">mono</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">x</span>
-</span><span id="dynamic_range_normalize-217"><a href="#dynamic_range_normalize-217"><span class="linenos">217</span></a>    <span class="n">mono_audio</span> <span class="o">=</span> <span class="n">Audio</span><span class="p">(</span><span class="n">waveform</span><span class="o">=</span><span class="n">mono</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">sampling_rate</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-218"><a href="#dynamic_range_normalize-218"><span class="linenos">218</span></a>
-</span><span id="dynamic_range_normalize-219"><a href="#dynamic_range_normalize-219"><span class="linenos">219</span></a>    <span class="n">macro_db</span> <span class="o">=</span> <span class="n">hilbert_envelope_dbfs</span><span class="p">(</span><span class="n">mono_audio</span><span class="p">,</span> <span class="n">smoothing</span><span class="o">=</span><span class="n">macro_smoothing</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-220"><a href="#dynamic_range_normalize-220"><span class="linenos">220</span></a>    <span class="n">micro_db</span> <span class="o">=</span> <span class="n">hilbert_envelope_dbfs</span><span class="p">(</span><span class="n">mono_audio</span><span class="p">,</span> <span class="n">smoothing</span><span class="o">=</span><span class="n">micro_smoothing</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-221"><a href="#dynamic_range_normalize-221"><span class="linenos">221</span></a>    <span class="n">macro_db</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">macro_db</span><span class="p">),</span> <span class="n">macro_db</span><span class="p">,</span> <span class="n">floor_dbfs</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-222"><a href="#dynamic_range_normalize-222"><span class="linenos">222</span></a>    <span class="n">micro_db</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">micro_db</span><span class="p">),</span> <span class="n">micro_db</span><span class="p">,</span> <span class="n">floor_dbfs</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-223"><a href="#dynamic_range_normalize-223"><span class="linenos">223</span></a>
-</span><span id="dynamic_range_normalize-224"><a href="#dynamic_range_normalize-224"><span class="linenos">224</span></a>    <span class="n">local_dr_db</span> <span class="o">=</span> <span class="n">micro_db</span> <span class="o">-</span> <span class="n">macro_db</span>
-</span><span id="dynamic_range_normalize-225"><a href="#dynamic_range_normalize-225"><span class="linenos">225</span></a>    <span class="n">gain_db</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">local_dr_db</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-226"><a href="#dynamic_range_normalize-226"><span class="linenos">226</span></a>    <span class="n">over_target</span> <span class="o">=</span> <span class="n">local_dr_db</span> <span class="o">&gt;</span> <span class="mf">0.0</span>
-</span><span id="dynamic_range_normalize-227"><a href="#dynamic_range_normalize-227"><span class="linenos">227</span></a>    <span class="n">gain_db</span><span class="p">[</span><span class="n">over_target</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="n">local_dr_db</span><span class="p">[</span><span class="n">over_target</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">compression_ratio</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-228"><a href="#dynamic_range_normalize-228"><span class="linenos">228</span></a>    <span class="n">under_target</span> <span class="o">=</span> <span class="n">local_dr_db</span> <span class="o">&lt;</span> <span class="o">-</span><span class="n">target_dr_db</span>
-</span><span id="dynamic_range_normalize-229"><a href="#dynamic_range_normalize-229"><span class="linenos">229</span></a>    <span class="n">gain_db</span><span class="p">[</span><span class="n">under_target</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="o">-</span><span class="n">target_dr_db</span> <span class="o">-</span> <span class="n">local_dr_db</span><span class="p">[</span><span class="n">under_target</span><span class="p">])</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">compression_ratio</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-230"><a href="#dynamic_range_normalize-230"><span class="linenos">230</span></a>
-</span><span id="dynamic_range_normalize-231"><a href="#dynamic_range_normalize-231"><span class="linenos">231</span></a>    <span class="n">combined_gain_db</span> <span class="o">=</span> <span class="n">gain_db</span> <span class="o">+</span> <span class="p">(</span><span class="n">macro_target_dbfs</span> <span class="o">-</span> <span class="n">macro_db</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-232"><a href="#dynamic_range_normalize-232"><span class="linenos">232</span></a>    <span class="n">combined_gain</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">power</span><span class="p">(</span><span class="mf">10.0</span><span class="p">,</span> <span class="n">combined_gain_db</span> <span class="o">/</span> <span class="mf">20.0</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-233"><a href="#dynamic_range_normalize-233"><span class="linenos">233</span></a>    <span class="n">smooth_gain</span> <span class="o">=</span> <span class="n">gain_smoothing</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">combined_gain</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">))</span>
-</span><span id="dynamic_range_normalize-234"><a href="#dynamic_range_normalize-234"><span class="linenos">234</span></a>
-</span><span id="dynamic_range_normalize-235"><a href="#dynamic_range_normalize-235"><span class="linenos">235</span></a>    <span class="n">processed</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">smooth_gain</span>
-</span><span id="dynamic_range_normalize-236"><a href="#dynamic_range_normalize-236"><span class="linenos">236</span></a>    <span class="n">peak</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">processed</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">())</span> <span class="k">if</span> <span class="n">processed</span><span class="o">.</span><span class="n">size</span> <span class="k">else</span> <span class="mf">0.0</span>
-</span><span id="dynamic_range_normalize-237"><a href="#dynamic_range_normalize-237"><span class="linenos">237</span></a>    <span class="k">if</span> <span class="n">peak</span> <span class="o">&gt;</span> <span class="n">ceiling</span><span class="p">:</span>
-</span><span id="dynamic_range_normalize-238"><a href="#dynamic_range_normalize-238"><span class="linenos">238</span></a>        <span class="n">processed</span> <span class="o">=</span> <span class="n">processed</span> <span class="o">*</span> <span class="p">(</span><span class="n">ceiling</span> <span class="o">/</span> <span class="n">peak</span><span class="p">)</span>
-</span><span id="dynamic_range_normalize-239"><a href="#dynamic_range_normalize-239"><span class="linenos">239</span></a>    <span class="k">return</span> <span class="n">Audio</span><span class="p">(</span><span class="n">waveform</span><span class="o">=</span><span class="n">processed</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">sampling_rate</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="dynamic_range_normalize-216"><a href="#dynamic_range_normalize-216"><span class="linenos">216</span></a><span class="k">def</span><span class="w"> </span><span class="nf">dynamic_range_normalize</span><span class="p">(</span>
+</span><span id="dynamic_range_normalize-217"><a href="#dynamic_range_normalize-217"><span class="linenos">217</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-218"><a href="#dynamic_range_normalize-218"><span class="linenos">218</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-219"><a href="#dynamic_range_normalize-219"><span class="linenos">219</span></a>    <span class="n">macro_smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-220"><a href="#dynamic_range_normalize-220"><span class="linenos">220</span></a>    <span class="n">micro_smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-221"><a href="#dynamic_range_normalize-221"><span class="linenos">221</span></a>    <span class="n">target_dr_db</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-222"><a href="#dynamic_range_normalize-222"><span class="linenos">222</span></a>    <span class="n">compression_ratio</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-223"><a href="#dynamic_range_normalize-223"><span class="linenos">223</span></a>    <span class="n">macro_target_dbfs</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-224"><a href="#dynamic_range_normalize-224"><span class="linenos">224</span></a>    <span class="n">gain_smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-225"><a href="#dynamic_range_normalize-225"><span class="linenos">225</span></a>    <span class="n">floor_dbfs</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-226"><a href="#dynamic_range_normalize-226"><span class="linenos">226</span></a>    <span class="n">ceiling</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="dynamic_range_normalize-227"><a href="#dynamic_range_normalize-227"><span class="linenos">227</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Audio</span><span class="p">:</span>
+</span><span id="dynamic_range_normalize-228"><a href="#dynamic_range_normalize-228"><span class="linenos">228</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Even out local dynamic range against the recording&#39;s own slow-moving loudness context.</span>
+</span><span id="dynamic_range_normalize-229"><a href="#dynamic_range_normalize-229"><span class="linenos">229</span></a>
+</span><span id="dynamic_range_normalize-230"><a href="#dynamic_range_normalize-230"><span class="linenos">230</span></a><span class="sd">    A quiet passage and a loud passage of the same recording are each brought toward</span>
+</span><span id="dynamic_range_normalize-231"><a href="#dynamic_range_normalize-231"><span class="linenos">231</span></a><span class="sd">    ``macro_target_dbfs``, and within each, a passage whose *local* excursion above or below that</span>
+</span><span id="dynamic_range_normalize-232"><a href="#dynamic_range_normalize-232"><span class="linenos">232</span></a><span class="sd">    passage&#39;s own macro level exceeds ``target_dr_db`` is compressed back toward it — so a loud</span>
+</span><span id="dynamic_range_normalize-233"><a href="#dynamic_range_normalize-233"><span class="linenos">233</span></a><span class="sd">    transient in a quiet scene, or a quiet word in a loud scene, is not read as clipping or as</span>
+</span><span id="dynamic_range_normalize-234"><a href="#dynamic_range_normalize-234"><span class="linenos">234</span></a><span class="sd">    silence by an instrument downstream that assumes one stable dynamic range for the whole file.</span>
+</span><span id="dynamic_range_normalize-235"><a href="#dynamic_range_normalize-235"><span class="linenos">235</span></a>
+</span><span id="dynamic_range_normalize-236"><a href="#dynamic_range_normalize-236"><span class="linenos">236</span></a><span class="sd">    Reads both envelopes off one :func:`analytic_envelope` through :func:`envelope_dbfs`, each with</span>
+</span><span id="dynamic_range_normalize-237"><a href="#dynamic_range_normalize-237"><span class="linenos">237</span></a><span class="sd">    its own smoothing strategy: a slow one for the scene&#39;s macro loudness context and a fast one for</span>
+</span><span id="dynamic_range_normalize-238"><a href="#dynamic_range_normalize-238"><span class="linenos">238</span></a><span class="sd">    the passage&#39;s own micro dynamics. The two are already in dB, so the local dynamic range is their</span>
+</span><span id="dynamic_range_normalize-239"><a href="#dynamic_range_normalize-239"><span class="linenos">239</span></a><span class="sd">    plain difference rather than a ratio.</span>
+</span><span id="dynamic_range_normalize-240"><a href="#dynamic_range_normalize-240"><span class="linenos">240</span></a>
+</span><span id="dynamic_range_normalize-241"><a href="#dynamic_range_normalize-241"><span class="linenos">241</span></a><span class="sd">    Args:</span>
+</span><span id="dynamic_range_normalize-242"><a href="#dynamic_range_normalize-242"><span class="linenos">242</span></a><span class="sd">        audio: The recording, already known to be clipping-free at the point this runs — this</span>
+</span><span id="dynamic_range_normalize-243"><a href="#dynamic_range_normalize-243"><span class="linenos">243</span></a><span class="sd">            function only redistributes level, so a genuinely clipped sample stays clipped.</span>
+</span><span id="dynamic_range_normalize-244"><a href="#dynamic_range_normalize-244"><span class="linenos">244</span></a><span class="sd">        macro_smoothing: Strategy for the slow, scene-level envelope. Construct from</span>
+</span><span id="dynamic_range_normalize-245"><a href="#dynamic_range_normalize-245"><span class="linenos">245</span></a><span class="sd">            ``normalization.macro_smoothing``.</span>
+</span><span id="dynamic_range_normalize-246"><a href="#dynamic_range_normalize-246"><span class="linenos">246</span></a><span class="sd">        micro_smoothing: Strategy for the fast, passage-level envelope. Construct from</span>
+</span><span id="dynamic_range_normalize-247"><a href="#dynamic_range_normalize-247"><span class="linenos">247</span></a><span class="sd">            ``normalization.micro_smoothing``.</span>
+</span><span id="dynamic_range_normalize-248"><a href="#dynamic_range_normalize-248"><span class="linenos">248</span></a><span class="sd">        target_dr_db: The local dynamic range, in dB, a passage may carry before its excess is</span>
+</span><span id="dynamic_range_normalize-249"><a href="#dynamic_range_normalize-249"><span class="linenos">249</span></a><span class="sd">            compressed toward the macro level. Read it from ``normalization.target_dr_db``.</span>
+</span><span id="dynamic_range_normalize-250"><a href="#dynamic_range_normalize-250"><span class="linenos">250</span></a><span class="sd">        compression_ratio: How much of the excess above ``target_dr_db`` is removed;</span>
+</span><span id="dynamic_range_normalize-251"><a href="#dynamic_range_normalize-251"><span class="linenos">251</span></a><span class="sd">            ``compression_ratio=2`` removes half. Read it from ``normalization.compression_ratio``.</span>
+</span><span id="dynamic_range_normalize-252"><a href="#dynamic_range_normalize-252"><span class="linenos">252</span></a><span class="sd">        macro_target_dbfs: The reference level every scene&#39;s macro envelope is brought toward. Read</span>
+</span><span id="dynamic_range_normalize-253"><a href="#dynamic_range_normalize-253"><span class="linenos">253</span></a><span class="sd">            it from ``normalization.macro_target_dbfs``.</span>
+</span><span id="dynamic_range_normalize-254"><a href="#dynamic_range_normalize-254"><span class="linenos">254</span></a><span class="sd">        gain_smoothing: Strategy that keeps the final gain curve continuous before it multiplies the</span>
+</span><span id="dynamic_range_normalize-255"><a href="#dynamic_range_normalize-255"><span class="linenos">255</span></a><span class="sd">            waveform. A zero-phase Butterworth was tried here first and measured to fail on short</span>
+</span><span id="dynamic_range_normalize-256"><a href="#dynamic_range_normalize-256"><span class="linenos">256</span></a><span class="sd">            events: its own resonance means it cannot settle to a brief event&#39;s correct gain within</span>
+</span><span id="dynamic_range_normalize-257"><a href="#dynamic_range_normalize-257"><span class="linenos">257</span></a><span class="sd">            the event, injecting several-hundred-percent excess gain for most of a ~150 ms burst&#39;s</span>
+</span><span id="dynamic_range_normalize-258"><a href="#dynamic_range_normalize-258"><span class="linenos">258</span></a><span class="sd">            duration rather than a short, localized ringing artifact at its edges — raising the</span>
+</span><span id="dynamic_range_normalize-259"><a href="#dynamic_range_normalize-259"><span class="linenos">259</span></a><span class="sd">            cutoff did not fix it (still ~3.5x too high at the burst&#39;s centre with a 200 Hz cutoff),</span>
+</span><span id="dynamic_range_normalize-260"><a href="#dynamic_range_normalize-260"><span class="linenos">260</span></a><span class="sd">            because the residual is the filter&#39;s own lagging response to the *macro* transition it</span>
+</span><span id="dynamic_range_normalize-261"><a href="#dynamic_range_normalize-261"><span class="linenos">261</span></a><span class="sd">            is downstream of, not insufficient bandwidth. A short median settles to the correct</span>
+</span><span id="dynamic_range_normalize-262"><a href="#dynamic_range_normalize-262"><span class="linenos">262</span></a><span class="sd">            plateau almost immediately regardless of window width, at the cost of a bounded rather</span>
+</span><span id="dynamic_range_normalize-263"><a href="#dynamic_range_normalize-263"><span class="linenos">263</span></a><span class="sd">            than a ramped transition — construct from ``normalization.gain_smoothing``.</span>
+</span><span id="dynamic_range_normalize-264"><a href="#dynamic_range_normalize-264"><span class="linenos">264</span></a><span class="sd">        floor_dbfs: The dB value substituted wherever an envelope has no measurable value (silence,</span>
+</span><span id="dynamic_range_normalize-265"><a href="#dynamic_range_normalize-265"><span class="linenos">265</span></a><span class="sd">            or below the input&#39;s numeric resolution — see :func:`envelope_dbfs`), so the gain curve</span>
+</span><span id="dynamic_range_normalize-266"><a href="#dynamic_range_normalize-266"><span class="linenos">266</span></a><span class="sd">            stays finite through a silent stretch instead of propagating ``nan``. Read it from</span>
+</span><span id="dynamic_range_normalize-267"><a href="#dynamic_range_normalize-267"><span class="linenos">267</span></a><span class="sd">            ``normalization.floor_dbfs``.</span>
+</span><span id="dynamic_range_normalize-268"><a href="#dynamic_range_normalize-268"><span class="linenos">268</span></a><span class="sd">        ceiling: The absolute peak the processed waveform is rescaled to if it would otherwise</span>
+</span><span id="dynamic_range_normalize-269"><a href="#dynamic_range_normalize-269"><span class="linenos">269</span></a><span class="sd">            exceed it — a numeric safety bound on this operation&#39;s own output, not a perceptual</span>
+</span><span id="dynamic_range_normalize-270"><a href="#dynamic_range_normalize-270"><span class="linenos">270</span></a><span class="sd">            choice. Read it from ``normalization.ceiling``.</span>
+</span><span id="dynamic_range_normalize-271"><a href="#dynamic_range_normalize-271"><span class="linenos">271</span></a>
+</span><span id="dynamic_range_normalize-272"><a href="#dynamic_range_normalize-272"><span class="linenos">272</span></a><span class="sd">    Returns:</span>
+</span><span id="dynamic_range_normalize-273"><a href="#dynamic_range_normalize-273"><span class="linenos">273</span></a><span class="sd">        The gain-adjusted audio, same shape, sampling rate and channel count as the input (a</span>
+</span><span id="dynamic_range_normalize-274"><a href="#dynamic_range_normalize-274"><span class="linenos">274</span></a><span class="sd">        multi-channel input has the same mono gain curve applied to every channel).</span>
+</span><span id="dynamic_range_normalize-275"><a href="#dynamic_range_normalize-275"><span class="linenos">275</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="dynamic_range_normalize-276"><a href="#dynamic_range_normalize-276"><span class="linenos">276</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-277"><a href="#dynamic_range_normalize-277"><span class="linenos">277</span></a>    <span class="n">mono</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">x</span>
+</span><span id="dynamic_range_normalize-278"><a href="#dynamic_range_normalize-278"><span class="linenos">278</span></a>    <span class="n">mono_audio</span> <span class="o">=</span> <span class="n">Audio</span><span class="p">(</span><span class="n">waveform</span><span class="o">=</span><span class="n">mono</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">sampling_rate</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-279"><a href="#dynamic_range_normalize-279"><span class="linenos">279</span></a>
+</span><span id="dynamic_range_normalize-280"><a href="#dynamic_range_normalize-280"><span class="linenos">280</span></a>    <span class="n">envelope</span> <span class="o">=</span> <span class="n">analytic_envelope</span><span class="p">(</span><span class="n">mono_audio</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-281"><a href="#dynamic_range_normalize-281"><span class="linenos">281</span></a>    <span class="n">macro_db</span> <span class="o">=</span> <span class="n">envelope_dbfs</span><span class="p">(</span><span class="n">envelope</span><span class="p">,</span> <span class="n">smoothing</span><span class="o">=</span><span class="n">macro_smoothing</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-282"><a href="#dynamic_range_normalize-282"><span class="linenos">282</span></a>    <span class="n">micro_db</span> <span class="o">=</span> <span class="n">envelope_dbfs</span><span class="p">(</span><span class="n">envelope</span><span class="p">,</span> <span class="n">smoothing</span><span class="o">=</span><span class="n">micro_smoothing</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-283"><a href="#dynamic_range_normalize-283"><span class="linenos">283</span></a>    <span class="n">macro_db</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">macro_db</span><span class="p">),</span> <span class="n">macro_db</span><span class="p">,</span> <span class="n">floor_dbfs</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-284"><a href="#dynamic_range_normalize-284"><span class="linenos">284</span></a>    <span class="n">micro_db</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">micro_db</span><span class="p">),</span> <span class="n">micro_db</span><span class="p">,</span> <span class="n">floor_dbfs</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-285"><a href="#dynamic_range_normalize-285"><span class="linenos">285</span></a>
+</span><span id="dynamic_range_normalize-286"><a href="#dynamic_range_normalize-286"><span class="linenos">286</span></a>    <span class="n">local_dr_db</span> <span class="o">=</span> <span class="n">micro_db</span> <span class="o">-</span> <span class="n">macro_db</span>
+</span><span id="dynamic_range_normalize-287"><a href="#dynamic_range_normalize-287"><span class="linenos">287</span></a>    <span class="n">gain_db</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">local_dr_db</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-288"><a href="#dynamic_range_normalize-288"><span class="linenos">288</span></a>    <span class="n">over_target</span> <span class="o">=</span> <span class="n">local_dr_db</span> <span class="o">&gt;</span> <span class="mf">0.0</span>
+</span><span id="dynamic_range_normalize-289"><a href="#dynamic_range_normalize-289"><span class="linenos">289</span></a>    <span class="n">gain_db</span><span class="p">[</span><span class="n">over_target</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="n">local_dr_db</span><span class="p">[</span><span class="n">over_target</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">compression_ratio</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-290"><a href="#dynamic_range_normalize-290"><span class="linenos">290</span></a>    <span class="n">under_target</span> <span class="o">=</span> <span class="n">local_dr_db</span> <span class="o">&lt;</span> <span class="o">-</span><span class="n">target_dr_db</span>
+</span><span id="dynamic_range_normalize-291"><a href="#dynamic_range_normalize-291"><span class="linenos">291</span></a>    <span class="n">gain_db</span><span class="p">[</span><span class="n">under_target</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="o">-</span><span class="n">target_dr_db</span> <span class="o">-</span> <span class="n">local_dr_db</span><span class="p">[</span><span class="n">under_target</span><span class="p">])</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="mf">1.0</span> <span class="o">/</span> <span class="n">compression_ratio</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-292"><a href="#dynamic_range_normalize-292"><span class="linenos">292</span></a>
+</span><span id="dynamic_range_normalize-293"><a href="#dynamic_range_normalize-293"><span class="linenos">293</span></a>    <span class="n">combined_gain_db</span> <span class="o">=</span> <span class="n">gain_db</span> <span class="o">+</span> <span class="p">(</span><span class="n">macro_target_dbfs</span> <span class="o">-</span> <span class="n">macro_db</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-294"><a href="#dynamic_range_normalize-294"><span class="linenos">294</span></a>    <span class="n">combined_gain</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">power</span><span class="p">(</span><span class="mf">10.0</span><span class="p">,</span> <span class="n">combined_gain_db</span> <span class="o">/</span> <span class="mf">20.0</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-295"><a href="#dynamic_range_normalize-295"><span class="linenos">295</span></a>    <span class="n">smooth_gain</span> <span class="o">=</span> <span class="n">gain_smoothing</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">combined_gain</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">))</span>
+</span><span id="dynamic_range_normalize-296"><a href="#dynamic_range_normalize-296"><span class="linenos">296</span></a>
+</span><span id="dynamic_range_normalize-297"><a href="#dynamic_range_normalize-297"><span class="linenos">297</span></a>    <span class="n">processed</span> <span class="o">=</span> <span class="n">x</span> <span class="o">*</span> <span class="n">smooth_gain</span>
+</span><span id="dynamic_range_normalize-298"><a href="#dynamic_range_normalize-298"><span class="linenos">298</span></a>    <span class="n">peak</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">processed</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">())</span> <span class="k">if</span> <span class="n">processed</span><span class="o">.</span><span class="n">size</span> <span class="k">else</span> <span class="mf">0.0</span>
+</span><span id="dynamic_range_normalize-299"><a href="#dynamic_range_normalize-299"><span class="linenos">299</span></a>    <span class="k">if</span> <span class="n">peak</span> <span class="o">&gt;</span> <span class="n">ceiling</span><span class="p">:</span>
+</span><span id="dynamic_range_normalize-300"><a href="#dynamic_range_normalize-300"><span class="linenos">300</span></a>        <span class="n">processed</span> <span class="o">=</span> <span class="n">processed</span> <span class="o">*</span> <span class="p">(</span><span class="n">ceiling</span> <span class="o">/</span> <span class="n">peak</span><span class="p">)</span>
+</span><span id="dynamic_range_normalize-301"><a href="#dynamic_range_normalize-301"><span class="linenos">301</span></a>    <span class="k">return</span> <span class="n">Audio</span><span class="p">(</span><span class="n">waveform</span><span class="o">=</span><span class="n">processed</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">sampling_rate</span><span class="o">=</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -673,10 +890,10 @@ passage's own macro level exceeds <code>target_dr_db</code> is compressed back t
 transient in a quiet scene, or a quiet word in a loud scene, is not read as clipping or as
 silence by an instrument downstream that assumes one stable dynamic range for the whole file.</p>
 
-<p>Reuses <code><a href="#hilbert_envelope_dbfs">hilbert_envelope_dbfs()</a></code> for both envelopes, each with its own smoothing strategy: a
-slow one for the scene's macro loudness context and a fast one for the passage's own micro
-dynamics. The two are already in dB, so the local dynamic range is their plain difference rather
-than a ratio.</p>
+<p>Reads both envelopes off one <code><a href="#analytic_envelope">analytic_envelope()</a></code> through <code><a href="#envelope_dbfs">envelope_dbfs()</a></code>, each with
+its own smoothing strategy: a slow one for the scene's macro loudness context and a fast one for
+the passage's own micro dynamics. The two are already in dB, so the local dynamic range is their
+plain difference rather than a ratio.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
@@ -704,8 +921,8 @@ is downstream of, not insufficient bandwidth. A short median settles to the corr
 plateau almost immediately regardless of window width, at the cost of a bounded rather
 than a ramped transition — construct from <code>normalization.gain_smoothing</code>.</li>
 <li><strong>floor_dbfs:</strong>  The dB value substituted wherever an envelope has no measurable value (silence,
-or below the input's numeric resolution — see <code><a href="#hilbert_envelope_dbfs">hilbert_envelope_dbfs()</a></code>), so the gain
-curve stays finite through a silent stretch instead of propagating <code>nan</code>. Read it from
+or below the input's numeric resolution — see <code><a href="#envelope_dbfs">envelope_dbfs()</a></code>), so the gain curve
+stays finite through a silent stretch instead of propagating <code>nan</code>. Read it from
 <code>normalization.floor_dbfs</code>.</li>
 <li><strong>ceiling:</strong>  The absolute peak the processed waveform is rescaled to if it would otherwise
 exceed it — a numeric safety bound on this operation's own output, not a perceptual
@@ -722,6 +939,60 @@ choice. Read it from <code>normalization.ceiling</code>.</li>
 
 
                 </section>
+                <section id="envelope_dbfs">
+                            <input id="envelope_dbfs-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
+<div class="attr function">
+            
+        <span class="def">def</span>
+        <span class="name">envelope_dbfs</span><span class="signature pdoc-code multiline">(<span class="param">	<span class="n">envelope</span><span class="p">:</span> <span class="n"><a href="#AnalyticEnvelope">AnalyticEnvelope</a></span>,</span><span class="param">	<span class="o">*</span>,</span><span class="param">	<span class="n">smoothing</span><span class="p">:</span> <span class="n"><a href="#EnvelopeSmoothing">EnvelopeSmoothing</a></span></span><span class="return-annotation">) -> <span class="n">numpy</span><span class="o">.</span><span class="n">ndarray</span>:</span></span>
+
+                <label class="view-source-button" for="envelope_dbfs-view-source"><span>View Source</span></label>
+
+    </div>
+    <a class="headerlink" href="#envelope_dbfs"></a>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="envelope_dbfs-146"><a href="#envelope_dbfs-146"><span class="linenos">146</span></a><span class="k">def</span><span class="w"> </span><span class="nf">envelope_dbfs</span><span class="p">(</span><span class="n">envelope</span><span class="p">:</span> <span class="n">AnalyticEnvelope</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="envelope_dbfs-147"><a href="#envelope_dbfs-147"><span class="linenos">147</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Smooth an already-computed analytic magnitude and read it in dBFS.</span>
+</span><span id="envelope_dbfs-148"><a href="#envelope_dbfs-148"><span class="linenos">148</span></a>
+</span><span id="envelope_dbfs-149"><a href="#envelope_dbfs-149"><span class="linenos">149</span></a><span class="sd">    Args:</span>
+</span><span id="envelope_dbfs-150"><a href="#envelope_dbfs-150"><span class="linenos">150</span></a><span class="sd">        envelope: The magnitude to smooth, from :func:`analytic_envelope`.</span>
+</span><span id="envelope_dbfs-151"><a href="#envelope_dbfs-151"><span class="linenos">151</span></a><span class="sd">        smoothing: Strategy applied to the magnitude before it is read in dB.</span>
+</span><span id="envelope_dbfs-152"><a href="#envelope_dbfs-152"><span class="linenos">152</span></a>
+</span><span id="envelope_dbfs-153"><a href="#envelope_dbfs-153"><span class="linenos">153</span></a><span class="sd">    Returns:</span>
+</span><span id="envelope_dbfs-154"><a href="#envelope_dbfs-154"><span class="linenos">154</span></a><span class="sd">        One value per input sample, in dBFS, absolute and never normalised by the input&#39;s maximum.</span>
+</span><span id="envelope_dbfs-155"><a href="#envelope_dbfs-155"><span class="linenos">155</span></a><span class="sd">        A sample whose smoothed envelope is non-positive or below the input representation&#39;s</span>
+</span><span id="envelope_dbfs-156"><a href="#envelope_dbfs-156"><span class="linenos">156</span></a><span class="sd">        resolution has no dB value and reads ``nan``.</span>
+</span><span id="envelope_dbfs-157"><a href="#envelope_dbfs-157"><span class="linenos">157</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="envelope_dbfs-158"><a href="#envelope_dbfs-158"><span class="linenos">158</span></a>    <span class="n">env</span> <span class="o">=</span> <span class="n">smoothing</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">envelope</span><span class="o">.</span><span class="n">magnitude</span><span class="p">,</span> <span class="n">envelope</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">)</span>
+</span><span id="envelope_dbfs-159"><a href="#envelope_dbfs-159"><span class="linenos">159</span></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">env</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
+</span><span id="envelope_dbfs-160"><a href="#envelope_dbfs-160"><span class="linenos">160</span></a>    <span class="c1"># A resonant smoothing (Butterworth) can ring through zero after a transient. Tiny positive</span>
+</span><span id="envelope_dbfs-161"><a href="#envelope_dbfs-161"><span class="linenos">161</span></a>    <span class="c1"># values on that crossing are numerical residue, not a measurable acoustic level; admitting them</span>
+</span><span id="envelope_dbfs-162"><a href="#envelope_dbfs-162"><span class="linenos">162</span></a>    <span class="c1"># into a local percentile creates implausible downward floor spikes and inflated span contrast.</span>
+</span><span id="envelope_dbfs-163"><a href="#envelope_dbfs-163"><span class="linenos">163</span></a>    <span class="n">measurable</span> <span class="o">=</span> <span class="n">env</span> <span class="o">&gt;=</span> <span class="n">envelope</span><span class="o">.</span><span class="n">resolution</span>
+</span><span id="envelope_dbfs-164"><a href="#envelope_dbfs-164"><span class="linenos">164</span></a>    <span class="n">out</span><span class="p">[</span><span class="n">measurable</span><span class="p">]</span> <span class="o">=</span> <span class="mf">20.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log10</span><span class="p">(</span><span class="n">env</span><span class="p">[</span><span class="n">measurable</span><span class="p">])</span>
+</span><span id="envelope_dbfs-165"><a href="#envelope_dbfs-165"><span class="linenos">165</span></a>    <span class="k">return</span> <span class="n">out</span>
+</span></pre></div>
+
+
+            <div class="docstring"><p>Smooth an already-computed analytic magnitude and read it in dBFS.</p>
+
+<h6 id="arguments">Arguments:</h6>
+
+<ul>
+<li><strong>envelope:</strong>  The magnitude to smooth, from <code><a href="#analytic_envelope">analytic_envelope()</a></code>.</li>
+<li><strong>smoothing:</strong>  Strategy applied to the magnitude before it is read in dB.</li>
+</ul>
+
+<h6 id="returns">Returns:</h6>
+
+<blockquote>
+  <p>One value per input sample, in dBFS, absolute and never normalised by the input's maximum.
+  A sample whose smoothed envelope is non-positive or below the input representation's
+  resolution has no dB value and reads <code>nan</code>.</p>
+</blockquote>
+</div>
+
+
+                </section>
                 <section id="global_floor_dbfs">
                             <input id="global_floor_dbfs-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
 <div class="attr function">
@@ -733,32 +1004,32 @@ choice. Read it from <code>normalization.ceiling</code>.</li>
 
     </div>
     <a class="headerlink" href="#global_floor_dbfs"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="global_floor_dbfs-127"><a href="#global_floor_dbfs-127"><span class="linenos">127</span></a><span class="k">def</span><span class="w"> </span><span class="nf">global_floor_dbfs</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">percentile</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-</span><span id="global_floor_dbfs-128"><a href="#global_floor_dbfs-128"><span class="linenos">128</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single low percentile of the envelope, over the whole recording.</span>
-</span><span id="global_floor_dbfs-129"><a href="#global_floor_dbfs-129"><span class="linenos">129</span></a>
-</span><span id="global_floor_dbfs-130"><a href="#global_floor_dbfs-130"><span class="linenos">130</span></a><span class="sd">    One number for the whole signal, not a rolling one: a rolling percentile of the envelope tracked</span>
-</span><span id="global_floor_dbfs-131"><a href="#global_floor_dbfs-131"><span class="linenos">131</span></a><span class="sd">    whichever moment happened to be quietest inside whatever window currently surrounded the walk,</span>
-</span><span id="global_floor_dbfs-132"><a href="#global_floor_dbfs-132"><span class="linenos">132</span></a><span class="sd">    which on continuous real speech with no genuine internal silence swings by 20+ dB across one</span>
-</span><span id="global_floor_dbfs-133"><a href="#global_floor_dbfs-133"><span class="linenos">133</span></a><span class="sd">    uninterrupted utterance — &quot;quietest recent speech&quot; is not &quot;background noise&quot; when there is no</span>
-</span><span id="global_floor_dbfs-134"><a href="#global_floor_dbfs-134"><span class="linenos">134</span></a><span class="sd">    pause long enough to expose one. It also fed a span&#39;s offset threshold from the floor at the</span>
-</span><span id="global_floor_dbfs-135"><a href="#global_floor_dbfs-135"><span class="linenos">135</span></a><span class="sd">    peak&#39;s own sample, never re-read as the walk advanced away from it. A single global value removes</span>
-</span><span id="global_floor_dbfs-136"><a href="#global_floor_dbfs-136"><span class="linenos">136</span></a><span class="sd">    both: there is no per-sample floor for a later sample to have drifted away from. Reading the</span>
-</span><span id="global_floor_dbfs-137"><a href="#global_floor_dbfs-137"><span class="linenos">137</span></a><span class="sd">    percentile from the envelope rather than the raw waveform keeps it directly comparable to</span>
-</span><span id="global_floor_dbfs-138"><a href="#global_floor_dbfs-138"><span class="linenos">138</span></a><span class="sd">    ``envelope_db`` in :func:`~senselab.audio.tasks.spans.api.propose_spans`&#39;s ``rise``: a floor and</span>
-</span><span id="global_floor_dbfs-139"><a href="#global_floor_dbfs-139"><span class="linenos">139</span></a><span class="sd">    an envelope are the same statistic of the same underlying quantity, not two different summaries</span>
-</span><span id="global_floor_dbfs-140"><a href="#global_floor_dbfs-140"><span class="linenos">140</span></a><span class="sd">    of two different signals a fixed number of dB apart regardless of level.</span>
-</span><span id="global_floor_dbfs-141"><a href="#global_floor_dbfs-141"><span class="linenos">141</span></a>
-</span><span id="global_floor_dbfs-142"><a href="#global_floor_dbfs-142"><span class="linenos">142</span></a><span class="sd">    Args:</span>
-</span><span id="global_floor_dbfs-143"><a href="#global_floor_dbfs-143"><span class="linenos">143</span></a><span class="sd">        envelope_db: Output of :func:`hilbert_envelope_dbfs`, ``nan`` where it had no dB value.</span>
-</span><span id="global_floor_dbfs-144"><a href="#global_floor_dbfs-144"><span class="linenos">144</span></a><span class="sd">        percentile: Which percentile of the envelope is the floor. Read it from ``floor.percentile``.</span>
-</span><span id="global_floor_dbfs-145"><a href="#global_floor_dbfs-145"><span class="linenos">145</span></a>
-</span><span id="global_floor_dbfs-146"><a href="#global_floor_dbfs-146"><span class="linenos">146</span></a><span class="sd">    Returns:</span>
-</span><span id="global_floor_dbfs-147"><a href="#global_floor_dbfs-147"><span class="linenos">147</span></a><span class="sd">        One dBFS value for the whole recording, over its measured samples. ``nan`` when nothing in</span>
-</span><span id="global_floor_dbfs-148"><a href="#global_floor_dbfs-148"><span class="linenos">148</span></a><span class="sd">        the envelope was measurable at all — propagates cleanly to</span>
-</span><span id="global_floor_dbfs-149"><a href="#global_floor_dbfs-149"><span class="linenos">149</span></a><span class="sd">        :class:`~senselab.audio.tasks.spans.api.NoContrast` rather than a fabricated number.</span>
-</span><span id="global_floor_dbfs-150"><a href="#global_floor_dbfs-150"><span class="linenos">150</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="global_floor_dbfs-151"><a href="#global_floor_dbfs-151"><span class="linenos">151</span></a>    <span class="n">measured</span> <span class="o">=</span> <span class="n">envelope_db</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">)]</span>
-</span><span id="global_floor_dbfs-152"><a href="#global_floor_dbfs-152"><span class="linenos">152</span></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">measured</span><span class="p">,</span> <span class="n">percentile</span><span class="p">))</span> <span class="k">if</span> <span class="n">measured</span><span class="o">.</span><span class="n">size</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="global_floor_dbfs-188"><a href="#global_floor_dbfs-188"><span class="linenos">188</span></a><span class="k">def</span><span class="w"> </span><span class="nf">global_floor_dbfs</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">percentile</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+</span><span id="global_floor_dbfs-189"><a href="#global_floor_dbfs-189"><span class="linenos">189</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;A single low percentile of the envelope, over the whole recording.</span>
+</span><span id="global_floor_dbfs-190"><a href="#global_floor_dbfs-190"><span class="linenos">190</span></a>
+</span><span id="global_floor_dbfs-191"><a href="#global_floor_dbfs-191"><span class="linenos">191</span></a><span class="sd">    One number for the whole signal, not a rolling one: a rolling percentile of the envelope tracked</span>
+</span><span id="global_floor_dbfs-192"><a href="#global_floor_dbfs-192"><span class="linenos">192</span></a><span class="sd">    whichever moment happened to be quietest inside whatever window currently surrounded the walk,</span>
+</span><span id="global_floor_dbfs-193"><a href="#global_floor_dbfs-193"><span class="linenos">193</span></a><span class="sd">    which on continuous real speech with no genuine internal silence swings by 20+ dB across one</span>
+</span><span id="global_floor_dbfs-194"><a href="#global_floor_dbfs-194"><span class="linenos">194</span></a><span class="sd">    uninterrupted utterance — &quot;quietest recent speech&quot; is not &quot;background noise&quot; when there is no</span>
+</span><span id="global_floor_dbfs-195"><a href="#global_floor_dbfs-195"><span class="linenos">195</span></a><span class="sd">    pause long enough to expose one. It also fed a span&#39;s offset threshold from the floor at the</span>
+</span><span id="global_floor_dbfs-196"><a href="#global_floor_dbfs-196"><span class="linenos">196</span></a><span class="sd">    peak&#39;s own sample, never re-read as the walk advanced away from it. A single global value removes</span>
+</span><span id="global_floor_dbfs-197"><a href="#global_floor_dbfs-197"><span class="linenos">197</span></a><span class="sd">    both: there is no per-sample floor for a later sample to have drifted away from. Reading the</span>
+</span><span id="global_floor_dbfs-198"><a href="#global_floor_dbfs-198"><span class="linenos">198</span></a><span class="sd">    percentile from the envelope rather than the raw waveform keeps it directly comparable to</span>
+</span><span id="global_floor_dbfs-199"><a href="#global_floor_dbfs-199"><span class="linenos">199</span></a><span class="sd">    ``envelope_db`` in :func:`~senselab.audio.tasks.spans.api.propose_spans`&#39;s ``rise``: a floor and</span>
+</span><span id="global_floor_dbfs-200"><a href="#global_floor_dbfs-200"><span class="linenos">200</span></a><span class="sd">    an envelope are the same statistic of the same underlying quantity, not two different summaries</span>
+</span><span id="global_floor_dbfs-201"><a href="#global_floor_dbfs-201"><span class="linenos">201</span></a><span class="sd">    of two different signals a fixed number of dB apart regardless of level.</span>
+</span><span id="global_floor_dbfs-202"><a href="#global_floor_dbfs-202"><span class="linenos">202</span></a>
+</span><span id="global_floor_dbfs-203"><a href="#global_floor_dbfs-203"><span class="linenos">203</span></a><span class="sd">    Args:</span>
+</span><span id="global_floor_dbfs-204"><a href="#global_floor_dbfs-204"><span class="linenos">204</span></a><span class="sd">        envelope_db: Output of :func:`hilbert_envelope_dbfs`, ``nan`` where it had no dB value.</span>
+</span><span id="global_floor_dbfs-205"><a href="#global_floor_dbfs-205"><span class="linenos">205</span></a><span class="sd">        percentile: Which percentile of the envelope is the floor. Read it from ``floor.percentile``.</span>
+</span><span id="global_floor_dbfs-206"><a href="#global_floor_dbfs-206"><span class="linenos">206</span></a>
+</span><span id="global_floor_dbfs-207"><a href="#global_floor_dbfs-207"><span class="linenos">207</span></a><span class="sd">    Returns:</span>
+</span><span id="global_floor_dbfs-208"><a href="#global_floor_dbfs-208"><span class="linenos">208</span></a><span class="sd">        One dBFS value for the whole recording, over its measured samples. ``nan`` when nothing in</span>
+</span><span id="global_floor_dbfs-209"><a href="#global_floor_dbfs-209"><span class="linenos">209</span></a><span class="sd">        the envelope was measurable at all — propagates cleanly to</span>
+</span><span id="global_floor_dbfs-210"><a href="#global_floor_dbfs-210"><span class="linenos">210</span></a><span class="sd">        :class:`~senselab.audio.tasks.spans.api.NoContrast` rather than a fabricated number.</span>
+</span><span id="global_floor_dbfs-211"><a href="#global_floor_dbfs-211"><span class="linenos">211</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="global_floor_dbfs-212"><a href="#global_floor_dbfs-212"><span class="linenos">212</span></a>    <span class="n">measured</span> <span class="o">=</span> <span class="n">envelope_db</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">envelope_db</span><span class="p">)]</span>
+</span><span id="global_floor_dbfs-213"><a href="#global_floor_dbfs-213"><span class="linenos">213</span></a>    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">measured</span><span class="p">,</span> <span class="n">percentile</span><span class="p">))</span> <span class="k">if</span> <span class="n">measured</span><span class="o">.</span><span class="n">size</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">)</span>
 </span></pre></div>
 
 
@@ -805,42 +1076,33 @@ of two different signals a fixed number of dB apart regardless of level.</p>
 
     </div>
     <a class="headerlink" href="#hilbert_envelope_dbfs"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="hilbert_envelope_dbfs-96"><a href="#hilbert_envelope_dbfs-96"><span class="linenos"> 96</span></a><span class="k">def</span><span class="w"> </span><span class="nf">hilbert_envelope_dbfs</span><span class="p">(</span><span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
-</span><span id="hilbert_envelope_dbfs-97"><a href="#hilbert_envelope_dbfs-97"><span class="linenos"> 97</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The analytic-signal magnitude, smoothed, in dBFS.</span>
-</span><span id="hilbert_envelope_dbfs-98"><a href="#hilbert_envelope_dbfs-98"><span class="linenos"> 98</span></a>
-</span><span id="hilbert_envelope_dbfs-99"><a href="#hilbert_envelope_dbfs-99"><span class="linenos"> 99</span></a><span class="sd">    A resonant smoothing strategy is offline-only if it is zero-phase; :class:`MedianSmoothing` has</span>
-</span><span id="hilbert_envelope_dbfs-100"><a href="#hilbert_envelope_dbfs-100"><span class="linenos">100</span></a><span class="sd">    no phase response to speak of.</span>
-</span><span id="hilbert_envelope_dbfs-101"><a href="#hilbert_envelope_dbfs-101"><span class="linenos">101</span></a>
-</span><span id="hilbert_envelope_dbfs-102"><a href="#hilbert_envelope_dbfs-102"><span class="linenos">102</span></a><span class="sd">    Args:</span>
-</span><span id="hilbert_envelope_dbfs-103"><a href="#hilbert_envelope_dbfs-103"><span class="linenos">103</span></a><span class="sd">        audio: Mono audio. A multi-channel input is averaged.</span>
-</span><span id="hilbert_envelope_dbfs-104"><a href="#hilbert_envelope_dbfs-104"><span class="linenos">104</span></a><span class="sd">        smoothing: Strategy applied to ``|hilbert(x)|`` before it is read in dB.</span>
-</span><span id="hilbert_envelope_dbfs-105"><a href="#hilbert_envelope_dbfs-105"><span class="linenos">105</span></a>
-</span><span id="hilbert_envelope_dbfs-106"><a href="#hilbert_envelope_dbfs-106"><span class="linenos">106</span></a><span class="sd">    Returns:</span>
-</span><span id="hilbert_envelope_dbfs-107"><a href="#hilbert_envelope_dbfs-107"><span class="linenos">107</span></a><span class="sd">        One value per input sample, in dBFS, absolute and never normalised by the input&#39;s maximum.</span>
-</span><span id="hilbert_envelope_dbfs-108"><a href="#hilbert_envelope_dbfs-108"><span class="linenos">108</span></a><span class="sd">        A sample whose smoothed envelope is non-positive or below the input representation&#39;s</span>
-</span><span id="hilbert_envelope_dbfs-109"><a href="#hilbert_envelope_dbfs-109"><span class="linenos">109</span></a><span class="sd">        resolution has no dB value and reads ``nan``.</span>
-</span><span id="hilbert_envelope_dbfs-110"><a href="#hilbert_envelope_dbfs-110"><span class="linenos">110</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="hilbert_envelope_dbfs-111"><a href="#hilbert_envelope_dbfs-111"><span class="linenos">111</span></a>    <span class="n">source</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">)</span>
-</span><span id="hilbert_envelope_dbfs-112"><a href="#hilbert_envelope_dbfs-112"><span class="linenos">112</span></a>    <span class="n">source_dtype</span> <span class="o">=</span> <span class="n">source</span><span class="o">.</span><span class="n">dtype</span> <span class="k">if</span> <span class="n">np</span><span class="o">.</span><span class="n">issubdtype</span><span class="p">(</span><span class="n">source</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">floating</span><span class="p">)</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">dtype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-</span><span id="hilbert_envelope_dbfs-113"><a href="#hilbert_envelope_dbfs-113"><span class="linenos">113</span></a>    <span class="n">resolution</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">finfo</span><span class="p">(</span><span class="n">source_dtype</span><span class="p">)</span><span class="o">.</span><span class="n">eps</span><span class="p">)</span>
-</span><span id="hilbert_envelope_dbfs-114"><a href="#hilbert_envelope_dbfs-114"><span class="linenos">114</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">source</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="hilbert_envelope_dbfs-115"><a href="#hilbert_envelope_dbfs-115"><span class="linenos">115</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="hilbert_envelope_dbfs-116"><a href="#hilbert_envelope_dbfs-116"><span class="linenos">116</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="hilbert_envelope_dbfs-117"><a href="#hilbert_envelope_dbfs-117"><span class="linenos">117</span></a>    <span class="n">env</span> <span class="o">=</span> <span class="n">smoothing</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">hilbert</span><span class="p">(</span><span class="n">x</span><span class="p">)),</span> <span class="nb">int</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">sampling_rate</span><span class="p">))</span>
-</span><span id="hilbert_envelope_dbfs-118"><a href="#hilbert_envelope_dbfs-118"><span class="linenos">118</span></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">env</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">)</span>
-</span><span id="hilbert_envelope_dbfs-119"><a href="#hilbert_envelope_dbfs-119"><span class="linenos">119</span></a>    <span class="c1"># A resonant smoothing (Butterworth) can ring through zero after a transient. Tiny positive</span>
-</span><span id="hilbert_envelope_dbfs-120"><a href="#hilbert_envelope_dbfs-120"><span class="linenos">120</span></a>    <span class="c1"># values on that crossing are numerical residue, not a measurable acoustic level; admitting them</span>
-</span><span id="hilbert_envelope_dbfs-121"><a href="#hilbert_envelope_dbfs-121"><span class="linenos">121</span></a>    <span class="c1"># into a local percentile creates implausible downward floor spikes and inflated span contrast.</span>
-</span><span id="hilbert_envelope_dbfs-122"><a href="#hilbert_envelope_dbfs-122"><span class="linenos">122</span></a>    <span class="n">measurable</span> <span class="o">=</span> <span class="n">env</span> <span class="o">&gt;=</span> <span class="n">resolution</span>
-</span><span id="hilbert_envelope_dbfs-123"><a href="#hilbert_envelope_dbfs-123"><span class="linenos">123</span></a>    <span class="n">out</span><span class="p">[</span><span class="n">measurable</span><span class="p">]</span> <span class="o">=</span> <span class="mf">20.0</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">log10</span><span class="p">(</span><span class="n">env</span><span class="p">[</span><span class="n">measurable</span><span class="p">])</span>
-</span><span id="hilbert_envelope_dbfs-124"><a href="#hilbert_envelope_dbfs-124"><span class="linenos">124</span></a>    <span class="k">return</span> <span class="n">out</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="hilbert_envelope_dbfs-168"><a href="#hilbert_envelope_dbfs-168"><span class="linenos">168</span></a><span class="k">def</span><span class="w"> </span><span class="nf">hilbert_envelope_dbfs</span><span class="p">(</span><span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">smoothing</span><span class="p">:</span> <span class="n">EnvelopeSmoothing</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+</span><span id="hilbert_envelope_dbfs-169"><a href="#hilbert_envelope_dbfs-169"><span class="linenos">169</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;The analytic-signal magnitude, smoothed, in dBFS.</span>
+</span><span id="hilbert_envelope_dbfs-170"><a href="#hilbert_envelope_dbfs-170"><span class="linenos">170</span></a>
+</span><span id="hilbert_envelope_dbfs-171"><a href="#hilbert_envelope_dbfs-171"><span class="linenos">171</span></a><span class="sd">    A resonant smoothing strategy is offline-only if it is zero-phase; :class:`MedianSmoothing` has</span>
+</span><span id="hilbert_envelope_dbfs-172"><a href="#hilbert_envelope_dbfs-172"><span class="linenos">172</span></a><span class="sd">    no phase response to speak of. Reading two smoothings off one recording costs two transforms</span>
+</span><span id="hilbert_envelope_dbfs-173"><a href="#hilbert_envelope_dbfs-173"><span class="linenos">173</span></a><span class="sd">    through this entry point; call :func:`analytic_envelope` once and :func:`envelope_dbfs` per</span>
+</span><span id="hilbert_envelope_dbfs-174"><a href="#hilbert_envelope_dbfs-174"><span class="linenos">174</span></a><span class="sd">    strategy instead.</span>
+</span><span id="hilbert_envelope_dbfs-175"><a href="#hilbert_envelope_dbfs-175"><span class="linenos">175</span></a>
+</span><span id="hilbert_envelope_dbfs-176"><a href="#hilbert_envelope_dbfs-176"><span class="linenos">176</span></a><span class="sd">    Args:</span>
+</span><span id="hilbert_envelope_dbfs-177"><a href="#hilbert_envelope_dbfs-177"><span class="linenos">177</span></a><span class="sd">        audio: Mono audio. A multi-channel input is averaged.</span>
+</span><span id="hilbert_envelope_dbfs-178"><a href="#hilbert_envelope_dbfs-178"><span class="linenos">178</span></a><span class="sd">        smoothing: Strategy applied to ``|hilbert(x)|`` before it is read in dB.</span>
+</span><span id="hilbert_envelope_dbfs-179"><a href="#hilbert_envelope_dbfs-179"><span class="linenos">179</span></a>
+</span><span id="hilbert_envelope_dbfs-180"><a href="#hilbert_envelope_dbfs-180"><span class="linenos">180</span></a><span class="sd">    Returns:</span>
+</span><span id="hilbert_envelope_dbfs-181"><a href="#hilbert_envelope_dbfs-181"><span class="linenos">181</span></a><span class="sd">        One value per input sample, in dBFS, absolute and never normalised by the input&#39;s maximum.</span>
+</span><span id="hilbert_envelope_dbfs-182"><a href="#hilbert_envelope_dbfs-182"><span class="linenos">182</span></a><span class="sd">        A sample whose smoothed envelope is non-positive or below the input representation&#39;s</span>
+</span><span id="hilbert_envelope_dbfs-183"><a href="#hilbert_envelope_dbfs-183"><span class="linenos">183</span></a><span class="sd">        resolution has no dB value and reads ``nan``.</span>
+</span><span id="hilbert_envelope_dbfs-184"><a href="#hilbert_envelope_dbfs-184"><span class="linenos">184</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="hilbert_envelope_dbfs-185"><a href="#hilbert_envelope_dbfs-185"><span class="linenos">185</span></a>    <span class="k">return</span> <span class="n">envelope_dbfs</span><span class="p">(</span><span class="n">analytic_envelope</span><span class="p">(</span><span class="n">audio</span><span class="p">),</span> <span class="n">smoothing</span><span class="o">=</span><span class="n">smoothing</span><span class="p">)</span>
 </span></pre></div>
 
 
             <div class="docstring"><p>The analytic-signal magnitude, smoothed, in dBFS.</p>
 
 <p>A resonant smoothing strategy is offline-only if it is zero-phase; <code><a href="#MedianSmoothing">MedianSmoothing</a></code> has
-no phase response to speak of.</p>
+no phase response to speak of. Reading two smoothings off one recording costs two transforms
+through this entry point; call <code><a href="#analytic_envelope">analytic_envelope()</a></code> once and <code><a href="#envelope_dbfs">envelope_dbfs()</a></code> per
+strategy instead.</p>
 
 <h6 id="arguments">Arguments:</h6>
 

@@ -99,21 +99,21 @@
 
     </div>
     <a class="headerlink" href="#ClipEvent"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="ClipEvent-13"><a href="#ClipEvent-13"><span class="linenos">13</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="ClipEvent-14"><a href="#ClipEvent-14"><span class="linenos">14</span></a><span class="k">class</span><span class="w"> </span><span class="nc">ClipEvent</span><span class="p">:</span>
-</span><span id="ClipEvent-15"><a href="#ClipEvent-15"><span class="linenos">15</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One run of samples pinned near the recording&#39;s own amplitude extreme.</span>
-</span><span id="ClipEvent-16"><a href="#ClipEvent-16"><span class="linenos">16</span></a>
-</span><span id="ClipEvent-17"><a href="#ClipEvent-17"><span class="linenos">17</span></a><span class="sd">    Attributes:</span>
-</span><span id="ClipEvent-18"><a href="#ClipEvent-18"><span class="linenos">18</span></a><span class="sd">        start_sample: First sample of the run, inclusive.</span>
-</span><span id="ClipEvent-19"><a href="#ClipEvent-19"><span class="linenos">19</span></a><span class="sd">        end_sample: Last sample counted as part of the run, inclusive — including any trailing</span>
-</span><span id="ClipEvent-20"><a href="#ClipEvent-20"><span class="linenos">20</span></a><span class="sd">            samples tolerated by the leniency window.</span>
-</span><span id="ClipEvent-21"><a href="#ClipEvent-21"><span class="linenos">21</span></a><span class="sd">        polarity: ``&quot;positive&quot;`` when the run tracks the file&#39;s global maximum, ``&quot;negative&quot;`` when</span>
-</span><span id="ClipEvent-22"><a href="#ClipEvent-22"><span class="linenos">22</span></a><span class="sd">            it tracks the global minimum.</span>
-</span><span id="ClipEvent-23"><a href="#ClipEvent-23"><span class="linenos">23</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="ClipEvent-24"><a href="#ClipEvent-24"><span class="linenos">24</span></a>
-</span><span id="ClipEvent-25"><a href="#ClipEvent-25"><span class="linenos">25</span></a>    <span class="n">start_sample</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="ClipEvent-26"><a href="#ClipEvent-26"><span class="linenos">26</span></a>    <span class="n">end_sample</span><span class="p">:</span> <span class="nb">int</span>
-</span><span id="ClipEvent-27"><a href="#ClipEvent-27"><span class="linenos">27</span></a>    <span class="n">polarity</span><span class="p">:</span> <span class="nb">str</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="ClipEvent-28"><a href="#ClipEvent-28"><span class="linenos">28</span></a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="ClipEvent-29"><a href="#ClipEvent-29"><span class="linenos">29</span></a><span class="k">class</span><span class="w"> </span><span class="nc">ClipEvent</span><span class="p">:</span>
+</span><span id="ClipEvent-30"><a href="#ClipEvent-30"><span class="linenos">30</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;One run of samples pinned near the recording&#39;s own amplitude extreme.</span>
+</span><span id="ClipEvent-31"><a href="#ClipEvent-31"><span class="linenos">31</span></a>
+</span><span id="ClipEvent-32"><a href="#ClipEvent-32"><span class="linenos">32</span></a><span class="sd">    Attributes:</span>
+</span><span id="ClipEvent-33"><a href="#ClipEvent-33"><span class="linenos">33</span></a><span class="sd">        start_sample: First sample of the run, inclusive.</span>
+</span><span id="ClipEvent-34"><a href="#ClipEvent-34"><span class="linenos">34</span></a><span class="sd">        end_sample: Last sample counted as part of the run, inclusive — including any trailing</span>
+</span><span id="ClipEvent-35"><a href="#ClipEvent-35"><span class="linenos">35</span></a><span class="sd">            samples tolerated by the leniency window.</span>
+</span><span id="ClipEvent-36"><a href="#ClipEvent-36"><span class="linenos">36</span></a><span class="sd">        polarity: ``&quot;positive&quot;`` when the run tracks the file&#39;s global maximum, ``&quot;negative&quot;`` when</span>
+</span><span id="ClipEvent-37"><a href="#ClipEvent-37"><span class="linenos">37</span></a><span class="sd">            it tracks the global minimum.</span>
+</span><span id="ClipEvent-38"><a href="#ClipEvent-38"><span class="linenos">38</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="ClipEvent-39"><a href="#ClipEvent-39"><span class="linenos">39</span></a>
+</span><span id="ClipEvent-40"><a href="#ClipEvent-40"><span class="linenos">40</span></a>    <span class="n">start_sample</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="ClipEvent-41"><a href="#ClipEvent-41"><span class="linenos">41</span></a>    <span class="n">end_sample</span><span class="p">:</span> <span class="nb">int</span>
+</span><span id="ClipEvent-42"><a href="#ClipEvent-42"><span class="linenos">42</span></a>    <span class="n">polarity</span><span class="p">:</span> <span class="nb">str</span>
 </span></pre></div>
 
 
@@ -188,91 +188,108 @@ it tracks the global minimum.</li>
 
     </div>
     <a class="headerlink" href="#detect_clip_events"></a>
-            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_clip_events-30"><a href="#detect_clip_events-30"><span class="linenos"> 30</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_clip_events</span><span class="p">(</span>
-</span><span id="detect_clip_events-31"><a href="#detect_clip_events-31"><span class="linenos"> 31</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
-</span><span id="detect_clip_events-32"><a href="#detect_clip_events-32"><span class="linenos"> 32</span></a>    <span class="o">*</span><span class="p">,</span>
-</span><span id="detect_clip_events-33"><a href="#detect_clip_events-33"><span class="linenos"> 33</span></a>    <span class="n">near_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_clip_events-34"><a href="#detect_clip_events-34"><span class="linenos"> 34</span></a>    <span class="n">leniency_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-</span><span id="detect_clip_events-35"><a href="#detect_clip_events-35"><span class="linenos"> 35</span></a>    <span class="n">minimum_extreme</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
-</span><span id="detect_clip_events-36"><a href="#detect_clip_events-36"><span class="linenos"> 36</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ClipEvent</span><span class="p">]:</span>
-</span><span id="detect_clip_events-37"><a href="#detect_clip_events-37"><span class="linenos"> 37</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;ClipDaT: tag runs of samples pinned near the recording&#39;s own amplitude extreme.</span>
-</span><span id="detect_clip_events-38"><a href="#detect_clip_events-38"><span class="linenos"> 38</span></a>
-</span><span id="detect_clip_events-39"><a href="#detect_clip_events-39"><span class="linenos"> 39</span></a><span class="sd">    Hansen, Stauffer &amp; Xia, &quot;Nonlinear waveform distortion: Assessment and detection of clipping on</span>
-</span><span id="detect_clip_events-40"><a href="#detect_clip_events-40"><span class="linenos"> 40</span></a><span class="sd">    speech data and systems&quot;, Speech Communication 134 (2021) 20-31, section 3 (&quot;ClipDaT&quot;), Fig. 9.</span>
-</span><span id="detect_clip_events-41"><a href="#detect_clip_events-41"><span class="linenos"> 41</span></a><span class="sd">    The threshold is the file&#39;s own max/min rather than a fixed full-scale value, because pre-amp</span>
-</span><span id="detect_clip_events-42"><a href="#detect_clip_events-42"><span class="linenos"> 42</span></a><span class="sd">    saturation does not always produce a perfectly flat top — the paper&#39;s Fig. 10b/10c show wavering</span>
-</span><span id="detect_clip_events-43"><a href="#detect_clip_events-43"><span class="linenos"> 43</span></a><span class="sd">    near-clip amplitudes — and a gain change applied after clipping still leaves a run pinned at</span>
-</span><span id="detect_clip_events-44"><a href="#detect_clip_events-44"><span class="linenos"> 44</span></a><span class="sd">    whatever became this file&#39;s own extreme.</span>
-</span><span id="detect_clip_events-45"><a href="#detect_clip_events-45"><span class="linenos"> 45</span></a>
-</span><span id="detect_clip_events-46"><a href="#detect_clip_events-46"><span class="linenos"> 46</span></a><span class="sd">    Algorithm: find the file&#39;s global max and min once; then walk the signal, and whenever a sample</span>
-</span><span id="detect_clip_events-47"><a href="#detect_clip_events-47"><span class="linenos"> 47</span></a><span class="sd">    equals the max or the min, open a clip event and keep extending it while subsequent samples stay</span>
-</span><span id="detect_clip_events-48"><a href="#detect_clip_events-48"><span class="linenos"> 48</span></a><span class="sd">    within ``near_threshold`` of that same extreme, tolerating up to ``leniency_samples`` consecutive</span>
-</span><span id="detect_clip_events-49"><a href="#detect_clip_events-49"><span class="linenos"> 49</span></a><span class="sd">    samples that dip below it before closing the event at the sample where the tolerance was</span>
-</span><span id="detect_clip_events-50"><a href="#detect_clip_events-50"><span class="linenos"> 50</span></a><span class="sd">    exceeded — the paper&#39;s own mechanism for surviving the amplitude wobble Fig. 10 documents,</span>
-</span><span id="detect_clip_events-51"><a href="#detect_clip_events-51"><span class="linenos"> 51</span></a><span class="sd">    rather than fragmenting one clipped burst into many.</span>
-</span><span id="detect_clip_events-52"><a href="#detect_clip_events-52"><span class="linenos"> 52</span></a>
-</span><span id="detect_clip_events-53"><a href="#detect_clip_events-53"><span class="linenos"> 53</span></a><span class="sd">    Args:</span>
-</span><span id="detect_clip_events-54"><a href="#detect_clip_events-54"><span class="linenos"> 54</span></a><span class="sd">        audio: The recording. A multi-channel input is averaged, matching</span>
-</span><span id="detect_clip_events-55"><a href="#detect_clip_events-55"><span class="linenos"> 55</span></a><span class="sd">            ``disruptions.detect_disruptions``&#39;s convention elsewhere in this graph.</span>
-</span><span id="detect_clip_events-56"><a href="#detect_clip_events-56"><span class="linenos"> 56</span></a><span class="sd">        near_threshold: Fraction of the file&#39;s own max/min a sample must reach to still count as</span>
-</span><span id="detect_clip_events-57"><a href="#detect_clip_events-57"><span class="linenos"> 57</span></a><span class="sd">            part of the run. The paper&#39;s own reported constant is ``0.995``.</span>
-</span><span id="detect_clip_events-58"><a href="#detect_clip_events-58"><span class="linenos"> 58</span></a><span class="sd">        leniency_samples: How many consecutive samples may fall below ``near_threshold`` before the</span>
-</span><span id="detect_clip_events-59"><a href="#detect_clip_events-59"><span class="linenos"> 59</span></a><span class="sd">            run closes. The paper&#39;s own reported constant is ``3``.</span>
-</span><span id="detect_clip_events-60"><a href="#detect_clip_events-60"><span class="linenos"> 60</span></a><span class="sd">        minimum_extreme: Below this absolute sample value, the file&#39;s global max/min is treated as</span>
-</span><span id="detect_clip_events-61"><a href="#detect_clip_events-61"><span class="linenos"> 61</span></a><span class="sd">            noise floor rather than a genuine peak, and no event is ever opened. Not part of the</span>
-</span><span id="detect_clip_events-62"><a href="#detect_clip_events-62"><span class="linenos"> 62</span></a><span class="sd">            paper&#39;s algorithm, which assumes a real recording&#39;s peak is meaningfully above zero; a</span>
-</span><span id="detect_clip_events-63"><a href="#detect_clip_events-63"><span class="linenos"> 63</span></a><span class="sd">            near-silent file would otherwise open a spurious event at every sample near 0.0, since</span>
-</span><span id="detect_clip_events-64"><a href="#detect_clip_events-64"><span class="linenos"> 64</span></a><span class="sd">            ``near_threshold`` of an extreme near 0.0 excludes almost nothing.</span>
-</span><span id="detect_clip_events-65"><a href="#detect_clip_events-65"><span class="linenos"> 65</span></a>
-</span><span id="detect_clip_events-66"><a href="#detect_clip_events-66"><span class="linenos"> 66</span></a><span class="sd">    Returns:</span>
-</span><span id="detect_clip_events-67"><a href="#detect_clip_events-67"><span class="linenos"> 67</span></a><span class="sd">        The tagged clip events, in sample order. Empty when the file&#39;s peak amplitude never repeats</span>
-</span><span id="detect_clip_events-68"><a href="#detect_clip_events-68"><span class="linenos"> 68</span></a><span class="sd">        — nothing is &quot;clipped&quot; if the extreme sample value occurs only once — or when the file&#39;s</span>
-</span><span id="detect_clip_events-69"><a href="#detect_clip_events-69"><span class="linenos"> 69</span></a><span class="sd">        peak never clears ``minimum_extreme``.</span>
-</span><span id="detect_clip_events-70"><a href="#detect_clip_events-70"><span class="linenos"> 70</span></a><span class="sd">    &quot;&quot;&quot;</span>
-</span><span id="detect_clip_events-71"><a href="#detect_clip_events-71"><span class="linenos"> 71</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
-</span><span id="detect_clip_events-72"><a href="#detect_clip_events-72"><span class="linenos"> 72</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
-</span><span id="detect_clip_events-73"><a href="#detect_clip_events-73"><span class="linenos"> 73</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-</span><span id="detect_clip_events-74"><a href="#detect_clip_events-74"><span class="linenos"> 74</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-</span><span id="detect_clip_events-75"><a href="#detect_clip_events-75"><span class="linenos"> 75</span></a>    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
-</span><span id="detect_clip_events-76"><a href="#detect_clip_events-76"><span class="linenos"> 76</span></a>        <span class="k">return</span> <span class="p">[]</span>
-</span><span id="detect_clip_events-77"><a href="#detect_clip_events-77"><span class="linenos"> 77</span></a>    <span class="n">global_max</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
-</span><span id="detect_clip_events-78"><a href="#detect_clip_events-78"><span class="linenos"> 78</span></a>    <span class="n">global_min</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
-</span><span id="detect_clip_events-79"><a href="#detect_clip_events-79"><span class="linenos"> 79</span></a>    <span class="c1"># Each extreme is guarded on its own magnitude, not the pair&#39;s: a one-sided clip against a</span>
-</span><span id="detect_clip_events-80"><a href="#detect_clip_events-80"><span class="linenos"> 80</span></a>    <span class="c1"># zero baseline has a genuine positive peak but global_min == 0.0, which every baseline sample</span>
-</span><span id="detect_clip_events-81"><a href="#detect_clip_events-81"><span class="linenos"> 81</span></a>    <span class="c1"># matches exactly — treating 0.0 as a real &quot;negative extreme&quot; would open a clip event on the</span>
-</span><span id="detect_clip_events-82"><a href="#detect_clip_events-82"><span class="linenos"> 82</span></a>    <span class="c1"># entire baseline.</span>
-</span><span id="detect_clip_events-83"><a href="#detect_clip_events-83"><span class="linenos"> 83</span></a>    <span class="n">watch_max</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">global_max</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">minimum_extreme</span>
-</span><span id="detect_clip_events-84"><a href="#detect_clip_events-84"><span class="linenos"> 84</span></a>    <span class="n">watch_min</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">global_min</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">minimum_extreme</span>
-</span><span id="detect_clip_events-85"><a href="#detect_clip_events-85"><span class="linenos"> 85</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">watch_max</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">watch_min</span><span class="p">:</span>
-</span><span id="detect_clip_events-86"><a href="#detect_clip_events-86"><span class="linenos"> 86</span></a>        <span class="k">return</span> <span class="p">[]</span>
+            <div class="pdoc-code codehilite"><pre><span></span><span id="detect_clip_events-79"><a href="#detect_clip_events-79"><span class="linenos"> 79</span></a><span class="k">def</span><span class="w"> </span><span class="nf">detect_clip_events</span><span class="p">(</span>
+</span><span id="detect_clip_events-80"><a href="#detect_clip_events-80"><span class="linenos"> 80</span></a>    <span class="n">audio</span><span class="p">:</span> <span class="n">Audio</span><span class="p">,</span>
+</span><span id="detect_clip_events-81"><a href="#detect_clip_events-81"><span class="linenos"> 81</span></a>    <span class="o">*</span><span class="p">,</span>
+</span><span id="detect_clip_events-82"><a href="#detect_clip_events-82"><span class="linenos"> 82</span></a>    <span class="n">near_threshold</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_clip_events-83"><a href="#detect_clip_events-83"><span class="linenos"> 83</span></a>    <span class="n">leniency_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+</span><span id="detect_clip_events-84"><a href="#detect_clip_events-84"><span class="linenos"> 84</span></a>    <span class="n">minimum_extreme</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span>
+</span><span id="detect_clip_events-85"><a href="#detect_clip_events-85"><span class="linenos"> 85</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">ClipEvent</span><span class="p">]:</span>
+</span><span id="detect_clip_events-86"><a href="#detect_clip_events-86"><span class="linenos"> 86</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;ClipDaT: tag runs of samples pinned near the recording&#39;s own amplitude extreme.</span>
 </span><span id="detect_clip_events-87"><a href="#detect_clip_events-87"><span class="linenos"> 87</span></a>
-</span><span id="detect_clip_events-88"><a href="#detect_clip_events-88"><span class="linenos"> 88</span></a>    <span class="n">events</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ClipEvent</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
-</span><span id="detect_clip_events-89"><a href="#detect_clip_events-89"><span class="linenos"> 89</span></a>    <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
-</span><span id="detect_clip_events-90"><a href="#detect_clip_events-90"><span class="linenos"> 90</span></a>    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">:</span>
-</span><span id="detect_clip_events-91"><a href="#detect_clip_events-91"><span class="linenos"> 91</span></a>        <span class="n">at_max</span> <span class="o">=</span> <span class="n">watch_max</span> <span class="ow">and</span> <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="n">global_max</span>
-</span><span id="detect_clip_events-92"><a href="#detect_clip_events-92"><span class="linenos"> 92</span></a>        <span class="n">at_min</span> <span class="o">=</span> <span class="n">watch_min</span> <span class="ow">and</span> <span class="n">x</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="n">global_min</span>
-</span><span id="detect_clip_events-93"><a href="#detect_clip_events-93"><span class="linenos"> 93</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">at_max</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">at_min</span><span class="p">:</span>
-</span><span id="detect_clip_events-94"><a href="#detect_clip_events-94"><span class="linenos"> 94</span></a>            <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
-</span><span id="detect_clip_events-95"><a href="#detect_clip_events-95"><span class="linenos"> 95</span></a>            <span class="k">continue</span>
-</span><span id="detect_clip_events-96"><a href="#detect_clip_events-96"><span class="linenos"> 96</span></a>        <span class="n">polarity</span> <span class="o">=</span> <span class="s2">&quot;positive&quot;</span> <span class="k">if</span> <span class="n">at_max</span> <span class="k">else</span> <span class="s2">&quot;negative&quot;</span>
-</span><span id="detect_clip_events-97"><a href="#detect_clip_events-97"><span class="linenos"> 97</span></a>        <span class="n">extreme</span> <span class="o">=</span> <span class="n">global_max</span> <span class="k">if</span> <span class="n">polarity</span> <span class="o">==</span> <span class="s2">&quot;positive&quot;</span> <span class="k">else</span> <span class="n">global_min</span>
-</span><span id="detect_clip_events-98"><a href="#detect_clip_events-98"><span class="linenos"> 98</span></a>        <span class="n">band</span> <span class="o">=</span> <span class="n">near_threshold</span> <span class="o">*</span> <span class="n">extreme</span>
-</span><span id="detect_clip_events-99"><a href="#detect_clip_events-99"><span class="linenos"> 99</span></a>        <span class="n">below_run</span> <span class="o">=</span> <span class="mi">0</span>
-</span><span id="detect_clip_events-100"><a href="#detect_clip_events-100"><span class="linenos">100</span></a>        <span class="n">end</span> <span class="o">=</span> <span class="n">i</span>
-</span><span id="detect_clip_events-101"><a href="#detect_clip_events-101"><span class="linenos">101</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span>
-</span><span id="detect_clip_events-102"><a href="#detect_clip_events-102"><span class="linenos">102</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">:</span>
-</span><span id="detect_clip_events-103"><a href="#detect_clip_events-103"><span class="linenos">103</span></a>            <span class="n">within</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">band</span><span class="p">)</span> <span class="k">if</span> <span class="n">polarity</span> <span class="o">==</span> <span class="s2">&quot;positive&quot;</span> <span class="k">else</span> <span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">band</span><span class="p">)</span>
-</span><span id="detect_clip_events-104"><a href="#detect_clip_events-104"><span class="linenos">104</span></a>            <span class="n">end</span> <span class="o">=</span> <span class="n">j</span>
-</span><span id="detect_clip_events-105"><a href="#detect_clip_events-105"><span class="linenos">105</span></a>            <span class="k">if</span> <span class="n">within</span><span class="p">:</span>
-</span><span id="detect_clip_events-106"><a href="#detect_clip_events-106"><span class="linenos">106</span></a>                <span class="n">below_run</span> <span class="o">=</span> <span class="mi">0</span>
-</span><span id="detect_clip_events-107"><a href="#detect_clip_events-107"><span class="linenos">107</span></a>            <span class="k">else</span><span class="p">:</span>
-</span><span id="detect_clip_events-108"><a href="#detect_clip_events-108"><span class="linenos">108</span></a>                <span class="n">below_run</span> <span class="o">+=</span> <span class="mi">1</span>
-</span><span id="detect_clip_events-109"><a href="#detect_clip_events-109"><span class="linenos">109</span></a>                <span class="k">if</span> <span class="n">below_run</span> <span class="o">&gt;</span> <span class="n">leniency_samples</span><span class="p">:</span>
-</span><span id="detect_clip_events-110"><a href="#detect_clip_events-110"><span class="linenos">110</span></a>                    <span class="k">break</span>
-</span><span id="detect_clip_events-111"><a href="#detect_clip_events-111"><span class="linenos">111</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
-</span><span id="detect_clip_events-112"><a href="#detect_clip_events-112"><span class="linenos">112</span></a>        <span class="n">events</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ClipEvent</span><span class="p">(</span><span class="n">start_sample</span><span class="o">=</span><span class="n">i</span><span class="p">,</span> <span class="n">end_sample</span><span class="o">=</span><span class="n">end</span><span class="p">,</span> <span class="n">polarity</span><span class="o">=</span><span class="n">polarity</span><span class="p">))</span>
-</span><span id="detect_clip_events-113"><a href="#detect_clip_events-113"><span class="linenos">113</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="n">end</span> <span class="o">+</span> <span class="mi">1</span>
-</span><span id="detect_clip_events-114"><a href="#detect_clip_events-114"><span class="linenos">114</span></a>    <span class="k">return</span> <span class="n">events</span>
+</span><span id="detect_clip_events-88"><a href="#detect_clip_events-88"><span class="linenos"> 88</span></a><span class="sd">    Hansen, Stauffer &amp; Xia, &quot;Nonlinear waveform distortion: Assessment and detection of clipping on</span>
+</span><span id="detect_clip_events-89"><a href="#detect_clip_events-89"><span class="linenos"> 89</span></a><span class="sd">    speech data and systems&quot;, Speech Communication 134 (2021) 20-31, section 3 (&quot;ClipDaT&quot;), Fig. 9.</span>
+</span><span id="detect_clip_events-90"><a href="#detect_clip_events-90"><span class="linenos"> 90</span></a><span class="sd">    The threshold is the file&#39;s own max/min rather than a fixed full-scale value, because pre-amp</span>
+</span><span id="detect_clip_events-91"><a href="#detect_clip_events-91"><span class="linenos"> 91</span></a><span class="sd">    saturation does not always produce a perfectly flat top — the paper&#39;s Fig. 10b/10c show wavering</span>
+</span><span id="detect_clip_events-92"><a href="#detect_clip_events-92"><span class="linenos"> 92</span></a><span class="sd">    near-clip amplitudes — and a gain change applied after clipping still leaves a run pinned at</span>
+</span><span id="detect_clip_events-93"><a href="#detect_clip_events-93"><span class="linenos"> 93</span></a><span class="sd">    whatever became this file&#39;s own extreme.</span>
+</span><span id="detect_clip_events-94"><a href="#detect_clip_events-94"><span class="linenos"> 94</span></a>
+</span><span id="detect_clip_events-95"><a href="#detect_clip_events-95"><span class="linenos"> 95</span></a><span class="sd">    Algorithm: find the file&#39;s global max and min once; then walk the signal, and wherever an</span>
+</span><span id="detect_clip_events-96"><a href="#detect_clip_events-96"><span class="linenos"> 96</span></a><span class="sd">    extreme is *held* — see below — open a clip event and keep extending it while subsequent samples</span>
+</span><span id="detect_clip_events-97"><a href="#detect_clip_events-97"><span class="linenos"> 97</span></a><span class="sd">    stay within ``near_threshold`` of that same extreme, tolerating up to ``leniency_samples``</span>
+</span><span id="detect_clip_events-98"><a href="#detect_clip_events-98"><span class="linenos"> 98</span></a><span class="sd">    consecutive samples that dip below it before closing the event at the sample where the tolerance</span>
+</span><span id="detect_clip_events-99"><a href="#detect_clip_events-99"><span class="linenos"> 99</span></a><span class="sd">    was exceeded — the paper&#39;s own mechanism for surviving the amplitude wobble Fig. 10 documents,</span>
+</span><span id="detect_clip_events-100"><a href="#detect_clip_events-100"><span class="linenos">100</span></a><span class="sd">    rather than fragmenting one clipped burst into many.</span>
+</span><span id="detect_clip_events-101"><a href="#detect_clip_events-101"><span class="linenos">101</span></a>
+</span><span id="detect_clip_events-102"><a href="#detect_clip_events-102"><span class="linenos">102</span></a><span class="sd">    What counts as held depends on where the extreme sits, and is decided per extreme, so a file&#39;s</span>
+</span><span id="detect_clip_events-103"><a href="#detect_clip_events-103"><span class="linenos">103</span></a><span class="sd">    max and min may be treated differently:</span>
+</span><span id="detect_clip_events-104"><a href="#detect_clip_events-104"><span class="linenos">104</span></a>
+</span><span id="detect_clip_events-105"><a href="#detect_clip_events-105"><span class="linenos">105</span></a><span class="sd">    * **Below digital full scale** — the extreme must repeat across at least</span>
+</span><span id="detect_clip_events-106"><a href="#detect_clip_events-106"><span class="linenos">106</span></a><span class="sd">      ``MINIMUM_EXTREME_RUN`` consecutive samples. A lone sample at a merely relative maximum is</span>
+</span><span id="detect_clip_events-107"><a href="#detect_clip_events-107"><span class="linenos">107</span></a><span class="sd">      where the waveform happened to peak and is no evidence of clipping, whereas a saturated</span>
+</span><span id="detect_clip_events-108"><a href="#detect_clip_events-108"><span class="linenos">108</span></a><span class="sd">      waveform holds its extreme. The repeat must be *consecutive*: a periodic signal revisits the</span>
+</span><span id="detect_clip_events-109"><a href="#detect_clip_events-109"><span class="linenos">109</span></a><span class="sd">      identical extreme value once per period, so a count across the whole file does not separate</span>
+</span><span id="detect_clip_events-110"><a href="#detect_clip_events-110"><span class="linenos">110</span></a><span class="sd">      the two cases.</span>
+</span><span id="detect_clip_events-111"><a href="#detect_clip_events-111"><span class="linenos">111</span></a><span class="sd">    * **At digital full scale** (within ``FULL_SCALE_TOLERANCE`` of ``1.0``) — a single sample opens</span>
+</span><span id="detect_clip_events-112"><a href="#detect_clip_events-112"><span class="linenos">112</span></a><span class="sd">      an event, no repeat required. Reaching the representable ceiling is itself evidence of</span>
+</span><span id="detect_clip_events-113"><a href="#detect_clip_events-113"><span class="linenos">113</span></a><span class="sd">      saturation, and a single-sample clip is only detectable at all in this case.</span>
+</span><span id="detect_clip_events-114"><a href="#detect_clip_events-114"><span class="linenos">114</span></a>
+</span><span id="detect_clip_events-115"><a href="#detect_clip_events-115"><span class="linenos">115</span></a><span class="sd">    Args:</span>
+</span><span id="detect_clip_events-116"><a href="#detect_clip_events-116"><span class="linenos">116</span></a><span class="sd">        audio: The recording. A multi-channel input is averaged, matching</span>
+</span><span id="detect_clip_events-117"><a href="#detect_clip_events-117"><span class="linenos">117</span></a><span class="sd">            ``disruptions.detect_disruptions``&#39;s convention elsewhere in this graph.</span>
+</span><span id="detect_clip_events-118"><a href="#detect_clip_events-118"><span class="linenos">118</span></a><span class="sd">        near_threshold: Fraction of the file&#39;s own max/min a sample must reach to still count as</span>
+</span><span id="detect_clip_events-119"><a href="#detect_clip_events-119"><span class="linenos">119</span></a><span class="sd">            part of the run. The paper&#39;s own reported constant is ``0.995``.</span>
+</span><span id="detect_clip_events-120"><a href="#detect_clip_events-120"><span class="linenos">120</span></a><span class="sd">        leniency_samples: How many consecutive samples may fall below ``near_threshold`` before the</span>
+</span><span id="detect_clip_events-121"><a href="#detect_clip_events-121"><span class="linenos">121</span></a><span class="sd">            run closes. The paper&#39;s own reported constant is ``3``.</span>
+</span><span id="detect_clip_events-122"><a href="#detect_clip_events-122"><span class="linenos">122</span></a><span class="sd">        minimum_extreme: Below this absolute sample value, the file&#39;s global max/min is treated as</span>
+</span><span id="detect_clip_events-123"><a href="#detect_clip_events-123"><span class="linenos">123</span></a><span class="sd">            noise floor rather than a genuine peak, and no event is ever opened. Not part of the</span>
+</span><span id="detect_clip_events-124"><a href="#detect_clip_events-124"><span class="linenos">124</span></a><span class="sd">            paper&#39;s algorithm, which assumes a real recording&#39;s peak is meaningfully above zero; a</span>
+</span><span id="detect_clip_events-125"><a href="#detect_clip_events-125"><span class="linenos">125</span></a><span class="sd">            near-silent file would otherwise open a spurious event at every sample near 0.0, since</span>
+</span><span id="detect_clip_events-126"><a href="#detect_clip_events-126"><span class="linenos">126</span></a><span class="sd">            ``near_threshold`` of an extreme near 0.0 excludes almost nothing.</span>
+</span><span id="detect_clip_events-127"><a href="#detect_clip_events-127"><span class="linenos">127</span></a>
+</span><span id="detect_clip_events-128"><a href="#detect_clip_events-128"><span class="linenos">128</span></a><span class="sd">    Returns:</span>
+</span><span id="detect_clip_events-129"><a href="#detect_clip_events-129"><span class="linenos">129</span></a><span class="sd">        The tagged clip events, in sample order. Empty when neither extreme is ever held — for a</span>
+</span><span id="detect_clip_events-130"><a href="#detect_clip_events-130"><span class="linenos">130</span></a><span class="sd">        sub-full-scale extreme that means it never repeats across ``MINIMUM_EXTREME_RUN``</span>
+</span><span id="detect_clip_events-131"><a href="#detect_clip_events-131"><span class="linenos">131</span></a><span class="sd">        consecutive samples, since a waveform that only touches its extreme in passing is not</span>
+</span><span id="detect_clip_events-132"><a href="#detect_clip_events-132"><span class="linenos">132</span></a><span class="sd">        clipped — or when the file&#39;s peak never clears ``minimum_extreme``.</span>
+</span><span id="detect_clip_events-133"><a href="#detect_clip_events-133"><span class="linenos">133</span></a><span class="sd">    &quot;&quot;&quot;</span>
+</span><span id="detect_clip_events-134"><a href="#detect_clip_events-134"><span class="linenos">134</span></a>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">audio</span><span class="o">.</span><span class="n">waveform</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">)</span>
+</span><span id="detect_clip_events-135"><a href="#detect_clip_events-135"><span class="linenos">135</span></a>    <span class="k">if</span> <span class="n">x</span><span class="o">.</span><span class="n">ndim</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+</span><span id="detect_clip_events-136"><a href="#detect_clip_events-136"><span class="linenos">136</span></a>        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="detect_clip_events-137"><a href="#detect_clip_events-137"><span class="linenos">137</span></a>    <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span><span id="detect_clip_events-138"><a href="#detect_clip_events-138"><span class="linenos">138</span></a>    <span class="k">if</span> <span class="n">n</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span><span id="detect_clip_events-139"><a href="#detect_clip_events-139"><span class="linenos">139</span></a>        <span class="k">return</span> <span class="p">[]</span>
+</span><span id="detect_clip_events-140"><a href="#detect_clip_events-140"><span class="linenos">140</span></a>    <span class="n">global_max</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+</span><span id="detect_clip_events-141"><a href="#detect_clip_events-141"><span class="linenos">141</span></a>    <span class="n">global_min</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
+</span><span id="detect_clip_events-142"><a href="#detect_clip_events-142"><span class="linenos">142</span></a>    <span class="c1"># Each extreme is guarded on its own magnitude, not the pair&#39;s: a one-sided clip against a</span>
+</span><span id="detect_clip_events-143"><a href="#detect_clip_events-143"><span class="linenos">143</span></a>    <span class="c1"># zero baseline has a genuine positive peak but global_min == 0.0, which every baseline sample</span>
+</span><span id="detect_clip_events-144"><a href="#detect_clip_events-144"><span class="linenos">144</span></a>    <span class="c1"># matches exactly — treating 0.0 as a real &quot;negative extreme&quot; would open a clip event on the</span>
+</span><span id="detect_clip_events-145"><a href="#detect_clip_events-145"><span class="linenos">145</span></a>    <span class="c1"># entire baseline.</span>
+</span><span id="detect_clip_events-146"><a href="#detect_clip_events-146"><span class="linenos">146</span></a>    <span class="n">watch_max</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">global_max</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">minimum_extreme</span>
+</span><span id="detect_clip_events-147"><a href="#detect_clip_events-147"><span class="linenos">147</span></a>    <span class="n">watch_min</span> <span class="o">=</span> <span class="nb">abs</span><span class="p">(</span><span class="n">global_min</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">minimum_extreme</span>
+</span><span id="detect_clip_events-148"><a href="#detect_clip_events-148"><span class="linenos">148</span></a>    <span class="k">if</span> <span class="ow">not</span> <span class="n">watch_max</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">watch_min</span><span class="p">:</span>
+</span><span id="detect_clip_events-149"><a href="#detect_clip_events-149"><span class="linenos">149</span></a>        <span class="k">return</span> <span class="p">[]</span>
+</span><span id="detect_clip_events-150"><a href="#detect_clip_events-150"><span class="linenos">150</span></a>
+</span><span id="detect_clip_events-151"><a href="#detect_clip_events-151"><span class="linenos">151</span></a>    <span class="n">held_max</span> <span class="o">=</span> <span class="n">_held_extreme</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">global_max</span><span class="p">,</span> <span class="n">_required_run</span><span class="p">(</span><span class="n">global_max</span><span class="p">))</span> <span class="k">if</span> <span class="n">watch_max</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+</span><span id="detect_clip_events-152"><a href="#detect_clip_events-152"><span class="linenos">152</span></a>    <span class="n">held_min</span> <span class="o">=</span> <span class="n">_held_extreme</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">global_min</span><span class="p">,</span> <span class="n">_required_run</span><span class="p">(</span><span class="n">global_min</span><span class="p">))</span> <span class="k">if</span> <span class="n">watch_min</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="nb">bool</span><span class="p">)</span>
+</span><span id="detect_clip_events-153"><a href="#detect_clip_events-153"><span class="linenos">153</span></a>
+</span><span id="detect_clip_events-154"><a href="#detect_clip_events-154"><span class="linenos">154</span></a>    <span class="n">events</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ClipEvent</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+</span><span id="detect_clip_events-155"><a href="#detect_clip_events-155"><span class="linenos">155</span></a>    <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="detect_clip_events-156"><a href="#detect_clip_events-156"><span class="linenos">156</span></a>    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">:</span>
+</span><span id="detect_clip_events-157"><a href="#detect_clip_events-157"><span class="linenos">157</span></a>        <span class="n">at_max</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">held_max</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+</span><span id="detect_clip_events-158"><a href="#detect_clip_events-158"><span class="linenos">158</span></a>        <span class="n">at_min</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span><span class="n">held_min</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>
+</span><span id="detect_clip_events-159"><a href="#detect_clip_events-159"><span class="linenos">159</span></a>        <span class="k">if</span> <span class="ow">not</span> <span class="n">at_max</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">at_min</span><span class="p">:</span>
+</span><span id="detect_clip_events-160"><a href="#detect_clip_events-160"><span class="linenos">160</span></a>            <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-161"><a href="#detect_clip_events-161"><span class="linenos">161</span></a>            <span class="k">continue</span>
+</span><span id="detect_clip_events-162"><a href="#detect_clip_events-162"><span class="linenos">162</span></a>        <span class="n">polarity</span> <span class="o">=</span> <span class="s2">&quot;positive&quot;</span> <span class="k">if</span> <span class="n">at_max</span> <span class="k">else</span> <span class="s2">&quot;negative&quot;</span>
+</span><span id="detect_clip_events-163"><a href="#detect_clip_events-163"><span class="linenos">163</span></a>        <span class="n">extreme</span> <span class="o">=</span> <span class="n">global_max</span> <span class="k">if</span> <span class="n">polarity</span> <span class="o">==</span> <span class="s2">&quot;positive&quot;</span> <span class="k">else</span> <span class="n">global_min</span>
+</span><span id="detect_clip_events-164"><a href="#detect_clip_events-164"><span class="linenos">164</span></a>        <span class="n">band</span> <span class="o">=</span> <span class="n">near_threshold</span> <span class="o">*</span> <span class="n">extreme</span>
+</span><span id="detect_clip_events-165"><a href="#detect_clip_events-165"><span class="linenos">165</span></a>        <span class="n">below_run</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="detect_clip_events-166"><a href="#detect_clip_events-166"><span class="linenos">166</span></a>        <span class="n">end</span> <span class="o">=</span> <span class="n">i</span>
+</span><span id="detect_clip_events-167"><a href="#detect_clip_events-167"><span class="linenos">167</span></a>        <span class="n">j</span> <span class="o">=</span> <span class="n">i</span> <span class="o">+</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-168"><a href="#detect_clip_events-168"><span class="linenos">168</span></a>        <span class="k">while</span> <span class="n">j</span> <span class="o">&lt;</span> <span class="n">n</span><span class="p">:</span>
+</span><span id="detect_clip_events-169"><a href="#detect_clip_events-169"><span class="linenos">169</span></a>            <span class="n">within</span> <span class="o">=</span> <span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">band</span><span class="p">)</span> <span class="k">if</span> <span class="n">polarity</span> <span class="o">==</span> <span class="s2">&quot;positive&quot;</span> <span class="k">else</span> <span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">band</span><span class="p">)</span>
+</span><span id="detect_clip_events-170"><a href="#detect_clip_events-170"><span class="linenos">170</span></a>            <span class="n">end</span> <span class="o">=</span> <span class="n">j</span>
+</span><span id="detect_clip_events-171"><a href="#detect_clip_events-171"><span class="linenos">171</span></a>            <span class="k">if</span> <span class="n">within</span><span class="p">:</span>
+</span><span id="detect_clip_events-172"><a href="#detect_clip_events-172"><span class="linenos">172</span></a>                <span class="n">below_run</span> <span class="o">=</span> <span class="mi">0</span>
+</span><span id="detect_clip_events-173"><a href="#detect_clip_events-173"><span class="linenos">173</span></a>            <span class="k">else</span><span class="p">:</span>
+</span><span id="detect_clip_events-174"><a href="#detect_clip_events-174"><span class="linenos">174</span></a>                <span class="n">below_run</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-175"><a href="#detect_clip_events-175"><span class="linenos">175</span></a>                <span class="k">if</span> <span class="n">below_run</span> <span class="o">&gt;</span> <span class="n">leniency_samples</span><span class="p">:</span>
+</span><span id="detect_clip_events-176"><a href="#detect_clip_events-176"><span class="linenos">176</span></a>                    <span class="k">break</span>
+</span><span id="detect_clip_events-177"><a href="#detect_clip_events-177"><span class="linenos">177</span></a>            <span class="n">j</span> <span class="o">+=</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-178"><a href="#detect_clip_events-178"><span class="linenos">178</span></a>        <span class="n">events</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ClipEvent</span><span class="p">(</span><span class="n">start_sample</span><span class="o">=</span><span class="n">i</span><span class="p">,</span> <span class="n">end_sample</span><span class="o">=</span><span class="n">end</span><span class="p">,</span> <span class="n">polarity</span><span class="o">=</span><span class="n">polarity</span><span class="p">))</span>
+</span><span id="detect_clip_events-179"><a href="#detect_clip_events-179"><span class="linenos">179</span></a>        <span class="n">i</span> <span class="o">=</span> <span class="n">end</span> <span class="o">+</span> <span class="mi">1</span>
+</span><span id="detect_clip_events-180"><a href="#detect_clip_events-180"><span class="linenos">180</span></a>    <span class="k">return</span> <span class="n">events</span>
 </span></pre></div>
 
 
@@ -285,12 +302,27 @@ saturation does not always produce a perfectly flat top — the paper's Fig. 10b
 near-clip amplitudes — and a gain change applied after clipping still leaves a run pinned at
 whatever became this file's own extreme.</p>
 
-<p>Algorithm: find the file's global max and min once; then walk the signal, and whenever a sample
-equals the max or the min, open a clip event and keep extending it while subsequent samples stay
-within <code>near_threshold</code> of that same extreme, tolerating up to <code>leniency_samples</code> consecutive
-samples that dip below it before closing the event at the sample where the tolerance was
-exceeded — the paper's own mechanism for surviving the amplitude wobble Fig. 10 documents,
+<p>Algorithm: find the file's global max and min once; then walk the signal, and wherever an
+extreme is <em>held</em> — see below — open a clip event and keep extending it while subsequent samples
+stay within <code>near_threshold</code> of that same extreme, tolerating up to <code>leniency_samples</code>
+consecutive samples that dip below it before closing the event at the sample where the tolerance
+was exceeded — the paper's own mechanism for surviving the amplitude wobble Fig. 10 documents,
 rather than fragmenting one clipped burst into many.</p>
+
+<p>What counts as held depends on where the extreme sits, and is decided per extreme, so a file's
+max and min may be treated differently:</p>
+
+<ul>
+<li><strong>Below digital full scale</strong> — the extreme must repeat across at least
+<code>MINIMUM_EXTREME_RUN</code> consecutive samples. A lone sample at a merely relative maximum is
+where the waveform happened to peak and is no evidence of clipping, whereas a saturated
+waveform holds its extreme. The repeat must be <em>consecutive</em>: a periodic signal revisits the
+identical extreme value once per period, so a count across the whole file does not separate
+the two cases.</li>
+<li><strong>At digital full scale</strong> (within <code>FULL_SCALE_TOLERANCE</code> of <code>1.0</code>) — a single sample opens
+an event, no repeat required. Reaching the representable ceiling is itself evidence of
+saturation, and a single-sample clip is only detectable at all in this case.</li>
+</ul>
 
 <h6 id="arguments">Arguments:</h6>
 
@@ -311,9 +343,10 @@ near-silent file would otherwise open a spurious event at every sample near 0.0,
 <h6 id="returns">Returns:</h6>
 
 <blockquote>
-  <p>The tagged clip events, in sample order. Empty when the file's peak amplitude never repeats
-  — nothing is "clipped" if the extreme sample value occurs only once — or when the file's
-  peak never clears <code>minimum_extreme</code>.</p>
+  <p>The tagged clip events, in sample order. Empty when neither extreme is ever held — for a
+  sub-full-scale extreme that means it never repeats across <code>MINIMUM_EXTREME_RUN</code>
+  consecutive samples, since a waveform that only touches its extreme in passing is not
+  clipped — or when the file's peak never clears <code>minimum_extreme</code>.</p>
 </blockquote>
 </div>
 
