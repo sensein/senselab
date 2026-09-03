@@ -5,8 +5,11 @@ noncommercial licence, so every test here exercises the routing, input validatio
 audio normalization around the load rather than the load itself.
 """
 
+from typing import Dict, List
+
 import pytest
 import torch
+from transformers.feature_extraction_utils import BatchFeature
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.audio_understanding import describe_audios
@@ -94,6 +97,108 @@ class TestAttentionSelectionFallsBackSafely:
 
         monkeypatch.setattr(builtins, "__import__", _no_flash)
         assert AudioFlamingoUnderstanding._attention_implementation(DeviceType.CUDA) == "sdpa"
+
+
+class _FakeProcessor:
+    """Records how ``apply_chat_template`` was called and returns a real ``BatchFeature``.
+
+    Returning the genuine container matters: the dtype handling under test lives in
+    ``BatchFeature.to``, so a hand-rolled stand-in would assert nothing about it.
+    """
+
+    def __init__(self) -> None:
+        self.template_calls: List[Dict[str, object]] = []
+
+    def apply_chat_template(self, conversation: object, **kwargs: object) -> BatchFeature:
+        """Record the keyword arguments and return a mixed-dtype batch."""
+        self.template_calls.append(kwargs)
+        return BatchFeature(
+            data={
+                "input_features": torch.zeros((1, 8), dtype=torch.float32),
+                "input_ids": torch.ones((1, 3), dtype=torch.int64),
+                "attention_mask": torch.ones((1, 3), dtype=torch.int64),
+            }
+        )
+
+    def batch_decode(self, sequences: object, skip_special_tokens: bool = True) -> List[str]:
+        """Return one placeholder generation."""
+        return ["a caption"]
+
+
+class _FakeModel:
+    """Records the dtype of every tensor handed to ``generate``."""
+
+    def __init__(self, dtype: torch.dtype = torch.bfloat16) -> None:
+        self.dtype = dtype
+        self.device = torch.device("cpu")
+        self.seen: Dict[str, torch.dtype] = {}
+
+    def generate(self, max_new_tokens: int = 0, **inputs: object) -> torch.Tensor:
+        """Capture input dtypes and return a token sequence longer than the prompt."""
+        self.seen = {k: v.dtype for k, v in inputs.items() if isinstance(v, torch.Tensor)}
+        return torch.ones((1, 5), dtype=torch.int64)
+
+
+@pytest.fixture()
+def _wired(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeProcessor, _FakeModel]:
+    """Seed the weight cache so a call runs end to end without loading anything."""
+    processor, mdl = _FakeProcessor(), _FakeModel()
+    cache_key = "nvidia/audio-flamingo-3-hf@cpu@sdpa"
+    monkeypatch.setattr(AudioFlamingoUnderstanding, "_cache", {cache_key: (processor, mdl)})
+    return processor, mdl
+
+
+class TestProcessorOutputIsCastToTheModelDtype:
+    """The processor emits float32; bf16 weights reject it.
+
+    On CUDA this surfaced as ``RuntimeError: Input type (float) and bias type
+    (c10::BFloat16) should be the same`` and made the backend unusable on GPU.
+    """
+
+    def test_floating_inputs_are_cast_to_the_model_dtype(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """``input_features`` reaches the model in the weights' own dtype."""
+        _, mdl = _wired
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
+        assert mdl.seen["input_features"] == torch.bfloat16
+
+    @pytest.mark.parametrize("key", ["input_ids", "attention_mask"])
+    def test_integer_inputs_keep_their_dtype(self, _wired: tuple[_FakeProcessor, _FakeModel], key: str) -> None:
+        """Index tensors stay integral — casting them to bf16 would break embedding lookup."""
+        _, mdl = _wired
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
+        assert mdl.seen[key] == torch.int64
+
+    def test_a_float32_model_leaves_features_alone(
+        self, monkeypatch: pytest.MonkeyPatch, _wired: tuple[_FakeProcessor, _FakeModel]
+    ) -> None:
+        """The cast follows the weights rather than hard-coding bf16."""
+        processor, _ = _wired
+        mdl = _FakeModel(dtype=torch.float32)
+        monkeypatch.setattr(
+            AudioFlamingoUnderstanding, "_cache", {"nvidia/audio-flamingo-3-hf@cpu@sdpa": (processor, mdl)}
+        )
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
+        assert mdl.seen["input_features"] == torch.float32
+
+
+class TestTheSamplingRateReachesTheProcessor:
+    """transformers routes processor arguments through ``processor_kwargs``.
+
+    Passing them as bare ``**kwargs`` warns and replaces the whole ``processor_kwargs``
+    dict, so anything else intended for the processor would be discarded.
+    """
+
+    def test_the_sampling_rate_is_passed_in_processor_kwargs(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """The rate arrives in the dict transformers reads it from."""
+        processor, _ = _wired
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
+        assert processor.template_calls[0]["processor_kwargs"] == {"sampling_rate": TARGET_SAMPLING_RATE}
+
+    def test_the_sampling_rate_is_not_passed_as_a_bare_kwarg(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """It must not also ride in ``**kwargs``, which triggers the clobbering path."""
+        processor, _ = _wired
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
+        assert "sampling_rate" not in processor.template_calls[0]
 
 
 class TestTheApiRoutesOnlySupportedModels:
