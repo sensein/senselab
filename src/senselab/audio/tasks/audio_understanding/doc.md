@@ -43,7 +43,10 @@ natively and senselab already pins `transformers>=5.3`, so no subprocess venv is
 needed. An ~8B-parameter model: CUDA is strongly recommended, and weights are cached
 per `(model, device, attention)` so repeated calls do not reload them.
 
-vLLM offers a documented 5–7× speedup for this model. It is not implemented here.
+vLLM serves this model too and is not implemented here. Against batched generation it is
+3.2× faster on 40 clips of an H100 and slower end to end for a single clip, its load
+costing 51 s against 13 s — measured in
+`specs/20260903-af3-batched-generation/measurement.md`.
 
 ## Reasoning mode (AF-Think)
 
