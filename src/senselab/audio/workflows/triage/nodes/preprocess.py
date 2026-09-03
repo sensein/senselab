@@ -54,7 +54,13 @@ from senselab.audio.tasks.health_acoustics.hear import (
 )
 from senselab.audio.tasks.phonation.api import f0_track, formant_track
 from senselab.audio.tasks.preprocessing.preprocessing import resample_audios
-from senselab.audio.tasks.spans.api import NoContrast, Span, group_extents_into_runs, propose_spans
+from senselab.audio.tasks.spans.api import (
+    NoContrast,
+    Span,
+    group_extents_into_runs,
+    propose_spans,
+    segments_between_change_points,
+)
 from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
 from senselab.audio.tasks.speech_to_text.api import transcribe_audios
 from senselab.audio.workflows.audio_analysis.asr import fuse_consensus_words
@@ -305,7 +311,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "near_threshold": float(config.require("clipping.near_threshold")),
             "leniency_samples": int(config.require("clipping.leniency_samples")),
             "minimum_extreme": float(config.require("clipping.minimum_extreme")),
-            "min_duration_ms": float(config.require("clipping.min_duration_ms")),
             "merge_gap_ms": float(config.require("clipping.merge_gap_ms")),
         }
         activity = _step("clip_spans", parameters, (recording_ids[-1],), software)
@@ -316,12 +321,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             leniency_samples=parameters["leniency_samples"],
             minimum_extreme=parameters["minimum_extreme"],
         )
-        min_samples = parameters["min_duration_ms"] * sr / 1000.0
         merge_gap_samples = parameters["merge_gap_ms"] * sr / 1000.0
-        kept = sorted(
-            (event for event in events if (event.end_sample - event.start_sample + 1) >= min_samples),
-            key=lambda event: event.start_sample,
-        )
+        kept = sorted(events, key=lambda event: event.start_sample)
         merged: list[list[int]] = []
         for event in kept:
             if merged and event.start_sample - merged[-1][1] <= merge_gap_samples:
@@ -349,8 +350,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _envelope() -> None:
         """`energy_envelope` and its floor, over the pre-emphasised signal -- the primary span signal.
 
-        Primary rather than the normalized signal: AGC is an optional, unvalidated step
-        (`normalization.*` ships null), and measured directly on real recordings it can compress
+        Primary rather than the normalized signal: AGC is an optional, unvalidated step, and
+        measured directly on real recordings it can compress
         local dynamic range enough that no peak clears any reasonable `k_db` at all (a five-breath
         recording's rise-over-floor topped out at 9 dB post-normalization against 23 dB pre-). The
         pre-emphasised envelope needs no optional step to exist, so `_spans` below always has a
@@ -534,12 +535,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "transition_window_ms": int(config.require("spans.transition_window_ms")),
             "min_duration_ms": int(config.require("spans.min_duration_ms")),
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
-            "continuity_margin": float(config.require("spans.continuity_margin")),
-            "continuity_floor_margin": float(config.require("spans.continuity_floor_margin")),
+            "continuity_cut_percentile": float(config.require("spans.continuity_cut_percentile")),
             "continuity_min_duration_ms": int(config.require("spans.continuity_min_duration_ms")),
             "envelope_lowpass_hz": float(config.require("envelope.lowpass_hz")),
             "envelope_filter_order": int(config.require("envelope.filter_order")),
-            "floor_percentile": float(config.require("floor.percentile")),
         }
         word_gap_ms = config.get("speech.word_gap_ms")
         if word_gap_ms is not None:
@@ -547,8 +546,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         reads = [state["envelope_id"]]
         if "normalized_envelope" in state:
             reads.append(state["normalized_envelope_id"])
-        if "spectrogram_wideband_magnitude" in state:
-            reads.append(derivatives.get("spectrogram_wideband", state["envelope_id"]))
+        if "spectrogram_narrowband_magnitude" in state:
+            reads.append(derivatives.get("spectrogram_narrowband", state["envelope_id"]))
         if "consensus" in state and word_gap_ms is not None:
             reads.append(state["consensus_id"])
         activity = _step("spans", parameters, tuple(reads), software)
@@ -572,10 +571,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             if measure == "amplitude":
                 return {"peak_over_floor_db": span.peak_over_floor_db, "k_db": k_db}
             if measure == "continuity":
-                return {
-                    "peak_over_floor_continuity": span.peak_over_floor_db,
-                    "continuity_margin": parameters["continuity_margin"],
-                }
+                return {"continuity_cut_percentile": parameters["continuity_cut_percentile"]}
             return {"word_gap_ms": parameters["word_gap_ms"]}
 
         corroboration: dict[int, list[dict[str, Any]]] = {}
@@ -626,22 +622,20 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             supplement = _novel(secondary, primary, measure="amplitude", signal="normalized")
 
         continuity: list[Span] = []
-        if "spectrogram_wideband_magnitude" in state:
+        if "spectrogram_narrowband_magnitude" in state:
             continuity_trace = spectral_continuity(
-                state["spectrogram_wideband_magnitude"],
-                hop_s=state["spectrogram_wideband_hop_s"],
+                state["spectrogram_narrowband_magnitude"],
+                hop_s=state["spectrogram_narrowband_hop_s"],
                 sampling_rate=target_hz,
                 n_samples=len(state["envelope"]),
                 smoothing=ButterworthSmoothing(
                     cutoff_hz=parameters["envelope_lowpass_hz"], order=parameters["envelope_filter_order"]
                 ),
             )
-            continuity_floor = global_floor_dbfs(continuity_trace, percentile=parameters["floor_percentile"])
-            continuity_candidates = _propose(
+            continuity_candidates = segments_between_change_points(
                 continuity_trace,
-                continuity_floor,
-                gate=parameters["continuity_margin"],
-                margin=parameters["continuity_floor_margin"],
+                target_hz,
+                cut_percentile=parameters["continuity_cut_percentile"],
                 min_duration_ms=parameters["continuity_min_duration_ms"],
             )
             continuity = _novel(continuity_candidates, primary + supplement, measure="continuity", signal=sharp_signal)
@@ -1224,10 +1218,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         Sustained-phonation and glide span *detection* used to happen here; it has moved to
         TAXONOMY (owner-directed), which reads this measurement back and runs the same proposal
         functions over it, so a decision about which stretch counts as phonation is no longer made
-        during conditioning. This block keeps only the part that is a measurement: F0 and the first
-        four formants and their bandwidths, per frame, over the whole pre-emphasised stream. It no
-        longer depends on the consensus transcript at all — word-aligned phonation proposal is
-        TAXONOMY's concern now, not a reason for this measurement to wait on ASR.
+        during conditioning. This block keeps only the part that is a measurement: F0 over the
+        pre-emphasised stream, and the first four formants and their bandwidths over ``plain``, per
+        frame. It no longer depends on the consensus transcript at all — word-aligned phonation
+        proposal is TAXONOMY's concern now, not a reason for this measurement to wait on ASR.
         """
         f0_range = config.require("voice.f0_range_hz")
         f0_min_hz, f0_max_hz = float(f0_range[0]), float(f0_range[1])
@@ -1240,10 +1234,10 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "f0_min_hz": f0_min_hz,
             "f0_max_hz": f0_max_hz,
         }
-        activity = _step("phonation_tracks", parameters, (sharp_id,), software)
+        activity = _step("phonation_tracks", parameters, (sharp_id, plain_id), software)
         times, f0_hz, strength = f0_track(sharp, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=parameters["hop_s"])
         formants = formant_track(
-            sharp,
+            plain,
             hop_s=parameters["hop_s"],
             max_formants=parameters["max_formants"],
             formant_max_hz=parameters["formant_max_hz"],
@@ -1271,8 +1265,14 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             software,
             name="phonation_tracks",
             signal=sharp_signal,
-            attributes={"hop_s": parameters["hop_s"], "f0_min_hz": f0_min_hz, "f0_max_hz": f0_max_hz},
-            derived_from=(sharp_id,),
+            attributes={
+                "hop_s": parameters["hop_s"],
+                "f0_min_hz": f0_min_hz,
+                "f0_max_hz": f0_max_hz,
+                "f0_signal": sharp_signal,
+                "formant_signal": "plain",
+            },
+            derived_from=(sharp_id, plain_id),
         )
         derivatives["phonation_tracks"] = entity_id
         view.append(entity_id)

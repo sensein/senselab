@@ -39,10 +39,9 @@ derivation: |
   noise-bed-plus-one-burst fixture measured a median ``rise`` of 19.4 dB with no burst in sight. 10.0
   was carried over from the retired rolling floor's own percentile, not re-derived for the new
   definition; lowered to 5.0 this session, owner-directed, tightening the floor toward the true
-  quietest stretch of the recording rather than a broader low-decile band -- shared as-is by
-  spectral_continuity's own floor (spans.continuity_margin/.continuity_floor_margin are the
-  continuity-specific thresholds; the percentile itself is one number for both measures). Not
-  re-derived from a corpus fit either.
+  quietest stretch of the recording rather than a broader low-decile band. Read by the two amplitude
+  envelopes only; spectral continuity no longer references a floor at all, since its rank cut
+  (spans.continuity_cut_percentile) is scale-free. Not re-derived from a corpus fit either.
 
   Span walk-stop: 12 dB above the floor, sustained for 30 ms, the same rule for onset (walking
   backward) and offset (walking forward) -- owner-directed this session, replacing the asymmetric
@@ -103,13 +102,14 @@ derivation: |
 
   Spectral continuity -- owner-directed this session, added specifically to catch breathing and
   glides that an amplitude-only gate can miss. Originally its own window_s/hop_s pair; now reuses
-  spectrogram_wideband's own magnitude array directly (spectrogram.wideband_window_ms/.hop_ms,
-  5 ms / 5 ms) rather than computing a second STFT at merely-matching parameters -- one recording
-  put through one STFT for both purposes, and `_spans` reads spectrogram_wideband's output from
-  `state` instead of recomputing it. Wideband rather than narrowband, owner-directed: the shorter
-  analysis window gives continuity finer temporal resolution to place a transition against, at the
-  cost of frequency resolution its own frame-to-frame comparison does not need as much as a
-  band-energy measurement would. Owns no smoothing key of its own any more: the frame-to-frame trace
+  spectrogram_narrowband's own magnitude array directly (spectrogram.narrowband_window_ms/.hop_ms,
+  20 ms / 5 ms) rather than computing a second STFT at merely-matching parameters -- one recording
+  put through one STFT for both purposes, and `_spans` reads spectrogram_narrowband's output from
+  `state` instead of recomputing it. Narrowband rather than wideband, measured: see
+  benchmarks/preprocess-params.md, "Which representation feeds continuity". A 5 ms window is about
+  one glottal period, so the wideband array resolves the pulse train in time rather than resolving
+  harmonics, and its frame-to-frame comparison swings on glottal phase during steady phonation;
+  the 20 ms window does not. Owns no smoothing key of its own any more: the frame-to-frame trace
   is smoothed with the identical ButterworthSmoothing(cutoff_hz=envelope.lowpass_hz,
   order=envelope.filter_order) the primary amplitude envelope itself is built with, not a
   separately-chosen scheme -- owner-directed, replacing an earlier MedianSmoothing(window_s=0.2)
@@ -117,12 +117,23 @@ derivation: |
   the amplitude envelope in the same `_spans` pass (see the priority-order paragraph above); sharing
   the envelope's own filter means both measures agree on what counts as the same continuous event at
   the same time-constant before that comparison happens, rather than each drawing its own boundary
-  on its own schedule. spans.continuity_margin/.continuity_floor_margin (0.03 / 0.02) are unchanged
-  numerically but not re-validated against the new smoothing -- they were fitted with
-  MedianSmoothing(0.2 s) in place, and the switch to ButterworthSmoothing changes the trace's own
-  transient response; carried over as the best available starting point, not a corpus fit either
-  way, provisional and expected to be refit, the same status as
-  spans.floor_margin_db/.transition_window_ms. The measure itself (frame-to-frame cosine similarity
+  on its own schedule. spans.continuity_cut_percentile 5.0 -- measured, and it replaced the retired
+  absolute pair spans.continuity_margin/.continuity_floor_margin (0.03 / 0.02) outright. Continuity
+  is a novelty function, so it is read for its dips, not its plateaus: a high value only says
+  nothing changed, which is equally true of steady silence and steady phonation, and no gate on the
+  plateaus can separate those. The lowest 5% of trace samples BY RANK are the change points and the
+  runs between them are the spans. Rank, not a comparison against the percentile's value: a value
+  cut lands on the plateau of a flat trace, where `>` admits no samples at all (an all-continuous
+  file measured zero spans) and `>=` admits every one of them. A rank cut is also scale-free, which
+  is what let the representation change at all -- an absolute 0.03 means something different against
+  every input array, and refitting it per representation was the blocker the rank cut removed. 5.0
+  is the owner's own proposal and measured: on Prolonged-vowel, median segment duration outside
+  speech divided by the same inside speech reads 7.6x at p5 against ~1.0x -- no separation -- for
+  every other representation and smoothing tested. p2 reads 8.8x, consistently but not decisively
+  better; 5.0 kept for the wider margin against a file with fewer genuine events. Honest limit: a
+  percentile gate cannot express "nothing here", since it always marks exactly that fraction of
+  frames as change points, however continuous the recording. Not a corpus fit -- three recordings.
+  The measure itself (frame-to-frame cosine similarity
   of log-magnitude spectra, smoothed) worked well for sustained tonal/harmonic production under the
   retired MedianSmoothing: on a High-to-Low glide it read 0.95-0.99 through the voiced glide against
   0.86-0.92 in the silence flanking it, and on a held vowel it separated the same way, both
@@ -136,11 +147,13 @@ derivation: |
   breath detection the way it was asked to. Left in as a general continuity detector rather than
   restricted to glides specifically, because nothing about the mechanism is glide-specific and a
   future corpus may show it earning its keep on other sustained productions; the breath gap is
-  recorded here rather than hidden so it is not mistaken for a working detector later. Reuses the
-  shared spans.transition_window_ms and spans.min_separation_ms rather than declaring its own;
+  recorded here rather than hidden so it is not mistaken for a working detector later. No longer
+  reads spans.transition_window_ms or spans.min_separation_ms: a rank cut has no walk to stop and no
+  neighbouring proposals to merge, so both dropped out with the retired threshold pair.
   spans.continuity_min_duration_ms (300 ms) is its own key because continuity events (a glide, a
   sustained vowel) are typically much longer than the 50 ms amplitude spans.min_duration_ms admits,
-  and reusing the shorter value let noise-length blips through in testing. Absent whenever
+  and reusing the shorter value let noise-length blips through in testing. It is the only length
+  filter left on this source, and it is what the measured discrimination above was run under. Absent whenever
   spectrogram_narrowband itself is, since continuity now has a hard data dependency on that block's
   output rather than computing its own.
 
@@ -494,12 +507,21 @@ derivation: |
   max or min sits at or near exact zero (a one-sided clip against a silent baseline, or true
   silence) and the 99.5% band of that near-zero value excludes almost nothing, opening a spurious
   event across the whole baseline. A numerical guard against a divide-by-near-zero class of input,
-  not a perceptual threshold. clipping.min_duration_ms and clipping.merge_gap_ms are null: the
-  detector's own leniency mechanism means a lone sample at the file's extreme always opens a short
-  event (measured: this is a real, load-bearing property of the algorithm, not a bug in this
-  implementation of it -- see clipping_test.py), so a caller must filter trivially short events and
-  merge nearby ones before treating a clip event as a genuine plateau, exactly as spans.min_duration_ms
-  and spans.min_separation_ms already do for envelope-peak spans. Neither has a corpus behind it yet.
+  not a perceptual threshold. The detector no longer opens an event on a lone sample at a merely
+  relative extreme, so the caller-side duration filter that used to suppress that is gone: there is
+  no clipping.min_duration_ms. See benchmarks/preprocess-params.md for the run-length measurement
+  behind the detector's own gate.
+
+  clipping.merge_gap_ms 30 -- the surviving caller-side value, and the only one _clip_spans applies.
+  Its job is coalescing, not suppression: per-period clipping of voiced speech leaves one plateau
+  per glottal cycle, so a hard-limited 200 Hz tone yields 1200 separate events over 3 s and a 120 Hz
+  one yields 720. Merging within 30 ms collapses each to a single span covering the clipped region
+  (measured: 1 span, 2.999 s, for both), which is the correct description of one clipped vowel;
+  without it a single clipped vowel would render as hundreds of adjacent spans. 30 ms comfortably
+  exceeds one glottal period across the plausible F0 range while staying well below the separation
+  of distinct clipping episodes -- a 2 Hz sine hard-limited at 0.6, whose plateaus sit ~148 ms
+  apart, still yields 12 separate spans totalling 1.778 s rather than being bridged into one. The
+  value is conventional, not corpus-fitted, and is still owed a corpus.
 
   normalization.* -- audio/tasks/envelope.dynamic_range_normalize. Owner-directed this session: on by
   default, all eight keys given real values, so PREPROCESS's normalized_envelope measurement and its
@@ -603,16 +625,14 @@ spans:
   min_duration_ms: 50
   min_separation_ms: 30
   k_db: 6.0
-  continuity_margin: 0.03
-  continuity_floor_margin: 0.02
+  continuity_cut_percentile: 5.0
   continuity_min_duration_ms: 300
 
 clipping:
   near_threshold: 0.995
   leniency_samples: 3
   minimum_extreme: 0.0001
-  min_duration_ms: null
-  merge_gap_ms: null
+  merge_gap_ms: 30         # coalesce per-period clipping plateaus into one event
 
 normalization:
   macro_smoothing:

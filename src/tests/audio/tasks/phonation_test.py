@@ -256,9 +256,7 @@ class TestProposePhonationSpans:
             np.full(n, 0.1),
             formant_bandwidth_hz=600.0,
         )
-        assert propose_phonation_spans(
-            times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE
-        ) == []
+        assert propose_phonation_spans(times=times, f0_hz=f0, strength=strength, formants=formants, **_SPAN_RULE) == []
 
     def test_a_span_voiced_for_half_its_frames_is_mixed(self) -> None:
         """Between the two cutoffs is its own production, not rounded to the nearer one.
@@ -326,14 +324,17 @@ class TestWordAlignedPhonationEvidence:
         times, f0, strength, formants = _tracks(
             np.full(n, np.nan), np.full(n, 700.0), np.full(n, 0.1), formant_bandwidth_hz=600.0
         )
-        assert propose_word_aligned_phonation_spans(
-            times=times,
-            f0_hz=f0,
-            strength=strength,
-            formants=formants,
-            word_extents=[(0.1, 0.8)],
-            voicing_strength_floor=0.5,
-            mixed_voiced_fraction=0.6,
-            unvoiced_max_formant_bandwidth_hz=250.0,
-            min_evidence_fraction=0.8,
-        ) == []
+        assert (
+            propose_word_aligned_phonation_spans(
+                times=times,
+                f0_hz=f0,
+                strength=strength,
+                formants=formants,
+                word_extents=[(0.1, 0.8)],
+                voicing_strength_floor=0.5,
+                mixed_voiced_fraction=0.6,
+                unvoiced_max_formant_bandwidth_hz=250.0,
+                min_evidence_fraction=0.8,
+            )
+            == []
+        )

@@ -7,7 +7,13 @@ import warnings
 import numpy as np
 import pytest
 
-from senselab.audio.tasks.spans import NoContrast, Span, group_extents_into_runs, propose_spans
+from senselab.audio.tasks.spans import (
+    NoContrast,
+    Span,
+    group_extents_into_runs,
+    propose_spans,
+    segments_between_change_points,
+)
 
 SR = 16000
 
@@ -235,3 +241,47 @@ class TestGroupExtentsIntoRuns:
     def test_no_extents_is_no_runs(self) -> None:
         """An empty input produces an empty output, not an error."""
         assert group_extents_into_runs([], gap_ms=150.0) == []
+
+
+class TestSegmentsBetweenChangePoints:
+    """The rank cut: the lowest percentile of a novelty trace bounds the spans between them."""
+
+    def test_a_dip_splits_one_run_into_two_spans(self) -> None:
+        """Samples ranked lowest become change points, and the runs either side become spans."""
+        trace = np.ones(SR)
+        trace[int(0.5 * SR) : int(0.52 * SR)] = 0.0
+        spans = segments_between_change_points(trace, SR, cut_percentile=2.0, min_duration_ms=100.0)
+        assert len(spans) == 2
+        assert spans[0].end == pytest.approx(0.5, abs=0.01)
+        assert spans[1].start == pytest.approx(0.52, abs=0.01)
+
+    def test_a_flat_trace_is_still_cut(self) -> None:
+        """Ranking is tie-immune: a constant trace has no percentile *value* to compare against."""
+        spans = segments_between_change_points(np.ones(SR), SR, cut_percentile=5.0, min_duration_ms=100.0)
+        assert spans, "a value comparison returns nothing here; a rank cut must not"
+        assert sum(s.end - s.start for s in spans) == pytest.approx(0.95, abs=0.01)
+
+    def test_a_zero_cut_leaves_the_trace_whole(self) -> None:
+        """No change points means one span covering everything."""
+        spans = segments_between_change_points(
+            np.random.default_rng(0).random(SR), SR, cut_percentile=0.0, min_duration_ms=1.0
+        )
+        assert len(spans) == 1
+        assert (spans[0].start, spans[0].end) == (0.0, 1.0)
+
+    def test_runs_under_the_minimum_are_dropped(self) -> None:
+        """The length filter is the only one this source applies."""
+        trace = np.ones(SR)
+        trace[int(0.1 * SR) : int(0.11 * SR)] = 0.0
+        spans = segments_between_change_points(trace, SR, cut_percentile=1.0, min_duration_ms=500.0)
+        assert len(spans) == 1, "the 0.1 s head run is under the minimum; only the 0.89 s tail survives"
+        assert spans[0].start == pytest.approx(0.11, abs=0.01)
+
+    def test_an_empty_trace_is_no_spans(self) -> None:
+        """An empty input produces an empty output, not an error."""
+        assert segments_between_change_points(np.array([]), SR, cut_percentile=5.0, min_duration_ms=100.0) == []
+
+    def test_no_floor_is_referenced(self) -> None:
+        """A rank cut has no floor, so there is no rise to report."""
+        spans = segments_between_change_points(np.linspace(0.0, 1.0, SR), SR, cut_percentile=5.0, min_duration_ms=100.0)
+        assert all(np.isnan(s.peak_over_floor_db) for s in spans)

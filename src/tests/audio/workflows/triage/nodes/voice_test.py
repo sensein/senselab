@@ -42,13 +42,49 @@ def _fake_hnr_track(
     return times, np.full(n, 20.0)
 
 
-def _fake_f0_track(
-    audio: Audio, *, f0_min_hz: float, f0_max_hz: float, hop_s: float
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """A constant ``FAKE_F0`` track with constant strength, on the same hop grid."""
-    n = int(round(audio.waveform.shape[-1] / audio.sampling_rate / hop_s))
+def _seed_phonation_tracks(store: ProvStore, tmp_path: Path, *, hop_s: float, phonation: list[tuple[Any, ...]]) -> None:
+    """Write the ``phonation_tracks`` derivative VOICE reads instead of tracking F0 itself.
+
+    ``FAKE_F0`` at voiced strength inside the seeded phonation extents and nothing outside them, so
+    the track agrees with the spans this store already carries; a constant track over the whole file
+    would instead have TAXONOMY derive one span spanning the recording.
+    """
+    n = int(round(_SEED_DURATION_S / hop_s))
     times = (np.arange(n) + 0.5) * hop_s
-    return times, np.full(n, FAKE_F0), np.full(n, 0.9)
+    voiced = np.zeros(n, dtype=bool)
+    aperiodic = np.zeros(n, dtype=bool)
+    for entry in phonation:
+        start, end = float(entry[0]), float(entry[1])
+        frames = (times >= start) & (times < end)
+        # An "unvoiced" span carries no periodicity, so its frames sit below any strength floor
+        # rather than reading as voiced with an F0.
+        if len(entry) > 2 and str(entry[2]) == "unvoiced":
+            aperiodic |= frames
+        else:
+            voiced |= frames
+    (tmp_path / "derivatives").mkdir(parents=True, exist_ok=True)
+    # Formants are NaN throughout — PREPROCESS's own representation for "Praat placed none" — so a
+    # reader gets the full array shape without this fixture inventing formant values.
+    absent_formants = {f"f{order}_hz": np.full(n, np.nan) for order in (1, 2, 3, 4)}
+    absent_formants.update({f"f{order}_bw_hz": np.full(n, np.nan) for order in (1, 2, 3, 4)})
+    np.savez(
+        tmp_path / "derivatives" / "phonation_tracks.npz",
+        times_s=times,
+        f0_hz=np.where(voiced, FAKE_F0, np.nan),
+        strength=np.where(voiced, 0.9, np.where(aperiodic, 0.1, 0.0)),
+        formant_times_s=times,
+        **absent_formants,
+    )
+    agent = store.agent(agent_type="software", version="senselab test-seed")
+    activity = store.activity(node="PREPROCESS", step="phonation_tracks", parameters={"hop_s": hop_s})
+    store.was_associated_with(activity, agent)
+    entity_id = store.entity(
+        prov_type="measurement",
+        extent=None,
+        attributes={"name": "phonation_tracks", "signal": "preemphasised", "hop_s": hop_s},
+    )
+    store.was_generated_by(entity_id, activity)
+    store.was_attributed_to(entity_id, agent)
 
 
 def _fake_period_marks(
@@ -64,7 +100,6 @@ def _fake_period_marks(
 def praat_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Praat is deterministic but slow; the phonation task's tests own the real calls."""
     monkeypatch.setattr(voice_module, "hnr_track", _fake_hnr_track)
-    monkeypatch.setattr(voice_module, "f0_track", _fake_f0_track)
     monkeypatch.setattr(voice_module, "period_marks", _fake_period_marks)
 
 
@@ -127,6 +162,7 @@ def _seed_voice_store(
             f"hop_s {hop_s} is not phonation_spans.hop_s {declared_hop_s}; the store would be inconsistent"
         )
     seed_preprocess_store.__wrapped__(tmp_path)(store, duration_s=_SEED_DURATION_S, phonation=phonation)
+    _seed_phonation_tracks(store, tmp_path, hop_s=hop_s, phonation=phonation)
 
     agent = store.agent(agent_type="software", version="senselab test-seed")
     if speech_spans:
@@ -284,7 +320,18 @@ class TestProductionModes:
             "  f0_range_hz: [75.0, 190.0]\n"
             "taxonomy:\n"
             "  voice_min_duration_s: 1.0\n"
-            "  voice_uncertain_duration_s: 0.3\n",
+            "  voice_uncertain_duration_s: 0.3\n"
+            # TAXONOMY reaches its phonation-span step now that phonation_tracks is seeded;
+            # the same fixture values conftest's phonation_config states.
+            "phonation_spans:\n"
+            "  f0_stability_cents: 50.0\n"
+            "  formant_stability_hz: 50.0\n"
+            "  glide_min_excursion_cents: 200.0\n"
+            "  hangover_ms: 50.0\n"
+            "  voicing_strength_floor: 0.5\n"
+            "  mixed_voiced_fraction: 0.6\n"
+            "  unvoiced_max_formant_bandwidth_hz: 250.0\n"
+            "  word_aligned_min_evidence_fraction: 0.8\n",
         )
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
         assert taxonomy(store, "plain", config, run_dir=tmp_path).kinds["voice"] == "present"

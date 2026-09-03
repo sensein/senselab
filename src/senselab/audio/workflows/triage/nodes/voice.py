@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 
 from senselab.audio.data_structures import AudioHints
-from senselab.audio.tasks.phonation import PeriodMark, f0_track, hnr_track, period_marks
+from senselab.audio.tasks.phonation import PeriodMark, hnr_track, period_marks
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -265,9 +265,11 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
         periods_per_window=params["periods_per_window"],
     )
     stream_rms = _rms_track(mono, sr, stream_times, window_s)
-    stream_f0_times, stream_f0, stream_strength = f0_track(
-        plain, f0_min_hz=f0_min_hz, f0_max_hz=f0_max_hz, hop_s=params["hop_s"]
-    )
+    tracks = find_measurement(store, "phonation_tracks")
+    if tracks is None:
+        raise LookupError("phonation_tracks is absent; PREPROCESS did not write the F0 track")
+    npz = np.load(run_dir / "derivatives" / "phonation_tracks.npz")
+    stream_f0_times, stream_f0, stream_strength = npz["times_s"], npz["f0_hz"], npz["strength"]
     track_times: list[np.ndarray] = []
     track_rms: list[np.ndarray] = []
     track_hnr: list[np.ndarray] = []

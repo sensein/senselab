@@ -15,27 +15,20 @@ def spectral_continuity(
     A sustained, spectrally stable sound -- a held tone, a glide's own slowly-moving harmonic
     structure -- keeps a similar spectral shape from one analysis frame to the next, so this reads
     high and steady through it. A transient (onset, offset, a plosive) changes the spectral shape
-    abruptly between frames, reading low right at the transition. Verified on real recordings this
-    session: a glide's voiced region reads continuity 0.95-0.99 against 0.86-0.92 for the silence
-    flanking it, a clean, well-separated signal. The same measure does not discriminate a breath from
-    the background noise around it on the recording tested (both read 0.85-0.90 with no separation
-    tracking the breath's own timing) -- turbulent broadband noise does not carry the frame-to-frame
-    bin-level coherence a harmonic sound does, so this measure is a real detector for sustained
-    tonal/harmonic production (glides, phonation, vowels) and not, on the evidence gathered so far,
-    for breath noise specifically.
+    abruptly between frames, reading low right at the transition.
 
     Takes an already-computed magnitude spectrogram rather than raw audio and its own STFT
-    parameters: the caller (PREPROCESS's ``_spans``) reuses the narrowband spectrogram block's own
-    output directly, so a recording is not put through two independent STFTs at merely-matching
-    parameters for two purposes that are both "look at this recording's spectral structure". This
-    does mean a caller wanting its own analysis resolution must supply its own magnitude array;
-    nothing here computes one. ``smoothing`` reuses the same pluggable
+    parameters, so a recording is not put through two independent STFTs at merely-matching
+    parameters. PREPROCESS's ``_spans`` passes the **narrowband** block's magnitude. A caller wanting
+    its own analysis resolution must supply its own magnitude array; nothing here computes one.
+    ``smoothing`` is the same pluggable
     :class:`~senselab.audio.tasks.envelope.api.EnvelopeSmoothing` strategy
-    :func:`~senselab.audio.tasks.envelope.api.hilbert_envelope_dbfs` already takes, applied to the
-    per-frame continuity trace as if it were a signal sampled at the frame rate (``1 / hop_s``) --
-    the same generic mechanism, not a bespoke moving average, and :class:`MedianSmoothing` for the
-    same reason it is used for the gain curve elsewhere: it cannot overshoot past a transient the way
-    a moving average or a resonant filter can.
+    :func:`~senselab.audio.tasks.envelope.api.envelope_dbfs` takes, applied to the per-frame
+    continuity trace as if it were a signal sampled at the frame rate (``1 / hop_s``).
+
+    What this measure does and does not detect, which spectrogram to feed it, and the jitter it
+    carries at a transition are measured in
+    ``specs/20260817-triage-workflow-dag/benchmarks/preprocess-params.md``.
 
     Args:
         magnitude: A magnitude (not power) spectrogram, shape ``(n_freqs, n_frames)``.

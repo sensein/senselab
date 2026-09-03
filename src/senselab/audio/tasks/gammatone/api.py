@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import gammatone, hilbert, lfilter
+from scipy.signal import gammatone, lfilter
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.envelope.api import analytic_magnitude
 
 
 def erb_space(low_hz: float, high_hz: float, n_channels: int) -> np.ndarray:
@@ -55,6 +56,6 @@ def gammatone_filterbank(
     out = np.zeros((n_channels, n_frames))
     for k, centre in enumerate(cf):
         b, a = gammatone(centre, "iir", fs=sr)
-        magnitude = np.abs(hilbert(lfilter(b, a, x)))
+        magnitude = analytic_magnitude(lfilter(b, a, x))
         out[k] = magnitude[: n_frames * hop].reshape(n_frames, hop).mean(axis=1)
     return cf, 20.0 * np.log10(out + 1e-10)

@@ -154,6 +154,44 @@ def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return [(int(edges[i]), int(edges[i + 1])) for i in range(0, len(edges), 2)]
 
 
+def segments_between_change_points(
+    trace: np.ndarray, sampling_rate: int, *, cut_percentile: float, min_duration_ms: float
+) -> list[Span]:
+    """Spans covering the runs a novelty trace leaves between its lowest-ranked samples.
+
+    The lowest ``cut_percentile`` percent of ``trace``, **selected by rank**, are the change points;
+    each maximal run of the remaining samples becomes one span. Ranking rather than comparing against
+    a percentile value is what makes this total: a value comparison lands on the plateau of a flat
+    trace, where ``>`` admits no samples at all and ``>=`` admits every one of them.
+
+    Unlike :func:`propose_spans` there is no floor, no margin and no walk — a rank cut is scale-free,
+    so nothing here depends on the units or spread of the trace it is given.
+
+    Args:
+        trace: One value per sample. Higher means less change.
+        sampling_rate: Samples per second, used to place the runs on the timeline.
+        cut_percentile: Percent of samples to mark as change points, lowest first.
+        min_duration_ms: Runs shorter than this are dropped.
+
+    Returns:
+        The surviving spans, in start order. ``peak_over_floor_db`` is ``nan``: no floor was
+        referenced. Empty when every run is shorter than ``min_duration_ms``.
+    """
+    n = len(trace)
+    if n == 0:
+        return []
+    n_change_points = int(round(n * cut_percentile / 100.0))
+    is_change_point = np.zeros(n, dtype=bool)
+    if n_change_points > 0:
+        is_change_point[np.argsort(trace, kind="stable")[:n_change_points]] = True
+    minimum_samples = min_duration_ms * sampling_rate / 1000.0
+    return [
+        Span(start=start / sampling_rate, end=end / sampling_rate, peak_over_floor_db=float("nan"))
+        for start, end in _contiguous_true_runs(~is_change_point)
+        if (end - start) >= minimum_samples
+    ]
+
+
 def group_extents_into_runs(extents: list[tuple[float, float]], gap_ms: float) -> list[tuple[float, float, list[int]]]:
     """A run is the extent of a group of extents; a gap over ``gap_ms`` starts a new run.
 

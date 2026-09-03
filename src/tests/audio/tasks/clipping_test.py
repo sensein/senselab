@@ -52,15 +52,29 @@ class TestNoClipping:
         total_event_samples = sum(event.end_sample - event.start_sample + 1 for event in events)
         assert total_event_samples < 0.01 * len(x)
 
-    def test_a_single_high_sample_opens_one_short_event_not_a_plateau(self) -> None:
-        """The extreme occurring once opens an event bounded by the leniency window, not a run."""
+    def test_a_single_sub_full_scale_sample_opens_no_event(self) -> None:
+        """A lone sample at a merely relative extreme is where the waveform peaked, not clipping."""
         x = _tone(seconds=0.1, amp=0.5)
         x[0] = 0.9
         events = _detect(_audio(x))
-        positive = [event for event in events if event.polarity == "positive"]
+        assert [event for event in events if event.polarity == "positive"] == []
+
+    def test_a_single_full_scale_sample_opens_an_event(self) -> None:
+        """Reaching the representable ceiling is itself evidence of saturation, repeat or not."""
+        for peak in (1.0, 32767 / 32768):
+            x = _tone(seconds=0.1, amp=0.5)
+            x[0] = peak
+            positive = [event for event in _detect(_audio(x)) if event.polarity == "positive"]
+            assert len(positive) == 1, peak
+            assert positive[0].start_sample == 0
+
+    def test_a_repeated_sub_full_scale_extreme_opens_an_event(self) -> None:
+        """Two consecutive samples at the extreme are a held peak, which is what saturation leaves."""
+        x = _tone(seconds=0.1, amp=0.5)
+        x[10] = x[11] = 0.9
+        positive = [event for event in _detect(_audio(x)) if event.polarity == "positive"]
         assert len(positive) == 1
-        assert positive[0].start_sample == 0
-        assert positive[0].end_sample <= 3 + 1
+        assert positive[0].start_sample == 10
 
     def test_near_silence_opens_no_event(self) -> None:
         """minimum_extreme guards a near-zero global extreme, where the band excludes almost nothing."""
