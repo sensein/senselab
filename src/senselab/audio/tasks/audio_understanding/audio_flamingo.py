@@ -45,6 +45,8 @@ class AudioFlamingoUnderstanding:
         model: Optional[HFModel] = None,
         device: Optional[DeviceType] = None,
         max_new_tokens: int = 500,
+        think: bool = False,
+        strip_prefix: bool = False,
     ) -> List[str]:
         """Generate a textual response to ``prompt`` for each audio.
 
@@ -55,12 +57,18 @@ class AudioFlamingoUnderstanding:
             model: HF model spec (default: ``nvidia/audio-flamingo-3-hf``).
             device: CPU or CUDA. CUDA strongly recommended.
             max_new_tokens: Generation cap.
+            think: Load the AF-Think PEFT adapter from the repository's ``think``
+                subfolder. Required for prompts that ask the model to reason before
+                answering; the base checkpoint is not a reasoning model.
+            strip_prefix: Drop the canned ``The spoken content of the audio is "..."``
+                wrapper the transcription checkpoints prepend.
 
         Returns:
             One generated string per input audio, in input order.
 
         Raises:
             ValueError: If ``prompt`` is empty or an audio exceeds ``MAX_AUDIO_SECONDS``.
+            FileNotFoundError: If ``think`` is set but the adapter is absent from the snapshot.
         """
         if not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
@@ -77,25 +85,31 @@ class AudioFlamingoUnderstanding:
         dtype = torch.bfloat16 if device_type == DeviceType.CUDA else torch.float32
         attention = cls._attention_implementation(device_type)
 
-        cache_key = f"{model_name}@{device_type.value}@{attention}"
+        cache_key = f"{model_name}@{device_type.value}@{attention}@think={think}"
         if cache_key not in cls._cache:
             revision = (model.revision if model is not None else None) or "main"
-            processor = load_hf_resilient(
-                AutoProcessor.from_pretrained,
-                model_name,
-                repo_id=model_name,
-                revision=revision,
-            )
-            mdl = load_hf_resilient(
-                AudioFlamingo3ForConditionalGeneration.from_pretrained,
-                model_name,
-                repo_id=model_name,
-                revision=revision,
-                dtype=dtype,
-                attn_implementation=attention,
-                device_map="auto" if device_type == DeviceType.CUDA else "cpu",
-            )
-            cls._cache[cache_key] = (processor, mdl)
+            device_map = "auto" if device_type == DeviceType.CUDA else "cpu"
+            if think:
+                cls._cache[cache_key] = cls._load_think(
+                    model_name, revision, dtype=dtype, attention=attention, device_map=device_map
+                )
+            else:
+                processor = load_hf_resilient(
+                    AutoProcessor.from_pretrained,
+                    model_name,
+                    repo_id=model_name,
+                    revision=revision,
+                )
+                mdl = load_hf_resilient(
+                    AudioFlamingo3ForConditionalGeneration.from_pretrained,
+                    model_name,
+                    repo_id=model_name,
+                    revision=revision,
+                    dtype=dtype,
+                    attn_implementation=attention,
+                    device_map=device_map,
+                )
+                cls._cache[cache_key] = (processor, mdl)
         processor, mdl = cls._cache[cache_key]
 
         results: List[str] = []
@@ -115,8 +129,8 @@ class AudioFlamingoUnderstanding:
                 tokenize=True,
                 add_generation_prompt=True,
                 return_dict=True,
-                sampling_rate=TARGET_SAMPLING_RATE,
-            ).to(mdl.device)
+                processor_kwargs={"sampling_rate": TARGET_SAMPLING_RATE},
+            ).to(device=mdl.device, dtype=mdl.dtype)
             with torch.no_grad():
                 outputs = mdl.generate(**inputs, max_new_tokens=max_new_tokens)
             decoded = processor.batch_decode(

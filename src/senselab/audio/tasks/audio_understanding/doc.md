@@ -45,3 +45,18 @@ per `(model, device, attention)` so repeated calls do not reload them.
 vLLM offers a documented 5–7× speedup for this model but requires a prerelease
 `transformers>=5.0.0rc1` override and a git build of vLLM, which conflicts with the
 pinned environment. Not implemented here.
+
+## Running on a cluster
+
+Compute nodes frequently carry no system ffmpeg, and `torchcodec` fails to load
+without it, so audio decoding raises before this backend is reached. On MIT ORCD the
+module supplies the binaries but sets `PATH` only, so `LD_LIBRARY_PATH` must point at
+its `lib` directory as well:
+
+```bash
+module load ffmpeg/5.1.4
+export LD_LIBRARY_PATH="$(dirname "$(dirname "$(which ffmpeg)")")/lib:$LD_LIBRARY_PATH"
+```
+
+This is a property of the decoding stack rather than of this backend, so it applies to
+any senselab job that reads audio on such a node.
