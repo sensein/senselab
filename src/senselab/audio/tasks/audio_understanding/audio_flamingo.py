@@ -29,6 +29,7 @@ from senselab.utils.data_structures import DeviceType, HFModel, _select_device_a
 DEFAULT_MODEL_ID = "nvidia/audio-flamingo-3-hf"
 TARGET_SAMPLING_RATE = 16000
 MAX_AUDIO_SECONDS = 600.0
+DEFAULT_BATCH_SIZE = 8
 
 
 class AudioFlamingoUnderstanding:
@@ -50,6 +51,7 @@ class AudioFlamingoUnderstanding:
         max_new_tokens: int = 500,
         think: bool = False,
         strip_prefix: bool = False,
+        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> List[str]:
         """Generate a textual response to ``prompt`` for each audio.
 
@@ -65,16 +67,21 @@ class AudioFlamingoUnderstanding:
                 answering; the base checkpoint is not a reasoning model.
             strip_prefix: Drop the canned ``The spoken content of the audio is "..."``
                 wrapper the transcription checkpoints prepend.
+            batch_size: Clips sent to the model per generate call. Larger values raise
+                throughput and peak memory together; 1 restores per-clip generation.
 
         Returns:
             One generated string per input audio, in input order.
 
         Raises:
-            ValueError: If ``prompt`` is empty or an audio exceeds ``MAX_AUDIO_SECONDS``.
+            ValueError: If ``prompt`` is empty, ``batch_size`` is below 1, or an audio
+                exceeds ``MAX_AUDIO_SECONDS``.
             FileNotFoundError: If ``think`` is set but the adapter is absent from the snapshot.
         """
         if not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
+        if batch_size < 1:
+            raise ValueError(f"batch_size must be at least 1, got {batch_size}")
         if not audios:
             return []
 
@@ -115,34 +122,38 @@ class AudioFlamingoUnderstanding:
                 cls._cache[cache_key] = (processor, mdl)
         processor, mdl = cls._cache[cache_key]
 
+        prepared = [cls._prepare(audio) for audio in audios]
+
         results: List[str] = []
-        for audio in audios:
-            prepared = cls._prepare(audio)
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "audio", "audio": prepared.waveform.squeeze(0).numpy()},
-                    ],
-                }
+        for start in range(0, len(prepared), batch_size):
+            chunk = prepared[start : start + batch_size]
+            conversations = [
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "audio", "audio": item.waveform.squeeze(0).numpy()},
+                        ],
+                    }
+                ]
+                for item in chunk
             ]
             inputs = processor.apply_chat_template(
-                conversation,
+                conversations,
                 tokenize=True,
                 add_generation_prompt=True,
                 return_dict=True,
-                processor_kwargs={"sampling_rate": TARGET_SAMPLING_RATE},
+                processor_kwargs={"sampling_rate": TARGET_SAMPLING_RATE, "padding_side": "left"},
             ).to(device=mdl.device, dtype=mdl.dtype)
             with torch.no_grad():
                 outputs = mdl.generate(**inputs, max_new_tokens=max_new_tokens)
-            # decode, not batch_decode: strip_prefix is only exposed on the per-sequence call.
-            decoded = processor.decode(
-                outputs[0, inputs["input_ids"].shape[1] :],
+            decoded = processor.batch_decode(
+                outputs[:, inputs["input_ids"].shape[1] :],
                 skip_special_tokens=True,
                 strip_prefix=strip_prefix,
             )
-            results.append(decoded.strip())
+            results.extend(text.strip() for text in decoded)
         return results
 
     @classmethod

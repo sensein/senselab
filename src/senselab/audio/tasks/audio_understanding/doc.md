@@ -36,6 +36,7 @@ audio = Audio(filepath="recording.wav")
 | Internal windowing | the model processes audio in 30 s windows |
 | dtype | bfloat16 on CUDA, float32 on CPU |
 | Attention | `flash_attention_2` when `flash-attn` is installed on CUDA, otherwise `sdpa` |
+| Batching | `batch_size` clips per `generate` call, default 8; `1` restores per-clip generation |
 
 Runs in-process — `transformers` ships `AudioFlamingo3ForConditionalGeneration`
 natively and senselab already pins `transformers>=5.3`, so no subprocess venv is
@@ -57,8 +58,9 @@ Sending a reasoning prompt to the base weights is a variant mismatch, so the two
 cached separately.
 
 The transcription checkpoints wrap answers in a fixed `The spoken content of the audio
-is "..."` phrasing; `strip_prefix=True` removes it. It is exposed on the processor's
-`decode` and not on `batch_decode`, which is why generations are decoded one at a time.
+is "..."` phrasing; `strip_prefix=True` removes it. The processor applies it per answer
+only when decoding a 2-D batch; handed a single 1-D sequence, the same code iterates the
+decoded string's characters, so answers are always decoded as a batch.
 
 ## Running on a cluster
 
