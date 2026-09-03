@@ -42,21 +42,39 @@ natively and senselab already pins `transformers>=5.3`, so no subprocess venv is
 needed. An ~8B-parameter model: CUDA is strongly recommended, and weights are cached
 per `(model, device, attention)` so repeated calls do not reload them.
 
-vLLM offers a documented 5–7× speedup for this model but requires a prerelease
-`transformers>=5.0.0rc1` override and a git build of vLLM, which conflicts with the
-pinned environment. Not implemented here.
+vLLM offers a documented 5–7× speedup for this model. It is not implemented here.
+
+## Reasoning mode (AF-Think)
+
+The base checkpoint is not a reasoning model. Prompts that ask it to think before
+answering — the card's `"Please think and reason about the input <media> before you
+respond."` — belong to **AF-Think**, a PEFT adapter shipped in the same repository's
+`think` subfolder rather than as a separate model. `describe_audios(..., think=True)`
+loads it: the extra trainables from `think/non_lora_trainables.bin` go in via
+`load_state_dict(strict=False)`, then the LoRA weights via `PeftModel.from_pretrained`.
+
+Sending a reasoning prompt to the base weights is a variant mismatch, so the two are
+cached separately.
+
+The transcription checkpoints wrap answers in a fixed `The spoken content of the audio
+is "..."` phrasing; `strip_prefix=True` removes it. It is exposed on the processor's
+`decode` and not on `batch_decode`, which is why generations are decoded one at a time.
 
 ## Running on a cluster
 
 Compute nodes frequently carry no system ffmpeg, and `torchcodec` fails to load
-without it, so audio decoding raises before this backend is reached. On MIT ORCD the
-module supplies the binaries but sets `PATH` only, so `LD_LIBRARY_PATH` must point at
-its `lib` directory as well:
+without it, so audio decoding raises before this backend is reached. Install it with
+the repo's own script, documented under *System Requirements* in the README — it needs
+no root and drops the shared libraries where `torchcodec`'s soname lookup finds them:
 
 ```bash
-module load ffmpeg/5.1.4
-export LD_LIBRARY_PATH="$(dirname "$(dirname "$(which ffmpeg)")")/lib:$LD_LIBRARY_PATH"
+CONDA_PREFIX=~/ffmpeg bash scripts/install-ffmpeg.sh
+export LD_LIBRARY_PATH="$HOME/ffmpeg/lib:${LD_LIBRARY_PATH:-}"
 ```
+
+Prefer that to a cluster module. A module that sets `PATH` only still leaves
+`torchcodec` unable to `dlopen` the libraries, and the resulting `libavutil.so.56:
+cannot open shared object file` names the symbol rather than the cause.
 
 This is a property of the decoding stack rather than of this backend, so it applies to
 any senselab job that reads audio on such a node.

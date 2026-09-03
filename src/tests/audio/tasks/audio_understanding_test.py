@@ -108,6 +108,7 @@ class _FakeProcessor:
 
     def __init__(self) -> None:
         self.template_calls: List[Dict[str, object]] = []
+        self.decode_calls: List[Dict[str, object]] = []
 
     def apply_chat_template(self, conversation: object, **kwargs: object) -> BatchFeature:
         """Record the keyword arguments and return a mixed-dtype batch."""
@@ -120,9 +121,14 @@ class _FakeProcessor:
             }
         )
 
-    def batch_decode(self, sequences: object, skip_special_tokens: bool = True) -> List[str]:
-        """Return one placeholder generation."""
-        return ["a caption"]
+    def decode(self, sequence: object, **kwargs: object) -> str:
+        """Record the decode keywords and return one placeholder generation.
+
+        ``decode``, not ``batch_decode``: ``strip_prefix`` is only exposed on the
+        per-sequence call, so decoding the batch would silently drop it.
+        """
+        self.decode_calls.append(kwargs)
+        return "a caption"
 
 
 class _FakeModel:
@@ -143,7 +149,7 @@ class _FakeModel:
 def _wired(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeProcessor, _FakeModel]:
     """Seed the weight cache so a call runs end to end without loading anything."""
     processor, mdl = _FakeProcessor(), _FakeModel()
-    cache_key = "nvidia/audio-flamingo-3-hf@cpu@sdpa"
+    cache_key = "nvidia/audio-flamingo-3-hf@cpu@sdpa@think=False"
     monkeypatch.setattr(AudioFlamingoUnderstanding, "_cache", {cache_key: (processor, mdl)})
     return processor, mdl
 
@@ -175,7 +181,7 @@ class TestProcessorOutputIsCastToTheModelDtype:
         processor, _ = _wired
         mdl = _FakeModel(dtype=torch.float32)
         monkeypatch.setattr(
-            AudioFlamingoUnderstanding, "_cache", {"nvidia/audio-flamingo-3-hf@cpu@sdpa": (processor, mdl)}
+            AudioFlamingoUnderstanding, "_cache", {"nvidia/audio-flamingo-3-hf@cpu@sdpa@think=False": (processor, mdl)}
         )
         AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
         assert mdl.seen["input_features"] == torch.float32
@@ -201,6 +207,59 @@ class TestTheSamplingRateReachesTheProcessor:
         assert "sampling_rate" not in processor.template_calls[0]
 
 
+class TestTheTranscriptionPrefixCanBeStripped:
+    """``strip_prefix`` lives on ``decode`` alone, so ``batch_decode`` would swallow it."""
+
+    def test_strip_prefix_reaches_the_decoder(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """The flag is forwarded, so the canned wrapper can actually be removed."""
+        processor, _ = _wired
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo(
+            [_audio()], prompt="transcribe", device=DeviceType.CPU, strip_prefix=True
+        )
+        assert processor.decode_calls[0]["strip_prefix"] is True
+
+    def test_it_defaults_to_leaving_the_answer_untouched(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """Captioning answers carry no prefix, so stripping is opt-in."""
+        processor, _ = _wired
+        AudioFlamingoUnderstanding.describe_with_audio_flamingo([_audio()], prompt="describe", device=DeviceType.CPU)
+        assert processor.decode_calls[0]["strip_prefix"] is False
+
+
+class TestTheThinkAdapterIsASeparateVariant:
+    """AF-Think is a PEFT adapter in the repo's ``think`` subfolder, not the base checkpoint.
+
+    Asking the base weights to follow a reasoning prompt is a variant mismatch, so the
+    two must not share a cache entry.
+    """
+
+    def test_think_and_base_do_not_share_a_cache_entry(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """``think=True`` misses the base entry rather than silently reusing it."""
+        calls: List[tuple[str, str]] = []
+
+        def _fake_load(model_name: str, revision: str, **kwargs: object) -> tuple[object, object]:
+            calls.append((model_name, revision))
+            return _FakeProcessor(), _FakeModel()
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AudioFlamingoUnderstanding, "_load_think", _fake_load)
+            AudioFlamingoUnderstanding.describe_with_audio_flamingo(
+                [_audio()], prompt="describe", device=DeviceType.CPU, think=True
+            )
+        assert calls == [("nvidia/audio-flamingo-3-hf", "main")]
+
+    def test_the_base_path_never_loads_the_adapter(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """Without ``think`` the adapter loader is not reached at all."""
+
+        def _boom(*args: object, **kwargs: object) -> tuple[object, object]:
+            raise AssertionError("_load_think must not run when think is False")
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AudioFlamingoUnderstanding, "_load_think", _boom)
+            AudioFlamingoUnderstanding.describe_with_audio_flamingo(
+                [_audio()], prompt="describe", device=DeviceType.CPU
+            )
+
+
 class TestTheApiRoutesOnlySupportedModels:
     """An unsupported model id should fail loudly rather than loading the default."""
 
@@ -208,3 +267,18 @@ class TestTheApiRoutesOnlySupportedModels:
         """A non-Flamingo model id raises NotImplementedError naming what is supported."""
         with pytest.raises(NotImplementedError, match="audio-flamingo"):
             describe_audios([_audio()], prompt="describe", model=HFModel(path_or_uri="openai/whisper-tiny"))
+
+    def test_think_and_strip_prefix_reach_the_backend(self, _wired: tuple[_FakeProcessor, _FakeModel]) -> None:
+        """The public wrapper forwards both flags rather than dropping them."""
+        processor, _ = _wired
+        seen: Dict[str, object] = {}
+
+        def _capture(**kwargs: object) -> List[str]:
+            seen.update(kwargs)
+            return ["ok"]
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(AudioFlamingoUnderstanding, "describe_with_audio_flamingo", _capture)
+            describe_audios([_audio()], prompt="describe", think=True, strip_prefix=True)
+        assert seen["think"] is True
+        assert seen["strip_prefix"] is True

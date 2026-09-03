@@ -18,7 +18,10 @@ The model consumes audio in 30 s windows internally and accepts clips up to
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+
+if TYPE_CHECKING:
+    import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.utils.data_structures import DeviceType, HFModel, _select_device_and_dtype
@@ -133,12 +136,65 @@ class AudioFlamingoUnderstanding:
             ).to(device=mdl.device, dtype=mdl.dtype)
             with torch.no_grad():
                 outputs = mdl.generate(**inputs, max_new_tokens=max_new_tokens)
-            decoded = processor.batch_decode(
-                outputs[:, inputs["input_ids"].shape[1] :],
+            # decode, not batch_decode: strip_prefix is only exposed on the per-sequence call.
+            decoded = processor.decode(
+                outputs[0, inputs["input_ids"].shape[1] :],
                 skip_special_tokens=True,
+                strip_prefix=strip_prefix,
             )
-            results.append(decoded[0].strip())
+            results.append(decoded.strip())
         return results
+
+    @classmethod
+    def _load_think(
+        cls,
+        model_name: str,
+        revision: str,
+        *,
+        dtype: "torch.dtype",
+        attention: str,
+        device_map: str,
+    ) -> Tuple[object, object]:
+        """Load the base checkpoint, then its AF-Think extra trainables and LoRA adapter.
+
+        Args:
+            model_name: Repository holding both the base weights and the ``think`` subfolder.
+            revision: Ref or SHA; resolved to an immutable SHA before anything is read.
+            dtype: Weight dtype.
+            attention: ``flash_attention_2`` or ``sdpa``.
+            device_map: ``auto`` on CUDA, ``cpu`` otherwise.
+
+        Returns:
+            A ``(processor, model)`` pair whose model is the PEFT-wrapped reasoning variant.
+
+        Raises:
+            FileNotFoundError: If the snapshot holds no ``think/non_lora_trainables.bin``.
+        """
+        from pathlib import Path
+
+        import torch
+        from peft import PeftModel
+        from transformers import AudioFlamingo3ForConditionalGeneration, AutoProcessor
+
+        from senselab.utils.dependencies import resolve_model
+
+        _, snapshot = resolve_model(model_name, revision)
+        extras = Path(snapshot) / "think" / "non_lora_trainables.bin"
+        if not extras.is_file():
+            raise FileNotFoundError(
+                f"{model_name} has no think/non_lora_trainables.bin in its snapshot at {snapshot}; "
+                "the AF-Think adapter is unavailable for this revision."
+            )
+
+        processor = AutoProcessor.from_pretrained(snapshot)
+        mdl = AudioFlamingo3ForConditionalGeneration.from_pretrained(
+            snapshot,
+            dtype=dtype,
+            attn_implementation=attention,
+            device_map=device_map,
+        )
+        mdl.load_state_dict(torch.load(extras, map_location="cpu", weights_only=True), strict=False)
+        return processor, PeftModel.from_pretrained(mdl, str(snapshot), subfolder="think")
 
     @staticmethod
     def _attention_implementation(device_type: DeviceType) -> str:
