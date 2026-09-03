@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.audio_understanding.audio_flamingo import (
+    DEFAULT_BATCH_SIZE,
     DEFAULT_MODEL_ID,
     AudioFlamingoUnderstanding,
 )
@@ -20,6 +21,7 @@ def describe_audios(
     max_new_tokens: int = 500,
     think: bool = False,
     strip_prefix: bool = False,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> List[str]:
     """Answer ``prompt`` about each audio with an audio-language model.
 
@@ -36,6 +38,8 @@ def describe_audios(
         think: Load the AF-Think adapter. Set this for prompts that ask the model to
             reason before answering; the base checkpoint is not a reasoning model.
         strip_prefix: Drop the canned transcription wrapper from the answer.
+        batch_size: Clips sent to the model per generate call. Larger values raise
+            throughput and peak memory together; 1 restores per-clip generation.
 
     Returns:
         One generated string per input audio, in input order.
@@ -54,4 +58,5 @@ def describe_audios(
         max_new_tokens=max_new_tokens,
         think=think,
         strip_prefix=strip_prefix,
+        batch_size=batch_size,
     )
