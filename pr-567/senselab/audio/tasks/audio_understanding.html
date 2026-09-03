@@ -34,6 +34,7 @@
     <li><a href="#licence-read-before-use">Licence — read before use</a></li>
     <li><a href="#usage">Usage</a></li>
     <li><a href="#constraints">Constraints</a></li>
+    <li><a href="#running-on-a-cluster">Running on a cluster</a></li>
   </ul></li>
 </ul>
 
@@ -131,6 +132,22 @@ per <code>(model, device, attention)</code> so repeated calls do not reload them
 <p>vLLM offers a documented 5–7× speedup for this model but requires a prerelease
 <code>transformers&gt;=5.0.0rc1</code> override and a git build of vLLM, which conflicts with the
 pinned environment. Not implemented here.</p>
+
+<h2 id="running-on-a-cluster">Running on a cluster</h2>
+
+<p>Compute nodes frequently carry no system ffmpeg, and <code>torchcodec</code> fails to load
+without it, so audio decoding raises before this backend is reached. On MIT ORCD the
+module supplies the binaries but sets <code>PATH</code> only, so <code>LD_LIBRARY_PATH</code> must point at
+its <code>lib</code> directory as well:</p>
+
+<div class="pdoc-code codehilite">
+<pre><span></span><code>module<span class="w"> </span>load<span class="w"> </span>ffmpeg/5.1.4
+<span class="nb">export</span><span class="w"> </span><span class="nv">LD_LIBRARY_PATH</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>which<span class="w"> </span>ffmpeg<span class="k">)</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">/lib:</span><span class="nv">$LD_LIBRARY_PATH</span><span class="s2">&quot;</span>
+</code></pre>
+</div>
+
+<p>This is a property of the decoding stack rather than of this backend, so it applies to
+any senselab job that reads audio on such a node.</p>
 </div>
 
                         <input id="mod-audio_understanding-view-source" class="view-source-toggle-state" type="checkbox" aria-hidden="true" tabindex="-1">
