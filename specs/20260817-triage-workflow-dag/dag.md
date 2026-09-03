@@ -253,7 +253,7 @@ reads them back.
 | **file-level quality: `disruptions_file`** (clipping, dropouts, discontinuities), on the *original* recording | `disruptions.clip_headroom`, `disruptions.min_clip_run`, `disruptions.min_dropout_ms`, `disruptions.discontinuity_local_factor`, `disruptions.discontinuity_window_ms` |
 | both ASR recognizers' own transcripts | none decision-relevant |
 | consensus transcript (`fuse_consensus_words`) + `word`/`event` entities | `words.onomatopoeic_tokens` (null). A recognizer that brackets a non-lexical event (e.g. CrisperWhisper's `[COUGH]`) and one that transcribes it as a plain word (Qwen's `cough`) already vote as one word — `_normalize_word` strips brackets as punctuation — and the fused text now deterministically keeps the bracketed form regardless of which recognizer the fold visits first (`speech_to_text_ensemble/api.py`'s `_is_bracketed_token`); only a wholly-unbracketed reading still depends on `words.onomatopoeic_tokens` to become an `event` |
-| F0/formant tracks (`phonation_tracks`) — measurement only, no boundary decided; sustained-phonation and glide span *detection* moved to TAXONOMY this session (owner-directed), which reads this measurement back — see TAXONOMY's own table below. **Two source streams**: F0 from the pre-emphasised `sharp`, formants from `plain`, because Praat's own `pre_emphasis_from` assumes an un-pre-emphasised input (see the stream prose above). VOICE now reads this measurement back too rather than recomputing F0 — see 5c | `voice.f0_range_hz` (**null in the packaged config**, so this block never runs there either), `phonation_spans.hop_s`/`.max_formants`/`.formant_max_hz`/`.formant_window_s`/`.formant_preemphasis_hz` (all five populated; the seven *detection* keys in `phonation_spans.*` that are null are read by TAXONOMY's proposal step, not by this measurement) |
+| F0/formant tracks (`phonation_tracks`) — measurement only, no boundary decided; sustained-phonation and glide span *detection* moved to TAXONOMY this session (owner-directed), which reads this measurement back — see TAXONOMY's own table below. **Two source streams**: F0 from the pre-emphasised `sharp`, formants from `plain`, because Praat's own `pre_emphasis_from` assumes an un-pre-emphasised input (see the stream prose above). VOICE now reads this measurement back too rather than recomputing F0 — see 5c | `voice.f0_range_hz` (**null in the packaged config**, so this block never runs there either), `phonation_spans.hop_s`/`.max_formants`/`.formant_max_hz`/`.formant_window_s`/`.formant_preemphasis_hz` (all five populated; the eight *detection* keys in `phonation_spans.*` that are null are read by TAXONOMY's proposal step, not by this measurement). These thirteen keys must be given values as one group or none: `_propose_phonation_spans` guards only on `phonation_tracks` being absent (`taxonomy.py:277`), so setting `voice.f0_range_hz` alone lets the measurement reach the store, the guard passes, and the eight `require()` calls at `taxonomy.py:282-291` raise on the nulls — out of `taxonomy()` itself, since the call site at `:549` has no `try`/`except` |
 | spectrograms (wideband/narrowband), gammatone | fixed window/hop keys, none decision-relevant. **Narrowband** is the one with a `src/` consumer — its magnitude array is read directly out of `state` by the spans block's continuity source (so it runs before `spans` in block order), measured to beat wideband because its 20 ms window resolves harmonics in frequency rather than the glottal pulse train in time. **Wideband** now has no `src/` reader; it is only what the reporting figure displays. **Gammatone** has no reader either — it was the third candidate in that comparison and lost, by the same pulse-modulation mechanism as wideband. Both retained rather than deleted. See the wideband/narrowband note above the table |
 
 Dynamic-range normalization is `envelope.dynamic_range_normalize` — a slow (`macro_smoothing`) and a
@@ -359,11 +359,13 @@ own floor:
 |---|---|---|
 | speech | `lexical` (consensus word count) — **authoritative**; `acoustic` (YAMNet+AST windows carrying a speech-family label) — corroboration only | `taxonomy.presence_floor.speech.lexical`, `taxonomy.presence_floor.speech.acoustic`, `taxonomy.speech_labels` — **all three null** |
 | airway | `health_acoustic` (PREPROCESS's own per-span `span_hear` labels, one shared span pool with speech and voice) — **authoritative**; `acoustic` (PREPROCESS's per-span `span_yamnet` labels) — corroboration only | `taxonomy.presence_floor.airway.health_acoustic`, `taxonomy.presence_floor.airway.acoustic`, `taxonomy.audioset_airway_labels`, `taxonomy.hear_airway_labels` |
-| voice | `phonation` (longest phonation span duration alone, over the spans TAXONOMY itself just localised) | `taxonomy.voice_min_duration_s`, `taxonomy.voice_uncertain_duration_s` — **both null**; span detection itself reads `phonation_spans.*` (seven of eight keys null) |
+| voice | `phonation` (longest phonation span duration alone, over the spans TAXONOMY itself just localised) | `taxonomy.voice_min_duration_s`, `taxonomy.voice_uncertain_duration_s` — **both null**; span detection itself reads `phonation_spans.*` (all eight detection keys null) |
 
 A line whose derivative never reached the store, or whose floor is null, reads `unavailable` — which
-makes the *line* uncertain, never absent; a kind is `absent` only when every one of its lines
-genuinely counted evidence below floor. `airway`'s two lines were an equal-weight AND-fold
+makes the *line* uncertain, never absent; a kind is `absent` only when its **authoritative** line
+genuinely counted evidence below floor, since that line's state is copied whole
+(`_fold_authoritative_line`) and a corroborating line never changes the outcome either way.
+`airway`'s two lines were an equal-weight AND-fold
 (`_fold_two_lines`, both had to independently resolve) until this session; owner-directed, HeAR — the
 domain-specific detector — now decides alone via the same authoritative-plus-corroboration shape
 `speech` already gave its lexical/acoustic pair (`_fold_authoritative_line`, shared by both kinds).
@@ -386,8 +388,10 @@ else:
 
 Every uncertain kind is weighted identically here — speech, airway and voice each independently
 trigger the same `FLAG` with no priority among them. Under the packaged config, with every presence
-floor null, **every kind reads `uncertain` on every file that has any evidence at all**, so TAXONOMY
-flags nearly universally until floors are fit.
+floor null, `_line_state` returns `unavailable` before it ever compares a count, so **every kind
+reads `uncertain` on every file**, whatever evidence was measured. `all(ABSENT)` is therefore never
+true and `any(UNCERTAIN)` always is: TAXONOMY's outcome is invariably `FLAG "uncertain: airway,
+speech, voice"` until floors are fit.
 
 **Serves the stated goals:** none of the three directly — this classifies *content type*, not
 quality, speaker identity, or PII. It matters to this document because its uniform-uncertainty fold
