@@ -68,6 +68,7 @@ _SUBPROCESS_HELPER = "hf_subprocess_env"
 
 # In-process load sites that route through resolve_model / load_hf_resilient.
 REVIEWED_INPROCESS = {
+    "audio/tasks/audio_understanding/audio_flamingo.py",
     "audio/tasks/classification/huggingface.py",
     "audio/tasks/classification/speech_emotion_recognition/api.py",
     "audio/tasks/forced_alignment/forced_alignment.py",
