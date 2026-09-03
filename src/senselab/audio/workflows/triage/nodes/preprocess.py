@@ -494,18 +494,16 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         kept only where it does not already overlap a primary span. Continuity: proposed from
         spectral_continuity's frame-to-frame spectral similarity over the wideband spectrogram
         block's own magnitude output (reused directly, not recomputed at merely-matching parameters
-        -- see `_spectrogram`) -- wideband rather than narrowband for its shorter analysis window
-        (spectrogram.wideband_window_ms against .narrowband_window_ms, same shared hop_ms), giving
-        continuity finer temporal resolution to place an onset/offset transition against, at the cost
-        of frequency resolution continuity's own frame-to-frame comparison does not need as much as a
-        band-energy measurement would. Smoothed with the same `ButterworthSmoothing(cutoff_hz=
+        -- see `_spectrogram`) -- the narrowband block (spectrogram.narrowband_window_ms, on the hop
+        both spectrograms share); benchmarks/preprocess-params.md records the measurement behind that
+        choice. Smoothed with the same `ButterworthSmoothing(cutoff_hz=
         envelope.lowpass_hz, order=envelope.filter_order)` the primary amplitude envelope itself
         uses -- not a separately-chosen scheme -- so both measures agree on what counts as the same
         continuous event at the same time-constant before either is compared against or deduplicated
         with the other. Kept only where it does not already overlap a primary or
         supplementary span -- a sustained tonal/harmonic production (a glide, a held vowel) can hold
         a stable spectral shape well before its amplitude clears any gate. Absent whenever
-        `spectrogram_wideband` itself is, the same "each block is independent" contract every
+        `spectrogram_narrowband` itself is, the same "each block is independent" contract every
         other dependency in this node already follows. ASR: the consensus transcript's own word
         timings (`_consensus`), grouped into runs by `speech.word_gap_ms` via
         :func:`~senselab.audio.tasks.spans.api.group_extents_into_runs` -- the same grouping SPEECH
