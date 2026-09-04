@@ -24,6 +24,39 @@ stated and its constant unjustified — not silently guessed.
 | **`classify_audios` applies softmax for AST** | TAXONOMY | AudioSet is multi-label; softmax makes the scores a distribution they are not |
 | **`resample_audios` designs its anti-alias filter at the target rate and applies it at the source rate** | PREPROCESS's 16 kHz resample | for 48→16 kHz the explicit pre-filter may be close to inert. **Unverified** — SpeechBrain's sinc interpolation may cover it, and a sweep test would settle it. Not asserted as a defect |
 
+## Hints: mapping, extraction and vocabulary
+
+Opened 2026-09-03 after the TAXONOMY stage-0 collection ran with no hint at all, on a corpus whose
+sidecars carry exactly the fields a hint wants.
+
+| item | what it blocks | why |
+| --- | --- | --- |
+| **A b2ai sidecar is not extracted into an `AudioHints`** | every hint-dependent path, on this corpus | each recording has a `<stem>_recording-metadata.json` (100% coverage over the three reference participants) carrying `task_name`, `speech_type`, `stimulus_text`, `instructions`, `language`, `recording_input_gain` and `recording_microphone`. Nothing maps them. The stage-0 driver read the sidecar only to copy fields into its collection table and called `run_triage` with `hint=None`, so all 112 recordings recorded `declared_hints: no_claim` on all three kinds and `forced_by_hint: false`. The shapes line up without strain — `task_name` is a `may_contain` tag, `speech_type` is `metadata.speech_type`, and `stimulus_text` is what `expected_speech` exists to hold, ordered per prompt |
+| **`routing.hint_kind_map` is null** | hint-forced branch selection, independently of the above | its own derivation says it maps "which `may_contain` tags and which `metadata.speech_type` values force which kind's branch", and it is null pending the corpus it should be drawn from. So even a correctly extracted hint forces nothing: every tag matches no entry, forces no branch, and is recorded as `unmapped`. Two independent reasons the stage-0 run could not have used a hint even if the driver had passed one |
+| **`voice.hint_tags` is dead config** | nothing, but it misleads | marked "unread as of v2 — hints route through `routing.hint_kind_map` alone", with deletion pending the campaign-config decision. Pre-alpha says delete outright rather than carry an unread key |
+
+### The vocabulary is deliberately open, and that decision is now the question
+
+`AudioHints.may_contain` is `list[str]`, and `audio_hints.py` states the reason: "Open strings rather
+than an enum: a closed vocabulary here would be a taxonomy nobody fitted, and every corpus that did
+not fit it would force an edit." The owner has asked for standardised enums for hints, which
+reverses that. The tension is real and is the decision owed here, not a detail:
+
+- **What the open form buys** is that a corpus supplies its own tags with no edit to senselab, which
+  is what let b2ai's task names be usable as tags at all.
+- **What it costs** is that no tag can be validated, a typo is indistinguishable from a new tag, and
+  `hint_kind_map` must carry every spelling any corpus might use — which is part of why it is still
+  null. `routing` already records `bad_map_values` and `unmapped_tags`, machinery that exists only
+  because the vocabulary is unchecked.
+- **What is not yet decided**: whether the closed set governs the hint itself or only the
+  `hint_kind_map` keys; whether an unrecognised tag is refused, or admitted and recorded as
+  unmapped as it is today; and whether the enum is one vocabulary or one per kind. A closed set that
+  refuses an unknown tag would have rejected this corpus's `task_name` values outright, so the
+  migration is not free and needs the corpus listed before the enum is written.
+
+The b2ai task vocabulary is small and enumerable — 12 task families over the three reference
+participants — so this corpus can supply the first real list rather than an invented one.
+
 ## Decisions with no measurement behind them
 
 | item | current state |
