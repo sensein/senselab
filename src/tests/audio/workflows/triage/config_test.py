@@ -11,6 +11,32 @@ import senselab.audio.tasks
 from senselab.audio.workflows.triage.config import DATA_MAP_PATHS, TriageConfig, load_triage_config
 from senselab.text.tasks.pii_detection.api import default_detectors
 
+_MAX_VALUE_CHARS = 80
+"""Longest a string value may be. A name, a format or a label fits; a sentence does not."""
+
+
+def _leaves(node: object, path: str = "") -> dict[str, object]:
+    """Flatten a nested mapping to dotted path -> scalar.
+
+    Args:
+        node: A mapping, sequence or scalar.
+        path: The dotted path accumulated so far.
+
+    Returns:
+        Every leaf keyed by its dotted path. List elements are indexed.
+    """
+    if isinstance(node, dict):
+        out: dict[str, object] = {}
+        for key, value in node.items():
+            out.update(_leaves(value, f"{path}.{key}" if path else str(key)))
+        return out
+    if isinstance(node, list):
+        out = {}
+        for index, value in enumerate(node):
+            out.update(_leaves(value, f"{path}[{index}]"))
+        return out
+    return {path: node}
+
 
 class TestMeasuredValues:
     """A value with a derivation is readable."""
@@ -305,3 +331,28 @@ class TestTheV2OpenKeys:
         with pytest.raises(ValueError, match="has no value"):
             config.require("voice.f0_range_hz")
         assert config.get("voice.f0_range_hz", "SENTINEL") == "SENTINEL"
+
+
+class TestTheHashNamesParametersOnly:
+    """``config_hash`` is over the merged mapping, so prose in a value changes a run's identity."""
+
+    def test_no_value_carries_prose(self) -> None:
+        """Every string value is a short token, not a sentence, and none spans lines.
+
+        The file once carried a 50 kB ``derivation`` string, which put the reasoning inside
+        ``config_hash``: correcting a word made two behaviourally identical runs report different
+        identities. Descriptions are ``#`` comments now, which the loader never reads. This fails
+        if prose returns to a value.
+        """
+        offenders = []
+        for path, value in _leaves(load_triage_config().values).items():
+            if isinstance(value, str) and ("\n" in value or len(value) > _MAX_VALUE_CHARS):
+                offenders.append(f"{path} ({len(value)} chars)")
+        assert not offenders, (
+            "config values must not carry prose — put it in "
+            "specs/20260817-triage-workflow-dag/config-derivations.md and leave a `#` comment: " + ", ".join(offenders)
+        )
+
+    def test_the_derivation_key_is_gone(self) -> None:
+        """Its prose moved to the spec; nothing in the package reads the key."""
+        assert "derivation" not in load_triage_config().values
