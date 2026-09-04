@@ -24,6 +24,7 @@ from typing import Any, Sequence
 import numpy as np
 import soundfile as sf
 from matplotlib.axes import Axes
+from matplotlib.backend_bases import RendererBase
 from matplotlib.figure import Figure
 
 from senselab.audio.workflows.triage.config import TriageConfig
@@ -87,13 +88,23 @@ class FigureStyle:
         marker_size: Raster cell area.
         text_fontsize: The taxonomy panel's monospaced lines.
         absent_fontsize: The note a panel prints when its element is absent.
+        cell_floor_fontsize: The smallest a raster cell's score text is shrunk to before it is
+            dropped. The cell itself is never dropped.
+        waveform_headroom: The page's own peak amplitude is scaled by this to set the waveform's
+            y-limits, so a signal well below full scale still fills its panel.
+        waveform_min_amplitude: A floor on those limits, so a near-silent page does not zoom into
+            its own noise.
+        absent_height_ratio: The height an absent panel collapses to, freeing its remaining share
+            for the panels that have something to draw.
+        asr_rows: How many staggered rows the consensus-word lane uses.
+        asr_row_height: The bar height within one word-lane row, in row units.
     """
 
     page_seconds: float = 20.0
     pad_short_pages: bool = True
     figure_inches: tuple[float, float] = (14.0, 17.0)
     dpi: int = 130
-    height_ratios: tuple[float, ...] = (2.2, 2.0, 0.5, 0.5, 0.32, 0.5, 1.0, 1.6)
+    height_ratios: tuple[float, ...] = (2.2, 2.0, 0.5, 0.5, 0.32, 0.5, 0.62, 1.6)
     spectrogram_dynamic_range_db: float = 80.0
     top_labels: int = 4
     summary_labels: int = 6
@@ -114,6 +125,12 @@ class FigureStyle:
     marker_size: float = 260.0
     text_fontsize: float = 7.5
     absent_fontsize: float = 7.0
+    cell_floor_fontsize: float = 4.0
+    waveform_headroom: float = 1.15
+    waveform_min_amplitude: float = 0.02
+    absent_height_ratio: float = 0.2
+    asr_rows: int = 3
+    asr_row_height: float = 0.58
     span_row_colours: dict[str, str] = field(default_factory=dict)
 
     def row_colour(self, code: str) -> str:
@@ -188,13 +205,16 @@ def _mark_padding(axes: Sequence[Axes], duration_s: float, t1: float, style: Fig
             zorder=5,
         )
         axis.axvline(duration_s, color=style.colour_padding, linewidth=1.0, linestyle="--", zorder=6)
+    # Rotated inside the band: a padded tail is often a fraction of a second wide, and a horizontal
+    # label centred on it overflows onto the recording it is meant to be distinguished from.
     axes[0].text(
         (duration_s + t1) / 2,
-        0.94,
+        0.5,
         "padding — recording ended",
         transform=axes[0].get_xaxis_transform(),
         ha="center",
-        va="top",
+        va="center",
+        rotation=90,
         fontsize=style.tick_fontsize,
         color="0.25",
         zorder=7,
@@ -587,8 +607,12 @@ def _waveform_panel(
     k_db: float | None,
     cut_level: float | None,
     cut_percentile: float | None,
+    continuity_absent: str,
 ) -> None:
     """The conditioned waveform, its envelope and floor, and the continuity trace on their own scales.
+
+    The scalar readings go in the title rather than a legend, which at this panel's density covered
+    the traces it was labelling.
 
     Args:
         axis: The panel.
@@ -596,21 +620,36 @@ def _waveform_panel(
         sampling_rate: Its rate.
         envelope_db: PREPROCESS's persisted envelope, or None when absent.
         floor_db: Its floor, or None.
-        continuity: The continuity trace, or None when the narrowband array is absent.
+        continuity: PREPROCESS's persisted continuity trace, or None when absent.
         window: The page's ``(start, end)``.
         style: The drawing configuration.
         k_db: Amplitude's detection threshold above the floor.
-        cut_level: The trace value the rank cut lands on.
+        cut_level: The trace value the rank cut landed on, as PREPROCESS recorded it.
         cut_percentile: The percentile that produced it.
+        continuity_absent: What to name when the trace is absent.
     """
     t0, t1 = window
     times = np.arange(len(samples)) / sampling_rate
     mask = (times >= t0) & (times < t1)
+    page = samples[mask[: len(samples)]] if len(samples) else samples
     axis.plot(times[mask], samples[mask], linewidth=0.3, color="0.4", zorder=1)
-    axis.set_ylim(-1.05, 1.05)
+    peak = float(np.abs(page).max()) if len(page) else 0.0
+    limit = max(peak * style.waveform_headroom, style.waveform_min_amplitude)
+    axis.set_ylim(-limit, limit)
     axis.set_xlim(t0, t1)
     axis.set_ylabel("Amplitude")
-    axis.set_title("conditioned waveform + envelope + floor + continuity", fontsize=style.title_fontsize)
+
+    readings = [f"waveform peak {peak:.3f}" if len(page) else "waveform absent"]
+    if floor_db is not None:
+        readings.append(f"floor {floor_db:.1f} dBFS (dashed)")
+        if k_db is not None:
+            readings.append(f"k_db {floor_db + k_db:.1f} dBFS (solid)")
+    if cut_level is not None and cut_percentile is not None:
+        readings.append(f"rank cut p{cut_percentile:g} {cut_level:.3f}")
+    axis.set_title(
+        "conditioned waveform + envelope + floor + continuity — " + "  ·  ".join(readings),
+        fontsize=style.title_fontsize,
+    )
 
     if envelope_db is not None and floor_db is not None:
         twin = axis.twinx()
@@ -623,22 +662,13 @@ def _waveform_panel(
             label="envelope dBFS",
             zorder=2,
         )
-        twin.axhline(floor_db, color="firebrick", linewidth=1.0, linestyle="--", label=f"floor ({floor_db:.1f} dBFS)")
+        twin.axhline(floor_db, color="firebrick", linewidth=1.0, linestyle="--")
         if k_db is not None:
-            twin.axhline(
-                floor_db + k_db,
-                color="firebrick",
-                linewidth=1.2,
-                alpha=0.9,
-                label=f"k_db ({floor_db + k_db:.1f} dBFS)",
-            )
+            twin.axhline(floor_db + k_db, color="firebrick", linewidth=1.2, alpha=0.9)
         twin.set_ylabel("dBFS")
         finite = window_env[np.isfinite(window_env)] if len(window_env) else window_env
         if len(finite):
             twin.set_ylim(min(floor_db, float(finite.min())) - 5, float(finite.max()) + 5)
-        handles, labels = twin.get_legend_handles_labels()
-    else:
-        handles, labels = [], []
 
     if continuity is not None and len(continuity):
         cont_axis = axis.twinx()
@@ -649,7 +679,6 @@ def _waveform_panel(
             trace[mask[: len(trace)]],
             color=style.colour_continuity,
             linewidth=0.8,
-            label="continuity",
             zorder=2,
         )
         if cut_level is not None:
@@ -658,15 +687,23 @@ def _waveform_panel(
                 color="darkgreen",
                 linewidth=1.2,
                 alpha=0.9,
-                label=f"rank cut p{cut_percentile:g} ({cut_level:.3f})",
             )
         cont_axis.set_ylim(0.0, 1.05)
         cont_axis.set_ylabel("continuity", color=style.colour_continuity)
         cont_axis.tick_params(axis="y", colors=style.colour_continuity)
-        extra_handles, extra_labels = cont_axis.get_legend_handles_labels()
-        handles, labels = handles + extra_handles, labels + extra_labels
-    if handles:
-        axis.legend(handles, labels, loc="upper right", fontsize=style.tick_fontsize)
+    else:
+        axis.text(
+            0.006,
+            0.06,
+            continuity_absent,
+            transform=axis.transAxes,
+            ha="left",
+            va="bottom",
+            fontsize=style.absent_fontsize,
+            style="italic",
+            color="0.35",
+            zorder=7,
+        )
 
 
 def _span_row_cells(spans: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -704,8 +741,12 @@ def _span_lane_panel(
     clips: list[tuple[float, float]],
     window: tuple[float, float],
     style: FigureStyle,
+    row_absent: dict[str, str],
 ) -> None:
     """One compact row per proposing source, hatched where dedup kept the proposal.
+
+    A row that proposed nothing anywhere in the recording says why on the row itself, so an empty
+    row is never mistaken for a source that ran and found nothing.
 
     Args:
         axis: The panel.
@@ -713,6 +754,7 @@ def _span_lane_panel(
         clips: Clip-event extents.
         window: The page's ``(start, end)``.
         style: The drawing configuration.
+        row_absent: ``{code: reason}`` for a source that contributed no span to the whole recording.
     """
     from matplotlib.patches import Rectangle
 
@@ -754,6 +796,18 @@ def _span_lane_panel(
                     alpha=0.9,
                     zorder=3 if kept else 2,
                 )
+            )
+        if not cells[code] and code in row_absent:
+            axis.text(
+                t0 + (t1 - t0) * 0.004,
+                y,
+                row_absent[code],
+                ha="left",
+                va="center",
+                fontsize=style.absent_fontsize,
+                style="italic",
+                color="0.4",
+                zorder=4,
             )
 
 
@@ -848,14 +902,22 @@ def _squim_panel(
     axis.set_yticklabels(list(metrics), fontsize=style.tick_fontsize)
     axis.set_ylim(-0.5, len(metrics) - 0.5)
     cmap = plt.get_cmap(style.cmap_squim)
+    marker_points = float(np.sqrt(style.marker_size))
+    here = []
     for span in spans:
         start, end = span["extent"]
-        if end < t0 or start > t1:
+        if end < t0 or start > t1 or squim.get(span["id"]) is None:
             continue
-        mid = max(start, t0) + (min(end, t1) - max(start, t0)) / 2
-        scores = squim.get(span["id"])
-        if scores is None:
-            continue
+        here.append((max(start, t0) + (min(end, t1) - max(start, t0)) / 2, squim[span["id"]]))
+    here.sort(key=lambda item: item[0])
+    mids = [mid for mid, _ in here]
+    renderer = _renderer(axis)
+    points_per_second = _axis_points_per_second(axis, window, renderer)
+    for position, (mid, scores) in enumerate(here):
+        gaps = [abs(mid - mids[neighbour]) for neighbour in (position - 1, position + 1) if 0 <= neighbour < len(mids)]
+        # A cell's label may use the space up to its nearest neighbour, never more than its own
+        # marker: at this page width neighbouring markers themselves overlap on dense spans.
+        available = min(marker_points, min(gaps) * points_per_second) if gaps else marker_points
         for row, metric in enumerate(metrics):
             value = scores.get(metric)
             if value is None:
@@ -872,15 +934,73 @@ def _squim_panel(
                 linewidths=0.4,
                 zorder=3,
             )
-            axis.text(
-                mid,
-                row,
-                f"{float(value):.2f}",
-                ha="center",
-                va="center",
-                fontsize=style.cell_fontsize,
-                zorder=4,
-            )
+            _fit_cell_text(axis, mid, row, f"{float(value):.2f}", available, style, renderer)
+
+
+def _renderer(axis: Axes) -> RendererBase | None:
+    """The canvas renderer, for measuring a label before it is committed to the page.
+
+    Args:
+        axis: Any panel on the figure.
+
+    Returns:
+        The renderer, or None where the backend exposes none — text extents then fall back to
+        matplotlib's own cached renderer, which is accurate enough for a fit decision.
+    """
+    getter = getattr(axis.figure.canvas, "get_renderer", None)
+    renderer = getter() if callable(getter) else None
+    return renderer if isinstance(renderer, RendererBase) else None
+
+
+def _axis_points_per_second(axis: Axes, window: tuple[float, float], renderer: RendererBase | None) -> float:
+    """How many typographic points one second of the shared time axis occupies.
+
+    Args:
+        axis: The panel.
+        window: The page's ``(start, end)``.
+        renderer: :func:`_renderer`'s result.
+
+    Returns:
+        Points per second, using the axes' own drawn width rather than the figure's, since the
+        margins are not available to a label.
+    """
+    t0, t1 = window
+    width_px = axis.get_window_extent(renderer=renderer).width
+    return float(width_px) / float(axis.figure.dpi) * 72.0 / max(t1 - t0, 1e-9)
+
+
+def _fit_cell_text(
+    axis: Axes,
+    x: float,
+    y: float,
+    text: str,
+    cell_points: float,
+    style: FigureStyle,
+    renderer: RendererBase | None,
+) -> bool:
+    """Draw a raster cell's score text only at a size that fits the space the cell has.
+
+    Args:
+        axis: The panel.
+        x: The cell's centre on the time axis.
+        y: The cell's row.
+        text: The score, already formatted.
+        cell_points: The width available to this cell, in points.
+        style: The drawing configuration.
+        renderer: :func:`_renderer`'s result.
+
+    Returns:
+        Whether the text was drawn. The caller has already drawn the marker, which is never dropped:
+        a missing number means the cell was too small for one, not that nothing was measured.
+    """
+    sizes = (style.cell_fontsize, (style.cell_fontsize + style.cell_floor_fontsize) / 2, style.cell_floor_fontsize)
+    for size in sizes:
+        artist = axis.text(x, y, text, ha="center", va="center", fontsize=size, zorder=4)
+        width = artist.get_window_extent(renderer=renderer).width / float(axis.figure.dpi) * 72.0
+        if width <= cell_points:
+            return True
+        artist.remove()
+    return False
 
 
 def _asr_lane_panel(
@@ -903,17 +1023,18 @@ def _asr_lane_panel(
     if not words:
         _absent_panel(axis, window, absent_note, style)
         return
-    axis.set_ylim(-0.5, 2.5)
+    half = style.asr_row_height / 2.0
+    axis.set_ylim(-0.5, style.asr_rows - 0.5)
     axis.set_yticks([])
     here = [word for word in words if word["extent"][1] >= t0 and word["extent"][0] <= t1]
     for index, word in enumerate(here):
         start, end = word["extent"]
-        row = index % 3
+        row = index % style.asr_rows
         axis.add_patch(
             Rectangle(
-                (max(start, t0), row - 0.4),
+                (max(start, t0), row - half),
                 max(min(end, t1) - max(start, t0), 0.01),
-                0.8,
+                style.asr_row_height,
                 facecolor=style.word_colours[index % len(style.word_colours)],
                 alpha=0.8,
             )
@@ -944,61 +1065,90 @@ def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> None:
     )
 
 
-def _continuity_trace(
-    store: ProvStore, run_dir: Path, config: TriageConfig, sampling_rate: int, n_samples: int
-) -> np.ndarray | None:
-    """The continuity trace, recomputed from the persisted narrowband spectrogram.
+def _continuity(store: ProvStore, run_dir: Path) -> tuple[np.ndarray | None, float | None, float | None]:
+    """PREPROCESS's persisted continuity trace, with the rank cut it recorded.
 
-    PREPROCESS computes this trace inside ``_spans`` and does not persist it, so unlike every other
-    curve here it cannot simply be read back. It is recomputed from the stored narrowband array under
-    the run's own configuration, which is deterministic but not the same guarantee as reading a
-    sidecar.
+    Read, never recomputed: a trace derived here could differ from the one the spans in this same
+    store were proposed against, and the page would then annotate spans with a threshold that never
+    produced them.
 
     Args:
         store: The provenance store.
         run_dir: The run directory.
-        config: The run's configuration.
-        sampling_rate: The stream's rate.
-        n_samples: How many samples the trace is resampled to.
 
     Returns:
-        The trace, or None when the narrowband spectrogram is absent.
+        ``(trace, cut_level, cut_percentile)``. Every element is None when the derivative is absent;
+        ``cut_level`` alone is None when the cut marked no sample.
     """
-    from senselab.audio.tasks.envelope.api import ButterworthSmoothing
-    from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
-
-    power = _npz(run_dir, store, "spectrogram_narrowband", "spectrogram")
-    if power is None:
-        return None
-    smoothing = ButterworthSmoothing(
-        cutoff_hz=float(config.require("envelope.lowpass_hz")),
-        order=int(config.require("envelope.filter_order")),
-    )
-    return spectral_continuity(
-        np.sqrt(np.maximum(power, 0.0)),
-        hop_s=float(config.require("spectrogram.hop_ms")) / 1000.0,
-        sampling_rate=sampling_rate,
-        n_samples=n_samples,
-        smoothing=smoothing,
+    measurement = find_measurement(store, "continuity_trace")
+    if measurement is None:
+        return None, None, None
+    trace = _npz(run_dir, store, "continuity_trace", "continuity")
+    level = measurement.attributes.get("cut_level")
+    percentile = measurement.attributes.get("cut_percentile")
+    return (
+        trace,
+        None if level is None else float(level),
+        None if percentile is None else float(percentile),
     )
 
 
-def _cut_level(trace: np.ndarray | None, cut_percentile: float) -> float | None:
-    """The trace value the rank cut lands on.
+def _span_row_absence(config: TriageConfig, absent: dict[str, str], spans: list[dict[str, Any]]) -> dict[str, str]:
+    """Why a span-source row is empty over the whole recording.
+
+    A source is skipped either because a config value it needs is null or because its own upstream
+    derivative is absent. Both leave an empty row, and neither means the source ran and found
+    nothing, so the row says which it was.
 
     Args:
-        trace: The continuity trace, or None.
-        cut_percentile: The configured percentile.
+        config: The run's configuration, read for the keys a source needs.
+        absent: :func:`_absent_reasons`' result.
+        spans: :func:`_spans`' result.
 
     Returns:
-        The level, or None when there is no trace or the cut takes no samples.
+        ``{code: reason}`` for each row that contributed nothing.
     """
-    if trace is None or not len(trace):
-        return None
-    n_change_points = int(round(len(trace) * cut_percentile / 100.0))
-    if n_change_points <= 0:
-        return None
-    return float(np.sort(trace, kind="stable")[n_change_points - 1])
+    present = {_span_code(str(span["signal"] or ""), str(span["measure"] or "")) for span in spans}
+    reasons: dict[str, str] = {}
+    if "E" not in present:
+        reasons["E"] = absent.get("energy_envelope", "no amplitude span reached the store")
+    if "S" not in present:
+        reasons["S"] = absent.get("normalized_envelope", "no normalization-derived span was novel")
+    if "C" not in present:
+        reasons["C"] = absent.get("continuity_trace", "no continuity span was novel")
+    if "A" not in present:
+        if config.get("speech.word_gap_ms") is None:
+            reasons["A"] = "no asr spans — speech.word_gap_ms is null, so this source is skipped silently"
+        else:
+            reasons["A"] = absent.get("consensus_transcript", "no asr span was novel")
+    return reasons
+
+
+def _page_height_ratios(style: FigureStyle, collapsed: Sequence[int]) -> list[float]:
+    """The page's panel heights, with absent panels collapsed and their share redistributed.
+
+    The figure's total height is unchanged, so pages stay comparable: what an absent panel gives up
+    goes to the panels that have something to draw, in proportion to what they already had.
+
+    Args:
+        style: The drawing configuration.
+        collapsed: Indices of the panels to collapse.
+
+    Returns:
+        One height per panel, in panel order.
+    """
+    ratios = list(style.height_ratios)
+    freed = 0.0
+    for index in collapsed:
+        if ratios[index] > style.absent_height_ratio:
+            freed += ratios[index] - style.absent_height_ratio
+            ratios[index] = style.absent_height_ratio
+    keep = [index for index in range(len(ratios)) if index not in set(collapsed)]
+    total = sum(ratios[index] for index in keep)
+    if freed > 0 and total > 0:
+        for index in keep:
+            ratios[index] += freed * ratios[index] / total
+    return ratios
 
 
 def preprocess_figure(
@@ -1051,8 +1201,7 @@ def preprocess_figure(
     floor_db = float(floor_array[0]) if floor_array is not None and len(floor_array) else None
     wideband = _npz(run_dir, store, "spectrogram_wideband", "spectrogram")
     hop_s = float(config.require("spectrogram.hop_ms")) / 1000.0
-    trace = _continuity_trace(store, run_dir, config, sampling_rate, len(samples))
-    cut_percentile = float(config.require("spans.continuity_cut_percentile"))
+    trace, cut_level, cut_percentile = _continuity(store, run_dir)
 
     spans = _spans(store)
     clips = _clip_extents(store)
@@ -1068,16 +1217,25 @@ def preprocess_figure(
         "continuity runs on the narrowband array, not this one"
     )
 
+    row_absent = _span_row_absence(config, absent, spans)
+    # Panel indices, in the order they are unpacked below.
+    collapsed = [
+        index
+        for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
+        if empty
+    ]
+    height_ratios = _page_height_ratios(style, collapsed)
+
     figure_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
     for index, window in enumerate(pages(duration_s, style), start=1):
         figure: Figure
         figure, axes = plt.subplots(
-            len(style.height_ratios),
+            len(height_ratios),
             1,
             figsize=style.figure_inches,
             constrained_layout=True,
-            gridspec_kw={"height_ratios": list(style.height_ratios)},
+            gridspec_kw={"height_ratios": height_ratios},
         )
         (
             axis_wide,
@@ -1111,10 +1269,11 @@ def preprocess_figure(
             window,
             style,
             k_db=float(config.require("spans.k_db")),
-            cut_level=_cut_level(trace, cut_percentile),
+            cut_level=cut_level,
             cut_percentile=cut_percentile,
+            continuity_absent=absent.get("continuity_trace", "continuity_trace is absent from the store"),
         )
-        _span_lane_panel(axis_spans, spans, clips, window, style)
+        _span_lane_panel(axis_spans, spans, clips, window, style, row_absent)
         _raster_panel(
             axis_yamnet,
             spans,

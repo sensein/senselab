@@ -373,6 +373,11 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
             nothing on that span).
         span_yamnet_labels: The same, for PREPROCESS's per-span ``span_yamnet`` measurement.
         disruptions_file: Whether to write the file-level disruption measurement.
+        continuity_trace: The persisted continuity trace, written to its own npz sidecar with a
+            ``continuity_trace`` measurement pointing at it. ``None`` writes neither, which is the
+            state of every run recorded before PREPROCESS began persisting it.
+        continuity_cut_level: The ``cut_level`` that measurement records. Defaults to the rank cut
+            over ``continuity_trace`` at the packaged percentile.
 
     Returns:
         A callable taking ``(store, **the above)`` and writing them. It returns None; a test reads
@@ -397,6 +402,8 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         span_hear_labels: list[list[str]] | None = None,
         span_yamnet_labels: list[list[str]] | None = None,
         disruptions_file: bool = False,
+        continuity_trace: "np.ndarray | None" = None,
+        continuity_cut_level: float | None = None,
     ) -> None:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 
@@ -616,6 +623,27 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
                         "raw_scores": {label: 0.9 for label in labels},
                     },
                 )
+
+        if continuity_trace is not None:
+            trace = np.asarray(continuity_trace, dtype="float64")
+            np.savez(tmp_path / "derivatives" / "continuity_trace.npz", continuity=trace)
+            level = continuity_cut_level
+            if level is None:
+                from senselab.audio.tasks.spans.api import rank_cut_level
+
+                level = rank_cut_level(trace, cut_percentile=5.0)
+            _write(
+                "measurement",
+                None,
+                {
+                    "name": "continuity_trace",
+                    "signal": "preemphasised",
+                    "path": "derivatives/continuity_trace.npz",
+                    "sampling_rate": stream_hz,
+                    "cut_percentile": 5.0,
+                    "cut_level": level,
+                },
+            )
 
         if disruptions_file:
             _write(

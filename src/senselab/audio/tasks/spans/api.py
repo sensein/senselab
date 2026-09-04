@@ -154,6 +154,39 @@ def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
     return [(int(edges[i]), int(edges[i + 1])) for i in range(0, len(edges), 2)]
 
 
+def _n_change_points(n_samples: int, cut_percentile: float) -> int:
+    """How many of ``n_samples`` the rank cut marks, at ``cut_percentile`` percent.
+
+    Args:
+        n_samples: Length of the trace.
+        cut_percentile: Percent of samples to mark, lowest first.
+
+    Returns:
+        The count, which may be zero.
+    """
+    return int(round(n_samples * cut_percentile / 100.0))
+
+
+def rank_cut_level(trace: np.ndarray, *, cut_percentile: float) -> float | None:
+    """The highest trace value the rank cut marks as a change point.
+
+    Args:
+        trace: One value per sample.
+        cut_percentile: Percent of samples to mark as change points, lowest first.
+
+    Returns:
+        The level, or None when the trace is empty or the cut marks no sample. Where the trace has
+        ties astride the boundary this level is reached by more samples than the cut marks, because
+        the cut selects by rank and not by value; it is an annotation of where the cut fell, never
+        an equivalent test.
+    """
+    n = len(trace)
+    n_change_points = _n_change_points(n, cut_percentile)
+    if n == 0 or n_change_points <= 0:
+        return None
+    return float(np.sort(trace, kind="stable")[n_change_points - 1])
+
+
 def segments_between_change_points(
     trace: np.ndarray, sampling_rate: int, *, cut_percentile: float, min_duration_ms: float
 ) -> list[Span]:
@@ -180,7 +213,7 @@ def segments_between_change_points(
     n = len(trace)
     if n == 0:
         return []
-    n_change_points = int(round(n * cut_percentile / 100.0))
+    n_change_points = _n_change_points(n, cut_percentile)
     is_change_point = np.zeros(n, dtype=bool)
     if n_change_points > 0:
         is_change_point[np.argsort(trace, kind="stable")[:n_change_points]] = True
