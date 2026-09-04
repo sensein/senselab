@@ -191,6 +191,40 @@ def _raw_label_scores(window: dict[str, Any]) -> dict[str, float]:
     return {label: score for pair in label_scores(window) for label, score in pair.items()}
 
 
+def _classify_spans_in_batch(
+    inputs: list[Audio],
+    classify: Callable[[list[Audio]], list[list[dict[str, Any]]]],
+) -> list[tuple[list[dict[str, Any]] | None, str | None]]:
+    """Classify every span's input in one call, falling back to one call per span if that fails.
+
+    Args:
+        inputs: One prepared audio per span, in span order.
+        classify: The batch call. Takes every input at once and returns one window list per input.
+
+    Returns:
+        One ``(windows, failure)`` pair per input, in the same order. Exactly one of the two is
+        ``None``: ``windows`` is the classifier's output for that span, ``failure`` the exception
+        type that stopped it.
+    """
+    if not inputs:
+        return []
+    try:
+        batched = classify(inputs)
+    except Exception as err:  # noqa: BLE001 — a batch that fails as a whole is retried per span below
+        batch_failure = type(err).__name__
+    else:
+        if len(batched) == len(inputs):
+            return [(windows, None) for windows in batched]
+        batch_failure = f"batch returned {len(batched)} results for {len(inputs)} spans"
+    results: list[tuple[list[dict[str, Any]] | None, str | None]] = []
+    for item in inputs:
+        try:
+            results.append((classify([item])[0], None))
+        except Exception as err:  # noqa: BLE001 — now each span's own failure is its own fact
+            results.append((None, f"{type(err).__name__} (after batch failed: {batch_failure})"))
+    return results
+
+
 def _span_window_attributes(
     *,
     name: str,
@@ -989,16 +1023,26 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             str(label): float(value) for label, value in (config.get("windows.hear.label_thresholds") or {}).items()
         }
         result_ids: list[str] = []
+        prepared: list[Audio] = []
+        prepared_for: list[str] = []
         for span_id in span_ids:
             span = store.get_entity(span_id)
             extent = span.extent or (0.0, 0.0)
             try:
-                input_audio = span_hear_input(plain, extent)
-                raw_windows = detect_health_acoustic_events([input_audio], hop_length=HEAR_WINDOW_SECONDS, top_k=None)[
-                    0
-                ]
-            except Exception as err:  # noqa: BLE001 — a span HeAR refuses is unmeasured, not padded
+                prepared.append(span_hear_input(plain, extent))
+            except Exception as err:  # noqa: BLE001 — a span HeAR cannot be given is unmeasured, not padded
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", type(err).__name__))
+                continue
+            prepared_for.append(span_id)
+        classified = _classify_spans_in_batch(
+            prepared,
+            lambda batch: detect_health_acoustic_events(batch, hop_length=HEAR_WINDOW_SECONDS, top_k=None),
+        )
+        for span_id, (raw_windows, failure) in zip(prepared_for, classified):
+            span = store.get_entity(span_id)
+            extent = span.extent or (0.0, 0.0)
+            if failure is not None:
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", failure))
                 continue
             if not raw_windows:
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", "no_native_window"))
@@ -1051,17 +1095,27 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         }
         top_k = int(config.require("yamnet.top_k"))
         result_ids: list[str] = []
+        prepared: list[Audio] = []
+        prepared_for: list[str] = []
         for span_id in span_ids:
             span = store.get_entity(span_id)
             start, end = span.extent or (0.0, 0.0)
-            segment = Audio(
-                waveform=plain.waveform[:, int(start * target_hz) : int(end * target_hz)],
-                sampling_rate=target_hz,
+            prepared.append(
+                Audio(
+                    waveform=plain.waveform[:, int(start * target_hz) : int(end * target_hz)],
+                    sampling_rate=target_hz,
+                )
             )
-            try:
-                raw_windows = classify_audios([segment], model="yamnet", top_k=top_k)[0]
-            except Exception as err:  # noqa: BLE001 — a span YAMNet refuses is unmeasured, not padded
-                result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", type(err).__name__))
+            prepared_for.append(span_id)
+        classified = _classify_spans_in_batch(
+            prepared,
+            lambda batch: classify_audios(batch, model="yamnet", top_k=top_k),
+        )
+        for span_id, (raw_windows, failure) in zip(prepared_for, classified):
+            span = store.get_entity(span_id)
+            start, end = span.extent or (0.0, 0.0)
+            if failure is not None:
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", failure))
                 continue
             if not raw_windows:
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "no_native_window"))

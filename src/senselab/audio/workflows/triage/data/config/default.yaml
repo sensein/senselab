@@ -751,6 +751,7 @@ taxonomy:
   voice_min_duration_s: null
   voice_uncertain_duration_s: null
   speech_labels: null
+  yamnet_consolidation_floor: 0.1  # owner-directed: YAMNet consolidation drops a label scoring under this
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
 

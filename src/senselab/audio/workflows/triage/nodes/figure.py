@@ -133,8 +133,8 @@ class FigureStyle:
     colour_clip: str = "crimson"
     colour_padding: str = "0.55"
     cmap_spectrogram: str = "magma"
-    cmap_yamnet: str = "BuGn"
-    cmap_hear: str = "OrRd"
+    cmap_yamnet: str = "BuGn_r"
+    cmap_hear: str = "OrRd_r"
     cmap_squim: str = "Purples"
     word_fill: str = "#fdd0a2"
     word_text_colour: str = "black"
@@ -385,13 +385,18 @@ def _span_scores(store: ProvStore, measurement_name: str) -> dict[str, dict[str,
     return by_span
 
 
-def _raster_rows(per_span: dict[str, dict[str, float]], per_span_top_k: int, scope: str) -> list[str]:
+def _raster_rows(
+    per_span: dict[str, dict[str, float]], per_span_top_k: int, scope: str, floor: float | None = None
+) -> list[str]:
     """The raster's row set: the union of each span's highest-scoring labels, over the whole file.
 
     Args:
         per_span: :func:`_span_scores`'s result, every span in the recording.
         per_span_top_k: How many of its own labels each span contributes.
         scope: Where the union is taken. Only ``"file"`` is implemented.
+        floor: A label whose file-wide peak falls under this contributes no row, or ``None`` to keep
+            every label a span ranked. Without it a span where nothing fires still contributes its
+            four highest, which are all near zero.
 
     Returns:
         The rows, highest file-wide peak first, so a row holds the same position on every page.
@@ -411,6 +416,8 @@ def _raster_rows(per_span: dict[str, dict[str, float]], per_span_top_k: int, sco
         rows.update(label for label, _ in carried[:per_span_top_k])
         for label, score in scores.items():
             peaks[label] = max(peaks.get(label, 0.0), float(score))
+    if floor is not None:
+        rows = {label for label in rows if peaks.get(label, 0.0) >= floor}
     return [label for label in sorted(rows, key=lambda label: (-peaks.get(label, 0.0), label))]
 
 
@@ -945,17 +952,42 @@ def _raster_panel(
             score = scores.get(label)
             if score is None:
                 continue
+            fill = cmap(0.25 + 0.75 * max(0.0, min(1.0, score)))
             axis.scatter(
                 [mid],
                 [row],
                 s=marker_size or style.marker_size,
                 marker="s",
-                c=[cmap(0.25 + 0.75 * max(0.0, min(1.0, score)))],
+                c=[fill],
                 edgecolors="0.3",
                 linewidths=0.4,
                 zorder=3,
             )
-            axis.text(mid, row, f"{score:.2f}", ha="center", va="center", fontsize=style.cell_fontsize, zorder=4)
+            axis.text(
+                mid,
+                row,
+                f"{score:.2f}",
+                ha="center",
+                va="center",
+                fontsize=style.cell_fontsize,
+                color=_readable_on(fill),
+                zorder=4,
+            )
+
+
+def _readable_on(rgba: tuple[float, float, float, float]) -> str:
+    """Black or white, whichever reads on a cell of this colour.
+
+    Args:
+        rgba: The cell's fill.
+
+    Returns:
+        The text colour. Uses Rec. 601 luminance, so the choice follows perceived brightness rather
+        than the colormap's position — which is what a reversed map needs, since its dark end and
+        its light end swap.
+    """
+    red, green, blue = rgba[0], rgba[1], rgba[2]
+    return "black" if (0.299 * red + 0.587 * green + 0.114 * blue) > 0.55 else "white"
 
 
 def _squim_panel(
@@ -1323,7 +1355,13 @@ def preprocess_figure(
         "continuity runs on the narrowband array, not this one"
     )
 
-    yamnet_rows = _raster_rows(yamnet, style.top_labels, style.raster_rows_scope)
+    yamnet_floor = config.get("taxonomy.yamnet_consolidation_floor")
+    yamnet_rows = _raster_rows(
+        yamnet,
+        style.top_labels,
+        style.raster_rows_scope,
+        None if yamnet_floor is None else float(yamnet_floor),
+    )
     hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope)
 
     row_absent = _span_row_absence(config, absent, spans)
