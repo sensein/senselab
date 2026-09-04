@@ -139,18 +139,64 @@ express.
 | consensus ASR words | `word` entities | |
 | whole-file taxonomy readout | `*_label_summary` + `kind` elements | text, off the shared time axis |
 
-## Known limitation: the continuity trace is recomputed
+## Decision 5 — the continuity trace is persisted, so FIGURE recomputes nothing
 
-Every other curve is read from a sidecar. The continuity trace is **not persisted** — PREPROCESS
-computes it inside `_spans()` and keeps it only in local scope — so FIGURE recomputes it from the
-persisted narrowband spectrogram under the run's own configuration. That is deterministic and uses
-stored input, but it is not the same guarantee as reading a sidecar: if `spectral_continuity`
-changed, a re-render of an old run would draw a trace the run's spans were not proposed against.
+Owner ruling, 2026-09-04: **the figure should not recompute anything.** The first version recomputed
+the continuity trace from the persisted narrowband spectrogram, because PREPROCESS computed it inside
+`_spans()` and kept it in local scope. That is deterministic, but it is not the same guarantee as
+reading a sidecar: a re-render draws a trace the run's spans were not necessarily proposed against.
+The owner's own rendered page hit exactly this — the trace on it was computed at draw time and agreed
+with the spans only because the code had not changed in between.
 
-`open.md` already records the general form of this hazard ("A fix to a derivative producer does not
-reach a completed run, and the page cannot tell"). **Persisting the trace in PREPROCESS would close
-it for this panel and is a small change**, but it alters what PREPROCESS writes and so was left for
-the owner rather than taken here.
+PREPROCESS now writes **`continuity_trace`** as its own block, in the same shape as every other
+derivative: `derivatives/continuity_trace.npz` under the key `continuity`, with a measurement
+carrying `path`, `sampling_rate`, `cut_percentile` and `cut_level`. `_spans()` reads the array out of
+`state` instead of computing it, so the spans and the drawn curve are the same object by
+construction, and the trace survives even when span proposal later fails.
+
+`cut_level` is recorded rather than re-derived for the same reason. It is computed by
+`rank_cut_level()` in `spans/api.py`, which shares `_n_change_points()` with
+`segments_between_change_points()` so the rank rule exists once. The level is an **annotation of
+where the cut fell, not an equivalent test**: the cut selects by rank, so where the trace has ties
+astride the boundary the level is reached by more samples than the cut marks. That is why ranking is
+used in the first place — a value comparison lands on the plateau of a flat trace, where `>` admits
+nothing and `>=` admits everything.
+
+### The guard is structural
+
+`figure_reads_only_test.py` sweeps FIGURE's imports and fails if the module imports anything that
+measures — `spectral_continuity`, `hilbert_envelope_dbfs`, `extract_spectrogram_from_audios`,
+`propose_spans`, `classify_audios` and the rest. Verified against the previous commit: the sweep
+reports `['spectral_continuity']` there and nothing here. A data test covers the same contract from
+the other side, seeding a ramp no spectral analysis of a silent stream could produce and asserting it
+comes back verbatim, with the recorded `cut_level` used even where it is not the rank cut of that
+ramp.
+
+Everything else was already read, not derived. The spectrogram panel takes the persisted power array
+and only converts it to dB for display; the envelope, its floor, the spans, SQUIM, the words and the
+kind entities all come out of the store. The dB conversion and the raster's top-K selection are
+display transforms of persisted values, not measurements.
+
+## Decision 6 — six legibility defects, all found by looking at a rendered page
+
+Fixed after rendering a real 79.51 s run rather than reading the code:
+
+| defect | cause | fix |
+| --- | --- | --- |
+| the waveform was invisible | y-limits pinned at ±1.0 while a conditioned stream peaks near 0.05 | limits track the page's own peak, `waveform_headroom` above it, `waveform_min_amplitude` as a floor so a silent page does not magnify dither |
+| the legend covered the traces it labelled | five entries drawn `loc="upper right"` over the continuity curve | the legend is gone; every scalar reading is in the panel title, and the curves are identified by their own coloured axes |
+| SQUIM labels collided | the label was measured against its own marker, but at this page width neighbouring *markers* overlap on dense spans | a cell's label may use the space up to its nearest neighbour's midpoint, never more than its marker; it shrinks toward `cell_floor_fontsize` and is dropped if it will not fit. The marker is never dropped |
+| two absent rasters took ~20% of the page to say one line | fixed `height_ratios` | an absent panel collapses to `absent_height_ratio` and its remaining share is redistributed to the panels with data, in proportion. The page total is unchanged, so pages stay comparable |
+| the `A` (asr) row was silently empty | `preprocess.py` reads `word_gap_ms` with `config.get` and **omits the parameter when null**, so no error is raised and the source is dropped | each span row that contributed nothing names why — the null key, or the producing node's own recorded reason |
+| the word lane read as three disconnected bands | 0.8-tall bars on a 1.0 pitch in a lane of height ratio 1.0 | lane ratio 1.0 → 0.62 and bar height 0.8 → `asr_row_height` 0.58. The staggering and the row assignment are untouched |
+
+`cell_floor_fontsize` is **4.0 pt**, not lower: 3.5 pt fitted the space and was unreadable on the
+rendered page. 4.0 matches the token-label floor `report.py` already uses, so a label that will not
+fit at a legible size is dropped rather than shipped illegible.
+
+The padding label is drawn **rotated inside the padded band**. A padded tail is often a fraction of a
+second wide — 0.49 s on the test recording — and a horizontal label centred on it overflowed onto the
+recording it exists to be distinguished from.
 
 ## Left alone deliberately
 
@@ -159,6 +205,11 @@ the owner rather than taken here.
   `preprocess.spectral_continuity` to sweep smoothing candidates. It belongs to the continuity
   investigation that has since concluded (the rank-cut reframe retired the absolute gate), and
   monkeypatching a node's internals is not something to ship inside the package.
-- **The spectrogram panel keeps its full height when absent**, showing one line of text in a tall
-  frame. Honest but wasteful; a height that responded to content would make pages differ in layout,
-  which is the thing the uniform page exists to prevent.
+- **The word lane does not fit a word's text to its bar.** Text is drawn left-aligned at the bar's
+  start at a fixed size, so a word longer than its own bar overruns it — visible on short words in
+  running speech. `report.py`'s `_token_lane` already solves this properly, measuring each label at
+  draw time against the slot its row leaves it and choosing the row count `R` from the labels' own
+  rendered widths. Porting that fitter here is a real piece of work and was not in scope; the
+  staggering this lane does have was left exactly as it was, per instruction.
+- **The `phonation` lane** has no panel at all yet; TAXONOMY's phonation pass raises on eight null
+  keys, so there would be nothing to draw.

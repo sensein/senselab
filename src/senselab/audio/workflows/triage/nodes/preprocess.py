@@ -59,6 +59,7 @@ from senselab.audio.tasks.spans.api import (
     Span,
     group_extents_into_runs,
     propose_spans,
+    rank_cut_level,
     segments_between_change_points,
 )
 from senselab.audio.tasks.spectral_continuity.api import spectral_continuity
@@ -489,40 +490,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _spans() -> None:
         """Foreground-energy candidate spans, flagged where they overlap a clip.
 
-        Primary: proposed from the pre-emphasised amplitude envelope, always available.
-        Supplementary: proposed from the normalized amplitude envelope where that derivative exists,
-        kept only where it does not already overlap a primary span. Continuity: proposed from
-        spectral_continuity's frame-to-frame spectral similarity over the wideband spectrogram
-        block's own magnitude output (reused directly, not recomputed at merely-matching parameters
-        -- see `_spectrogram`) -- the narrowband block (spectrogram.narrowband_window_ms, on the hop
-        both spectrograms share); benchmarks/preprocess-params.md records the measurement behind that
-        choice. Smoothed with the same `ButterworthSmoothing(cutoff_hz=
-        envelope.lowpass_hz, order=envelope.filter_order)` the primary amplitude envelope itself
-        uses -- not a separately-chosen scheme -- so both measures agree on what counts as the same
-        continuous event at the same time-constant before either is compared against or deduplicated
-        with the other. Kept only where it does not already overlap a primary or
-        supplementary span -- a sustained tonal/harmonic production (a glide, a held vowel) can hold
-        a stable spectral shape well before its amplitude clears any gate. Absent whenever
-        `spectrogram_narrowband` itself is, the same "each block is independent" contract every
-        other dependency in this node already follows. ASR: the consensus transcript's own word
-        timings (`_consensus`), grouped into runs by `speech.word_gap_ms` via
-        :func:`~senselab.audio.tasks.spans.api.group_extents_into_runs` -- the same grouping SPEECH
-        uses for its own word-timing spans, shared rather than duplicated. No threshold or floor: a
-        recognizer transcribing a stretch as speech is itself the evidence, not a measure needing a
-        gate. Absent whenever `consensus` itself is (both recognizers failed).
+        Four sources, applied in this order, each adding only spans over ground no earlier source
+        covers: primary (the pre-emphasised amplitude envelope), supplementary (the normalized
+        envelope, where that derivative exists), continuity (``continuity_trace``, where that
+        derivative exists) and ASR (the consensus transcript's word timings grouped by
+        ``speech.word_gap_ms``). A later candidate overlapping a kept span is recorded on that
+        span's ``corroborated_by`` attribute rather than dropped; the attribute is absent, not
+        empty, on a span nothing corroborated, and creates no provenance edge because a
+        corroborating candidate never becomes its own entity. ``contains_clip`` is the only flag
+        this pass asserts.
 
-        Priority order is primary, then supplementary, then continuity, then ASR: each source only
-        ever adds a *new* span over ground no earlier source already covers -- one span entity per
-        covered stretch, never two near-duplicates for the same region. A later source's candidate
-        that overlaps an already-kept span is not silently dropped, though: it is recorded on that
-        span's own `corroborated_by` attribute (one entry per overlapping candidate, carrying that
-        candidate's own `measure`/`signal`/extent/its own contrast field), so agreement between
-        independent sources over the same stretch stays visible and queryable rather than being
-        implied only by which single source happened to propose first. `corroborated_by` is absent
-        (not an empty list) on a span nothing else corroborated. This is attribute metadata only --
-        no `was_derived_from` provenance edge is created for a corroborating candidate, since it
-        never becomes its own store entity. A span carries no notion of which downstream branch it
-        is "for"; `contains_clip` is the only flag this pass asserts.
+        The measurements behind the source set and its ordering are in
+        ``specs/20260904-preprocess-taxonomy-figure/design.md`` and
+        ``specs/20260817-triage-workflow-dag/benchmarks/preprocess-params.md``.
         """
         if "envelope" not in state:
             raise LookupError("energy_envelope is absent")
@@ -535,8 +515,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
             "continuity_cut_percentile": float(config.require("spans.continuity_cut_percentile")),
             "continuity_min_duration_ms": int(config.require("spans.continuity_min_duration_ms")),
-            "envelope_lowpass_hz": float(config.require("envelope.lowpass_hz")),
-            "envelope_filter_order": int(config.require("envelope.filter_order")),
         }
         word_gap_ms = config.get("speech.word_gap_ms")
         if word_gap_ms is not None:
@@ -544,8 +522,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         reads = [state["envelope_id"]]
         if "normalized_envelope" in state:
             reads.append(state["normalized_envelope_id"])
-        if "spectrogram_narrowband_magnitude" in state:
-            reads.append(derivatives.get("spectrogram_narrowband", state["envelope_id"]))
+        if "continuity_trace" in state:
+            reads.append(derivatives["continuity_trace"])
         if "consensus" in state and word_gap_ms is not None:
             reads.append(state["consensus_id"])
         activity = _step("spans", parameters, tuple(reads), software)
@@ -620,18 +598,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             supplement = _novel(secondary, primary, measure="amplitude", signal="normalized")
 
         continuity: list[Span] = []
-        if "spectrogram_narrowband_magnitude" in state:
-            continuity_trace = spectral_continuity(
-                state["spectrogram_narrowband_magnitude"],
-                hop_s=state["spectrogram_narrowband_hop_s"],
-                sampling_rate=target_hz,
-                n_samples=len(state["envelope"]),
-                smoothing=ButterworthSmoothing(
-                    cutoff_hz=parameters["envelope_lowpass_hz"], order=parameters["envelope_filter_order"]
-                ),
-            )
+        if "continuity_trace" in state:
             continuity_candidates = segments_between_change_points(
-                continuity_trace,
+                state["continuity_trace"],
                 target_hz,
                 cut_percentile=parameters["continuity_cut_percentile"],
                 min_duration_ms=parameters["continuity_min_duration_ms"],
@@ -1309,6 +1278,52 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         state[f"{name}_magnitude"] = np.sqrt(np.maximum(power, 0.0))
         state[f"{name}_hop_s"] = hop_ms / 1000.0
 
+    def _continuity_trace() -> None:
+        """The frame-to-frame spectral similarity over the narrowband spectrogram, to one npz sidecar.
+
+        Written as its own derivative rather than left in ``_spans``' local scope, so a reader draws
+        the trace these spans were proposed from. ``cut_level`` records where the rank cut fell.
+        """
+        if "spectrogram_narrowband_magnitude" not in state:
+            raise LookupError("spectrogram_narrowband is absent")
+        if "envelope" not in state:
+            raise LookupError("energy_envelope is absent")
+        parameters: dict[str, Any] = {
+            "cut_percentile": float(config.require("spans.continuity_cut_percentile")),
+            "envelope_lowpass_hz": float(config.require("envelope.lowpass_hz")),
+            "envelope_filter_order": int(config.require("envelope.filter_order")),
+        }
+        reads = (derivatives["spectrogram_narrowband"], state["envelope_id"])
+        activity = _step("continuity_trace", parameters, reads, software)
+        trace = spectral_continuity(
+            state["spectrogram_narrowband_magnitude"],
+            hop_s=state["spectrogram_narrowband_hop_s"],
+            sampling_rate=target_hz,
+            n_samples=len(state["envelope"]),
+            smoothing=ButterworthSmoothing(
+                cutoff_hz=parameters["envelope_lowpass_hz"], order=parameters["envelope_filter_order"]
+            ),
+        )
+        cut_level = rank_cut_level(trace, cut_percentile=parameters["cut_percentile"])
+        np.savez(run_dir / "derivatives" / "continuity_trace.npz", continuity=trace)
+        entity_id = _measurement(
+            store,
+            activity,
+            software,
+            name="continuity_trace",
+            signal=sharp_signal,
+            attributes={
+                "path": "derivatives/continuity_trace.npz",
+                "sampling_rate": target_hz,
+                "cut_percentile": parameters["cut_percentile"],
+                "cut_level": cut_level,
+            },
+            derived_from=reads,
+        )
+        derivatives["continuity_trace"] = entity_id
+        view.append(entity_id)
+        state["continuity_trace"] = trace
+
     def _gammatone() -> None:
         """The ERB-spaced filterbank energies, to one npz sidecar."""
         parameters: dict[str, Any] = {
@@ -1367,6 +1382,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "spectrogram_narrowband",
             lambda: _spectrogram("spectrogram_narrowband", "spectrogram.narrowband_window_ms"),
         ),
+        ("continuity_trace", _continuity_trace),
         ("spans", _spans),
         ("squim", _squim),
         ("span_hear", _span_hear),
