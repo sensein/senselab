@@ -81,7 +81,8 @@ class FigureStyle:
         cmap_yamnet: YAMNet raster colormap.
         cmap_hear: HeAR raster colormap.
         cmap_squim: SQUIM raster colormap.
-        word_colours: The consensus-word fill cycle.
+        word_fill: The consensus-word bar fill.
+        word_text_colour: The consensus-word text colour.
         title_fontsize: Panel title size.
         tick_fontsize: Axis tick-label size.
         cell_fontsize: Score text drawn inside a raster cell.
@@ -104,7 +105,7 @@ class FigureStyle:
     pad_short_pages: bool = True
     figure_inches: tuple[float, float] = (14.0, 17.0)
     dpi: int = 130
-    height_ratios: tuple[float, ...] = (2.2, 2.0, 0.5, 0.5, 0.32, 0.5, 0.62, 1.6)
+    height_ratios: tuple[float, ...] = (1.32, 2.0, 0.5, 0.5, 0.32, 0.5, 0.40, 1.6)
     spectrogram_dynamic_range_db: float = 80.0
     top_labels: int = 4
     summary_labels: int = 6
@@ -118,7 +119,8 @@ class FigureStyle:
     cmap_yamnet: str = "BuGn"
     cmap_hear: str = "OrRd"
     cmap_squim: str = "Purples"
-    word_colours: tuple[str, ...] = ("#6a51a3", "#3182bd", "#31a354", "#e6550d")
+    word_fill: str = "#fdd0a2"
+    word_text_colour: str = "black"
     title_fontsize: float = 9.0
     tick_fontsize: float = 6.0
     cell_fontsize: float = 5.0
@@ -130,7 +132,7 @@ class FigureStyle:
     waveform_min_amplitude: float = 0.02
     absent_height_ratio: float = 0.2
     asr_rows: int = 3
-    asr_row_height: float = 0.58
+    asr_row_height: float = 0.44
     span_row_colours: dict[str, str] = field(default_factory=dict)
 
     def row_colour(self, code: str) -> str:
@@ -483,7 +485,14 @@ def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
             f"@ {attributes.get('win_length_s')}s/{attributes.get('hop_s')}s hop, {len(labels)} labels"
         )
         lines.append(head)
-        for label, stats in list(labels.items())[: style.summary_labels]:
+        ranked = sorted(
+            ((name, stats) for name, stats in labels.items() if float(stats["peak"]) > 0.0),
+            key=lambda item: (float(item[1]["peak"]), float(item[1]["median"])),
+            reverse=True,
+        )
+        if not ranked:
+            lines.append("      every label scored 0.000 in every window")
+        for label, stats in ranked[: style.summary_labels]:
             lines.append(
                 f"      {label:<28} peak {float(stats['peak']):.3f}  "
                 f"median {float(stats['median']):.3f}  in {int(stats['n_windows'])} windows"
@@ -1035,12 +1044,20 @@ def _asr_lane_panel(
                 (max(start, t0), row - half),
                 max(min(end, t1) - max(start, t0), 0.01),
                 style.asr_row_height,
-                facecolor=style.word_colours[index % len(style.word_colours)],
+                facecolor=style.word_fill,
+                edgecolor="none",
+                linewidth=0.0,
                 alpha=0.8,
             )
         )
         axis.text(
-            max(start, t0), row, word["text"], fontsize=style.cell_fontsize, ha="left", va="center", color="white"
+            max(start, t0),
+            row,
+            word["text"],
+            fontsize=style.cell_fontsize,
+            ha="left",
+            va="center",
+            color=style.word_text_colour,
         )
 
 
