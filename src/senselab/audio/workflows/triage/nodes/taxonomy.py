@@ -30,6 +30,7 @@ the other.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ from typing import Any
 import numpy as np
 
 from senselab.audio.data_structures import AudioHints
+from senselab.audio.tasks.classification.label_scores import label_scores
 from senselab.audio.tasks.phonation.api import (
     FormantTrack,
     propose_phonation_spans,
@@ -58,6 +60,8 @@ from senselab.utils.prov_store import Entity, ProvStore
 NODE = "TAXONOMY"
 
 SCREENED_KINDS = ("airway", "speech", "voice")
+
+SUMMARISED_CLASSIFIERS = ("yamnet", "ast", "hear")
 
 PRESENT = "present"
 ABSENT = "absent"
@@ -486,6 +490,84 @@ def _voice_line(spans: list[Entity] | None, min_s: Any, uncertain_s: Any) -> tup
     return line, kind_state
 
 
+def _label_score_distribution(store: ProvStore, classifier: str, run_dir: Path) -> dict[str, Any] | None:
+    """Every label's score distribution over the whole recording, with no threshold applied.
+
+    Args:
+        store: The provenance store, holding PREPROCESS's verbatim score measurement.
+        classifier: ``"yamnet"``, ``"ast"`` or ``"hear"``.
+        run_dir: Where PREPROCESS wrote the classifier's windows.
+
+    Returns:
+        ``{n_windows, win_length_s, hop_s, labels, element_id}`` where ``labels`` maps a label to
+        ``{peak, median, n_windows}``, ordered by descending peak; or None when the measurement or
+        its sidecar is absent.
+    """
+    raw = find_measurement(store, f"{classifier}_scores")
+    if raw is None:
+        return None
+    path = raw.attributes.get("path")
+    if not path:
+        return None
+    sidecar = run_dir / str(path)
+    if not sidecar.is_file():
+        return None
+    windows = json.loads(sidecar.read_text())
+    per_label: dict[str, list[float]] = {}
+    for window in windows:
+        for pair in label_scores(window):
+            for label, score in pair.items():
+                per_label.setdefault(str(label), []).append(float(score))
+    labels = {
+        label: {"peak": float(max(scores)), "median": float(np.median(scores)), "n_windows": len(scores)}
+        for label, scores in per_label.items()
+    }
+    return {
+        "n_windows": len(windows),
+        "win_length_s": raw.attributes.get("win_length_s"),
+        "hop_s": raw.attributes.get("hop_s"),
+        "labels": dict(sorted(labels.items(), key=lambda item: -item[1]["peak"])),
+        "element_id": raw.id,
+    }
+
+
+def _write_label_summaries(store: ProvStore, run_dir: Path, software: str) -> list[str]:
+    """Write one whole-file label-score summary per classifier that produced scores.
+
+    Args:
+        store: The provenance store.
+        run_dir: Where PREPROCESS wrote the score sidecars.
+        software: This node's software agent.
+
+    Returns:
+        The ids written, for the node's view. A classifier whose scores are absent contributes
+        nothing rather than an empty summary, so a missing summary and an all-zero one stay
+        distinguishable.
+    """
+    written: list[str] = []
+    for classifier in SUMMARISED_CLASSIFIERS:
+        distribution = _label_score_distribution(store, classifier, run_dir)
+        if distribution is None:
+            continue
+        element_id = str(distribution.pop("element_id"))
+        activity = store.activity(node=NODE, step=f"{classifier}_label_summary", parameters={"classifier": classifier})
+        store.was_associated_with(activity, software)
+        store.used(activity, element_id)
+        written.append(
+            write_measurement(
+                store,
+                activity,
+                software,
+                name=f"{classifier}_label_summary",
+                signal="plain",
+                attributes={"classifier": classifier, **distribution},
+                derived_from=(element_id,),
+                extent=None,
+            )
+        )
+    return written
+
+
 def taxonomy(
     store: ProvStore,
     source: str,
@@ -502,11 +584,13 @@ def taxonomy(
         config: The triage configuration.
         hint: Accepted for the shared node shape and **not read**. A classification that reads the
             declaration cannot disagree with it; forcing a branch is ``routing``'s job.
-        run_dir: Where PREPROCESS wrote ``derivatives/phonation_tracks.npz`` — the one sidecar this
-            node reads. It writes none of its own.
+        run_dir: Where PREPROCESS wrote ``derivatives/phonation_tracks.npz`` and each classifier's
+            verbatim ``derivatives/<classifier>_scores.json`` — the sidecars this node reads. It
+            writes none of its own.
 
     Returns:
-        The verdict, the three kind element ids as the view, and the state per kind.
+        The verdict, the three kind element ids plus each classifier's whole-file label summary as
+        the view, and the state per kind.
     """
     software = software_agent(store)
     speech_family = {str(label) for label in (config.get("taxonomy.speech_labels") or [])}
@@ -546,6 +630,7 @@ def taxonomy(
             ),
         },
     }
+    summary_view = _write_label_summaries(store, run_dir, software)
     phonation_view = _propose_phonation_spans(store, config, run_dir, software)
     voice_line, voice_state = _voice_line(
         _phonation_spans(store),
@@ -571,7 +656,7 @@ def taxonomy(
     for element_id in sorted(read_ids):
         store.used(fold, element_id)
 
-    view: list[str] = list(phonation_view)
+    view: list[str] = list(summary_view) + list(phonation_view)
     for kind in SCREENED_KINDS:
         kind_id = store.entity(
             prov_type="kind",
