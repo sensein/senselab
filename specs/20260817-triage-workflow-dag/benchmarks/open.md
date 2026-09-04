@@ -26,36 +26,53 @@ stated and its constant unjustified — not silently guessed.
 
 ## Hints: mapping, extraction and vocabulary
 
-Opened 2026-09-03 after the TAXONOMY stage-0 collection ran with no hint at all, on a corpus whose
-sidecars carry exactly the fields a hint wants.
+Opened 2026-09-03 after the TAXONOMY stage-0 collection ran with no hint at all. **Extraction is not
+missing** — `runs/b2ai-v2/make_hints.py` already builds `AudioHints` for this corpus, twenty
+task-token rules emitting `may_contain` plus `metadata.speech_type`, `task_token`, `task_id` and the
+`b2aiprep@ebc2a14e` registry string, and `--selftest` proves those rules reproduce the 28-row v1 hint
+table verbatim, subject `1f4ea26f`'s 47 (v2) tokens, and the cough matcher's boundary in both
+directions. `runs/b2ai-v2/hints/` carries the 28 generated files. What is owed is narrower than
+"write an extractor", and the items below are what is actually left.
 
 | item | what it blocks | why |
 | --- | --- | --- |
-| **A b2ai sidecar is not extracted into an `AudioHints`** | every hint-dependent path, on this corpus | each recording has a `<stem>_recording-metadata.json` (100% coverage over the three reference participants) carrying `task_name`, `speech_type`, `stimulus_text`, `instructions`, `language`, `recording_input_gain` and `recording_microphone`. Nothing maps them. The stage-0 driver read the sidecar only to copy fields into its collection table and called `run_triage` with `hint=None`, so all 112 recordings recorded `declared_hints: no_claim` on all three kinds and `forced_by_hint: false`. The shapes line up without strain — `task_name` is a `may_contain` tag, `speech_type` is `metadata.speech_type`, and `stimulus_text` is what `expected_speech` exists to hold, ordered per prompt |
-| **`routing.hint_kind_map` is null** | hint-forced branch selection, independently of the above | its own derivation says it maps "which `may_contain` tags and which `metadata.speech_type` values force which kind's branch", and it is null pending the corpus it should be drawn from. So even a correctly extracted hint forces nothing: every tag matches no entry, forces no branch, and is recorded as `unmapped`. Two independent reasons the stage-0 run could not have used a hint even if the driver had passed one |
-| **`voice.hint_tags` is dead config** | nothing, but it misleads | marked "unread as of v2 — hints route through `routing.hint_kind_map` alone", with deletion pending the campaign-config decision. Pre-alpha says delete outright rather than carry an unread key |
+| **The hint is derived from the filename, not from the sidecar that states it** | nothing today; it is a correctness and provenance question | `make_hints.py` reads the task token out of `..._task-<token>.wav` and maps it through `RULES`. Every recording also carries a `<stem>_recording-metadata.json` — 100% coverage over the three reference participants — whose `task_name` and `speech_type` are the acquisition protocol's own values, not a token parsed out of a path. Two consequences: the rules must keep pace with every new token spelling a corpus invents (`Diadochokinesis-(v2)-puhtuhkuh` needed a prefix rule; `V2_47` is pinned by hand precisely because RULES could otherwise reclassify it), and the sidecar's `speech_type` and the rule's `speech_type` are two independent sources for one field with nothing checking that they agree. Reading the sidecar first and treating the token as corroboration inverts that |
+| **`stimulus_text` is never carried into `expected_speech`** | every use of the declared prompt | the sidecar holds the full expected text — the frog story for story-recall, the passage for a read task — and `AudioHints.expected_speech` is the ordered-prompt field that exists to hold it. `make_hints.py` writes only `may_contain` and `metadata`, so the one field that would let a read task be compared against what was actually put in front of the participant is dropped at extraction. The `ExpectedSpeech` ordering question ("which sentence was skipped" versus "how close was the whole thing") cannot be asked at all while this is empty |
+| **`routing.hint_kind_map` is populated only in a campaign override** | any run under the packaged config | the packaged `default.yaml` carries `routing.hint_kind_map: null`, and `runs/b2ai-v2/override.yaml` supplies the real map. `make_hints.py` refuses to emit a tag absent from that map, so the two files are coupled and neither is usable without the other. Under the packaged config every tag would be unmapped and force nothing, which is what "owed the corpus it was drawn from" means in the derivation — and the corpus now exists, in `RULES` |
+| **The stage-0 collection passed no hint at all** | comparability of anything measured against a hinted run | the driver's docstring states it: "no hint, no enrollment, no overrides". All 112 recordings recorded `declared_hints: no_claim` on all three kinds and `forced_by_hint: false`. That was the right call for a stage-0 baseline, but it means the collection says nothing about hint behaviour and cannot be compared with the b2ai-v2 campaign, which ran hinted under the override |
+| **`voice.hint_tags` is dead config** | nothing, but it misleads | marked "unread as of v2 — hints route through `routing.hint_kind_map` alone", deletion pending the campaign-config decision. Its four values duplicate four of `hint_kind_map`'s keys, so it is also a second place the vocabulary is written down. Pre-alpha says delete outright rather than carry an unread key |
 
-### The vocabulary is deliberately open, and that decision is now the question
+### The vocabulary is already closed in practice, and written down three times
 
-`AudioHints.may_contain` is `list[str]`, and `audio_hints.py` states the reason: "Open strings rather
+`AudioHints.may_contain` is `list[str]`, and `audio_hints.py` gives the reason: "Open strings rather
 than an enum: a closed vocabulary here would be a taxonomy nobody fitted, and every corpus that did
-not fit it would force an edit." The owner has asked for standardised enums for hints, which
-reverses that. The tension is real and is the decision owed here, not a detail:
+not fit it would force an edit." The owner has asked for standardised enums, and the case for that is
+stronger than the docstring's, because the vocabulary is no longer unfitted or hypothetical — it is
+enumerable today, and it is duplicated:
 
-- **What the open form buys** is that a corpus supplies its own tags with no edit to senselab, which
-  is what let b2ai's task names be usable as tags at all.
-- **What it costs** is that no tag can be validated, a typo is indistinguishable from a new tag, and
-  `hint_kind_map` must carry every spelling any corpus might use — which is part of why it is still
-  null. `routing` already records `bad_map_values` and `unmapped_tags`, machinery that exists only
-  because the vocabulary is unchecked.
-- **What is not yet decided**: whether the closed set governs the hint itself or only the
-  `hint_kind_map` keys; whether an unrecognised tag is refused, or admitted and recorded as
-  unmapped as it is today; and whether the enum is one vocabulary or one per kind. A closed set that
-  refuses an unknown tag would have rejected this corpus's `task_name` values outright, so the
-  migration is not free and needs the corpus listed before the enum is written.
+- **eight tags**: `cough`, `airway`, `breathe`, `speech`, `voice`, `sustained-vowel`, `phonation`,
+  `read-speech`
+- **four `speech_type` values**: `non-lexical`, `read`, `elicited`, `recall`
+- **written in three places**: `RULES` in `make_hints.py`, the keys of
+  `routing.hint_kind_map` in `runs/b2ai-v2/override.yaml`, and `voice.hint_tags` in the packaged
+  config. `make_hints.py`'s cross-check exists only because two of the three can drift apart, and
+  its `--selftest` asserts every rule tag is a `hint_kind_map` key — a test that would be
+  unnecessary if one enum were the single source
 
-The b2ai task vocabulary is small and enumerable — 12 task families over the three reference
-participants — so this corpus can supply the first real list rather than an invented one.
+What the open form still buys is that a new corpus supplies its own tags without editing senselab.
+What it costs is that no tag can be validated at the type level, a typo is indistinguishable from a
+new tag, and `routing` carries `bad_map_values` and `unmapped_tags` machinery that exists only
+because the vocabulary is unchecked.
+
+**What is not yet decided**, and needs an owner's ruling rather than a measurement:
+
+- whether the closed set governs `may_contain` itself, or only the `hint_kind_map` keys it is
+  checked against — the second is nearly free, since `make_hints.py` already refuses an unmapped tag
+- whether an unrecognised tag is refused (as `make_hints.py` does today, deliberately: "an
+  unrecognised task must fail loudly") or admitted and recorded as `unmapped` (as ROUTING does)
+- whether `speech_type` becomes its own enum, given that `non-lexical` covers DDK, glides, breath
+  and cough alike and the override maps **no** kind to it on purpose
+- whether one vocabulary serves every corpus or each corpus declares its own extension
 
 ## Decisions with no measurement behind them
 
