@@ -19,13 +19,14 @@ import json
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 import soundfile as sf
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
 from matplotlib.figure import Figure
+from matplotlib.text import Text
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
@@ -57,6 +58,13 @@ _MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A"}
 _SPAN_ROWS = ("E", "C", "A", "S")
 
 
+_SUMMARY_LABEL_WIDTH = 20
+"""Characters a label field takes in the whole-file summary."""
+
+_SUMMARY_COLUMN_WIDTH = 52
+"""Characters one classifier column takes when the summary is laid out across the page."""
+
+
 @dataclass(frozen=True)
 class FigureStyle:
     """How the figure is drawn. Nothing here is read by the pipeline.
@@ -69,7 +77,14 @@ class FigureStyle:
         dpi: Raster resolution.
         height_ratios: One entry per panel, top first.
         spectrogram_dynamic_range_db: Colour floor, in dB below the page's own peak bin.
-        top_labels: How many labels a per-span raster shows.
+        top_labels: How many of its own highest-scoring labels each span contributes to a
+            per-span raster's row set.
+        raster_row_ratio: Height one raster row takes, as a share of the page's height ratios. A
+            raster is at least its declared height and grows past it rather than compressing its
+            rows.
+        raster_rows_scope: Where a raster's row set is unioned. Only ``"file"`` is implemented:
+            every page draws the same rows in the same order, so a label can be scanned down
+            across pages and a page carrying none of a row's label shows that row empty.
         summary_labels: How many labels the whole-file taxonomy panel lists per classifier.
         colour_primary: Envelope and primary-amplitude spans.
         colour_supplement: Normalization-derived spans.
@@ -108,6 +123,8 @@ class FigureStyle:
     height_ratios: tuple[float, ...] = (1.32, 2.0, 0.5, 0.5, 0.32, 0.5, 0.40, 1.6)
     spectrogram_dynamic_range_db: float = 80.0
     top_labels: int = 4
+    raster_rows_scope: str = "file"
+    raster_row_ratio: float = 0.075
     summary_labels: int = 6
     colour_primary: str = "steelblue"
     colour_supplement: str = "darkorange"
@@ -354,7 +371,8 @@ def _span_scores(store: ProvStore, measurement_name: str) -> dict[str, dict[str,
         measurement_name: ``"span_yamnet"`` or ``"span_hear"``.
 
     Returns:
-        ``{span_id: {label: score}}``.
+        ``{span_id: {label: score}}``, read from ``raw_scores`` — the model's own output for the
+        window, written whatever the configuration says. No labelling threshold takes part.
     """
     by_span: dict[str, dict[str, float]] = {}
     for measurement in find_measurements(store, measurement_name):
@@ -362,26 +380,38 @@ def _span_scores(store: ProvStore, measurement_name: str) -> dict[str, dict[str,
         if span_id is None:
             continue
         slot = by_span.setdefault(str(span_id), {})
-        for label, score in (measurement.attributes.get("scores") or {}).items():
+        for label, score in (measurement.attributes.get("raw_scores") or {}).items():
             slot[str(label)] = max(slot.get(str(label), 0.0), float(score))
     return by_span
 
 
-def _top_labels(per_span: dict[str, dict[str, float]], limit: int) -> list[str]:
-    """The labels appearing on the most spans.
+def _raster_rows(per_span: dict[str, dict[str, float]], per_span_top_k: int, scope: str) -> list[str]:
+    """The raster's row set: the union of each span's highest-scoring labels, over the whole file.
 
     Args:
-        per_span: :func:`_span_scores`'s result.
-        limit: How many to keep.
+        per_span: :func:`_span_scores`'s result, every span in the recording.
+        per_span_top_k: How many of its own labels each span contributes.
+        scope: Where the union is taken. Only ``"file"`` is implemented.
 
     Returns:
-        The labels, most frequent first.
+        The rows, highest file-wide peak first, so a row holds the same position on every page.
+
+    Raises:
+        ValueError: If ``scope`` is not ``"file"``.
     """
-    counts: dict[str, int] = {}
+    if scope != "file":
+        raise ValueError(f"raster_rows_scope must be 'file', got {scope!r}")
+    rows: set[str] = set()
+    peaks: dict[str, float] = {}
     for scores in per_span.values():
-        for label in scores:
-            counts[label] = counts.get(label, 0) + 1
-    return [label for label, _ in sorted(counts.items(), key=lambda pair: (-pair[1], pair[0]))[:limit]]
+        carried = sorted(
+            ((label, score) for label, score in scores.items() if float(score) > 0.0),
+            key=lambda pair: (-float(pair[1]), pair[0]),
+        )
+        rows.update(label for label, _ in carried[:per_span_top_k])
+        for label, score in scores.items():
+            peaks[label] = max(peaks.get(label, 0.0), float(score))
+    return [label for label in sorted(rows, key=lambda label: (-peaks.get(label, 0.0), label))]
 
 
 def _words(store: ProvStore) -> list[dict[str, Any]]:
@@ -451,13 +481,77 @@ def _label_summaries(store: ProvStore) -> dict[str, Entity]:
     return found
 
 
+def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[str]], list[str]]:
+    """The whole-file readout as its parts: one block per classifier, then the kind block.
+
+    Args:
+        store: The provenance store.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        ``(classifier_blocks, kind_lines)``. Each classifier block leads with its own name, so a
+        block stands alone in a column.
+    """
+    absent = _absent_reasons(store)
+    summaries = _label_summaries(store)
+    blocks: list[list[str]] = []
+    for classifier in _SUMMARISED_CLASSIFIERS:
+        summary = summaries.get(classifier)
+        if summary is None:
+            reason = absent.get(f"{classifier}_scores")
+            blocks.append([f"{classifier}: absent", f"  {reason}" if reason else "  no reason recorded"])
+            continue
+        attributes = summary.attributes
+        labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
+        block = [
+            f"{classifier}: {attributes.get('n_windows')} win "
+            f"@ {attributes.get('win_length_s')}/{attributes.get('hop_s')}s, {len(labels)} labels"
+        ]
+        ranked = sorted(
+            ((name, stats) for name, stats in labels.items() if float(stats["peak"]) > 0.0),
+            key=lambda item: (float(item[1]["peak"]), float(item[1]["median"])),
+            reverse=True,
+        )
+        if not ranked:
+            block.append("  every label scored 0.000")
+        for label, stats in ranked[: style.summary_labels]:
+            block.append(
+                f"  {label:<{_SUMMARY_LABEL_WIDTH}.{_SUMMARY_LABEL_WIDTH}} "
+                f"peak {float(stats['peak']):.2f} median {float(stats['median']):.2f} "
+                f"({int(stats['n_windows'])})"
+            )
+        blocks.append(block)
+
+    kind_lines: list[str] = []
+    kinds = _kind_entities(store)
+    if not kinds:
+        return blocks, ["  TAXONOMY wrote no kind element"]
+    for entity in sorted(kinds, key=lambda item: str(item.attributes.get("kind"))):
+        kind = str(entity.attributes.get("kind"))
+        kind_lines.append(f"  {kind}: {entity.attributes.get('state')}")
+        for name, line in (entity.attributes.get("lines") or {}).items():
+            floor = line.get("floor")
+            floor_text = "floor —" if floor is None else f"floor {floor}"
+            kind_lines.append(
+                f"      {name:<18} {str(line.get('state')):<12} "
+                f"{line.get('evidence')} {line.get('unit')}  ({floor_text})"
+            )
+            if line.get("state") != "unavailable":
+                continue
+            for source in _LINE_SOURCE.get((kind, name), ()):
+                reason = absent.get(source)
+                if reason:
+                    kind_lines.append(f"          {source} absent: {reason}")
+    return blocks, kind_lines
+
+
 def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
-    """The whole-file taxonomy readout, as the lines the panel prints.
+    """The whole-file taxonomy readout, one line under another, as the sidecar JSON records it.
 
     Two aggregations, both file-scoped: each classifier's label-score distribution over every window
     it produced, and each kind's folded state with its evidence lines. A line whose derivative is
-    absent prints the reason PREPROCESS recorded, so a null configuration key is named on the page
-    instead of being filled in with a value this figure invented.
+    absent prints the reason PREPROCESS recorded, so a null configuration key is named instead of
+    being filled in with a value this figure invented.
 
     Args:
         store: The provenance store.
@@ -466,60 +560,43 @@ def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     Returns:
         The lines, in print order.
     """
+    blocks, kind_lines = _summary_sections(store, style)
     lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
-    absent = _absent_reasons(store)
-    summaries = _label_summaries(store)
-    if not summaries:
+    if not _label_summaries(store):
         lines.append("  no classifier produced a label-score summary")
-    for classifier in _SUMMARISED_CLASSIFIERS:
-        summary = summaries.get(classifier)
-        if summary is None:
-            reason = absent.get(f"{classifier}_scores")
-            detail = f" — {reason}" if reason else ""
-            lines.append(f"  {classifier}: absent{detail}")
-            continue
-        attributes = summary.attributes
-        labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
-        head = (
-            f"  {classifier}: {attributes.get('n_windows')} windows "
-            f"@ {attributes.get('win_length_s')}s/{attributes.get('hop_s')}s hop, {len(labels)} labels"
-        )
-        lines.append(head)
-        ranked = sorted(
-            ((name, stats) for name, stats in labels.items() if float(stats["peak"]) > 0.0),
-            key=lambda item: (float(item[1]["peak"]), float(item[1]["median"])),
-            reverse=True,
-        )
-        if not ranked:
-            lines.append("      every label scored 0.000 in every window")
-        for label, stats in ranked[: style.summary_labels]:
-            lines.append(
-                f"      {label:<28} peak {float(stats['peak']):.3f}  "
-                f"median {float(stats['median']):.3f}  in {int(stats['n_windows'])} windows"
-            )
+    for block in blocks:
+        lines.append(f"  {block[0]}")
+        lines.extend(f"    {line.strip()}" for line in block[1:])
     lines.append("")
     lines.append("KIND STATES AND EVIDENCE LINES")
-    kinds = _kind_entities(store)
-    if not kinds:
-        lines.append("  TAXONOMY wrote no kind element")
-        return lines
-    for entity in sorted(kinds, key=lambda item: str(item.attributes.get("kind"))):
-        kind = str(entity.attributes.get("kind"))
-        lines.append(f"  {kind}: {entity.attributes.get('state')}")
-        for name, line in (entity.attributes.get("lines") or {}).items():
-            floor = line.get("floor")
-            floor_text = "floor —" if floor is None else f"floor {floor}"
-            body = (
-                f"      {name:<18} {str(line.get('state')):<12} "
-                f"{line.get('evidence')} {line.get('unit')}  ({floor_text})"
-            )
-            lines.append(body)
-            if line.get("state") != "unavailable":
-                continue
-            for source in _LINE_SOURCE.get((kind, name), ()):
-                reason = absent.get(source)
-                if reason:
-                    lines.append(f"          {source} absent: {reason}")
+    lines.extend(kind_lines)
+    return lines
+
+
+def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
+    """The same readout laid out across the page: the classifier blocks side by side in columns.
+
+    Every column is padded to :data:`_SUMMARY_COLUMN_WIDTH`, so the longest possible line is a
+    known number of monospaced characters and cannot run past the axis.
+
+    Args:
+        store: The provenance store.
+        style: The drawing configuration.
+
+    Returns:
+        The lines, in print order.
+    """
+    blocks, kind_lines = _summary_sections(store, style)
+    lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
+    depth = max((len(block) for block in blocks), default=0)
+    for row in range(depth):
+        cells = [block[row] if row < len(block) else "" for block in blocks]
+        lines.append(
+            "  " + "".join(f"{cell:<{_SUMMARY_COLUMN_WIDTH}.{_SUMMARY_COLUMN_WIDTH}}" for cell in cells).rstrip()
+        )
+    lines.append("")
+    lines.append("KIND STATES AND EVIDENCE LINES")
+    lines.extend(kind_lines)
     return lines
 
 
@@ -1061,16 +1138,19 @@ def _asr_lane_panel(
         )
 
 
-def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> None:
+def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> Text:
     """The whole-file taxonomy readout, monospaced and off the shared time axis.
 
     Args:
         axis: The panel.
-        lines: :func:`taxonomy_summary_lines`' result.
+        lines: :func:`summary_panel_lines`' result.
         style: The drawing configuration.
+
+    Returns:
+        The artist, so a test can measure its extent against the axis.
     """
     axis.set_axis_off()
-    axis.text(
+    return axis.text(
         0.0,
         1.0,
         "\n".join(lines),
@@ -1141,20 +1221,28 @@ def _span_row_absence(config: TriageConfig, absent: dict[str, str], spans: list[
     return reasons
 
 
-def _page_height_ratios(style: FigureStyle, collapsed: Sequence[int]) -> list[float]:
+def _page_height_ratios(
+    style: FigureStyle, collapsed: Sequence[int], raster_rows: Mapping[int, int] | None = None
+) -> list[float]:
     """The page's panel heights, with absent panels collapsed and their share redistributed.
 
     The figure's total height is unchanged, so pages stay comparable: what an absent panel gives up
-    goes to the panels that have something to draw, in proportion to what they already had.
+    goes to the panels that have something to draw, in proportion to what they already had. A
+    raster's own height grows with how many rows it draws, so its tick labels keep their point size
+    however large the row union turns out to be.
 
     Args:
         style: The drawing configuration.
         collapsed: Indices of the panels to collapse.
+        raster_rows: Row counts by panel index, for the panels whose height follows their rows.
 
     Returns:
         One height per panel, in panel order.
     """
     ratios = list(style.height_ratios)
+    for index, rows in (raster_rows or {}).items():
+        if index not in set(collapsed):
+            ratios[index] = max(ratios[index], rows * style.raster_row_ratio)
     freed = 0.0
     for index in collapsed:
         if ratios[index] > style.absent_height_ratio:
@@ -1227,12 +1315,16 @@ def preprocess_figure(
     words = _words(store)
     squim = _squim_by_span(store)
     summary_lines = taxonomy_summary_lines(store, style)
+    panel_lines = summary_panel_lines(store, style)
 
     wideband_title = (
         f"wideband spectrogram ({float(config.require('spectrogram.wideband_window_ms')):.0f} ms window, "
         f"{float(config.require('spectrogram.hop_ms')):.0f} ms hop) — the speech-analysis view; "
         "continuity runs on the narrowband array, not this one"
     )
+
+    yamnet_rows = _raster_rows(yamnet, style.top_labels, style.raster_rows_scope)
+    hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope)
 
     row_absent = _span_row_absence(config, absent, spans)
     # Panel indices, in the order they are unpacked below.
@@ -1241,7 +1333,7 @@ def preprocess_figure(
         for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
         if empty
     ]
-    height_ratios = _page_height_ratios(style, collapsed)
+    height_ratios = _page_height_ratios(style, collapsed, {3: len(yamnet_rows), 4: len(hear_rows)})
 
     figure_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
@@ -1295,9 +1387,9 @@ def preprocess_figure(
             axis_yamnet,
             spans,
             yamnet,
-            _top_labels(yamnet, style.top_labels),
+            yamnet_rows,
             style.cmap_yamnet,
-            f"YAMNet per-span labels (top-{style.top_labels})",
+            f"YAMNet per-span scores — rows: union of each span's top-{style.top_labels} over the file",
             window,
             style,
             absent.get("span_yamnet", "span_yamnet is absent from the store"),
@@ -1306,9 +1398,9 @@ def preprocess_figure(
             axis_hear,
             spans,
             hear,
-            _top_labels(hear, style.top_labels),
+            hear_rows,
             style.cmap_hear,
-            f"HeAR per-span labels (top-{style.top_labels})",
+            f"HeAR per-span scores — rows: union of each span's top-{style.top_labels} over the file",
             window,
             style,
             absent.get("span_hear", "span_hear is absent from the store"),
@@ -1322,7 +1414,7 @@ def preprocess_figure(
             style,
             absent.get("consensus_transcript", "no consensus word in the store"),
         )
-        _taxonomy_panel(axis_taxonomy, summary_lines, style)
+        _taxonomy_panel(axis_taxonomy, panel_lines, style)
 
         for axis in timed:
             axis.set_xlim(*window)

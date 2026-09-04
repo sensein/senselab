@@ -649,6 +649,10 @@ class TestThePackagedConfigStillRunsEveryClassifier:
     ) -> None:
         """A null threshold must not cost the expensive model output, and a null hop must not either.
 
+        The per-span passes are held to the same rule as the whole-file ones: they are documented
+        "raw scores only -- no labelling decision", so a null labelling threshold leaves them
+        unlabelled rather than unrun.
+
         The hops are what made this worth pinning: while ``windows.ast.hop_s`` and
         ``windows.hear.hop_s`` were null, ``require`` raised inside the scores block, so AST and HeAR
         never ran at all under the packaged config and V3 held for one classifier out of three.
@@ -672,9 +676,14 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "ast_windows",
             "hear_windows",
             "phonation_tracks",
-            "span_hear",
-            "span_yamnet",
         }
+        for name in ("span_hear", "span_yamnet"):
+            windows = find_measurements(store, name)
+            assert windows, f"{name} must run: its scores do not depend on a labelling threshold"
+            for measurement in windows:
+                assert measurement.attributes["raw_scores"], f"{name} kept no scores"
+                assert measurement.attributes["labelled"] is False
+                assert "labels" not in measurement.attributes
 
     def test_the_shipped_hops_are_non_overlapping(
         self,

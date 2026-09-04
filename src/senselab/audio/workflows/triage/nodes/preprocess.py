@@ -191,6 +191,54 @@ def _raw_label_scores(window: dict[str, Any]) -> dict[str, float]:
     return {label: score for pair in label_scores(window) for label, score in pair.items()}
 
 
+def _span_window_attributes(
+    *,
+    name: str,
+    classifier: str,
+    span_id: str,
+    raw_window: dict[str, Any],
+    default_threshold: float | None,
+    label_thresholds: dict[str, float],
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    """One per-span classifier window's attributes, labelled only when a threshold exists.
+
+    ``raw_scores`` is written whatever the configuration says, because the model ran and its output
+    is a measurement. ``labels`` and ``scores`` are a decision taken over that measurement, so they
+    appear only when a threshold was configured, and ``labelled`` says which case a reader is
+    looking at: absent labels with ``labelled`` False is "no threshold was set", an empty ``labels``
+    with ``labelled`` True is "nothing cleared the bar".
+
+    Args:
+        name: The measurement name, ``"span_hear"`` or ``"span_yamnet"``.
+        classifier: The classifier's own name.
+        span_id: The span this window was cut from.
+        raw_window: The classifier's own output for the window.
+        default_threshold: The configured threshold, or None while it is unmeasured.
+        label_thresholds: Per-label overrides of that threshold.
+        extra: Attributes particular to one caller.
+
+    Returns:
+        The attribute mapping.
+    """
+    attributes: dict[str, Any] = {
+        "name": name,
+        "classifier": classifier,
+        "signal": "plain",
+        "span_id": span_id,
+        "raw_scores": _raw_label_scores(raw_window),
+        "default_threshold": default_threshold,
+        "labelled": default_threshold is not None,
+        "isolated_span": True,
+        **extra,
+    }
+    if default_threshold is not None:
+        members = _confident_labels(raw_window, default_threshold, label_thresholds)
+        attributes["labels"] = list(members)
+        attributes["scores"] = members
+    return attributes
+
+
 def preprocess(  # noqa: C901 — one block per derivative, each independent
     store: ProvStore,
     source: Audio,
@@ -935,7 +983,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             raise LookupError("spans are absent")
         agent = store.agent(agent_type="model", model_id=HEAR_MODEL_ID, commit_sha=HEAR_REVISION)
         activity = _step("span_hear", {}, tuple(span_ids), agent)
-        default_threshold = float(config.require("windows.hear.default_threshold"))
+        declared = config.get("windows.hear.default_threshold")
+        default_threshold = None if declared is None else float(declared)
         label_thresholds = {
             str(label): float(value) for label, value in (config.get("windows.hear.label_thresholds") or {}).items()
         }
@@ -955,23 +1004,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_hear", "no_native_window"))
                 continue
             for raw_window in raw_windows:
-                members = _confident_labels(raw_window, default_threshold, label_thresholds)
-                raw_scores = _raw_label_scores(raw_window)
                 window_extent = hear_window_extent(extent, raw_window)
                 window_id = store.entity(
                     prov_type="measurement",
                     extent=window_extent,
-                    attributes={
-                        "name": "span_hear",
-                        "classifier": "hear",
-                        "signal": "plain",
-                        "span_id": span_id,
-                        "labels": list(members),
-                        "scores": members,
-                        "raw_scores": raw_scores,
-                        "input_window_s": HEAR_WINDOW_SECONDS,
-                        "isolated_span": True,
-                    },
+                    attributes=_span_window_attributes(
+                        name="span_hear",
+                        classifier="hear",
+                        span_id=span_id,
+                        raw_window=raw_window,
+                        default_threshold=default_threshold,
+                        label_thresholds=label_thresholds,
+                        extra={"input_window_s": HEAR_WINDOW_SECONDS},
+                    ),
                 )
                 store.was_generated_by(window_id, activity)
                 store.was_attributed_to(window_id, agent)
@@ -999,7 +1044,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             unresolved_reason="TF-Hub URL pin; no commit exists to resolve",
         )
         activity = _step("span_yamnet", {}, tuple(span_ids), agent)
-        default_threshold = float(config.require("windows.yamnet.default_threshold"))
+        declared = config.get("windows.yamnet.default_threshold")
+        default_threshold = None if declared is None else float(declared)
         label_thresholds = {
             str(label): float(value) for label, value in (config.get("windows.yamnet.label_thresholds") or {}).items()
         }
@@ -1021,22 +1067,19 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "no_native_window"))
                 continue
             for raw_window in raw_windows:
-                members = _confident_labels(raw_window, default_threshold, label_thresholds)
-                raw_scores = _raw_label_scores(raw_window)
                 window_extent = (start + float(raw_window["start"]), start + float(raw_window["end"]))
                 window_id = store.entity(
                     prov_type="measurement",
                     extent=window_extent,
-                    attributes={
-                        "name": "span_yamnet",
-                        "classifier": "yamnet",
-                        "signal": "plain",
-                        "span_id": span_id,
-                        "labels": list(members),
-                        "scores": members,
-                        "raw_scores": raw_scores,
-                        "isolated_span": True,
-                    },
+                    attributes=_span_window_attributes(
+                        name="span_yamnet",
+                        classifier="yamnet",
+                        span_id=span_id,
+                        raw_window=raw_window,
+                        default_threshold=default_threshold,
+                        label_thresholds=label_thresholds,
+                        extra={},
+                    ),
                 )
                 store.was_generated_by(window_id, activity)
                 store.was_attributed_to(window_id, agent)
