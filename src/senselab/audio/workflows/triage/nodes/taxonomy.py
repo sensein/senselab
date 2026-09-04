@@ -195,14 +195,21 @@ def _span_label_evidence(
         exclude_span_ids: Spans a live consensus word already explains.
 
     Returns:
-        ``{available, n_spans, element_ids}``. ``available`` is False only when PREPROCESS's own
+        ``{available, n_spans, element_ids}``. ``available`` is False when PREPROCESS's own
         ``span_<classifier>`` pass never ran at all (checked by activity, not by measurement count,
-        the same distinction :func:`_phonation_spans` draws) — distinct from it running over zero
-        spans, or running and labelling none of them, both of which are "ran, found nothing".
+        the same distinction :func:`_phonation_spans` draws), and also when it ran but labelled
+        nothing because ``windows.<classifier>.default_threshold`` is unmeasured — this line counts
+        labels, so windows that were never labelled leave it unable to judge. A window is taken as
+        labelled unless it says otherwise, so a store written before ``labelled`` existed keeps its
+        meaning. Both are distinct
+        from it running over zero spans, or labelling spans and matching none of them, which are
+        "ran, found nothing".
     """
     if not [a for a in store.activities("PREPROCESS") if a.step == f"span_{classifier}"]:
         return {"available": False, "n_spans": 0, "element_ids": []}
     windows = find_measurements(store, f"span_{classifier}")
+    if windows and all(window.attributes.get("labelled") is False for window in windows):
+        return {"available": False, "n_spans": 0, "element_ids": []}
     matched: dict[str, list[str]] = {}
     for window in windows:
         span_id = window.attributes.get("span_id")
