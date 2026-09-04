@@ -448,6 +448,19 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
                     "hop_s": hop_s if labels else None,
                 },
             )
+            # PREPROCESS writes the verbatim windows beside the measurement, and a reader that takes
+            # the sidecar path from the store finds nothing without them. Scores default to the same
+            # 0.9 the seeded window folds use; a test needing a distribution writes its own file.
+            sidecar = tmp_path / "derivatives" / f"{classifier}_scores.json"
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_text(
+                json.dumps(
+                    [
+                        window(start, end, {label: 0.9 for label in members})
+                        for start, end, members in _grid(labels, win_s, hop_s)
+                    ]
+                )
+            )
             if classifier in scores_only:
                 continue
             windows_by_label: dict[str, list[str]] = {}

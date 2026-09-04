@@ -58,10 +58,12 @@ class TestItRunsNoModels:
     def test_it_writes_no_activity_that_names_a_model(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """The only activity is the fold."""
+        """Every step re-reads what PREPROCESS already measured; none of them runs a model."""
         seed_preprocess_store(store, yamnet_labels=[["Speech"]], words=["one", "two"])
         taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
-        assert [a.step for a in store.activities("TAXONOMY")] == ["fold"]
+        # Named rather than counted: a genuinely new step must be reviewed against the class's
+        # invariant, and re-reading a stored score distribution is not running a classifier.
+        assert [a.step for a in store.activities("TAXONOMY")] == ["yamnet_label_summary", "fold"]
         assert not [
             agent
             for activity in store.activities("TAXONOMY")
