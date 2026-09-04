@@ -538,6 +538,128 @@ def _label_score_distribution(store: ProvStore, classifier: str, run_dir: Path) 
     }
 
 
+PER_SPAN_CLASSIFIERS: dict[str, str] = {"yamnet": "span_yamnet", "hear": "span_hear"}
+"""Each per-span classifier and the measurement PREPROCESS writes for it."""
+
+
+def _per_span_label_scores(store: ProvStore, measurement_name: str) -> dict[str, dict[str, float]]:
+    """One classifier's per-span label scores, reduced to the best score per label in each span.
+
+    Args:
+        store: The provenance store.
+        measurement_name: ``"span_yamnet"`` or ``"span_hear"``.
+
+    Returns:
+        ``{span_id: {label: score}}``, read from ``raw_scores`` — the model's own output, written
+        whatever the configuration says. No labelling threshold takes part.
+    """
+    by_span: dict[str, dict[str, float]] = {}
+    for measurement in find_measurements(store, measurement_name):
+        span_id = measurement.attributes.get("span_id")
+        if span_id is None:
+            continue
+        slot = by_span.setdefault(str(span_id), {})
+        for label, score in (measurement.attributes.get("raw_scores") or {}).items():
+            slot[str(label)] = max(slot.get(str(label), 0.0), float(score))
+    return by_span
+
+
+def _consolidate(per_span: dict[str, dict[str, float]], floor: float | None) -> dict[str, dict[str, float]]:
+    """One classifier's per-span scores consolidated to one row per label over the whole file.
+
+    Args:
+        per_span: :func:`_per_span_label_scores`' result.
+        floor: A label whose peak falls under this is dropped, or ``None`` to keep every label.
+
+    Returns:
+        ``{label: {peak, median, n_spans}}``, over the spans that carry the label.
+    """
+    gathered: dict[str, list[float]] = {}
+    for scores in per_span.values():
+        for label, score in scores.items():
+            gathered.setdefault(label, []).append(float(score))
+    consolidated: dict[str, dict[str, float]] = {}
+    for label, across_spans in gathered.items():
+        peak = max(across_spans)
+        if floor is not None and peak < floor:
+            continue
+        consolidated[label] = {
+            "peak": peak,
+            "median": float(np.median(across_spans)),
+            "n_spans": float(len(across_spans)),
+        }
+    return consolidated
+
+
+def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: str) -> list[str]:
+    """Consolidate the per-span labels into one file-level taxonomy, for downstream to read.
+
+    Args:
+        store: The provenance store.
+        config: The run's configuration, read for the YAMNet consolidation floor.
+        software: This node's software agent.
+
+    Returns:
+        The ids written, for the node's view. Empty when no per-span classifier produced scores,
+        so "no consensus" and "a consensus over nothing" stay distinguishable.
+    """
+    floor = config.get("taxonomy.yamnet_consolidation_floor")
+    yamnet_floor = None if floor is None else float(floor)
+    by_classifier: dict[str, dict[str, dict[str, float]]] = {}
+    read_ids: list[str] = []
+    for classifier, measurement_name in PER_SPAN_CLASSIFIERS.items():
+        measurements = list(find_measurements(store, measurement_name))
+        if not measurements:
+            continue
+        read_ids.extend(measurement.id for measurement in measurements)
+        per_span = _per_span_label_scores(store, measurement_name)
+        by_classifier[classifier] = _consolidate(per_span, yamnet_floor if classifier == "yamnet" else None)
+    if not by_classifier:
+        return []
+
+    labels: dict[str, dict[str, Any]] = {}
+    for classifier, consolidated in by_classifier.items():
+        for label, stats in consolidated.items():
+            row = labels.setdefault(label, {"label": label, "classifiers": {}})
+            row["classifiers"][classifier] = stats
+    ranked = sorted(
+        labels.values(),
+        key=lambda row: (-max(float(s["peak"]) for s in row["classifiers"].values()), str(row["label"])),
+    )
+    for row in ranked:
+        peaks = {name: float(stats["peak"]) for name, stats in row["classifiers"].items()}
+        row["peak"] = max(peaks.values())
+        row["peak_by_classifier"] = peaks
+        row["n_classifiers"] = len(peaks)
+        row["classifiers"] = sorted(peaks)
+
+    activity = store.activity(
+        node=NODE,
+        step="consensus_taxonomy",
+        parameters={"yamnet_consolidation_floor": yamnet_floor, "classifiers": sorted(by_classifier)},
+    )
+    store.was_associated_with(activity, software)
+    for element_id in read_ids:
+        store.used(activity, element_id)
+    return [
+        write_measurement(
+            store,
+            activity,
+            software,
+            name="consensus_taxonomy",
+            signal="plain",
+            attributes={
+                "labels": ranked,
+                "n_labels": len(ranked),
+                "classifiers": sorted(by_classifier),
+                "yamnet_consolidation_floor": yamnet_floor,
+            },
+            derived_from=tuple(read_ids),
+            extent=None,
+        )
+    ]
+
+
 def _write_label_summaries(store: ProvStore, run_dir: Path, software: str) -> list[str]:
     """Write one whole-file label-score summary per classifier that produced scores.
 
@@ -638,6 +760,7 @@ def taxonomy(
         },
     }
     summary_view = _write_label_summaries(store, run_dir, software)
+    summary_view += _write_consensus_taxonomy(store, config, software)
     phonation_view = _propose_phonation_spans(store, config, run_dir, software)
     voice_line, voice_state = _voice_line(
         _phonation_spans(store),
