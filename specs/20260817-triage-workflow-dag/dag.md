@@ -259,7 +259,7 @@ Two **file-scoped measurements** are written here, both `extent=None`:
   turning it into present/absent. Empty when no per-span classifier produced scores, so "no
   consensus" and "a consensus over nothing" stay distinguishable.
 
-`taxonomy.consolidation_floor` (0.1, owner-directed) drops a label scoring under it, **for every
+`taxonomy.consolidation_floor` (0.2, owner-directed) drops a label scoring under it, **for every
 classifier**. On the reference recording it took the YAMNet raster's per-file union of each span's
 top-4 from 17 rows to 2 (`Silence`, `Speech`): with 521 labels, a span where nothing fires still
 contributes its four highest, and those are near-zero.
@@ -269,6 +269,152 @@ any is uncertain, `pass` otherwise. As above, only `flag` is reachable today.
 
 *Goals served*: 2, by deciding whether the airway/speech content is there at all. The floors that
 would let it decide are all null.
+
+
+---
+
+#### PROPOSED — deciding the kinds from `consensus_taxonomy`
+
+> **Everything from here to the end of this subsection is a plan, not the code.** Today's behaviour
+> is the table above: every floor null, every line `unavailable`, every kind `uncertain`, every
+> recording flagged. Nothing below is implemented. It is written here for the owner to mark up.
+
+##### What the measurement looks like on a real corpus
+
+Measured over the 388-recording, 10-subject run (`~/Downloads/triage_10subj_20260905`), which is
+the evidence this design is drawn from rather than an argument from first principles.
+
+| label | files | median peak | reached by both classifiers |
+| --- | --- | --- | --- |
+| `Speech` | 359 | 0.998 | yes |
+| `Silence` | 325 | 1.000 | no |
+| `Snore` | 293 | 0.494 | no |
+| `Breathe` | 271 | 0.293 | no |
+| `Baby Cough` | 243 | 0.263 | no |
+| `Laugh` | 205 | 0.328 | no |
+| `Cough` | 154 | 0.275 | yes |
+| `Sneeze` | 123 | 0.207 | yes |
+
+Median 6 labels per recording at the 0.2 floor, no recording with zero. **Two findings shape
+everything below.**
+
+**1. `n_classifiers` cannot mean what it appears to mean.** Only `Cough`, `Sneeze` and `Speech` are
+ever reached by both classifiers — not because the models disagree, but because the vocabularies
+spell the same concept differently: HeAR's `Breathe` against YAMNet's `Breathing`, `Snore` against
+`Snoring`, `Throat Clear` against `Throat clearing`. The consensus is keyed on the raw label
+string, so corroboration is systematically under-counted and a reader comparing `n_classifiers`
+across labels is comparing spelling coincidence.
+
+**2. A label's presence is not a kind's presence.** Grouping by task family, at peak ≥ 0.2:
+
+| task family | n | most frequent labels (`Silence` omitted — it is uninformative for kinds) |
+| --- | --- | --- |
+| Maximum-phonation-time | 18 | **`Snore` 18/18**, `Mantra` 16/18, `Chant` 16/18 |
+| Diadochokinesis | 50 | `Speech` 50/50, `Snore` 41/50, **`Laugh` 39/50** |
+| Free-speech | 28 | `Speech` 28/28, `Snore` 27/28, `Breathe` 25/28 |
+| Respiration-and-cough | 70 | **`Breathe` 52/70**, `Snore` 50/70, `Speech` 34/70 |
+
+A sustained vowel reads as `Snore` in every single instance, and syllable repetition reads as
+`Laugh` in four of five. HeAR's health vocabulary fires on ordinary phonation. A rule of the form
+"`Snore` present ⇒ airway present" would mark nearly every recording airway-positive. The
+respiration signal is nonetheless real — `Breathe` at 52/70 where the protocol asked for breathing
+— so the discrimination exists; it is just not carried by presence alone.
+
+##### The proposal, in three parts
+
+**A concept layer between labels and kinds.** Each classifier's labels map onto a shared *concept*;
+kinds are decided over concepts, never over raw label strings. This is the smallest change that
+makes corroboration mean agreement. The shape already half-exists: `taxonomy.audioset_airway_labels`
+and `taxonomy.hear_airway_labels` are two per-classifier families for one kind, one level too
+coarse. A new `taxonomy.concepts` would give, per concept, the label list each classifier expresses
+it with — `breathing: {yamnet: [Breathing], hear: [Breathe]}` — and each kind names the concepts
+that express it.
+
+**Two floors per kind, not one.** A single floor forces every recording into present/absent at the
+threshold. Proposed instead: a kind is `present` when its authoritative concept's peak is at or
+above `present_floor`; `absent` only when every one of its concepts is below `absent_ceiling` *and*
+the classifiers that could have seen it actually ran; `uncertain` in the band between. The band is
+where leniency lives — screening does not have to commit, and the branch still runs and discards.
+
+**The authoritative-plus-corroboration rule survives, generalised to concepts.** `speech` is decided
+by the lexical line, `airway` by HeAR; corroboration is recorded and never converted into evidence
+strength, exactly as `_fold_authoritative_line` already does.
+
+##### The hint: a flag, never a state
+
+TAXONOMY refuses hints today, with a reason worth preserving (`taxonomy.py:20-26`): a recording can
+genuinely carry two tasks' content, and a hint naming one must not suppress evidence for the other.
+That sits against the ruling that screening decides on content **plus the hint when available**.
+
+The reconciliation: **the hint may not set, raise, lower or suppress any kind's state.** The state
+stays content-only. What the hint may do is produce its own finding — when the concept the task
+declares is absent from the consensus, or a strongly-supported concept contradicts the declaration,
+that is recorded as a `hint_contradiction` flag on the file. `Snore` at 18/18 on Maximum-phonation-time
+is exactly such a case, and it is more useful surfaced than silently resolved either way.
+
+##### The flags
+
+```mermaid
+graph LR
+  subgraph inputs
+    SY["per-span YAMNet<br/>raw scores"]
+    SH["per-span HeAR<br/>raw scores"]
+    LEX["consensus words"]
+    HINT["hint tags<br/>+ speech_type"]
+  end
+  SY --> CT["consensus_taxonomy<br/>peak per label<br/>floor 0.2"]
+  SH --> CT
+  CT --> CON[/"concepts<br/>PROPOSED"/]
+  CON --> AIR{"airway<br/>HeAR authoritative"}
+  CON --> VOI{"voice<br/>no concept set yet"}
+  LEX --> SPE{"speech<br/>lexical authoritative"}
+  CON -.corroborates.-> SPE
+  AIR --> ST["present / absent / uncertain"]
+  SPE --> ST
+  VOI --> ST
+  ST --> FOLD{{"file fold"}}
+  FOLD -->|all absent| F1["node FAIL"]
+  FOLD -->|any uncertain| F2["node FLAG"]
+  FOLD -->|else| F3["node PASS"]
+  HINT -.never sets state.-> HC["hint_contradiction<br/>PROPOSED"]
+  CON -.expected vs found.-> HC
+```
+
+Every state, and what produces it:
+
+| level | state | produced by | reachable today |
+| --- | --- | --- | --- |
+| line | `present` | evidence at or over its floor | no — every floor null |
+| line | `absent` | evidence under its floor | no — same |
+| line | `unavailable` | derivative missing, floor null, or vocabulary empty | **yes, always** |
+| kind | `present` | authoritative line/concept `present` | no |
+| kind | `absent` | authoritative line/concept `absent` | no |
+| kind | `uncertain` | authoritative line `unavailable`, or *(proposed)* score in the band | **yes, always** |
+| node | `FAIL` | every kind `absent` | no — blocked by voice |
+| node | `FLAG` | any kind `uncertain` | **yes, the only outcome** |
+| node | `PASS` | none uncertain, at least one present | no — blocked by voice |
+| file | `DISCARD` | ADMIT `fail` | yes, independently of anything here |
+| file | `DISCARD` (acoustically empty) | every kind `absent` | no |
+| file *(proposed)* | `hint_contradiction` | declared concept absent, or a strong concept the declaration excludes | not implemented |
+
+**Two levels people conflate.** The diagram's `FAIL`/`FLAG`/`PASS` are **TAXONOMY's node outcome**
+(`taxonomy.py:636-643`). They are not the **file** result: `Triage.PASS` and the acoustically-empty
+`DISCARD` are VERDICT's, and `DISCARD` stays reachable through ADMIT `fail` regardless of anything
+here, while the acoustically-empty discard cannot occur while any kind is uncertain.
+
+Reachable today: node `FLAG` only. Node `FAIL` needs every kind `absent`, and `PASS` needs none
+uncertain; both are blocked while `voice` has no evidence source.
+
+##### What each piece still needs
+
+| piece | owed |
+| --- | --- |
+| concept layer | `taxonomy.concepts` — the mapping itself, and which concepts express which kind |
+| speech | `taxonomy.speech_labels` is null, so the family is empty; and the pooled `<classifier>_windows` its acoustic line reads never run under a null `default_threshold` |
+| airway | `present_floor` and `absent_ceiling` per kind, replacing the four null `presence_floor` values |
+| voice | **a concept set that does not exist.** Neither vocabulary carries a clean voice concept; sustained phonation surfaces as `Snore`, `Mantra`, `Chant`, `Groan`. Either voice is decided from those with the confusion stated, or as speech-without-lexical (phonation with no words), or the F0 measurement returns. This is a ruling, not a fit |
+| hint | extraction exists (`runs/b2ai-v2/make_hints.py`); `routing.hint_kind_map` is null in the packaged config; nothing passes a hint to `run_triage` today |
+| corroboration | meaningful only after the concept layer; until then `n_classifiers` reports spelling agreement |
 
 ### 4. routing — turn classification (+ hints) into an execution set
 
