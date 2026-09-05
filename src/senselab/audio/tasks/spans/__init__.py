@@ -5,6 +5,7 @@ from senselab.audio.tasks.spans.api import (
     Span,
     group_extents_into_runs,
     propose_spans,
+    rank_cut_level,
     segments_between_change_points,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "Span",
     "group_extents_into_runs",
     "propose_spans",
+    "rank_cut_level",
     "segments_between_change_points",
 ]
