@@ -1029,6 +1029,7 @@ def _taxonomy_decision_paths(store: ProvStore) -> dict[str, dict[str, Any]]:
                     "unit": values.get("unit"),
                     "floor": values.get("floor"),
                     "uncertain_floor": values.get("uncertain_floor"),
+                    "why": values.get("why"),
                 }
                 for name, values in lines.items()
                 if isinstance(values, dict)
@@ -1699,6 +1700,10 @@ def _decision_blocks(document: dict[str, Any]) -> list[str]:
             if kind == "speech" and "lexical" in evidence_lines:
                 rendered += "; lexical consensus decides; acoustic is corroboration"
             lines.append(f"  {kind}: {rendered} -> {_shown(path.get('state'))}")
+            for name, line in evidence_lines.items():
+                why = line.get("why")
+                if why:
+                    lines.append(f"      {name}: {why}")
 
     lines += ["", "MEASURED BRANCH FINDINGS"]
     findings_start = len(lines)

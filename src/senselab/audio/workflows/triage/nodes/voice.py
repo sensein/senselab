@@ -229,7 +229,10 @@ def voice(  # noqa: C901 — the store read, the tracks and the per-span assembl
     for span in spans:
         store.used(activity, span.id)
     if not spans:
-        why = "no phonation span in the store"
+        why = (
+            "no phonation span in the store; the detector that proposed them was retired on "
+            "2026-09-04 and VOICE is pending a rework onto consensus_taxonomy"
+        )
         outcome = Outcome.FAIL
         verdict_id, verdict = write_verdict(
             store,

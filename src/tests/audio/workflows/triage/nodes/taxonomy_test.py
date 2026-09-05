@@ -148,45 +148,32 @@ class TestTheThreeKinds:
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
         assert result.kinds["airway"] == "absent"
 
-    def test_voice_is_classified_from_phonation_span_duration_alone(
+    def test_voice_has_no_evidence_source_and_says_so(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """A 2 s sustain makes voice present, whatever else is in the recording."""
-        seed_preprocess_store(store, phonation=[(0.0, 2.0, "voiced")])
+        """The retired phonation-span source leaves a named gap, not a bare uncertain.
+
+        Voice is to be reworked onto ``consensus_taxonomy``; until then the line must not read as a
+        measurement that came back short, because a reader of the report or the figure would take
+        that for evidence.
+        """
+        seed_preprocess_store(store)
         result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
-        assert result.kinds["voice"] == "present"
+        assert result.kinds["voice"] == "uncertain"
+        (kind,) = [e for e in live_entities(store, "kind") if e.attributes["kind"] == "voice"]
+        line = kind.attributes["lines"]["phonation"]
+        assert line["state"] == "unavailable"
+        assert "retired" in line["why"]
+        assert "consensus_taxonomy" in line["why"]
 
-    def test_an_unvoiced_sustain_makes_voice_present_too(
+    def test_voice_is_never_absent_now_that_it_has_no_source(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """A disordered voice sustaining without periodicity is phonation."""
-        seed_preprocess_store(store, phonation=[(0.0, 2.0, "unvoiced")])
-        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
-        assert result.kinds["voice"] == "present"
-
-    def test_a_short_span_is_uncertain_and_a_shorter_one_is_absent(
-        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
-    ) -> None:
-        """Between the two floors is uncertain; below the shorter floor there is nothing to be sure of."""
-        seed_preprocess_store(store, phonation=[(0.0, 0.5, "voiced")])
-        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
-        other = ProvStore(run_id="short")
-        seed_preprocess_store(other, phonation=[(0.0, 0.1, "voiced")])
-        assert taxonomy(other, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "absent"
-
-    def test_no_phonation_span_is_absent(
-        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
-    ) -> None:
-        """The pass ran and found nothing, which is absence."""
-        seed_preprocess_store(store, phonation=[])
-        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "absent"
-
-    def test_no_phonation_pass_at_all_is_uncertain(
-        self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
-    ) -> None:
-        """A pass that did not run leaves the line unavailable; that is not evidence of absence."""
-        seed_preprocess_store(store, phonation=None)
-        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
+        """No seeding makes voice absent -- an unavailable line folds to uncertain, never to absence."""
+        for kwargs in ({}, {"yamnet_labels": [["Speech"]]}, {"words": ["one"]}):
+            other = ProvStore(run_id="voice")
+            seed_preprocess_store(other, **kwargs)
+            assert taxonomy(other, "plain", _floors(tmp_path), run_dir=tmp_path).kinds["voice"] == "uncertain"
 
 
 class TestAMissingDerivativeIsNotAbsence:
@@ -227,21 +214,30 @@ class TestHintsAreNotAnInput:
 
 
 class TestTheOutcome:
-    """fail on all-absent, flag on any-uncertain, pass otherwise."""
+    """fail on all-absent, flag on any-uncertain, pass otherwise.
 
-    def test_all_absent_fails(
+    Two of those three are currently unreachable, and deliberately so: voice has had no evidence
+    source since the phonation-span detector was retired, so its line is always ``unavailable`` and
+    its kind always ``uncertain``. "Every kind absent" and "nothing uncertain" therefore cannot
+    occur, which blocks both the discard and the clean pass. That is a consequence of the
+    retirement, not of anything a recording contains, and it lifts when voice is reworked onto
+    ``consensus_taxonomy``.
+    """
+
+    def test_all_absent_cannot_be_reached_while_voice_has_no_source(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """Nothing is classified present."""
+        """The seeding that used to fail now flags, because voice cannot be absent."""
         seed_preprocess_store(
             store,
             yamnet_labels=[["Music"]],
             words=[],
-            phonation=[],
             spans=[(0.0, 1.0, 10.0)],
             span_hear_labels=[[]],
         )
-        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FAIL
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+        assert result.kinds["voice"] == "uncertain"
 
     def test_any_uncertain_flags(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
@@ -257,20 +253,22 @@ class TestTheOutcome:
         )
         assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.FLAG
 
-    def test_present_and_absent_together_pass(
+    def test_pass_cannot_be_reached_while_voice_has_no_source(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """Speech present, airway and voice absent, nothing uncertain."""
+        """Speech present and airway absent still flags, because voice stays uncertain."""
         seed_preprocess_store(
             store,
             yamnet_labels=[["Speech"]],
             ast_labels=[["Speech"]],
             words=["one", "two", "three"],
-            phonation=[],
             spans=[(0.0, 1.0, 10.0)],
             span_hear_labels=[[]],
         )
-        assert taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path).verdict.outcome is Outcome.PASS
+        result = taxonomy(store, "plain", _floors(tmp_path), run_dir=tmp_path)
+        assert result.verdict.outcome is Outcome.FLAG
+        assert result.kinds["speech"] == "present"
+        assert result.kinds["voice"] == "uncertain"
 
     def test_exactly_three_kind_elements_and_no_residual(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
@@ -285,13 +283,11 @@ class TestTheOutcome:
     def test_it_localises_nothing_beyond_phonation(
         self, store: ProvStore, seed_preprocess_store: Callable[..., None], tmp_path: Path
     ) -> None:
-        """No new span, no interval, no other extent-bearing element -- phonation spans excepted.
+        """No new span, no interval, no other extent-bearing element.
 
-        Phonation-span detection is this node's one localising exception (see the module docstring)
-        but it is guarded on a real ``phonation_tracks`` measurement, which this fixture never seeds
-        -- spans are seeded directly here, bypassing track computation entirely -- so the set of
-        span ids is still unchanged; see ``TestPhonationSpans`` for the case where TAXONOMY does add
-        spans.
+        TAXONOMY localises nothing at all since the phonation-span detector was removed: it counts
+        stored elements against floors and writes kinds, and the voice kind's line is seconds read
+        off PREPROCESS's F0 track rather than an extent this node places.
         """
         seed_preprocess_store(
             store, yamnet_labels=[["Speech"]], words=["one", "two", "three"], phonation=[(0.0, 2.0, "voiced")]
@@ -365,158 +361,3 @@ def _rising_glide() -> np.ndarray:
     resonances = np.stack([300.0 + 3300.0 * ramp, 900.0 + 3500.0 * ramp], axis=1)
     swept = _resonate(_pulses(150.0 * (480.0 / 150.0) ** ramp), resonances)
     return np.concatenate([swept, np.zeros(int(0.2 * SR))])
-
-
-class TestPhonationSpans:
-    """Sustains and glides, voiced, unvoiced or mixed, with duration_s as the primary feature.
-
-    Detection moved here from PREPROCESS this session: PREPROCESS now only measures F0/formant
-    tracks (see ``TestPhonationTracks`` in ``preprocess_test.py``); every test here runs PREPROCESS
-    first (to produce ``phonation_tracks``) and then TAXONOMY (to localise the spans over it), on the
-    same real Praat-backed tracker these fixtures always exercised.
-    """
-
-    def test_a_sustained_vowel_yields_a_span_carrying_its_duration(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A 1.5 s steady tone is one sustained span whose duration_s is its extent."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        taxonomy(store, "plain", phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        assert spans
-        best = max(spans, key=lambda e: e.attributes["duration_s"])
-        assert best.attributes["member"] == "sustained"
-        assert best.extent is not None
-        assert best.attributes["duration_s"] == pytest.approx(best.extent[1] - best.extent[0])
-        assert best.attributes["duration_s"] > 1.0
-
-    def test_an_unvoiced_sustain_is_a_span_like_any_other(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Steady band-limited noise sustains with no periodicity and is not refused."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_noise())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        taxonomy(store, "plain", phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        assert spans
-        assert any(e.attributes["production"] in ("unvoiced", "mixed") for e in spans)
-
-    def test_broadband_noise_does_not_become_an_unvoiced_span(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """Stable broad LPC poles are insufficient to claim phonation from ordinary noise."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_broadband_noise())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        taxonomy(store, "plain", phonation_config, run_dir=tmp_path)
-        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-
-    def test_a_glide_is_a_span_with_a_direction_and_an_excursion(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """A rising sweep is a glide, not a sustain, and carries where it went."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_rising_glide())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        taxonomy(store, "plain", phonation_config, run_dir=tmp_path)
-        glides = [
-            e
-            for e in live_entities(store, "span")
-            if e.attributes.get("family") == "phonation" and e.attributes["member"] == "glide"
-        ]
-        assert glides
-        assert glides[0].attributes["glide_direction"] == "rising"
-        assert glides[0].attributes["glide_extent_cents"] > 0.0
-
-    def test_formant_tracks_are_written_per_span_and_sliced_from_the_stream(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One formant_tracks measurement per span, each derived from the span it covers."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        taxonomy(store, "plain", phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        tracks = find_measurements(store, "formant_tracks")
-        assert len(tracks) == len(spans)
-        assert set(store.derived_from(tracks[0].id)) & {e.id for e in spans}
-        assert len(tracks[0].attributes["f1_hz"]) == len(tracks[0].attributes["times_s"])
-
-    def test_the_formant_track_is_measured_once_over_the_whole_stream(
-        self,
-        store: ProvStore,
-        phonation_config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """One call, over the whole stream, however many spans come out of it.
-
-        "Tracks are computed once on the stream and then sliced" is a property of PREPROCESS's own
-        call graph (it measures the tracks, once, before TAXONOMY ever runs), so the call graph is
-        what this asserts: a per-span re-fit produces identical stored attributes on a steady fixture
-        and is invisible to every other test in this file. The duration assertion is the half that
-        matters -- a re-fit would pass a span-length fragment, and a fragment renormalises to its own
-        maximum, which is the failure the rule exists to prevent.
-        """
-        seen_durations: list[float] = []
-        measure = preprocess_module.formant_track
-
-        def counting(audio: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — delegates to the real one
-            """Record what the tracker was handed, then track it for real."""
-            seen_durations.append(audio.waveform.shape[-1] / audio.sampling_rate)
-            return measure(audio, **kwargs)
-
-        monkeypatch.setattr(preprocess_module, "formant_track", counting)
-        samples = np.concatenate([_steady_vowel(), np.zeros(int(0.2 * SR)), _steady_vowel()])
-        _seed_admit(store, tmp_path, wav_writer, samples=samples)
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), phonation_config, run_dir=tmp_path)
-        taxonomy(store, "plain", phonation_config, run_dir=tmp_path)
-        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]
-        assert len(spans) >= 2, "the fixture must yield several spans or a call count of one proves nothing"
-        assert len(seen_durations) == 1
-        assert seen_durations[0] == pytest.approx(3.2, abs=0.05)
-
-    def test_a_null_criterion_leaves_the_spans_absent(
-        self,
-        store: ProvStore,
-        config: TriageConfig,
-        tmp_path: Path,
-        wav_writer: Callable[..., Path],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        """The packaged config fits nothing, so the pass is absent rather than run on invented floors."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_steady_vowel())
-        _stub_models(monkeypatch)
-        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        taxonomy(store, "plain", config, run_dir=tmp_path)
-        assert not [e for e in live_entities(store, "span") if e.attributes.get("family") == "phonation"]

@@ -102,18 +102,10 @@ windows:
     label_thresholds: null             # as above
     hop_s: 2.0                         # non-overlapping 2 s windows; a null here stopped HeAR running
 
-# The sustained-phonation and glide detector. Applied by TAXONOMY over PREPROCESS's F0/formant
-# tracks. Its criterion parameters are null, so the pass raises and is recorded absent.
+# Praat's settings for PREPROCESS's F0 and formant tracks. The sustained-phonation and glide
+# detector these were also named for was removed on 2026-09-04; only the track settings remain.
 phonation_spans:
-  hop_s: 0.01                          # analysis hop for the span walk
-  f0_stability_cents: null             # F0 movement per hop under which a frame continues a sustain
-  formant_stability_hz: null           # F1/F2 movement per hop under which a frame continues a sustain
-  glide_min_excursion_cents: null      # monotone excursion separating a glide from drift
-  hangover_ms: null                    # how long the criterion must fail continuously before a span closes
-  voicing_strength_floor: null         # periodicity below which a frame is not voiced
-  mixed_voiced_fraction: null          # voiced fraction at which a span is called mixed
-  unvoiced_max_formant_bandwidth_hz: null  # bandwidth above which an unvoiced frame is noise, not formant
-  word_aligned_min_evidence_fraction: null # evidence fraction a word-aligned span needs
+  hop_s: 0.01                          # analysis hop for the F0/formant tracks
   formant_max_hz: 5000.0               # Praat's maximum_formant
   max_formants: 5                      # Praat's max_number_of_formants
   formant_window_s: 0.025              # Praat's window_length for the formant track
@@ -178,8 +170,8 @@ taxonomy:
     airway:
       health_acoustic: null            # HeAR-labelled spans
       acoustic: null                   # YAMNet-labelled spans
-  voice_min_duration_s: null           # phonation seconds for voice to read `present`
-  voice_uncertain_duration_s: null     # phonation seconds below which voice reads `uncertain` rather than `absent`
+  voice_min_duration_s: null           # UNREAD since the phonation-span source was retired 2026-09-04
+  voice_uncertain_duration_s: null     # UNREAD likewise; both await the voice rework onto consensus_taxonomy
   speech_labels: null                  # which classifier labels can express the speech kind
   consolidation_floor: 0.1             # owner-directed: consolidation drops a label under this, every classifier
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]

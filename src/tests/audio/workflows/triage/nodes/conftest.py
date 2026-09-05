@@ -175,25 +175,14 @@ def windows_config(tmp_path: Path) -> TriageConfig:
 
 @pytest.fixture
 def phonation_config(tmp_path: Path) -> TriageConfig:
-    """The packaged config with the F0 range and every phonation-span criterion supplied.
+    """The packaged config with the F0 range supplied, which VOICE reads for its own measurement.
 
-    The values are a test fixture, not a fit: the packaged file leaves each of them null, and this
-    is the override mechanism a caller would use to state which population is being measured.
+    The value is a test fixture, not a fit: the packaged file leaves it null, and this is the
+    override mechanism a caller would use to state which population is being measured. The
+    phonation-span criteria this fixture also used to supply went with the detector that read them.
     """
     override = tmp_path / "phonation.yaml"
-    override.write_text(
-        "voice:\n"
-        "  f0_range_hz: [75.0, 500.0]\n"
-        "phonation_spans:\n"
-        "  f0_stability_cents: 50.0\n"
-        "  formant_stability_hz: 50.0\n"
-        "  glide_min_excursion_cents: 200.0\n"
-        "  hangover_ms: 50.0\n"
-        "  voicing_strength_floor: 0.5\n"
-        "  mixed_voiced_fraction: 0.6\n"
-        "  unvoiced_max_formant_bandwidth_hz: 250.0\n"
-        "  word_aligned_min_evidence_fraction: 0.8\n"
-    )
+    override.write_text("voice:\n  f0_range_hz: [75.0, 500.0]\n")
     return load_triage_config(override)
 
 
