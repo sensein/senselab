@@ -120,6 +120,7 @@ class FigureStyle:
             exists on every row so that every panel is drawn to the same width and the shared time
             axis stays aligned; rows with nothing to scale leave their slot blank.
         colorbar_tick_fontsize: The colorbar's tick labels.
+        colorbar_gap_axes: The gap between a panel's right edge and its colorbar, in axes fractions.
         squim_ranges: The value range each SQUIM row is normalised over for colour. One shared scale
             across rows would be meaningless, the three metrics having unrelated units.
         cell_floor_fontsize: The smallest a raster cell's score text is shrunk to before it is
@@ -139,9 +140,9 @@ class FigureStyle:
 
     page_seconds: float = 20.0
     pad_short_pages: bool = True
-    figure_inches: tuple[float, float] = (14.0, 17.0)
+    figure_inches: tuple[float, float] = (11.0, 8.5)
     dpi: int = 130
-    height_ratios: tuple[float, ...] = (1.32, 2.0, 0.5, 0.5, 0.32, 0.5, 0.40, 1.6)
+    height_ratios: tuple[float, ...] = (0.66, 0.6, 0.1, 0.1, 0.1, 0.1, 0.34)
     spectrogram_dynamic_range_db: float = 80.0
     top_labels: int = 4
     raster_rows_scope: str = "file"
@@ -156,12 +157,14 @@ class FigureStyle:
     cmap_spectrogram: str = "magma"
     cmap_yamnet: str = "BuGn"
     cmap_hear: str = "OrRd"
-    cmap_squim: str = "Purples_r"
+    cmap_squim: str = "Purples"
     word_fill: str = "#fdd0a2"
     word_text_colour: str = "black"
     title_fontsize: float = 9.0
     tick_fontsize: float = 6.0
     cell_fontsize: float = 5.0
+    asr_fontsize: float = 6.0
+    asr_fontweight: str = "bold"
     marker_size: float = 260.0
     text_fontsize: float = 7.5
     absent_fontsize: float = 7.0
@@ -172,15 +175,16 @@ class FigureStyle:
     also_write_pngs: bool = False
     colorbar_width_ratio: float = 0.014
     colorbar_tick_fontsize: float = 5.0
+    colorbar_gap_axes: float = 0.006
     squim_ranges: dict[str, tuple[float, float]] = field(
         default_factory=lambda: {"stoi": (0.0, 1.0), "pesq": (1.0, 4.5), "si_sdr": (-10.0, 30.0)}
     )
     waveform_headroom: float = 1.15
     waveform_min_amplitude: float = 0.02
-    absent_height_ratio: float = 0.2
-    raster_paint_floor: float = 0.1
-    asr_rows: int = 3
-    asr_row_height: float = 0.44
+    absent_height_ratio: float = 0.08
+    raster_paint_floor: float = 0.0
+    asr_rows: int = 4
+    asr_row_height: float = 0.52
     span_row_colours: dict[str, str] = field(default_factory=dict)
 
     def row_colour(self, code: str) -> str:
@@ -958,17 +962,16 @@ def _ramped(cmap_name: str, style: FigureStyle) -> Colormap:
     )
 
 
-def _score_colorbar(axis: Axes, cmap_name: str, style: FigureStyle, *, label: str) -> None:
-    """Draw a panel's colour scale in the slot reserved to its right.
+def _score_colorbar(axis: Axes, cmap_name: str, style: FigureStyle) -> None:
+    """Draw a panel's colour scale in an inset at the panel's right edge.
 
-    The slot is its own gridspec column rather than space taken from the panel, so adding a scale
-    never narrows the panel and the shared time axis stays aligned down the page.
+    Carries ticks and no caption: every scale on the page runs the same way, darker meaning more of
+    whatever its panel measures, so a caption per bar repeated one fact three times.
 
     Args:
-        axis: The reserved slot.
+        axis: The inset the scale is drawn in.
         cmap_name: The colormap the panel drew with.
         style: The drawing configuration.
-        label: What the scale measures.
     """
     import matplotlib.pyplot as plt
     from matplotlib.cm import ScalarMappable
@@ -977,7 +980,6 @@ def _score_colorbar(axis: Axes, cmap_name: str, style: FigureStyle, *, label: st
     axis.set_axis_on()
     mappable = ScalarMappable(norm=Normalize(vmin=0.0, vmax=1.0), cmap=_ramped(cmap_name, style))
     bar = axis.figure.colorbar(mappable, cax=axis)
-    bar.set_label(label, fontsize=style.colorbar_tick_fontsize)
     bar.ax.tick_params(labelsize=style.colorbar_tick_fontsize, length=2, pad=1)
 
 
@@ -1043,7 +1045,7 @@ def _raster_panel(
                     zorder=3,
                 )
             )
-    _score_colorbar(colorbar_axis, cmap_name, style, label="probability — dark = present")
+    _score_colorbar(colorbar_axis, cmap_name, style)
 
 
 def _readable_on(rgba: tuple[float, float, float, float]) -> str:
@@ -1124,7 +1126,7 @@ def _squim_panel(
                     zorder=3,
                 )
             )
-    _score_colorbar(colorbar_axis, style.cmap_squim, style, label="per row — dark = poor")
+    _score_colorbar(colorbar_axis, style.cmap_squim, style)
 
 
 def _renderer(axis: Axes) -> RendererBase | None:
@@ -1235,7 +1237,8 @@ def _asr_lane_panel(
             max(start, t0),
             row,
             word["text"],
-            fontsize=style.cell_fontsize,
+            fontsize=style.asr_fontsize,
+            fontweight=style.asr_fontweight,
             ha="left",
             va="center",
             color=style.word_text_colour,
@@ -1345,9 +1348,11 @@ def _page_height_ratios(
             ratios[index] = max(ratios[index], rows * style.raster_row_ratio)
     freed = 0.0
     for index in collapsed:
-        if ratios[index] > style.absent_height_ratio:
-            freed += ratios[index] - style.absent_height_ratio
-            ratios[index] = style.absent_height_ratio
+        # Never grow a panel by collapsing it: a lane whose declared height is already at or under
+        # the absent height keeps its own, so an absent raster cannot out-rank a present one.
+        collapsed_to = min(ratios[index], style.absent_height_ratio)
+        freed += ratios[index] - collapsed_to
+        ratios[index] = collapsed_to
     keep = [index for index in range(len(ratios)) if index not in set(collapsed)]
     total = sum(ratios[index] for index in keep)
     if freed > 0 and total > 0:
@@ -1435,20 +1440,27 @@ def preprocess_figure(
         for index, empty in ((0, wideband is None), (3, not yamnet), (4, not hear), (5, not squim), (6, not words))
         if empty
     ]
-    height_ratios = _page_height_ratios(style, collapsed, {3: len(yamnet_rows), 4: len(hear_rows)})
+    height_ratios = _page_height_ratios(
+        style, collapsed, {2: len(_SPAN_ROWS), 3: len(yamnet_rows), 4: len(hear_rows), 5: len(style.squim_ranges)}
+    )
 
     figure_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
     pdf_path = figure_dir / f"{stem or store.run_id}.pdf"
     pdf = PdfPages(pdf_path)
+    cover = plt.figure(figsize=style.figure_inches)
+    cover.suptitle(f"{stem or store.run_id} — whole-file summary", fontsize=11)
+    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.92)), panel_lines, style)
+    pdf.savefig(cover, dpi=style.dpi)
+    plt.close(cover)
     for index, window in enumerate(pages(duration_s, style), start=1):
         figure: Figure
         figure, axes = plt.subplots(
             len(height_ratios),
-            2,
+            1,
             figsize=style.figure_inches,
             constrained_layout=True,
-            gridspec_kw={"height_ratios": height_ratios, "width_ratios": [1.0, style.colorbar_width_ratio]},
+            gridspec_kw={"height_ratios": height_ratios},
         )
         (
             axis_wide,
@@ -1458,13 +1470,26 @@ def preprocess_figure(
             axis_hear,
             axis_squim,
             axis_asr,
-            axis_taxonomy,
-        ) = axes[:, 0]
-        # Every row owns a slot in the second column so that all panels are laid out to one width
-        # and the shared time axis stays aligned; a row with no scale to show blanks its slot.
-        slots = list(axes[:, 1])
-        for slot in slots:
-            slot.set_axis_off()
+        ) = axes
+
+        # A colorbar is an inset anchored to its own panel's right edge, not a gridspec column.
+        # As a column it sat 0.07 of the figure clear of the panels: the waveform row's twin dBFS
+        # and continuity labels widen the shared column, and constrained_layout aligns every panel
+        # to it, so the gap was reserved decoration space no padding could close.
+        def slot_for(panel: Axes) -> Axes:
+            """An inset just outside a panel's right edge, for that panel's colorbar.
+
+            Args:
+                panel: The panel the scale belongs to.
+
+            Returns:
+                The inset axes.
+            """
+            return panel.inset_axes(
+                [1.0 + style.colorbar_gap_axes, 0.0, style.colorbar_width_ratio, 1.0],
+                transform=panel.transAxes,
+            )
+
         timed = [axis_wide, axis_wave, axis_spans, axis_yamnet, axis_hear, axis_squim, axis_asr]
 
         _spectrogram_panel(
@@ -1502,7 +1527,7 @@ def preprocess_figure(
             window,
             style,
             absent.get("span_yamnet", "span_yamnet is absent from the store"),
-            slots[3],
+            slot_for(axis_yamnet),
         )
         _raster_panel(
             axis_hear,
@@ -1514,9 +1539,9 @@ def preprocess_figure(
             window,
             style,
             absent.get("span_hear", "span_hear is absent from the store"),
-            slots[4],
+            slot_for(axis_hear),
         )
-        _squim_panel(axis_squim, spans, squim, window, style, slots[5])
+        _squim_panel(axis_squim, spans, squim, window, style, slot_for(axis_squim))
         _asr_lane_panel(
             axis_asr,
             words,
@@ -1524,7 +1549,6 @@ def preprocess_figure(
             style,
             absent.get("consensus_transcript", "no consensus word in the store"),
         )
-        _taxonomy_panel(axis_taxonomy, panel_lines, style)
 
         for axis in timed:
             axis.set_xlim(*window)

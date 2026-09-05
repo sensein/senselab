@@ -172,7 +172,7 @@ taxonomy:
   voice_min_duration_s: null           # UNREAD since the phonation-span source was retired 2026-09-04
   voice_uncertain_duration_s: null     # UNREAD likewise; both await the voice rework onto consensus_taxonomy
   speech_labels: null                  # which classifier labels can express the speech kind
-  consolidation_floor: 0.1             # owner-directed: consolidation drops a label under this, every classifier
+  consolidation_floor: 0.2             # owner-directed: consolidation drops a label under this, every classifier
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
 
