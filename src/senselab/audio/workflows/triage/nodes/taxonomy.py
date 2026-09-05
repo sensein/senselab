@@ -603,8 +603,8 @@ def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: 
         The ids written, for the node's view. Empty when no per-span classifier produced scores,
         so "no consensus" and "a consensus over nothing" stay distinguishable.
     """
-    floor = config.get("taxonomy.yamnet_consolidation_floor")
-    yamnet_floor = None if floor is None else float(floor)
+    floor = config.get("taxonomy.consolidation_floor")
+    consolidation_floor = None if floor is None else float(floor)
     by_classifier: dict[str, dict[str, dict[str, float]]] = {}
     read_ids: list[str] = []
     for classifier, measurement_name in PER_SPAN_CLASSIFIERS.items():
@@ -613,7 +613,7 @@ def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: 
             continue
         read_ids.extend(measurement.id for measurement in measurements)
         per_span = _per_span_label_scores(store, measurement_name)
-        by_classifier[classifier] = _consolidate(per_span, yamnet_floor if classifier == "yamnet" else None)
+        by_classifier[classifier] = _consolidate(per_span, consolidation_floor)
     if not by_classifier:
         return []
 
@@ -636,7 +636,7 @@ def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: 
     activity = store.activity(
         node=NODE,
         step="consensus_taxonomy",
-        parameters={"yamnet_consolidation_floor": yamnet_floor, "classifiers": sorted(by_classifier)},
+        parameters={"consolidation_floor": consolidation_floor, "classifiers": sorted(by_classifier)},
     )
     store.was_associated_with(activity, software)
     for element_id in read_ids:
@@ -652,7 +652,7 @@ def _write_consensus_taxonomy(store: ProvStore, config: TriageConfig, software: 
                 "labels": ranked,
                 "n_labels": len(ranked),
                 "classifiers": sorted(by_classifier),
-                "yamnet_consolidation_floor": yamnet_floor,
+                "consolidation_floor": consolidation_floor,
             },
             derived_from=tuple(read_ids),
             extent=None,
