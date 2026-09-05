@@ -32,7 +32,6 @@ def _propose(env: np.ndarray, floor: float) -> list[Span] | NoContrast:
         floor,
         SR,
         k_db=18.0,
-        floor_margin_db=12.0,
         transition_window_ms=300,
         min_duration_ms=50,
         min_separation_ms=150,
@@ -128,7 +127,7 @@ class TestTheMergeRate:
 
 
 class TestWalkStopIsFloorRelativeAndSymmetric:
-    """Onset and offset walk by the identical rule -- within floor_margin_db, sustained transition_window_ms.
+    """Onset and offset walk by the identical rule -- within k_db of the floor, sustained transition_window_ms.
 
     Replaces a peak-anchored onset (walk back while within a fixed drop of the peak) paired with a
     floor-fraction offset (walk forward to a threshold fixed once at the peak's own floor value): that
@@ -154,9 +153,9 @@ class TestWalkStopIsFloorRelativeAndSymmetric:
         assert onset_samples == pytest.approx(offset_samples, abs=2)
 
     def test_a_dip_that_stays_above_the_threshold_does_not_end_the_walk(self) -> None:
-        """The threshold is floor(-55) + floor_margin_db(12) = -43; a -40 dB dip never crosses it."""
+        """The threshold is floor(-55) + k_db(18) = -37; a -30 dB dip never crosses it."""
         env = _envelope([(2.0, 2.5, -20.0)])
-        env[int(2.2 * SR) : int(2.3 * SR)] = -40.0
+        env[int(2.2 * SR) : int(2.3 * SR)] = -30.0
         out = _propose(env, -55.0)
         assert isinstance(out, list)
         assert len(out) == 1
@@ -285,3 +284,33 @@ class TestSegmentsBetweenChangePoints:
         """A rank cut has no floor, so there is no rise to report."""
         spans = segments_between_change_points(np.linspace(0.0, 1.0, SR), SR, cut_percentile=5.0, min_duration_ms=100.0)
         assert all(np.isnan(s.peak_over_floor_db) for s in spans)
+
+
+class TestTheWalkStopsAtKDb:
+    """`k_db` is both the gate and the walk-stop, so the retired `floor_margin_db` cannot return.
+
+    It shipped at 12.0 against a `k_db` of 6.0, and a stop test more permissive than the open test
+    can never extend a span: every sample failing the crossing already satisfies the stop. Removing
+    it was proven inert on a real 79.51 s envelope -- 86 spans and 59.77 s either way, extents
+    byte-identical. These pin the rule that replaced it.
+    """
+
+    def test_the_walk_stops_where_the_gate_opens(self) -> None:
+        """A dip below `k_db`, sustained past the window, ends the walk at the gate's own level."""
+        env = _envelope([(2.0, 3.0, -20.0)])
+        env[int(2.4 * SR) : int(2.6 * SR)] = -50.0
+        out = propose_spans(
+            env, -55.0, SR, k_db=18.0, transition_window_ms=100, min_duration_ms=50, min_separation_ms=10
+        )
+        assert isinstance(out, list)
+        assert len(out) == 2, "a sustained dip under k_db splits the event"
+
+    def test_a_dip_above_k_db_does_not_split(self) -> None:
+        """The same dip, held above floor + k_db, leaves one span -- the stop level is k_db and nothing else."""
+        env = _envelope([(2.0, 3.0, -20.0)])
+        env[int(2.4 * SR) : int(2.6 * SR)] = -30.0
+        out = propose_spans(
+            env, -55.0, SR, k_db=18.0, transition_window_ms=100, min_duration_ms=50, min_separation_ms=10
+        )
+        assert isinstance(out, list)
+        assert len(out) == 1

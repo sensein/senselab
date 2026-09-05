@@ -45,7 +45,6 @@ class TestMeasuredValues:
         """Each measured value reads back exactly as the file states it."""
         cfg = load_triage_config()
         assert cfg.require("envelope.lowpass_hz") == 40.0
-        assert cfg.require("spans.floor_margin_db") == 12.0
         assert cfg.require("spans.transition_window_ms") == 30
         assert cfg.require("spans.k_db") == 6.0
         assert cfg.require("preemphasis.coefficient") == 0.97
@@ -133,14 +132,14 @@ class TestOverrides:
     def test_an_override_changes_the_hash(self, tmp_path: Path) -> None:
         """Two different merged mappings never share a hash."""
         override = tmp_path / "o.yaml"
-        override.write_text("spans:\n  floor_margin_db: 8.0\n")
+        override.write_text("spans:\n  k_db: 8.0\n")
         assert load_triage_config(override).config_hash != load_triage_config().config_hash
 
     def test_an_unknown_key_is_refused_rather_than_ignored(self, tmp_path: Path) -> None:
         """A typo in an override key is an error, not a no-op."""
         override = tmp_path / "o.yaml"
-        override.write_text("spans:\n  floor_margni_db: 8.0\n")
-        with pytest.raises(ValueError, match="floor_margni_db"):
+        override.write_text("spans:\n  k_bd: 8.0\n")
+        with pytest.raises(ValueError, match="k_bd"):
             load_triage_config(override)
 
 
