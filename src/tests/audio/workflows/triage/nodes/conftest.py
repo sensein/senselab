@@ -372,7 +372,16 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
             empty label list for a span writes the measurement with no label (the pass ran, found
             nothing on that span).
         span_yamnet_labels: The same, for PREPROCESS's per-span ``span_yamnet`` measurement.
+        span_unlabelled: Classifiers whose per-span windows carry their raw scores and **no** label
+            set, recording ``labelled`` False -- the state the packaged config produces, where
+            ``windows.<classifier>.default_threshold`` is null so the model ran over every span and
+            no labelling decision was taken over its output.
         disruptions_file: Whether to write the file-level disruption measurement.
+        continuity_trace: The persisted continuity trace, written to its own npz sidecar with a
+            ``continuity_trace`` measurement pointing at it. ``None`` writes neither, which is the
+            state of every run recorded before PREPROCESS began persisting it.
+        continuity_cut_level: The ``cut_level`` that measurement records. Defaults to the rank cut
+            over ``continuity_trace`` at the packaged percentile.
 
     Returns:
         A callable taking ``(store, **the above)`` and writing them. It returns None; a test reads
@@ -396,7 +405,10 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         span_merged: int = 1,
         span_hear_labels: list[list[str]] | None = None,
         span_yamnet_labels: list[list[str]] | None = None,
+        span_unlabelled: tuple[str, ...] = (),
         disruptions_file: bool = False,
+        continuity_trace: "np.ndarray | None" = None,
+        continuity_cut_level: float | None = None,
     ) -> None:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 
@@ -447,6 +459,19 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
                     "win_length_s": win_s if labels else None,
                     "hop_s": hop_s if labels else None,
                 },
+            )
+            # PREPROCESS writes the verbatim windows beside the measurement, and a reader that takes
+            # the sidecar path from the store finds nothing without them. Scores default to the same
+            # 0.9 the seeded window folds use; a test needing a distribution writes its own file.
+            sidecar = tmp_path / "derivatives" / f"{classifier}_scores.json"
+            sidecar.parent.mkdir(parents=True, exist_ok=True)
+            sidecar.write_text(
+                json.dumps(
+                    [
+                        window(start, end, {label: 0.9 for label in members})
+                        for start, end, members in _grid(labels, win_s, hop_s)
+                    ]
+                )
             )
             if classifier in scores_only:
                 continue
@@ -588,21 +613,43 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
             store.was_associated_with(
                 store.activity(node="PREPROCESS", step=f"span_{classifier}", parameters={}), agent
             )
+            labelled = classifier not in span_unlabelled
             for span_id, labels in zip(span_ids, per_span_labels, strict=True):
                 extent = store.get_entity(span_id).extent or (0.0, 0.0)
-                _write(
-                    "measurement",
-                    extent,
-                    {
-                        "name": f"span_{classifier}",
-                        "classifier": classifier,
-                        "signal": "plain",
-                        "span_id": span_id,
-                        "labels": list(labels),
-                        "scores": {label: 0.9 for label in labels},
-                        "raw_scores": {label: 0.9 for label in labels},
-                    },
-                )
+                attributes: dict[str, Any] = {
+                    "name": f"span_{classifier}",
+                    "classifier": classifier,
+                    "signal": "plain",
+                    "span_id": span_id,
+                    "raw_scores": {label: 0.9 for label in labels},
+                    "labelled": labelled,
+                    "default_threshold": 0.3 if labelled else None,
+                }
+                if labelled:
+                    attributes["labels"] = list(labels)
+                    attributes["scores"] = {label: 0.9 for label in labels}
+                _write("measurement", extent, attributes)
+
+        if continuity_trace is not None:
+            trace = np.asarray(continuity_trace, dtype="float64")
+            np.savez(tmp_path / "derivatives" / "continuity_trace.npz", continuity=trace)
+            level = continuity_cut_level
+            if level is None:
+                from senselab.audio.tasks.spans.api import rank_cut_level
+
+                level = rank_cut_level(trace, cut_percentile=5.0)
+            _write(
+                "measurement",
+                None,
+                {
+                    "name": "continuity_trace",
+                    "signal": "preemphasised",
+                    "path": "derivatives/continuity_trace.npz",
+                    "sampling_rate": stream_hz,
+                    "cut_percentile": 5.0,
+                    "cut_level": level,
+                },
+            )
 
         if disruptions_file:
             _write(

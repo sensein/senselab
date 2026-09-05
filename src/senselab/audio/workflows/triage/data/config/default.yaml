@@ -182,6 +182,7 @@ taxonomy:
   voice_min_duration_s: null           # phonation seconds for voice to read `present`
   voice_uncertain_duration_s: null     # phonation seconds below which voice reads `uncertain` rather than `absent`
   speech_labels: null                  # which classifier labels can express the speech kind
+  consolidation_floor: 0.1             # owner-directed: consolidation drops a label under this, every classifier
   audioset_airway_labels: [Cough, Throat clearing, Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]
   hear_airway_labels: [Cough, Snore, Baby Cough, Breathe, Sneeze, Throat Clear]
 
