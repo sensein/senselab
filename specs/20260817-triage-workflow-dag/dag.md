@@ -50,10 +50,12 @@ path into `data/config/default.yaml`.
 throughout: `config.require(...)` **raises** on a null, and inside PREPROCESS that raise is caught
 and recorded as an absent derivative (`preprocess.py:1483-1497`) while the node still returns
 normally; `config.get(...)` returns `None` and the caller carries on **silently**. The second is
-the more dangerous of the two, and one instance of it is currently deleting a whole span source —
-see PREPROCESS below, "A null that deletes a span source in silence".
+the more dangerous of the two. Its worst instance — a null silently deleting the whole ASR span
+source — was closed on 2026-09-05 by deleting the key (see PREPROCESS below); the pattern survives
+in `taxonomy.speech_labels`, read `get ... or []` by both its readers, where a null empties the
+speech family without a word anywhere.
 
-The config is **208 lines, 106 keys, 39 of them null**. It carries a short `#` description per
+The config is **207 lines, 105 keys, 38 of them null**. It carries a short `#` description per
 section and per key and nothing longer. There is no `derivation:` key: it used to hold 50 kB of
 prose, and because the loader hashes the merged mapping that prose sat inside `config_hash`, so
 correcting a word of it made two behaviourally identical runs report different identities. The
@@ -191,12 +193,15 @@ means a reader draws **the trace these spans were actually proposed from** rathe
 recomputed later against possibly-changed code. `_spans` reads the array back rather than
 recomputing it, so the trace and the spans are the same object by construction.
 
-**A null that deletes a span source in silence.** `_spans` reads `speech.word_gap_ms` with
-`config.get` and, when it is `None`, simply **omits the parameter** (`preprocess.py:600`). No
-exception, no absent-derivative record: the ASR span source is dropped and PREPROCESS still returns
-`pass`. Measured over 112 recordings: **1,951 spans — 1,858 amplitude, 72 continuity, 21
-unlabelled, and zero `asr`.** This is the clearest instance of the `require`/`get` distinction
-mattering, and it is invisible in the verdict.
+**A null that deleted a span source in silence — resolved 2026-09-05.** `_spans` used to read
+`speech.word_gap_ms` with `config.get` and, when it was `None`, simply omit the parameter: no
+exception, no absent-derivative record, the ASR span source dropped and PREPROCESS still returning
+`pass`. Measured over 112 recordings it cost every one of **1,951 spans** any ASR source — 1,858
+amplitude, 72 continuity, 21 unlabelled, **zero `asr`** — while 7,651 consensus words sat in the
+same stores. The key is now **deleted outright** rather than given a value: consensus words arrive
+with their own timestamps, so grouping them needs no gap threshold, and
+`group_extents_into_runs` merges on adjacency alone (`spans/api.py`). ASR spans exist again, and
+the deletion also unblocked SPEECH, which had been `require`-ing the same null key.
 
 **`phonation_tracks` does not run under the packaged config.** It requires `voice.f0_range_hz`
 (`preprocess.py:1284`), which is null, so it raises and is recorded absent. What it *would* measure
@@ -279,66 +284,182 @@ would let it decide are all null.
 > is the table above: every floor null, every line `unavailable`, every kind `uncertain`, every
 > recording flagged. Nothing below is implemented. It is written here for the owner to mark up.
 
-##### What the measurement looks like on a real corpus
+Four pathways, each raising one kind, plus a fallback. A pathway is **certain** or it is not; a kind
+no certain pathway raised is `uncertain`, and a file with no certain pathway is flagged. Floors that
+turn a count into present/absent are replaced by the pathways themselves.
 
-Measured over the 388-recording, 10-subject run (`~/Downloads/triage_10subj_20260905`), which is
-the evidence this design is drawn from rather than an argument from first principles.
+##### 1. Speech — real lexical content is certain, not inferred
 
-| label | files | median peak | reached by both classifiers |
-| --- | --- | --- | --- |
-| `Speech` | 359 | 0.998 | yes |
-| `Silence` | 325 | 1.000 | no |
-| `Snore` | 293 | 0.494 | no |
-| `Breathe` | 271 | 0.293 | no |
-| `Baby Cough` | 243 | 0.263 | no |
-| `Laugh` | 205 | 0.328 | no |
-| `Cough` | 154 | 0.275 | yes |
-| `Sneeze` | 123 | 0.207 | yes |
+If the recognizer emitted **actual words**, speech is present and the matter is closed. No floor, no
+count compared to a threshold. The distinction that carries it is real lexical content against
+**only bracketed non-lexical markers** like `[COUGH]`, and the test already exists:
+`_is_bracketed_token` (`speech_to_text_ensemble/api.py:61`), *"a bracketed non-lexical marker, e.g.
+`[COUGH]`"*.
 
-Median 6 labels per recording at the 0.2 floor, no recording with zero. **Two findings shape
-everything below.**
+The rule: **consensus words that are not all bracketed ⇒ speech present, certain.** YAMNet and AST
+over the whole audio **corroborate** — they are recorded, they never decide, and their absence never
+weakens the ASR.
 
-**1. `n_classifiers` cannot mean what it appears to mean.** Only `Cough`, `Sneeze` and `Speech` are
-ever reached by both classifiers — not because the models disagree, but because the vocabularies
-spell the same concept differently: HeAR's `Breathe` against YAMNet's `Breathing`, `Snore` against
-`Snoring`, `Throat Clear` against `Throat clearing`. The consensus is keyed on the raw label
-string, so corroboration is systematically under-counted and a reader comparing `n_classifiers`
-across labels is comparing spelling coincidence.
+Two things make the test more trustworthy than it looks. The tally normalises `[COUGH]` and `COUGH`
+to one vote key, and when the two forms tie the **bracketed form wins the display** (`:403`),
+deliberately: *"a bracketed non-lexical marker is strictly more informative than the same event
+transcribed as a plain word"*. So the bias is toward marking content non-lexical, which is the safe
+direction — a cough will not be mistaken for a word.
 
-**2. A label's presence is not a kind's presence.** Grouping by task family, at peak ≥ 0.2:
+**The inverse case is what `words.onomatopoeic_tokens` (null) is for**: a recognizer that renders a
+cough as the ordinary word `cough`, which no bracket test can catch. That vocabulary subtracts —
+words matching it do not count as lexical content. While it is null the rule over-calls speech on a
+recording whose only "words" are onomatopoeic renderings, which is the lenient direction, and the
+branch still discards.
 
-| task family | n | most frequent labels (`Silence` omitted — it is uninformative for kinds) |
+*Owed*: `_is_bracketed_token` is private to another module and used only for display; TAXONOMY needs
+it exposed or restated. `words.onomatopoeic_tokens` needs its vocabulary.
+
+##### 2. The AudioSet ontology, not a hand-built concept layer
+
+YAMNet's 521 and AST's 527 classes are **AudioSet classes with a published parent–child ontology**.
+Kinds should be expressed as subtrees of it rather than as flat string lists. This supersedes the
+ad-hoc concept layer an earlier draft of this section proposed: the hierarchy is the concept layer,
+and it is published rather than invented. It also dissolves most of the naming mismatch that draft
+found — `Breathe`/`Breathing`, `Laugh`/`Laughter`, `Throat Clear`/`Throat clearing` are HeAR-against-
+AudioSet spellings, so only **HeAR's eight labels** need mapping into the ontology by hand.
+
+**The ontology is not in this repository.** What exists is
+`audio_analysis/data/audioset_source_map.json` — a *flattening*, 527 AST display names onto four
+categories (`speech`, `people`, `machine`, `environment`), whose own `derivation` records that it was
+"Generated from audioset/ontology (632 nodes)". The tree it was generated from was not vendored. That
+map cannot serve here: `Cough`, `Breathing`, `Snoring`, `Wheeze`, `Gasp`, `Sniff` and
+`Throat clearing` all flatten to `people`, so it cannot separate airway from anything else a person
+does. It also belongs to another workflow, which does not govern triage.
+
+*Owed*: vendor and pin the AudioSet `ontology.json` (id, name, `child_ids`) with its release
+identifier, the same way a model revision is pinned. Until then any subtree claim below is
+unverified.
+
+##### 3. Airway is cough and breathing — and `Snoring` is dropped
+
+Measured over the 388-recording, 10-subject run:
+
+| label | fires on | verdict |
 | --- | --- | --- |
-| Maximum-phonation-time | 18 | **`Snore` 18/18**, `Mantra` 16/18, `Chant` 16/18 |
-| Diadochokinesis | 50 | `Speech` 50/50, `Snore` 41/50, **`Laugh` 39/50** |
-| Free-speech | 28 | `Speech` 28/28, `Snore` 27/28, `Breathe` 25/28 |
-| Respiration-and-cough | 70 | **`Breathe` 52/70**, `Snore` 50/70, `Speech` 34/70 |
+| `Snore` | **245/388 (63%)**, incl. 27/28 free-speech and 9/9 story-recall | not discriminative |
+| `Snore` in **gap** spans | peak **0.298** on the silence between utterances | fires on background |
 
-A sustained vowel reads as `Snore` in every single instance, and syllable repetition reads as
-`Laugh` in four of five. HeAR's health vocabulary fires on ordinary phonation. A rule of the form
-"`Snore` present ⇒ airway present" would mark nearly every recording airway-positive. The
-respiration signal is nonetheless real — `Breathe` at 52/70 where the protocol asked for breathing
-— so the discrimination exists; it is just not carried by presence alone.
+`Snore` must not raise airway. Today `taxonomy.audioset_airway_labels` is `[Cough, Throat clearing,
+Sneeze, Sniff, Breathing, Wheeze, Snoring, Gasp, Sigh]` and `taxonomy.hear_airway_labels` includes
+`Snore`; under this proposal airway is the **`Cough` and `Breathing` subtrees only**, and `Snoring`,
+`Sigh`, `Sniff`, `Wheeze` and `Gasp` are dropped unless a measurement argues them back.
 
-##### The proposal, in three parts
+> **A conflict between notions 2 and 3 that needs the owner's ruling.** In the published AudioSet
+> ontology `Snoring` is, to the best of our knowledge, a **child of `Breathing`** — so "take the
+> `Breathing` subtree" and "drop `Snoring`" contradict each other. Either the rule is a subtree
+> *minus an explicit exclusion list*, or airway names its members directly and the ontology is used
+> only for naming and grouping. This must be checked against the pinned ontology before either is
+> written; it is asserted here from published structure, not from a file in this repository.
 
-**A concept layer between labels and kinds.** Each classifier's labels map onto a shared *concept*;
-kinds are decided over concepts, never over raw label strings. This is the smallest change that
-makes corroboration mean agreement. The shape already half-exists: `taxonomy.audioset_airway_labels`
-and `taxonomy.hear_airway_labels` are two per-classifier families for one kind, one level too
-coarse. A new `taxonomy.concepts` would give, per concept, the label list each classifier expresses
-it with — `breathing: {yamnet: [Breathing], hear: [Breathe]}` — and each kind names the concepts
-that express it.
+##### 4. YAMNet and AST raise airway; HeAR corroborates
 
-**Two floors per kind, not one.** A single floor forces every recording into present/absent at the
-threshold. Proposed instead: a kind is `present` when its authoritative concept's peak is at or
-above `present_floor`; `absent` only when every one of its concepts is below `absent_ceiling` *and*
-the classifiers that could have seen it actually ran; `uncertain` in the band between. The band is
-where leniency lives — screening does not have to commit, and the branch still runs and discards.
+Measured over the same run, splitting the respiration protocol into its sub-tasks and separating the
+classifiers through `peak_by_classifier`, at peak ≥ 0.2:
 
-**The authoritative-plus-corroboration rule survives, generalised to concepts.** `speech` is decided
-by the lexical line, `airway` by HeAR; corroboration is recorded and never converted into evidence
-strength, exactly as `_fold_authoritative_line` already does.
+| | cough sub-task (14) | breath sub-task (56) | every other task (318) |
+| --- | --- | --- | --- |
+| `Cough` — YAMNet | 35% | 1% | **0.9%** |
+| `Cough` — HeAR | 64% | 1% | **27%** |
+| `Breathing` — YAMNet | 14% | 55% | **12%** |
+| `Breathe` — HeAR | 42% | 82% | **39%** |
+
+**YAMNet is the specific one; HeAR is the sensitive one.** YAMNet's `Cough` fires on 3 of 318
+unrelated recordings — essentially no false alarms — while HeAR's fires on 27% of them, more often
+off-task than on the cough task itself. On breathing, YAMNet separates 55% against 12% (≈4.6×) where
+HeAR separates 82% against 39% (≈2.1×).
+
+So airway is **raised by the AudioSet classifiers and corroborated by HeAR**, never raised by HeAR
+alone. Recall is the price: YAMNet alone would miss roughly two thirds of cough tasks. Under
+leniency that is the wrong trade to make silently, so **HeAR corroboration should widen recall
+without being able to raise the kind by itself** — a span HeAR calls cough and YAMNet does not is
+recorded, and the branch decides.
+
+**Honest consequence:** of HeAR's eight labels, `Snore` is excluded by notion 3, and `Speech`,
+`Laugh`, `Sneeze`, `Throat Clear` and `Baby Cough` have no raising role here. Only `Cough` and
+`Breathe` corroborate. HeAR's remaining labels become unused by TAXONOMY, which is worth saying out
+loud rather than leaving them nominally configured.
+
+##### 5. Phonation — long spans that also carry continuity
+
+Voice's pathway: a span that is **long** and carries **continuity corroboration**. Both quantities
+exist. Spans carry `measure` (`amplitude`, `continuity`, `asr`, `gap`) and extents, and a candidate
+from a second source that overlaps an existing span is attached as a `corroborated_by` entry rather
+than dropped (`preprocess.py:626-640`) — each entry carrying its own `measure`, `start` and `end`.
+So the joint condition is directly readable: **`measure == "amplitude"` with a `corroborated_by`
+entry whose `measure == "continuity"`.**
+
+**The count of continuity spans is the wrong place to look**, and this trips up the obvious check. A
+continuity candidate overlapping an amplitude span becomes corroboration, not a span of its own, so
+`span_counts` shows `continuity: 0` for exactly the recordings where phonation lives — median 0 for
+Maximum-phonation-time, Prolonged-vowel and Glides, against median 4 for story-recall. That is not
+evidence against this pathway; it is evidence that the pathway must read `corroborated_by`.
+
+*Owed*: a duration. On one story-recall recording, 64 of 92 spans are amplitude-with-continuity, at
+median 0.69 s and max 2.65 s — connected speech, not phonation, so that is the wrong recording to
+fit on. The threshold belongs in `taxonomy` as a new key, since it decides a kind, and should be
+measured on the sustained-vowel tasks. `spans.continuity_min_duration_ms` (300 ms) is the existing
+length filter on the continuity *source* and is not the same quantity.
+
+##### 6. No certain pathway ⇒ flag the file
+
+The fallback, stated positively: **a kind no pathway raised with certainty is `uncertain`, and any
+uncertain kind flags the file.** This is what the fold already does (`taxonomy.py:636-643`, `any
+uncertain ⇒ FLAG`) — the change is not the fold but that pathways can now reach certainty, which
+none can today.
+
+What becomes reachable: once real ASR text can make speech certain, `FLAG` stops being the only
+outcome. `PASS` needs every kind decided and at least one present; `FAIL` needs all three absent.
+Both stay blocked while voice has no implemented pathway, so notion 5 is what unblocks the node
+outcome, not notion 1.
+
+##### Background, and the gap spans
+
+PREPROCESS now writes the complement of the proposed set as `measure: "gap"` and classifies it like
+any other span. On one story-recall recording, **20 gaps totalling 7.9 s** — verified in its store —
+carry `Silence` 0.977, `Pulse` 0.721, `Mains hum` 0.404, `Hum` 0.339 and `Snore` 0.298: a mains buzz
+nothing previously measured.
+
+**Background should be neither a kind nor a pathway.** The three kinds answer "is the content the
+protocol asked for present"; a mains hum is a property of the room. Proposed instead: gaps feed a
+**file-level quality flag**, alongside the disruption counting, where a background that competes
+with the content is a reason to look and not a reason to route a branch. The `Snore` 0.298 in those
+same gaps is the sharpest evidence for notion 3 in this document — the label fires on the silence
+between utterances.
+
+##### The pathways, their inputs, and the flags
+
+```mermaid
+graph LR
+  subgraph inputs
+    ASR["consensus words<br/>bracketed?"]
+    YAM["YAMNet / AST<br/>AudioSet classes"]
+    HEAR["HeAR<br/>8 labels"]
+    SPN["spans: measure<br/>+ corroborated_by"]
+    GAP["gap spans"]
+  end
+  ASR --> P1{{"1. real lexical content<br/>CERTAIN"}}
+  YAM -.corroborates.-> P1
+  YAM --> P2{{"2. Cough / Breathing<br/>subtrees"}}
+  HEAR -.corroborates only.-> P2
+  SPN --> P3{{"3. long + continuity<br/>corroboration"}}
+  P1 --> SPE["speech"]
+  P2 --> AIR["airway"]
+  P3 --> VOI["voice"]
+  SPE --> FOLD{{"any kind uncertain?"}}
+  AIR --> FOLD
+  VOI --> FOLD
+  FOLD -->|yes| FLAG["FLAG the file"]
+  FOLD -->|no| DEC["PASS or FAIL"]
+  GAP -.background.-> QF["quality flag<br/>not a kind"]
+  HINT["hint tags"] -.never sets a state.-> HC["hint_contradiction"]
+  P2 -.expected vs found.-> HC
+```
 
 ##### The hint: a flag, never a state
 
@@ -347,74 +468,41 @@ genuinely carry two tasks' content, and a hint naming one must not suppress evid
 That sits against the ruling that screening decides on content **plus the hint when available**.
 
 The reconciliation: **the hint may not set, raise, lower or suppress any kind's state.** The state
-stays content-only. What the hint may do is produce its own finding — when the concept the task
-declares is absent from the consensus, or a strongly-supported concept contradicts the declaration,
-that is recorded as a `hint_contradiction` flag on the file. `Snore` at 18/18 on Maximum-phonation-time
-is exactly such a case, and it is more useful surfaced than silently resolved either way.
+stays content-only. What it may do is produce its own finding — when the content the task declares
+is absent, or a strongly-supported label contradicts the declaration, that is a `hint_contradiction`
+flag on the file. A sustained-vowel task reading as `Snore` on 18 of 18 recordings is exactly such a
+case, and more useful surfaced than resolved either way.
 
-##### The flags
-
-```mermaid
-graph LR
-  subgraph inputs
-    SY["per-span YAMNet<br/>raw scores"]
-    SH["per-span HeAR<br/>raw scores"]
-    LEX["consensus words"]
-    HINT["hint tags<br/>+ speech_type"]
-  end
-  SY --> CT["consensus_taxonomy<br/>peak per label<br/>floor 0.2"]
-  SH --> CT
-  CT --> CON[/"concepts<br/>PROPOSED"/]
-  CON --> AIR{"airway<br/>HeAR authoritative"}
-  CON --> VOI{"voice<br/>no concept set yet"}
-  LEX --> SPE{"speech<br/>lexical authoritative"}
-  CON -.corroborates.-> SPE
-  AIR --> ST["present / absent / uncertain"]
-  SPE --> ST
-  VOI --> ST
-  ST --> FOLD{{"file fold"}}
-  FOLD -->|all absent| F1["node FAIL"]
-  FOLD -->|any uncertain| F2["node FLAG"]
-  FOLD -->|else| F3["node PASS"]
-  HINT -.never sets state.-> HC["hint_contradiction<br/>PROPOSED"]
-  CON -.expected vs found.-> HC
-```
-
-Every state, and what produces it:
+##### Every state, and what produces it
 
 | level | state | produced by | reachable today |
 | --- | --- | --- | --- |
-| line | `present` | evidence at or over its floor | no — every floor null |
-| line | `absent` | evidence under its floor | no — same |
-| line | `unavailable` | derivative missing, floor null, or vocabulary empty | **yes, always** |
-| kind | `present` | authoritative line/concept `present` | no |
-| kind | `absent` | authoritative line/concept `absent` | no |
-| kind | `uncertain` | authoritative line `unavailable`, or *(proposed)* score in the band | **yes, always** |
-| node | `FAIL` | every kind `absent` | no — blocked by voice |
+| kind | `present` | its pathway raised with certainty | no — no pathway implemented |
+| kind | `absent` | pathway ran, raised nothing, inputs available | no |
+| kind | `uncertain` | no certain pathway, or its inputs unavailable | **yes, always** |
+| node | `FAIL` | all three kinds `absent` | no |
 | node | `FLAG` | any kind `uncertain` | **yes, the only outcome** |
-| node | `PASS` | none uncertain, at least one present | no — blocked by voice |
+| node | `PASS` | none uncertain, at least one present | no |
 | file | `DISCARD` | ADMIT `fail` | yes, independently of anything here |
 | file | `DISCARD` (acoustically empty) | every kind `absent` | no |
-| file *(proposed)* | `hint_contradiction` | declared concept absent, or a strong concept the declaration excludes | not implemented |
+| file *(proposed)* | `hint_contradiction` | declared content absent, or contradicted | not implemented |
+| file *(proposed)* | background quality flag | gap spans carry competing background | not implemented |
 
-**Two levels people conflate.** The diagram's `FAIL`/`FLAG`/`PASS` are **TAXONOMY's node outcome**
-(`taxonomy.py:636-643`). They are not the **file** result: `Triage.PASS` and the acoustically-empty
-`DISCARD` are VERDICT's, and `DISCARD` stays reachable through ADMIT `fail` regardless of anything
-here, while the acoustically-empty discard cannot occur while any kind is uncertain.
+**Two levels people conflate.** `FAIL`/`FLAG`/`PASS` above are **TAXONOMY's node outcome**. They are
+not the **file** result: `Triage.PASS` and the acoustically-empty `DISCARD` are VERDICT's, and
+`DISCARD` stays reachable through ADMIT `fail` regardless of anything here.
 
-Reachable today: node `FLAG` only. Node `FAIL` needs every kind `absent`, and `PASS` needs none
-uncertain; both are blocked while `voice` has no evidence source.
+##### What each pathway still needs
 
-##### What each piece still needs
-
-| piece | owed |
+| pathway | owed |
 | --- | --- |
-| concept layer | `taxonomy.concepts` — the mapping itself, and which concepts express which kind |
-| speech | `taxonomy.speech_labels` is null, so the family is empty; and the pooled `<classifier>_windows` its acoustic line reads never run under a null `default_threshold` |
-| airway | `present_floor` and `absent_ceiling` per kind, replacing the four null `presence_floor` values |
-| voice | **a concept set that does not exist.** Neither vocabulary carries a clean voice concept; sustained phonation surfaces as `Snore`, `Mantra`, `Chant`, `Groan`. Either voice is decided from those with the confusion stated, or as speech-without-lexical (phonation with no words), or the F0 measurement returns. This is a ruling, not a fit |
-| hint | extraction exists (`runs/b2ai-v2/make_hints.py`); `routing.hint_kind_map` is null in the packaged config; nothing passes a hint to `run_triage` today |
-| corroboration | meaningful only after the concept layer; until then `n_classifiers` reports spelling agreement |
+| 1 speech | `_is_bracketed_token` exposed to TAXONOMY; `words.onomatopoeic_tokens` vocabulary (null) |
+| 2 ontology | the AudioSet `ontology.json` vendored and pinned — **not currently in the repository** |
+| 3 airway | the subtree-minus-exclusions ruling; HeAR's eight labels mapped into the ontology |
+| 4 raising | whether HeAR-corroborated-only widens recall, or is recorded and ignored |
+| 5 voice | a minimum duration, measured on sustained-vowel tasks, living in `taxonomy` |
+| 6 fold | nothing — the fold already flags on uncertainty; pathways are what is missing |
+| background | whether a competing background is a quality flag or nothing at all |
 
 ### 4. routing — turn classification (+ hints) into an execution set
 
@@ -459,9 +547,9 @@ branch marks; it removes nothing.**
 Null keys that disable paths here: `speech.second_diarizer`, `speech.separation_backend`,
 `speech.separation_sound_class`, `speech.target_match_cosine`, `speech.enrollment_model`,
 `speech.speech_test_stoi_floor`, `speech.speech_test_si_sdr_floor`, and all three
-`speech.nontarget.*` legs (read via an f-string at `speech.py:997`). `speech.word_gap_ms` is
-`require`d here (`:117`) — so unlike PREPROCESS, SPEECH **raises** on it rather than proceeding
-quietly.
+`speech.nontarget.*` legs (read via an f-string at `speech.py:997`). It used to `require`
+`speech.word_gap_ms` as well, which is why this branch errored on every recording of the 112-file
+collection; that key is now deleted and **SPEECH passes under the packaged config**.
 
 *Goals served*: 2 and 3.
 
@@ -545,8 +633,8 @@ The pipeline configuration is **read and never overridden** — a standing rule,
 set to make a panel draw would produce a picture of a pipeline that is not the one in production. A
 panel whose element is absent names the missing derivative and prints the reason the producing node
 recorded. Config: `spans.k_db` (`figure.py:1420`), `spectrogram.wideband_window_ms` and
-`spectrogram.hop_ms` (`figure.py:1359-1360`), `taxonomy.consolidation_floor` (`figure.py:1364`),
-and `speech.word_gap_ms` (`figure.py:1255`, read only to explain the empty ASR span lane).
+`spectrogram.hop_ms` (`figure.py:1359-1360`), and `taxonomy.consolidation_floor`
+(`figure.py:1364`).
 
 Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline
 reads, and a test asserts no style field name can shadow a pipeline key.
@@ -566,8 +654,7 @@ the verdict carries no discriminating information for any file that ADMIT accept
 triage verdicts downstream is reading a constant.
 
 **`require` and `get` are not interchangeable, and the choice is currently inconsistent.**
-`speech.word_gap_ms` is `get` in PREPROCESS (deleting a span source in silence) and `require` in
-SPEECH (raising). `windows.*.default_threshold` is `require` in the whole-file fold (three
+`windows.*.default_threshold` is `require` in the whole-file fold (three
 derivatives absent) and `get` in the per-span passes (raw scores kept). `taxonomy.speech_labels` is
 `get ... or []` in both its readers (`taxonomy.py:566`, `speech.py:530`), so a null empties the
 speech family without a word anywhere. The per-span behaviour is the intended one; the others have
