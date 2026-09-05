@@ -728,6 +728,36 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             store.was_attributed_to(span_id, software)
             store.was_derived_from(span_id, source_id)
             span_ids.append(span_id)
+        # Everything the proposers left over is itself a span. The gaps are where the recording's
+        # background lives, and the per-span classifiers run over whatever is in `span_ids`, so
+        # naming them here is what gets the background measured at all rather than never looked at.
+        min_gap_s = parameters["min_duration_ms"] / 1000.0
+        covered = sorted((span.start, span.end) for span, _, _, _ in combined)
+        gaps: list[tuple[float, float]] = []
+        cursor = 0.0
+        for start, end in covered:
+            if start - cursor >= min_gap_s:
+                gaps.append((cursor, start))
+            cursor = max(cursor, end)
+        if duration_s - cursor >= min_gap_s:
+            gaps.append((cursor, duration_s))
+        for start, end in gaps:
+            contains_clip = any(start < clip_end and end > clip_start for clip_start, clip_end in clip_extents)
+            gap_id = store.entity(
+                prov_type="span",
+                extent=(start, end),
+                attributes={
+                    "signal": sharp_signal,
+                    "measure": "gap",
+                    "merged_proposals": 0,
+                    "contains_clip": contains_clip,
+                },
+            )
+            store.was_generated_by(gap_id, activity)
+            store.was_attributed_to(gap_id, software)
+            store.was_derived_from(gap_id, state["envelope_id"])
+            span_ids.append(gap_id)
+
         derivatives["spans"] = span_ids
         view.extend(span_ids)
         state["span_ids"] = span_ids

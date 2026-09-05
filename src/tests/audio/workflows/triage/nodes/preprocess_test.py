@@ -342,7 +342,9 @@ class TestSpectralContinuitySpans:
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
         assert spans
-        assert all(e.attributes["measure"] == "continuity" for e in spans)
+        proposed = [e for e in spans if e.attributes["measure"] != "gap"]
+        assert proposed, "continuity should have proposed something to leave gaps around"
+        assert all(e.attributes["measure"] == "continuity" for e in proposed)
         assert "continuity_cut_percentile" in spans[0].attributes
         assert "k_db" not in spans[0].attributes
         assert "peak_over_floor_continuity" not in spans[0].attributes, "a rank cut references no floor"
@@ -1114,9 +1116,12 @@ class TestTheEnvelopeSidecarHoldsMeasurementsOnly:
         _stub_models(monkeypatch)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        # A gap span reaching the end is the trailing background, which is the point of gaps; the
+        # hangover this guards against would show as a *proposed* span running to the last sample.
         for span in spans:
             assert span.extent is not None
             assert np.isfinite(span.extent).all()
+        for span in (e for e in spans if e.attributes["measure"] != "gap"):
             assert span.extent[1] < 2.9, "the burst ends at 1.5 s; a span to 3.0 s is the NaN hangover"
 
 
