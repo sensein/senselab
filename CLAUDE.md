@@ -11,7 +11,12 @@ reading it, and the traps that have cost real time.
 
 Senselab processes and analyses behavioural data — primarily voice and speech, also text and
 video — through reproducible pipelines. uv for dependency management; the interpreter is pinned in
-`.python-version` (3.12, matching CI).
+`.python-version` (3.12.11). The patch level is load-bearing: `_thread.RLock` gained
+`_recursion_count` after 3.12.0, and `multiprocess` (a `datasets` dependency) calls it during
+teardown, so on 3.12.0 the resource tracker's child is never reaped and a finished process hangs —
+18 minutes per task, measured on a cluster array. See
+`specs/20260905-resource-tracker-teardown/`. Note CI runs 3.11, which is unaffected, so no CI job
+sees this.
 
 ## Architecture
 
