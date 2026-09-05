@@ -48,7 +48,7 @@ path into `data/config/default.yaml`.
 
 `null` there means declared but unmeasured. Which of two readers is used matters and is called out
 throughout: `config.require(...)` **raises** on a null, and inside PREPROCESS that raise is caught
-and recorded as an absent derivative (`preprocess.py:1376-1390`) while the node still returns
+and recorded as an absent derivative (`preprocess.py:1483-1497`) while the node still returns
 normally; `config.get(...)` returns `None` and the caller carries on **silently**. The second is
 the more dangerous of the two, and one instance of it is currently deleting a whole span source —
 see PREPROCESS below, "A null that deletes a span source in silence".
@@ -107,7 +107,7 @@ A branch that raises is recorded `errored` and its siblings still run: none read
 Decodes the recording and admits it. **The only rejections are decode failure, all samples zero,
 and a constant signal** (`admit.py:1-6`). No thresholds, no models, no derived audio, and **no
 `flag` outcome** — `pass` or `fail` only (`admit.py:70`, `:102-107`). It reads **no config key at
-all**, which is unique in the graph.
+all**, which it shares with VERDICT alone.
 
 *Goals served*: none directly. It is the precondition for all three.
 
@@ -119,7 +119,7 @@ HeAR, both recognizers, SQUIM — and **no later node re-runs one** (`preprocess
 It takes no pass/flag/fail decision, but it is not guaranteed to complete. Each block runs in its
 own `try`/`except`: a block whose config value is null, or whose upstream prerequisite is missing,
 records that derivative **absent** and the pass continues; any *other* exception is collected and,
-after every remaining block has run, re-raised as one summary (`preprocess.py:1376-1390`). So
+after every remaining block has run, re-raised as one summary (`preprocess.py:1483-1497`). So
 "unmeasured because unconfigured" and "unmeasured because broken" are different outcomes, and only
 the second stops the graph.
 
@@ -224,6 +224,11 @@ absent**.
 | | `acoustic` | per-span `span_yamnet` | `taxonomy.presence_floor.airway.acoustic` (**null**) |
 | `voice` | `phonation` | **none — retired** | n/a |
 
+Which classifier labels count as speech at all is `taxonomy.speech_labels`, **null**, read as
+`config.get(...) or []` in both readers (`taxonomy.py:566`, `speech.py:530`). So the speech family
+is the empty set and the `acoustic` line has no label that could express its kind — a second,
+independent reason it cannot report, on top of its own null floor.
+
 **Airway's lines read per-span measurements, not the pooled whole-file windows** that speech's
 `acoustic` line uses. A span already carrying a live consensus word is excluded from both, since
 ASR is strictly stronger content evidence and an ASR-explained span is not airway evidence whatever
@@ -317,10 +322,20 @@ quietly.
 ### 6. REDACT — a step of SPEECH, not a fourth branch
 
 Runs only when SPEECH ran **and** its scan found live PII (`run.py:261-268`,
-`_speech_found_pii`). Reads **no config key directly**; `redaction.padding_ms` and `redaction.fill`
-are both null.
+`_speech_found_pii`). It reads **four** config keys, every one of them through a module constant
+(`redact.py:51-54`) rather than a literal, so a grep for `config.require("redaction` finds none of
+them: `redaction.padding_ms` (`require`, `:114`), `redaction.fill` (`require`, `:375`),
+`redaction.bleep_hz` (`get`, `:376`) and `pii.required_detectors` (`require`, `:378`).
 
-*Goals served*: 3.
+**`redaction.padding_ms` and `redaction.fill` are both null and both `require`d, so REDACT cannot
+run at all — it raises on the first of them it reaches.** It is unreachable by configuration, like
+the `pass` and `discard` rows of the fold's ladder. The raise is caught: the call is wrapped in
+`_attempt` (`run.py:262-266`), which records the node `ERRORED` with the message and returns `None`
+(`run.py:185-187`), so the failure is an operational fact about the run and changes no verdict.
+`pii.required_detectors` and `redaction.bleep_hz` are populated (`[gliner, presidio, rules]` and
+`1000.0`) and are not what stops it.
+
+*Goals served*: 3, in intent. None reached, since the node cannot execute.
 
 ### 5c. VOICE — inert, and saying so
 
@@ -383,8 +398,9 @@ on anything that measures.
 The pipeline configuration is **read and never overridden** — a standing rule, because a threshold
 set to make a panel draw would produce a picture of a pipeline that is not the one in production. A
 panel whose element is absent names the missing derivative and prints the reason the producing node
-recorded. Config: `spans.k_db`, `spectrogram.hop_ms`, `taxonomy.consolidation_floor`, and
-`speech.word_gap_ms` (read only to explain the empty ASR span lane).
+recorded. Config: `spans.k_db`, `spectrogram.wideband_window_ms`, `spectrogram.hop_ms`,
+`taxonomy.consolidation_floor` (`figure.py:1359-1360`), and `speech.word_gap_ms` (read only to
+explain the empty ASR span lane).
 
 Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline
 reads, and a test asserts no style field name can shadow a pipeline key.
@@ -395,7 +411,7 @@ reads, and a test asserts no style field name can shadow a pipeline key.
 | --- | --- | --- | --- |
 | 1. bad quality | yes — SQUIM, level, `disruptions_file`, per-span SQUIM | **no** | `quality.stoi_floor`, `quality.pesq_floor`, `quality.disruption_clipped_s_max`, `quality.disruption_dropout_s_max` are read by **nothing in `src/senselab`**; the gate they describe is unimplemented |
 | 2. other speakers | yes — the general span set, per-span HeAR/YAMNet, diarization | partially | every `taxonomy.presence_floor.*` is null, so no kind can be `present` or `absent`; the ASR span source is silently absent; `speech.target_match_cosine` and `speech.nontarget.*` are null, so the enrolled path is unreachable by design |
-| 3. PII | yes — the consensus transcript is scanned once | **yes** | the one goal fully wired to a decision; `redaction.padding_ms`/`fill` are null, so REDACT can mark but its release shape is unfitted |
+| 3. PII | yes — the consensus transcript is scanned once | **yes** | the one goal fully wired to a decision, and the only one whose acting node cannot run: `redaction.padding_ms` and `redaction.fill` are null and both `require`d, so REDACT raises. SPEECH marks PII; nothing releases a redacted product |
 
 ## Cross-cutting tensions
 
@@ -406,8 +422,10 @@ triage verdicts downstream is reading a constant.
 **`require` and `get` are not interchangeable, and the choice is currently inconsistent.**
 `speech.word_gap_ms` is `get` in PREPROCESS (deleting a span source in silence) and `require` in
 SPEECH (raising). `windows.*.default_threshold` is `require` in the whole-file fold (three
-derivatives absent) and `get` in the per-span passes (raw scores kept). The per-span behaviour is
-the intended one; the others have not been brought to it.
+derivatives absent) and `get` in the per-span passes (raw scores kept). `taxonomy.speech_labels` is
+`get ... or []` in both its readers (`taxonomy.py:566`, `speech.py:530`), so a null empties the
+speech family without a word anywhere. The per-span behaviour is the intended one; the others have
+not been brought to it.
 
 **Six keys are read by nothing**: the four `quality.*`, plus `taxonomy.voice_min_duration_s` and
 `taxonomy.voice_uncertain_duration_s`, orphaned by the voice retirement. Pre-alpha says delete
