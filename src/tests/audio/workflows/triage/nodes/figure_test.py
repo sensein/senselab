@@ -1,6 +1,7 @@
 """FIGURE — the paging rule, the padded tail, and what a panel says when its element is absent."""
 
 import json
+import re
 from pathlib import Path
 from typing import Callable
 
@@ -16,6 +17,18 @@ from senselab.audio.workflows.triage.nodes.figure import (
 )
 from senselab.audio.workflows.triage.nodes.taxonomy import taxonomy
 from senselab.utils.prov_store import ProvStore
+
+
+def _pdf_page_count(path: Path) -> int:
+    """How many pages a PDF holds.
+
+    Args:
+        path: The PDF.
+
+    Returns:
+        The page count, read from the file's own ``/Type /Page`` objects rather than by rendering.
+    """
+    return len(re.findall(rb"/Type\s*/Page[^s]", path.read_bytes()))
 
 
 class TestThePagingRule:
@@ -78,11 +91,44 @@ class TestItDrawsFromTheStore:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """A 25 s recording renders two pages plus the summary JSON."""
+        """A 25 s recording renders one PDF of two pages, plus the summary JSON."""
         seed_preprocess_store(store, duration_s=25.0, yamnet_labels=[["Speech"]], words=["one"])
         out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
-        assert sorted(out) == ["page01", "page02", "taxonomy_summary"]
-        assert out["page01"].is_file() and out["page02"].is_file()
+        assert sorted(out) == ["figure", "taxonomy_summary"]
+        assert out["figure"].is_file() and out["figure"].suffix == ".pdf"
+        assert _pdf_page_count(out["figure"]) == 2
+
+    def test_the_pdf_holds_one_page_per_window(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        seed_preprocess_store: Callable[..., None],
+        tmp_path: Path,
+    ) -> None:
+        """A 70 s recording is four 20 s pages, the last one padded — all in one file."""
+        seed_preprocess_store(store, duration_s=70.0, yamnet_labels=[["Speech"]], words=["one"])
+        out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
+        assert _pdf_page_count(out["figure"]) == 4
+
+    def test_pngs_are_written_only_when_the_style_asks(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        seed_preprocess_store: Callable[..., None],
+        tmp_path: Path,
+    ) -> None:
+        """The PDF is the default output; loose pages are opt-in, never both by accident."""
+        seed_preprocess_store(store, duration_s=25.0, yamnet_labels=[["Speech"]], words=["one"])
+        out = preprocess_figure(
+            store,
+            tmp_path / "figures",
+            config,
+            run_dir=tmp_path,
+            stem="rec",
+            style=FigureStyle(also_write_pngs=True),
+        )
+        assert sorted(out) == ["figure", "page01", "page02", "taxonomy_summary"]
+        assert out["page01"].is_file()
 
     def test_it_writes_nothing_back_to_the_store(
         self,
@@ -124,7 +170,8 @@ class TestItDrawsFromTheStore:
         """The common case for a short task recording."""
         seed_preprocess_store(store, duration_s=3.0, yamnet_labels=[["Speech"]])
         out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="short")
-        assert sorted(out) == ["page01", "taxonomy_summary"]
+        assert sorted(out) == ["figure", "taxonomy_summary"]
+        assert _pdf_page_count(out["figure"]) == 1
 
     def test_it_refuses_a_store_with_no_conditioned_stream(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path
@@ -226,7 +273,6 @@ class TestItOverridesNoPipelineValue:
         forbidden = {
             "default_threshold",
             "label_thresholds",
-            "word_gap_ms",
             "f0_range_hz",
             "k_db",
             "continuity_cut_percentile",

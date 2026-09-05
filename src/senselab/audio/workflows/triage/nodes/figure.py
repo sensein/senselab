@@ -25,6 +25,8 @@ import numpy as np
 import soundfile as sf
 from matplotlib.axes import Axes
 from matplotlib.backend_bases import RendererBase
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 
@@ -104,6 +106,22 @@ class FigureStyle:
         marker_size: Raster cell area.
         text_fontsize: The taxonomy panel's monospaced lines.
         absent_fontsize: The note a panel prints when its element is absent.
+        cell_ramp: The span of a colormap a value is mapped onto. Ink means attention: the end
+            of the ramp that matters runs to near-full colour, and the other end to near-white so
+            it recedes into the page.
+        raster_cell_height: A cell's height in row units, leaving a gap between rows so a dense
+            band of cells does not read as one solid row.
+        raster_min_cell_s: The narrowest a cell is drawn, in seconds. A cell takes its span's width,
+            and a span shorter than this would otherwise render as an invisible hairline.
+        also_write_pngs: Whether each page is additionally written as its own PNG. Off: a recording's
+            pages are one PDF, because 388 recordings emitted 538 loose pages whose only ordering was
+            their filename. A test that must inspect one page's pixels turns it on.
+        colorbar_width_ratio: The colorbar column's width, as a fraction of the panel's. The column
+            exists on every row so that every panel is drawn to the same width and the shared time
+            axis stays aligned; rows with nothing to scale leave their slot blank.
+        colorbar_tick_fontsize: The colorbar's tick labels.
+        squim_ranges: The value range each SQUIM row is normalised over for colour. One shared scale
+            across rows would be meaningless, the three metrics having unrelated units.
         cell_floor_fontsize: The smallest a raster cell's score text is shrunk to before it is
             dropped. The cell itself is never dropped.
         waveform_headroom: The page's own peak amplitude is scaled by this to set the waveform's
@@ -136,9 +154,9 @@ class FigureStyle:
     colour_clip: str = "crimson"
     colour_padding: str = "0.55"
     cmap_spectrogram: str = "magma"
-    cmap_yamnet: str = "BuGn_r"
-    cmap_hear: str = "OrRd_r"
-    cmap_squim: str = "Purples"
+    cmap_yamnet: str = "BuGn"
+    cmap_hear: str = "OrRd"
+    cmap_squim: str = "Purples_r"
     word_fill: str = "#fdd0a2"
     word_text_colour: str = "black"
     title_fontsize: float = 9.0
@@ -148,6 +166,15 @@ class FigureStyle:
     text_fontsize: float = 7.5
     absent_fontsize: float = 7.0
     cell_floor_fontsize: float = 4.0
+    cell_ramp: tuple[float, float] = (0.05, 0.95)
+    raster_cell_height: float = 0.72
+    raster_min_cell_s: float = 0.02
+    also_write_pngs: bool = False
+    colorbar_width_ratio: float = 0.014
+    colorbar_tick_fontsize: float = 5.0
+    squim_ranges: dict[str, tuple[float, float]] = field(
+        default_factory=lambda: {"stoi": (0.0, 1.0), "pesq": (1.0, 4.5), "si_sdr": (-10.0, 30.0)}
+    )
     waveform_headroom: float = 1.15
     waveform_min_amplitude: float = 0.02
     absent_height_ratio: float = 0.2
@@ -910,6 +937,50 @@ def _span_lane_panel(
             )
 
 
+def _ramped(cmap_name: str, style: FigureStyle) -> Colormap:
+    """The portion of a colormap scores are drawn on.
+
+    Args:
+        cmap_name: The full colormap's name.
+        style: The drawing configuration, for the ramp's bounds.
+
+    Returns:
+        A colormap spanning only ``style.cell_ramp`` of the original, so a cell and the colorbar
+        beside it are the same scale.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+
+    low, high = style.cell_ramp
+    full = plt.get_cmap(cmap_name)
+    return LinearSegmentedColormap.from_list(
+        f"{cmap_name}-ramped", [full(low + (high - low) * step / 255.0) for step in range(256)]
+    )
+
+
+def _score_colorbar(axis: Axes, cmap_name: str, style: FigureStyle, *, label: str) -> None:
+    """Draw a panel's colour scale in the slot reserved to its right.
+
+    The slot is its own gridspec column rather than space taken from the panel, so adding a scale
+    never narrows the panel and the shared time axis stays aligned down the page.
+
+    Args:
+        axis: The reserved slot.
+        cmap_name: The colormap the panel drew with.
+        style: The drawing configuration.
+        label: What the scale measures.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+
+    axis.set_axis_on()
+    mappable = ScalarMappable(norm=Normalize(vmin=0.0, vmax=1.0), cmap=_ramped(cmap_name, style))
+    bar = axis.figure.colorbar(mappable, cax=axis)
+    bar.set_label(label, fontsize=style.colorbar_tick_fontsize)
+    bar.ax.tick_params(labelsize=style.colorbar_tick_fontsize, length=2, pad=1)
+
+
 def _raster_panel(
     axis: Axes,
     spans: list[dict[str, Any]],
@@ -920,9 +991,9 @@ def _raster_panel(
     window: tuple[float, float],
     style: FigureStyle,
     absent_note: str,
-    marker_size: float | None = None,
+    colorbar_axis: Axes,
 ) -> None:
-    """One fixed row per label, each span's cell coloured by its score.
+    """One fixed row per label, each span's cell drawn at its span's width and coloured by its score.
 
     Args:
         axis: The panel.
@@ -934,51 +1005,45 @@ def _raster_panel(
         window: The page's ``(start, end)``.
         style: The drawing configuration.
         absent_note: What to print when the measurement never ran.
-        marker_size: Cell area, defaulting to the style's.
+        colorbar_axis: The slot to the panel's right, where the score scale is drawn.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
 
     t0, t1 = window
     axis.set_title(title, fontsize=style.title_fontsize)
     axis.set_xlim(t0, t1)
     if not labels:
         _absent_panel(axis, window, absent_note, style)
+        colorbar_axis.set_axis_off()
         return
     axis.set_yticks(range(len(labels)))
     axis.set_yticklabels(labels, fontsize=style.tick_fontsize)
     axis.set_ylim(-0.5, len(labels) - 0.5)
-    cmap = plt.get_cmap(cmap_name)
+    cmap = _ramped(cmap_name, style)
     for span in spans:
         start, end = span["extent"]
         if end < t0 or start > t1:
             continue
-        mid = max(start, t0) + (min(end, t1) - max(start, t0)) / 2
+        left = max(start, t0)
+        width = min(end, t1) - left
         scores = per_span.get(span["id"], {})
         for row, label in enumerate(labels):
             score = scores.get(label)
             if score is None or score < style.raster_paint_floor:
                 continue
-            fill = cmap(0.25 + 0.75 * max(0.0, min(1.0, score)))
-            axis.scatter(
-                [mid],
-                [row],
-                s=marker_size or style.marker_size,
-                marker="s",
-                c=[fill],
-                edgecolors="0.3",
-                linewidths=0.4,
-                zorder=3,
+            axis.add_patch(
+                Rectangle(
+                    (left, row - style.raster_cell_height / 2),
+                    max(width, style.raster_min_cell_s),
+                    style.raster_cell_height,
+                    facecolor=cmap(max(0.0, min(1.0, score))),
+                    edgecolor="none",
+                    linewidth=0.0,
+                    zorder=3,
+                )
             )
-            axis.text(
-                mid,
-                row,
-                f"{score:.2f}",
-                ha="center",
-                va="center",
-                fontsize=style.cell_fontsize,
-                color=_readable_on(fill),
-                zorder=4,
-            )
+    _score_colorbar(colorbar_axis, cmap_name, style, label="probability — dark = present")
 
 
 def _readable_on(rgba: tuple[float, float, float, float]) -> str:
@@ -1002,8 +1067,15 @@ def _squim_panel(
     squim: dict[str, dict[str, float | None]],
     window: tuple[float, float],
     style: FigureStyle,
+    colorbar_axis: Axes,
 ) -> None:
-    """SQUIM's three metrics per span.
+    """SQUIM's three metrics per span, each cell drawn at its span's width.
+
+    Ink means attention, so the two kinds of panel ink opposite ends of their scales and still
+    read the same way: a raster darkens where a label fires, and this panel darkens where quality is
+    poor. STOI, PESQ and SI-SDR are all higher-is-better, so low is dark here. Their units are
+    unrelated, so each row is normalised over its own range from ``style.squim_ranges`` and the
+    colorbar reads as a normalised fraction rather than a value.
 
     Args:
         axis: The panel.
@@ -1011,54 +1083,48 @@ def _squim_panel(
         squim: :func:`_squim_by_span`'s result.
         window: The page's ``(start, end)``.
         style: The drawing configuration.
+        colorbar_axis: The slot to the panel's right, where the scale is drawn.
     """
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
 
     t0, t1 = window
     metrics = ("stoi", "pesq", "si_sdr")
-    ranges = {"stoi": (0.0, 1.0), "pesq": (1.0, 4.5), "si_sdr": (-10.0, 30.0)}
     axis.set_title("SQUIM per span (STOI / PESQ / SI-SDR)", fontsize=style.title_fontsize)
     axis.set_xlim(t0, t1)
     if not squim:
         _absent_panel(axis, window, "no SQUIM assertion in the store", style)
+        colorbar_axis.set_axis_off()
         return
     axis.set_yticks(range(len(metrics)))
     axis.set_yticklabels(list(metrics), fontsize=style.tick_fontsize)
     axis.set_ylim(-0.5, len(metrics) - 0.5)
-    cmap = plt.get_cmap(style.cmap_squim)
-    marker_points = float(np.sqrt(style.marker_size))
-    here = []
+    cmap = _ramped(style.cmap_squim, style)
     for span in spans:
         start, end = span["extent"]
-        if end < t0 or start > t1 or squim.get(span["id"]) is None:
+        scores = squim.get(span["id"])
+        if end < t0 or start > t1 or scores is None:
             continue
-        here.append((max(start, t0) + (min(end, t1) - max(start, t0)) / 2, squim[span["id"]]))
-    here.sort(key=lambda item: item[0])
-    mids = [mid for mid, _ in here]
-    renderer = _renderer(axis)
-    points_per_second = _axis_points_per_second(axis, window, renderer)
-    for position, (mid, scores) in enumerate(here):
-        gaps = [abs(mid - mids[neighbour]) for neighbour in (position - 1, position + 1) if 0 <= neighbour < len(mids)]
-        # A cell's label may use the space up to its nearest neighbour, never more than its own
-        # marker: at this page width neighbouring markers themselves overlap on dense spans.
-        available = min(marker_points, min(gaps) * points_per_second) if gaps else marker_points
+        left = max(start, t0)
+        width = max(min(end, t1) - left, style.raster_min_cell_s)
         for row, metric in enumerate(metrics):
             value = scores.get(metric)
             if value is None:
                 continue
-            low, high = ranges[metric]
+            low, high = style.squim_ranges[metric]
             frac = max(0.0, min(1.0, (float(value) - low) / (high - low)))
-            axis.scatter(
-                [mid],
-                [row],
-                s=style.marker_size,
-                marker="s",
-                c=[cmap(0.25 + 0.75 * frac)],
-                edgecolors="0.3",
-                linewidths=0.4,
-                zorder=3,
+            axis.add_patch(
+                Rectangle(
+                    (left, row - style.raster_cell_height / 2),
+                    width,
+                    style.raster_cell_height,
+                    facecolor=cmap(frac),
+                    edgecolor="none",
+                    linewidth=0.0,
+                    zorder=3,
+                )
             )
-            _fit_cell_text(axis, mid, row, f"{float(value):.2f}", available, style, renderer)
+    _score_colorbar(colorbar_axis, style.cmap_squim, style, label="per row — dark = poor")
 
 
 def _renderer(axis: Axes) -> RendererBase | None:
@@ -1228,15 +1294,14 @@ def _continuity(store: ProvStore, run_dir: Path) -> tuple[np.ndarray | None, flo
     )
 
 
-def _span_row_absence(config: TriageConfig, absent: dict[str, str], spans: list[dict[str, Any]]) -> dict[str, str]:
+def _span_row_absence(absent: dict[str, str], spans: list[dict[str, Any]]) -> dict[str, str]:
     """Why a span-source row is empty over the whole recording.
 
-    A source is skipped either because a config value it needs is null or because its own upstream
-    derivative is absent. Both leave an empty row, and neither means the source ran and found
-    nothing, so the row says which it was.
+    A source contributes nothing either because its own upstream derivative is absent or because
+    every candidate it proposed corroborated a span an earlier source already covered. Neither
+    means the source ran and found nothing, so the row says which it was.
 
     Args:
-        config: The run's configuration, read for the keys a source needs.
         absent: :func:`_absent_reasons`' result.
         spans: :func:`_spans`' result.
 
@@ -1252,10 +1317,7 @@ def _span_row_absence(config: TriageConfig, absent: dict[str, str], spans: list[
     if "C" not in present:
         reasons["C"] = absent.get("continuity_trace", "no continuity span was novel")
     if "A" not in present:
-        if config.get("speech.word_gap_ms") is None:
-            reasons["A"] = "no asr spans — speech.word_gap_ms is null, so this source is skipped silently"
-        else:
-            reasons["A"] = absent.get("consensus_transcript", "no asr span was novel")
+        reasons["A"] = absent.get("consensus_transcript", "no asr span was novel")
     return reasons
 
 
@@ -1366,7 +1428,7 @@ def preprocess_figure(
     yamnet_rows = _raster_rows(yamnet, style.top_labels, style.raster_rows_scope, floor)
     hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope, floor)
 
-    row_absent = _span_row_absence(config, absent, spans)
+    row_absent = _span_row_absence(absent, spans)
     # Panel indices, in the order they are unpacked below.
     collapsed = [
         index
@@ -1377,14 +1439,16 @@ def preprocess_figure(
 
     figure_dir.mkdir(parents=True, exist_ok=True)
     written: dict[str, Path] = {}
+    pdf_path = figure_dir / f"{stem or store.run_id}.pdf"
+    pdf = PdfPages(pdf_path)
     for index, window in enumerate(pages(duration_s, style), start=1):
         figure: Figure
         figure, axes = plt.subplots(
             len(height_ratios),
-            1,
+            2,
             figsize=style.figure_inches,
             constrained_layout=True,
-            gridspec_kw={"height_ratios": height_ratios},
+            gridspec_kw={"height_ratios": height_ratios, "width_ratios": [1.0, style.colorbar_width_ratio]},
         )
         (
             axis_wide,
@@ -1395,7 +1459,12 @@ def preprocess_figure(
             axis_squim,
             axis_asr,
             axis_taxonomy,
-        ) = axes
+        ) = axes[:, 0]
+        # Every row owns a slot in the second column so that all panels are laid out to one width
+        # and the shared time axis stays aligned; a row with no scale to show blanks its slot.
+        slots = list(axes[:, 1])
+        for slot in slots:
+            slot.set_axis_off()
         timed = [axis_wide, axis_wave, axis_spans, axis_yamnet, axis_hear, axis_squim, axis_asr]
 
         _spectrogram_panel(
@@ -1433,6 +1502,7 @@ def preprocess_figure(
             window,
             style,
             absent.get("span_yamnet", "span_yamnet is absent from the store"),
+            slots[3],
         )
         _raster_panel(
             axis_hear,
@@ -1444,9 +1514,9 @@ def preprocess_figure(
             window,
             style,
             absent.get("span_hear", "span_hear is absent from the store"),
-            marker_size=150.0,
+            slots[4],
         )
-        _squim_panel(axis_squim, spans, squim, window, style)
+        _squim_panel(axis_squim, spans, squim, window, style, slots[5])
         _asr_lane_panel(
             axis_asr,
             words,
@@ -1470,11 +1540,15 @@ def preprocess_figure(
             f"{stem or store.run_id} — page {index}, {window[0]:.0f}-{window[1]:.0f}s of {duration_s:.2f}s{pad_note}",
             fontsize=10,
         )
-        out_path = figure_dir / f"{stem or store.run_id}__page{index:02d}.png"
-        figure.savefig(out_path, dpi=style.dpi)
+        pdf.savefig(figure, dpi=style.dpi)
+        if style.also_write_pngs:
+            page_path = figure_dir / f"{stem or store.run_id}__page{index:02d}.png"
+            figure.savefig(page_path, dpi=style.dpi)
+            written[f"page{index:02d}"] = page_path
         plt.close(figure)
-        written[f"page{index:02d}"] = out_path
 
+    pdf.close()
+    written["figure"] = pdf_path
     (figure_dir / "taxonomy_summary.json").write_text(json.dumps({"lines": summary_lines}, indent=1) + "\n")
     written["taxonomy_summary"] = figure_dir / "taxonomy_summary.json"
     return written

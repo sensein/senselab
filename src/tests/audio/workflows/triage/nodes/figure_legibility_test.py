@@ -113,23 +113,27 @@ class TestAnAbsentPanelGivesUpItsHeight:
 class TestAnEmptySpanRowSaysWhy:
     """An empty row is a skipped source, never a source that ran and found nothing."""
 
-    def test_the_asr_row_names_the_null_key_that_skipped_it(self, config: TriageConfig) -> None:
-        """The packaged config leaves speech.word_gap_ms null, which drops the source silently."""
-        assert config.get("speech.word_gap_ms") is None
+    def test_the_asr_row_names_the_absent_transcript(self, config: TriageConfig) -> None:
+        """No transcript, no ASR span — and the row says which, rather than reading as a finding."""
+        reasons = _span_row_absence({"consensus_transcript": "ValueError: no recognizer agreed"}, [])
 
-        reasons = _span_row_absence(config, {}, [])
+        assert "recognizer" in reasons["A"]
 
-        assert "speech.word_gap_ms" in reasons["A"]
+    def test_an_empty_asr_row_with_a_transcript_means_nothing_was_novel(self, config: TriageConfig) -> None:
+        """Every candidate corroborated a span an earlier source already covered."""
+        reasons = _span_row_absence({}, [])
+
+        assert reasons["A"] == "no asr span was novel"
 
     def test_a_row_that_proposed_a_span_says_nothing(self, config: TriageConfig) -> None:
         """A source with a span of its own needs no explanation."""
         spans = [{"signal": "preemphasised", "measure": "amplitude"}]
 
-        assert "E" not in _span_row_absence(config, {}, spans)
+        assert "E" not in _span_row_absence({}, spans)
 
     def test_it_prefers_the_producing_node_s_own_reason(self, config: TriageConfig) -> None:
         """Where PREPROCESS recorded why a derivative is absent, that text is used verbatim."""
-        reasons = _span_row_absence(config, {"continuity_trace": "ValueError: nobody measured it"}, [])
+        reasons = _span_row_absence({"continuity_trace": "ValueError: nobody measured it"}, [])
 
         assert reasons["C"] == "ValueError: nobody measured it"
 
