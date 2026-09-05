@@ -112,6 +112,9 @@ class FigureStyle:
             its own noise.
         absent_height_ratio: The height an absent panel collapses to, freeing its remaining share
             for the panels that have something to draw.
+        raster_paint_floor: A raster cell scoring below this is left unpainted, so the eye finds the
+            spans where something registered. A display choice only: it changes no measurement, and the
+            row stays present because the label is still part of the file's union.
         asr_rows: How many staggered rows the consensus-word lane uses.
         asr_row_height: The bar height within one word-lane row, in row units.
     """
@@ -148,6 +151,7 @@ class FigureStyle:
     waveform_headroom: float = 1.15
     waveform_min_amplitude: float = 0.02
     absent_height_ratio: float = 0.2
+    raster_paint_floor: float = 0.1
     asr_rows: int = 3
     asr_row_height: float = 0.44
     span_row_colours: dict[str, str] = field(default_factory=dict)
@@ -950,7 +954,7 @@ def _raster_panel(
         scores = per_span.get(span["id"], {})
         for row, label in enumerate(labels):
             score = scores.get(label)
-            if score is None:
+            if score is None or score < style.raster_paint_floor:
                 continue
             fill = cmap(0.25 + 0.75 * max(0.0, min(1.0, score)))
             axis.scatter(
@@ -1355,14 +1359,10 @@ def preprocess_figure(
         "continuity runs on the narrowband array, not this one"
     )
 
-    yamnet_floor = config.get("taxonomy.yamnet_consolidation_floor")
-    yamnet_rows = _raster_rows(
-        yamnet,
-        style.top_labels,
-        style.raster_rows_scope,
-        None if yamnet_floor is None else float(yamnet_floor),
-    )
-    hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope)
+    raw_floor = config.get("taxonomy.consolidation_floor")
+    floor = None if raw_floor is None else float(raw_floor)
+    yamnet_rows = _raster_rows(yamnet, style.top_labels, style.raster_rows_scope, floor)
+    hear_rows = _raster_rows(hear, style.top_labels, style.raster_rows_scope, floor)
 
     row_absent = _span_row_absence(config, absent, spans)
     # Panel indices, in the order they are unpacked below.
