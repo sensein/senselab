@@ -398,9 +398,9 @@ on anything that measures.
 The pipeline configuration is **read and never overridden** — a standing rule, because a threshold
 set to make a panel draw would produce a picture of a pipeline that is not the one in production. A
 panel whose element is absent names the missing derivative and prints the reason the producing node
-recorded. Config: `spans.k_db`, `spectrogram.wideband_window_ms`, `spectrogram.hop_ms`,
-`taxonomy.consolidation_floor` (`figure.py:1359-1360`), and `speech.word_gap_ms` (read only to
-explain the empty ASR span lane).
+recorded. Config: `spans.k_db` (`figure.py:1420`), `spectrogram.wideband_window_ms` and
+`spectrogram.hop_ms` (`figure.py:1359-1360`), `taxonomy.consolidation_floor` (`figure.py:1364`),
+and `speech.word_gap_ms` (`figure.py:1255`, read only to explain the empty ASR span lane).
 
 Its own drawing choices live in a `FigureStyle` dataclass, disjoint from anything the pipeline
 reads, and a test asserts no style field name can shadow a pipeline key.
