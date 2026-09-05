@@ -1,8 +1,9 @@
 """VOICE — the phonation spans PREPROCESS detected, measured. There is no residual.
 
 Praat is faked here: this module's subject is what VOICE does with a span it was handed, and the
-phonation task's own tests own where Praat's refusals lie. The spans are seeded directly, so no test
-here depends on ``propose_phonation_spans`` classifying anything.
+phonation task's own tests own where Praat's refusals lie. The spans are seeded directly, which is
+now the only way they exist at all: the detector that used to propose them was retired on
+2026-09-04, so in production VOICE finds no span and says so.
 """
 
 from __future__ import annotations
@@ -313,28 +314,16 @@ class TestProductionModes:
     def test_a_sustained_unvoiced_span_routes_and_reaches_voice_without_marks(
         self, store: ProvStore, tmp_path: Path
     ) -> None:
-        """TAXONOMY and routing preserve aperiodic phonation; VOICE measures rather than rejects it."""
-        config = _override(
-            tmp_path,
-            "voice:\n"
-            "  f0_range_hz: [75.0, 190.0]\n"
-            "taxonomy:\n"
-            "  voice_min_duration_s: 1.0\n"
-            "  voice_uncertain_duration_s: 0.3\n"
-            # TAXONOMY reaches its phonation-span step now that phonation_tracks is seeded;
-            # the same fixture values conftest's phonation_config states.
-            "phonation_spans:\n"
-            "  f0_stability_cents: 50.0\n"
-            "  formant_stability_hz: 50.0\n"
-            "  glide_min_excursion_cents: 200.0\n"
-            "  hangover_ms: 50.0\n"
-            "  voicing_strength_floor: 0.5\n"
-            "  mixed_voiced_fraction: 0.6\n"
-            "  unvoiced_max_formant_bandwidth_hz: 250.0\n"
-            "  word_aligned_min_evidence_fraction: 0.8\n",
-        )
+        """Routing preserves aperiodic phonation; VOICE measures rather than rejects it.
+
+        The voice *kind* is uncertain rather than present because its evidence line was retired
+        with the phonation-span detector, but routing runs a branch on an uncertain kind, so VOICE
+        still reaches a seeded span and still measures it. What the branch does with aperiodic
+        phonation is what this test is for, and that is unchanged.
+        """
+        config = _override(tmp_path, "voice:\n  f0_range_hz: [75.0, 190.0]\n")
         _seed_voice_store(store, tmp_path, phonation=[(0.0, 1.5, "unvoiced")])
-        assert taxonomy(store, "plain", config, run_dir=tmp_path).kinds["voice"] == "present"
+        assert taxonomy(store, "plain", config, run_dir=tmp_path).kinds["voice"] == "uncertain"
         assert "VOICE" in routing(store, None, config, run_dir=tmp_path).runs
         voice(store, "plain", config, run_dir=tmp_path)
         assert find_measurements(store, "period_marks")[-1].attributes["unmeasured"] == "unvoiced_span"

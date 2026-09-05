@@ -1,13 +1,11 @@
 """TAXONOMY — which kinds are in the recording, folded from PREPROCESS's stored derivatives.
 
-It runs no model and reads no hint. One exception to "localises nothing": phonation-span
-*detection* moved here from PREPROCESS (owner-directed) — PREPROCESS measures F0 and formant
-tracks over the whole stream and decides no boundary; this node reads those tracks back and
-proposes the sustained-phonation/glide spans over them, the one place in TAXONOMY that places an
-extent rather than only counting against a floor. Every other kind's rule reads named evidence
+It runs no model, reads no hint and localises nothing. Every kind's rule reads named evidence
 lines, each line counts stored elements against its own configured floor, and a line whose
 derivative never reached the store is ``unavailable`` — which makes its kind uncertain, never
-absent.
+absent. ``voice``'s line reads PREPROCESS's F0 track and reports how long the recording was
+voiced; the sustained-phonation/glide span detector that used to place extents here was removed
+(owner-directed) — see ``specs/20260817-triage-workflow-dag/config-derivations.md``.
 
 ``airway``'s two lines read PREPROCESS's per-span ``span_hear``/``span_yamnet`` measurements
 directly (owner-directed this session), not the whole-file pooled windows the ``speech`` acoustic
@@ -39,11 +37,6 @@ import numpy as np
 
 from senselab.audio.data_structures import AudioHints
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.tasks.phonation.api import (
-    FormantTrack,
-    propose_phonation_spans,
-    propose_word_aligned_phonation_spans,
-)
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
@@ -67,8 +60,6 @@ PRESENT = "present"
 ABSENT = "absent"
 UNCERTAIN = "uncertain"
 UNAVAILABLE = "unavailable"
-
-_PHONATION_FAMILY = "phonation"
 
 
 @dataclass(frozen=True)
@@ -197,7 +188,7 @@ def _span_label_evidence(
     Returns:
         ``{available, n_spans, element_ids}``. ``available`` is False when PREPROCESS's own
         ``span_<classifier>`` pass never ran at all (checked by activity, not by measurement count,
-        the same distinction :func:`_phonation_spans` draws), and also when it ran but labelled
+        the same distinction the voiced-seconds line draws), and also when it ran but labelled
         nothing because ``windows.<classifier>.default_threshold`` is unmeasured — this line counts
         labels, so windows that were never labelled leave it unable to judge. A window is taken as
         labelled unless it says otherwise, so a store written before ``labelled`` existed keeps its
@@ -264,153 +255,6 @@ def _fold_authoritative_line(lines: dict[str, dict[str, Any]], authoritative: st
     return state
 
 
-def _propose_phonation_spans(store: ProvStore, config: TriageConfig, run_dir: Path, software: str) -> list[str]:
-    """Read PREPROCESS's F0/formant tracks and localise the phonation spans over them.
-
-    Guarded, not raised, on absence: no ``phonation_tracks`` measurement (parselmouth missing,
-    PREPROCESS itself failed) leaves this a no-op, and :func:`_phonation_spans` below reports that
-    as "the pass did not run" — the same cascading-absence contract every PREPROCESS-dependent
-    reader in this node already follows.
-
-    Args:
-        store: The provenance store, holding PREPROCESS's ``phonation_tracks`` measurement.
-        config: The triage configuration; reads the same ``phonation_spans.*`` keys the detector
-            used before it moved here — the values did not change meaning, only which node applies
-            them.
-        run_dir: Where PREPROCESS wrote ``derivatives/phonation_tracks.npz``.
-        software: The agent answerable for the spans this writes.
-
-    Returns:
-        Every entity id written (each span plus its own ``formant_tracks`` sub-measurement), for the
-        caller's view; empty when ``phonation_tracks`` is absent or no span was proposed.
-    """
-    tracks = find_measurement(store, "phonation_tracks")
-    if tracks is None:
-        return []
-    hop_s = float(tracks.attributes["hop_s"])
-    parameters: dict[str, Any] = {
-        "hop_s": hop_s,
-        "f0_stability_cents": float(config.require("phonation_spans.f0_stability_cents")),
-        "formant_stability_hz": float(config.require("phonation_spans.formant_stability_hz")),
-        "glide_min_excursion_cents": float(config.require("phonation_spans.glide_min_excursion_cents")),
-        "hangover_ms": float(config.require("phonation_spans.hangover_ms")),
-        "voicing_strength_floor": float(config.require("phonation_spans.voicing_strength_floor")),
-        "mixed_voiced_fraction": float(config.require("phonation_spans.mixed_voiced_fraction")),
-        "unvoiced_max_formant_bandwidth_hz": float(config.require("phonation_spans.unvoiced_max_formant_bandwidth_hz")),
-        "word_aligned_min_evidence_fraction": float(
-            config.require("phonation_spans.word_aligned_min_evidence_fraction")
-        ),
-    }
-    activity = store.activity(node=NODE, step="phonation_spans", parameters=parameters)
-    store.was_associated_with(activity, software)
-    store.used(activity, tracks.id)
-
-    npz = np.load(run_dir / "derivatives" / "phonation_tracks.npz")
-    times, f0_hz, strength = npz["times_s"], npz["f0_hz"], npz["strength"]
-    formants = FormantTrack(
-        times_s=npz["formant_times_s"],
-        f_hz=tuple(npz[f"f{order + 1}_hz"] for order in range(4)),  # type: ignore[arg-type]
-        bandwidth_hz=tuple(npz[f"f{order + 1}_bw_hz"] for order in range(4)),  # type: ignore[arg-type]
-    )
-    proposals = propose_phonation_spans(
-        times=times,
-        f0_hz=f0_hz,
-        strength=strength,
-        formants=formants,
-        hop_s=parameters["hop_s"],
-        f0_stability_cents=parameters["f0_stability_cents"],
-        formant_stability_hz=parameters["formant_stability_hz"],
-        glide_min_excursion_cents=parameters["glide_min_excursion_cents"],
-        hangover_ms=parameters["hangover_ms"],
-        voicing_strength_floor=parameters["voicing_strength_floor"],
-        mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
-        unvoiced_max_formant_bandwidth_hz=parameters["unvoiced_max_formant_bandwidth_hz"],
-    )
-    consensus = find_measurement(store, "consensus_transcript")
-    word_ids = list(consensus.attributes["word_ids"]) if consensus is not None else []
-    word_extents = [store.get_entity(word_id).extent for word_id in word_ids]
-    word_spans = propose_word_aligned_phonation_spans(
-        times=times,
-        f0_hz=f0_hz,
-        strength=strength,
-        formants=formants,
-        word_extents=[extent for extent in word_extents if extent is not None],
-        voicing_strength_floor=parameters["voicing_strength_floor"],
-        mixed_voiced_fraction=parameters["mixed_voiced_fraction"],
-        unvoiced_max_formant_bandwidth_hz=parameters["unvoiced_max_formant_bandwidth_hz"],
-        min_evidence_fraction=parameters["word_aligned_min_evidence_fraction"],
-    )
-    word_sources = {
-        extent: word_id for word_id, extent in zip(word_ids, word_extents, strict=True) if extent is not None
-    }
-    proposals.extend(
-        proposal
-        for proposal in word_spans
-        if not any(existing.start <= proposal.start and proposal.end <= existing.end for existing in proposals)
-    )
-    signal = str(tracks.attributes.get("signal") or "plain")
-    written: list[str] = []
-    for proposal in proposals:
-        span_id = store.entity(
-            prov_type="span",
-            extent=(proposal.start, proposal.end),
-            attributes={
-                "family": "phonation",
-                "member": proposal.member,
-                "duration_s": proposal.end - proposal.start,
-                "production": proposal.production,
-                "voiced_fraction": proposal.voiced_fraction,
-                "f0_median_hz": proposal.f0_median_hz,
-                "f0_start_hz": proposal.f0_start_hz,
-                "f0_end_hz": proposal.f0_end_hz,
-                "glide_direction": proposal.glide_direction,
-                "glide_extent_cents": proposal.glide_extent_cents,
-                "offset_criterion": proposal.offset_criterion,
-                "signal": signal,
-                "hop_s": hop_s,
-            },
-        )
-        store.was_generated_by(span_id, activity)
-        store.was_attributed_to(span_id, software)
-        store.was_derived_from(span_id, tracks.id)
-        if proposal.member == "word_aligned":
-            store.was_derived_from(span_id, word_sources[(proposal.start, proposal.end)])
-        written.append(span_id)
-        inside = (formants.times_s >= proposal.start) & (formants.times_s < proposal.end)
-        track_id = write_measurement(
-            store,
-            activity,
-            software,
-            name="formant_tracks",
-            signal=signal,
-            extent=(proposal.start, proposal.end),
-            attributes={
-                "times_s": formants.times_s[inside].tolist(),
-                "hop_s": hop_s,
-                **{f"f{order + 1}_hz": formants.f_hz[order][inside].tolist() for order in range(4)},
-                **{f"f{order + 1}_bw_hz": formants.bandwidth_hz[order][inside].tolist() for order in range(4)},
-            },
-            derived_from=(span_id,),
-        )
-        written.append(track_id)
-    return written
-
-
-def _phonation_spans(store: ProvStore) -> list[Entity] | None:
-    """This node's own phonation spans, or None when the pass left nothing in the store at all.
-
-    Args:
-        store: The provenance store.
-
-    Returns:
-        The live phonation spans, possibly empty; None when no phonation activity ran, so a reader
-        can tell "the pass found nothing" from "the pass did not happen".
-    """
-    if not [activity for activity in store.activities(NODE) if activity.step == "phonation_spans"]:
-        return None
-    return [e for e in live_entities(store, "span") if e.attributes.get("family") == _PHONATION_FAMILY]
-
-
 def _line_state(available: bool, evidence: int, floor: Any) -> str:  # noqa: ANN401
     """One line's state from its evidence and its floor.
 
@@ -466,35 +310,32 @@ def _fold_speech_lines(lines: dict[str, dict[str, Any]]) -> str:
     return _fold_authoritative_line(lines, "lexical")
 
 
-def _voice_line(spans: list[Entity] | None, min_s: Any, uncertain_s: Any) -> tuple[dict[str, Any], str]:  # noqa: ANN401
-    """The voice kind's single line, from the longest phonation span's duration alone.
+def _retired_voice_line() -> tuple[dict[str, Any], str]:
+    """The voice kind's line while it has no evidence source at all.
 
-    Args:
-        spans: The live phonation spans, or None when the pass did not run.
-        min_s: ``taxonomy.voice_min_duration_s``, or None while it is unmeasured.
-        uncertain_s: ``taxonomy.voice_uncertain_duration_s``, or None while it is unmeasured.
+    The sustained-phonation and glide detector that fed this line was removed on 2026-09-04: its
+    criterion parameters had never been measured, so the pass raised on every run, and its glide
+    criterion was separately recorded as unfixable by fitting. Voice is to be reworked to read the
+    file-level ``consensus_taxonomy`` instead, which is a decision nobody has made yet -- which
+    consolidated labels express the voice kind, and how they map to a state.
+
+    Until then the line must say so rather than reading as a measurement that came back short. The
+    state stays ``unavailable``, which folds to ``uncertain`` and never to ``absent``, and ``why``
+    names the retirement so a report or a figure prints a deliberate gap instead of a bare
+    ``uncertain`` a reader would take for evidence.
 
     Returns:
         The line as it is written onto the kind element, and the kind's state.
     """
-    longest_s = max((float(e.attributes["duration_s"]) for e in spans), default=0.0) if spans else 0.0
-    if spans is None or min_s is None or uncertain_s is None:
-        line_state, kind_state = UNAVAILABLE, UNCERTAIN
-    elif longest_s >= float(min_s):
-        line_state, kind_state = PRESENT, PRESENT
-    elif longest_s >= float(uncertain_s):
-        line_state, kind_state = PRESENT, UNCERTAIN
-    else:
-        line_state, kind_state = ABSENT, ABSENT
     line = {
-        "state": line_state,
-        "evidence": longest_s,
-        "unit": "seconds",
-        "floor": min_s,
-        "uncertain_floor": uncertain_s,
-        "element_ids": [e.id for e in spans] if spans else [],
+        "state": UNAVAILABLE,
+        "evidence": 0,
+        "unit": None,
+        "floor": None,
+        "element_ids": [],
+        "why": "the phonation-span source was retired; voice is pending a rework onto consensus_taxonomy",
     }
-    return line, kind_state
+    return line, UNCERTAIN
 
 
 def _label_score_distribution(store: ProvStore, classifier: str, run_dir: Path) -> dict[str, Any] | None:
@@ -761,12 +602,7 @@ def taxonomy(
     }
     summary_view = _write_label_summaries(store, run_dir, software)
     summary_view += _write_consensus_taxonomy(store, config, software)
-    phonation_view = _propose_phonation_spans(store, config, run_dir, software)
-    voice_line, voice_state = _voice_line(
-        _phonation_spans(store),
-        config.get("taxonomy.voice_min_duration_s"),
-        config.get("taxonomy.voice_uncertain_duration_s"),
-    )
+    voice_line, voice_state = _retired_voice_line()
     lines["voice"] = {"phonation": voice_line}
 
     states = {
@@ -786,7 +622,7 @@ def taxonomy(
     for element_id in sorted(read_ids):
         store.used(fold, element_id)
 
-    view: list[str] = list(summary_view) + list(phonation_view)
+    view: list[str] = list(summary_view)
     for kind in SCREENED_KINDS:
         kind_id = store.entity(
             prov_type="kind",

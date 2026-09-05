@@ -443,7 +443,45 @@ membership, so there is no aggregate for a floor to gate.
 
 ## phonation_spans
 
-The sustained-phonation and glide detector, applied by TAXONOMY.
+Praat's settings for PREPROCESS's F0 and formant tracks. The detector these keys were named for was
+removed on 2026-09-04; the five surviving keys are the track settings, and the section keeps its
+name only until a rename is worth the config-hash churn.
+
+### The detector -- REMOVED 2026-09-04
+
+Owner-directed. Eight of this section's keys were its criterion parameters -- `f0_stability_cents`,
+`formant_stability_hz`, `glide_min_excursion_cents`, `hangover_ms`, `voicing_strength_floor`,
+`mixed_voiced_fraction`, `unvoiced_max_formant_bandwidth_hz`, `word_aligned_min_evidence_fraction`
+-- and every one shipped null, so `_propose_phonation_spans` raised on `require()` on every run and
+was swallowed as a cascading absence. The pass was dead code that read as a measurement.
+
+Two defects are on the record and neither is repairable by fitting those eight values, which is why
+the detector went rather than being given numbers:
+
+- **The glide criterion cannot classify a pitch glide on steady formants.** Its two continuity limbs
+  are OR'd and the formant limb alone suffices, so an F0 sweep of 150-600 Hz over a steady vowel
+  reads `sustained` at every rate probed -- and the clinical glissando task is exactly that shape.
+- **A sustained span needs no voicing to be admitted.** Formant stability is defined on any audio,
+  so the formant limb admitted whole-file `sustained`/`unvoiced` spans with `voiced_fraction=0.0` on
+  a breath recording and on free speech. A span whose voiced fraction is zero and whose family is
+  `phonation` is a contradiction in terms.
+
+**What it cost, recorded rather than hidden.** The detector was the only producer of
+`family="phonation"` spans, and two readers depended on them:
+
+- TAXONOMY's `voice` kind had exactly one evidence line, fed by those spans. It now reports
+  `unavailable` with a `why` naming the retirement, which folds to `uncertain` and never to
+  `absent`. The gating keys `taxonomy.voice_min_duration_s` and `.voice_uncertain_duration_s` are
+  consequently read by nothing.
+- The VOICE branch's whole subject is those spans. In production it now finds none and says so, in
+  a `why` that names the retirement rather than the bare "no phonation span in the store" a reader
+  would take for a property of the recording.
+
+**A structural consequence worth stating plainly:** with `voice` permanently `uncertain`,
+TAXONOMY's fold can reach neither `FAIL` (every kind absent) nor `PASS` (nothing uncertain). Every
+recording flags, whatever it contains. That is an artefact of the retirement, not of the audio, and
+it lifts when voice is reworked to read `consensus_taxonomy` -- which is owed a decision nobody has
+made: which consolidated labels express the voice kind, and how they map to a state.
 
 phonation_spans -- the sustained-phonation and glide detector, moved from PREPROCESS to TAXONOMY
 this session (owner-directed): PREPROCESS now only measures F0 and formant tracks over the whole

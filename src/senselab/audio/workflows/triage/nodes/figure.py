@@ -543,12 +543,14 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
         for name, line in (entity.attributes.get("lines") or {}).items():
             floor = line.get("floor")
             floor_text = "floor —" if floor is None else f"floor {floor}"
-            kind_lines.append(
-                f"      {name:<18} {str(line.get('state')):<12} "
-                f"{line.get('evidence')} {line.get('unit')}  ({floor_text})"
-            )
+            unit = line.get("unit")
+            evidence = f"{line.get('evidence')}" + (f" {unit}" if unit else "")
+            kind_lines.append(f"      {name:<18} {str(line.get('state')):<12} {evidence}  ({floor_text})")
             if line.get("state") != "unavailable":
                 continue
+            why = line.get("why")
+            if why:
+                kind_lines.append(f"          {why}")
             for source in _LINE_SOURCE.get((kind, name), ()):
                 reason = absent.get(source)
                 if reason:
