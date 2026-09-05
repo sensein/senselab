@@ -15,8 +15,9 @@ video — through reproducible pipelines. uv for dependency management; the inte
 `_recursion_count` after 3.12.0, and `multiprocess` (a `datasets` dependency) calls it during
 teardown, so on 3.12.0 the resource tracker's child is never reaped and a finished process hangs —
 18 minutes per task, measured on a cluster array. See
-`specs/20260905-resource-tracker-teardown/`. Note CI runs 3.11, which is unaffected, so no CI job
-sees this.
+`specs/20260905-resource-tracker-teardown/`. CI's cpu and gpu matrices already default to 3.12;
+the macOS and pre-commit jobs lagged at 3.11 until 2026-09-05, which is part of why this went
+unseen.
 
 ## Architecture
 
