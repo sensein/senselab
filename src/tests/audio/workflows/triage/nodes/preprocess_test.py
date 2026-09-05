@@ -375,8 +375,10 @@ class TestAsrSpans:
         """
         samples = (np.random.default_rng(0).standard_normal(int(3.0 * SR)) * 1e-4).astype(np.float32)
         _seed_admit(store, tmp_path, wav_writer, samples=samples)
-        first = ScriptLine(text="one", start=2.093, end=2.100, score=0.9)
-        second = ScriptLine(text="two", start=2.104, end=2.111, score=0.9)
+        # Contiguous, so the two words are one run: grouping merges where extents touch, there
+        # being no gap threshold to bridge a hole between them.
+        first = ScriptLine(text="one", start=2.093, end=2.102, score=0.9)
+        second = ScriptLine(text="two", start=2.102, end=2.111, score=0.9)
         line = ScriptLine(text="one two", start=2.093, end=2.111, chunks=[first, second], score=0.9)
         _stub_models(monkeypatch, crisper=line, qwen=line)
         preprocess(store, _audio(tmp_path), asr_span_config, run_dir=tmp_path)

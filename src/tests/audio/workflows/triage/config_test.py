@@ -103,7 +103,7 @@ class TestUnsetValues:
             "phonation.hnr_floor_interval_db",
             "phonation.rms_floor_interval",
             "redaction.padding_ms",
-            "speech.word_gap_ms",
+            "speech.second_diarizer",
             "quality.stoi_floor",
             "taxonomy.voice_min_duration_s",
         ):

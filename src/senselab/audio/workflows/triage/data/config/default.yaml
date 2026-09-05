@@ -147,7 +147,6 @@ voice:
 
 # SPEECH's enrollment, separation, diarization and non-target settings.
 speech:
-  word_gap_ms: null                    # gap grouping consensus words into speech spans; read with .get, so a null silently drops the ASR span source
   second_diarizer: null                # which model corroborates pyannote's speaker count
   target_match_cosine: null            # similarity above which a diarized speaker is the enrolled target
   speech_test_stoi_floor: null         # STOI floor for a speech span to pass quality

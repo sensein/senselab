@@ -220,17 +220,18 @@ def segments_between_change_points(
     ]
 
 
-def group_extents_into_runs(extents: list[tuple[float, float]], gap_ms: float) -> list[tuple[float, float, list[int]]]:
-    """A run is the extent of a group of extents; a gap over ``gap_ms`` starts a new run.
+def group_extents_into_runs(extents: list[tuple[float, float]]) -> list[tuple[float, float, list[int]]]:
+    """A run is the extent of a group of extents that touch or overlap.
 
     Generic over any already-timed source (consensus ASR words, or any other list of
     ``(start, end)`` extents already in seconds) — there is no envelope or floor here, unlike
     :func:`propose_spans`: the caller's own extents are the ground truth being grouped, not a
-    measure needing a threshold to become one.
+    measure needing a threshold to become one. Extents that arrive already timed need no gap
+    parameter to become spans, so there is none: adjacency alone decides, and a run ends where the
+    next extent starts after it.
 
     Args:
         extents: ``(start, end)`` pairs in seconds, in any order.
-        gap_ms: The gap that starts a new run, in milliseconds.
 
     Returns:
         ``[(start, end, member indices), ...]``, in start order. Member indices refer to
@@ -239,7 +240,7 @@ def group_extents_into_runs(extents: list[tuple[float, float]], gap_ms: float) -
     runs: list[tuple[float, float, list[int]]] = []
     for index in sorted(range(len(extents)), key=lambda i: extents[i][0]):
         start, end = extents[index]
-        if runs and (start - runs[-1][1]) * 1000.0 <= gap_ms:
+        if runs and start <= runs[-1][1]:
             open_start, open_end, members = runs[-1]
             runs[-1] = (open_start, max(open_end, end), [*members, index])
         else:

@@ -64,7 +64,7 @@ def _config(tmp_path: Path) -> TriageConfig:
         The resolved configuration.
     """
     path = tmp_path / "interlock-override.yaml"
-    path.write_text("speech:\n  word_gap_ms: 500\nredaction:\n  padding_ms: 50\n  fill: silence\n")
+    path.write_text("redaction:\n  padding_ms: 50\n  fill: silence\n")
     return load_triage_config(path)
 
 

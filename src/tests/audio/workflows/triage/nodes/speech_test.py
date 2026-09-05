@@ -76,7 +76,7 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 
 
 def _override(tmp_path: Path, yaml_text: str = "") -> TriageConfig:
-    """The packaged config with ``speech.word_gap_ms`` supplied and ``yaml_text`` layered over it.
+    """The packaged config with ``yaml_text`` layered over it.
 
     Args:
         tmp_path: Where the override file is written.
@@ -85,7 +85,7 @@ def _override(tmp_path: Path, yaml_text: str = "") -> TriageConfig:
     Returns:
         The resolved configuration.
     """
-    values: dict[str, Any] = {"speech": {"word_gap_ms": 500}}
+    values: dict[str, Any] = {}
     _deep_merge(values, yaml.safe_load(yaml_text) or {})
     path = tmp_path / f"override-{abs(hash(yaml_text)) % 10**10}.yaml"
     path.write_text(yaml.safe_dump(values))
@@ -93,7 +93,7 @@ def _override(tmp_path: Path, yaml_text: str = "") -> TriageConfig:
 
 
 def _speech_config(tmp_path: Path) -> TriageConfig:
-    """``speech.word_gap_ms`` and nothing else.
+    """The packaged config, unmodified.
 
     Args:
         tmp_path: Where the override file is written.
@@ -228,8 +228,10 @@ def _place(words: list[str], speakers: int, duration_s: float) -> list[tuple[str
         high = first + total * (group + 1) / speakers
         slot = (high - low) / max(len(members), 1)
         for offset, index in enumerate(members):
-            start = low + offset * slot + slot * 0.05
-            slots[index] = (round(start, 4), round(low + (offset + 1) * slot - slot * 0.05, 4))
+            # Contiguous within a group, as the docstring says: words are grouped into spans where
+            # they touch, so a margin here would make every word its own span.
+            start = low + offset * slot
+            slots[index] = (round(start, 4), round(low + (offset + 1) * slot, 4))
     for index, text in enumerate(words):
         placed.append((text, slots[index]))
     return placed
@@ -328,8 +330,10 @@ def _seed_level(store: ProvStore, tmp_path: Path) -> None:
     store.was_generated_by(entity_id, activity)
 
 
-_NEAR_EXTENTS = [(0.5, 0.8), (0.9, 1.2)]  # one span, 0.5-1.2 s
-_FAR_EXTENTS = [(2.0, 2.4), (2.6, 3.1)]  # one span, 2.0-3.1 s -- a different length, deliberately
+# Words are grouped where they touch, so a pair that shares a boundary is one span. These used to
+# carry a 100 ms hole each and relied on a gap threshold to close it; the threshold is gone.
+_NEAR_EXTENTS = [(0.5, 0.85), (0.85, 1.2)]  # one span, 0.5-1.2 s
+_FAR_EXTENTS = [(2.0, 2.55), (2.55, 3.1)]  # one span, 2.0-3.1 s -- a different length, deliberately
 
 
 def _seed_two_distance_spans(store: ProvStore, tmp_path: Path, duration_s: float = 5.0) -> None:
@@ -678,17 +682,18 @@ class TestItReadsTheConsensusAndReFusesNothing:
 class TestTheUnmeasuredKeyAndTheHintThatContradictsTheFile:
     """F8i, F8j: an unmeasured key is a configuration error, and a contradicted hint outranks a fail."""
 
-    def test_the_packaged_config_refuses_and_leaves_the_store_untouched(self, store: ProvStore, tmp_path: Path) -> None:
-        """speech.word_gap_ms ships null, so an ordinary run raises before it measures anything.
+    def test_the_packaged_config_runs_now_that_the_word_gap_is_set(self, store: ProvStore, tmp_path: Path) -> None:
+        """``speech.word_gap_ms`` was the one key stopping this branch under the packaged config.
 
-        This is not a finding about the recording, so it is not demoted to a flag: nobody has
-        derived the key, and a branch that guessed one would report a span count it invented.
+        It shipped null and was ``require``d here, so an ordinary run raised before measuring
+        anything — SPEECH errored on all 112 recordings of the stage-0 collection for this reason
+        alone. With the key set to 500 ms the branch reaches a verdict.
         """
         _seed_speech_store(store, tmp_path, words=["hello", "world"])
-        before = store.fingerprint()
-        with pytest.raises(ValueError, match="speech.word_gap_ms"):
-            speech(store, "plain", load_triage_config(), run_dir=tmp_path, enrollment=None)
-        assert store.fingerprint() == before, "an unmeasured key must leave the store untouched"
+
+        result = speech(store, "plain", load_triage_config(), run_dir=tmp_path, enrollment=None)
+
+        assert result.verdict.outcome is Outcome.PASS
 
     def test_a_hint_asserting_speech_this_branch_did_not_find_still_fails(
         self, store: ProvStore, speech_config: TriageConfig, tmp_path: Path

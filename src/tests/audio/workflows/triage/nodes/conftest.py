@@ -217,9 +217,9 @@ def spans_config(tmp_path: Path) -> TriageConfig:
 
 @pytest.fixture
 def asr_span_config(tmp_path: Path) -> TriageConfig:
-    """``spans_config`` plus ``speech.word_gap_ms``, so PREPROCESS's ASR span source is exercised.
+    """``spans_config``, under which PREPROCESS's ASR span source is exercised.
 
-    The packaged file leaves ``speech.word_gap_ms`` null (unmeasured); this fixture states one for
+    The source needs no config key — word extents are grouped where they touch. This fixture states
     tests that need the ASR span source itself present, not just absent-by-default.
     """
     override = tmp_path / "asr_spans.yaml"
@@ -241,7 +241,6 @@ def asr_span_config(tmp_path: Path) -> TriageConfig:
         "spans:\n"
         "  k_db: 12.0\n"
         "speech:\n"
-        "  word_gap_ms: 150.0\n"
     )
     return load_triage_config(override)
 
@@ -905,7 +904,7 @@ def seed_speech_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageCo
         *,
         airway_label_extent: tuple[float, float] | None = None,
         duration_s: float = 6.0,
-        config_yaml: str = "speech:\n  word_gap_ms: 300\n",
+        config_yaml: str = "",
     ) -> tuple[ProvStore, TriageConfig, Path]:
         from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
 
