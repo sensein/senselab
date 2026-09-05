@@ -61,11 +61,20 @@ Key audio processing capabilities in `audio/tasks/`:
 - Google-style docstrings (enforced by ruff, `convention = "google"`)
 - Line length 120; type hints required (mypy with the pydantic plugin)
 - Tests in `src/tests/` mirroring the package, named `*_test.py`
-- **Rationale does not go in code.** Docstrings and comments say what a thing is and how to call it;
-  the measurement behind a choice, the failure that drove it and the rejected alternatives go in
-  `specs/`. This reverses an earlier convention, so much of the tree still carries multi-paragraph
-  rationale inline — move it out when you edit such a file rather than extending it. A `derivation:`
-  block in a `data/` profile is not code and stays where it is.
+- **Rationale does not go in code, and not in config either.** Docstrings and comments say what a
+  thing is and how to call it; the measurement behind a choice, the failure that drove it and the
+  rejected alternatives go in `specs/`. This reverses an earlier convention, so much of the tree
+  still carries multi-paragraph rationale inline — move it out when you edit such a file rather
+  than extending it.
+- **A `derivation:` key in a config is a hashed value, not a comment — do not add one back.** The
+  triage config carried 50 kB of English in a top-level `derivation:` string, 547 of its 779 lines.
+  The loader hashes the merged mapping, so that prose sat inside `config_hash` and correcting a word
+  of it made two behaviourally identical runs report different identities. It now lives in
+  `specs/20260817-triage-workflow-dag/config-derivations.md`, keyed by config section, and the
+  config carries a short `#` description per section and per key. `#` comments are not hashed and
+  can be corrected freely. Two tests enforce this: no config value may carry prose, and `derivation`
+  stays absent. An earlier version of this file said such a block "is not code and stays where it
+  is" — that was reversed by the owner on 2026-09-04.
 
 ## Traps that have cost time
 

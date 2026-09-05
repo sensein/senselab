@@ -46,6 +46,12 @@ All models supported by senselab, organized by task.
 | MOSS-Transcribe-Diarize | OpenMOSS-Team | `OpenMOSS-Team/MOSS-Transcribe-Diarize` | — | 0.9B | — | — | yes | Unified ASR + diarization, lightweight and CPU-plausible (via subprocess venv, transformers>=5.6). Seed-17 probe: no structural ceiling observed (predicted up to 12 at k=8), but exact-count accuracy is inconsistent (0% at k=1, 25-65% elsewhere) — do not rely on its speaker count without independent verification. |
 | DiariZen | BUT-FIT | `BUT-FIT/diarizen-wavlm-large-s80-md` | — | WavLM-large + Conformer | CC BY-NC 4.0 — non-commercial only | — | no | Diarization only, no transcription (via subprocess venv installing DiariZen's forked pyannote-audio). Seed-17 probe: no structural ceiling observed (predicted up to 8 at k=8); best exact-count accuracy at k=2-3 (75-90%), degrading beyond. |
 
+## Audio Understanding
+
+| Model | Source | Model ID | Parameters | License | Recommended For |
+|-------|--------|----------|------------|---------|-----------------|
+| Audio Flamingo 3 | nvidia | `nvidia/audio-flamingo-3-hf` | ~8B | **NVIDIA OneWay Noncommercial License — non-commercial research only** (training-data generation additionally subject to the Qwen Research License and OpenAI's Terms of Use) | Audio captioning, sound-event description and open-ended audio QA from a free-text prompt; transcription is one instruction among many. In-process (`transformers` ships `AudioFlamingo3ForConditionalGeneration`; no subprocess venv). 16 kHz mono, 10-minute ceiling, 30 s internal windows. CUDA strongly recommended. |
+
 ## Speech Emotion Recognition
 
 | Model | Source | Model ID | Embedding Dim | Parameters | Recommended For |

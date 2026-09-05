@@ -241,7 +241,8 @@ def extract_segments(data: List[Tuple[Audio, List[Tuple[float, float]]]]) -> Lis
 
     Raises:
         ValueError:
-            If any segment is invalid or exceeds audio duration.
+            If any segment has `start < 0`, `start >= end`, an `end` beyond the audio duration, or a
+            `(start, end)` pair that selects no samples at this audio's rate.
 
     Example:
         >>> from senselab.audio.data_structures import Audio
@@ -261,10 +262,17 @@ def extract_segments(data: List[Tuple[Audio, List[Tuple[float, float]]]]) -> Lis
         for start, end in timestamps:
             if start < 0:
                 raise ValueError("Start time must be >= 0.")
+            if start >= end:
+                raise ValueError(f"Start time must be < end; got start={start}, end={end}.")
             if end > dur:
                 raise ValueError(f"End must be <= duration of the audio ({dur} sec).")
             s = int(start * sr)
             e = int(end * sr)
+            if s >= e:
+                raise ValueError(
+                    f"Start time must be < end; got start={start}, end={end}, which select no samples "
+                    f"at {sr} Hz (both fall in sample {s})."
+                )
             wf = audio.waveform[:, s:e]
             out.append(Audio(waveform=wf, sampling_rate=sr, metadata=audio.metadata.copy()))
         result.append(out)

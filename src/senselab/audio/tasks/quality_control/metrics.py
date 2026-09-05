@@ -8,6 +8,7 @@ import scipy
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.envelope.api import analytic_magnitude
 from senselab.audio.tasks.speaker_diarization.api import diarize_audios
 from senselab.audio.tasks.voice_activity_detection.api import (
     detect_human_voice_activity_in_audios,
@@ -233,14 +234,11 @@ def amplitude_modulation_depth_metric(audio: Audio) -> float:
     assert raw_waveform.ndim == 2, "Expected waveform shape (num_channels, num_samples)"
 
     # Convert to numpy array if it's a torch tensor (own name so the static type
-    # is ndarray for scipy below, not the Tensor it started as).
+    # is ndarray, not the Tensor it started as).
     waveform: np.ndarray = raw_waveform.numpy() if isinstance(raw_waveform, torch.Tensor) else raw_waveform
 
-    # Compute the analytic signal
-    analytic_signal = scipy.signal.hilbert(waveform, axis=-1)
-
-    # Compute the amplitude envelope
-    amplitude_envelope = np.abs(analytic_signal)
+    # Per channel, not mono-averaged: the depth is meaned across channels below.
+    amplitude_envelope = analytic_magnitude(waveform, axis=-1)
 
     # Calculate modulation depth
     max_env = np.max(amplitude_envelope, axis=-1)

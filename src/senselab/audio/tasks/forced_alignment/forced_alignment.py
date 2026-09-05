@@ -122,7 +122,7 @@ def _preprocess_segments(
 
 
 def _can_align_segment(
-    segment: SingleSegment, model_dictionary: Dict[str, int], t1: float, max_duration: float
+    segment: SingleSegment, model_dictionary: Dict[str, int], t1: float, t2: float, max_duration: float
 ) -> bool:
     """Check if a segment can be aligned based on content and timing.
 
@@ -130,6 +130,8 @@ def _can_align_segment(
         segment (SingleSegment): The segment to check.
         model_dictionary (Dict[str, int]): Model character dictionary.
         t1 (float): Segment start time.
+        t2 (float): Segment end time. A segment whose start is not before its end selects no
+            samples, so it is skipped here rather than reaching `extract_segments`, which refuses it.
         max_duration (float): Maximum allowed audio duration.
 
     Returns:
@@ -141,6 +143,10 @@ def _can_align_segment(
 
     # Check if segment is within duration bounds
     if t1 >= max_duration:
+        return False
+
+    # Check if the segment selects any audio at all
+    if t1 >= t2:
         return False
 
     # Check if all clean chars are in model dictionary
@@ -446,7 +452,7 @@ def _align_segments(
     for sdx, segment in enumerate(transcript):
         t1 = segment["start"]
         t2 = segment["end"]
-        if _can_align_segment(segment, model_dictionary, t1, max_duration):
+        if _can_align_segment(segment, model_dictionary, t1, t2, max_duration):
             aligned_segment = _align_single_segment(
                 segment, model, model_dictionary, model_lang, model_type, audio, device, t1, t2
             )

@@ -1,8 +1,9 @@
 """unasdiff unsupervised source separation via isolated subprocess venv.
 
-unasdiff (Shi, Runwu et al., *Unsupervised Audio Source Separation using Diffusion
-Priors*, https://github.com/RunwuShi/unasdiff) separates a mixture into speech and
-one FSD50K-conditioned sound source without ever training on mixtures: it factors
+unasdiff (Shi, Runwu et al., *Unsupervised Single-Channel Audio Separation with
+Diffusion Source Priors*, AAAI 2026, arXiv:2512.07226,
+https://github.com/RunwuShi/unasdiff) separates a mixture into speech and
+one FSDKaggle2018-conditioned sound source without ever training on mixtures: it factors
 the mixture likelihood into two independently-trained unconditional diffusion
 priors (a speech prior and a sound prior) and runs posterior sampling at inference
 time. This is what makes it usable for the off-target-speaker-detection problem
@@ -11,9 +12,9 @@ project's notes) -- there is no dataset of "target speech + arbitrary intruder"
 mixtures to train a supervised separator on, but there are large unconditional
 speech and sound corpora to train priors on separately.
 
-Upstream ships training code and the two benchmark scripts its paper's numbers
-came from (``benchmark_musdb.py``, ``benchmark_urmp.py``); it has no installable
-package, no inference-only entry point, and no long-form chunking (the paper's
+Upstream ships training code and the three benchmark scripts its paper's numbers
+came from (``test_speech_sound.py``, ``test_soundevent.py``, ``test_speech_speech.py``); it has no
+installable package, no inference-only entry point, and no long-form chunking (the paper's
 mixtures are short benchmark clips). The worker driver, the three separation
 modes, and chunking for arbitrary-length recordings are therefore this
 repository's own code reusing upstream's model construction, not a thin wrapper
@@ -22,14 +23,20 @@ API, and long-form chunking.
 
 Two label spaces, not one
 --------------------------
-The sound prior's conditioning embedding has 50 slots (``num_class=50`` in
-``config/atten_unet_fsd/config.toml``), of which 41 were populated by training on
-FSD50K subset labels -- see ``data/fsd41_classes.json`` and
+The sound prior's conditioning embedding has 51 slots: ``config/atten_unet_fsd/config.toml`` sets
+``num_class=50``, and ``models/atten_unet.py``'s ``LabelEmbedder`` allocates
+``num_classes + use_cfg_embedding`` rows, where ``use_cfg_embedding`` is ``True`` because
+``dropout_prob=0.1 > 0``. Of those 51, 41 (rows 0-40) were populated by training on FSDKaggle2018
+subset labels -- see ``data/fsd41_classes.json`` and
 :func:`load_fsd_class_map_document`. The speech prior's conditioning label space is
 disjoint and has exactly one member (unconditional speech). Passing a sound-prior
 index to the speech prior, or an index above 40 to the sound prior, is a caller
 error this module is built to catch rather than silently accept -- see
-:func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`.
+:func:`_validate_source_class_indices`, which runs in :func:`separate_with_unasdiff`
+before the worker ever starts, and
+:func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`, which
+catches the same error one layer up, at the point a caller's class *name* resolves
+to an index.
 
 Why a subprocess venv
 ----------------------
@@ -80,13 +87,19 @@ reason: an unresolved license request must not end up load-bearing in a default 
 
 Two priors, one mode dispatch
 ------------------------------
-``p_sample_loop_group`` (upstream's multi-model sampler) zips one model object against one label
-per slot, so ``n_sources`` model instances are always constructed -- even when two slots share
-weights. Which prior a slot loads is **not** recoverable from ``source_class_indices`` alone: index
-``0`` is simultaneously "unconditional speech" in the speech prior's one-label space and "Hi-hat" in
-the sound prior's, so :func:`separate_with_unasdiff` takes ``mode`` explicitly rather than inferring
-it, and the worker payload carries all four checkpoint/config paths so the worker can build whichever
+Which prior a slot loads is **not** recoverable from ``source_class_indices`` alone: index ``0`` is
+simultaneously "unconditional speech" in the speech prior's one-label space and "Hi-hat" in the
+sound prior's, so :func:`separate_with_unasdiff` takes ``mode`` explicitly rather than inferring it,
+and the worker payload carries all four checkpoint/config paths so the worker can build whichever
 slots the mode calls for.
+
+``speech_sound`` needs two different priors in the same reverse-diffusion call, which only
+upstream's multi-model sampler, ``p_sample_loop_group``, supports: it zips one model object against
+one label per slot, so ``n_sources`` model instances are always constructed there. ``sound_sound``
+and ``speech_speech`` use only one prior each, so they use upstream's single-model sampler,
+``p_sample_loop``, instead -- a single model instance processes every slot in one batched forward
+per step, with a per-slot label tensor, matching upstream's own single-prior benchmark scripts
+exactly and building one model instance rather than ``n_sources``.
 """
 
 from __future__ import annotations
@@ -153,10 +166,11 @@ _UNASDIFF_REQUIREMENTS = [
     # H100: uv finds no wheel for av==14.4.0 on this interpreter and falls back to a source
     # build, which fails with "You are REQUIRED to use ffmpeg 7" and pkg-config unable to
     # find avformat/avcodec/... -- so the whole venv build dies. Checked upstream at the
-    # pinned commit: neither inference.py, utils.py nor dataloader.py imports av, so it is a
-    # training/data-pipeline dependency the inference path never touches. Same reasoning as
-    # flash-attn above, and the opposite of DriftSE's pesq, which looked training-only but
-    # was imported at module scope -- which is why this one was verified rather than assumed.
+    # pinned commit: nothing this worker imports (models/, diffusion/, utils.py) imports av
+    # anywhere -- it is a training/data-pipeline dependency the inference path never touches.
+    # Same reasoning as flash-attn above, and the opposite of DriftSE's pesq, which looked
+    # training-only but was imported at module scope -- which is why this one was verified
+    # rather than assumed.
     "soundfile",
 ]
 
@@ -222,38 +236,59 @@ _MODE_SPEECH_SOUND = "speech_sound"
 _MODE_SOUND_SOUND = "sound_sound"
 _MODE_SPEECH_SPEECH = "speech_speech"
 
+# The paper evaluated at most this many sources; see doc.md for the citation.
+_MAX_SOURCES = 3
+
 _TARGET_SR = 16000
 _WINDOW_S = 4.0  # upstream's trained window; not a tunable
 _OVERLAP_S = 2.0  # 50% overlap between adjacent windows -- see Task 5 / doc.md
-# config/*/config.toml: diffusion_step. Upstream's own quality default -- the only value with
-# any published basis -- so it stays the default for separate_with_unasdiff's diffusion_steps
-# parameter. 200 network evaluations per window is the dominant cost of this backend (measured
-# RTF ~22-26x on an H100, vs. DriftSE's 1 step and SGMSE+'s 30 in this same repository), so a
-# caller who wants to trade quality for speed can lower it -- see that parameter's docstring for
-# why no lower value is recommended here.
+# config/*/config.toml: diffusion_step -- the reverse-diffusion schedule length the priors were
+# trained at (T=200). api.separate_audios accepts no other value for this parameter: changing it
+# re-specifies the schedule rather than subsampling it. This lower-level function still accepts
+# other positive values, since a future retrained prior may use a different T; see doc.md for the
+# mechanism and the measured per-step cost.
 _DIFFUSION_STEPS = 200
 
 # Terms of the default worker ceiling, in seconds per (window x diffusion step) and as a floor.
 # Derivation and the measurement behind both numbers:
 # specs/20260818-071500-unasdiff-device-timeout-pcm16.
-_SECONDS_PER_WINDOW_STEP = 0.4
+_SECONDS_PER_WINDOW_STEP_CUDA = 0.4
+# CPU/MPS multiplier on the CUDA figure -- derivation in doc.md.
+_CPU_TIMEOUT_MULTIPLIER = 45.0
 _TIMEOUT_HEADROOM = 4.0
 _TIMEOUT_FLOOR_S = 1800.0
 
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
 
 
-def _default_timeout_s(n_windows: int, diffusion_steps: int) -> float:
+def _seconds_per_window_step(device: Optional[DeviceType]) -> float:
+    """Return the per-(window x diffusion-step) cost, in seconds, for ``device``.
+
+    Args:
+        device: The device the worker will run on. ``None`` (the caller has left the choice to
+            the worker) and ``DeviceType.CUDA`` both use the measured CUDA figure; any other
+            device is scaled by ``_CPU_TIMEOUT_MULTIPLIER``.
+
+    Returns:
+        Seconds per window-step.
+    """
+    if device is None or device == DeviceType.CUDA:
+        return _SECONDS_PER_WINDOW_STEP_CUDA
+    return _SECONDS_PER_WINDOW_STEP_CUDA * _CPU_TIMEOUT_MULTIPLIER
+
+
+def _default_timeout_s(n_windows: int, diffusion_steps: int, device: Optional[DeviceType] = None) -> float:
     """Return the default worker ceiling for ``n_windows`` windows at ``diffusion_steps`` steps.
 
     Args:
         n_windows: Total number of 4 s windows the worker will separate, across every input.
         diffusion_steps: Reverse-diffusion steps per window.
+        device: The device the worker will run on; see :func:`_seconds_per_window_step`.
 
     Returns:
         Seconds, never below ``_TIMEOUT_FLOOR_S``.
     """
-    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _SECONDS_PER_WINDOW_STEP * n_windows * diffusion_steps)
+    return max(_TIMEOUT_FLOOR_S, _TIMEOUT_HEADROOM * _seconds_per_window_step(device) * n_windows * diffusion_steps)
 
 
 @functools.lru_cache(maxsize=1)
@@ -407,52 +442,64 @@ try:
         # split-and-sum.
         return sum(torch.split(x, x.shape[-1] // n_src, dim=-1))
 
-    def separate_window(models_list, gaussian, mixture, n_src, labels):
+    def separate_window(sampler_model, sampler_name, sampler_labels, gaussian, mixture, n_src):
         # One 4 s window. Returns a list of n_src waveforms.
         #
-        # p_sample_loop_group ignores the measurement argument it is handed and recomputes
-        # measurement = degradation(orig_x, n_src) on every step. Packing orig_x as
-        # [mixture, zeros, ..., zeros] makes that sum equal the mixture exactly, so the sampler
-        # sees precisely what it saw in the benchmark and no per-source information enters.
-        # This looks like an oracle from the call site; it is not.
+        # Both p_sample_loop_group and p_sample_loop ignore the measurement argument they are
+        # handed and recompute measurement = degradation(orig_x, n_src) on every step. Packing
+        # orig_x as [mixture, zeros, ..., zeros] makes that sum equal the mixture exactly, so the
+        # sampler sees precisely what it saw in the benchmark and no per-source information
+        # enters. This looks like an oracle from the call site; it is not.
         T = mixture.shape[-1]
         mix = mixture.reshape(1, 1, -1)
         orig_x = torch.cat([mix] + [torch.zeros_like(mix)] * (n_src - 1), dim=-1)
         shape = (1, 1, n_src * T)
-        gen = gaussian.p_sample_loop_group(
-            models_list,
+        sampler_kwargs = dict(
             shape=shape,
             measurement=mix,
             orig_x=orig_x,
             n_src=n_src,
             clip_denoised=True,
             degradation=degradation,
-            model_kwargs=labels,
+            model_kwargs=sampler_labels,
         )
+        # speech_sound needs two different priors in one call, which only p_sample_loop_group
+        # supports (it zips one model object against one label per slot, so n_sources model
+        # instances are always constructed there). sound_sound and speech_speech use only one
+        # prior each, so they use upstream's own p_sample_loop instead: a single model instance
+        # processes every slot in one batched forward per step, with a per-slot label tensor --
+        # matching upstream's own single-prior benchmark scripts exactly (not named here
+        # literally, same reason as load_prior above), at the cost of n_sources - 1 fewer model
+        # instances than p_sample_loop_group would build.
+        if sampler_name == "group":
+            gen = gaussian.p_sample_loop_group(sampler_model, **sampler_kwargs)
+        else:
+            gen = gaussian.p_sample_loop(sampler_model, **sampler_kwargs)
         out = None
         for out in gen:
             pass
         est = out["sample"].reshape(1, 1, -1)
         return [seg.reshape(-1) for seg in torch.split(est, T, dim=-1)]
 
-    # Model list + diffusion process for this mode. p_sample_loop_group zips `model` against
-    # `model_kwargs` one-to-one, so every slot needs its own model object -- even
-    # speech-speech, where both slots share the same weights: a separate deepcopy'd instance
-    # per slot, not one instance reused twice.
+    # Which sampler this mode uses, and the model(s)/labels it is given -- see separate_window
+    # for why speech_sound alone needs the "group" sampler.
+    sampler_name = "group" if mode == "speech_sound" else "single"
     if mode == "speech_sound":
         speech_model, speech_cfg = load_prior(speech_config_path, speech_ckpt_path)
-        models_list = [speech_model] + [
+        sampler_model = [speech_model] + [
             load_prior(sound_config_path, sound_ckpt_path)[0] for _ in range(n_sources - 1)
         ]
+        sampler_labels = labels
         diffusion_config = speech_cfg
     elif mode == "sound_sound":
-        loaded = [load_prior(sound_config_path, sound_ckpt_path) for _ in range(n_sources)]
-        models_list = [m for m, _ in loaded]
-        diffusion_config = loaded[0][1]
+        sampler_model, diffusion_config = load_prior(sound_config_path, sound_ckpt_path)
+        sampler_labels = labels
     elif mode == "speech_speech":
-        loaded = [load_prior(speech_config_path, speech_ckpt_path) for _ in range(n_sources)]
-        models_list = [m for m, _ in loaded]
-        diffusion_config = loaded[0][1]
+        sampler_model, diffusion_config = load_prior(speech_config_path, speech_ckpt_path)
+        # Upstream's own speech-speech benchmark script passes model_kwargs=None here (not
+        # named here literally, same reason as load_prior above): the speech prior has no
+        # conditioning to give it, and p_sample already tolerates model_kwargs=None.
+        sampler_labels = None
     else:
         raise ValueError("unknown mode: " + str(mode))
 
@@ -479,7 +526,7 @@ try:
         peak = y.abs().amax().clamp(min=1e-8)
         y_norm = y / peak * 0.95
 
-        sources = separate_window(models_list, gaussian, y_norm, n_sources, labels)
+        sources = separate_window(sampler_model, sampler_name, sampler_labels, gaussian, y_norm, n_sources)
 
         for src_wave, out_path in zip(sources, out_path_list):
             src_wave = src_wave / 0.95 * peak
@@ -590,7 +637,9 @@ def _window_starts(n_samples: int, window_samples: int, hop_samples: int) -> Lis
     return starts
 
 
-def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tuple[Path, Path, Path, Path]:
+def _resolve_checkpoint_paths(
+    checkpoint_dir: Optional[Union[str, Path]],
+) -> tuple[Path, Path, Path, Path, Optional[str]]:
     """Resolve the four files unasdiff's two priors need: two checkpoints, two configs.
 
     Resolution order mirrors DriftSE's (``speech_enhancement/driftse.py``): an explicit
@@ -604,8 +653,12 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
         checkpoint_dir: Explicit override directory, if any.
 
     Returns:
-        ``(speech_ckpt, speech_config, sound_ckpt, sound_config)`` paths.
+        ``(speech_ckpt, speech_config, sound_ckpt, sound_config, checkpoint_revision)``.
+        ``checkpoint_revision`` is the resolved 40-hex commit SHA when the pinned HF mirror was
+        the source, ``None`` when the caller supplied their own checkpoints (``checkpoint_dir`` or
+        ``SENSELAB_UNASDIFF_CHECKPOINTS``) -- there is no commit to attribute those to.
     """
+    checkpoint_revision: Optional[str] = None
     if checkpoint_dir is not None:
         base = Path(checkpoint_dir)
     else:
@@ -615,13 +668,46 @@ def _resolve_checkpoint_paths(checkpoint_dir: Optional[Union[str, Path]]) -> tup
         else:
             from senselab.utils.dependencies import resolve_model
 
-            _, base = resolve_model(_UNASDIFF_HF_REPO, _UNASDIFF_HF_REVISION)
+            checkpoint_revision, base = resolve_model(_UNASDIFF_HF_REPO, _UNASDIFF_HF_REVISION)
     return (
         base / _UNASDIFF_SPEECH_CKPT,
         base / _UNASDIFF_SPEECH_CONFIG,
         base / _UNASDIFF_SOUND_CKPT,
         base / _UNASDIFF_SOUND_CONFIG,
+        checkpoint_revision,
     )
+
+
+def _validate_source_class_indices(mode: str, source_class_indices: List[int]) -> None:
+    """Raise if any slot's label is out of range for the prior that slot loads.
+
+    Speech and sound are two disjoint label spaces sharing the integer 0 for unrelated meanings
+    (see this module's docstring) -- an index valid for one prior is not merely unchecked for the
+    other, it silently selects a real (wrong) meaning there. This is the catch the module docstring
+    promises at this layer; :func:`senselab.audio.tasks.source_separation.api.resolve_source_classes`
+    only catches a typo in a class *name* and is bypassed entirely by a caller passing raw indices
+    to this function directly.
+
+    Args:
+        mode: One of ``"speech_sound"``, ``"sound_sound"``, ``"speech_speech"``.
+        source_class_indices: One label per slot.
+
+    Raises:
+        ValueError: Naming the offending slot, which prior it loads, and the index it was given.
+    """
+    max_sound_index = max(load_fsd_class_map_document()["classes"].values())
+    for slot, index in enumerate(source_class_indices):
+        slot_is_speech = mode == _MODE_SPEECH_SPEECH or (mode == _MODE_SPEECH_SOUND and slot == 0)
+        if slot_is_speech:
+            if index != 0:
+                raise ValueError(
+                    f"slot {slot} loads the speech prior in mode={mode!r}, whose only valid label is 0; got {index}"
+                )
+        elif not (0 <= index <= max_sound_index):
+            raise ValueError(
+                f"slot {slot} loads the sound prior in mode={mode!r}, whose valid labels are "
+                f"0..{max_sound_index}; got {index}"
+            )
 
 
 def separate_with_unasdiff(
@@ -634,6 +720,7 @@ def separate_with_unasdiff(
     seed: int = 17,
     diffusion_steps: int = _DIFFUSION_STEPS,
     timeout_s: Optional[float] = None,
+    source_classes: Optional[List[str]] = None,
 ) -> List[List[Audio]]:
     """Separate each audio into ``n_sources`` sources with unasdiff.
 
@@ -668,40 +755,51 @@ def separate_with_unasdiff(
             the worker, which takes ``cuda:<current index>`` when CUDA is available and CPU
             otherwise. Only CUDA and CPU are accepted.
         seed: RNG seed, recorded in the log line.
-        diffusion_steps: Number of reverse-diffusion steps the sampler runs per window. Each
-            step is a network evaluation, so this is the backend's dominant cost -- 200 steps
-            measure at RTF ~22-26x on an H100, versus DriftSE's 1 step and SGMSE+'s 30 in this
-            same repository. The default, ``200``, is upstream's own ``config/*/config.toml:
-            diffusion_step`` value and is kept as the quality default: it is the only value
-            with any published basis. Lowering it trades quality for speed roughly
-            proportionally, but **no lower value has been measured in this repository** -- there
-            is no fitted threshold or "recommended" lower setting to fall back on (see this
-            module's ``CLAUDE.md``-derived convention against unfitted thresholds), so any value
-            below 200 is the caller's own unmeasured quality/speed trade.
+        diffusion_steps: Reverse-diffusion schedule length passed to the sampler, not a step count
+            to subsample -- see ``doc.md`` for the mechanism. The priors are trained at ``T=200``,
+            which is why :func:`senselab.audio.tasks.source_separation.api.separate_audios` accepts
+            no other value; this lower-level function still accepts any positive integer, since a
+            future retrained prior may use a different ``T``, but no value other than ``200`` has
+            any published or measured basis against the checkpoints this backend ships today.
         timeout_s: Ceiling on the worker subprocess, in seconds. ``None`` derives one from the
             work -- total windows across every input, times ``diffusion_steps``, times a
-            per-window-step factor, with a floor covering the first-use clone and the checkpoint
-            load (:func:`_default_timeout_s`). Exceeding it raises ``RuntimeError`` and discards
-            every window, completed or not.
+            per-window-step factor that itself depends on ``device`` (CPU and MPS scale the
+            measured CUDA figure -- see :func:`_seconds_per_window_step`), with a floor covering
+            the first-use clone and the checkpoint load (:func:`_default_timeout_s`). Exceeding it
+            raises ``RuntimeError`` and discards every window, completed or not.
+        source_classes: Class names, one per sound slot, purely for the ``metadata["unasdiff"]``
+            provenance record below -- conditioning itself uses ``source_class_indices``. ``None``
+            for a mode with no class names (``"speech_speech"``).
 
     Returns:
-        One list of ``n_sources`` ``Audio`` objects per input, in order. For a multi-window
-        input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]`` carries one
-        ``best_score - second_best_score`` float per window boundary (see
+        One list of ``n_sources`` ``Audio`` objects per input, in order. Every returned ``Audio``
+        carries ``metadata["unasdiff"]``: ``mode``, ``source_classes``, ``n_sources``,
+        ``diffusion_steps``, ``upstream_commit`` (the pinned clone commit), ``checkpoint_revision``
+        (the resolved 40-hex commit of the checkpoint mirror, or ``None`` when the caller supplied
+        checkpoints directly rather than through the pinned mirror), and ``device``. For a
+        multi-window input, every returned ``Audio``'s ``metadata["unasdiff_alignment_margins"]``
+        also carries one ``best_score - second_best_score`` float per window boundary (see
         ``data/permutation_alignment.json`` for the measurement behind reading this number,
         which the profile does not gate on since the measurement did not support a fitted
         threshold).
 
     Raises:
-        ValueError: if ``len(source_class_indices) != n_sources``, if ``diffusion_steps`` is
-            not positive, if ``timeout_s`` is not positive, or if ``device`` is neither CUDA
-            nor CPU (or names a device this host does not have).
+        ValueError: if ``n_sources`` exceeds ``_MAX_SOURCES`` (the paper's own evaluated range --
+            see ``doc.md``), if ``len(source_class_indices) != n_sources``, if ``diffusion_steps``
+            is not positive, if ``timeout_s`` is not positive, if any slot's label is out of range
+            for the prior it loads (see :func:`_validate_source_class_indices`), or if ``device``
+            is neither CUDA nor CPU (or names a device this host does not have).
         RuntimeError: if the worker fails; the upstream traceback is included. Also if the
             worker exceeds ``timeout_s`` -- that message names the ceiling, the inputs, and how
             many windows had been written when it fired.
     """
     if not audios:
         return []
+    if n_sources > _MAX_SOURCES:
+        raise ValueError(
+            f"n_sources={n_sources} exceeds {_MAX_SOURCES}: the paper this backend implements "
+            f"evaluated at most {_MAX_SOURCES} sources. See doc.md."
+        )
     if len(source_class_indices) != n_sources:
         raise ValueError(
             f"source_class_indices must have exactly n_sources={n_sources} entries, got {len(source_class_indices)}"
@@ -710,6 +808,7 @@ def separate_with_unasdiff(
         raise ValueError(f"diffusion_steps must be a positive integer, got {diffusion_steps}")
     if timeout_s is not None and timeout_s <= 0:
         raise ValueError(f"timeout_s must be a positive number of seconds, got {timeout_s}")
+    _validate_source_class_indices(mode, source_class_indices)
 
     from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
     from senselab.utils.data_structures.device import _select_device_and_dtype, device_run_opt
@@ -735,9 +834,22 @@ def separate_with_unasdiff(
     ]
 
     total_windows = sum(len(w) for w in windows_per_audio)
-    effective_timeout_s = _default_timeout_s(total_windows, diffusion_steps) if timeout_s is None else timeout_s
+    effective_timeout_s = (
+        _default_timeout_s(total_windows, diffusion_steps, device=device) if timeout_s is None else timeout_s
+    )
 
-    speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path = _resolve_checkpoint_paths(checkpoint_dir)
+    speech_ckpt_path, speech_config_path, sound_ckpt_path, sound_config_path, checkpoint_revision = (
+        _resolve_checkpoint_paths(checkpoint_dir)
+    )
+    provenance = {
+        "mode": mode,
+        "source_classes": source_classes,
+        "n_sources": n_sources,
+        "diffusion_steps": diffusion_steps,
+        "upstream_commit": _UNASDIFF_COMMIT,
+        "checkpoint_revision": checkpoint_revision,
+        "device": worker_device or "worker-selected",
+    }
 
     venv_dir = ensure_venv(
         _UNASDIFF_VENV,
@@ -841,6 +953,7 @@ def separate_with_unasdiff(
                     source_audio = Audio(filepath=p)
                     _ = source_audio.waveform
                     source_audio.metadata = dict(audio.metadata)
+                    source_audio.metadata["unasdiff"] = provenance
                     sources.append(source_audio)
                 separated.append(sources)
                 continue
@@ -891,6 +1004,7 @@ def separate_with_unasdiff(
                 stitched_audio = Audio(waveform=(acc[s] / weight_sum).unsqueeze(0), sampling_rate=_TARGET_SR)
                 stitched_audio.metadata = dict(audio.metadata)
                 stitched_audio.metadata["unasdiff_alignment_margins"] = margins
+                stitched_audio.metadata["unasdiff"] = provenance
                 sources.append(stitched_audio)
             separated.append(sources)
 

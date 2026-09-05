@@ -1,0 +1,277 @@
+# b2ai-v2 campaign override -- every value below is an ADMITTED GUESS, not a measurement.
+#
+# The packaged config (src/senselab/audio/workflows/triage/data/config/default.yaml) leaves ~47 keys
+# null, each with a written reason for why nobody has measured it. This file supplies the subset a
+# screening run cannot execute without, and nothing else: a null the graph never reads stays null,
+# so the run's config_hash names only the decisions this campaign actually took.
+#
+# Read the notes. Every one names what the number is, why this number, and what would replace it.
+# None of them was fitted to this corpus or to any labelled verdict set. Results under these guesses
+# are distinguishable from results under measured values because the merged mapping's hash is
+# stamped into every artifact.
+#
+# Ported unchanged from runs/b2ai-28/override.yaml (v1): speech.word_gap_ms 500 and
+# redaction.padding_ms 200. The v1 phonation.f0_min_hz/f0_max_hz pair is replaced by the single
+# voice.f0_range_hz below, carrying the same guess and the same caveat. The v1
+# phonation.hnr_floor_db / rms_floor and taxonomy.min_families keys no longer exist and are dropped.
+#
+# GUESS phonation_spans.unvoiced_max_formant_bandwidth_hz 250 -- the widest F1/F2 pole admitted as
+# resonant evidence when periodic F0 is absent. This is the conservative screening value exercised
+# by the task-level phonation tests; it is not fitted to B2AI and must not be interpreted as a
+# diagnostic threshold. What would fit it: bandwidth distributions over labelled unvoiced phonation
+# and non-vocal resonant noise.
+# GUESS phonation_spans.word_aligned_min_evidence_fraction 0.8 -- at least four fifths of a timed
+# consensus-word segment must show periodic or narrow-resonant evidence before it becomes a
+# word-aligned phonation span. This is an evaluation choice, not a lexical rule. What would fit it:
+# frame-level phonation annotations over words, disfluencies, and non-vocal intervals.
+# ---------------------------------------------------------------------------------------------
+# GUESS windows.{yamnet,ast,hear}.default_threshold 0.5 -- the score-gap heuristic, and EXPLICITLY
+#   UNVALIDATED as a per-window cut. The packaged derivation retracts the v1 taxonomy.presence_floor
+#   0.5 values in as many words: they were read off bimodal gaps in ONE reference recording's
+#   WHOLE-FILE scores, and a whole-file gap is not a per-window threshold. No ROC over this corpus
+#   exists. 0.5 is carried forward because it is the value the retracted reasoning produced and
+#   because a run needs the window folds to execute at all -- under a null, require() raises inside
+#   PREPROCESS's window block, the label lanes never render, and TAXONOMY's acoustic lines read
+#   `unavailable`, which makes every kind uncertain on every file. What would replace it: a
+#   per-classifier ROC over windows labelled by a human, one curve per classifier because the three
+#   score distributions are not comparable, and per-label cuts for the labels whose curves separate
+#   from their classifier's default.
+#   ONE KNOWN, MEASURED COST OF 0.5, ON HeAR SPECIFICALLY -- benchmarks/hear-yamnet.md, the
+#   `hear.label_floor` retraction. Over the b2ai-28 corpus, 170 spans produced 14 labels at all; the
+#   14 winners span 0.501-0.821, two sit within 0.005 of the floor, and BOTH DEDICATED COUGH FILES
+#   GOT ZERO LABELS. The floor is sitting on top of the data, not in a gap, and it rejects the
+#   corpus's least ambiguous airway material. Expect taxonomy.presence_floor.airway.health_acoustic
+#   to read `absent` on real cough and breath files under this override. What keeps airway from
+#   going blind is that its OTHER line, acoustic, reads YAMNet and AST AudioSet labels on their own
+#   grids: one line present and one absent folds to `uncertain`, and ROUTING runs a branch on
+#   anything that is not `absent`, so AIRWAY still executes. The cost is a weaker claim in the
+#   verdict, not a skipped branch. Two smoke files carried no airway material and so cannot test
+#   this; it is a live risk for the campaign, recorded here and in README.md.
+# GUESS windows.{yamnet,ast,hear}.label_thresholds {} -- NOT null, and this is a correction to the
+#   review's list, which said label_thresholds may stay null. preprocess.py:411 reads it through
+#   config.require(), and require() raises on null exactly as it does on a missing key. An empty
+#   mapping is the declaration "no per-label override"; null is "nobody decided", and the node
+#   refuses to run on it. This is a data mapping (config.DATA_MAP_PATHS), so a later run may add
+#   entries to it without editing the package.
+# ---------------------------------------------------------------------------------------------
+# GUESS phonation_spans.f0_stability_cents 100 -- one semitone of F0 movement across one 10 ms hop
+#   still continues a sustain. A semitone is a musical interval, not a fitted tolerance; it is here
+#   because it is round, is the same order as the jitter of an ordinary sustained vowel, and is
+#   narrow enough that a glide's deliberate excursion breaks it. What would fit it: the distribution
+#   of |dF0| per hop over hand-marked sustains against hand-marked non-sustains, cut where they
+#   separate.
+# GUESS phonation_spans.formant_stability_hz 400 -- the other limb of the continuity criterion: a
+#   frame also continues a sustain when F1 AND F2 both move less than this across one hop. 400 Hz is
+#   wide, deliberately: the criterion is a disjunction, so a wide formant limb rescues a sustain
+#   whose F0 track is broken or absent, which is the disordered-voice case the whole detector exists
+#   for. What would fit it: per-hop |dF1|,|dF2| over hand-marked sustains, and the same over
+#   diphthongs and connected speech, which is what the cut has to exclude.
+# GUESS phonation_spans.glide_min_excursion_cents 400 -- a third of an octave of monotone movement
+#   separates a glide from drift. Chosen because the b2ai glide task instructs a sweep across the
+#   subject's usable range, which is far more than this, while the drift of a held vowel is far
+#   less; nothing in between was measured. What would fit it: total monotone excursion over
+#   hand-marked glides against hand-marked sustains from the same speakers.
+# GUESS phonation_spans.hangover_ms 60 -- the criterion must fail continuously for 60 ms (6 hops)
+#   before the span closes. Chosen as the shortest hangover that survives a handful of dropped
+#   frames without bridging a real syllable boundary; the packaged spans.hangover_ms 120 was FITTED
+#   for the energy-envelope detector and does not transfer, because a phonation span closes on a
+#   continuity criterion rather than on level. What would fit it: the distribution of intra-sustain
+#   analysis-frame dropouts against inter-sustain gaps.
+# GUESS phonation_spans.voicing_strength_floor 0.3 -- the Praat pitch strength above which a frame
+#   counts as voiced. Low on purpose. It does NOT gate the span: the packaged derivation is explicit
+#   that a detector requiring a periodicity floor would measure exactly the voices least in need of
+#   measuring, so this floor only sorts frames into voiced/unvoiced for the mixed-fraction test
+#   below. What would fit it: strength distributions over frames a rater called voiced against
+#   frames a rater called unvoiced, on disordered as well as typical voices.
+# GUESS phonation_spans.mixed_voiced_fraction 0.5 -- the voiced-frame fraction separating voiced
+#   from mixed from unvoiced. A bare majority, chosen for symmetry and nothing else; it is the value
+#   with the least claim behind it in this file. What would fit it: three-way rater labels over
+#   spans, and probably two cutoffs rather than one.
+# ---------------------------------------------------------------------------------------------
+# GUESS voice.f0_range_hz [75, 500] -- Praat's default adult analysis range, covering a low male
+#   fundamental through a high female one. Nothing about this corpus was measured. CARRIED-OVER
+#   CAVEAT, still true and worth restating because it makes one reported number worthless: a run is
+#   flagged ambiguous when f0*2 <= f0_max OR f0/2 >= f0_min, so the band that is NOT flagged is
+#   (f0_max/2, 2*f0_min), non-empty only when f0_max < 4*f0_min -- a range narrower than TWO octaves.
+#   At 75/500 the ratio is 6.67x, the unflagged band (250, 150) is empty, and 100% of clean
+#   phonation flags. THE ALIAS CHECK IS VACUOUS AT THIS RATIO AND ITS FLAGS ARE BATCH NOISE: read
+#   ambiguous_runs_n as carrying no information under this override, and do not triage on it. The
+#   packaged voice.f0_range_ratio_max exists to REFUSE such a configuration at load; it is null, so
+#   nothing is refused, which is the honest state -- nobody has fixed the bound. Left null here
+#   rather than invented, because setting it above 6.67 to permit this range would be writing a
+#   bound to fit the range it was supposed to judge.
+# ---------------------------------------------------------------------------------------------
+# GUESS speech.word_gap_ms 500 -- ported unchanged from v1. A pause longer than half a second splits
+#   word runs into separate speech spans. A round conversational-pause figure; nothing was fitted.
+# NOT-A-GUESS, but a decision: speech.enrollment_model. model_id is the shipped constant
+#   DEFAULT_SPEAKER_EMBEDDING_MODEL (audio/tasks/speaker_embeddings/api.py:21), so the branch's
+#   probe is the same model the enrollment builder defaults to. Two corrections to the review's
+#   list, both of which would have made every enrollment inert:
+#   (1) SHAPE -- this key is a MAPPING carrying model_id AND revision, not a bare string.
+#       speech.py:126-128 reads model["model_id"] and model["revision"].
+#   (2) THE REVISION MUST BE A RESOLVED 40-HEX COMMIT, NEVER A REF. speech.py:785 passes this
+#       string STRAIGHT INTO Enrollment.refusal_against as the probe commit -- it does no
+#       resolution of its own -- and refusal_against compares it for equality against the
+#       enrollment's model_commit_sha, which the estimator always records as a resolved sha
+#       (SpeakerEmbeddingProvenance refuses a ref there by contract). `revision: main` would
+#       therefore refuse EVERY enrollment on EVERY file with "the enrollment was estimated at
+#       commit <sha> and the probe resolves to main", and phase 2 would run as an unenrolled pass
+#       that reported a refusal instead of a target. The value below is
+#       speechbrain/spkrec-ecapa-voxceleb at `main` as resolved on 2026-08-25; it is pinned here so
+#       that a push to the model between array jobs cannot split one campaign across two commits.
+#       RE-RESOLVE AND RE-PIN if the enrollment vectors are ever rebuilt -- README, "Enrollment",
+#       carries the one-liner, and make_enrollment.py refuses to write an enrollment whose commit
+#       disagrees with this key.
+# GUESS speech.target_match_cosine 0.5 -- the cosine above which a diarized speaker IS the enrolled
+#   target. No similarity threshold has been derived on this or any corpus here; benchmarks/open.md
+#   says so. 0.5 is the midpoint of the [0,1] range ECAPA cosines occupy in practice for
+#   same-vs-different speaker and nothing more. It is read ONLY when an enrollment is supplied, so
+#   phase 1 of this campaign never touches it; it is declared here so that phase 1 and phase 2 share
+#   one config_hash and their verdicts stay comparable. What would fit it: the same-speaker and
+#   different-speaker cosine distributions across these subjects' own files, cut at equal error.
+# ---------------------------------------------------------------------------------------------
+# GUESS taxonomy.presence_floor.* all 1 -- one window (or one word) of evidence is presence. This is
+#   the same screening-permissive reasoning as v1's taxonomy.min_families 1, and carries the SAME
+#   CAVEAT: it is the most permissive value the key admits, chosen so that a screening run surfaces
+#   candidates rather than misses them, and it makes "present" a weak claim on every file. Absence
+#   still needs BOTH of a kind's lines to read absent, so a floor of 1 does not make absence easy.
+#   What would fit it: window counts on files a rater called containing-the-kind against files a
+#   rater called not, per line, with the two lines cut separately -- a lexical word count and an
+#   acoustic window count are not the same currency and there is no reason their floors should match.
+# GUESS taxonomy.voice_min_duration_s 1.0 and voice_uncertain_duration_s 0.3 -- the longest
+#   phonation span at or above 1.0 s makes voice present; at or above 0.3 s, uncertain; below,
+#   absent. Anchored on the tasks rather than on any measurement: every phonation task in this
+#   protocol (prolonged vowel, MPT, glides, loudness) instructs a sustain of THREE SECONDS OR MORE,
+#   so 1.0 s is a third of the shortest intended production and a real attempt clears it with room.
+#   0.3 s is roughly one long syllable nucleus -- enough to say something was voiced, not enough to
+#   call it a sustain. Neither was fitted, and both are cutoffs on a detector whose own six
+#   criterion parameters are themselves guesses above, so the duration they measure is a guess of a
+#   guess. What would fit them: hand-marked sustain durations across voiced, unvoiced and mixed
+#   production, which the packaged derivation asks for by name.
+# GUESS taxonomy.speech_labels -- the AudioSet speech family, exact display strings verified against
+#   the YAMNet class map this repo ships
+#   (~/.cache/senselab/tfhub/*/assets/yamnet_class_map.csv, indices 0-3) and against
+#   MIT/ast-finetuned-audioset-10-10-0.4593's id2label. NOTE the strings use COMMAS, not the slashes
+#   the review's list wrote: "Child speech, kid speaking" and "Narration, monologue". Vocabulary
+#   rather than a threshold, but a JUDGEMENT all the same, on two counts. First, the family stops
+#   at the four labels both detectors can express: AST additionally carries "Male speech, man
+#   speaking" and "Female speech, woman speaking", which YAMNet's 521 drops from AudioSet's 527, and
+#   TAXONOMY's acoustic line SUMS the two grids' window counts, so an AST-only member would let one
+#   grid contribute evidence the other cannot -- included, they would raise AST's share of a count
+#   the fold reads as one number. Second, Babbling and Speech synthesizer are in the same AudioSet
+#   subtree and are excluded as not-this-protocol's-speech. Both calls are reversible by override
+#   and neither was measured.
+# ---------------------------------------------------------------------------------------------
+# GUESS routing.hint_kind_map -- which may_contain tags and which metadata.speech_type values force
+#   which kind's branch. Every tag this campaign's hint generator emits is a key here, and
+#   make_hints.py refuses to write a hint carrying a tag that is not (it parses this file). THIRD
+#   correction to the review's list, which omitted `airway`: the v1 hint table tags respiration and
+#   cough files with BOTH the event tag and `airway`, and an unmapped `airway` tag would force
+#   nothing while reading as declared -- the tag most load-bearing for those files would have been
+#   inert. The speech_type entries matter for the same reason: routing.py:_declared_tags appends
+#   metadata.speech_type to the tag list, so `read`, `elicited` and `recall` reach the map as tags
+#   and are mapped to speech, which is what they mean. `non-lexical` is DELIBERATELY LEFT OUT: it
+#   covers DDK, glides, breath and cough alike, so no single kind is right for it, and forcing only
+#   ever ADDS a branch -- mapping it to voice would run VOICE on every cough file. It is recorded as
+#   unmapped on those files, which is the honest state. Nothing here was fitted; it is a reading of
+#   the b2ai task registry's own vocabulary.
+# ---------------------------------------------------------------------------------------------
+# GUESS redaction.padding_ms 200 -- ported unchanged from v1. Must exceed the WORST alignment edge
+#   error, which remains unquantified; 200 ms is a generous cover for word-level ASR timing error.
+#   Not measured. The packaged derivation is explicit that a median will not do here, because of the
+#   two boundary failures -- an audible fragment of a name, and a clipped neighbour -- only one is
+#   recoverable.
+# GUESS redaction.fill silence -- redact.md leaves the choice DEFERRED: which of silence, noise or
+#   bleep least damages the measurements taken downstream of a released artifact has not been
+#   measured. silence is chosen because it is the only implemented fill that adds no signal. The
+#   packaged bleep is scaled to the extent's own PEAK, so a bleeped extent comes out louder than
+#   what it replaced by that extent's crest factor over sqrt(2) -- measured 3.19x on the node's own
+#   noise fixture -- which is energy a downstream level or spectral measurement would read as real.
+#   noise is not implemented and raises rather than shipping an unmeasured spectral shape. Silence
+#   is not free either: it puts a hole in the envelope that a duration or continuity measurement
+#   will read. Declared rather than defaulted; not fitted.
+# ---------------------------------------------------------------------------------------------
+# NOT SET, deliberately, and each stays null:
+#   speech.second_diarizer -- no measured ranking exists; a count of not-1 records
+#     second_diarizer "not_consulted" and still flags, which is the honest state.
+#   speech.separation_backend / separation_sound_class -- the second is absent UPSTREAM
+#     (separate_audios refuses speech_sound without a class, and there is no defensible class), so
+#     separation does not run.
+#   speech.speech_test_stoi_floor / speech_test_si_sdr_floor, quality.* -- unmeasured; the gates they
+#     would arm report without gating, by design, until labelled verdicts exist.
+#   phonation.hnr_floor_interval_db / rms_floor_interval -- the v1 intervals were measured in
+#     normalised-autocorrelation units and the gate now reads Praat dB and RMS; the units do not
+#     transfer, so the near-edge row stays inert rather than carrying a converted invention.
+#   voice.f0_range_by_population, voice.f0_range_ratio_max, voice.task_duration_ranges -- see the
+#     f0_range_hz note; each is owed a fit, and none is needed to run.
+#   airway.k_db, k_db_by_task, k_margin_db, contest_labels -- the branch falls back to the FITTED
+#     spans.k_db.airway 18.0 dB; overriding a fitted value with a guess would be a strict loss.
+#   words.onomatopoeic_tokens -- owed the corpus it would be drawn from.
+#   speech.hint_tags / voice.hint_tags -- UNREAD by the v2 fold. See README.
+# ---------------------------------------------------------------------------------------------
+
+windows:
+  yamnet:
+    default_threshold: 0.5
+    label_thresholds: {}
+  ast:
+    default_threshold: 0.5
+    label_thresholds: {}
+  hear:
+    default_threshold: 0.5
+    label_thresholds: {}
+
+phonation_spans:
+  f0_stability_cents: 100.0
+  formant_stability_hz: 400.0
+  glide_min_excursion_cents: 400.0
+  hangover_ms: 60.0
+  voicing_strength_floor: 0.3
+  mixed_voiced_fraction: 0.5
+  unvoiced_max_formant_bandwidth_hz: 250.0
+  word_aligned_min_evidence_fraction: 0.8
+
+voice:
+  f0_range_hz: [75.0, 500.0]
+
+speech:
+  word_gap_ms: 500
+  enrollment_model:
+    model_id: speechbrain/spkrec-ecapa-voxceleb
+    revision: 0f99f2d0ebe89ac095bcc5903c4dd8f72b367286
+  target_match_cosine: 0.5
+
+taxonomy:
+  presence_floor:
+    speech:
+      acoustic: 1
+      lexical: 1
+    airway:
+      health_acoustic: 1
+      acoustic: 1
+  voice_min_duration_s: 1.0
+  voice_uncertain_duration_s: 0.3
+  speech_labels:
+    - Speech
+    - "Child speech, kid speaking"
+    - Conversation
+    - "Narration, monologue"
+
+routing:
+  hint_kind_map:
+    cough: airway
+    breathe: airway
+    airway: airway
+    speech: speech
+    read-speech: speech
+    read: speech
+    elicited: speech
+    recall: speech
+    phonation: voice
+    sustained-vowel: voice
+    voice: voice
+    humming: voice
+
+redaction:
+  padding_ms: 200
+  fill: silence
