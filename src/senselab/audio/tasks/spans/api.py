@@ -45,7 +45,6 @@ def propose_spans(
     sampling_rate: int,
     *,
     k_db: float,
-    floor_margin_db: float,
     transition_window_ms: int,
     min_duration_ms: int,
     min_separation_ms: int,
@@ -56,9 +55,11 @@ def propose_spans(
     envelope has risen ``k_db`` above the floor is one candidate, directly — not a peak later
     expanded outward. Onset and offset then walk by the identical rule, in opposite directions,
     from each candidate's own edges: neither can close for a reason the other would not also close
-    for, unlike the peak-anchored/floor-fraction pair this replaced, whose asymmetry (see
-    ``floor_margin_db``) let a real multi-scene recording collapse into one merged span once an
-    unrelated bug stopped masking it.
+    for, unlike the peak-anchored/floor-fraction pair this replaced, whose asymmetry let a real
+    multi-scene recording collapse into one merged span once an unrelated bug stopped masking it.
+
+    ``k_db`` is both tests: it opens a candidate, and a walk stops once the envelope has fallen back
+    within it of the floor for ``transition_window_ms`` continuously.
 
     Args:
         envelope_db: Envelope in dBFS, ``nan`` at any sample that had no dB value.
@@ -66,16 +67,10 @@ def propose_spans(
             :func:`~senselab.audio.tasks.envelope.api.global_floor_dbfs` — one value for the whole
             signal, not a local, time-varying one.
         sampling_rate: Samples per second.
-        k_db: How far above the floor the envelope must cross to open a candidate span. Per reader:
-            read it from ``spans.k_db.<reader>`` in the triage config.
-        floor_margin_db: A walk stops once the envelope has fallen within this many dB of the floor,
-            sustained for ``transition_window_ms`` — the same rule for onset (walking backward) and
-            offset (walking forward). Replaces a peak-anchored onset (walk back while within a fixed
-            drop of the peak) paired with a floor-fraction offset (walk forward to a threshold fixed
-            once at the peak's own floor value): that pair's asymmetry is what let an offset's stale,
-            peak-anchored threshold outlive the walk's own progress across a scene. Read it from
-            ``spans.floor_margin_db``.
-        transition_window_ms: How long the envelope must stay within ``floor_margin_db`` of the floor,
+        k_db: How far above the floor the envelope must cross to open a candidate span, and the
+            level a walk stops at. Per reader: read it from ``spans.k_db.<reader>`` in the triage
+            config.
+        transition_window_ms: How long the envelope must stay within ``k_db`` of the floor,
             continuously, before a walk closes. Must be shorter than the shortest event to be
             bounded. Read it from ``spans.transition_window_ms``.
         min_duration_ms: Discard spans shorter than this. Read it from ``spans.min_duration_ms``.
@@ -104,7 +99,7 @@ def propose_spans(
             candidates[-1] = (candidates[-1][0], end, candidates[-1][2] + 1)
         else:
             candidates.append((start, end, 1))
-    threshold = floor_db + floor_margin_db
+    threshold = floor_db + k_db
     win = int(transition_window_ms * sampling_rate / 1000)
     found: list[Span] = []
     for start, end, n_absorbed in candidates:

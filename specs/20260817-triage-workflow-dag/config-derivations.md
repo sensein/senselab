@@ -218,16 +218,34 @@ the instruments here localise. min_separation_ms 30, changed this session from a
 threshold-crossings this close together into one proposal before either is walked, so one event's
 own brief dips below k_db do not read as several, but at 150 ms it was absorbing more than that --
 verified directly on a real recording (a DDK buttercup task) where a genuine ~149 ms gap, well
-past floor_margin_db's own 30 ms sustain requirement and dipping below the floor itself, sat 0.6 ms
+past the walk-stop's own 30 ms sustain requirement and dipping below the floor itself, sat 0.6 ms
 under the old 150 ms cutoff and got glued into one seven-second span the walk-stop rule would
-otherwise have split. floor_margin_db(12) > k_db(6) makes this provable, not just observed: any
-sample failing the k_db crossing test also clears the walk-stop's own, more permissive threshold,
-so a raw gap of at least transition_window_ms is always long enough to stop a walk on its own once
-it reaches it. Setting min_separation_ms to that same value closes the gap: nothing shorter than a
+otherwise have split. The walk stops at k_db, the same level that opens a candidate, which makes
+this provable rather than merely observed: any sample failing the crossing test also satisfies the
+stop, so a raw gap of at least transition_window_ms is always long enough to stop a walk on its own
+once it reaches it. Setting min_separation_ms to that same value closes the gap: nothing shorter than a
 self-sufficient stop condition ever survives to the pre-merge stage un-merged, and nothing merged
 away was ever going to stop a walk regardless. The two keys must move together -- if
 transition_window_ms changes again, min_separation_ms should equal it, not sit independently at
 whatever value was last fitted.
+
+### floor_margin_db -- RETIRED 2026-09-04
+
+The walk-stop used to have a level of its own, `spans.floor_margin_db`, shipped at 12.0 against a
+`k_db` of 6.0. It never did anything. The stop test was *more permissive* than the open test, so
+every sample that failed the `k_db` crossing already satisfied the stop, and no walk could extend a
+span past its own crossing run at any `floor_margin_db >= k_db`. Measured on a real 79.51 s envelope
+(1,272,082 samples, floor -78.28 dBFS): 12.0 and 6.0 both give 86 spans totalling 59.77 s, extents
+byte-identical; only values *below* `k_db` change anything (3.0 -> 51 spans / 66.52 s, 0.0 -> 11
+spans / 74.88 s).
+
+Why it existed is still worth knowing: it replaced a peak-anchored onset paired with a
+floor-fraction offset, whose asymmetry let an offset's stale, peak-anchored threshold outlive the
+walk's own progress and collapse a real multi-scene recording into one merged span. The symmetric
+floor-relative rule it introduced is what survives -- only its separate level is gone, folded into
+`k_db`. `transition_window_ms` is untouched and remains load-bearing: it sets how far the walk looks
+for a still-loud sample, and so whether neighbouring events bridge into one span (30 ms -> 86 spans,
+100 ms -> 45, 300 ms -> 18 on the same envelope).
 
 ## clipping
 

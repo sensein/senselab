@@ -591,7 +591,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         k_db = float(config.require("spans.k_db"))
         parameters: dict[str, Any] = {
             "k_db": k_db,
-            "floor_margin_db": float(config.require("spans.floor_margin_db")),
             "transition_window_ms": int(config.require("spans.transition_window_ms")),
             "min_duration_ms": int(config.require("spans.min_duration_ms")),
             "min_separation_ms": int(config.require("spans.min_separation_ms")),
@@ -610,15 +609,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             reads.append(state["consensus_id"])
         activity = _step("spans", parameters, tuple(reads), software)
 
-        def _propose(
-            envelope: np.ndarray, floor: float, *, gate: float, margin: float, min_duration_ms: int
-        ) -> list[Span]:
+        def _propose(envelope: np.ndarray, floor: float, *, gate: float, min_duration_ms: int) -> list[Span]:
             proposed = propose_spans(
                 envelope,
                 floor,
                 target_hz,
                 k_db=gate,
-                floor_margin_db=margin,
                 transition_window_ms=parameters["transition_window_ms"],
                 min_duration_ms=min_duration_ms,
                 min_separation_ms=parameters["min_separation_ms"],
@@ -665,7 +661,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             state["envelope"],
             state["floor"],
             gate=k_db,
-            margin=parameters["floor_margin_db"],
             min_duration_ms=parameters["min_duration_ms"],
         )
         supplement: list[Span] = []
@@ -674,7 +669,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 state["normalized_envelope"],
                 state["normalized_floor"],
                 gate=k_db,
-                margin=parameters["floor_margin_db"],
                 min_duration_ms=parameters["min_duration_ms"],
             )
             supplement = _novel(secondary, primary, measure="amplitude", signal="normalized")

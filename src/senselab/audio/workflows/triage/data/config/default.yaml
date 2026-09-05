@@ -34,11 +34,10 @@ floor:
 
 # Span proposal: the gate, the walk, the length filters, and the continuity source's own cut.
 spans:
-  floor_margin_db: 12.0                # a walk stops once the envelope is within this of the floor
-  transition_window_ms: 30             # how long it must stay there; same rule for onset and offset
+  transition_window_ms: 30             # how long it must stay within k_db of the floor; onset and offset alike
   min_duration_ms: 50                  # discard an amplitude proposal shorter than this
   min_separation_ms: 30                # merge proposals closer than this; must track transition_window_ms
-  k_db: 6.0                            # rise over floor a peak needs to be proposed at all
+  k_db: 6.0                            # rise over floor to open a span, and the level a walk stops at
   continuity_cut_percentile: 5.0       # lowest N% of continuity-trace samples BY RANK are the change points
   continuity_min_duration_ms: 300      # continuity events are long; the only length filter on that source
 

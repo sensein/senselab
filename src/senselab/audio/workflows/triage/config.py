@@ -8,7 +8,7 @@ An override may not introduce a key, because a key the packaged file does not ha
 ignoring it would run the packaged value while the caller believed otherwise. Two kinds of mapping
 live in that file, though, and the rule applies to one of them:
 
-* A **schema** mapping's keys are names the code reads — ``spans.floor_margin_db``,
+* A **schema** mapping's keys are names the code reads — ``spans.k_db``,
   ``taxonomy.voice_min_duration_s``. A key the code never reads does nothing, so a new one is refused.
 * A **data** mapping's keys are values the caller supplies — a HeAR label, a hint tag, a vocal task,
   a kind. Refusing a new one refuses the configuration's whole purpose: a campaign screening for
@@ -80,7 +80,7 @@ class TriageConfig:
         """Read a value, returning ``default`` when it is absent or null.
 
         Args:
-            path: Dotted path, e.g. ``"spans.floor_margin_db"``.
+            path: Dotted path, e.g. ``"spans.k_db"``.
             default: Returned when the value is missing or null.
 
         Returns:
