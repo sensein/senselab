@@ -222,24 +222,34 @@ class TestAnUnmeasurableEnvelope:
 class TestGroupExtentsIntoRuns:
     """The generic word/extent grouper shared by PREPROCESS's ASR spans and SPEECH's own spans."""
 
-    def test_a_gap_over_the_threshold_starts_a_new_run(self) -> None:
-        """Two extents 200 ms apart, with a 150 ms gap threshold, stay two runs."""
-        runs = group_extents_into_runs([(0.0, 0.5), (0.7, 1.0)], gap_ms=150.0)
+    def test_extents_with_a_hole_between_them_stay_two_runs(self) -> None:
+        """Extents that do not touch are two runs; no gap threshold decides it."""
+        runs = group_extents_into_runs([(0.0, 0.5), (0.7, 1.0)])
         assert runs == [(0.0, 0.5, [0]), (0.7, 1.0, [1])]
 
-    def test_a_gap_under_the_threshold_merges_into_one_run(self) -> None:
-        """Two extents 100 ms apart, with a 150 ms gap threshold, merge into one run."""
-        runs = group_extents_into_runs([(0.0, 0.5), (0.6, 1.0)], gap_ms=150.0)
+    def test_touching_extents_merge_into_one_run(self) -> None:
+        """A shared boundary is adjacency, so the two become one run."""
+        runs = group_extents_into_runs([(0.0, 0.5), (0.5, 1.0)])
+        assert runs == [(0.0, 1.0, [0, 1])]
+
+    def test_overlapping_extents_merge_into_one_run(self) -> None:
+        """An overlap merges too, and the run takes the later end."""
+        runs = group_extents_into_runs([(0.0, 0.6), (0.5, 1.0)])
+        assert runs == [(0.0, 1.0, [0, 1])]
+
+    def test_a_contained_extent_does_not_shorten_its_run(self) -> None:
+        """A short extent inside a longer one leaves the run's end where it was."""
+        runs = group_extents_into_runs([(0.0, 1.0), (0.2, 0.4)])
         assert runs == [(0.0, 1.0, [0, 1])]
 
     def test_input_order_does_not_matter(self) -> None:
         """Extents are sorted by start before grouping; member indices still refer to the input."""
-        runs = group_extents_into_runs([(0.6, 1.0), (0.0, 0.5)], gap_ms=150.0)
+        runs = group_extents_into_runs([(0.5, 1.0), (0.0, 0.5)])
         assert runs == [(0.0, 1.0, [1, 0])]
 
     def test_no_extents_is_no_runs(self) -> None:
         """An empty input produces an empty output, not an error."""
-        assert group_extents_into_runs([], gap_ms=150.0) == []
+        assert group_extents_into_runs([]) == []
 
 
 class TestSegmentsBetweenChangePoints:

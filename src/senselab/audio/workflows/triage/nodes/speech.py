@@ -114,7 +114,6 @@ def _required(config: TriageConfig, enrollment: Enrollment | None) -> dict[str, 
         The resolved values, keyed by their short names.
     """
     values: dict[str, Any] = {
-        "word_gap_ms": float(config.require("speech.word_gap_ms")),
         "coverage_threshold": float(config.require("yamnet.coverage_threshold")),
         "clip_headroom": float(config.require("disruptions.clip_headroom")),
         "min_clip_run": int(config.require("disruptions.min_clip_run")),
@@ -511,7 +510,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
 
     # Step 2 — speech spans from consensus word timings, in memory until corroborated.
     word_extents = [word.extent or (0.0, 0.0) for word in words]
-    grouped = group_extents_into_runs(word_extents, values["word_gap_ms"])
+    grouped = group_extents_into_runs(word_extents)
     span_extents = [clamp_extent((start, end), plain) for start, end, _ in grouped]
     speech_s = sum(end - start for start, end in span_extents)
 
@@ -532,7 +531,6 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         node=NODE,
         step="corroborate",
         parameters={
-            "word_gap_ms": values["word_gap_ms"],
             "coverage_threshold": values["coverage_threshold"],
             "speech_labels": sorted(speech_family) or None,
         },

@@ -204,6 +204,24 @@ transcribing a stretch as speech already says something an envelope or a spectra
 would otherwise have to infer from the acoustics. Consecutive consensus words are grouped into runs
 by speech.word_gap_ms, the identical mechanism and the identical config key SPEECH already uses for
 its own word-timing spans (group_extents_into_runs, shared rather than duplicated so the two
+speech.word_gap_ms -- DELETED 2026-09-05, parameter and key both. Words arrive from the recognizers
+already timed, so their extents are the span; nothing is inferred and nothing needs a threshold to
+become one. group_extents_into_runs now merges where extents touch or overlap and takes no gap
+argument at all, a parameter that could only ever take one defensible value being worse than none.
+
+What the key cost while it existed. It shipped null and PREPROCESS read it with `.get`, skipping the
+ASR span source entirely when it was None -- silently, with the node still returning PASS. A
+388-recording run over ten subjects produced 7,651 consensus words and zero ASR spans. SPEECH read
+the same key with `require`, so the same null errored that branch outright on all 112 recordings of
+the earlier stage-0 collection. One unmeasured key, two failures, neither of them announced.
+
+Both call sites shared the key deliberately, so PREPROCESS and SPEECH could not drift onto two
+notions of one span; they now share the parameterless rule instead. The concept the key expressed --
+"one utterance", a run of words delimited by pauses -- is no longer expressed anywhere in the graph.
+Nothing downstream was found to depend on it. Two test fixtures did, both by placing words with
+deliberate holes between them and relying on a threshold to close them; both now place contiguous
+words, which is what the helper's own docstring already claimed it did.
+
 branches cannot drift onto two different notions of "one utterance"). speech.word_gap_ms ships null
 in the packaged config -- "any value is a claim about what makes one utterance," per its own
 derivation below -- so the ASR span source is absent by default alongside every other place that
@@ -754,7 +772,6 @@ UNSET, and why -- benchmarks/open.md carries each of these:
   redaction.padding_ms: must exceed the *worst* consensus-word edge error, which is unquantified. The
     median will not do -- of the two boundary failures, an audible fragment of a name and a clipped
     neighbour, only one is recoverable.
-  speech.word_gap_ms: any value is a claim about what makes one utterance.
   speech.second_diarizer: no measured ranking of second diarizers exists; while null, a count of
     not-1 records second_diarizer "not_consulted" and still flags.
   speech.target_match_cosine: no similarity threshold has been derived; a hint carrying a target

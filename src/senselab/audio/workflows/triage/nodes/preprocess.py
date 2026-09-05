@@ -575,8 +575,8 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         Four sources, applied in this order, each adding only spans over ground no earlier source
         covers: primary (the pre-emphasised amplitude envelope), supplementary (the normalized
         envelope, where that derivative exists), continuity (``continuity_trace``, where that
-        derivative exists) and ASR (the consensus transcript's word timings grouped by
-        ``speech.word_gap_ms``). A later candidate overlapping a kept span is recorded on that
+        derivative exists) and ASR (the consensus transcript's word timings, grouped where they
+        touch). A later candidate overlapping a kept span is recorded on that
         span's ``corroborated_by`` attribute rather than dropped; the attribute is absent, not
         empty, on a span nothing corroborated, and creates no provenance edge because a
         corroborating candidate never becomes its own entity. ``contains_clip`` is the only flag
@@ -597,15 +597,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             "continuity_cut_percentile": float(config.require("spans.continuity_cut_percentile")),
             "continuity_min_duration_ms": int(config.require("spans.continuity_min_duration_ms")),
         }
-        word_gap_ms = config.get("speech.word_gap_ms")
-        if word_gap_ms is not None:
-            parameters["word_gap_ms"] = float(word_gap_ms)
         reads = [state["envelope_id"]]
         if "normalized_envelope" in state:
             reads.append(state["normalized_envelope_id"])
         if "continuity_trace" in state:
             reads.append(derivatives["continuity_trace"])
-        if "consensus" in state and word_gap_ms is not None:
+        if "consensus" in state:
             reads.append(state["consensus_id"])
         activity = _step("spans", parameters, tuple(reads), software)
 
@@ -626,7 +623,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 return {"peak_over_floor_db": span.peak_over_floor_db, "k_db": k_db}
             if measure == "continuity":
                 return {"continuity_cut_percentile": parameters["continuity_cut_percentile"]}
-            return {"word_gap_ms": parameters["word_gap_ms"]}
+            return {}
 
         corroboration: dict[int, list[dict[str, Any]]] = {}
 
@@ -684,11 +681,11 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             continuity = _novel(continuity_candidates, primary + supplement, measure="continuity", signal=sharp_signal)
 
         asr: list[Span] = []
-        if "consensus" in state and word_gap_ms is not None:
+        if "consensus" in state:
             word_extents = [(float(word["start"]), float(word["end"])) for word in state["consensus"]]
             asr_candidates = [
                 Span(start=start, end=end, peak_over_floor_db=float("nan"), merged_proposals=len(members))
-                for start, end, members in group_extents_into_runs(word_extents, parameters["word_gap_ms"])
+                for start, end, members in group_extents_into_runs(word_extents)
             ]
             asr = _novel(asr_candidates, primary + supplement + continuity, measure="asr", signal="consensus")
 
