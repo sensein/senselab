@@ -91,12 +91,12 @@ class TestItDrawsFromTheStore:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """A 25 s recording renders one PDF of two pages, plus the summary JSON."""
+        """A 25 s recording renders one PDF: a summary cover plus two timeline pages."""
         seed_preprocess_store(store, duration_s=25.0, yamnet_labels=[["Speech"]], words=["one"])
         out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
         assert sorted(out) == ["figure", "taxonomy_summary"]
         assert out["figure"].is_file() and out["figure"].suffix == ".pdf"
-        assert _pdf_page_count(out["figure"]) == 2
+        assert _pdf_page_count(out["figure"]) == 1 + 2  # cover, then two 20 s windows
 
     def test_the_pdf_holds_one_page_per_window(
         self,
@@ -105,10 +105,10 @@ class TestItDrawsFromTheStore:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """A 70 s recording is four 20 s pages, the last one padded — all in one file."""
+        """A 70 s recording is a cover plus four 20 s pages, the last padded — all one file."""
         seed_preprocess_store(store, duration_s=70.0, yamnet_labels=[["Speech"]], words=["one"])
         out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="rec")
-        assert _pdf_page_count(out["figure"]) == 4
+        assert _pdf_page_count(out["figure"]) == 1 + 4  # cover, then four windows
 
     def test_pngs_are_written_only_when_the_style_asks(
         self,
@@ -167,11 +167,11 @@ class TestItDrawsFromTheStore:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """The common case for a short task recording."""
+        """The common case for a short task recording: a cover and one timeline page."""
         seed_preprocess_store(store, duration_s=3.0, yamnet_labels=[["Speech"]])
         out = preprocess_figure(store, tmp_path / "figures", config, run_dir=tmp_path, stem="short")
         assert sorted(out) == ["figure", "taxonomy_summary"]
-        assert _pdf_page_count(out["figure"]) == 1
+        assert _pdf_page_count(out["figure"]) == 1 + 1  # cover, then one window
 
     def test_it_refuses_a_store_with_no_conditioned_stream(
         self, store: ProvStore, config: TriageConfig, tmp_path: Path

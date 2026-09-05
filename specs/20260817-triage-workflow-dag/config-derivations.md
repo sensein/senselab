@@ -646,6 +646,31 @@ fitted; extended by override.
 
 ## taxonomy
 
+`taxonomy.consolidation_floor` **0.2** -- owner-directed, applied to every classifier, both to
+TAXONOMY's consolidation and to the union that selects the figure's raster rows.
+
+Raised from 0.1 on 2026-09-05. The reasoning is about what these numbers are: YAMNet's and HeAR's
+outputs are **probabilities**, and this corpus is single-speaker clinical recordings, not complex
+mixtures with many concurrent sources. A label a classifier gives 0.15 to, in a recording that
+contains one person doing one task, is far more likely to be the tail of a 500-label distribution
+than a second sound genuinely present. The floor was originally 0.1 and applied only to YAMNet, on
+the argument that HeAR's eight labels are all health events worth seeing; that exemption was
+withdrawn when a rendered page showed HeAR painting all eight in every span, which made the real
+coughs unfindable.
+
+Measured on `Story-recall-(v2)`, whose HeAR label peaks over the file are Speech 0.781, Laugh 0.717,
+Snore 0.677, Baby Cough 0.414, Breathe 0.377, Sneeze 0.190, Throat Clear 0.139, Cough 0.127. At 0.1
+all eight survive; at **0.2 the surviving five are Speech, Laugh, Snore, Baby Cough and Breathe**,
+and the three that go are the ones under 0.2. YAMNet is unaffected on this recording: only Silence
+and Speech clear either value, everything else being under 0.08.
+
+This is a declared default, not a fitted one. What would upgrade it is per-window labelled verdicts
+over more than three subjects -- the ROC that `windows.<classifier>.default_threshold` is still
+owed. Note the two are different quantities: this floor governs which labels are worth
+*consolidating and drawing*, while `default_threshold` governs which become labelled window
+entities in the store.
+
+
 The evidence fold: per-kind presence floors and label vocabularies.
 
 Taxonomy label vocabularies -- semantic mappings, not thresholds: which of each detector's labels
