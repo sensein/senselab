@@ -27,9 +27,10 @@ jobs:
       fail-fast: true
       matrix:
         include:
-        - {os: macos-latest, architecture: arm64, python-version: '3.11'}
-        # - {os: macos-latest, architecture: arm64, python-version: '3.12'}
-        # the reason why we commented out 3.12 is that it hits github rate limit for some modules (e.g., knn-vc)
+        - {os: macos-latest, architecture: arm64, python-version: '3.12'}
+        # 3.12 is the project default; 3.11 ran here until 2026-09-05 only because 3.12 once hit a
+        # GitHub rate limit fetching some modules (e.g. knn-vc). If that returns, fix the fetch
+        # rather than dropping this job's interpreter below the one everything else tests.
     steps:
     - uses: actions/checkout@v5
       with:
@@ -105,7 +106,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.11'
+        python-version: '3.12'
     - name: Install dependencies with uv
       run: uv sync --all-extras --group dev
     - name: Run pre-commit
