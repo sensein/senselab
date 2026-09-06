@@ -72,7 +72,7 @@ commits, the licence history, the venv's dependency set and every measurement be
 in `specs/20260818-083214-driftse-upstream-mit/design.md`.
 
 
-## ClearVoice (FRCRN, MossFormerGAN, MossFormer2)
+## ClearerVoice (FRCRN, MossFormerGAN, MossFormer2)
 
 [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio) (Alibaba Speech Lab,
 Apache-2.0) contributes three enhancers, in an isolated subprocess venv:
@@ -113,7 +113,7 @@ and clean speech is left essentially untouched — every SepFormer checkpoint te
 Peaks stayed ≤ 0.95, so no clipping exposure was observed. Independently reproduced here on clean
 16 kHz conversational speech: `FRCRN_SE_16K` returned −0.01 dB RMS at r = 1.0000.
 
-`FRCRN_SE_16K` is one of two ClearVoice checkpoints whose input upstream RMS-normalises to −25 dBFS;
+`FRCRN_SE_16K` is one of two ClearerVoice checkpoints whose input upstream RMS-normalises to −25 dBFS;
 the inverse scalar is applied to the output, and reported in `metadata["clearvoice"]`.
 
 Each returned `Audio` carries `metadata["clearvoice"]` with the model id and the **resolved commit**

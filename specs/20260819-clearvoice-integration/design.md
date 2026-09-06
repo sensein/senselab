@@ -12,7 +12,7 @@ the README's prose, which is looser than the code.
 
 Three components:
 
-1. **ClearVoice** — the inference platform, on PyPI. Four tasks, six checkpoints:
+1. **ClearerVoice** — the inference platform, on PyPI. Four tasks, six checkpoints:
 
    | Upstream task | Model | Rate | Outputs |
    |---|---|---|---|
@@ -35,7 +35,7 @@ Three components:
 3. **train/** — training and finetuning recipes. The README advertises target-speaker extraction
    "conditioned on a reference speech (8 kHz)", "on body gestures", and "neuro-steered on EEG", and
    those are real, but they are `train/target_speaker_extraction/config/*.yaml` recipes with no
-   ClearVoice inference entry point and no released checkpoint reachable through it. senselab
+   ClearerVoice inference entry point and no released checkpoint reachable through it. senselab
    integrates inference, so they are out of scope; they are recorded here so a later reader does not
    mistake their absence for an oversight.
 
@@ -228,7 +228,7 @@ other task uses.
 
 ### D-9: `decode()`, not the tensor-to-tensor path
 
-`ClearVoice.__call__` accepts a numpy array and routes to `decode_one_audio_batch`. That path is
+`ClearerVoice.__call__` accepts a numpy array and routes to `decode_one_audio_batch`. That path is
 broken for the super-resolution model with a single mono input: `decode_one_audio_mossformer2_sr_48k`
 in `decode_batch.py` ends the short-audio branch with `outputs = generator_output.squeeze()`, which
 for `b == 1` yields a 1-D array, and then indexes it as `outputs_pred[batch_idx, :]` → `IndexError`.
@@ -347,7 +347,7 @@ From a comparison against six human-verified events on a real recording (prior w
 recorded here because it is capability information absent from upstream's documentation, and it is
 what a caller needs in order to choose a checkpoint):
 
-- Every ClearVoice model **conserves energy**: output never exceeds input (−12.2 to −0.0 dB), in
+- Every ClearerVoice model **conserves energy**: output never exceeds input (−12.2 to −0.0 dB), in
   phase at zero lag, and clean speech is left essentially untouched. Every SepFormer checkpoint
   tested failed that check. Independently reproduced here: `FRCRN_SE_16K` on clean 16 kHz
   conversational speech returned −0.01 dB RMS with r = 1.0000 and peak 0.63.

@@ -310,7 +310,7 @@ the checkpoint mirror -- `resolve_model` returns `(sha, path)`, and it used to b
 nothing downstream could tell which commit of the mirror actually produced a given separation, only
 which ref was requested. It is `None` when the caller supplied checkpoints directly
 (`checkpoint_dir` or `SENSELAB_UNASDIFF_CHECKPOINTS`) rather than through the pinned mirror -- there
-is no commit to attribute those to. Same pattern as ClearVoice's `metadata["clearvoice"]` below.
+is no commit to attribute those to. Same pattern as ClearerVoice's `metadata["clearvoice"]` below.
 
 ### Licensing
 
@@ -337,7 +337,7 @@ containment check — there is exactly one backend today). It is not in any defa
 `scripts/analyze_audio.py` never reaches it. The licensing position above is the reason: an
 unresolved licence request must not end up load-bearing in a default pipeline.
 
-## ClearVoice MossFormer2_SS_16K
+## ClearerVoice MossFormer2_SS_16K
 
 [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio)'s two-speaker separator
 (Apache-2.0), in an isolated subprocess venv. Upstream's SI-SNRi leads SepFormer on LRS2-2Mix

@@ -79,7 +79,7 @@ def _second_diarizer_model(model_id: str) -> HFModel:
 
 
 def _clearvoice_model(model_id: str) -> HFModel:
-    """A ClearVoice separation checkpoint's model spec; its commit resolves at construction.
+    """A ClearerVoice separation checkpoint's model spec; its commit resolves at construction.
 
     Args:
         model_id: The fully qualified checkpoint id.

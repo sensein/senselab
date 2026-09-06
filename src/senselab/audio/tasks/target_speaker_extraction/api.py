@@ -27,13 +27,13 @@ def extract_target_speakers_from_videos(
 ) -> List[List[Audio]]:
     """Extract each visible speaker's voice from every video, using their lip motion as the cue.
 
-    One backend today: ClearVoice's ``AV_MossFormer2_TSE_16K``, in an isolated subprocess venv. The
+    One backend today: ClearerVoice's ``AV_MossFormer2_TSE_16K``, in an isolated subprocess venv. The
     input must be a video **file** (``.mp4``, ``.avi``, ``.mov``, ``.webm``) and ffmpeg must be on
     PATH.
 
     Args:
         videos: Video files, as paths or file-backed ``Video`` objects.
-        model: ``HFModel`` naming a ClearVoice extraction checkpoint. ``None`` uses
+        model: ``HFModel`` naming a ClearerVoice extraction checkpoint. ``None`` uses
             ``alibabasglab/AV_MossFormer2_TSE_16K``.
         device: CUDA or CPU. ``None`` leaves the choice to the backend.
         parameters: Backend-specific parameters, validated against the selected backend's signature —
@@ -60,5 +60,5 @@ def extract_target_speakers_from_videos(
 
     raise NotImplementedError(
         f"No target-speaker-extraction backend for {model.path_or_uri!r}. Supported: HFModel ids "
-        f"naming a ClearVoice extraction checkpoint ({DEFAULT_TSE_MODEL})."
+        f"naming a ClearerVoice extraction checkpoint ({DEFAULT_TSE_MODEL})."
     )

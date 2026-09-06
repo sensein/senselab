@@ -100,7 +100,7 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
     ),
     # ── Audio: Speech Enhancement ──
     # NOTE: documents the default in-process backend (SpeechBrain) only. enhance_audios also
-    # dispatches by model id to DriftSE and to ClearVoice, both ISOLATED subprocess venvs
+    # dispatches by model id to DriftSE and to ClearerVoice, both ISOLATED subprocess venvs
     # (venv_name="driftse" / "clearvoice"). Same flat-schema limitation as the diarization entry.
     "audio.tasks.speech_enhancement.enhance_audios": CompatibilityEntry(
         required_deps=["speechbrain", "torchaudio"],
