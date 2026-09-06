@@ -29,6 +29,7 @@ import torch
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
+from senselab.audio.tasks.classification.yamnet import span_yamnet_input
 from senselab.audio.tasks.clipping.api import detect_clip_events
 from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.envelope.api import (
@@ -1093,8 +1094,9 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
     def _span_yamnet() -> None:
         """Per-span YAMNet over the spans, raw scores only — no labelling decision.
 
-        Unlike HeAR, YAMNet has no fixed-window constraint (its own native ~0.96 s grid runs over
-        whatever length it is given), so a span is classified directly rather than buffered. Runs
+        YAMNet's native frame is fixed at 0.96 s and the model zero-pads anything shorter up to it,
+        so a short span is filled from its own samples by ``span_yamnet_input`` before it is handed
+        over; ``frame_filled`` records which windows that applied to. Runs
         over the plain signal, like ``_squim_for`` -- YAMNet already carries its own internal
         preprocessing, so our own dynamic-range-normalized signal on top is redundant at best and
         distorting at worst. No longer gated on normalization: this re-evaluation needs no
@@ -1118,15 +1120,13 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         result_ids: list[str] = []
         prepared: list[Audio] = []
         prepared_for: list[str] = []
+        filled_for: dict[str, bool] = {}
         for span_id in span_ids:
             span = store.get_entity(span_id)
-            start, end = span.extent or (0.0, 0.0)
-            prepared.append(
-                Audio(
-                    waveform=plain.waveform[:, int(start * target_hz) : int(end * target_hz)],
-                    sampling_rate=target_hz,
-                )
-            )
+            extent = span.extent or (0.0, 0.0)
+            audio, filled = span_yamnet_input(plain, extent)
+            prepared.append(audio)
+            filled_for[span_id] = filled
             prepared_for.append(span_id)
         classified = _classify_spans_in_batch(
             prepared,
@@ -1142,7 +1142,12 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "no_native_window"))
                 continue
             for raw_window in raw_windows:
-                window_extent = (start + float(raw_window["start"]), start + float(raw_window["end"]))
+                # A filled frame is longer than the span it came from, so its own end would overrun
+                # the span; the measurement covers the span, never the samples added to reach 0.96 s.
+                window_extent = (
+                    start + float(raw_window["start"]),
+                    min(start + float(raw_window["end"]), end),
+                )
                 window_id = store.entity(
                     prov_type="measurement",
                     extent=window_extent,
@@ -1153,7 +1158,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                         raw_window=raw_window,
                         default_threshold=default_threshold,
                         label_thresholds=label_thresholds,
-                        extra={},
+                        extra={"frame_filled": filled_for[span_id]},
                     ),
                 )
                 store.was_generated_by(window_id, activity)
