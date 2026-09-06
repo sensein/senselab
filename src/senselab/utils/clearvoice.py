@@ -127,7 +127,7 @@ class ClearVoiceModelSpec:
     Attributes:
         name: Upstream model name. Doubles as the HuggingFace repository name under
             :data:`CLEARVOICE_HF_ORG` and as the key ``network_wrapper`` dispatches on.
-        upstream_task: The ``task`` string ``clearvoice.ClearerVoice`` takes.
+        upstream_task: The ``task`` string ``clearvoice.ClearVoice`` takes.
         sampling_rate: Rate the checkpoint was trained at. Inputs are resampled to it on the host,
             and outputs come back at it.
         expected_outputs: Signals per input this checkpoint is *expected* to produce — 2 for the
@@ -229,7 +229,7 @@ def clearvoice_models_for_task(upstream_task: str) -> List[ClearVoiceModelSpec]:
     """Return every ClearerVoice checkpoint for one upstream task, in table order.
 
     Args:
-        upstream_task: One of the four ``task`` strings ``clearvoice.ClearerVoice`` accepts.
+        upstream_task: One of the four ``task`` strings ``clearvoice.ClearVoice`` accepts.
 
     Returns:
         The matching specs.
@@ -397,7 +397,7 @@ try:
 
     cvnet.SpeechModel.__init__ = _patched_init
 
-    from clearvoice import ClearerVoice
+    from clearvoice import ClearVoice
 
     if args["mode"] == "tse":
         import clearvoice.utils.video_process as vp
@@ -422,7 +422,7 @@ try:
         if not s3fd_weights.exists():
             os.symlink(args["s3fd_weights"], s3fd_weights)
 
-        cv = ClearerVoice(task=args["task"], model_names=[model_name])
+        cv = ClearVoice(task=args["task"], model_names=[model_name])
         outputs = []
         for video_path in args["video_paths"]:
             cv(input_path=video_path, online_write=True, output_path=args["output_dir"])
@@ -433,7 +433,7 @@ try:
         print(json.dumps({"output_paths": outputs, "device": str(device)}))
         sys.exit(0)
 
-    cv = ClearerVoice(task=args["task"], model_names=[model_name])
+    cv = ClearVoice(task=args["task"], model_names=[model_name])
     net = cv.models[0]
 
     from clearvoice.dataloader.dataloader import audio_norm
