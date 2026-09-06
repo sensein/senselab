@@ -241,7 +241,7 @@ requirements. Used for:</p>
 </span><span id="L-100"><a href="#L-100"><span class="linenos">100</span></a>    <span class="p">),</span>
 </span><span id="L-101"><a href="#L-101"><span class="linenos">101</span></a>    <span class="c1"># ── Audio: Speech Enhancement ──</span>
 </span><span id="L-102"><a href="#L-102"><span class="linenos">102</span></a>    <span class="c1"># NOTE: documents the default in-process backend (SpeechBrain) only. enhance_audios also</span>
-</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>    <span class="c1"># dispatches by model id to DriftSE and to ClearVoice, both ISOLATED subprocess venvs</span>
+</span><span id="L-103"><a href="#L-103"><span class="linenos">103</span></a>    <span class="c1"># dispatches by model id to DriftSE and to ClearerVoice, both ISOLATED subprocess venvs</span>
 </span><span id="L-104"><a href="#L-104"><span class="linenos">104</span></a>    <span class="c1"># (venv_name=&quot;driftse&quot; / &quot;clearvoice&quot;). Same flat-schema limitation as the diarization entry.</span>
 </span><span id="L-105"><a href="#L-105"><span class="linenos">105</span></a>    <span class="s2">&quot;audio.tasks.speech_enhancement.enhance_audios&quot;</span><span class="p">:</span> <span class="n">CompatibilityEntry</span><span class="p">(</span>
 </span><span id="L-106"><a href="#L-106"><span class="linenos">106</span></a>        <span class="n">required_deps</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;speechbrain&quot;</span><span class="p">,</span> <span class="s2">&quot;torchaudio&quot;</span><span class="p">],</span>

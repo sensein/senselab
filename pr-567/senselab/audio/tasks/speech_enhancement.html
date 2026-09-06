@@ -34,7 +34,7 @@
     <li><a href="#task-overview">Task Overview</a></li>
     <li><a href="#models">Models</a></li>
     <li><a href="#driftse-one-step-diffusion-enhancement">DriftSE (one-step diffusion enhancement)</a></li>
-    <li><a href="#clearvoice-frcrn-mossformergan-mossformer2">ClearVoice (FRCRN, MossFormerGAN, MossFormer2)</a></li>
+    <li><a href="#clearervoice-frcrn-mossformergan-mossformer2">ClearerVoice (FRCRN, MossFormerGAN, MossFormer2)</a></li>
     <li><a href="#evaluation">Evaluation</a></li>
   </ul></li>
 </ul>
@@ -155,7 +155,7 @@ Hann-tapered overlap-add for long inputs, and a recorded RNG seed. Those deviati
 commits, the licence history, the venv's dependency set and every measurement behind the choices are
 in <code>specs/20260818-083214-driftse-upstream-mit/design.md</code>.</p>
 
-<h2 id="clearvoice-frcrn-mossformergan-mossformer2">ClearVoice (FRCRN, MossFormerGAN, MossFormer2)</h2>
+<h2 id="clearervoice-frcrn-mossformergan-mossformer2">ClearerVoice (FRCRN, MossFormerGAN, MossFormer2)</h2>
 
 <p><a href="https://github.com/modelscope/ClearerVoice-Studio">ClearerVoice-Studio</a> (Alibaba Speech Lab,
 Apache-2.0) contributes three enhancers, in an isolated subprocess venv:</p>
@@ -238,12 +238,117 @@ analysis that treats breaths or coughs as signal:</p>
 <p>So: <code>FRCRN_SE_16K</code> when non-speech events matter, <code>MossFormerGAN_SE_16K</code> when only speech does, and
 <code>MossFormer2_SE_48K</code> when the recording is fullband and breaths are not of interest.</p>
 
+<h3 id="the-whole-toolkit-and-what-each-checkpoints-rate-means">The whole toolkit, and what each checkpoint's rate means</h3>
+
+<p>Enhancement is three of the six checkpoints ClearerVoice-Studio ships
+(<a href="https://arxiv.org/abs/2506.19398">arXiv 2506.19398</a>). The others reach senselab through their own
+task modules:</p>
+
+<table>
+<thead>
+<tr>
+  <th>Checkpoint</th>
+  <th>Task</th>
+  <th>Native rate</th>
+  <th>senselab task</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><code>FRCRN_SE_16K</code></td>
+  <td>enhancement</td>
+  <td>16 kHz</td>
+  <td><code>speech_enhancement</code></td>
+</tr>
+<tr>
+  <td><code>MossFormerGAN_SE_16K</code></td>
+  <td>enhancement</td>
+  <td>16 kHz</td>
+  <td><code>speech_enhancement</code></td>
+</tr>
+<tr>
+  <td><code>MossFormer2_SE_48K</code></td>
+  <td>enhancement</td>
+  <td>48 kHz</td>
+  <td><code>speech_enhancement</code></td>
+</tr>
+<tr>
+  <td><code>MossFormer2_SS_16K</code></td>
+  <td>separation</td>
+  <td>16 kHz</td>
+  <td><code>speech_separation</code></td>
+</tr>
+<tr>
+  <td><code>MossFormer2_SR_48K</code></td>
+  <td>super-resolution</td>
+  <td>48 kHz out</td>
+  <td><code>speech_super_resolution</code></td>
+</tr>
+<tr>
+  <td><code>AV_MossFormer2_TSE_16K</code></td>
+  <td>audio-visual target speaker extraction</td>
+  <td>16 kHz</td>
+  <td><code>target_speaker_extraction</code></td>
+</tr>
+</tbody>
+</table>
+
+<p><strong>The rate is the checkpoint's, not the caller's, and senselab honours it per model</strong>: each spec in
+<code>CLEARVOICE_MODELS</code> carries its <code>sampling_rate</code>, and the host resamples to exactly that before the
+worker runs. So a 16 kHz recording sent to <code>MossFormer2_SE_48K</code> is upsampled to 48 kHz for the
+model, and a 48 kHz recording sent to <code>FRCRN_SE_16K</code> is downsampled to 16 kHz — the checkpoint
+never sees a rate it was not trained on, and choosing a 48 kHz model does not recover bandwidth the
+input never had. Upstream's own pairing for that case is <code>MossFormer2_SR_48K</code> after enhancement:
+the paper reports PESQ 1.97 → 3.15 for enhancement plus super-resolution together.</p>
+
+<h3 id="an-enhancer-can-amplify-the-noise-you-wanted-gone">An enhancer can amplify the noise you wanted gone</h3>
+
+<p>Measured on a 25.54 s recording carrying a background buzz, scoring YAMNet over the non-speech
+regions before and after. Every ClearerVoice checkpoint and DriftSE removed it; SpeechBrain's
+<code>sepformer-wham16k-enhancement</code> <strong>made it louder</strong>:</p>
+
+<table>
+<thead>
+<tr>
+  <th></th>
+  <th><code>Buzz</code></th>
+  <th><code>Insect</code></th>
+  <th><code>Electric shaver</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>original</td>
+  <td>0.682</td>
+  <td>0.351</td>
+  <td>0.416</td>
+</tr>
+<tr>
+  <td><code>sepformer-wham16k-enhancement</code></td>
+  <td><strong>0.934</strong></td>
+  <td><strong>0.891</strong></td>
+  <td><strong>0.673</strong></td>
+</tr>
+<tr>
+  <td>FRCRN / MossFormerGAN / MossFormer2 SE / MossFormer2 SS / DriftSE</td>
+  <td>≤0.01</td>
+  <td>≤0.01</td>
+  <td>≤0.01</td>
+</tr>
+</tbody>
+</table>
+
+<p>Anything measured downstream of that SpeechBrain checkpoint carries a stronger buzz than the
+recording did. Note also that <code>MossFormer2_SS_16K</code> does not <em>isolate</em> the background into one of
+its two streams — neither stream retains it — so a two-source separator is not a way to obtain a
+noise channel here.</p>
+
 <p>All three <strong>conserve energy</strong>: output never exceeds input (−12.2 to −0.0 dB), in phase at zero lag,
 and clean speech is left essentially untouched — every SepFormer checkpoint tested failed that check.
 Peaks stayed ≤ 0.95, so no clipping exposure was observed. Independently reproduced here on clean
 16 kHz conversational speech: <code>FRCRN_SE_16K</code> returned −0.01 dB RMS at r = 1.0000.</p>
 
-<p><code>FRCRN_SE_16K</code> is one of two ClearVoice checkpoints whose input upstream RMS-normalises to −25 dBFS;
+<p><code>FRCRN_SE_16K</code> is one of two ClearerVoice checkpoints whose input upstream RMS-normalises to −25 dBFS;
 the inverse scalar is applied to the output, and reported in <code>metadata["clearvoice"]</code>.</p>
 
 <p>Each returned <code>Audio</code> carries <code>metadata["clearvoice"]</code> with the model id and the <strong>resolved commit</strong>
@@ -303,7 +408,7 @@ and every deviation from upstream's own inference path, is in
 </span><span id="enhance_audios-35"><a href="#enhance_audios-35"><span class="linenos">35</span></a>
 </span><span id="enhance_audios-36"><a href="#enhance_audios-36"><span class="linenos">36</span></a><span class="sd">    - a ``SpeechBrainModel`` (or ``None``) uses SpeechBrain, in process;</span>
 </span><span id="enhance_audios-37"><a href="#enhance_audios-37"><span class="linenos">37</span></a><span class="sd">    - an ``HFModel`` under ``LIANGXU123/DriftSE`` uses DriftSE, one-step diffusion in an isolated venv;</span>
-</span><span id="enhance_audios-38"><a href="#enhance_audios-38"><span class="linenos">38</span></a><span class="sd">    - an ``HFModel`` naming a ClearVoice enhancement checkpoint uses ClearVoice, in an isolated venv.</span>
+</span><span id="enhance_audios-38"><a href="#enhance_audios-38"><span class="linenos">38</span></a><span class="sd">    - an ``HFModel`` naming a ClearerVoice enhancement checkpoint uses ClearerVoice, in an isolated venv.</span>
 </span><span id="enhance_audios-39"><a href="#enhance_audios-39"><span class="linenos">39</span></a>
 </span><span id="enhance_audios-40"><a href="#enhance_audios-40"><span class="linenos">40</span></a><span class="sd">    Args:</span>
 </span><span id="enhance_audios-41"><a href="#enhance_audios-41"><span class="linenos">41</span></a><span class="sd">        audios: The audios to enhance.</span>
@@ -313,7 +418,7 @@ and every deviation from upstream's own inference path, is in
 </span><span id="enhance_audios-45"><a href="#enhance_audios-45"><span class="linenos">45</span></a><span class="sd">            signature: an unknown or misspelled key raises rather than being ignored, and the</span>
 </span><span id="enhance_audios-46"><a href="#enhance_audios-46"><span class="linenos">46</span></a><span class="sd">            effective set is recorded on each result&#39;s ``metadata[&quot;backend_parameters&quot;]``. DriftSE</span>
 </span><span id="enhance_audios-47"><a href="#enhance_audios-47"><span class="linenos">47</span></a><span class="sd">            declares ``variant``, ``seed``, ``sigma``, ``chunk_s``, ``overlap_s`` and ``timeout_s``;</span>
-</span><span id="enhance_audios-48"><a href="#enhance_audios-48"><span class="linenos">48</span></a><span class="sd">            ClearVoice declares ``timeout_s``; SpeechBrain declares none.</span>
+</span><span id="enhance_audios-48"><a href="#enhance_audios-48"><span class="linenos">48</span></a><span class="sd">            ClearerVoice declares ``timeout_s``; SpeechBrain declares none.</span>
 </span><span id="enhance_audios-49"><a href="#enhance_audios-49"><span class="linenos">49</span></a>
 </span><span id="enhance_audios-50"><a href="#enhance_audios-50"><span class="linenos">50</span></a><span class="sd">    Returns:</span>
 </span><span id="enhance_audios-51"><a href="#enhance_audios-51"><span class="linenos">51</span></a><span class="sd">        One enhanced ``Audio`` per input, in order.</span>
@@ -340,7 +445,7 @@ and every deviation from upstream's own inference path, is in
 </span><span id="enhance_audios-72"><a href="#enhance_audios-72"><span class="linenos">72</span></a>    <span class="k">if</span> <span class="n">backend</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
 </span><span id="enhance_audios-73"><a href="#enhance_audios-73"><span class="linenos">73</span></a>        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
 </span><span id="enhance_audios-74"><a href="#enhance_audios-74"><span class="linenos">74</span></a>            <span class="sa">f</span><span class="s2">&quot;No enhancement backend for </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="si">!r}</span><span class="s2">. Supported: SpeechBrain models, HFModel &quot;</span>
-</span><span id="enhance_audios-75"><a href="#enhance_audios-75"><span class="linenos">75</span></a>            <span class="sa">f</span><span class="s2">&quot;ids starting with </span><span class="si">{</span><span class="n">_DRIFTSE_MODEL_PREFIX</span><span class="si">!r}</span><span class="s2">, and ClearVoice enhancement checkpoints &quot;</span>
+</span><span id="enhance_audios-75"><a href="#enhance_audios-75"><span class="linenos">75</span></a>            <span class="sa">f</span><span class="s2">&quot;ids starting with </span><span class="si">{</span><span class="n">_DRIFTSE_MODEL_PREFIX</span><span class="si">!r}</span><span class="s2">, and ClearerVoice enhancement checkpoints &quot;</span>
 </span><span id="enhance_audios-76"><a href="#enhance_audios-76"><span class="linenos">76</span></a>            <span class="s2">&quot;under &#39;alibabasglab/&#39;.&quot;</span>
 </span><span id="enhance_audios-77"><a href="#enhance_audios-77"><span class="linenos">77</span></a>        <span class="p">)</span>
 </span><span id="enhance_audios-78"><a href="#enhance_audios-78"><span class="linenos">78</span></a>
@@ -358,7 +463,7 @@ and every deviation from upstream's own inference path, is in
 <ul>
 <li>a <code>SpeechBrainModel</code> (or <code>None</code>) uses SpeechBrain, in process;</li>
 <li>an <code>HFModel</code> under <code>LIANGXU123/DriftSE</code> uses DriftSE, one-step diffusion in an isolated venv;</li>
-<li>an <code>HFModel</code> naming a ClearVoice enhancement checkpoint uses ClearVoice, in an isolated venv.</li>
+<li>an <code>HFModel</code> naming a ClearerVoice enhancement checkpoint uses ClearerVoice, in an isolated venv.</li>
 </ul>
 
 <h6 id="arguments">Arguments:</h6>
@@ -371,7 +476,7 @@ and every deviation from upstream's own inference path, is in
 signature: an unknown or misspelled key raises rather than being ignored, and the
 effective set is recorded on each result's <code>metadata["backend_parameters"]</code>. DriftSE
 declares <code>variant</code>, <code>seed</code>, <code>sigma</code>, <code>chunk_s</code>, <code>overlap_s</code> and <code>timeout_s</code>;
-ClearVoice declares <code>timeout_s</code>; SpeechBrain declares none.</li>
+ClearerVoice declares <code>timeout_s</code>; SpeechBrain declares none.</li>
 </ul>
 
 <h6 id="returns">Returns:</h6>

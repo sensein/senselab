@@ -179,11 +179,11 @@ output rate are covered by tests; the quality numbers above are upstream's own.<
 </span><span id="super_resolve_audios-27"><a href="#super_resolve_audios-27"><span class="linenos">27</span></a><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">List</span><span class="p">[</span><span class="n">Audio</span><span class="p">]:</span>
 </span><span id="super_resolve_audios-28"><a href="#super_resolve_audios-28"><span class="linenos">28</span></a><span class="w">    </span><span class="sd">&quot;&quot;&quot;Reconstruct the high band of each audio, returning 48 kHz output.</span>
 </span><span id="super_resolve_audios-29"><a href="#super_resolve_audios-29"><span class="linenos">29</span></a>
-</span><span id="super_resolve_audios-30"><a href="#super_resolve_audios-30"><span class="linenos">30</span></a><span class="sd">    One backend today: ClearVoice&#39;s ``MossFormer2_SR_48K``, in an isolated subprocess venv.</span>
+</span><span id="super_resolve_audios-30"><a href="#super_resolve_audios-30"><span class="linenos">30</span></a><span class="sd">    One backend today: ClearerVoice&#39;s ``MossFormer2_SR_48K``, in an isolated subprocess venv.</span>
 </span><span id="super_resolve_audios-31"><a href="#super_resolve_audios-31"><span class="linenos">31</span></a>
 </span><span id="super_resolve_audios-32"><a href="#super_resolve_audios-32"><span class="linenos">32</span></a><span class="sd">    Args:</span>
 </span><span id="super_resolve_audios-33"><a href="#super_resolve_audios-33"><span class="linenos">33</span></a><span class="sd">        audios: Inputs. Resampled to the model&#39;s rate and downmixed to mono.</span>
-</span><span id="super_resolve_audios-34"><a href="#super_resolve_audios-34"><span class="linenos">34</span></a><span class="sd">        model: ``HFModel`` naming a ClearVoice super-resolution checkpoint. ``None`` uses</span>
+</span><span id="super_resolve_audios-34"><a href="#super_resolve_audios-34"><span class="linenos">34</span></a><span class="sd">        model: ``HFModel`` naming a ClearerVoice super-resolution checkpoint. ``None`` uses</span>
 </span><span id="super_resolve_audios-35"><a href="#super_resolve_audios-35"><span class="linenos">35</span></a><span class="sd">            ``alibabasglab/MossFormer2_SR_48K``.</span>
 </span><span id="super_resolve_audios-36"><a href="#super_resolve_audios-36"><span class="linenos">36</span></a><span class="sd">        device: CUDA or CPU. ``None`` leaves the choice to the backend.</span>
 </span><span id="super_resolve_audios-37"><a href="#super_resolve_audios-37"><span class="linenos">37</span></a><span class="sd">        parameters: Backend-specific parameters, validated against the selected backend&#39;s signature —</span>
@@ -210,20 +210,20 @@ output rate are covered by tests; the quality numbers above are upstream's own.<
 </span><span id="super_resolve_audios-58"><a href="#super_resolve_audios-58"><span class="linenos">58</span></a>
 </span><span id="super_resolve_audios-59"><a href="#super_resolve_audios-59"><span class="linenos">59</span></a>    <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
 </span><span id="super_resolve_audios-60"><a href="#super_resolve_audios-60"><span class="linenos">60</span></a>        <span class="sa">f</span><span class="s2">&quot;No super-resolution backend for </span><span class="si">{</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="si">!r}</span><span class="s2">. Supported: HFModel ids naming a &quot;</span>
-</span><span id="super_resolve_audios-61"><a href="#super_resolve_audios-61"><span class="linenos">61</span></a>        <span class="sa">f</span><span class="s2">&quot;ClearVoice super-resolution checkpoint (</span><span class="si">{</span><span class="n">DEFAULT_SUPER_RESOLUTION_MODEL</span><span class="si">}</span><span class="s2">).&quot;</span>
+</span><span id="super_resolve_audios-61"><a href="#super_resolve_audios-61"><span class="linenos">61</span></a>        <span class="sa">f</span><span class="s2">&quot;ClearerVoice super-resolution checkpoint (</span><span class="si">{</span><span class="n">DEFAULT_SUPER_RESOLUTION_MODEL</span><span class="si">}</span><span class="s2">).&quot;</span>
 </span><span id="super_resolve_audios-62"><a href="#super_resolve_audios-62"><span class="linenos">62</span></a>    <span class="p">)</span>
 </span></pre></div>
 
 
             <div class="docstring"><p>Reconstruct the high band of each audio, returning 48 kHz output.</p>
 
-<p>One backend today: ClearVoice's <code>MossFormer2_SR_48K</code>, in an isolated subprocess venv.</p>
+<p>One backend today: ClearerVoice's <code>MossFormer2_SR_48K</code>, in an isolated subprocess venv.</p>
 
 <h6 id="arguments">Arguments:</h6>
 
 <ul>
 <li><strong>audios:</strong>  Inputs. Resampled to the model's rate and downmixed to mono.</li>
-<li><strong>model:</strong>  <code>HFModel</code> naming a ClearVoice super-resolution checkpoint. <code>None</code> uses
+<li><strong>model:</strong>  <code>HFModel</code> naming a ClearerVoice super-resolution checkpoint. <code>None</code> uses
 <code>alibabasglab/MossFormer2_SR_48K</code>.</li>
 <li><strong>device:</strong>  CUDA or CPU. <code>None</code> leaves the choice to the backend.</li>
 <li><strong>parameters:</strong>  Backend-specific parameters, validated against the selected backend's signature —

@@ -223,7 +223,7 @@ caller can fix the typo without a second round trip.</li>
 </span><span id="separate_audios-98"><a href="#separate_audios-98"><span class="linenos"> 98</span></a><span class="sd">        timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the</span>
 </span><span id="separate_audios-99"><a href="#separate_audios-99"><span class="linenos"> 99</span></a><span class="sd">            work. Forwarded unchanged to whichever backend runs.</span>
 </span><span id="separate_audios-100"><a href="#separate_audios-100"><span class="linenos">100</span></a><span class="sd">        parameters: Backend-specific parameters, validated against the selected backend&#39;s own</span>
-</span><span id="separate_audios-101"><a href="#separate_audios-101"><span class="linenos">101</span></a><span class="sd">            signature — an unknown key raises rather than being ignored. ClearVoice declares nothing</span>
+</span><span id="separate_audios-101"><a href="#separate_audios-101"><span class="linenos">101</span></a><span class="sd">            signature — an unknown key raises rather than being ignored. ClearerVoice declares nothing</span>
 </span><span id="separate_audios-102"><a href="#separate_audios-102"><span class="linenos">102</span></a><span class="sd">            beyond ``timeout_s``, which is already an argument above, so today this is accepted only</span>
 </span><span id="separate_audios-103"><a href="#separate_audios-103"><span class="linenos">103</span></a><span class="sd">            to reject a key that would otherwise have been silently dropped.</span>
 </span><span id="separate_audios-104"><a href="#separate_audios-104"><span class="linenos">104</span></a>
@@ -274,9 +274,9 @@ caller can fix the typo without a second round trip.</li>
 </span><span id="separate_audios-149"><a href="#separate_audios-149"><span class="linenos">149</span></a>        <span class="nb">isinstance</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">HFModel</span><span class="p">)</span> <span class="ow">and</span> <span class="nb">str</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">path_or_uri</span><span class="p">)</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="n">_UNASDIFF_MODEL_PREFIX</span><span class="p">)</span>
 </span><span id="separate_audios-150"><a href="#separate_audios-150"><span class="linenos">150</span></a>    <span class="p">):</span>
 </span><span id="separate_audios-151"><a href="#separate_audios-151"><span class="linenos">151</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-</span><span id="separate_audios-152"><a href="#separate_audios-152"><span class="linenos">152</span></a>            <span class="s2">&quot;source separation has two backends: unasdiff, and ClearVoice&#39;s MossFormer2_SS_16K. model &quot;</span>
+</span><span id="separate_audios-152"><a href="#separate_audios-152"><span class="linenos">152</span></a>            <span class="s2">&quot;source separation has two backends: unasdiff, and ClearerVoice&#39;s MossFormer2_SS_16K. model &quot;</span>
 </span><span id="separate_audios-153"><a href="#separate_audios-153"><span class="linenos">153</span></a>            <span class="sa">f</span><span class="s2">&quot;must be None, an HFModel whose path_or_uri starts with </span><span class="si">{</span><span class="n">_UNASDIFF_MODEL_PREFIX</span><span class="si">!r}</span><span class="s2">, or a &quot;</span>
-</span><span id="separate_audios-154"><a href="#separate_audios-154"><span class="linenos">154</span></a>            <span class="sa">f</span><span class="s2">&quot;ClearVoice separation checkpoint under &#39;alibabasglab/&#39;, got </span><span class="si">{</span><span class="n">model</span><span class="si">!r}</span><span class="s2">&quot;</span>
+</span><span id="separate_audios-154"><a href="#separate_audios-154"><span class="linenos">154</span></a>            <span class="sa">f</span><span class="s2">&quot;ClearerVoice separation checkpoint under &#39;alibabasglab/&#39;, got </span><span class="si">{</span><span class="n">model</span><span class="si">!r}</span><span class="s2">&quot;</span>
 </span><span id="separate_audios-155"><a href="#separate_audios-155"><span class="linenos">155</span></a>        <span class="p">)</span>
 </span><span id="separate_audios-156"><a href="#separate_audios-156"><span class="linenos">156</span></a>    <span class="k">if</span> <span class="n">parameters</span><span class="p">:</span>
 </span><span id="separate_audios-157"><a href="#separate_audios-157"><span class="linenos">157</span></a>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -378,7 +378,7 @@ prior may use a different <code>T</code>.</li>
 <li><strong>timeout_s:</strong>  Ceiling on the worker subprocess, in seconds; <code>None</code> derives one from the
 work. Forwarded unchanged to whichever backend runs.</li>
 <li><strong>parameters:</strong>  Backend-specific parameters, validated against the selected backend's own
-signature — an unknown key raises rather than being ignored. ClearVoice declares nothing
+signature — an unknown key raises rather than being ignored. ClearerVoice declares nothing
 beyond <code>timeout_s</code>, which is already an argument above, so today this is accepted only
 to reject a key that would otherwise have been silently dropped.</li>
 </ul>
