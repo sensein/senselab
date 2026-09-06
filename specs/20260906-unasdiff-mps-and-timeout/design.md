@@ -45,6 +45,19 @@ and is **5-11x slower than CPU**. There is no warmup curve to amortise: consecut
 So `resolve_device` honours `"mps"` when it is named, and never selects it for an unresolved
 device. Auto-selecting the fastest *available* accelerator would be a 10x pessimisation here.
 
+**There are two gates, not one.** The worker's `resolve_device` is reached only after a host-side
+allowlist, `_select_device_and_dtype(..., compatible_devices=...)`, which listed CUDA and CPU
+alone -- so patching the worker without the host leaves the MPS branch dead code. Both were
+changed, and `_COMPATIBLE_DEVICES` now names the list once so the two cannot drift apart.
+
+A misattribution worth recording, because it nearly led to reverting a working fix: the float64
+failure was blamed on `gaussian_diffusion.py:930` and `:937`
+(`torch.from_numpy(sde.alphas).to(device)`), with line 24 believed safe because it ends in
+`.float()`. It is the other way round. Line 24 is the failure -- its `.float()` comes *after* the
+`.to(device)* -- and `alphas` and `sqrt_one_minus_alphas_cumprod` are **float32** arrays
+(verified), so 930 and 937 convert to MPS without complaint. `p_sample_loop` constructs that very
+`CorrectorVPConditional` at line 448 and completed on MPS with only the line-24 fix in place.
+
 **Not investigated**: why MPS is this slow. 30 GB of allocated system memory was observed, which
 suggests thrashing rather than compute, but that was not chased down.
 

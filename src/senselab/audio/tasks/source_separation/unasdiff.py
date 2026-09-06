@@ -260,6 +260,10 @@ _TIMEOUT_FLOOR_S = 1800.0
 
 _FSD_CLASS_MAP_RESOURCE = "fsd41_classes.json"
 
+# Devices a caller may name. MPS is admitted but never auto-selected: it runs correctly and is
+# 5-11x slower than CPU here. Derivation: specs/20260906-unasdiff-mps-and-timeout.
+_COMPATIBLE_DEVICES = (DeviceType.CUDA, DeviceType.CPU, DeviceType.MPS)
+
 
 def _seconds_per_window_step(device: Optional[DeviceType]) -> float:
     """Return the per-(window x diffusion-step) cost, in seconds, for ``device``.
@@ -427,6 +431,11 @@ try:
                     "unasdiff worker: device %r was requested but torch.backends.mps.is_available() "
                     "is False inside the unasdiff venv" % (requested,)
                 )
+            sys.stderr.write(
+                "unasdiff worker: running on MPS, which is measurably SLOWER than CPU for this "
+                "model -- about 90-193s per diffusion step against 16.7s on CPU. MPS is honoured "
+                "because you named it; leaving device unset picks CPU instead.\n"
+            )
             patch_extract_for_mps()
             return torch.device("mps")
         if not str(requested).startswith("cuda"):
@@ -864,8 +873,12 @@ def separate_with_unasdiff(
     # governs where the worker can actually run.
     worker_device: Optional[str] = None
     if device is not None:
+        # MPS is admitted so a caller who names it is not refused by a list, but it is never
+        # reached by leaving the choice open: measured on this model it costs 90-193 s per
+        # diffusion step against 16.7 s on CPU. The worker warns rather than the host, because
+        # only the worker knows whether MPS is actually there.
         selected_device, _ = _select_device_and_dtype(
-            user_preference=device, compatible_devices=[DeviceType.CUDA, DeviceType.CPU]
+            user_preference=device, compatible_devices=list(_COMPATIBLE_DEVICES)
         )
         worker_device = device_run_opt(selected_device)
 
