@@ -6,6 +6,7 @@ from typing import Any, Callable
 import pytest
 
 from senselab.audio.workflows.triage.config import TriageConfig
+from senselab.audio.workflows.triage.nodes.common import resolve_stream
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
     _raster_rows,
@@ -163,6 +164,29 @@ class TestTheSummaryFits:
         lines = summary_panel_lines(store, FigureStyle())
         widest = max(len(line) for line in lines)
         assert widest <= 2 + 3 * _SUMMARY_COLUMN_WIDTH, f"a line is {widest} characters wide"
+
+    def test_the_cover_names_the_source_file_within_the_panel_width(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        seed_preprocess_store: Callable[..., None],
+        tmp_path: Path,
+    ) -> None:
+        """The full path belongs on the cover, wrapped no wider than the summary beneath it."""
+        from senselab.audio.workflows.triage.nodes.figure import cover_lines
+
+        seed_preprocess_store(store, yamnet_labels=[["Speech"], ["Speech"]], scores_only=("yamnet",))
+        taxonomy(store, "plain", config, run_dir=tmp_path)
+        panel = summary_panel_lines(store, FigureStyle())
+        lines = cover_lines(store, tmp_path, panel)
+
+        assert lines[0] == "SOURCE", "the cover must lead with the recording it describes"
+        source = "".join(line.strip() for line in lines[1 : lines.index("")])
+        recorded = str(store.get_entity(resolve_stream(store, tmp_path, "recording")[0]).attributes["path"])
+        assert source == recorded, "the wrapped path must reassemble to the one ADMIT recorded"
+        assert max(len(line) for line in lines) <= max(len(line) for line in panel), (
+            "a cover line reaches further right than the summary panel does"
+        )
 
     def test_the_rendered_text_stays_inside_its_axis(
         self,
