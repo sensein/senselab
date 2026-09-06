@@ -58,7 +58,7 @@ The SpeechBrain precedent is the governing one: senselab exposes SpeechBrain fro
 | Enhancement | `audio/tasks/speech_enhancement/clearvoice.py` | Existing package, existing entry point, two existing backends (SpeechBrain, DriftSE). A third belongs beside them. |
 | Separation | `audio/tasks/source_separation/clearvoice.py` | Existing package (unasdiff). Reinforced by PR #569: `enhance_audios` structurally cannot return N sources, so a 2-source checkpoint cannot live in enhancement even as a special case. |
 | Super-resolution | **new** `audio/tasks/speech_super_resolution/` | D-2 |
-| AV target-speaker extraction | **new** `audio/tasks/target_speaker_extraction/` | D-4 |
+| AV target-speaker extraction | **new** `video/tasks/target_speaker_extraction/` | D-4, reversed 2026-09-06 |
 | SpeechScore | `audio/tasks/features_extraction/clearvoice_speechscore.py` | D-5 |
 | Shared machinery | `utils/clearvoice.py` + `audio/tasks/clearvoice.py` | D-6 |
 
@@ -91,10 +91,23 @@ Four things had to be true, and all four are:
 3. **ffmpeg.** Required, and already required by other senselab paths.
 4. **The face detector's weights.** These are the problem, and D-8 is the answer.
 
-So it lands in `audio/tasks/target_speaker_extraction/`, under **audio** rather than **video**,
-because the capability's output is audio: the visual stream is a conditioning cue, and a caller
-looking for "extract this speaker" will look where the other extraction and separation capabilities
-are. `video/tasks/` holds capabilities whose *output* is visual (`pose_estimation`).
+**Reversed by the owner on 2026-09-06: it lands in `video/tasks/target_speaker_extraction/`.**
+The original placement and its reasoning are kept below, because the argument was coherent and the
+reversal is a change of criterion rather than a correction of a mistake.
+
+*Placed under `video/` because a capability is classified by what it consumes and what it keys on,
+not by what it emits.* This one requires a video **file** — a frames-only `Video` will not do — and
+its cue is lip motion; without the visual stream it cannot run at all. That it returns `Audio` is
+the shape of the answer, not the nature of the task. The rule this sets, for the next capability
+that spans two modalities: **classify by input modality and conditioning cue.** Under the old
+output-based rule, a hypothetical audio-driven face animator would have landed in `video/` while
+this lands in `audio/`, which is the wrong way round for anyone looking for either.
+
+*Superseded, retained for the record:* it originally landed in
+`audio/tasks/target_speaker_extraction/`, under **audio** rather than **video**, because the
+capability's output is audio: the visual stream is a conditioning cue, and a caller looking for
+"extract this speaker" will look where the other extraction and separation capabilities are.
+`video/tasks/` holds capabilities whose *output* is visual (`pose_estimation`).
 
 Not verified end to end: no talking-face recording with a known ground truth was available on this
 host, so the extractor's numerical output is untested here. What is tested is dispatch, validation,

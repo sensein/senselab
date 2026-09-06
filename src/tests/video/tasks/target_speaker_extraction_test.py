@@ -16,21 +16,20 @@ from typing import Any, Dict
 
 import pytest
 
-from senselab.audio.data_structures import Audio
-from senselab.audio.tasks.target_speaker_extraction import (
+from senselab.utils import clearvoice as cv
+from senselab.utils.backend_parameters import PARAMETER_RECORD_KEY
+from senselab.utils.data_structures import DeviceType, HFModel
+from senselab.utils.portable_audio_io import write_audio
+from senselab.video.tasks.target_speaker_extraction import (
     DEFAULT_TSE_MODEL,
     extract_target_speakers_from_videos,
 )
-from senselab.audio.tasks.target_speaker_extraction.clearvoice import (
+from senselab.video.tasks.target_speaker_extraction.clearvoice import (
     SUPPORTED_VIDEO_SUFFIXES,
     _video_path,
     extract_target_speakers_with_clearvoice,
     video_duration_s,
 )
-from senselab.utils import clearvoice as cv
-from senselab.utils.backend_parameters import PARAMETER_RECORD_KEY
-from senselab.utils.data_structures import DeviceType, HFModel
-from senselab.utils.portable_audio_io import write_audio
 
 STAGED_SHA = "e" * 40
 
@@ -115,7 +114,7 @@ def test_a_file_backed_video_object_is_accepted(video_file: Path) -> None:
     assert _video_path(Video(filepath=str(video_file))) == video_file
 
 
-def test_a_frames_only_video_is_refused_with_the_reason(mono_audio_sample: Audio) -> None:
+def test_a_frames_only_video_is_refused_with_the_reason() -> None:
     """The pipeline re-encodes the container and extracts its audio track; frames are not enough."""
     import torch
 

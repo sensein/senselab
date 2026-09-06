@@ -15,7 +15,7 @@ Upstream task                    Model                       Rate     senselab h
 ``speech_enhancement``           ``MossFormer2_SE_48K``      48 kHz   ``audio/tasks/speech_enhancement``
 ``speech_separation``            ``MossFormer2_SS_16K``      16 kHz   ``audio/tasks/source_separation``
 ``speech_super_resolution``      ``MossFormer2_SR_48K``      48 kHz   ``audio/tasks/speech_super_resolution``
-``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``audio/tasks/target_speaker_extraction``
+``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``video/tasks/target_speaker_extraction``
 ===============================  ==========================  =======  ===========================================
 
 SpeechScore, upstream's fifth component, is not reachable from here: it has no pip distribution and a
@@ -177,7 +177,7 @@ _TASK_OWNERS = {
     "speech_enhancement": "senselab.audio.tasks.speech_enhancement.enhance_audios",
     "speech_separation": "senselab.audio.tasks.source_separation.separate_audios",
     "speech_super_resolution": "senselab.audio.tasks.speech_super_resolution.super_resolve_audios",
-    "target_speaker_extraction": ("senselab.audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos"),
+    "target_speaker_extraction": ("senselab.video.tasks.target_speaker_extraction.extract_target_speakers_from_videos"),
 }
 
 
