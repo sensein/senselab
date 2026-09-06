@@ -108,6 +108,46 @@ analysis that treats breaths or coughs as signal:
 So: `FRCRN_SE_16K` when non-speech events matter, `MossFormerGAN_SE_16K` when only speech does, and
 `MossFormer2_SE_48K` when the recording is fullband and breaths are not of interest.
 
+### The whole toolkit, and what each checkpoint's rate means
+
+Enhancement is three of the six checkpoints ClearerVoice-Studio ships
+([arXiv 2506.19398](https://arxiv.org/abs/2506.19398)). The others reach senselab through their own
+task modules:
+
+| Checkpoint | Task | Native rate | senselab task |
+|---|---|---|---|
+| `FRCRN_SE_16K` | enhancement | 16 kHz | `speech_enhancement` |
+| `MossFormerGAN_SE_16K` | enhancement | 16 kHz | `speech_enhancement` |
+| `MossFormer2_SE_48K` | enhancement | 48 kHz | `speech_enhancement` |
+| `MossFormer2_SS_16K` | separation | 16 kHz | `speech_separation` |
+| `MossFormer2_SR_48K` | super-resolution | 48 kHz out | `speech_super_resolution` |
+| `AV_MossFormer2_TSE_16K` | audio-visual target speaker extraction | 16 kHz | `target_speaker_extraction` |
+
+**The rate is the checkpoint's, not the caller's, and senselab honours it per model**: each spec in
+`CLEARVOICE_MODELS` carries its `sampling_rate`, and the host resamples to exactly that before the
+worker runs. So a 16 kHz recording sent to `MossFormer2_SE_48K` is upsampled to 48 kHz for the
+model, and a 48 kHz recording sent to `FRCRN_SE_16K` is downsampled to 16 kHz — the checkpoint
+never sees a rate it was not trained on, and choosing a 48 kHz model does not recover bandwidth the
+input never had. Upstream's own pairing for that case is `MossFormer2_SR_48K` after enhancement:
+the paper reports PESQ 1.97 → 3.15 for enhancement plus super-resolution together.
+
+### An enhancer can amplify the noise you wanted gone
+
+Measured on a 25.54 s recording carrying a background buzz, scoring YAMNet over the non-speech
+regions before and after. Every ClearerVoice checkpoint and DriftSE removed it; SpeechBrain's
+`sepformer-wham16k-enhancement` **made it louder**:
+
+| | `Buzz` | `Insect` | `Electric shaver` |
+|---|---|---|---|
+| original | 0.682 | 0.351 | 0.416 |
+| `sepformer-wham16k-enhancement` | **0.934** | **0.891** | **0.673** |
+| FRCRN / MossFormerGAN / MossFormer2 SE / MossFormer2 SS / DriftSE | ≤0.01 | ≤0.01 | ≤0.01 |
+
+Anything measured downstream of that SpeechBrain checkpoint carries a stronger buzz than the
+recording did. Note also that `MossFormer2_SS_16K` does not *isolate* the background into one of
+its two streams — neither stream retains it — so a two-source separator is not a way to obtain a
+noise channel here.
+
 All three **conserve energy**: output never exceeds input (−12.2 to −0.0 dB), in phase at zero lag,
 and clean speech is left essentially untouched — every SepFormer checkpoint tested failed that check.
 Peaks stayed ≤ 0.95, so no clipping exposure was observed. Independently reproduced here on clean

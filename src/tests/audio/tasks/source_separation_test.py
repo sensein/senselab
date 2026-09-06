@@ -762,17 +762,21 @@ def test_no_device_leaves_the_choice_to_the_worker(monkeypatch: pytest.MonkeyPat
     assert captured["payload"]["device"] is None
 
 
-def test_an_incompatible_device_is_rejected_before_the_venv() -> None:
-    """MPS is not one of this backend's compatible devices and must raise rather than fall back."""
-    audio = Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)
-    with pytest.raises(ValueError):
-        unasdiff.separate_with_unasdiff(
-            [audio],
-            n_sources=2,
-            source_class_indices=[0, 0],
-            mode="speech_speech",
-            device=DeviceType.MPS,
-        )
+def test_mps_is_admitted_when_named_but_never_chosen_for_an_unresolved_device() -> None:
+    """MPS runs this model correctly; it is simply slow, so it is opt-in rather than refused.
+
+    This test previously asserted MPS raised, on the belief that the backend could not run there.
+    It can: the only blocker was upstream's ``_extract_into_tensor`` moving the float64 schedule to
+    the device before its own unconditional ``.float()``, which MPS cannot do. With the cast
+    hoisted the sampler completes on MPS and returns ``mps:0`` tensors, with no op falling back.
+
+    What remains true is that it is a bad default -- 90-193 s per diffusion step against 16.7 s on
+    CPU -- so an unresolved device must still resolve to CPU. See
+    specs/20260906-unasdiff-mps-and-timeout.
+    """
+    assert DeviceType.MPS in unasdiff._COMPATIBLE_DEVICES
+    unresolved_branch = unasdiff._WORKER_SCRIPT.split("if requested is None:")[1].split("if str(requested)")[0]
+    assert "mps" not in unresolved_branch
 
 
 # ── Worker timeout ────────────────────────────────────────────────────
@@ -1246,3 +1250,17 @@ def test_the_mps_path_casts_the_schedule_before_moving_it() -> None:
     script = unasdiff._WORKER_SCRIPT
     assert "patch_extract_for_mps" in script
     assert "src.float().to(device=timesteps.device)[timesteps]" in script
+
+
+def test_naming_mps_is_not_refused_by_the_host_allowlist(
+    mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's MPS branch is dead code unless the host allowlist admits MPS first.
+
+    ``_select_device_and_dtype`` is consulted before the worker is launched, so a compatible list
+    of CUDA and CPU alone rejects ``DeviceType.MPS`` there and ``resolve_device`` is never reached.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    u.separate_with_unasdiff([mono_audio_sample], 2, [0, 0], device=DeviceType.MPS)
+    assert captured["payload"]["device"] == "mps"
