@@ -1,4 +1,4 @@
-"""The ``Audio`` ↔ file-path bridge for ClearVoice's three audio-only capabilities.
+"""The ``Audio`` ↔ file-path bridge for ClearerVoice's three audio-only capabilities.
 
 ``senselab.utils.clearvoice`` owns the venv, the pin, the device and the worker, and cannot touch
 ``Audio``. This module is the other half: resample, downmix, write, run, read back, carry provenance —
@@ -25,7 +25,7 @@ from senselab.utils.data_structures import DeviceType
 def prepare_audios_for_clearvoice(audios: List[Audio], spec: ClearVoiceModelSpec) -> List[Audio]:
     """Resample to the checkpoint's rate and downmix to mono.
 
-    Every ClearVoice checkpoint is single-channel and rate-specific. senselab does this rather than
+    Every ClearerVoice checkpoint is single-channel and rate-specific. senselab does this rather than
     upstream's own reader, whose rescaling heuristic mis-scales a quiet 32-bit input: design.md D-8.
 
     Args:
@@ -48,7 +48,7 @@ def run_clearvoice_over_audios(
     timeout_s: Optional[float] = None,
     revision: str = "main",
 ) -> List[List[Audio]]:
-    """Run one audio-only ClearVoice checkpoint and return whatever sources it produced.
+    """Run one audio-only ClearerVoice checkpoint and return whatever sources it produced.
 
     Args:
         audios: Inputs. Resampled and downmixed as needed.
@@ -146,14 +146,14 @@ def single_source_per_input(
 
 
 def clearvoice_provenance(audio: Audio) -> Optional[Tuple[str, str]]:
-    """Return ``(model_id, commit)`` for an ``Audio`` a ClearVoice model produced, if it says so.
+    """Return ``(model_id, commit)`` for an ``Audio`` a ClearerVoice model produced, if it says so.
 
     Args:
         audio: A returned ``Audio``.
 
     Returns:
         The model id and the 40-hex commit its weights came from, or ``None`` if this audio did not
-        come from ClearVoice.
+        come from ClearerVoice.
     """
     record = audio.metadata.get("clearvoice")
     if not isinstance(record, dict):

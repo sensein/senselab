@@ -3521,7 +3521,7 @@ The map remains the best index into senselab. Two of its stale-on-the-design-bra
 **resolved by the `triage` merge** and two corrections still stand:
 
 1. **Resolved:** `health_acoustics` (with `span_to_hear_buffer` and `HEAR_WINDOW_SECONDS`,
-   commit `4788ffeb`) and the ClearVoice separation backend both exist on the merged tree
+   commit `4788ffeb`) and the ClearerVoice separation backend both exist on the merged tree
    (commit `33bf65ad`); the map's §1.3/§1.4/§1.9 rows now describe the tree this plan executes on.
 2. **Resolved:** `Audio.save_to_file` on the merged tree is the
    `subtype`/`out_of_range`/`AudioWriteReport` write layer §1.7 describes
