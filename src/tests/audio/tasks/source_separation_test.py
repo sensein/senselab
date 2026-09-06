@@ -1197,3 +1197,52 @@ def test_the_worker_writes_through_the_staged_policy() -> None:
     assert "stage_portable_audio_io(" in Path(unasdiff.__file__).read_text(), (
         "the parent must stage portable_audio_io.py into the worker's temp dir"
     )
+
+
+def test_an_unresolved_device_is_sized_for_the_slow_path_not_for_cuda() -> None:
+    """``device=None`` must not be costed as if CUDA were certain.
+
+    The host cannot resolve what the worker will pick: its torch is a different build from the
+    venv's, which is exactly why the choice is deferred. Costing the unknown as CUDA granted a
+    1800s floor to work that takes ~14400s on CPU, so a run that was progressing normally was
+    killed ~85 minutes in and its finished windows discarded. The unknown is sized for the slow
+    path instead -- an over-large ceiling costs nothing, an under-large one destroys work.
+    """
+    unresolved = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=None)
+    cpu = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=DeviceType.CPU)
+    cuda = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=DeviceType.CUDA)
+    assert unresolved == cpu
+    assert unresolved > cuda
+
+
+def test_the_worker_refuses_work_it_cannot_finish_in_the_ceiling() -> None:
+    """The worker fails fast, because only the worker knows the device it resolved to."""
+    assert "deadline_s" in unasdiff._WORKER_SCRIPT
+    assert "estimate_s > deadline_s" in unasdiff._WORKER_SCRIPT
+
+
+def test_the_host_tells_the_worker_its_deadline(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A worker that is not told the ceiling cannot refuse against it."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    u.separate_with_unasdiff([mono_audio_sample], 2, [0, 0], timeout_s=1234.0)
+    assert captured["payload"]["deadline_s"] == pytest.approx(1234.0)
+
+
+def test_mps_is_reachable_only_when_named() -> None:
+    """MPS is measurably slower than CPU here, so it must never be chosen by default.
+
+    Measured on this model, one 4 s window, per diffusion step: cpu 16.7 s, mps 90-193 s. An
+    unresolved device therefore resolves to cpu, and mps is honoured only when asked for by name.
+    """
+    script = unasdiff._WORKER_SCRIPT
+    assert 'str(requested).startswith("mps")' in script
+    unresolved_branch = script.split("if requested is None:")[1].split("if str(requested)")[0]
+    assert "mps" not in unresolved_branch
+
+
+def test_the_mps_path_casts_the_schedule_before_moving_it() -> None:
+    """MPS has no float64; upstream moves the schedule then casts, so the move raises first."""
+    script = unasdiff._WORKER_SCRIPT
+    assert "patch_extract_for_mps" in script
+    assert "src.float().to(device=timesteps.device)[timesteps]" in script
