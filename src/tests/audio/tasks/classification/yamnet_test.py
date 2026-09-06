@@ -23,8 +23,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
+from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.classification.yamnet import (
+    YAMNET_WINDOW_SECONDS,
+    span_yamnet_input,
     write_worker_wav,
 )
 from senselab.utils.portable_audio_io import LOSSLESS_WAV_SUBTYPE
@@ -116,3 +120,60 @@ def test_multichannel_input_is_collapsed_to_mono(tmp_path: Path) -> None:
     back, _ = sf.read(tmp_path / "m.wav", dtype="float32")
     assert back.ndim == 1
     assert _rms_dbfs(back) == pytest.approx(-40.0, abs=0.5)
+
+
+class TestSpanFrameFill:
+    """A span shorter than YAMNet's native frame is filled from its own samples, not with silence."""
+
+    @staticmethod
+    def _recording(seconds: float = 5.0, rate: int = 16000) -> Audio:
+        t = torch.arange(int(seconds * rate), dtype=torch.float32) / rate
+        return Audio(waveform=torch.sin(2 * torch.pi * 60.0 * t).unsqueeze(0) * 0.1, sampling_rate=rate)
+
+    def test_a_long_span_is_passed_through_untouched(self) -> None:
+        """At or over the frame, YAMNet's own grid applies and nothing should be added."""
+        audio = self._recording()
+        out, filled = span_yamnet_input(audio, (1.0, 3.0))
+        assert filled is False
+        assert out.waveform.shape[-1] == 2 * audio.sampling_rate
+
+    def test_a_short_span_reaches_exactly_one_frame(self) -> None:
+        """The model pads to 0.96 s regardless; filling first is what decides with what."""
+        audio = self._recording()
+        out, filled = span_yamnet_input(audio, (1.0, 1.1))
+        assert filled is True
+        assert out.waveform.shape[-1] == int(round(YAMNET_WINDOW_SECONDS * audio.sampling_rate))
+
+    def test_the_span_sits_at_the_centre_of_the_filled_frame(self) -> None:
+        """Centred, so the fill is symmetric rather than trailing the span."""
+        audio = self._recording()
+        rate = audio.sampling_rate
+        span = audio.waveform[..., rate : rate + int(0.1 * rate)]
+        out, _ = span_yamnet_input(audio, (1.0, 1.1))
+        frame = int(round(YAMNET_WINDOW_SECONDS * rate))
+        left = (frame - span.shape[-1]) // 2
+        assert torch.allclose(out.waveform[..., left : left + span.shape[-1]], span)
+
+    def test_the_fill_is_the_span_extended_periodically_on_both_sides(self) -> None:
+        """Tiling a stationary interferer preserves its spectrum; silence would erase it."""
+        rate = 16000
+        pattern = torch.arange(400, dtype=torch.float32).unsqueeze(0)
+        audio = Audio(waveform=pattern.repeat(1, 200), sampling_rate=rate)
+        out, _ = span_yamnet_input(audio, (0.0, 400 / rate))
+        frame = out.waveform.shape[-1]
+        left = (frame - 400) // 2
+        for index in range(frame):
+            assert out.waveform[0, index] == pattern[0, (index - left) % 400], f"sample {index} breaks the period"
+
+    def test_nothing_added_is_silence(self) -> None:
+        """The defect being fixed: a mostly-zero frame is classified as silence."""
+        audio = self._recording()
+        out, _ = span_yamnet_input(audio, (1.0, 1.05))
+        assert int((out.waveform == 0.0).sum()) == 0
+
+    def test_an_empty_span_is_left_alone(self) -> None:
+        """A zero-length span has no samples to tile; it stays unmeasurable rather than invented."""
+        audio = self._recording()
+        out, filled = span_yamnet_input(audio, (1.0, 1.0))
+        assert filled is False
+        assert out.waveform.shape[-1] == 0

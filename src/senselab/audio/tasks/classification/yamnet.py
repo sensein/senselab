@@ -6,10 +6,13 @@ TF/PyTorch conflicts.
 """
 
 import json
+import math
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
+
+import torch
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import resample_audios
@@ -225,3 +228,41 @@ class YAMNetClassifier:
                 all_results.append(timestamped)
 
             return all_results
+
+
+YAMNET_WINDOW_SECONDS = YAMNetClassifier.WINDOW_SECONDS
+"""YAMNet's native frame. An input shorter than this is zero-padded to it inside the model."""
+
+
+def span_yamnet_input(audio: Audio, extent: tuple[float, float]) -> tuple[Audio, bool]:
+    """Return a span ready for YAMNet, filling a short one to the native frame from its own samples.
+
+    A span at least :data:`YAMNET_WINDOW_SECONDS` long is passed through unchanged. A shorter one is
+    centred in a frame-length buffer whose remaining samples are the span's own, extended
+    periodically on both sides — the model would otherwise pad it with silence, and a span that is
+    mostly inserted silence is classified as silence.
+
+    Args:
+        audio: The recording the span was proposed over.
+        extent: The span's ``(start, end)`` in seconds.
+
+    Returns:
+        The audio to classify, and whether it was filled.
+    """
+    start, end = extent
+    rate = audio.sampling_rate
+    first = int(round(start * rate))
+    last = int(round(end * rate))
+    span = audio.waveform[..., first:last]
+    frame = int(round(YAMNET_WINDOW_SECONDS * rate))
+    length = span.shape[-1]
+    if length == 0 or length >= frame:
+        return Audio(waveform=span.clone(), sampling_rate=rate), False
+
+    left = (frame - length) // 2
+    right = frame - length - left
+    repeats = math.ceil(max(left, right) / length) + 1
+    tiled = span.repeat(*([1] * (span.dim() - 1)), repeats)
+    before = tiled[..., -left:] if left else tiled[..., :0]
+    after = tiled[..., :right]
+    return Audio(waveform=torch.cat((before, span, after), dim=-1), sampling_rate=rate), True
