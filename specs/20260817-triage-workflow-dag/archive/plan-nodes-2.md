@@ -10,19 +10,19 @@
 
 **Tech Stack:** Python 3.12, pydantic v2, numpy, scipy, pytest. uv for everything.
 
-## Prerequisite, now satisfied: the ClearVoice separation backend is on the merged tree
+## Prerequisite, now satisfied: the ClearerVoice separation backend is on the merged tree
 
 The `triage` merge has happened. On the tree this plan executes on (commit `33bf65ad`),
 `src/senselab/audio/tasks/source_separation/api.py:115-145` dispatches an `HFModel` naming a
-ClearVoice separation checkpoint (`is_clearvoice_model_id`, i.e. `alibabasglab/MossFormer2_SS_16K`)
+ClearerVoice separation checkpoint (`is_clearvoice_model_id`, i.e. `alibabasglab/MossFormer2_SS_16K`)
 to `separate_audios_with_clearvoice(audios, model, device=None, timeout_s=None) -> List[List[Audio]]`.
 Verified constraints of the real dispatch, all binding on Task 5's call:
 
 - **The unasdiff-only arguments must stay at their defaults.** `mode`, `source_classes`, `seed` and
-  `diffusion_steps` are refused (`ValueError`) when set alongside a ClearVoice model
+  `diffusion_steps` are refused (`ValueError`) when set alongside a ClearerVoice model
   (`api.py:117-129`); the node passes none of them.
 - **`n_sources` must equal the checkpoint's fixed output count, 2** (`api.py:130-134`).
-- **`parameters` is validated against the ClearVoice backend's own signature**; ClearVoice declares
+- **`parameters` is validated against the ClearerVoice backend's own signature**; ClearerVoice declares
   nothing beyond `timeout_s`, which is already a named argument, so the node omits `parameters` and
   forwards `timeout_s` only if it has one to forward (`api.py:135-142`).
 - Each output `Audio` carries a `metadata["clearvoice"]` record — keys `model`, `commit`,
@@ -204,7 +204,7 @@ in this file means this table's N7. The one duplicate (this file's N13 against t
 | N25 | "a hint asserts speech/phonation the branch did not find" — `may_contain` is an open vocabulary | config `speech.hint_tags` / `voice.hint_tags`: the tag lists that count as asserting each kind, seeded from the design documents' own member names (not fitted; extended by override). SPEECH additionally reads a non-empty `hint.expected_speech` as asserting speech |
 | N26 | how VERDICT learns `ran`, and what a gated run looks like | `ran` is caller-supplied (only the runner can know `errored`); when omitted it is derived from the store — a node with a `verdict` entity is `completed`, otherwise `skipped`, and the derivation cannot see `errored` (stated limitation). The file-verdict entity carries `gated: true` when any kind predicted **absent** has no branch verdict — marking that the contradiction check did not happen, per `verdict.md` |
 | N27 | TAXONOMY's `voice_no_words: "not_screened"` against the fold's `KindState` | VERDICT maps `not_screened` → `KindState.UNDECIDED`: the fold's undecided rows (pass → present, fail → absent, never-ran → flag) are exactly what an unscreened kind needs |
-| N28 | measurements on separated streams vs. the recording (capability-map §4.5) | record both, never normalise, never compare: every `measurement` entity carries a `stream` attribute naming the stream entity it was taken on, and separated-stream entities carry the `input_norm_scalar` from ClearVoice's `metadata["clearvoice"]` record (the scalar that was **not** applied to the outputs). No code path compares a dBFS-referenced value across streams |
+| N28 | measurements on separated streams vs. the recording (capability-map §4.5) | record both, never normalise, never compare: every `measurement` entity carries a `stream` attribute naming the stream entity it was taken on, and separated-stream entities carry the `input_norm_scalar` from ClearerVoice's `metadata["clearvoice"]` record (the scalar that was **not** applied to the outputs). No code path compares a dBFS-referenced value across streams |
 
 ## Config additions (one edit to `data/config/default.yaml`, made in Task 5, extended in Task 6)
 
@@ -305,7 +305,7 @@ Consumes (all verified on the merged tree):
   module-level `_diarization_model()` factory (it resolves its commit at construction), which tests
   monkeypatch; the fake model object carries `path_or_uri` and `commit_sha`.
 - `separate_audios(audios, model=<_separation_model()>, n_sources=2, device=None, timeout_s=None)
-  -> List[List[Audio]]` — the merged ClearVoice dispatch (`source_separation/api.py:115-145`; see
+  -> List[List[Audio]]` — the merged ClearerVoice dispatch (`source_separation/api.py:115-145`; see
   the prerequisite section). The unasdiff-only arguments (`mode`, `source_classes`, `seed`,
   `diffusion_steps`) are never passed — the API refuses them for this model; `n_sources` must be 2;
   `parameters` is omitted. Each output Audio carries `metadata["clearvoice"]` with keys `model`,
@@ -821,7 +821,7 @@ def _diarization_model() -> PyannoteAudioModel:
 
 
 def _separation_model() -> HFModel:
-    """The ClearVoice separation checkpoint; its commit resolves at construction."""
+    """The ClearerVoice separation checkpoint; its commit resolves at construction."""
     return HFModel(path_or_uri="alibabasglab/MossFormer2_SS_16K", revision="main")
 
 
@@ -1843,7 +1843,7 @@ ids; store never releasable; source not destroyed; branch-fail ≠ file-fail; th
 - §1.5's `separate_audios(model=HFModel("alibabasglab/MossFormer2_SS_16K"), ...)` row and §4.5's
   `utils.clearvoice` reference were stale on the pre-merge design branch; **the `triage` merge
   resolved this** — the merged tree's `source_separation/api.py` dispatches that model id to
-  ClearVoice, and `utils/clearvoice.py` exists. The prerequisite section at the top now records the
+  ClearerVoice, and `utils/clearvoice.py` exists. The prerequisite section at the top now records the
   verified post-merge behaviour instead of a merge instruction.
 - §1.5's PII rows ("`PiiSpan` has no offsets and no times", "MISSING — locating a finding") are
   **stale on this branch**: foundation Task 1 landed `PiiSpan(ScriptLine)`, and findings from a

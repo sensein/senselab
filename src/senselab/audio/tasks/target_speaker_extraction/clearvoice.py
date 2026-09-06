@@ -65,7 +65,7 @@ def _video_path(video: VideoInput) -> Path:
         raise FileNotFoundError(f"video not found: {resolved}")
     if resolved.suffix.lower() not in SUPPORTED_VIDEO_SUFFIXES:
         raise ValueError(
-            f"{resolved.suffix!r} is not a container ClearVoice's reader accepts; it takes "
+            f"{resolved.suffix!r} is not a container ClearerVoice's reader accepts; it takes "
             f"{', '.join(SUPPORTED_VIDEO_SUFFIXES)}. Remux first."
         )
     return resolved
@@ -117,7 +117,7 @@ def extract_target_speakers_with_clearvoice(
         not an error. Each ``Audio`` carries a ``metadata["clearvoice"]`` record.
 
     Raises:
-        ValueError: If ``model`` does not name the ClearVoice extraction checkpoint, if a video is not
+        ValueError: If ``model`` does not name the ClearerVoice extraction checkpoint, if a video is not
             file-backed or is in an unsupported container, or if ``timeout_s`` is not positive.
         FileNotFoundError: If a video path does not exist.
         RuntimeError: If the worker fails or exceeds its ceiling.

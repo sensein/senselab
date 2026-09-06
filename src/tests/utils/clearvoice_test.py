@@ -1,4 +1,4 @@
-"""ClearVoice's shared machinery: the model table, the pin, the device, the ceiling, the worker."""
+"""ClearerVoice's shared machinery: the model table, the pin, the device, the ceiling, the worker."""
 
 from __future__ import annotations
 

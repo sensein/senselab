@@ -42,7 +42,7 @@ sound is lower still and is unrecoverable beyond +20 dB.
 
 ## Enhancement survival — speech event only
 
-Job 20795138, 1× A100, 1362 rows. `*` = ClearVoice (`alibabasglab/*`).
+Job 20795138, 1× A100, 1362 rows. `*` = ClearerVoice (`alibabasglab/*`).
 
 | model | orig | +20 | +10 | +5 | 0 | −5 | drop |
 | --- | --- | --- | --- | --- | --- | --- | --- |

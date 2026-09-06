@@ -1,4 +1,4 @@
-"""ClearVoice speech enhancement: FRCRN, MossFormerGAN and MossFormer2 at 16 or 48 kHz.
+"""ClearerVoice speech enhancement: FRCRN, MossFormerGAN and MossFormer2 at 16 or 48 kHz.
 
 Reached through :func:`senselab.audio.tasks.speech_enhancement.enhance_audios` by naming one of the
 three checkpoints, or called directly. Runs in an isolated subprocess venv; see
@@ -24,7 +24,7 @@ def enhance_audios_with_clearvoice(
     device: Optional[DeviceType] = None,
     timeout_s: Optional[float] = None,
 ) -> List[Audio]:
-    """Enhance each audio with one of ClearVoice's three enhancement checkpoints.
+    """Enhance each audio with one of ClearerVoice's three enhancement checkpoints.
 
     Inputs are resampled to the checkpoint's rate (16 or 48 kHz) and downmixed to mono; outputs come
     back at that rate with the input's sample count.
@@ -42,7 +42,7 @@ def enhance_audios_with_clearvoice(
         model and the resolved commit.
 
     Raises:
-        ValueError: If ``model`` does not name a ClearVoice enhancement checkpoint, or if
+        ValueError: If ``model`` does not name a ClearerVoice enhancement checkpoint, or if
             ``timeout_s`` is not positive, or if ``device`` is neither CUDA nor CPU.
         RuntimeError: If the checkpoint returns anything other than one signal per input, or if the
             worker fails or exceeds its ceiling.

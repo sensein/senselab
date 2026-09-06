@@ -26,11 +26,11 @@ def super_resolve_audios(
 ) -> List[Audio]:
     """Reconstruct the high band of each audio, returning 48 kHz output.
 
-    One backend today: ClearVoice's ``MossFormer2_SR_48K``, in an isolated subprocess venv.
+    One backend today: ClearerVoice's ``MossFormer2_SR_48K``, in an isolated subprocess venv.
 
     Args:
         audios: Inputs. Resampled to the model's rate and downmixed to mono.
-        model: ``HFModel`` naming a ClearVoice super-resolution checkpoint. ``None`` uses
+        model: ``HFModel`` naming a ClearerVoice super-resolution checkpoint. ``None`` uses
             ``alibabasglab/MossFormer2_SR_48K``.
         device: CUDA or CPU. ``None`` leaves the choice to the backend.
         parameters: Backend-specific parameters, validated against the selected backend's signature —
@@ -57,5 +57,5 @@ def super_resolve_audios(
 
     raise NotImplementedError(
         f"No super-resolution backend for {model.path_or_uri!r}. Supported: HFModel ids naming a "
-        f"ClearVoice super-resolution checkpoint ({DEFAULT_SUPER_RESOLUTION_MODEL})."
+        f"ClearerVoice super-resolution checkpoint ({DEFAULT_SUPER_RESOLUTION_MODEL})."
     )

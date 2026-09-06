@@ -652,7 +652,7 @@ centres, `cf[0]` 79.9999, `cf[-1]` 7800.0002, top spacing 643 Hz against 5× bot
 a 1 kHz tone excites the channel at 1049 Hz; shape `(24, 200)` for 2 s at a 10 ms hop.
 `scipy.signal.gammatone` is available in the pinned environment. There is no in-tree gammatone to
 reuse — the only hit, `utils/clearvoice.py:102`, is the `gammatone` PyPI package listed as a
-ClearVoice subprocess-venv requirement, not a senselab implementation.
+ClearerVoice subprocess-venv requirement, not a senselab implementation.
 
 **Task 8 (redaction) is correct as written.** Padding (1.0, 1.2) → (0.9, 1.3); (0.02, 0.1) clamps to
 0.0; (0.9,1.2) + (1.15,1.45) merges to one; silence-in-place with duration preserved (verified the
