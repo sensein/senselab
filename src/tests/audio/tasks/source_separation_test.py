@@ -762,17 +762,21 @@ def test_no_device_leaves_the_choice_to_the_worker(monkeypatch: pytest.MonkeyPat
     assert captured["payload"]["device"] is None
 
 
-def test_an_incompatible_device_is_rejected_before_the_venv() -> None:
-    """MPS is not one of this backend's compatible devices and must raise rather than fall back."""
-    audio = Audio(waveform=torch.randn(1, 16000), sampling_rate=16000)
-    with pytest.raises(ValueError):
-        unasdiff.separate_with_unasdiff(
-            [audio],
-            n_sources=2,
-            source_class_indices=[0, 0],
-            mode="speech_speech",
-            device=DeviceType.MPS,
-        )
+def test_mps_is_admitted_when_named_but_never_chosen_for_an_unresolved_device() -> None:
+    """MPS runs this model correctly; it is simply slow, so it is opt-in rather than refused.
+
+    This test previously asserted MPS raised, on the belief that the backend could not run there.
+    It can: the only blocker was upstream's ``_extract_into_tensor`` moving the float64 schedule to
+    the device before its own unconditional ``.float()``, which MPS cannot do. With the cast
+    hoisted the sampler completes on MPS and returns ``mps:0`` tensors, with no op falling back.
+
+    What remains true is that it is a bad default -- 90-193 s per diffusion step against 16.7 s on
+    CPU -- so an unresolved device must still resolve to CPU. See
+    specs/20260906-unasdiff-mps-and-timeout.
+    """
+    assert DeviceType.MPS in unasdiff._COMPATIBLE_DEVICES
+    unresolved_branch = unasdiff._WORKER_SCRIPT.split("if requested is None:")[1].split("if str(requested)")[0]
+    assert "mps" not in unresolved_branch
 
 
 # ── Worker timeout ────────────────────────────────────────────────────
@@ -1197,3 +1201,66 @@ def test_the_worker_writes_through_the_staged_policy() -> None:
     assert "stage_portable_audio_io(" in Path(unasdiff.__file__).read_text(), (
         "the parent must stage portable_audio_io.py into the worker's temp dir"
     )
+
+
+def test_an_unresolved_device_is_sized_for_the_slow_path_not_for_cuda() -> None:
+    """``device=None`` must not be costed as if CUDA were certain.
+
+    The host cannot resolve what the worker will pick: its torch is a different build from the
+    venv's, which is exactly why the choice is deferred. Costing the unknown as CUDA granted a
+    1800s floor to work that takes ~14400s on CPU, so a run that was progressing normally was
+    killed ~85 minutes in and its finished windows discarded. The unknown is sized for the slow
+    path instead -- an over-large ceiling costs nothing, an under-large one destroys work.
+    """
+    unresolved = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=None)
+    cpu = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=DeviceType.CPU)
+    cuda = unasdiff._default_timeout_s(1, unasdiff._DIFFUSION_STEPS, device=DeviceType.CUDA)
+    assert unresolved == cpu
+    assert unresolved > cuda
+
+
+def test_the_worker_refuses_work_it_cannot_finish_in_the_ceiling() -> None:
+    """The worker fails fast, because only the worker knows the device it resolved to."""
+    assert "deadline_s" in unasdiff._WORKER_SCRIPT
+    assert "estimate_s > deadline_s" in unasdiff._WORKER_SCRIPT
+
+
+def test_the_host_tells_the_worker_its_deadline(mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A worker that is not told the ceiling cannot refuse against it."""
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    u.separate_with_unasdiff([mono_audio_sample], 2, [0, 0], timeout_s=1234.0)
+    assert captured["payload"]["deadline_s"] == pytest.approx(1234.0)
+
+
+def test_mps_is_reachable_only_when_named() -> None:
+    """MPS is measurably slower than CPU here, so it must never be chosen by default.
+
+    Measured on this model, one 4 s window, per diffusion step: cpu 16.7 s, mps 90-193 s. An
+    unresolved device therefore resolves to cpu, and mps is honoured only when asked for by name.
+    """
+    script = unasdiff._WORKER_SCRIPT
+    assert 'str(requested).startswith("mps")' in script
+    unresolved_branch = script.split("if requested is None:")[1].split("if str(requested)")[0]
+    assert "mps" not in unresolved_branch
+
+
+def test_the_mps_path_casts_the_schedule_before_moving_it() -> None:
+    """MPS has no float64; upstream moves the schedule then casts, so the move raises first."""
+    script = unasdiff._WORKER_SCRIPT
+    assert "patch_extract_for_mps" in script
+    assert "src.float().to(device=timesteps.device)[timesteps]" in script
+
+
+def test_naming_mps_is_not_refused_by_the_host_allowlist(
+    mono_audio_sample: Audio, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worker's MPS branch is dead code unless the host allowlist admits MPS first.
+
+    ``_select_device_and_dtype`` is consulted before the worker is launched, so a compatible list
+    of CUDA and CPU alone rejects ``DeviceType.MPS`` there and ``resolve_device`` is never reached.
+    """
+    captured: dict = {}
+    u = _stub_worker(monkeypatch, captured)
+    u.separate_with_unasdiff([mono_audio_sample], 2, [0, 0], device=DeviceType.MPS)
+    assert captured["payload"]["device"] == "mps"

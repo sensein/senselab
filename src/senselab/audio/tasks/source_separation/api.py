@@ -3,7 +3,7 @@
 Exposes class-space resolution for unasdiff's sound prior (:func:`resolve_source_classes`) and the
 separation entry point, :func:`separate_audios`. Two backends: unasdiff, reachable only by naming it
 and never wired into a default model list (see ``unasdiff``'s module docstring for the licensing
-reason), and ClearVoice's ``MossFormer2_SS_16K``.
+reason), and ClearerVoice's ``MossFormer2_SS_16K``.
 
 ``mode``, ``source_classes``, ``seed`` and ``diffusion_steps`` are unasdiff's own concepts and are
 rejected for any other backend rather than silently ignored. They pre-date the ``parameters`` pathway
@@ -97,7 +97,7 @@ def separate_audios(
         timeout_s: Ceiling on the worker subprocess, in seconds; ``None`` derives one from the
             work. Forwarded unchanged to whichever backend runs.
         parameters: Backend-specific parameters, validated against the selected backend's own
-            signature — an unknown key raises rather than being ignored. ClearVoice declares nothing
+            signature — an unknown key raises rather than being ignored. ClearerVoice declares nothing
             beyond ``timeout_s``, which is already an argument above, so today this is accepted only
             to reject a key that would otherwise have been silently dropped.
 
@@ -148,9 +148,9 @@ def separate_audios(
         isinstance(model, HFModel) and str(model.path_or_uri).startswith(_UNASDIFF_MODEL_PREFIX)
     ):
         raise ValueError(
-            "source separation has two backends: unasdiff, and ClearVoice's MossFormer2_SS_16K. model "
+            "source separation has two backends: unasdiff, and ClearerVoice's MossFormer2_SS_16K. model "
             f"must be None, an HFModel whose path_or_uri starts with {_UNASDIFF_MODEL_PREFIX!r}, or a "
-            f"ClearVoice separation checkpoint under 'alibabasglab/', got {model!r}"
+            f"ClearerVoice separation checkpoint under 'alibabasglab/', got {model!r}"
         )
     if parameters:
         raise ValueError(

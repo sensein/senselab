@@ -372,7 +372,7 @@
     b99a25a637a9963d5c7557f0b70597fc54c7a0bb). See
     specs/20260818-083214-driftse-upstream-mit/design.md.
 
-- name: ClearVoice FRCRN (16kHz)
+- name: ClearerVoice FRCRN (16kHz)
   task: speech_enhancement
   source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
   model_id: alibabasglab/FRCRN_SE_16K
@@ -390,7 +390,7 @@
     breaths survive at -2.0 and -5.5 dB and coughs at -1.0 and +0.1 dB, so it is the checkpoint to
     choose when breaths or coughs are signal rather than noise. Energy-conserving.
 
-- name: ClearVoice MossFormerGAN (16kHz)
+- name: ClearerVoice MossFormerGAN (16kHz)
   task: speech_enhancement
   source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
   model_id: alibabasglab/MossFormerGAN_SE_16K
@@ -407,7 +407,7 @@
     92% of input energy: breaths at -51 dB and two of four verified coughs removed entirely.
     Destructive for any analysis that treats non-speech sound as signal.
 
-- name: ClearVoice MossFormer2 (48kHz)
+- name: ClearerVoice MossFormer2 (48kHz)
   task: speech_enhancement
   source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
   model_id: alibabasglab/MossFormer2_SE_48K
@@ -497,7 +497,7 @@
     model list and not wired into audio_analysis (via subprocess venv,
     pinned upstream commit 5a5d70cdc94fe9d034892a1c5bc68ad1a67d2daa)
 
-- name: ClearVoice MossFormer2 (separation, 16kHz)
+- name: ClearerVoice MossFormer2 (separation, 16kHz)
   task: separation
   source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
   model_id: alibabasglab/MossFormer2_SS_16K
@@ -516,7 +516,7 @@
     -25 dBFS normalised input rather than to the caller's level, which each returned Audio reports.
 
 # Speech Super-Resolution
-- name: ClearVoice MossFormer2 (super-resolution, 48kHz)
+- name: ClearerVoice MossFormer2 (super-resolution, 48kHz)
   task: super_resolution
   source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11)
   model_id: alibabasglab/MossFormer2_SR_48K
@@ -535,7 +535,7 @@
     MossFormer2_SE_48K when the input is also noisy.
 
 # Audio-Visual Target Speaker Extraction
-- name: ClearVoice AV-MossFormer2 (TSE, 16kHz)
+- name: ClearerVoice AV-MossFormer2 (TSE, 16kHz)
   task: target_speaker_extraction
   source: alibabasglab (clearvoice==0.1.2, via subprocess venv, Python 3.11; needs ffmpeg)
   model_id: alibabasglab/AV_MossFormer2_TSE_16K
