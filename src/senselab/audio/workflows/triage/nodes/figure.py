@@ -55,9 +55,10 @@ _LINE_SOURCE: dict[tuple[str, str], tuple[str, ...]] = {
 
 _SUMMARISED_CLASSIFIERS = ("yamnet", "ast", "hear")
 
-# E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary amplitude).
-_MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A"}
-_SPAN_ROWS = ("E", "C", "A", "S")
+# E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary amplitude),
+# G=gap, the complement PREPROCESS writes so the background between proposals is measured too.
+_MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A", "gap": "G"}
+_SPAN_ROWS = ("E", "C", "A", "S", "G")
 
 
 _SUMMARY_LABEL_WIDTH = 20
@@ -92,6 +93,8 @@ class FigureStyle:
         colour_supplement: Normalization-derived spans.
         colour_continuity: The continuity trace and its spans.
         colour_asr: ASR-derived spans and the word lane.
+        colour_gap: Gap spans — the complement of the proposed set, drawn neutral so the
+            background reads as the absence of a proposal rather than as a fifth source.
         colour_clip: Clip-event accents.
         colour_padding: The shading that marks a padded tail.
         cmap_spectrogram: Spectrogram colormap.
@@ -152,6 +155,7 @@ class FigureStyle:
     colour_supplement: str = "darkorange"
     colour_continuity: str = "mediumseagreen"
     colour_asr: str = "mediumpurple"
+    colour_gap: str = "0.62"
     colour_clip: str = "crimson"
     colour_padding: str = "0.55"
     cmap_spectrogram: str = "magma"
@@ -191,7 +195,7 @@ class FigureStyle:
         """The colour for one span-source row.
 
         Args:
-            code: ``"E"``, ``"C"``, ``"A"`` or ``"S"``.
+            code: ``"E"``, ``"C"``, ``"A"``, ``"S"`` or ``"G"``.
 
         Returns:
             The configured colour.
@@ -201,6 +205,7 @@ class FigureStyle:
             "C": self.colour_continuity,
             "A": self.colour_asr,
             "S": self.colour_supplement,
+            "G": self.colour_gap,
         }
         return self.span_row_colours.get(code, default[code])
 
@@ -352,7 +357,7 @@ def _span_code(signal_name: str, measure: str) -> str:
         measure: The span's measure.
 
     Returns:
-        ``"E"``, ``"C"``, ``"A"``, ``"S"`` or ``"?"``.
+        ``"E"``, ``"C"``, ``"A"``, ``"S"``, ``"G"`` or ``"?"``.
     """
     if measure == "amplitude" and signal_name == "normalized":
         return "S"
