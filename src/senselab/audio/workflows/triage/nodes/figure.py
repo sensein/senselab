@@ -16,6 +16,7 @@ See ``specs/20260904-preprocess-taxonomy-figure/design.md``.
 from __future__ import annotations
 
 import json
+import textwrap
 from dataclasses import dataclass, field
 from math import ceil
 from pathlib import Path
@@ -43,6 +44,10 @@ NODE = "FIGURE"
 
 _STREAM = "preemphasised"
 _FALLBACK_STREAM = "plain"
+_SOURCE_STREAM = "recording"
+
+#: Characters per line of the cover title, at its 11 pt proportional face on an 11-inch page.
+_TITLE_COLUMNS = 95
 
 #: The derivative each TAXONOMY evidence line reads, so an unavailable line can name what is missing.
 _LINE_SOURCE: dict[tuple[str, str], tuple[str, ...]] = {
@@ -592,6 +597,24 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
                 if reason:
                     kind_lines.append(f"          {source} absent: {reason}")
     return blocks, kind_lines
+
+
+def _source_path(store: ProvStore, run_dir: Path) -> str | None:
+    """The recording's own file path, as ADMIT recorded it.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory.
+
+    Returns:
+        The path as recorded, or None when the store holds no live ``recording`` stream.
+    """
+    try:
+        entity_id, _ = resolve_stream(store, run_dir, _SOURCE_STREAM)
+    except LookupError:
+        return None
+    path = store.get_entity(entity_id).attributes.get("path")
+    return str(path) if path else None
 
 
 def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
@@ -1250,6 +1273,28 @@ def _asr_lane_panel(
         )
 
 
+def cover_lines(store: ProvStore, run_dir: Path, panel_lines: list[str]) -> list[str]:
+    """The cover's lines: the recording's full path over the whole-file summary.
+
+    The path is wrapped no wider than the summary's own widest line, so it cannot reach further
+    right than the panel already does.
+
+    Args:
+        store: The provenance store.
+        run_dir: The run directory.
+        panel_lines: :func:`summary_panel_lines`' result.
+
+    Returns:
+        The lines, in print order.
+    """
+    source = _source_path(store, run_dir)
+    if not source:
+        return list(panel_lines)
+    width = max((len(line) for line in panel_lines), default=_SUMMARY_COLUMN_WIDTH)
+    wrapped = textwrap.wrap(source, width=max(width - 2, 40), break_on_hyphens=False, break_long_words=True)
+    return ["SOURCE", *(f"  {part}" for part in wrapped), "", *panel_lines]
+
+
 def _taxonomy_panel(axis: Axes, lines: list[str], style: FigureStyle) -> Text:
     """The whole-file taxonomy readout, monospaced and off the shared time axis.
 
@@ -1454,8 +1499,9 @@ def preprocess_figure(
     pdf_path = figure_dir / f"{stem or store.run_id}.pdf"
     pdf = PdfPages(pdf_path)
     cover = plt.figure(figsize=style.figure_inches)
-    cover.suptitle(f"{stem or store.run_id} — whole-file summary", fontsize=11)
-    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.92)), panel_lines, style)
+    title = f"{stem or store.run_id} — whole-file summary"
+    cover.suptitle("\n".join(textwrap.wrap(title, width=_TITLE_COLUMNS, break_long_words=True)), fontsize=11)
+    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.86)), cover_lines(store, run_dir, panel_lines), style)
     pdf.savefig(cover, dpi=style.dpi)
     plt.close(cover)
     for index, window in enumerate(pages(duration_s, style), start=1):
