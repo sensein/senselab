@@ -265,14 +265,15 @@ def _seconds_per_window_step(device: Optional[DeviceType]) -> float:
     """Return the per-(window x diffusion-step) cost, in seconds, for ``device``.
 
     Args:
-        device: The device the worker will run on. ``None`` (the caller has left the choice to
-            the worker) and ``DeviceType.CUDA`` both use the measured CUDA figure; any other
-            device is scaled by ``_CPU_TIMEOUT_MULTIPLIER``.
+        device: The device the worker will run on. Only ``DeviceType.CUDA`` uses the measured CUDA
+            figure. ``None`` means the caller left the choice to the worker, which the host cannot
+            resolve -- its torch is a different build from the venv's -- so it is sized for the
+            slow path, like any other non-CUDA device.
 
     Returns:
         Seconds per window-step.
     """
-    if device is None or device == DeviceType.CUDA:
+    if device == DeviceType.CUDA:
         return _SECONDS_PER_WINDOW_STEP_CUDA
     return _SECONDS_PER_WINDOW_STEP_CUDA * _CPU_TIMEOUT_MULTIPLIER
 
@@ -340,6 +341,7 @@ try:
     diffusion_steps = int(args["diffusion_steps"])
     labels = args["labels"]
     in_paths, out_paths = args["in_paths"], args["out_paths"]
+    deadline_s = args.get("deadline_s")
     seed = int(args["seed"])
     requested_device = args.get("device")
     sys.path.insert(0, args["io_dir"])
@@ -394,10 +396,39 @@ try:
     else:
         os.environ["CUDA_VISIBLE_DEVICES"] = saved_visible_devices
 
+    def patch_extract_for_mps():
+        # Upstream's _extract_into_tensor moves the schedule to the device and only then casts to
+        # float32: torch.from_numpy(arr).to(device=...)[timesteps].float(). MPS has no float64, so
+        # the move raises before the cast that would have made it moot. Casting first is the same
+        # arithmetic in the same order of operations that upstream already performs -- .float() is
+        # unconditional there -- so CUDA and CPU results are unchanged; only MPS stops raising.
+        import diffusion.gaussian_diffusion as gd
+
+        def extract_into_tensor(arr, timesteps, broadcast_shape):
+            src = arr if isinstance(arr, torch.Tensor) else torch.from_numpy(arr)
+            res = src.float().to(device=timesteps.device)[timesteps]
+            while len(res.shape) < len(broadcast_shape):
+                res = res[..., None]
+            return res.expand(broadcast_shape)
+
+        gd._extract_into_tensor = extract_into_tensor
+
     def resolve_device(requested):
         # Bare "cuda" would take whatever index torch defaults to; an index is always chosen.
+        #
+        # MPS is reachable only when asked for by name, never by leaving the choice open: it is
+        # measurably slower than CPU for this model, so auto-selecting it on Apple Silicon would
+        # be a pessimisation. See specs/20260906-unasdiff-mps-and-timeout.
         if requested is None:
             return torch.device("cuda:%d" % torch.cuda.current_device() if torch.cuda.is_available() else "cpu")
+        if str(requested).startswith("mps"):
+            if not torch.backends.mps.is_available():
+                raise RuntimeError(
+                    "unasdiff worker: device %r was requested but torch.backends.mps.is_available() "
+                    "is False inside the unasdiff venv" % (requested,)
+                )
+            patch_extract_for_mps()
+            return torch.device("mps")
         if not str(requested).startswith("cuda"):
             return torch.device(requested)
         if not torch.cuda.is_available():
@@ -412,6 +443,21 @@ try:
 
     device = resolve_device(requested_device)
     torch.manual_seed(seed)
+
+    # Refuse work that cannot finish inside the ceiling the host granted. Only the worker can do
+    # this: the host's torch is a different build, so the host cannot know which device the worker
+    # will land on when the caller left the choice open. Without it a CPU run is killed ~85 minutes
+    # in, having made real progress that is then discarded.
+    seconds_per_step = {"cuda": 0.4, "mps": 130.0, "cpu": 17.0}.get(device.type, 17.0)
+    n_windows_total = sum(len(paths) for paths in out_paths)
+    estimate_s = seconds_per_step * n_windows_total * diffusion_steps
+    if deadline_s is not None and estimate_s > deadline_s:
+        raise RuntimeError(
+            "unasdiff worker: %d window(s) x %d diffusion steps on %s is about %.0fs of work, over "
+            "the %.0fs ceiling. Measured per-step cost on this model: cuda 0.4s, cpu 17s, mps 130s "
+            "(mps is slower than cpu here). Use a CUDA device, lower diffusion_steps, shorten the "
+            "input, or raise timeout_s." % (n_windows_total, diffusion_steps, device.type, estimate_s, deadline_s)
+        )
 
     def load_prior(config_path, ckpt_path):
         # Reimplementation of load_model() from upstream's benchmark scripts (not named here
@@ -911,6 +957,7 @@ def separate_with_unasdiff(
                 "seed": seed,
                 "diffusion_steps": diffusion_steps,
                 "device": worker_device,
+                "deadline_s": effective_timeout_s,
                 "io_dir": stage_portable_audio_io(tmp),
             }
         )
