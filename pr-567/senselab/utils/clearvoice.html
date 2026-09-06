@@ -157,7 +157,7 @@ Upstream task                    Model                       Rate     senselab h
 <code>speech_enhancement</code>           <code>MossFormer2_SE_48K</code>      48 kHz   <code>audio/tasks/speech_enhancement</code>
 <code>speech_separation</code>            <code>MossFormer2_SS_16K</code>      16 kHz   <code>audio/tasks/source_separation</code>
 <code>speech_super_resolution</code>      <code>MossFormer2_SR_48K</code>      48 kHz   <code>audio/tasks/speech_super_resolution</code>
-<code>target_speaker_extraction</code>    <code>AV_MossFormer2_TSE_16K</code>  16 kHz   <code>audio/tasks/target_speaker_extraction</code>
+<code>target_speaker_extraction</code>    <code>AV_MossFormer2_TSE_16K</code>  16 kHz   <code>video/tasks/target_speaker_extraction</code>
 ===============================  ==========================  =======  ===========================================</p>
 
 <p>SpeechScore, upstream's fifth component, is not reachable from here: it has no pip distribution and a
@@ -191,7 +191,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-15"><a href="#L-15"><span class="linenos"> 15</span></a><span class="sd">``speech_enhancement``           ``MossFormer2_SE_48K``      48 kHz   ``audio/tasks/speech_enhancement``</span>
 </span><span id="L-16"><a href="#L-16"><span class="linenos"> 16</span></a><span class="sd">``speech_separation``            ``MossFormer2_SS_16K``      16 kHz   ``audio/tasks/source_separation``</span>
 </span><span id="L-17"><a href="#L-17"><span class="linenos"> 17</span></a><span class="sd">``speech_super_resolution``      ``MossFormer2_SR_48K``      48 kHz   ``audio/tasks/speech_super_resolution``</span>
-</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="sd">``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``audio/tasks/target_speaker_extraction``</span>
+</span><span id="L-18"><a href="#L-18"><span class="linenos"> 18</span></a><span class="sd">``target_speaker_extraction``    ``AV_MossFormer2_TSE_16K``  16 kHz   ``video/tasks/target_speaker_extraction``</span>
 </span><span id="L-19"><a href="#L-19"><span class="linenos"> 19</span></a><span class="sd">===============================  ==========================  =======  ===========================================</span>
 </span><span id="L-20"><a href="#L-20"><span class="linenos"> 20</span></a>
 </span><span id="L-21"><a href="#L-21"><span class="linenos"> 21</span></a><span class="sd">SpeechScore, upstream&#39;s fifth component, is not reachable from here: it has no pip distribution and a</span>
@@ -353,7 +353,7 @@ that mechanism. Every design decision, deviation and measurement behind this mod
 </span><span id="L-177"><a href="#L-177"><span class="linenos">177</span></a>    <span class="s2">&quot;speech_enhancement&quot;</span><span class="p">:</span> <span class="s2">&quot;senselab.audio.tasks.speech_enhancement.enhance_audios&quot;</span><span class="p">,</span>
 </span><span id="L-178"><a href="#L-178"><span class="linenos">178</span></a>    <span class="s2">&quot;speech_separation&quot;</span><span class="p">:</span> <span class="s2">&quot;senselab.audio.tasks.source_separation.separate_audios&quot;</span><span class="p">,</span>
 </span><span id="L-179"><a href="#L-179"><span class="linenos">179</span></a>    <span class="s2">&quot;speech_super_resolution&quot;</span><span class="p">:</span> <span class="s2">&quot;senselab.audio.tasks.speech_super_resolution.super_resolve_audios&quot;</span><span class="p">,</span>
-</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>    <span class="s2">&quot;target_speaker_extraction&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;senselab.audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos&quot;</span><span class="p">),</span>
+</span><span id="L-180"><a href="#L-180"><span class="linenos">180</span></a>    <span class="s2">&quot;target_speaker_extraction&quot;</span><span class="p">:</span> <span class="p">(</span><span class="s2">&quot;senselab.video.tasks.target_speaker_extraction.extract_target_speakers_from_videos&quot;</span><span class="p">),</span>
 </span><span id="L-181"><a href="#L-181"><span class="linenos">181</span></a><span class="p">}</span>
 </span><span id="L-182"><a href="#L-182"><span class="linenos">182</span></a>
 </span><span id="L-183"><a href="#L-183"><span class="linenos">183</span></a>
