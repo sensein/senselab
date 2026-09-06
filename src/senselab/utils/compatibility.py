@@ -232,8 +232,8 @@ COMPATIBILITY_MATRIX: dict[str, CompatibilityEntry] = {
         venv_python=CLEARVOICE_PYTHON,
         install_hint="Automatically provisioned in isolated environment",
     ),
-    # ── Audio: Target Speaker Extraction (ISOLATED — clearvoice; needs ffmpeg on PATH) ──
-    "audio.tasks.target_speaker_extraction.extract_target_speakers_from_videos": CompatibilityEntry(
+    # ── Video: Target Speaker Extraction (ISOLATED — clearvoice; needs ffmpeg on PATH) ──
+    "video.tasks.target_speaker_extraction.extract_target_speakers_from_videos": CompatibilityEntry(
         required_deps=[],
         isolated=True,
         venv_name=CLEARVOICE_VENV,

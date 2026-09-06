@@ -16,7 +16,7 @@ One backend, in an isolated subprocess venv:
 from [ClearerVoice-Studio](https://github.com/modelscope/ClearerVoice-Studio) (Apache-2.0).
 
 ```python
-from senselab.audio.tasks.target_speaker_extraction import extract_target_speakers_from_videos
+from senselab.video.tasks.target_speaker_extraction import extract_target_speakers_from_videos
 
 per_video = extract_target_speakers_from_videos(["meeting.mp4"])
 speakers = per_video[0]        # one 16 kHz Audio per detected face track
@@ -41,7 +41,7 @@ write policy instead of upstream's default PCM_16.
 
 ## Two weights, pinned two different ways
 
-The checkpoint is pinned by resolved commit, like every other ClearVoice model. The **S3FD face
+The checkpoint is pinned by resolved commit, like every other ClearerVoice model. The **S3FD face
 detector** cannot be: it ships in no wheel, and upstream fetches it from an unversioned Google Drive
 file id with no digest, writing it into site-packages. senselab fetches it from a pinned commit of the
 GitHub tree and verifies its sha256 (`d54a87c2…`, 86 MB) before use, refusing a mismatch — a silently
