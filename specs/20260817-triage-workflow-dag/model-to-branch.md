@@ -41,9 +41,9 @@ candidate, not a decision: it rests on n=1, and using a separator as a class fil
 these models was built for.
 
 **unasdiff is not a separation backend for this path** — ruled out 2026-09-06 in
-[`benchmarks/separation-buzz-2026-09-06.md`](benchmarks/separation-buzz-2026-09-06.md): speech leaks
-into both slots at 1.000, only half the interferer's band survives, and it runs 43× slower than real
-time on an A100. That ruling is about background separation and leaves the `span_reconfirm`
+[`benchmarks/separation-buzz-2026-09-06.md`](benchmarks/separation-buzz-2026-09-06.md): it separated
+nothing — in the one buzz-only block its s1 is the input within 1.1 dB, lowpassed — and it runs 43×
+slower than real time on an A100. That ruling is about background separation and leaves the `span_reconfirm`
 class-filter idea above untouched — that one conditions on `Cough`, which the 41-class prior does
 carry.
 
