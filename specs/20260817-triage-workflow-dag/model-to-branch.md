@@ -40,6 +40,13 @@ matters because unasdiff can condition on `Cough` but has no `Breathing` class a
 candidate, not a decision: it rests on n=1, and using a separator as a class filter is not what any of
 these models was built for.
 
+**unasdiff is not a separation backend for this path** — ruled out 2026-09-06 in
+[`benchmarks/separation-buzz-2026-09-06.md`](benchmarks/separation-buzz-2026-09-06.md): speech leaks
+into both slots at 1.000, only half the interferer's band survives, and it runs 43× slower than real
+time on an A100. That ruling is about background separation and leaves the `span_reconfirm`
+class-filter idea above untouched — that one conditions on `Cough`, which the 41-class prior does
+carry.
+
 ## Where this actually applies
 
 **AIRWAY uses no enhancer at all.** Its detection plan (settled in
