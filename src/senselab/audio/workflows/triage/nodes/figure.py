@@ -61,6 +61,10 @@ _LINE_SOURCE: dict[tuple[str, str], tuple[str, ...]] = {
 
 _SUMMARISED_CLASSIFIERS = ("yamnet", "ast", "hear")
 
+#: The residual block summarises only these two — HeAR and the speech-free variant stay in the
+#: store, unrendered, by the owner's ruling.
+_RESIDUAL_SUMMARISED_CLASSIFIERS = ("yamnet", "ast")
+
 # E=envelope (primary amplitude), C=continuity, A=asr, S=normalization (supplementary amplitude),
 # G=gap, the complement PREPROCESS writes so the background between proposals is measured too.
 _MEASURE_CODE = {"amplitude": "E", "continuity": "C", "asr": "A", "gap": "G"}
@@ -724,6 +728,116 @@ def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     return lines
 
 
+def _columns(blocks: list[list[str]]) -> list[str]:
+    """Lay blocks side by side, one column per block, each padded to :data:`_SUMMARY_COLUMN_WIDTH`.
+
+    Args:
+        blocks: One line list per column.
+
+    Returns:
+        The laid-out lines, indented two spaces, with trailing padding stripped.
+    """
+    depth = max((len(block) for block in blocks), default=0)
+    lines: list[str] = []
+    for row in range(depth):
+        cells = [block[row] if row < len(block) else "" for block in blocks]
+        lines.append(
+            "  " + "".join(f"{cell:<{_SUMMARY_COLUMN_WIDTH}.{_SUMMARY_COLUMN_WIDTH}}" for cell in cells).rstrip()
+        )
+    return lines
+
+
+def _residual_header_line(store: ProvStore) -> tuple[str, bool]:
+    """The residual stream's own provenance line, read off the ``residual`` measurement.
+
+    Args:
+        store: The provenance store.
+
+    Returns:
+        ``(line, present)``. ``present`` is False when the line states an absence — PREPROCESS's own
+        recorded reason, covering the block never having run, having been gated out, or an upstream
+        failure — in which case no classifier block follows it.
+    """
+    measurement = find_measurement(store, "residual")
+    if measurement is None:
+        reason = _absent_reasons(store).get("residual", "no reason recorded")
+        return f"RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL: absent — {reason}", False
+    attributes = measurement.attributes
+    gain_db = attributes.get("gain_db")
+    enhanced_fraction = attributes.get("enhanced_energy_fraction")
+    energy_fraction = attributes.get("energy_fraction")
+    gain_text = f"{float(gain_db):+.2f} dB" if gain_db is not None else "—"
+    enhanced_text = f"{float(enhanced_fraction) * 100.0:.1f}%" if enhanced_fraction is not None else "—"
+    energy_text = f"{float(energy_fraction) * 100.0:.1f}%" if energy_fraction is not None else "—"
+    speech_text = "speech present" if attributes.get("speech_present") else "no speech detected"
+    line = (
+        "RESIDUAL — BACKGROUND AFTER SPEECH REMOVAL   "
+        f"gain {gain_text} · enhanced {enhanced_text} · residual {energy_text} · {speech_text}"
+    )
+    return line, True
+
+
+def _residual_classifier_block(store: ProvStore, classifier: str, style: FigureStyle) -> list[str]:
+    """One classifier's residual label summary, over every window, read off ``residual_<classifier>_summary_all``.
+
+    Args:
+        store: The provenance store.
+        classifier: ``"yamnet"`` or ``"ast"``.
+        style: The drawing configuration, for how many labels to list.
+
+    Returns:
+        The block's lines, headed by the classifier's own name so it stands alone in a column: an
+        absent summary states PREPROCESS's own reason, and a summary over zero windows says so
+        rather than printing an empty label list.
+    """
+    summary = find_measurement(store, f"residual_{classifier}_summary_all")
+    if summary is None:
+        reason = _absent_reasons(store).get(f"residual_{classifier}")
+        return [f"{classifier}: absent", f"  {reason}" if reason else "  no reason recorded"]
+    attributes = summary.attributes
+    n_windows = int(attributes.get("n_windows") or 0)
+    if n_windows == 0:
+        return [f"{classifier}: 0 win", "  residual produced no windows to classify"]
+    labels: dict[str, dict[str, float]] = attributes.get("labels") or {}
+    block = [f"{classifier}: {n_windows} win, {len(labels)} labels"]
+    ranked = sorted(
+        ((name, stats) for name, stats in labels.items() if float(stats["max_score"]) > 0.0),
+        key=lambda item: (float(item[1]["max_score"]), float(item[1]["mean_score"])),
+        reverse=True,
+    )
+    if not ranked:
+        block.append("  every label scored 0.000")
+    for label, stats in ranked[: style.summary_labels]:
+        block.append(
+            f"  {label:<{_SUMMARY_LABEL_WIDTH}.{_SUMMARY_LABEL_WIDTH}} "
+            f"peak {float(stats['max_score']):.2f} mean {float(stats['mean_score']):.2f} "
+            f"({int(stats['n_windows'])})"
+        )
+    return block
+
+
+def _residual_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
+    """The residual stream's whole-file classification summary: YAMNet and AST, over all windows.
+
+    Laid out with :func:`_columns`, the same machinery :func:`summary_panel_lines` uses for the
+    other classifiers. The speech-free variant is not rendered here.
+
+    Args:
+        store: The provenance store.
+        style: The drawing configuration.
+
+    Returns:
+        The lines, headed by the residual's own provenance line, alone when the block is absent.
+    """
+    header, present = _residual_header_line(store)
+    lines = [header]
+    if not present:
+        return lines
+    blocks = [_residual_classifier_block(store, classifier, style) for classifier in _RESIDUAL_SUMMARISED_CLASSIFIERS]
+    lines.extend(_columns(blocks))
+    return lines
+
+
 def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     """The same readout laid out across the page: the classifier blocks side by side in columns.
 
@@ -739,12 +853,9 @@ def summary_panel_lines(store: ProvStore, style: FigureStyle) -> list[str]:
     """
     blocks, kind_lines = _summary_sections(store, style)
     lines: list[str] = ["WHOLE-FILE CLASSIFICATION SUMMARY"]
-    depth = max((len(block) for block in blocks), default=0)
-    for row in range(depth):
-        cells = [block[row] if row < len(block) else "" for block in blocks]
-        lines.append(
-            "  " + "".join(f"{cell:<{_SUMMARY_COLUMN_WIDTH}.{_SUMMARY_COLUMN_WIDTH}}" for cell in cells).rstrip()
-        )
+    lines.extend(_columns(blocks))
+    lines.append("")
+    lines.extend(_residual_summary_lines(store, style))
     lines.append("")
     lines.append("KIND STATES AND EVIDENCE LINES")
     lines.extend(kind_lines)
