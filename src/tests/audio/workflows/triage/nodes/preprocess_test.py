@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from senselab.audio.data_structures import Audio
+from senselab.audio.tasks.classification.yamnet import YAMNET_WINDOW_SECONDS
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.common import find_measurement, find_measurements, live_entities
@@ -29,6 +30,28 @@ def _clipped_at_44k() -> np.ndarray:
     """2 s of a 220 Hz tone driven 3.5 dB past full scale, so it clips in flat plateaus."""
     grid = np.arange(int(2.0 * 44100)) / 44100
     return np.clip(1.5 * np.sin(2 * np.pi * 220.0 * grid), -1.0, 1.0).astype(np.float32)
+
+
+def _long_burst_samples(burst_s: float = 1.2, total_s: float = 3.5) -> np.ndarray:
+    """A quiet noise bed with one loud tone burst long enough to meet YAMNet's own native frame."""
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(total_s * SR)) * 1e-4).astype(np.float32)
+    start = int(1.0 * SR)
+    stop = start + int(burst_s * SR)
+    grid = np.arange(stop - start) / SR
+    samples[start:stop] += (0.5 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    return samples
+
+
+def _samples_with_a_long_gap() -> np.ndarray:
+    """A quiet noise bed with a short burst, long enough overall that a gap clears the native frame."""
+    rng = np.random.default_rng(0)
+    samples = (rng.standard_normal(int(8.0 * SR)) * 1e-4).astype(np.float32)
+    start = int(4.0 * SR)
+    stop = start + int(0.15 * SR)
+    grid = np.arange(stop - start) / SR
+    samples[start:stop] += (0.5 * np.sin(2 * np.pi * 440.0 * grid)).astype(np.float32)
+    return samples
 
 
 def _merging_bursts() -> np.ndarray:
@@ -592,7 +615,7 @@ class TestSpanQuality:
             e.id for e in live_entities(store, "span") if e.attributes.get("family") is None
         }
 
-    def test_yamnet_windows_a_span_directly_with_no_buffering(
+    def test_a_native_span_is_classified_directly_with_no_buffering(
         self,
         store: ProvStore,
         span_quality_config: TriageConfig,
@@ -600,8 +623,8 @@ class TestSpanQuality:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Unlike HeAR, YAMNet's window sits inside the span's own extent, not a 2 s buffer."""
-        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        """A span at least a native frame long: unlike HeAR, its window sits inside its own extent."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_long_burst_samples())
         _stub_models(monkeypatch, yamnet=[window(0.0, 0.96, {"Speech": 0.9})])
         preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
         spans = [
@@ -609,15 +632,16 @@ class TestSpanQuality:
             for e in live_entities(store, "span")
             if e.attributes.get("family") is None and e.attributes.get("measure") == "amplitude"
         ]
-        windows = find_measurements(store, "span_yamnet")
-        assert windows
-        assert windows[0].attributes["signal"] == "plain"
-        assert windows[0].attributes["labels"] == ["Speech"]
+        assert spans
+        measurement = next(w for w in find_measurements(store, "span_yamnet") if w.attributes["span_id"] == spans[0].id)
+        assert measurement.attributes["signal"] == "plain"
+        assert measurement.attributes["attribution"] == "native"
+        assert measurement.attributes["labels"] == ["Speech"]
         span_start = min(e.extent[0] for e in spans if e.extent is not None)
-        assert windows[0].extent is not None
-        assert windows[0].extent[0] == pytest.approx(span_start, abs=1e-3)
+        assert measurement.extent is not None
+        assert measurement.extent[0] == pytest.approx(span_start, abs=1e-3)
 
-    def test_a_span_yamnet_never_scores_never_labels_falls_back_to_unmeasured(
+    def test_a_short_span_is_attributed_from_its_covering_windows(
         self,
         store: ProvStore,
         span_quality_config: TriageConfig,
@@ -625,19 +649,111 @@ class TestSpanQuality:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """An empty native-window result is a recorded fact, not a silently missing span."""
+        """A span under the native frame is never classified directly; it takes the covering windows' mean.
+
+        With exactly one covering window, the overlap-weighted mean reduces to that window's own
+        scores -- the arithmetic itself is pinned separately in ``TestCoveringWindowAttribution``.
+        """
         _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        covering = window(1.0, 2.5, {"Synthesizer": 0.9, "Speech": 0.2})
+        _stub_models(monkeypatch, yamnet=[covering])
+        preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
+        spans = [
+            e
+            for e in live_entities(store, "span")
+            if e.attributes.get("family") is None and e.attributes.get("measure") == "amplitude"
+        ]
+        assert spans
+        span = spans[0]
+        assert span.extent is not None
+        assert span.extent[1] - span.extent[0] < YAMNET_WINDOW_SECONDS
+        measurement = next(w for w in find_measurements(store, "span_yamnet") if w.attributes["span_id"] == span.id)
+        assert measurement.attributes["attribution"] == "covering_windows"
+        assert measurement.attributes["covering_windows_n"] == 1
+        assert measurement.attributes["covering_seconds"] == pytest.approx(span.extent[1] - span.extent[0])
+        assert measurement.attributes["raw_scores"] == {"Synthesizer": 0.9, "Speech": 0.2}
+        assert measurement.attributes["labels"] == ["Synthesizer"]
+
+    def test_a_short_span_with_no_covering_window_is_unmeasured(
+        self,
+        store: ProvStore,
+        span_quality_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No window overlaps a short span (the whole-file pass produced none): unmeasured, not padded.
+
+        A native span with the same empty result is a different, already-covered fact
+        (``no_native_window``); this pins the short span's own reason distinctly.
+        """
+        _seed_admit(store, tmp_path, wav_writer, samples=_samples_with_a_long_gap())
         _stub_models(monkeypatch, yamnet=[])
         preprocess(store, _audio(tmp_path), span_quality_config, run_dir=tmp_path)
         spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
-        unmeasured = [
-            e
+        assert spans
+        unmeasured_by_extent = {
+            e.extent: e.attributes["unmeasured"]
             for e in live_entities(store, "assertion")
             if e.attributes.get("name") == "span_yamnet" and e.attributes.get("unmeasured")
+        }
+        assert len(unmeasured_by_extent) == len(spans)
+        amplitude_span = next(e for e in spans if e.attributes.get("measure") == "amplitude")
+        native_gap = next(
+            e
+            for e in spans
+            if e.attributes.get("measure") == "gap" and e.extent is not None and e.extent[1] - e.extent[0] >= 0.96
+        )
+        assert unmeasured_by_extent[amplitude_span.extent] == "no_covering_window"
+        assert unmeasured_by_extent[native_gap.extent] == "no_native_window"
+
+
+class TestCoveringWindowAttribution:
+    """The overlap-weighted mean, pinned directly against hand-computed numbers."""
+
+    def test_a_single_covering_window_reduces_to_its_own_scores(self) -> None:
+        """One window entirely covering the span: the weighted mean is just that window's scores."""
+        result = preprocess_module._covering_window_attribution(
+            (1.0, 1.5), [window(0.0, 2.0, {"Speech": 0.8, "Music": 0.2})]
+        )
+        assert result is not None
+        scores, n, covering_seconds = result
+        assert scores == pytest.approx({"Speech": 0.8, "Music": 0.2})
+        assert n == 1
+        assert covering_seconds == pytest.approx(0.5)
+
+    def test_two_covering_windows_are_weighted_by_their_overlap_seconds(self) -> None:
+        """0.3 s of one window and 0.1 s of another: the mean leans toward the larger overlap."""
+        windows = [
+            window(0.9, 1.3, {"Speech": 1.0, "Music": 0.0}),  # overlaps [1.0, 1.5) by 0.3 s
+            window(1.4, 2.0, {"Speech": 0.0, "Music": 1.0}),  # overlaps [1.0, 1.5) by 0.1 s
         ]
-        assert spans
-        assert len(unmeasured) == len(spans)
-        assert unmeasured[0].attributes["unmeasured"] == "no_native_window"
+        result = preprocess_module._covering_window_attribution((1.0, 1.5), windows)
+        assert result is not None
+        scores, n, covering_seconds = result
+        assert n == 2
+        assert covering_seconds == pytest.approx(0.4)
+        # sum(score * overlap) / sum(overlap): Speech = (1.0*0.3 + 0.0*0.1) / 0.4 = 0.75
+        assert scores["Speech"] == pytest.approx(0.75)
+        assert scores["Music"] == pytest.approx(0.25)
+
+    def test_a_non_overlapping_window_contributes_nothing(self) -> None:
+        """A window elsewhere in the file must not be counted or bias the mean."""
+        windows = [
+            window(0.9, 1.3, {"Speech": 1.0}),
+            window(5.0, 6.0, {"Speech": 0.0}),
+        ]
+        result = preprocess_module._covering_window_attribution((1.0, 1.5), windows)
+        assert result is not None
+        scores, n, covering_seconds = result
+        assert n == 1
+        assert covering_seconds == pytest.approx(0.3)
+        assert scores["Speech"] == pytest.approx(1.0)
+
+    def test_no_covering_window_returns_none(self) -> None:
+        """Nothing overlaps the span: the caller must not invent a score."""
+        assert preprocess_module._covering_window_attribution((1.0, 1.5), []) is None
+        assert preprocess_module._covering_window_attribution((1.0, 1.5), [window(5.0, 6.0, {"Speech": 1.0})]) is None
 
 
 class TestThePackagedConfigStillRunsEveryClassifier:

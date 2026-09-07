@@ -29,7 +29,7 @@ import torch
 from senselab.audio.data_structures import Audio, AudioHints
 from senselab.audio.tasks.classification.api import classify_audios
 from senselab.audio.tasks.classification.label_scores import label_scores
-from senselab.audio.tasks.classification.yamnet import span_yamnet_input
+from senselab.audio.tasks.classification.yamnet import SpanTooShortForYAMNet, span_yamnet_input
 from senselab.audio.tasks.clipping.api import detect_clip_events
 from senselab.audio.tasks.disruptions.api import detect_disruptions
 from senselab.audio.tasks.envelope.api import (
@@ -255,6 +255,41 @@ def _span_window_attributes(
         attributes["labels"] = list(members)
         attributes["scores"] = members
     return attributes
+
+
+def _covering_window_attribution(
+    span_extent: tuple[float, float], windows: list[dict[str, Any]]
+) -> tuple[dict[str, float], int, float] | None:
+    """The overlap-weighted mean of every whole-file window covering a short span.
+
+    ``score[label] = sum(score_w * overlap_w) / sum(overlap_w)`` over the windows whose extent
+    intersects the span at all, ``overlap_w`` the intersection in seconds.
+
+    Args:
+        span_extent: The span's own ``(start, end)`` in seconds.
+        windows: Whole-file YAMNet windows, each carrying ``start``, ``end`` and ``label_scores``.
+
+    Returns:
+        ``(scores, covering_windows_n, covering_seconds)``, or None when no window overlaps the
+        span at all.
+    """
+    start, end = span_extent
+    covering_seconds = 0.0
+    weighted: dict[str, float] = {}
+    covering_windows_n = 0
+    for window in windows:
+        w_start, w_end = float(window["start"]), float(window["end"])
+        overlap = min(end, w_end) - max(start, w_start)
+        if overlap <= 0.0:
+            continue
+        covering_windows_n += 1
+        covering_seconds += overlap
+        for label, score in _raw_label_scores(window).items():
+            weighted[label] = weighted.get(label, 0.0) + score * overlap
+    if covering_windows_n == 0:
+        return None
+    scores = {label: value / covering_seconds for label, value in weighted.items()}
+    return scores, covering_windows_n, covering_seconds
 
 
 def preprocess(  # noqa: C901 — one block per derivative, each independent
@@ -1075,15 +1110,18 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
         view.extend(result_ids)
 
     def _span_yamnet() -> None:
-        """Per-span YAMNet over the spans, raw scores only — no labelling decision.
+        """Per-span YAMNet, raw scores only — no labelling decision.
 
-        YAMNet's native frame is fixed at 0.96 s and the model zero-pads anything shorter up to it,
-        so a short span is filled from its own samples by ``span_yamnet_input`` before it is handed
-        over; ``frame_filled`` records which windows that applied to. Runs
-        over the plain signal, like ``_squim_for`` -- YAMNet already carries its own internal
-        preprocessing, so our own dynamic-range-normalized signal on top is redundant at best and
-        distorting at worst. No longer gated on normalization: this re-evaluation needs no
-        normalized signal to exist at all.
+        A span at least :data:`~senselab.audio.tasks.classification.yamnet.YAMNET_WINDOW_SECONDS`
+        long is classified directly, letting YAMNet place its own native windows over it. A shorter
+        span is never classified directly: its score is the overlap-weighted mean of the whole-file
+        ``yamnet_scores`` windows that cover it (:func:`_covering_window_attribution`) -- those
+        windows are real, unpadded audio, already computed earlier in this node. A short span with
+        nothing covering it (only possible when the whole-file pass itself is absent) is recorded
+        unmeasured rather than scored. Runs over the plain signal, like ``_squim_for`` -- YAMNet
+        already carries its own internal preprocessing, so our own dynamic-range-normalized signal
+        on top is redundant at best and distorting at worst. No longer gated on normalization: this
+        re-evaluation needs no normalized signal to exist at all.
         """
         span_ids = state.get("span_ids") or []
         if not span_ids:
@@ -1100,22 +1138,60 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
             str(label): float(value) for label, value in (config.get("windows.yamnet.label_thresholds") or {}).items()
         }
         top_k = int(config.require("yamnet.top_k"))
+        whole_file_windows: list[dict[str, Any]] | None = state.get("yamnet_scores")
+
         result_ids: list[str] = []
-        prepared: list[Audio] = []
-        prepared_for: list[str] = []
-        filled_for: dict[str, bool] = {}
+        native_ids: list[str] = []
+        native_prepared: list[Audio] = []
         for span_id in span_ids:
             span = store.get_entity(span_id)
             extent = span.extent or (0.0, 0.0)
-            audio, filled = span_yamnet_input(plain, extent)
-            prepared.append(audio)
-            filled_for[span_id] = filled
-            prepared_for.append(span_id)
+            try:
+                audio = span_yamnet_input(plain, extent)
+            except SpanTooShortForYAMNet:
+                if whole_file_windows is None:
+                    result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "yamnet_scores_absent"))
+                    continue
+                attribution = _covering_window_attribution(extent, whole_file_windows)
+                if attribution is None:
+                    result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "no_covering_window"))
+                    continue
+                scores, covering_windows_n, covering_seconds = attribution
+                ranked = sorted(scores.items(), key=lambda item: -item[1])
+                attributed_window: dict[str, Any] = {"label_scores": [{label: score} for label, score in ranked]}
+                window_id = store.entity(
+                    prov_type="measurement",
+                    extent=extent,
+                    attributes=_span_window_attributes(
+                        name="span_yamnet",
+                        classifier="yamnet",
+                        span_id=span_id,
+                        raw_window=attributed_window,
+                        default_threshold=default_threshold,
+                        label_thresholds=label_thresholds,
+                        extra={
+                            "attribution": "covering_windows",
+                            "covering_windows_n": covering_windows_n,
+                            "covering_seconds": covering_seconds,
+                        },
+                    ),
+                )
+                store.was_generated_by(window_id, activity)
+                store.was_attributed_to(window_id, agent)
+                store.was_derived_from(window_id, span_id)
+                result_ids.append(window_id)
+                continue
+            except Exception as err:  # noqa: BLE001 — a span YAMNet cannot be given is unmeasured, not padded
+                result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", type(err).__name__))
+                continue
+            native_prepared.append(audio)
+            native_ids.append(span_id)
+
         classified = _classify_spans_in_batch(
-            prepared,
+            native_prepared,
             lambda batch: classify_audios(batch, model="yamnet", top_k=top_k),
         )
-        for span_id, (raw_windows, failure) in zip(prepared_for, classified):
+        for span_id, (raw_windows, failure) in zip(native_ids, classified):
             span = store.get_entity(span_id)
             start, end = span.extent or (0.0, 0.0)
             if failure is not None:
@@ -1125,8 +1201,6 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                 result_ids.append(_mark_unmeasured(activity, agent, span, "span_yamnet", "no_native_window"))
                 continue
             for raw_window in raw_windows:
-                # A filled frame is longer than the span it came from, so its own end would overrun
-                # the span; the measurement covers the span, never the samples added to reach 0.96 s.
                 window_extent = (
                     start + float(raw_window["start"]),
                     min(start + float(raw_window["end"]), end),
@@ -1141,7 +1215,7 @@ def preprocess(  # noqa: C901 — one block per derivative, each independent
                         raw_window=raw_window,
                         default_threshold=default_threshold,
                         label_thresholds=label_thresholds,
-                        extra={"frame_filled": filled_for[span_id]},
+                        extra={"attribution": "native"},
                     ),
                 )
                 store.was_generated_by(window_id, activity)
