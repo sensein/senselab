@@ -178,7 +178,7 @@ class TestTheSummaryFits:
         seed_preprocess_store(store, yamnet_labels=[["Speech"], ["Speech"]], scores_only=("yamnet",))
         taxonomy(store, "plain", config, run_dir=tmp_path)
         panel = summary_panel_lines(store, FigureStyle())
-        lines = cover_lines(store, tmp_path, panel)
+        lines = cover_lines(store, panel)
 
         assert lines[0] == "SOURCE", "the cover must lead with the recording it describes"
         source = "".join(line.strip() for line in lines[1 : lines.index("")])
