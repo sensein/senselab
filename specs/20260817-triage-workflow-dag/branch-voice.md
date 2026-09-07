@@ -21,7 +21,7 @@ in the graph can name a member of this kind, so this branch owns no label space.
 | `formant_tracks` | PREPROCESS | the formant evidence over those spans |
 | `energy_envelope` | PREPROCESS | level and modulation rate |
 | `silence` | PREPROCESS | the floor |
-| `word` and `event` elements | PREPROCESS | which spans carry a transcript |
+| lexical `word` elements | PREPROCESS | which spans carry a transcript |
 | `hint` | caller, optional | task identity; never creates a span |
 
 **There is no residual.** VOICE measures the phonation spans PREPROCESS detected; it does not subtract

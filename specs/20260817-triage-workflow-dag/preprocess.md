@@ -69,9 +69,9 @@ recording (as supplied) --> resample-+
 | `level` | peak dBFS, RMS dBFS, LUFS | plain | voice branch reference level. **File-level only** |
 | `disruptions_file` | clipped runs, zero-crossing rate | **recording** | SPEECH step 8; VERDICT |
 | `squim` | STOI, PESQ, SI-SDR — objective head only | plain | speech branch, **per span, not per file**; reported, not gated |
-| `asr_crisperwhisper` | transcript, word and token edges | plain | word entities; airway lexical check; voice lexical exclusion |
-| `asr_qwen` | transcript, word timings | plain | word entities; agreement confidence |
-| `consensus_transcript` | fused text, word extents, and word uncertainty from both ASRs | plain | SPEECH's PII scan and spans; REDACT; TAXONOMY's lexical evidence |
+| `asr_crisperwhisper` | an `asr_hypothesis`: transcript and word timings | plain | one source of the consensus; SPEECH's PII scan reads its transcript |
+| `asr_qwen` | an `asr_hypothesis`: transcript and word timings | plain | one source of the consensus; SPEECH's PII scan reads its transcript |
+| `consensus_transcript` | the consensus text stream: one `word` per aligned column, each source's reading and timing verbatim, a monotone derived extent | plain | SPEECH's PII scan and spans; REDACT; TAXONOMY's lexical evidence; the figure and the report |
 | `spectrogram_wb` | 5 ms window, 5 ms hop | pre-emph | onsets, transients, glottal pulses |
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
 | `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
@@ -82,10 +82,14 @@ declared consumer — see [`store.md`](store.md).
 ### Consensus timing authority
 
 `consensus_transcript` is the only triage transcript and word-timing authority. Its `word` elements
-carry `confidence`, `existence_confidence`, `temporal_confidence`, `coverage`, `recognizers`, and
-`timing_sources`; each has an extent produced by `fuse_consensus_words`. PREPROCESS does not run
-forced alignment after the consensus, so no competing word or phone edge product exists. The two
-per-recognizer transcript measurements remain provenance for the fused product.
+are the positions of one linear stream: each carries `text`, `bracketed`, `outcome`
+(`agreement` / `variant` / `insertion`), `sources`, every source's own `readings` and `timings`
+verbatim, `variants`, `agreement`, the spreads and `temporal_uncertainty_s`, and `index` — the only
+order a reader may use. The extent is the derived onset and offset from the isotonic median fit
+over the stream ([`consensus-asr-redesign.md`](consensus-asr-redesign.md) §3.6). PREPROCESS does
+not run forced alignment after the consensus, so no competing word or phone edge product exists.
+The per-recognizer `asr_hypothesis` measurements remain the evidence the stream was aligned from,
+and SPEECH scans their transcripts beside the consensus text.
 
 ## Window classifications — sets, not accumulators
 
@@ -171,29 +175,34 @@ Parameters live under `phonation_spans` in the config.
 
 ## `consensus_transcript`
 
-The consensus over the recognizers' word streams, produced by **`fuse_consensus_words` in
-`senselab.audio.workflows.audio_analysis.asr`** — the same routine the audio-analysis workflow uses,
-called here rather than reimplemented. It carries per-word agreement between the recognizers. The
-word columns it fuses come from a sequence alignment of the recognizers' token streams; its cost
-model and the measurements behind it are in [`transcript-alignment.md`](transcript-alignment.md).
+The consensus text stream over every `asr_hypothesis` measurement in the store, produced by
+**`senselab.audio.workflows.triage.consensus.align_sources`**: the hypotheses are aligned as
+sequences by `harmonize_transcripts` (cost model in
+[`transcript-alignment.md`](transcript-alignment.md)), one `word` is emitted per aligned column in
+column order, and time is read once, after alignment, to set each word's derived onset and offset.
+Nothing re-sorts the stream by time; fewer than two hypotheses is a `LookupError`, recorded as the
+absence of `consensus_transcript`. The design, the owner's rulings and the measurements are in
+[`consensus-asr-redesign.md`](consensus-asr-redesign.md) and
+[`consensus-asr-rulings.md`](consensus-asr-rulings.md).
 
-**The consensus transcript is the text every downstream text consumer reads.** SPEECH's PII scan and
-[`REDACT`](redact.md) read it and nothing else; the per-recognizer transcripts remain in the store as
-the evidence it was fused from.
+**The consensus transcript is the text every downstream text consumer reads.** SPEECH's PII scan
+reads it and each recognizer's own transcript; [`REDACT`](redact.md) reads it and nothing else.
 
 ## Words are bracket-aware
 
-`word` entities are written here, and only here. Before any is written:
+`word` entities are written here, and only here, one per aligned column:
 
-- **A bracketed token is not a word.** CrisperWhisper emits non-lexical events in brackets
-  (`[COUGH]`, `[BREATH]`, `[UH]`); these are written as `event` entities carrying their extent, never
-  as `word` entities, and no word-derived product counts them.
-- **An onomatopoeic cough- or breath-like token is normalised into a bracketed non-word** before word
-  entities are written — a recognizer rendering a cough as `khh`, `uh-huh-huh` or `ahem` produces an
-  `event`, not a `word`. The normalisation vocabulary is the config key
-  `words.onomatopoeic_tokens`; the raw token travels with the event so the normalisation is legible.
+- **A bracketed token is a bracketed word.** CrisperWhisper emits non-lexical markers in brackets
+  (`[COUGH]`, `[BREATH]`, `[UH]`); these are `word` entities with `bracketed: true`, in the stream
+  at their position, and no lexical product counts them — TAXONOMY's lexical line, AIRWAY's
+  transcribed check, SPEECH's word count and speech spans all read `lexical_words`. A bracketed
+  reading that shares a key with a plain one (`[COUGH]` against `cough`) is one column whose surface
+  is the bracketed form; a bracketed token no other source produced is an insertion by one source.
+- **An onomatopoeic cough- or breath-like token is normalised into a bracketed word** — a recognizer
+  rendering a cough as `khh`, `uh-huh-huh` or `ahem` yields `[KHH]`, with the raw token kept in
+  `readings`. The normalisation vocabulary is the config key `words.onomatopoeic_tokens`.
 - **Word entities remain bounded to the decode.** A word exists where a recognizer decoded one;
-  nothing here invents, extends or merges words across recognizers beyond what the consensus routine
+  nothing here invents, extends or merges words across recognizers beyond what the alignment
   produces.
 
 ## Working rate
@@ -215,4 +224,4 @@ Derivations live in [`benchmarks/`](benchmarks/).
 | `windows.ast.default_threshold`, `.label_thresholds` | the same for AST; **null** until fitted. `.win_length_s` and `.hop_s` are **not** open: `.win_length_s` ships 10.24 s by the owner's 10 s directive (analyze_audio's window notes do not govern triage), and `.hop_s` ships 10.24 s, non-overlapping, because a null hop stopped AST running at all. A recording shorter than the window yields one zero-padded window covering the whole file |
 | `windows.hear.default_threshold`, `.label_thresholds` | the same for HeAR; **null** until fitted on spans HeAR's 2 s input does not have to be padded to fill. `.hop_s` is **not** open: it ships 2.0 s, non-overlapping, by the same ruling as AST's, and a fit on unpadded spans lands as an override |
 | `phonation_spans.*` continuity criterion and hangover | what opens and closes a sustained-phonation or glide span for voiced, unvoiced and mixed production; `unvoiced_max_formant_bandwidth_hz` is the required resonant-evidence guard for the non-periodic formant limb; **null** until fitted |
-| `words.onomatopoeic_tokens` | the token set normalised into bracketed non-words; a vocabulary, owed a corpus it was drawn from |
+| `words.onomatopoeic_tokens` | the token set normalised into bracketed words; a vocabulary, owed a corpus it was drawn from |

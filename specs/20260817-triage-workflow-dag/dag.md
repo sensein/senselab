@@ -292,19 +292,18 @@ turn a count into present/absent are replaced by the pathways themselves.
 
 If the recognizer emitted **actual words**, speech is present and the matter is closed. No floor, no
 count compared to a threshold. The distinction that carries it is real lexical content against
-**only bracketed non-lexical markers** like `[COUGH]`, and the test already exists:
-`_is_bracketed_token` (`speech_to_text_ensemble/api.py:61`), *"a bracketed non-lexical marker, e.g.
-`[COUGH]`"*.
+**only bracketed non-lexical markers** like `[COUGH]`, and the test is the word's own `bracketed`
+attribute, read through `lexical_words` (`triage/nodes/common.py`).
 
 The rule: **consensus words that are not all bracketed ⇒ speech present, certain.** YAMNet and AST
 over the whole audio **corroborate** — they are recorded, they never decide, and their absence never
 weakens the ASR.
 
-Two things make the test more trustworthy than it looks. The tally normalises `[COUGH]` and `COUGH`
-to one vote key, and when the two forms tie the **bracketed form wins the display** (`:403`),
-deliberately: *"a bracketed non-lexical marker is strictly more informative than the same event
-transcribed as a plain word"*. So the bias is toward marking content non-lexical, which is the safe
-direction — a cough will not be mistaken for a word.
+One thing makes the test more trustworthy than it looks. The consensus compares readings on a key
+that drops brackets, so `[COUGH]` and `cough` share a column, and that column's surface is the
+**bracketed form** — the bracket override of
+[`consensus-asr-rulings.md`](consensus-asr-rulings.md) R-1. So the bias is toward marking content
+non-lexical, which is the safe direction — a cough will not be mistaken for a word.
 
 **The inverse case is what `words.onomatopoeic_tokens` (null) is for**: a recognizer that renders a
 cough as the ordinary word `cough`, which no bracket test can catch. That vocabulary subtracts —

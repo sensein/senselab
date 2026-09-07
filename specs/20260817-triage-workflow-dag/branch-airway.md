@@ -19,7 +19,7 @@ re-evaluates every eligible `span` PREPROCESS wrote with HeAR, then `label`s, `c
 | `span` elements at `K` | PREPROCESS | the candidates this branch classifies |
 | `hear_windows` | PREPROCESS | TAXONOMY's whole-file health-acoustic evidence; **not used to label a candidate** |
 | `yamnet_windows`, `silence` | PREPROCESS | confirmation, contest, and negative evidence |
-| `word` and `event` elements | PREPROCESS | which spans already carry a transcript, and lexical contamination |
+| lexical `word` elements | PREPROCESS | which spans already carry a transcript, and lexical contamination |
 | `spectrogram_wb`, `gammatone` | PREPROCESS | the [report](report.md) only |
 | `hint` | caller | conditions the outcome only |
 
@@ -36,9 +36,9 @@ short candidate in the detector's two-second silent buffer, or scans a longer is
 then asks whether that input carries cough or breath.
 
 - A span is eligible for a HeAR label only if it carries **no non-cough/breath transcript**. A span
-  overlapping `word` entities from the consensus is transcribed content and is not offered to HeAR; a
-  span overlapping only bracketed or onomatopoeic `event` entities remains eligible, because those
-  are the events this branch is looking for.
+  overlapping lexical `word` entities from the consensus is transcribed content and is not offered
+  to HeAR; a span overlapping only bracketed words (`[COUGH]`, `[BREATH]`) remains eligible, because
+  those are the events this branch is looking for.
 - The label is the `labels_of_interest` member whose score clears its configured HeAR threshold in the
   span's fresh evaluation. The resulting `hear_span_window` records the scores and is derived from
   the candidate span.
@@ -68,7 +68,7 @@ disagreement about this one. The eligible contesting labels are the config key
 
 Any consensus `word` intersecting `[first airway-labelled span start, last airway-labelled span end]`
 flags the file. The interval spans the gaps between airway events; unlabelled spans do not extend it.
-Bracketed and onomatopoeic `event` entities are not words and do not contaminate.
+Bracketed words are not lexical and do not contaminate.
 
 ## 4. `K` is adjustable, and a span near it flags
 

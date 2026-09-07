@@ -4,9 +4,10 @@ The reasoning behind `_align_pair` and the slot lattice in
 `src/senselab/audio/workflows/audio_analysis/harmonize.py`. The code states what the aligner is; this
 file holds why, and the measurements.
 
-`harmonize_transcripts` is the only caller of `_align_pair`; `aligned_columns` (`asr.py`) is the only
-caller of `harmonize_transcripts` outside its tests, and it feeds `fuse_word_streams`, so this
-alignment is what the triage `consensus_transcript` is fused over.
+`harmonize_transcripts` is the only caller of `_align_pair`. It has two callers outside its tests:
+`aligned_columns` (`audio_analysis/asr.py`), which feeds `fuse_word_streams` in the audio-analysis
+workflow, and `align_sources` (`triage/consensus.py`), which emits the triage `consensus_transcript`
+one word per column, in column order.
 
 ## Why an alignment path, not a distance
 
@@ -50,8 +51,10 @@ the tokens actually match; on a tie between a mismatched diagonal and an indel, 
 
 The matching-diagonal-first order is what pins a repetition: "the the the" against "the" aligns the
 **last** copy (`{the,-} {the,-} {the,the}`), and symmetrically in the other direction. That was the
-behaviour before the change as well; it is now stated in the docstring and held by a test because
-downstream repetition handling in the fused transcript depends on which copy carries two sources.
+behaviour before the change as well; it is now stated in the docstring and held by a test so that a
+change to the rule shows up as a test change. The triage consensus emits every copy verbatim, so
+which copy carries two sources decides only which of them is bold, never what the transcript says;
+the audio-analysis fold still depends on it.
 
 ### Residual tie: which of two adjacent tokens is the substituted one
 
@@ -105,9 +108,12 @@ they were:
 | The the | `The [UM] the` | `the` | `{cw:The} {cw:[UM]} {cw:the,qw:the}` |
 | he he | `he he` | `he he` | `{cw:he,qw:he} {cw:he,qw:he}` |
 
-The consensus text orders them differently from the columns ("and the and the d- the" becomes
-"and and the the the d-") because `fuse_word_streams` re-sorts slots by their averaged member times
-after grouping; that is downstream of the aligner.
+The triage consensus text used to order them differently from the columns ("and the and the d-
+the" became "and and the the the d-") because `fuse_word_streams` re-sorted slots by their averaged
+member times after grouping; that was downstream of the aligner, and the triage path no longer goes
+through it — `align_sources` emits the columns in order
+([`consensus-asr-redesign.md`](consensus-asr-redesign.md) C-1). `fuse_word_streams` itself is
+unchanged and still re-sorts for the audio-analysis workflow.
 
 ## The slot carries a word index, not an onset
 
