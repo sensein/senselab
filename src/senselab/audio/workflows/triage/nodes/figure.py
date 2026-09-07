@@ -1629,7 +1629,7 @@ def preprocess_figure(
                 The inset axes.
             """
             return panel.inset_axes(
-                [1.0 + style.colorbar_gap_axes, 0.0, style.colorbar_width_ratio, 1.0],
+                (1.0 + style.colorbar_gap_axes, 0.0, style.colorbar_width_ratio, 1.0),
                 transform=panel.transAxes,
             )
 
