@@ -515,7 +515,7 @@ Flat; the nested `provenance` dict (`:1290`) goes. Attributes, all required:
 | `reference_source` | `str \| None` — `TranscriptHarmonization.reference` (`harmonize.py:519`, median token count; for `N = 2` the longer stream). Which sequence anchored the star; it changes no word |
 | `n_words` | `int` — `word` entities written; equals the column count |
 | `outcomes` | `{"agreement": int, "variant": int, "insertion": int}` |
-| `bracket_overrides_n` | `int` — columns where a bracketed and a plain reading shared a key |
+| `bracket_overrides_n` | `int` — key-groups, summed over every column, where a bracketed and a plain reading shared a key; a variant column can itself contribute one, counted independently of the column's `agreement`/`variant`/`insertion` outcome |
 | `empty_tokens_dropped` | `dict[str, int]` — per source, tokens normalising to `""` |
 | `time_fit` | `"weighted_isotonic_median"` — the only value (§3.6) |
 | `n_words_time_shifted` | `int` — positions that are members of a pooled block of size > 1, for their onset or their offset (8 of 226 on the reference store) |
