@@ -279,3 +279,53 @@ direction a real fix would need to go. The `store_span`/`native_window` referenc
 itself a methodological compromise this experiment introduces to reach the transient stratum at
 all — the two sources use different definitions of "a span" (pipeline-proposed region vs. raw YAMNet
 hop window) and are not a controlled comparison of each other.
+
+## Removed 2026-09-08: covering-window attribution replaces the fill
+
+The owner approved removing the fill on this evidence plus the ten-recording campaign it was drawn
+from (`taxonomy-vs-task-2026-09-07.md` §5): 68 of 69 artefact-family label occurrences and all 35
+airway-label occurrences (span top-4, `>= 0.5`) traced to a `frame_filled` span across those ten
+recordings.
+
+**What replaced it.** `span_yamnet_input` (`tasks/classification/yamnet.py`) no longer fills; it
+slices and returns a span at or over YAMNet's native frame, and raises `SpanTooShortForYAMNet` for
+anything shorter. `_span_yamnet` (`nodes/preprocess.py`) classifies a native-length span directly as
+before (`attribution: "native"`). A short span is attributed instead: its score is the
+overlap-weighted mean of the whole-file `yamnet_scores` windows (unpadded audio, already computed
+earlier in the same node) that overlap it —
+
+```
+score[label] = sum(score_w[label] * overlap_w) / sum(overlap_w)
+```
+
+over every window `w` whose extent intersects the span at all, `overlap_w` the intersection in
+seconds — implemented as `_covering_window_attribution`. The measurement records
+`attribution: "covering_windows"`, `covering_windows_n` and `covering_seconds` in place of
+`frame_filled`. A short span with no covering window (only possible when the whole-file YAMNet pass
+itself did not run) is marked unmeasured rather than scored.
+
+**Recomputed before/after, ten recordings, no re-run.** `frame_fill_removal_recompute.py` reads each
+of the ten `triage_10subj_20260908` stores' `span_yamnet` measurements (`frame_filled` recorded
+which were the old fill's) and each store's `derivatives/yamnet_scores.json` (the same whole-file
+windows `_covering_window_attribution` now reads), and recomputes what the new rule would have
+scored, entirely offline:
+
+| metric | before | after |
+| --- | --- | --- |
+| 8 named artefact-family labels in a span's top-4, `>= 0.2`, summed over 10 recordings | 60 | 1 |
+| airway labels in a span's top-4, `>= 0.5`, summed over 10 recordings | 35 | 2 |
+| broader non-Speech/Silence/airway labels in a span's top-4, `>= 0.2` | 714 | 66 |
+| `consensus_taxonomy.n_labels` per recording | 21–102 | 6–22 |
+| YAMNet raster row count per recording | 15–85 | 2–15 |
+
+The airway count (35) and the `consensus_taxonomy` range (21–102) match the brief's own reference
+numbers for this corpus exactly, which is the strongest evidence the recomputation reads the same
+quantities the original claim did. The named-artefact-family count comes out at 60, not the
+brief's 69 — this document's own list above (`Synthesizer`, `Music`, `Noise`, `Engine`, `Silence`)
+already shows the fill's manufactured vocabulary is far larger than the eight names the triage brief
+happened to spell out (`Buzzer`, `Sewing machine`, `Mechanisms`, `Idling`, `Motorcycle`, `Hum`,
+`Mains hum` and dozens more each occur a handful of times); the broader count (714 → 66) is reported
+alongside the named one for exactly this reason, and 66 is likely still an undercount of what a
+person would call "manufactured," since it excludes only Speech, Silence and the eight airway
+labels. Every one of the ten recordings falls sharply on every metric; none moved the wrong way or
+stayed flat.

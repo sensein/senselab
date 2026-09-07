@@ -115,6 +115,24 @@ consumer that needs presence reads the union.
 Each window is written as an element carrying its extent, its label set, and the score behind each
 member.
 
+## Per-span re-evaluation — `span_hear`, `span_yamnet`
+
+Beside the whole-file grids above, HeAR and YAMNet are re-run per span (`_span_hear`,
+`_span_yamnet`), raw scores only — no labelling decision is taken here (`labels`/`scores` appear
+only when `windows.<classifier>.default_threshold` is configured; `raw_scores` is always written).
+`_span_hear` centres a short span in HeAR's fixed 2 s buffer; HeAR accepts nothing else.
+
+**`_span_yamnet` does not do the equivalent for a short span.** A span at least YAMNet's own
+0.96 s native frame is classified directly, letting YAMNet place its own windows over it
+(`attribution: "native"`). A span shorter than that is never classified directly — it is attributed
+from the whole-file `yamnet_scores` windows that overlap it, unpadded audio already computed above,
+via the overlap-weighted mean of their raw scores (`attribution: "covering_windows"`,
+`covering_windows_n`, `covering_seconds`). A short span with nothing covering it (only possible when
+the whole-file YAMNet pass itself did not run) is recorded unmeasured rather than scored. An earlier
+version filled a short span to the frame from its own samples, tiled periodically; a controlled
+experiment (`benchmarks/span-fill-recovery-2026-09-08.md`) showed that fill manufacturing a false
+label far more often than it recovered the true one, and it was removed on that evidence.
+
 ## `spans`
 
 ```
