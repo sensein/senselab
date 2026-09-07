@@ -86,6 +86,10 @@ class FigureStyle:
         dpi: Raster resolution.
         height_ratios: One entry per panel, top first.
         spectrogram_dynamic_range_db: Colour floor, in dB below the page's own peak bin.
+        word_extent_colour: The consensus onset-offset rule drawn under each word.
+        word_extent_linewidth: Width of that rule.
+        asr_extent_offset: How far below the row the consensus rule sits, in row units.
+        asr_legend_line: Vertical step between the lane's source legend entries.
         top_labels: How many of its own highest-scoring labels each span contributes to a
             per-span raster's row set.
         raster_row_ratio: Height one raster row takes, as a share of the page's height ratios. A
@@ -156,6 +160,10 @@ class FigureStyle:
     height_ratios: tuple[float, ...] = (0.66, 0.6, 0.1, 0.1, 0.1, 0.1, 0.34)
     spectrogram_dynamic_range_db: float = 80.0
     top_labels: int = 4
+    word_extent_colour: str = "#6a51a3"
+    word_extent_linewidth: float = 1.1
+    asr_extent_offset: float = 0.05
+    asr_legend_line: float = 0.30
     raster_rows_scope: str = "file"
     raster_row_ratio: float = 0.075
     summary_labels: int = 6
@@ -442,9 +450,9 @@ def _raster_rows(
         per_span: :func:`_span_scores`'s result, every span in the recording.
         per_span_top_k: How many of its own labels each span contributes.
         scope: Where the union is taken. Only ``"file"`` is implemented.
-        floor: A label whose file-wide peak falls under this contributes no row, or ``None`` to keep
-            every label a span ranked. Without it a span where nothing fires still contributes its
-            four highest, which are all near zero.
+        floor: A span contributes only those of its top ``per_span_top_k`` that reach this score,
+            or ``None`` to contribute all of them. Applied per span, before the union: a span where
+            nothing fires contributes nothing, rather than its four highest near-zero labels.
 
     Returns:
         The rows, highest file-wide peak first, so a row holds the same position on every page.
@@ -461,11 +469,12 @@ def _raster_rows(
             ((label, score) for label, score in scores.items() if float(score) > 0.0),
             key=lambda pair: (-float(pair[1]), pair[0]),
         )
-        rows.update(label for label, _ in carried[:per_span_top_k])
+        top = carried[:per_span_top_k]
+        if floor is not None:
+            top = [(label, score) for label, score in top if float(score) >= floor]
+        rows.update(label for label, _ in top)
         for label, score in scores.items():
             peaks[label] = max(peaks.get(label, 0.0), float(score))
-    if floor is not None:
-        rows = {label for label in rows if peaks.get(label, 0.0) >= floor}
     return [label for label in sorted(rows, key=lambda label: (-peaks.get(label, 0.0), label))]
 
 
@@ -1269,9 +1278,10 @@ def _asr_lane_panel(
     """Each source's own span for every consensus word, one sub-band per source, under the derived extent.
 
     A word draws on row ``index mod asr_rows``. Within the row, source ``k`` always fills band ``k``
-    at that source's own ``[start, end]``; a thin outline over the full row height marks the derived
-    extent; the text sits at the derived onset, bold when the word is an agreement. The title names
-    each source with its colour.
+    at that source's own ``[start, end]``; a rule just under the row marks the consensus
+    onset-offset;
+    the text sits at the derived onset, bold when the word is an agreement. Each source is named
+    above the lane in its own colour.
 
     Args:
         axis: The panel.
@@ -1285,8 +1295,18 @@ def _asr_lane_panel(
 
     t0, t1 = window
     colours = {name: style.word_source_colours[k % len(style.word_source_colours)] for k, name in enumerate(sources)}
-    legend = ", ".join(f"{name}: {colour}" for name, colour in colours.items())
-    axis.set_title("consensus ASR" + (f" — {legend}" if legend else ""), fontsize=style.title_fontsize)
+    axis.set_title("consensus ASR", fontsize=style.title_fontsize)
+    for k, (name, colour) in enumerate(colours.items()):
+        axis.text(
+            1.0,
+            1.02 + k * style.asr_legend_line,
+            name,
+            transform=axis.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=style.title_fontsize,
+            color=colour,
+        )
     axis.set_xlim(t0, t1)
     if not words:
         _absent_panel(axis, window, absent_note, style)
@@ -1318,7 +1338,15 @@ def _asr_lane_panel(
             )
         onset, offset = word["extent"]
         if offset >= t0 and onset <= t1:
-            anchors.insert(0, max(onset, t0))
+            start, end = max(onset, t0), min(offset, t1)
+            anchors.insert(0, start)
+            axis.plot(
+                [start, max(end, start + 0.01)],
+                [row - half - style.asr_extent_offset] * 2,
+                color=style.word_extent_colour,
+                linewidth=style.word_extent_linewidth,
+                solid_capstyle="butt",
+            )
         if not anchors:
             continue
         label = (
