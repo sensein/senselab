@@ -918,8 +918,7 @@ def speech(  # noqa: C901 — the branch's nine steps, in design order
         scanned_by.update(scan.detectors_used)
         tokens = [_reading(words[position], haystack) for position in positions]
         for finding in scan.spans:
-            # One occurrence, one finding: the scan dedupes by (category, text, source), so a name
-            # said twice arrives here once and must still be marked at both places it was said.
+            # Locate and mark every occurrence of this finding, not just its first (branch-speech.md §7).
             located = [(positions[first], positions[last]) for first, last in _locate(str(finding.text or ""), tokens)]
             if not located:
                 flags.append(f"pii_unlocated ({finding.category})")

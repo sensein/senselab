@@ -204,6 +204,15 @@ branch's own decision rule rather than the module's default.
 carried the word, from the consensus, so a finding resting on one recognizer alone is legible as
 such.
 
+**A repeated name is one finding, marked at every place it was said.** `scan_for_pii` dedupes by
+`(category, text, source)`, so a name said twice in the scanned text arrives here as one finding,
+not two. `_locate` (`nodes/speech.py`) therefore returns every non-overlapping occurrence of that
+finding's text, not just the first, and each occurrence gets its own `pii` entity, extent and word
+marking. Locating only the first occurrence would leave the second unmarked and therefore
+unredacted: [`REDACT`](redact.md) plans off the marking, not off the finding, so an unmarked
+occurrence would be released, and the branch's own verification re-scan would then find the name
+again and withhold the release unremediably.
+
 ### The decision is scoped by speaker
 
 | finding | outcome |
