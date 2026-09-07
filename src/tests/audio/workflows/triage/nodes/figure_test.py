@@ -312,7 +312,11 @@ class TestTheWordLaneDrawsEachSourceInItsOwnBand:
 
     @staticmethod
     def _draw(words: list[dict], window: tuple[float, float] = (0.0, 20.0), **style: object) -> tuple:
-        """Draw the lane on a bare axis and hand back the axis with its fills and outlines split."""
+        """Draw the lane on a bare axis and hand back the axis with its patches.
+
+        The lane draws filled bands only — the word's derived extent carries no outline — so a
+        transparent patch means something has started drawing edges again.
+        """
         import matplotlib
 
         matplotlib.use("Agg")
@@ -326,11 +330,12 @@ class TestTheWordLaneDrawsEachSourceInItsOwnBand:
         outlines = [p for p in axis.patches if to_rgba(p.get_facecolor())[3] == 0.0]
         return axis, fills, outlines
 
-    def test_a_two_source_word_draws_two_fills_in_two_bands_and_one_outline(self) -> None:
+    def test_a_two_source_word_draws_two_fills_in_two_bands_and_no_edges(self) -> None:
         """Agreement is two bars stacked at the same time, never one darker bar."""
         word = self._word(0, "hello", "agreement", {"a": (1.0, 1.4), "b": (1.05, 1.45)}, (1.025, 1.425))
         _, fills, outlines = self._draw([word])
-        assert len(fills) == 2 and len(outlines) == 1
+        assert len(fills) == 2 and outlines == []
+        assert all(patch.get_linewidth() == 0.0 for patch in fills), "a band drew an edge"
         assert len({round(float(p.get_y()), 6) for p in fills}) == 2
         assert {p.get_facecolor()[:3] for p in fills} == {
             matplotlib_colour("#fdae6b"),
@@ -341,19 +346,21 @@ class TestTheWordLaneDrawsEachSourceInItsOwnBand:
         """An insertion leaves the other band empty."""
         word = self._word(0, "uh", "insertion", {"b": (2.0, 2.2)}, (2.0, 2.2))
         _, fills, outlines = self._draw([word])
-        assert len(fills) == 1 and len(outlines) == 1
+        assert len(fills) == 1 and outlines == []
         assert fills[0].get_facecolor()[:3] == matplotlib_colour("#6baed6")
-        assert fills[0].get_y() > outlines[0].get_y()
+        # Source "b" is second in source order, so its band is the upper half of the row: with the
+        # default row height 0.52 the row spans -0.26..0.26 and the upper band starts at 0.0.
+        assert fills[0].get_y() == pytest.approx(0.0)
 
     def test_disjoint_readings_draw_at_disjoint_times_in_different_bands(self) -> None:
-        """The 4.1 s case: two bars, two times, two bands, and the outline between them."""
+        """The 4.1 s case: two bars, two times, two bands, and nothing drawn between them."""
         word = self._word(3, "the", "agreement", {"a": (35.30, 35.36), "b": (31.20, 31.84)}, (33.25, 33.60))
         _, fills, outlines = self._draw([word], window=(20.0, 40.0))
         (a_fill,) = [p for p in fills if p.get_x() > 34.0]
         (b_fill,) = [p for p in fills if p.get_x() < 32.0]
         assert a_fill.get_y() != b_fill.get_y()
         assert a_fill.get_x() >= b_fill.get_x() + b_fill.get_width()
-        assert outlines[0].get_x() == 33.25
+        assert outlines == [], "the derived extent must not be drawn where no source put the word"
 
     def test_a_word_with_an_off_page_extent_is_drawn_where_a_source_put_it(self) -> None:
         """The page filter is the hull of timings and extent, not the derived extent alone."""
@@ -361,12 +368,13 @@ class TestTheWordLaneDrawsEachSourceInItsOwnBand:
         _, fills, outlines = self._draw([word], window=(0.0, 20.0))
         assert len(fills) == 1 and fills[0].get_x() == 19.5
         assert outlines == []
+        assert fills[0].get_width() == pytest.approx(0.3), "the bar is the source's own reading"
 
     def test_the_row_is_the_stream_position_not_the_page_position(self) -> None:
         """A word at stream position 5 draws on row 1 of 4 even as the first word on its page."""
         word = self._word(5, "sixth", "agreement", {"a": (25.0, 25.3), "b": (25.0, 25.3)}, (25.0, 25.3))
-        _, _, outlines = self._draw([word], window=(20.0, 40.0), asr_rows=4, asr_row_height=0.5)
-        assert outlines[0].get_y() == pytest.approx(1 - 0.25)
+        _, fills, _ = self._draw([word], window=(20.0, 40.0), asr_rows=4, asr_row_height=0.5)
+        assert min(patch.get_y() for patch in fills) == pytest.approx(1 - 0.25)
 
     def test_the_title_names_each_source_with_its_colour_and_agreement_is_bold(self) -> None:
         """The page carries its own legend, and the weight is the outcome."""

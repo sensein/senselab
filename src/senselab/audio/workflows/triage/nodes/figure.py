@@ -110,7 +110,6 @@ class FigureStyle:
         word_source_colours: One fill per ASR source, cycled in the consensus's source order; each
             source draws in its own sub-band of a word's row.
         word_span_alpha: The alpha of a source's own span.
-        word_extent_linewidth: The outline drawn over the word's derived extent.
         word_text_colour: The consensus-word text colour and the derived-extent outline.
         title_fontsize: Panel title size.
         tick_fontsize: Axis tick-label size.
@@ -173,7 +172,6 @@ class FigureStyle:
     cmap_squim: str = "Purples"
     word_source_colours: tuple[str, ...] = ("#fdae6b", "#6baed6")
     word_span_alpha: float = 0.9
-    word_extent_linewidth: float = 0.6
     word_text_colour: str = "black"
     title_fontsize: float = 9.0
     tick_fontsize: float = 6.0
@@ -635,22 +633,23 @@ def _summary_sections(store: ProvStore, style: FigureStyle) -> tuple[list[list[s
     return blocks, kind_lines
 
 
-def _source_path(store: ProvStore, run_dir: Path) -> str | None:
+def _source_path(store: ProvStore) -> str | None:
     """The recording's own file path, as ADMIT recorded it.
+
+    Read off the entity, never by loading the stream: a figure is often drawn on a different
+    machine from the run, where the recording's own path does not resolve.
 
     Args:
         store: The provenance store.
-        run_dir: The run directory.
 
     Returns:
         The path as recorded, or None when the store holds no live ``recording`` stream.
     """
-    try:
-        entity_id, _ = resolve_stream(store, run_dir, _SOURCE_STREAM)
-    except LookupError:
-        return None
-    path = store.get_entity(entity_id).attributes.get("path")
-    return str(path) if path else None
+    for entity in reversed(live_entities(store, "stream")):
+        if entity.attributes.get("name") == _SOURCE_STREAM:
+            path = entity.attributes.get("path")
+            return str(path) if path else None
+    return None
 
 
 def taxonomy_summary_lines(store: ProvStore, style: FigureStyle) -> list[str]:
@@ -1319,18 +1318,7 @@ def _asr_lane_panel(
             )
         onset, offset = word["extent"]
         if offset >= t0 and onset <= t1:
-            start, end = max(onset, t0), min(offset, t1)
-            anchors.insert(0, start)
-            axis.add_patch(
-                Rectangle(
-                    (start, row - half),
-                    max(end - start, 0.01),
-                    style.asr_row_height,
-                    facecolor="none",
-                    edgecolor=style.word_text_colour,
-                    linewidth=style.word_extent_linewidth,
-                )
-            )
+            anchors.insert(0, max(onset, t0))
         if not anchors:
             continue
         label = (
@@ -1350,7 +1338,7 @@ def _asr_lane_panel(
         )
 
 
-def cover_lines(store: ProvStore, run_dir: Path, panel_lines: list[str]) -> list[str]:
+def cover_lines(store: ProvStore, panel_lines: list[str]) -> list[str]:
     """The cover's lines: the recording's full path over the whole-file summary.
 
     The path is wrapped no wider than the summary's own widest line, so it cannot reach further
@@ -1358,13 +1346,12 @@ def cover_lines(store: ProvStore, run_dir: Path, panel_lines: list[str]) -> list
 
     Args:
         store: The provenance store.
-        run_dir: The run directory.
         panel_lines: :func:`summary_panel_lines`' result.
 
     Returns:
         The lines, in print order.
     """
-    source = _source_path(store, run_dir)
+    source = _source_path(store)
     if not source:
         return list(panel_lines)
     width = max((len(line) for line in panel_lines), default=_SUMMARY_COLUMN_WIDTH)
@@ -1578,7 +1565,7 @@ def preprocess_figure(
     cover = plt.figure(figsize=style.figure_inches)
     title = f"{stem or store.run_id} — whole-file summary"
     cover.suptitle("\n".join(textwrap.wrap(title, width=_TITLE_COLUMNS, break_long_words=True)), fontsize=11)
-    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.86)), cover_lines(store, run_dir, panel_lines), style)
+    _taxonomy_panel(cover.add_axes((0.06, 0.02, 0.92, 0.86)), cover_lines(store, panel_lines), style)
     pdf.savefig(cover, dpi=style.dpi)
     plt.close(cover)
     for index, window in enumerate(pages(duration_s, style), start=1):
