@@ -11,6 +11,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     NodeResult,
     find_measurement,
     find_measurements,
+    lexical_words,
     live_entities,
     resolve_stream,
     software_agent,
@@ -61,20 +62,20 @@ def _windows_covering(store: ProvStore, classifier: str, extent: tuple[float, fl
 
 
 def _is_transcribed(store: ProvStore, extent: tuple[float, float]) -> bool:
-    """Whether a consensus word overlaps this span, which makes it transcribed content.
+    """Whether a lexical consensus word overlaps this span, which makes it transcribed content.
 
-    An ``event`` entity — a bracketed or onomatopoeic non-word — does not make a span transcribed.
+    A bracketed word — ``[COUGH]``, ``[UM]`` — does not make a span transcribed.
 
     Args:
         store: The provenance store.
         extent: The span's extent.
 
     Returns:
-        True when at least one live ``word`` entity overlaps.
+        True when at least one live lexical ``word`` entity overlaps.
     """
     return any(
         word.extent is not None and word.extent[0] < extent[1] and word.extent[1] > extent[0]
-        for word in live_entities(store, "word")
+        for word in lexical_words(store)
     )
 
 
@@ -318,7 +319,7 @@ def airway(  # noqa: C901 — the branch's four steps, in order
         store.was_generated_by(interval_id, lexical)
         store.was_attributed_to(interval_id, software)
         contaminating: list[str] = []
-        for word in live_entities(store, "word"):
+        for word in lexical_words(store):
             word_start, word_end = word.extent or (0.0, 0.0)
             if word_start < interval[1] and word_end > interval[0]:
                 store.used(lexical, word.id)

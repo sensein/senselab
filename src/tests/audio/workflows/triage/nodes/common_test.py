@@ -9,7 +9,9 @@ import pytest
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.nodes.common import (
     clamp_extent,
+    consensus_words,
     find_measurement,
+    lexical_words,
     resolve_stream,
     software_agent,
     write_verdict,
@@ -122,6 +124,40 @@ class TestResolveStream:
         store.was_invalidated_by(first, activity_id)
         found_id, _ = resolve_stream(store, tmp_path, "recording")
         assert found_id == second
+
+
+class TestConsensusWords:
+    """The one order is ``index``; the lexical subset drops the bracketed words and nothing else."""
+
+    @staticmethod
+    def _word(store: ProvStore, text: str, index: int, extent: tuple[float, float]) -> str:
+        """One seeded word carrying only what these readers consult."""
+        bracketed = text.startswith("[") and text.endswith("]")
+        return store.entity(
+            prov_type="word", extent=extent, attributes={"text": text, "index": index, "bracketed": bracketed}
+        )
+
+    def test_words_come_back_in_index_order_whatever_their_extents_say(self, store: ProvStore) -> None:
+        """A time order read back as a sequence is the defect C-7 names; the reader never does it."""
+        self._word(store, "late", 2, (0.0, 0.1))
+        self._word(store, "early", 0, (5.0, 5.1))
+        self._word(store, "middle", 1, (9.0, 9.1))
+        assert [w.attributes["text"] for w in consensus_words(store)] == ["early", "middle", "late"]
+
+    def test_an_invalidated_word_is_not_read(self, store: ProvStore) -> None:
+        """The store's shared read rule."""
+        gone = self._word(store, "gone", 0, (0.0, 0.1))
+        self._word(store, "kept", 1, (0.2, 0.3))
+        store.was_invalidated_by(gone, store.activity(node="TEST", step=None, parameters={}))
+        assert [w.attributes["text"] for w in consensus_words(store)] == ["kept"]
+
+    def test_lexical_words_drop_the_bracketed_ones_and_keep_the_order(self, store: ProvStore) -> None:
+        """[UM] is in the stream and not in the lexical subset."""
+        self._word(store, "I", 0, (0.0, 0.1))
+        self._word(store, "[UM]", 1, (0.2, 0.3))
+        self._word(store, "think", 2, (0.4, 0.5))
+        assert [w.attributes["text"] for w in consensus_words(store)] == ["I", "[UM]", "think"]
+        assert [w.attributes["text"] for w in lexical_words(store)] == ["I", "think"]
 
 
 class TestClampExtent:

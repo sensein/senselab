@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import pytest
@@ -10,6 +10,7 @@ import soundfile as sf
 
 from senselab.audio.data_structures import Audio
 from senselab.audio.workflows.triage.config import TriageConfig, load_triage_config
+from senselab.audio.workflows.triage.consensus import ALGORITHM, NORMALISATION, ROUTINE, SOURCE_ORDER, TIME_FIT
 from senselab.audio.workflows.triage.nodes import preprocess as preprocess_module
 from senselab.audio.workflows.triage.nodes.admit import admit
 from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
@@ -313,6 +314,69 @@ def _grid(labels: list[list[str]], win_s: float, hop_s: float) -> list[tuple[flo
     return [(index * hop_s, index * hop_s + win_s, list(entry)) for index, entry in enumerate(labels)]
 
 
+SEED_SOURCES = ("asr_crisperwhisper", "asr_qwen")
+SEED_MODEL_IDS = {"asr_crisperwhisper": CRISPERWHISPER_ID, "asr_qwen": QWEN_ID}
+
+
+def word_attributes(
+    text: str,
+    extent: tuple[float, float],
+    *,
+    index: int,
+    sources: Sequence[str] = SEED_SOURCES,
+    outcome: str | None = None,
+    readings: dict[str, str] | None = None,
+    timings: dict[str, tuple[float, float]] | None = None,
+    variants: Sequence[dict[str, Any]] = (),
+    n_sources: int = len(SEED_SOURCES),
+) -> dict[str, Any]:
+    """The attributes of one seeded consensus ``word``, in the shape PREPROCESS writes.
+
+    Defaults describe an agreement of every seeded source reading ``text`` at ``extent``. Pass a
+    subset of ``sources`` for an insertion, ``variants`` for a variant, or explicit ``readings`` and
+    ``timings`` to make the sources disagree.
+
+    Args:
+        text: The word's label surface.
+        extent: The derived ``(onset, offset)``.
+        index: The word's position in the stream.
+        sources: The sources with a member in the column, in source order.
+        outcome: ``agreement``, ``variant`` or ``insertion``; inferred from ``sources`` and
+            ``variants`` when None.
+        readings: ``source → surface``; every source reads ``text`` when None.
+        timings: ``source → (start, end)``; every source is placed at ``extent`` when None.
+        variants: ``[{"text", "sources", "share"}, ...]`` for a variant word.
+        n_sources: The consensus's source count, the denominator of ``agreement``.
+
+    Returns:
+        The attribute dict.
+    """
+    named = list(sources)
+    if outcome is None:
+        outcome = "variant" if variants else ("agreement" if len(named) == n_sources else "insertion")
+    agreement = variants[0]["share"] if variants else len(named) / n_sources
+    own_timings = timings if timings is not None else {source: extent for source in named}
+    return {
+        "text": text,
+        "bracketed": text.startswith("[") and text.endswith("]"),
+        "outcome": outcome,
+        "sources": named,
+        "readings": dict(readings) if readings is not None else {source: text for source in named},
+        "timings": {source: [float(span[0]), float(span[1])] for source, span in own_timings.items()},
+        "onset_spread_s": max(s[0] for s in own_timings.values()) - min(s[0] for s in own_timings.values()),
+        "offset_spread_s": max(s[1] for s in own_timings.values()) - min(s[1] for s in own_timings.values()),
+        "temporal_uncertainty_s": max(
+            max(*(s[0] for s in own_timings.values()), extent[0])
+            - min(*(s[0] for s in own_timings.values()), extent[0]),
+            max(*(s[1] for s in own_timings.values()), extent[1])
+            - min(*(s[1] for s in own_timings.values()), extent[1]),
+        ),
+        "variants": [dict(variant) for variant in variants],
+        "agreement": agreement,
+        "index": index,
+    }
+
+
 @pytest.fixture
 def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
     """Write the entities PREPROCESS would have left behind, for a node test downstream of it.
@@ -335,13 +399,14 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
             threshold fold is left absent -- the state the **packaged config actually produces**,
             where every threshold is null so the model ran but no label set exists. Without this a
             test could not seed the shipped configuration's own store.
-        words: The consensus words, as ``[text, ...]`` or ``[(text, (start, end)), ...]``. **An empty
-            list still writes a ``consensus_transcript`` measurement carrying no words** — PREPROCESS
-            fusing to nothing is not PREPROCESS never having run, and TAXONOMY's lexical line reads
-            ``absent`` in the first case and ``unavailable`` in the second. ``None`` writes neither.
-        events: Bracketed or onomatopoeic non-words, same shapes as ``words``. ``[]`` writes the
-            ``PREPROCESS``/``consensus`` activity and no event, so a reader can tell "the consensus
-            ran and produced no event" from "no consensus ran"; ``None`` writes neither.
+        words: The consensus words, each ``text``, ``(text, (start, end))`` or a dict with ``text``,
+            optionally ``extent``, and any of :func:`word_attributes`' keyword arguments
+            (``outcome``, ``sources``, ``readings``, ``timings``, ``variants``). A bracketed text
+            seeds a bracketed word. **An empty list still writes a ``consensus_transcript``
+            measurement carrying no words** — PREPROCESS aligning to nothing is not PREPROCESS never
+            having run, and TAXONOMY's lexical line reads ``absent`` in the first case and
+            ``unavailable`` in the second. ``None`` writes neither. Every source's
+            ``asr_hypothesis`` measurement is written beside the consensus.
         phonation: ``[(start, end, production), ...]`` or ``[(start, end, production, member), ...]``
             phonation spans -- ``member`` is ``"sustained"`` by default and ``"glide"`` gives the span
             a direction and an excursion, which T5 and T6 both need. Written with the
@@ -386,7 +451,6 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         hear_labels: list[list[str]] | None = None,
         scores_only: tuple[str, ...] = (),
         words: list[Any] | None = None,
-        events: list[Any] | None = None,
         phonation: list[tuple[Any, ...]] | None = None,
         spans: list[tuple[float, float, float]] | None = None,
         span_k_db: float = 18.0,
@@ -398,8 +462,6 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
         continuity_trace: "np.ndarray | None" = None,
         continuity_cut_level: float | None = None,
     ) -> None:
-        from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
-
         (tmp_path / "streams").mkdir(exist_ok=True)
         (tmp_path / "derivatives").mkdir(exist_ok=True)
         name = f"plain-{store.run_id}.wav"
@@ -495,61 +557,95 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
                 },
             )
 
-        if words is not None or events is not None:
-            store.was_associated_with(store.activity(node="PREPROCESS", step="consensus", parameters={}), agent)
-        event_ids: list[str] = []
-        for text, extent in _timed(list(events if events is not None else []), duration_s):
-            event_ids.append(
-                _write(
-                    "event",
-                    extent,
-                    {
-                        "bracketed": text if text.startswith("[") else f"[{text.upper()}]",
-                        "raw": text,
-                        "origin": "bracketed" if text.startswith("[") else "onomatopoeic",
-                        "recognizers": [CRISPERWHISPER_ID, QWEN_ID],
-                    },
-                )
-            )
-
         if words is not None:
-            placed = _timed(list(words), duration_s)
-            word_ids = [
-                _write(
-                    "word",
-                    extent,
+            store.was_associated_with(store.activity(node="PREPROCESS", step="consensus", parameters={}), agent)
+            entries: list[dict[str, Any]] = []
+            for entry in words:
+                if isinstance(entry, dict):
+                    entries.append(dict(entry))
+                elif isinstance(entry, tuple):
+                    entries.append({"text": entry[0], "extent": entry[1]})
+                else:
+                    entries.append({"text": entry})
+            timed = _timed(
+                [(e["text"], e["extent"]) if e.get("extent") is not None else str(e["text"]) for e in entries],
+                duration_s,
+            )
+            word_attrs = [
+                word_attributes(
+                    text, extent, index=index, **{k: v for k, v in entry.items() if k not in ("text", "extent")}
+                )
+                for index, (entry, (text, extent)) in enumerate(zip(entries, timed))
+            ]
+            hypothesis_ids: dict[str, str] = {}
+            for source in SEED_SOURCES:
+                own = [(a["readings"][source], a["timings"][source]) for a in word_attrs if source in a["readings"]]
+                hypothesis_ids[source] = _write(
+                    "measurement",
+                    None,
                     {
-                        "text": text,
-                        "confidence": 0.9,
-                        "existence_confidence": 0.9,
-                        "temporal_confidence": 0.9,
-                        "coverage": 1.0,
-                        "recognizers": [CRISPERWHISPER_ID, QWEN_ID],
-                        "timing_sources": 2,
-                        "index": index,
+                        "name": source,
+                        "signal": "plain",
+                        "role": "asr_hypothesis",
+                        "source": source,
+                        "model_id": SEED_MODEL_IDS[source],
+                        "commit_sha": "a" * 40,
+                        "transcript": " ".join(text for text, _ in own),
+                        "words": [
+                            {"text": text, "start": span[0], "end": span[1], "score": None} for text, span in own
+                        ],
+                        "n_words": len(own),
+                        "untimed_chunks_n": 0,
+                        "out_of_bounds_chunks_n": 0,
+                        "timestamp_source": "native",
+                        "timestamp_model": None,
+                        "duration_s": duration_s,
                     },
                 )
-                for index, (text, extent) in enumerate(placed)
-            ]
+            word_ids: list[str] = []
+            for (text, extent), word in zip(timed, word_attrs):
+                word_id = _write("word", extent, word)
+                for source in word["sources"]:
+                    store.was_derived_from(word_id, hypothesis_ids[source])
+                word_ids.append(word_id)
+            outcomes = {"agreement": 0, "variant": 0, "insertion": 0}
+            for word in word_attrs:
+                outcomes[word["outcome"]] += 1
             _write(
                 "measurement",
                 None,
                 {
                     "name": "consensus_transcript",
                     "signal": "plain",
-                    "words": [
-                        {"text": text, "start": extent[0], "end": extent[1], "sources": [CRISPERWHISPER_ID, QWEN_ID]}
-                        for text, extent in placed
+                    "role": "consensus",
+                    "algorithm": ALGORITHM,
+                    "routine": ROUTINE,
+                    "normalisation": NORMALISATION,
+                    "source_order": SOURCE_ORDER,
+                    "sources": [
+                        {
+                            "name": source,
+                            "n_words": sum(1 for a in word_attrs if source in a["readings"]),
+                            "timestamp_source": "native",
+                            "timestamp_model": None,
+                            "model_id": SEED_MODEL_IDS[source],
+                            "commit_sha": "a" * 40,
+                            "measurement_id": hypothesis_ids[source],
+                            "agent_id": agent,
+                        }
+                        for source in SEED_SOURCES
                     ],
-                    "provenance": {
-                        "operator": "consensus_words/resample",
-                        "sources": [CRISPERWHISPER_ID, QWEN_ID],
-                        "n_words": len(placed),
-                    },
-                    "systems": [CRISPERWHISPER_ID, QWEN_ID],
+                    "n_sources": len(SEED_SOURCES),
+                    "reference_source": SEED_SOURCES[0] if word_attrs else None,
+                    "n_words": len(word_attrs),
+                    "outcomes": outcomes,
+                    "bracket_overrides_n": 0,
+                    "empty_tokens_dropped": {source: 0 for source in SEED_SOURCES},
+                    "time_fit": TIME_FIT,
+                    "n_words_time_shifted": 0,
+                    "max_time_shift_s": 0.0,
                     "word_ids": word_ids,
-                    "event_ids": event_ids,
-                    "text": " ".join(text for text, _ in placed),
+                    "text": " ".join(word["text"] for word in word_attrs),
                 },
             )
 
@@ -661,130 +757,6 @@ def seed_preprocess_store(tmp_path: Path) -> Callable[..., None]:
 
 
 @pytest.fixture
-def seed_store(tmp_path: Path) -> Callable[..., dict]:
-    """A builder writing PREPROCESS-shaped entities into a store — the Task 2 schema, seeded.
-
-    Writes a real plain-stream WAV so nodes that slice audio can, and entities for spans, words,
-    YAMNet windows, silence and no_contrast as requested.
-    """
-
-    def _seed(
-        store: ProvStore,
-        *,
-        spans: tuple = (),
-        words: tuple = (),
-        yamnet_windows: list | None = None,
-        silence_windows: list | None = None,
-        no_contrast_k: float | None = None,
-        asr_available: bool = True,
-        k_db: float = 18.0,
-        duration_s: float = 4.0,
-    ) -> dict:
-        (tmp_path / "streams").mkdir(exist_ok=True)
-        (tmp_path / "derivatives").mkdir(exist_ok=True)
-        sf.write(str(tmp_path / "streams" / "plain.wav"), burst_samples(duration_s=duration_s), 16000)
-        activity = store.activity(node="PREPROCESS", step="seed", parameters={})
-        agent = store.agent(agent_type="software", version="senselab test-seed")
-        store.was_associated_with(activity, agent)
-        ids: dict = {"spans": [], "words": []}
-
-        plain_id = store.entity(
-            prov_type="stream",
-            extent=(0.0, duration_s),
-            attributes={
-                "name": "plain",
-                "path": "streams/plain.wav",
-                "sampling_rate": 16000,
-                "channels": 1,
-                "peak_scale": 1.0,
-            },
-        )
-        store.was_generated_by(plain_id, activity)
-        ids["plain"] = plain_id
-
-        for start, end, contrast in spans:
-            span_id = store.entity(
-                prov_type="span",
-                extent=(start, end),
-                attributes={"peak_over_floor_db": contrast, "k_db": k_db, "signal": "preemphasised"},
-            )
-            store.was_generated_by(span_id, activity)
-            ids["spans"].append(span_id)
-
-        if no_contrast_k is not None:
-            nc_id = store.entity(
-                prov_type="measurement",
-                extent=None,
-                attributes={
-                    "name": "spans_no_contrast",
-                    "signal": "preemphasised",
-                    "k_db": no_contrast_k,
-                    "reason": "seeded",
-                },
-            )
-            store.was_generated_by(nc_id, activity)
-            ids["no_contrast"] = nc_id
-
-        if yamnet_windows is not None:
-            path = tmp_path / "derivatives" / "yamnet_windows.json"
-            path.write_text(json.dumps(yamnet_windows))
-            yw_id = store.entity(
-                prov_type="measurement",
-                extent=None,
-                attributes={
-                    "name": "yamnet_windows",
-                    "signal": "plain",
-                    "path": "derivatives/yamnet_windows.json",
-                    "n_windows": len(yamnet_windows),
-                },
-            )
-            store.was_generated_by(yw_id, activity)
-            ids["yamnet_windows"] = yw_id
-
-        if silence_windows is not None:
-            s_id = store.entity(
-                prov_type="measurement",
-                extent=None,
-                attributes={"name": "silence", "signal": "plain", "threshold": 0.5, "windows": silence_windows},
-            )
-            store.was_generated_by(s_id, activity)
-            ids["silence"] = s_id
-
-        if asr_available:
-            asr_id = store.entity(
-                prov_type="measurement",
-                extent=None,
-                attributes={
-                    "name": "asr_crisperwhisper",
-                    "signal": "plain",
-                    "recognizer": "nyralabs/CrisperWhisper2.0_turbo",
-                    "transcript": " ".join(str(w["text"]) for w in words),
-                    "word_ids": [],
-                    "timestamp_source": "native",
-                },
-            )
-            store.was_generated_by(asr_id, activity)
-            ids["asr"] = asr_id
-
-        for word in words:
-            word_id = store.entity(
-                prov_type="word",
-                extent=(float(word["start"]), float(word["end"])),
-                attributes={
-                    "text": str(word["text"]),
-                    "score": 0.9,
-                    "recognizer": "nyralabs/CrisperWhisper2.0_turbo",
-                    "timestamp_source": "native",
-                },
-            )
-            store.was_generated_by(word_id, activity)
-            ids["words"].append(word_id)
-        return ids
-
-    return _seed
-
-
-@pytest.fixture
 def seed_voice_store(tmp_path: Path) -> Callable[..., dict]:
     """A seeder writing the store surface VOICE reads, constructed directly.
 
@@ -886,140 +858,3 @@ def seed_voice_store(tmp_path: Path) -> Callable[..., dict]:
         return ids
 
     return _seed
-
-
-@pytest.fixture
-def seed_speech_store(tmp_path: Path) -> Callable[..., tuple[ProvStore, TriageConfig, Path]]:
-    """Build ``(store, config, run_dir)`` as ADMIT/PREPROCESS/TAXONOMY/AIRWAY leave them for SPEECH.
-
-    Mirrors the sibling plan's store-schema contract. ``words_cw``/``words_qw`` are
-    ``(text, start, end)`` triples per recognizer; ``airway_label_extent`` also writes a PREPROCESS
-    span over that extent carrying an AIRWAY ``label`` assertion. ``config_yaml`` is the production
-    override mechanism, defaulting to the one unmeasured key every SPEECH test needs.
-    """
-
-    def _make(
-        words_cw: list[tuple[str, float, float]],
-        words_qw: list[tuple[str, float, float]],
-        *,
-        airway_label_extent: tuple[float, float] | None = None,
-        duration_s: float = 6.0,
-        config_yaml: str = "",
-    ) -> tuple[ProvStore, TriageConfig, Path]:
-        from senselab.audio.workflows.triage.nodes.preprocess import CRISPERWHISPER_ID, QWEN_ID
-
-        sr = 16000
-        store = ProvStore(run_id="t")
-        rng = np.random.default_rng(0)
-        n = int(duration_s * sr)
-        wave = np.zeros(n, dtype=np.float32)
-        for _, start, end in [*words_cw, *words_qw]:
-            wave[int(start * sr) : int(end * sr)] = 0.1 * rng.standard_normal(int(end * sr) - int(start * sr))
-        if airway_label_extent:
-            start, end = airway_label_extent
-            wave[int(start * sr) : int(end * sr)] = 0.2 * rng.standard_normal(int(end * sr) - int(start * sr))
-        run_dir = tmp_path / "run"
-        (run_dir / "streams").mkdir(parents=True, exist_ok=True)
-        (run_dir / "derivatives").mkdir(exist_ok=True)
-        sf.write(str(run_dir / "streams" / "plain.wav"), wave, sr)
-
-        pre = store.activity(node="PREPROCESS", step=None, parameters={})
-        recording = store.entity(
-            prov_type="stream",
-            extent=(0.0, duration_s),
-            attributes={
-                "name": "recording",
-                "path": str(run_dir / "streams" / "plain.wav"),
-                "sampling_rate": sr,
-                "channels": 1,
-            },
-        )
-        store.was_generated_by(recording, pre)
-        plain = store.entity(
-            prov_type="stream",
-            extent=(0.0, duration_s),
-            attributes={
-                "name": "plain",
-                "path": "streams/plain.wav",
-                "sampling_rate": sr,
-                "channels": 1,
-                "peak_scale": 1.0,
-            },
-        )
-        store.was_generated_by(plain, pre)
-
-        # One sidecar (the Task 2 schema): envelope above the floor exactly where the wave is non-zero.
-        env = np.full(n, -80.0)
-        env[np.abs(wave) > 0] = -30.0
-        floor = np.full(n, -60.0)
-        np.savez(run_dir / "derivatives" / "energy_envelope.npz", envelope_dbfs=env, floor_dbfs=floor)
-        mid = store.entity(
-            prov_type="measurement",
-            extent=None,
-            attributes={
-                "name": "energy_envelope",
-                "signal": "preemphasised",
-                "path": "derivatives/energy_envelope.npz",
-                "sampling_rate": sr,
-            },
-        )
-        store.was_generated_by(mid, pre)
-
-        # YAMNet native windows, Speech-positive throughout -- SPEECH reads these from the store.
-        windows, t = [], 0.0
-        while t < duration_s:
-            windows.append(
-                {"start": t, "end": t + 0.96, "label_scores": [{"Speech": 0.9}], "win_length": 0.96, "hop_length": 0.48}
-            )
-            t += 0.48
-        (run_dir / "derivatives" / "yamnet_windows.json").write_text(json.dumps(windows))
-        yw = store.entity(
-            prov_type="measurement",
-            extent=None,
-            attributes={
-                "name": "yamnet_windows",
-                "signal": "plain",
-                "path": "derivatives/yamnet_windows.json",
-                "n_windows": len(windows),
-            },
-        )
-        store.was_generated_by(yw, pre)
-
-        for model_id, triples in ((CRISPERWHISPER_ID, words_cw), (QWEN_ID, words_qw)):
-            for text, start, end in triples:
-                wid = store.entity(
-                    prov_type="word",
-                    extent=(start, end),
-                    attributes={"text": text, "score": 0.9, "recognizer": model_id, "timestamp_source": "native"},
-                )
-                store.was_generated_by(wid, pre)
-
-        if airway_label_extent:
-            start, end = airway_label_extent
-            span = store.entity(
-                prov_type="span",
-                extent=(start, end),
-                attributes={"peak_over_floor_db": 30.0, "k_db": 18.0, "signal": "preemphasised"},
-            )
-            store.was_generated_by(span, pre)
-            air = store.activity(node="AIRWAY", step="classify", parameters={})
-            lab = store.entity(
-                prov_type="assertion",
-                extent=(start, end),
-                attributes={
-                    "verb": "label",
-                    "label": "Cough",
-                    "score": 0.97,
-                    "scores": {"Cough": 0.97, "Breathe": 0.1},
-                    "input": "buffered",
-                    "in_certified_silence": None,
-                },
-            )
-            store.was_generated_by(lab, air)
-            store.was_derived_from(lab, span)
-
-        override = tmp_path / "override.yaml"
-        override.write_text(config_yaml)
-        return store, load_triage_config(override), run_dir
-
-    return _make

@@ -827,9 +827,9 @@ class TestAnAbsenceIsAttributedNotJustClassified:
 
 
 class TestTheConsensusTranscript:
-    """fuse_consensus_words is called, and its output is what every text consumer reads."""
+    """The consensus stream is aligned by ``triage.consensus.align_sources`` over the store's hypotheses."""
 
-    def test_the_consensus_comes_from_fuse_consensus_words(
+    def test_the_consensus_is_the_aligned_stream_with_a_flat_provenance(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -837,18 +837,27 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The routine is called with both recognizers' resolved results, and its provenance stored."""
+        """The measurement carries the §4.2 fields and the plain join of the words."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
-        assert sorted(consensus.attributes["systems"]) == sorted([CRISPERWHISPER_ID, QWEN_ID])
-        assert consensus.attributes["provenance"]["operator"] == "consensus_words/resample"
-        assert consensus.attributes["text"] == "hello world"
-        assert consensus.attributes["timing_authority"] == "consensus_asr"
+        attributes = consensus.attributes
+        assert attributes["role"] == "consensus"
+        assert attributes["algorithm"] == "star_sequence_alignment"
+        assert attributes["routine"] == "senselab.audio.workflows.triage.consensus.align_sources"
+        assert attributes["source_order"] == "lexicographic_by_source_name"
+        assert [row["name"] for row in attributes["sources"]] == ["asr_crisperwhisper", "asr_qwen"]
+        assert attributes["n_sources"] == 2
+        assert attributes["text"] == "hello world"
+        assert attributes["outcomes"] == {"agreement": 2, "variant": 0, "insertion": 0}
+        assert attributes["time_fit"] == "weighted_isotonic_median"
+        assert len(attributes["word_ids"]) == attributes["n_words"] == 2
+        for retired in ("words", "provenance", "systems", "timing_authority", "event_ids"):
+            assert retired not in attributes
 
-    def test_word_entities_are_the_consensus_words_only(
+    def test_each_hypothesis_measurement_carries_its_role_source_and_model(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -856,13 +865,30 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Two recognizers agreeing on two words yield two word entities, not four."""
+        """Test 19: the §4.1 field set, with ``model_id`` and ``commit_sha`` matching the agent."""
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello there"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        assert len(live_entities(store, "word")) == 2
+        for name, model_id in (("asr_crisperwhisper", CRISPERWHISPER_ID), ("asr_qwen", QWEN_ID)):
+            measurement = find_measurement(store, name)
+            assert measurement is not None
+            attributes = measurement.attributes
+            assert attributes["role"] == "asr_hypothesis"
+            assert attributes["source"] == name
+            assert attributes["model_id"] == model_id
+            assert attributes["commit_sha"] == "a" * 40
+            assert attributes["n_words"] == len(attributes["words"]) == 2
+            assert "timestamp_model" in attributes and "duration_s" in attributes
+            assert "recognizer" not in attributes
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        rows = {row["name"]: row for row in consensus.attributes["sources"]}
+        assert rows["asr_qwen"]["model_id"] == QWEN_ID
+        assert rows["asr_qwen"]["commit_sha"] == "a" * 40
+        assert rows["asr_qwen"]["measurement_id"] == find_measurement(store, "asr_qwen").id  # type: ignore[union-attr]
+        assert rows["asr_qwen"]["agent_id"] is not None
 
-    def test_consensus_word_times_and_uncertainty_are_authoritative(
+    def test_word_entities_are_the_stream_positions(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -870,29 +896,36 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """No second aligner is written; downstream timing evidence stays on consensus words."""
+        """Two recognizers agreeing on two words yield two word entities carrying the §3.1 attributes."""
         _seed_admit(store, tmp_path, wav_writer)
         seen: dict[str, Any] = {}
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"), record=seen)
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-
         assert "align" not in seen
         assert find_measurement(store, "alignment") is None
-        assert not (tmp_path / "derivatives" / "alignment.json").exists()
         words = live_entities(store, "word")
-        assert len(words) == 2
+        assert [w.attributes["index"] for w in words] == [0, 1]
         for word in words:
             assert word.extent is not None
-            assert set(word.attributes) >= {
-                "confidence",
-                "existence_confidence",
-                "temporal_confidence",
-                "coverage",
-                "recognizers",
-                "timing_sources",
+            assert set(word.attributes) == {
+                "text",
+                "bracketed",
+                "outcome",
+                "sources",
+                "readings",
+                "timings",
+                "onset_spread_s",
+                "offset_spread_s",
+                "temporal_uncertainty_s",
+                "variants",
+                "agreement",
+                "index",
             }
+            assert word.attributes["outcome"] == "agreement"
+            assert word.attributes["sources"] == ["asr_crisperwhisper", "asr_qwen"]
+            assert set(word.attributes["timings"]) == {"asr_crisperwhisper", "asr_qwen"}
 
-    def test_the_per_recognizer_hypotheses_stay_as_measurements(
+    def test_the_consensus_reads_every_hypothesis_in_the_store(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -900,16 +933,47 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """The evidence the consensus was fused from is retained, but not as word entities."""
+        """Test 18: a third ``asr_hypothesis`` seeded directly, with no block, joins the consensus."""
         _seed_admit(store, tmp_path, wav_writer)
+        extra = store.entity(
+            prov_type="measurement",
+            extent=None,
+            attributes={
+                "name": "asr_extra",
+                "signal": "plain",
+                "role": "asr_hypothesis",
+                "source": "asr_extra",
+                "model_id": "seeded/extra",
+                "commit_sha": None,
+                "transcript": "hello world",
+                "words": [
+                    {"text": "hello", "start": 0.5, "end": 0.7, "score": None},
+                    {"text": "world", "start": 0.8, "end": 1.0, "score": None},
+                ],
+                "n_words": 2,
+                "untimed_chunks_n": 0,
+                "out_of_bounds_chunks_n": 0,
+                "timestamp_source": "native",
+                "timestamp_model": None,
+                "duration_s": 3.0,
+            },
+        )
         _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello there"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        for name in ("asr_crisperwhisper", "asr_qwen"):
-            measurement = find_measurement(store, name)
-            assert measurement is not None
-            assert len(measurement.attributes["words"]) == 2
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert [row["name"] for row in consensus.attributes["sources"]] == [
+            "asr_crisperwhisper",
+            "asr_extra",
+            "asr_qwen",
+        ]
+        assert consensus.attributes["n_sources"] == 3
+        assert extra in {row["measurement_id"] for row in consensus.attributes["sources"]}
+        [world] = [w for w in live_entities(store, "word") if w.attributes["text"] == "world"]
+        assert world.attributes["outcome"] == "variant"
+        assert world.attributes["agreement"] == pytest.approx(2 / 3)
 
-    def test_a_wordless_run_still_writes_the_consensus_with_a_filled_provenance(
+    def test_a_single_recognizer_is_an_absence_not_a_consensus(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -917,29 +981,92 @@ class TestTheConsensusTranscript:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A fold that ran and found nothing is a fact, and it is not the same fact as never folding.
+        """Test 20 (R-2): one block raising leaves no consensus and no word; the other blocks still run."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+        real = preprocess_module.transcribe_audios
 
-        ``fuse_consensus_words`` returns ``([], {})`` when no recognizer produced a readable word, so
-        every named read of the provenance would raise and the measurement would be lost with it.
-        TAXONOMY's lexical line reads ``absent`` from this measurement and ``unavailable`` from its
-        absence (I7), so collapsing the two here would silently change a downstream verdict.
-        """
+        def _one_fails(audios: list, model: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            if str(model.path_or_uri) == QWEN_ID:
+                raise LookupError("qwen unavailable")
+            return real(audios, model=model, **kwargs)
+
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _one_fails)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        absent = dict(store.get_entity(result.verdict_entity_id).attributes["absent"])
+        assert absent["consensus_transcript"].startswith("LookupError: consensus needs at least two")
+        assert "found 1: ['asr_crisperwhisper']" in absent["consensus_transcript"]
+        assert find_measurement(store, "consensus_transcript") is None
+        assert live_entities(store, "word") == []
+        assert find_measurement(store, "asr_crisperwhisper") is not None
+        assert find_measurement(store, "energy_envelope") is not None
+
+    def test_a_defect_in_the_consensus_fails_the_node(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 21: a RuntimeError from align_sources is a hard failure naming the block."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello world"), qwen=_line("hello world"))
+
+        def _broken(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise RuntimeError("alignment blew up")
+
+        monkeypatch.setattr(preprocess_module, "align_sources", _broken)
+        with pytest.raises(RuntimeError, match="consensus_transcript: RuntimeError: alignment blew up"):
+            preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+
+    def test_provenance_links_words_to_the_sources_that_produced_them(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 22: the activity used every hypothesis; an insertion derives from its source only."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("I uh think"), qwen=_line("I think"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        crisper = find_measurement(store, "asr_crisperwhisper")
+        qwen = find_measurement(store, "asr_qwen")
+        assert crisper is not None and qwen is not None
+        activity = store.generated_by(consensus.id)
+        assert activity is not None
+        assert set(store.uses_of(activity)) == {crisper.id, qwen.id}
+        assert set(store.derived_from(consensus.id)) == {crisper.id, qwen.id}
+        by_text = {w.attributes["text"]: w for w in live_entities(store, "word")}
+        assert store.derived_from(by_text["uh"].id) == [crisper.id]
+        assert set(store.derived_from(by_text["think"].id)) == {crisper.id, qwen.id}
+
+    def test_a_wordless_run_still_writes_the_consensus(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 24: two hypotheses with no word is an aligned nothing, not a missing alignment."""
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line(""), qwen=_line(""))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
         consensus = find_measurement(store, "consensus_transcript")
         assert consensus is not None
-        assert consensus.attributes["words"] == []
+        assert consensus.attributes["n_words"] == 0
+        assert consensus.attributes["word_ids"] == []
         assert consensus.attributes["text"] == ""
-        assert consensus.attributes["provenance"]["operator"] == "consensus_words/resample"
-        assert consensus.attributes["provenance"]["n_words"] == 0
+        assert consensus.attributes["reference_source"] is None
+        assert consensus.attributes["n_sources"] == 2
         assert live_entities(store, "word") == []
 
-
-class TestWordsAreBracketAware:
-    """A bracketed or onomatopoeic token is an event, and carries no lexical evidence."""
-
-    def test_a_bracketed_token_is_an_event_not_a_word(
+    def test_the_stream_order_is_the_column_order_not_the_time_order(
         self,
         store: ProvStore,
         config: TriageConfig,
@@ -947,39 +1074,65 @@ class TestWordsAreBracketAware:
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """[COUGH] between two words leaves two words and one event."""
+        """The finding: a repetition is emitted verbatim in column order, and no word is re-sorted."""
         _seed_admit(store, tmp_path, wav_writer)
-        _stub_models(
-            monkeypatch,
-            crisper=_line("hello [COUGH] world"),
-            qwen=_line("hello [COUGH] world"),
-        )
+        _stub_models(monkeypatch, crisper=_line("and the and the d- the"), qwen=_line("and the"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        assert [e.attributes["text"] for e in live_entities(store, "word")] == ["hello", "world"]
-        events = live_entities(store, "event")
-        assert len(events) == 1
-        assert events[0].attributes["bracketed"] == "[COUGH]"
-        assert events[0].attributes["origin"] == "bracketed"
+        consensus = find_measurement(store, "consensus_transcript")
+        assert consensus is not None
+        assert consensus.attributes["text"] == "and the and the d- the"
+        words = sorted(live_entities(store, "word"), key=lambda w: int(w.attributes["index"]))
+        assert [w.attributes["outcome"] for w in words] == [
+            "insertion",
+            "insertion",
+            "agreement",
+            "insertion",
+            "insertion",
+            "agreement",
+        ]
+        onsets = [w.extent[0] for w in words if w.extent is not None]
+        assert onsets == sorted(onsets)
 
-    def test_an_onomatopoeic_token_is_normalised_into_an_event(
+
+class TestWordsAreBracketAware:
+    """A bracketed or onomatopoeic token is a bracketed word: in the stream, not lexical."""
+
+    def test_a_bracketed_token_is_a_bracketed_word_in_stream_order(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 23: hello [COUGH] world from both is three words, the middle one bracketed and agreed."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, crisper=_line("hello [COUGH] world"), qwen=_line("hello [COUGH] world"))
+        preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        words = sorted(live_entities(store, "word"), key=lambda w: int(w.attributes["index"]))
+        assert [w.attributes["text"] for w in words] == ["hello", "[COUGH]", "world"]
+        assert [w.attributes["bracketed"] for w in words] == [False, True, False]
+        assert words[1].attributes["outcome"] == "agreement"
+        assert "event" not in {e.prov_type for e in store.entities()}
+
+    def test_an_onomatopoeic_token_is_normalised_into_a_bracketed_word(
         self,
         store: ProvStore,
         tmp_path: Path,
         wav_writer: Callable[..., Path],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """With the vocabulary supplied, 'khh' becomes [KHH] and the raw token travels with it."""
+        """With the vocabulary supplied, 'khh' becomes [KHH] and the raw token stays in the readings."""
         override = tmp_path / "tokens.yaml"
         override.write_text("words:\n  onomatopoeic_tokens: [khh, ahem]\n")
         config = load_triage_config(override)
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        assert [e.attributes["text"] for e in live_entities(store, "word")] == ["hello", "world"]
-        events = live_entities(store, "event")
-        assert events[0].attributes["bracketed"] == "[KHH]"
-        assert events[0].attributes["raw"] == "khh"
-        assert events[0].attributes["origin"] == "onomatopoeic"
+        words = sorted(live_entities(store, "word"), key=lambda w: int(w.attributes["index"]))
+        assert [w.attributes["text"] for w in words] == ["hello", "[KHH]", "world"]
+        assert words[1].attributes["bracketed"] is True
+        assert words[1].attributes["readings"] == {"asr_crisperwhisper": "khh", "asr_qwen": "khh"}
 
     def test_a_null_vocabulary_leaves_an_onomatopoeic_token_a_word(
         self,
@@ -993,7 +1146,29 @@ class TestWordsAreBracketAware:
         _seed_admit(store, tmp_path, wav_writer)
         _stub_models(monkeypatch, crisper=_line("hello khh world"), qwen=_line("hello khh world"))
         preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
-        assert [e.attributes["text"] for e in live_entities(store, "word")] == ["hello", "khh", "world"]
+        words = sorted(live_entities(store, "word"), key=lambda w: int(w.attributes["index"]))
+        assert [w.attributes["text"] for w in words] == ["hello", "khh", "world"]
+        assert not any(w.attributes["bracketed"] for w in words)
+
+    def test_the_asr_span_source_reads_lexical_words_and_changes_no_word(
+        self,
+        store: ProvStore,
+        asr_span_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Test 25 (R-4): a bracketed word proposes no span; the stream is the same either way."""
+        _seed_admit(store, tmp_path, wav_writer, samples=_default_samples())
+        cough = ScriptLine(text="[COUGH]", start=2.5, end=2.7, score=0.9)
+        line = ScriptLine(text="[COUGH]", start=2.5, end=2.7, chunks=[cough], score=0.9)
+        _stub_models(monkeypatch, crisper=line, qwen=line)
+        preprocess(store, _audio(tmp_path), asr_span_config, run_dir=tmp_path)
+        spans = [e for e in live_entities(store, "span") if e.attributes.get("family") is None]
+        assert all(e.attributes["measure"] != "asr" for e in spans)
+        words = live_entities(store, "word")
+        assert [w.attributes["text"] for w in words] == ["[COUGH]"]
+        assert words[0].extent == (2.5, 2.7)
 
 
 class TestDisruptionsAreMeasuredOnTheOriginal:
