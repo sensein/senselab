@@ -722,8 +722,7 @@ def _panels(
             continue
         original = str(word.attributes.get("text") or "")
         text = _redacted_text(marks, word, scanned=scanned)
-        # A placeholder's fill and weight must not borrow the word it replaced: they describe ASR
-        # evidence for text this lane no longer shows.
+        # A placeholder drops the replaced word's fill and bold weight (report.md, "The summary — the panels").
         kept = text == original
         redacted_words.append(
             (

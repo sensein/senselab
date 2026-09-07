@@ -54,6 +54,11 @@ row. The right-hand y-label is simply `dBFS`; each span carries its own dB-over-
 so the axis does not repeat a second, unrelated label. A lane that shares that row is still a
 **declared lane**, and the ABSENT block reports it as drawn.
 
+A redacted-lane token's fill and bold weight are dropped, not carried over from the consensus word
+it replaced: both describe ASR evidence (`agreement`, `outcome`) for the original text, and a
+placeholder no longer shows that text, so presenting it with that word's weight would claim
+evidence for a string that was never read off the recording.
+
 AST's packaged 10.24 s window and hop are intentionally rendered as a summary rather than a timeline:
 each fired label is a property of that broad acoustic context, not a local event boundary. The JSON
 records `evidence.label_presentations.ast` with the stored window and hop plus `mode: summary_only`,
