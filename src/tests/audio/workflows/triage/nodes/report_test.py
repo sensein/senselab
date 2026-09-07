@@ -27,6 +27,7 @@ from senselab.audio.workflows.triage.nodes.report import (
 from senselab.audio.workflows.triage.nodes.verdict import verdict as fold_verdict
 from senselab.audio.workflows.triage.vocabulary import Outcome
 from senselab.utils.prov_store import ProvStore
+from tests.audio.workflows.triage.nodes.conftest import SEED_SOURCES, word_attributes
 
 _SHA = "0" * 39 + "1"
 _DURATION_S = 6.0
@@ -113,7 +114,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
     *,
     full: bool = False,
     admit_failed: bool = False,
-    words: Sequence[str] = ("the", "quick", "brown", "fox"),
+    words: Sequence[Any] = ("the", "quick", "brown", "fox"),
     marked_words: Sequence[tuple[str, str]] = (),
     airway_labelled: Sequence[tuple[float, float]] = ((1.0, 1.3),),
     airway_unlabelled: Sequence[tuple[float, float]] = ((2.0, 2.3),),
@@ -131,7 +132,8 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         tmp_path: Where the plain stream and the envelope sidecar are written.
         full: Whether to seed every node's output. False seeds ADMIT and nothing else.
         admit_failed: Whether ADMIT refused the file, which is the outcome REPORT must still speak to.
-        words: The consensus words, rendered verbatim unless a mark covers them.
+        words: The consensus words — texts, or dicts in the shared seeder's word shape — rendered
+            verbatim unless a mark covers them.
         marked_words: ``(text, category)`` words the PII scan marked, appended to ``words``.
         airway_labelled: Extents AIRWAY put a label of interest on.
         airway_unlabelled: Extents AIRWAY looked at and did not label.
@@ -365,23 +367,16 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
 
     consensus = store.activity(node="PREPROCESS", step="consensus", parameters={})
     store.was_associated_with(consensus, software)
-    every_word = [(text, None) for text in words] + [(text, category) for text, category in marked_words]
+    every_word: list[tuple[dict[str, Any], str | None]] = [
+        (dict(entry) if isinstance(entry, dict) else {"text": entry}, None) for entry in words
+    ] + [({"text": text}, category) for text, category in marked_words]
     word_ids: list[str] = []
-    for index, (text, category) in enumerate(every_word):
+    for index, (spec, category) in enumerate(every_word):
         extent = (0.2 * index, 0.2 * index + 0.15)
         word_id = _entity(
             "word",
             extent,
-            {
-                "text": text,
-                "confidence": 0.9,
-                "existence_confidence": 0.88,
-                "temporal_confidence": 0.86,
-                "coverage": 1.0,
-                "recognizers": ["crisperwhisper", "qwen"],
-                "timing_sources": ["native", "bundled_aligner"],
-                "index": index,
-            },
+            word_attributes(str(spec["text"]), extent, index=index, **{k: v for k, v in spec.items() if k != "text"}),
         )
         word_ids.append(word_id)
         if category is not None:
@@ -393,10 +388,12 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         {
             "name": "consensus_transcript",
             "signal": "plain",
-            "words": [{"text": text} for text, _ in every_word],
+            "role": "consensus",
+            "sources": [{"name": source} for source in SEED_SOURCES],
+            "n_sources": len(SEED_SOURCES),
+            "n_words": len(every_word),
             "word_ids": word_ids,
-            "event_ids": [],
-            "text": " ".join(text for text, _ in every_word),
+            "text": " ".join(str(spec["text"]) for spec, _ in every_word),
         },
     )
 
@@ -411,7 +408,7 @@ def _seed_report_store(  # noqa: C901, D417 — one independent block per node, 
         _entity(
             "pii",
             (0.0, 1.0),
-            {"category": category, "source": "gliner", "occurrence": 0, "occurrences_n": 1, "recognizers": []},
+            {"category": category, "source": "gliner", "occurrence": 0, "occurrences_n": 1, "sources": []},
         )
     if scan != "absent":
         _entity(
@@ -567,7 +564,7 @@ class TestTheStructuredJsonCompanion:
         artifacts = report(store, tmp_path / "summary", pdf_config)
         payload = json.loads(artifacts["json"].read_text())
         assert artifacts["summary"].exists() and artifacts["json"].exists()
-        assert payload["schema_version"] == "triage-summary/v2"
+        assert payload["schema_version"] == "triage-summary/v3"
         assert payload["decisions"]["file_triage"] == payload["verdict"]["triage"]
         assert payload["decisions"]["release"] == payload["verdict"]["release"]
         assert payload["artifacts"]["summary"]["path"] == artifacts["summary"].name
@@ -583,35 +580,113 @@ class TestTheStructuredJsonCompanion:
         speech_items = payload["evidence"]["branches"]["SPEECH"]
         assert any(item["timing"] and item["provenance"]["node"] for item in speech_items)
         token = payload["evidence"]["consensus_transcript_tokens"][0]
-        assert token["timing_authority"] == "consensus"
-        assert token["confidence"] == 0.9
-        assert token["existence_confidence"] == 0.88 and token["temporal_confidence"] == 0.86
-        assert token["coverage"] == 1.0
-        assert token["recognizers"] == ["crisperwhisper", "qwen"]
-        assert token["timing_sources"] == ["native", "bundled_aligner"]
+        assert set(token) == {
+            "entity_id",
+            "text",
+            "bracketed",
+            "outcome",
+            "sources",
+            "readings",
+            "timings",
+            "variants",
+            "agreement",
+            "timing",
+            "onset_spread_s",
+            "offset_spread_s",
+            "temporal_uncertainty_s",
+            "provenance",
+        }
+        assert token["outcome"] == "agreement" and token["agreement"] == 1.0
+        assert token["sources"] == list(SEED_SOURCES)
+        assert set(token["timings"]) == set(SEED_SOURCES)
+        for retired in ("confidence", "existence_confidence", "recognizers", "timing_sources", "timing_authority"):
+            assert retired not in token
         assert all("entity_id" in item for item in payload["evidence"]["consensus_transcript_tokens"])
         assert all("entity_id" in item for item in payload["evidence"]["redacted_transcript_tokens"])
 
 
 class TestConsensusWordColorIsRobust:
-    """A confidence outside [0, 1], including non-finite, must not take rendering down with it."""
+    """An agreement outside [0, 1], including non-finite, must not take rendering down with it."""
 
-    def test_a_nan_confidence_falls_back_to_the_neutral_fill(self) -> None:
+    def test_a_nan_agreement_falls_back_to_the_neutral_fill(self) -> None:
         """A NaN passes the numeric isinstance check, so it needs its own finiteness guard."""
         assert _consensus_word_color(float("nan")) == "#e5e7eb"
 
-    def test_an_infinite_confidence_falls_back_to_the_neutral_fill(self) -> None:
+    def test_an_infinite_agreement_falls_back_to_the_neutral_fill(self) -> None:
         """An infinite value is finite-looking arithmetic that still breaks the color channel math."""
         assert _consensus_word_color(float("inf")) == "#e5e7eb"
         assert _consensus_word_color(float("-inf")) == "#e5e7eb"
 
-    def test_a_missing_confidence_falls_back_to_the_same_neutral_fill(self) -> None:
+    def test_a_missing_agreement_falls_back_to_the_same_neutral_fill(self) -> None:
         """The non-finite fallback must match the existing missing-value fallback exactly."""
         assert _consensus_word_color(None) == "#e5e7eb"
 
-    def test_an_ordinary_confidence_still_interpolates(self) -> None:
-        """The finiteness guard must not turn every ordinary confidence into the same fill."""
+    def test_an_ordinary_agreement_still_interpolates(self) -> None:
+        """The finiteness guard must not turn every ordinary agreement into the same fill."""
         assert _consensus_word_color(0.0) != _consensus_word_color(1.0)
+
+
+class TestTheTranscriptCarriesTheOutcomes:
+    """Test 29: bold means agreed, a/b means contested, and the plain text carries neither mark."""
+
+    @staticmethod
+    def _words() -> list[Any]:
+        return [
+            "hi",
+            {
+                "text": "Jon",
+                "variants": [
+                    {"text": "Jon", "sources": ["asr_crisperwhisper"], "share": 0.5},
+                    {"text": "John", "sources": ["asr_qwen"], "share": 0.5},
+                ],
+                "readings": {"asr_crisperwhisper": "Jon", "asr_qwen": "John"},
+            },
+            {"text": "[UM]", "sources": ["asr_crisperwhisper"]},
+            "there",
+        ]
+
+    def test_marked_text_bolds_agreement_and_joins_variants_while_text_stays_plain(
+        self, store: ProvStore, tmp_path: Path
+    ) -> None:
+        """The plain join is what the PII scan read; the marked form is what a reader sees."""
+        _seed_report_store(store, tmp_path, full=True, words=self._words())
+        payload = json.loads(report(store, tmp_path / "summary", _png(tmp_path))["json"].read_text())
+        transcript = payload["transcript"]
+        assert transcript["marked_text"] == "**hi** Jon/John [UM] **there**"
+        assert transcript["text"] == "hi Jon [UM] there"
+        assert "**" not in transcript["text"] and "/" not in transcript["text"]
+        assert transcript["tokens_n"] == 4
+        assert "words_n" not in transcript
+
+    def test_the_token_lane_sets_bold_iff_agreement_and_never_on_a_placeholder(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The lane's weight is the outcome; a redaction placeholder inherits nothing."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=self._words(), marked_words=[("alice", "PERSON")])
+        report(store, tmp_path / "summary", _png(tmp_path))
+        consensus = next(panel for panel in panels[0] if panel.get("report_lane") == "words")
+        assert [(token["text"], token["bold"]) for token in consensus["tokens"]] == [
+            ("hi", True),
+            ("Jon/John", False),
+            ("[UM]", False),
+            ("there", True),
+            ("alice", True),
+        ]
+        redacted = next(panel for panel in panels[0] if panel.get("report_lane") == "redacted")
+        placeholder = next(token for token in redacted["tokens"] if token["text"] == "[PERSON]")
+        assert placeholder["bold"] is False
+        assert placeholder["color"] == _consensus_word_color(None)
+
+    def test_the_summary_page_prints_the_marked_transcript(
+        self, store: ProvStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The monospaced page cannot bold, so ** is the mark it prints."""
+        panels = _capture_panels(monkeypatch)
+        _seed_report_store(store, tmp_path, full=True, words=self._words())
+        report(store, tmp_path / "summary", _png(tmp_path))
+        text = "\n".join("\n".join(panel["lines"]) for panel in panels[0] if panel.get("type") == "text")
+        assert "**hi** Jon/John [UM] **there**" in text
 
 
 class TestItSeparatesConsensusAndRedactedTranscript:
@@ -822,7 +897,7 @@ class TestTheSummaryLayers:
         report(store, tmp_path / "summary", _png(tmp_path))
         blocks = "\n".join(panels[0][-1]["lines"])
         assert "triage:" in blocks and "release:" in blocks
-        assert "hello world" in blocks
+        assert "**hello** **world**" in blocks
         assert "Speech" in blocks
         assert "AIRWAY" in blocks
 
@@ -1010,7 +1085,7 @@ class TestItReadsTheStoreOnceRatherThanPerWord:
         started = time.monotonic()
         artifacts = report(store, tmp_path / "summary", _png(tmp_path))
         elapsed = time.monotonic() - started
-        assert json.loads(artifacts["json"].read_text())["transcript"]["words_n"] == 800
+        assert json.loads(artifacts["json"].read_text())["transcript"]["tokens_n"] == 800
         assert elapsed < 15.0, f"reading the store took {elapsed:.1f}s; the per-word rescan is back"
 
 
@@ -1475,7 +1550,7 @@ class TestThePdfPagination:
         pdf_config = load_triage_config(_write(tmp_path, "report:\n  format: pdf\n"))
         report(store, tmp_path / "summary", pdf_config)
         blocks = "\n".join(drawn[-1])
-        assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "hello world" in blocks
+        assert "DECISION SUMMARY" in blocks and "SCREENING AND ROUTING" in blocks and "**hello** **world**" in blocks
         assert "TAXONOMY DECISION PATH" in blocks and "lexical consensus decides" in blocks
         assert "ANALYTIC RECORD" in blocks and "summary.json" in blocks
 

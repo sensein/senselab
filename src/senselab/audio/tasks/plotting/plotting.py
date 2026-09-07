@@ -1175,6 +1175,7 @@ def plot_aligned_panels(
                             ha="center",
                             va="center",
                             fontsize=fontsize,
+                            fontweight="bold" if token.get("bold") else "normal",
                             color="black",
                             transform=ax.transData,
                             clip_on=True,
