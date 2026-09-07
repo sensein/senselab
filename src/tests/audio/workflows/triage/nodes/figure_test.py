@@ -11,6 +11,8 @@ from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import live_entities
 from senselab.audio.workflows.triage.nodes.figure import (
     FigureStyle,
+    _asr_lane_panel,
+    _words,
     pages,
     preprocess_figure,
     taxonomy_summary_lines,
@@ -288,3 +290,109 @@ class TestItOverridesNoPipelineValue:
         assert "write_text" not in source.split("taxonomy_summary.json")[0], (
             "the module must not write a config override; the only file it writes is its own output"
         )
+
+
+class TestTheWordLaneDrawsEachSourceInItsOwnBand:
+    """Test 30: agreement reads as stacked bars, disagreement as separated ones, nothing compounds."""
+
+    @staticmethod
+    def _word(index: int, text: str, outcome: str, timings: dict[str, tuple[float, float]], extent: tuple) -> dict:
+        """One of ``_words``' dicts, built directly."""
+        return {
+            "index": index,
+            "extent": extent,
+            "text": text,
+            "outcome": outcome,
+            "variants": [],
+            "readings": {name: text for name in timings},
+            "timings": timings,
+            "sources": list(timings),
+            "bracketed": text.startswith("["),
+        }
+
+    @staticmethod
+    def _draw(words: list[dict], window: tuple[float, float] = (0.0, 20.0), **style: object) -> tuple:
+        """Draw the lane on a bare axis and hand back the axis with its fills and outlines split."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        _, axis = plt.subplots()
+        _asr_lane_panel(axis, words, ["a", "b"], window, FigureStyle(**style), "absent")  # type: ignore[arg-type]
+        from matplotlib.colors import to_rgba
+
+        fills = [p for p in axis.patches if to_rgba(p.get_facecolor())[3] > 0.0]
+        outlines = [p for p in axis.patches if to_rgba(p.get_facecolor())[3] == 0.0]
+        return axis, fills, outlines
+
+    def test_a_two_source_word_draws_two_fills_in_two_bands_and_one_outline(self) -> None:
+        """Agreement is two bars stacked at the same time, never one darker bar."""
+        word = self._word(0, "hello", "agreement", {"a": (1.0, 1.4), "b": (1.05, 1.45)}, (1.025, 1.425))
+        _, fills, outlines = self._draw([word])
+        assert len(fills) == 2 and len(outlines) == 1
+        assert len({round(float(p.get_y()), 6) for p in fills}) == 2
+        assert {p.get_facecolor()[:3] for p in fills} == {
+            matplotlib_colour("#fdae6b"),
+            matplotlib_colour("#6baed6"),
+        }
+
+    def test_a_one_source_word_draws_one_fill_in_its_sources_band(self) -> None:
+        """An insertion leaves the other band empty."""
+        word = self._word(0, "uh", "insertion", {"b": (2.0, 2.2)}, (2.0, 2.2))
+        _, fills, outlines = self._draw([word])
+        assert len(fills) == 1 and len(outlines) == 1
+        assert fills[0].get_facecolor()[:3] == matplotlib_colour("#6baed6")
+        assert fills[0].get_y() > outlines[0].get_y()
+
+    def test_disjoint_readings_draw_at_disjoint_times_in_different_bands(self) -> None:
+        """The 4.1 s case: two bars, two times, two bands, and the outline between them."""
+        word = self._word(3, "the", "agreement", {"a": (35.30, 35.36), "b": (31.20, 31.84)}, (33.25, 33.60))
+        _, fills, outlines = self._draw([word], window=(20.0, 40.0))
+        (a_fill,) = [p for p in fills if p.get_x() > 34.0]
+        (b_fill,) = [p for p in fills if p.get_x() < 32.0]
+        assert a_fill.get_y() != b_fill.get_y()
+        assert a_fill.get_x() >= b_fill.get_x() + b_fill.get_width()
+        assert outlines[0].get_x() == 33.25
+
+    def test_a_word_with_an_off_page_extent_is_drawn_where_a_source_put_it(self) -> None:
+        """The page filter is the hull of timings and extent, not the derived extent alone."""
+        word = self._word(0, "late", "agreement", {"a": (19.5, 19.8), "b": (21.0, 21.3)}, (20.25, 20.55))
+        _, fills, outlines = self._draw([word], window=(0.0, 20.0))
+        assert len(fills) == 1 and fills[0].get_x() == 19.5
+        assert outlines == []
+
+    def test_the_row_is_the_stream_position_not_the_page_position(self) -> None:
+        """A word at stream position 5 draws on row 1 of 4 even as the first word on its page."""
+        word = self._word(5, "sixth", "agreement", {"a": (25.0, 25.3), "b": (25.0, 25.3)}, (25.0, 25.3))
+        _, _, outlines = self._draw([word], window=(20.0, 40.0), asr_rows=4, asr_row_height=0.5)
+        assert outlines[0].get_y() == pytest.approx(1 - 0.25)
+
+    def test_the_title_names_each_source_with_its_colour_and_agreement_is_bold(self) -> None:
+        """The page carries its own legend, and the weight is the outcome."""
+        words = [
+            self._word(0, "I", "agreement", {"a": (0.5, 0.7), "b": (0.5, 0.7)}, (0.5, 0.7)),
+            self._word(1, "uh", "insertion", {"a": (0.8, 0.9)}, (0.8, 0.9)),
+        ]
+        axis, _, _ = self._draw(words)
+        assert axis.get_title() == "consensus ASR — a: #fdae6b, b: #6baed6"
+        weights = {text.get_text(): text.get_fontweight() for text in axis.texts}
+        assert weights == {"I": "bold", "uh": "normal"}
+
+    def test_words_reads_the_stream_by_index_and_the_source_order(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """``_words`` hands the lane the stream in index order and the measurement's sources."""
+        seed_preprocess_store(store, words=["one", {"text": "[UM]", "sources": ["asr_crisperwhisper"]}, "two"])
+        words, sources = _words(store)
+        assert [w["text"] for w in words] == ["one", "[UM]", "two"]
+        assert [w["index"] for w in words] == [0, 1, 2]
+        assert sources == ["asr_crisperwhisper", "asr_qwen"]
+        assert words[1]["sources"] == ["asr_crisperwhisper"] and words[1]["bracketed"]
+
+
+def matplotlib_colour(hex_colour: str) -> tuple[float, float, float]:
+    """A hex colour as the RGB triple matplotlib reports on a patch."""
+    from matplotlib.colors import to_rgb
+
+    return to_rgb(hex_colour)
