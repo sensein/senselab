@@ -81,3 +81,32 @@ transcript itself.
 
 A consequence worth stating: a span consumer that wants a different grouping is free to compute it,
 and doing so cannot change the transcript.
+
+## R-5. The product is a linear consensus text stream; timing is word-level metadata on it
+
+Consensus produces a **consensus text stream**: one linear sequence of words. Each position in that
+sequence carries word-level metadata — the text, which sources produced it, each source's own
+reading, each source's own timing, and the onset/offset derived from them.
+
+The sequence is the artifact. Timing is metadata attached to positions in it, never the thing that
+orders it.
+
+**Onsets are not monotonic along the stream, and no consumer may assume they are.** Measured on
+`sub-1f4ea26f…task-Story-recall-(v2)`: 7 of 226 columns open earlier than the column before them.
+Every one is a single-source disfluency whose timing overlaps the agreed word that follows it —
+
+```
+col 34  a-    9.60 < 9.88    then  gets   (agreed)
+col 44  the  12.64 < 12.79   then  and    (agreed)
+col 47  d-   12.80 < 13.29   then  the    (agreed)
+col 93  [UM] 31.20 < 31.52   then  the    (agreed)
+col135  ba-  47.76 < 48.04   then  loses  (agreed)
+col150  [UM] 52.16 < 52.24   then  the    (agreed)
+col165  But  58.07 < 58.08   then  at     (agreed)
+```
+
+which is what a verbatim recognizer produces for a stumble immediately before a word. Three of the
+seven are the duplicate pairs that prompted this work.
+
+The linear order therefore cannot be recovered from the timings, and any consumer that sorts words
+by onset scrambles the transcript. That is the entire defect, stated once.
