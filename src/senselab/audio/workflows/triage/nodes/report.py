@@ -479,20 +479,21 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
     if _window_presentation(store, classifier)["mode"] == "summary_only":
         return []
     use_raw_scores = classifier == "hear"
-    windows: list[tuple[Entity, dict[str, float]]] = []
+    windows: list[tuple[Entity, tuple[float, float], dict[str, float]]] = []
     peaks: dict[str, float] = {}
     for window in live_entities(store, "measurement"):
-        if window.attributes.get("name") != f"{classifier}_window" or window.extent is None:
+        extent = window.extent
+        if window.attributes.get("name") != f"{classifier}_window" or extent is None:
             continue
         scores = _window_label_scores(window, raw=use_raw_scores)
         if not scores:
             continue
-        windows.append((window, scores))
+        windows.append((window, extent, scores))
         for label, score in scores.items():
             peaks[label] = max(peaks.get(label, 0.0), score)
     rows = (
         list(HEAR_EVENT_LABELS)
-        if classifier == "hear" and any("raw_scores" in window.attributes for window, _ in windows)
+        if classifier == "hear" and any("raw_scores" in window.attributes for window, _, _ in windows)
         else [label for label, _ in sorted(peaks.items(), key=lambda item: (-item[1], item[0]))[:_TOP_CATEGORIES]]
     )
     if not rows:
@@ -502,9 +503,7 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
             "type": "score_raster",
             "name": f"{classifier} labels",
             "rows": rows,
-            "windows": [
-                {"start": window.extent[0], "end": window.extent[1], "scores": scores} for window, scores in windows
-            ],
+            "windows": [{"start": extent[0], "end": extent[1], "scores": scores} for _, extent, scores in windows],
             "height_ratio": max(0.9, 0.2 * len(rows)),
         }
     ]
@@ -513,7 +512,7 @@ def _window_raster(store: ProvStore, classifier: str) -> list[dict[str, Any]]:
 def _airway_hear_raster(store: ProvStore) -> list[dict[str, Any]]:
     """The full-probability HeAR windows AIRWAY freshly evaluated inside candidate spans."""
     windows = [
-        (window, _window_label_scores(window, raw=True))
+        (window, window.extent, _window_label_scores(window, raw=True))
         for window in live_entities(store, "measurement")
         if window.attributes.get("name") == "hear_span_window" and window.extent is not None
     ]
@@ -526,12 +525,13 @@ def _airway_hear_raster(store: ProvStore) -> list[dict[str, Any]]:
             "rows": list(HEAR_EVENT_LABELS),
             "windows": [
                 {
-                    "start": window.extent[0],
-                    "end": window.extent[1],
+                    "start": extent[0],
+                    "end": extent[1],
                     "scores": scores,
                     "span_id": window.attributes.get("span_id"),
                 }
-                for window, scores in windows
+                for window, extent, scores in windows
+                if extent is not None
             ],
             "height_ratio": max(1.6, 0.2 * len(HEAR_EVENT_LABELS)),
         }
@@ -1168,7 +1168,7 @@ def _branch_evidence(store: ProvStore, marks: dict[str, list[Entity]]) -> dict[s
             if span.id in known:
                 continue
             activity_id = store.generated_by(span.id)
-            activity = None if activity_id is None else store.get_activity(activity_id)
+            source_activity = None if activity_id is None else store.get_activity(activity_id)
             if branch == "AIRWAY":
                 description = f"airway source span: {', '.join(_airway_labels(store, marks, span)) or _UNLABELLED}"
             elif branch == "SPEECH":
@@ -1184,8 +1184,8 @@ def _branch_evidence(store: ProvStore, marks: dict[str, list[Entity]]) -> dict[s
                     "description": description,
                     "timing": _timing(span),
                     "provenance": {
-                        "node": None if activity is None else activity.node,
-                        "step": None if activity is None else activity.step,
+                        "node": None if source_activity is None else source_activity.node,
+                        "step": None if source_activity is None else source_activity.step,
                     },
                 }
             )
@@ -1443,7 +1443,11 @@ def _header(document: dict[str, Any]) -> dict[str, str]:
                 evidence_s = phonation.get("evidence")
                 floor_s = phonation.get("floor")
                 uncertain_s = phonation.get("uncertain_floor")
-                if all(isinstance(value, (int, float)) for value in (evidence_s, floor_s, uncertain_s)):
+                if (
+                    isinstance(evidence_s, (int, float))
+                    and isinstance(floor_s, (int, float))
+                    and isinstance(uncertain_s, (int, float))
+                ):
                     messages.append(
                         "TAXONOMY: voice uncertain: longest phonation span "
                         f"{float(evidence_s):.2f} s (present >= {float(floor_s):.2f} s; "
