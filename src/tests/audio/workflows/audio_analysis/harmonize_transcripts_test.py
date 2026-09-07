@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.harmonize import harmonize_transcripts
+from senselab.audio.workflows.audio_analysis.harmonize import TranscriptSlot, harmonize_transcripts
 
 
 def _w(pairs: list[tuple[float, float, str]]) -> list[tuple[float, float, str]]:
@@ -155,3 +155,85 @@ def test_a_slot_identifies_each_model_word_by_index_not_by_onset() -> None:
     # Two words share onset 0.4; only the index tells them apart.
     shared = [s for s in slots if s.times["a"] is not None and s.times["a"][0] == 0.4]
     assert {s.indices["a"] for s in shared} == {1, 2}
+
+
+def _shape(slots: list[TranscriptSlot]) -> list[tuple[str | None, str | None]]:
+    """``(cw, qwen)`` surface forms per slot, ``None`` for a gap."""
+    return [(s.words.get("cw"), s.words.get("qwen")) for s in slots]
+
+
+def test_a_filler_and_a_tail_word_are_two_insertions_around_an_agreement() -> None:
+    """CW "I uh think" against Qwen "I think so": "uh" and "so" are insertions, "think" is agreed.
+
+    Under unit costs with a diagonal-first backtrace this came out as {I,I} {uh,think} {think,so} —
+    two substitutions in place of two insertions, and "think" never recorded as agreed.
+    """
+    cw = _w([(0.0, 0.2, "I"), (0.25, 0.45, "uh"), (0.5, 0.9, "think")])
+    qwen = _w([(0.0, 0.2, "I"), (0.3, 0.9, "think"), (0.9, 1.1, "so")])
+    slots = harmonize_transcripts({"cw": cw, "qwen": qwen}).slots
+
+    assert _shape(slots) == [("I", "I"), ("uh", None), ("think", "think"), (None, "so")]
+    assert [s.consensus for s in slots] == ["I", "uh", "think", "so"]
+
+
+def test_a_leading_insertion_does_not_turn_the_rest_into_substitutions() -> None:
+    """CW "oh I uh think" against Qwen "I think so": three insertions around two agreements."""
+    cw = _w([(0.0, 0.1, "oh"), (0.1, 0.2, "I"), (0.25, 0.45, "uh"), (0.5, 0.9, "think")])
+    qwen = _w([(0.1, 0.2, "I"), (0.3, 0.9, "think"), (0.9, 1.1, "so")])
+    slots = harmonize_transcripts({"cw": cw, "qwen": qwen}).slots
+
+    assert _shape(slots) == [("oh", None), ("I", "I"), ("uh", None), ("think", "think"), (None, "so")]
+
+
+def test_a_one_for_one_substitution_stays_one_slot_with_an_insertion_nearby() -> None:
+    """A single differing word is a substitution, not a deletion plus an insertion.
+
+    The insertion sits one word away from the substitution so the alignment is unambiguous; a cost
+    model that under-priced indels would split "think"/"thing" into two single-source slots.
+    """
+    cw = _w([(0.0, 0.2, "I"), (0.25, 0.45, "uh"), (0.5, 0.8, "really"), (0.8, 1.1, "think")])
+    qwen = _w([(0.0, 0.2, "I"), (0.3, 0.8, "really"), (0.8, 1.1, "thing")])
+    slots = harmonize_transcripts({"cw": cw, "qwen": qwen}).slots
+
+    assert _shape(slots) == [("I", "I"), ("uh", None), ("really", "really"), ("think", "thing")]
+    assert slots[3].consensus is None and slots[3].disagreement > 0.0
+
+    plain_cw = _w([(0.0, 0.4, "the"), (0.4, 0.9, "cat"), (0.9, 1.4, "sat")])
+    plain_qwen = _w([(0.0, 0.4, "the"), (0.4, 0.9, "bat"), (0.9, 1.4, "sat")])
+    assert _shape(harmonize_transcripts({"cw": plain_cw, "qwen": plain_qwen}).slots) == [
+        ("the", "the"),
+        ("cat", "bat"),
+        ("sat", "sat"),
+    ]
+
+
+def test_a_substitution_beside_an_insertion_lands_on_the_earlier_token() -> None:
+    """CW "I uh think" against Qwen "I thing": the substitution pairs "uh" with "thing".
+
+    Which of two adjacent tokens is the substituted one is a tie under the cost model, and the
+    backtrace resolves it toward the earlier token. Pinned as behaviour, not as correctness — see
+    ``specs/20260817-triage-workflow-dag/transcript-alignment.md``.
+    """
+    cw = _w([(0.0, 0.2, "I"), (0.25, 0.45, "uh"), (0.5, 0.9, "think")])
+    qwen = _w([(0.0, 0.2, "I"), (0.3, 0.9, "thing")])
+    slots = harmonize_transcripts({"cw": cw, "qwen": qwen}).slots
+
+    assert _shape(slots) == [("I", "I"), ("uh", "thing"), ("think", None)]
+
+
+def test_a_repetition_against_one_token_aligns_its_last_copy() -> None:
+    """Three copies of "the" against one: the last copy is agreed, the earlier copies are insertions.
+
+    Pinned because the fused transcript's handling of repeated words depends on which copy carries
+    two sources; it holds in both directions.
+    """
+    cw = _w([(0.0, 0.2, "the"), (0.3, 0.5, "the"), (0.6, 0.8, "the")])
+    qwen = _w([(0.6, 0.8, "the")])
+
+    forward = harmonize_transcripts({"cw": cw, "qwen": qwen}).slots
+    assert _shape(forward) == [("the", None), ("the", None), ("the", "the")]
+    assert [s.indices["cw"] for s in forward] == [0, 1, 2] and forward[2].indices["qwen"] == 0
+
+    mirrored = harmonize_transcripts({"cw": qwen, "qwen": cw}).slots
+    assert _shape(mirrored) == [(None, "the"), (None, "the"), ("the", "the")]
+    assert mirrored[2].indices == {"cw": 0, "qwen": 2}

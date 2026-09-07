@@ -173,7 +173,9 @@ Parameters live under `phonation_spans` in the config.
 
 The consensus over the recognizers' word streams, produced by **`fuse_consensus_words` in
 `senselab.audio.workflows.audio_analysis.asr`** — the same routine the audio-analysis workflow uses,
-called here rather than reimplemented. It carries per-word agreement between the recognizers.
+called here rather than reimplemented. It carries per-word agreement between the recognizers. The
+word columns it fuses come from a sequence alignment of the recognizers' token streams; its cost
+model and the measurements behind it are in [`transcript-alignment.md`](transcript-alignment.md).
 
 **The consensus transcript is the text every downstream text consumer reads.** SPEECH's PII scan and
 [`REDACT`](redact.md) read it and nothing else; the per-recognizer transcripts remain in the store as

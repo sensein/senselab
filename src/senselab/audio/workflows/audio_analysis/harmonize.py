@@ -396,12 +396,8 @@ class TranscriptSlot:
     indices: dict[str, Optional[int]] = field(default_factory=dict)
     """``{model → index into that model's word list}``, ``None`` where it filled no word.
 
-    The identity of the word, not a description of it. A consumer rebuilding richer word objects
-    from this lattice cannot re-derive it from ``times``: forced aligners emit words that share an
-    onset and words of zero duration (measured: a recognizer placed "Josh" at ``[2.72, 2.72]`` and
-    another placed two words at ``2.72``), so an onset does not identify a word. Matching by onset
-    put one word in two columns and dropped another, which is how "wanted to take" became "wanted
-    take take".
+    The identity of the word. A consumer rebuilding richer word objects from this lattice looks them
+    up by this index, not by onset (``specs/20260817-triage-workflow-dag/transcript-alignment.md``).
     """
 
     times: dict[str, Optional[tuple[float, float]]] = field(default_factory=dict)
@@ -431,34 +427,57 @@ class TranscriptHarmonization:
     reference: Optional[str]
 
 
-def _align_pair(a: Sequence[str], b: Sequence[str]) -> list[tuple[Optional[int], Optional[int]]]:
-    """Levenshtein alignment path between two token sequences.
+_MATCH_COST = 0
+_SUBSTITUTION_COST = 4
+_INDEL_COST = 3
 
-    Returns ``(i, j)`` pairs where either side may be ``None`` for a gap. Needed rather than the
-    plain distance because H3's whole purpose is *which* positions correspond: a distance says a
-    model missed a word, an alignment says which one and leaves the rest lined up.
+
+def _align_pair(a: Sequence[str], b: Sequence[str]) -> list[tuple[Optional[int], Optional[int]]]:
+    """Weighted Levenshtein alignment path between two token sequences.
+
+    Edit costs are sclite's: a match costs 0, a substitution 4, an insertion or deletion 3. Among
+    paths of equal cost the backtrace prefers, at each cell, a matching diagonal, then a deletion
+    from ``a``, then an insertion from ``b``, then a mismatched diagonal. A run of identical tokens
+    against a single token therefore aligns its **last** copy. See
+    ``specs/20260817-triage-workflow-dag/transcript-alignment.md``.
+
+    Args:
+        a: Token sequence on the reference side.
+        b: Token sequence on the model side.
+
+    Returns:
+        ``(i, j)`` pairs in sequence order; ``i`` or ``j`` is ``None`` where that side has a gap.
     """
     n, m = len(a), len(b)
-    cost = np.zeros((n + 1, m + 1), dtype=np.int64)
-    cost[:, 0] = np.arange(n + 1)
-    cost[0, :] = np.arange(m + 1)
+    cost = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(1, n + 1):
+        cost[i][0] = i * _INDEL_COST
+    for j in range(1, m + 1):
+        cost[0][j] = j * _INDEL_COST
+    for i in range(1, n + 1):
+        a_i = a[i - 1]
+        row, prev = cost[i], cost[i - 1]
         for j in range(1, m + 1):
-            sub = cost[i - 1, j - 1] + (0 if a[i - 1] == b[j - 1] else 1)
-            cost[i, j] = min(sub, cost[i - 1, j] + 1, cost[i, j - 1] + 1)
+            diagonal = prev[j - 1] + (_MATCH_COST if a_i == b[j - 1] else _SUBSTITUTION_COST)
+            row[j] = min(diagonal, prev[j] + _INDEL_COST, row[j - 1] + _INDEL_COST)
 
     path: list[tuple[Optional[int], Optional[int]]] = []
     i, j = n, m
     while i > 0 or j > 0:
-        if i > 0 and j > 0 and cost[i, j] == cost[i - 1, j - 1] + (0 if a[i - 1] == b[j - 1] else 1):
+        here = cost[i][j]
+        matched = i > 0 and j > 0 and a[i - 1] == b[j - 1]
+        if matched and here == cost[i - 1][j - 1] + _MATCH_COST:
             path.append((i - 1, j - 1))
             i, j = i - 1, j - 1
-        elif i > 0 and cost[i, j] == cost[i - 1, j] + 1:
+        elif i > 0 and here == cost[i - 1][j] + _INDEL_COST:
             path.append((i - 1, None))
             i -= 1
-        else:
+        elif j > 0 and here == cost[i][j - 1] + _INDEL_COST:
             path.append((None, j - 1))
             j -= 1
+        else:
+            path.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
     path.reverse()
     return path
 
@@ -545,10 +564,6 @@ def harmonize_transcripts(
                 words={m: surfaces.get(m) for m in models},
                 consensus=consensus,
                 disagreement=float(1.0 - top / len(members)) if members else 0.0,
-                # ``members[m]``, not a bare ``i``: inside this comprehension ``i`` would resolve to
-                # whatever the enclosing loop left behind, so every model reported the last member's
-                # span. It produced a lattice where one word appeared in two columns and another
-                # vanished — a wrong answer that still looked like a lattice.
                 indices={m: members.get(m) for m in models},
                 times={m: (words[m][members[m]][0], words[m][members[m]][1]) if m in members else None for m in models},
             )
