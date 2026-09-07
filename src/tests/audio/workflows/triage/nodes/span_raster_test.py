@@ -195,22 +195,115 @@ class TestTheSummaryFits:
         seed_preprocess_store: Callable[..., None],
         tmp_path: Path,
     ) -> None:
-        """Measured against the drawn axis, not against a character count."""
+        """Measured against the drawn axis, not against a character count.
+
+        Renders the whole cover — source, consensus alignment block and summary — so the bound
+        holds with the alignment block present, not just the summary panel alone.
+        """
         import matplotlib
 
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        from senselab.audio.workflows.triage.nodes.figure import _taxonomy_panel
+        from senselab.audio.workflows.triage.nodes.figure import _taxonomy_panel, cover_lines
 
-        seed_preprocess_store(store, yamnet_labels=[["Speech"], ["Speech"]], scores_only=("yamnet",))
+        seed_preprocess_store(
+            store,
+            yamnet_labels=[["Speech"], ["Speech"]],
+            scores_only=("yamnet",),
+            words=[
+                {"text": "hello"},
+                {"text": "world", "timings": {"asr_crisperwhisper": (3.0, 3.5), "asr_qwen": (3.0, 3.5)}},
+            ],
+        )
         taxonomy(store, "plain", config, run_dir=tmp_path)
         style = FigureStyle()
         figure, axis = plt.subplots(figsize=(style.figure_inches[0], 2.0))
-        text = _taxonomy_panel(axis, summary_panel_lines(store, style), style)
+        lines = cover_lines(store, summary_panel_lines(store, style))
+        text = _taxonomy_panel(axis, lines, style)
         figure.canvas.draw()
         assert text is not None, "_taxonomy_panel must return its artist so its extent can be measured"
         extent = text.get_window_extent(renderer=figure.canvas.get_renderer())
         axis_extent = axis.get_window_extent()
         plt.close(figure)
-        assert extent.x1 <= axis_extent.x1 + 1.0, "the summary overruns the right edge of its axis"
+        assert extent.x1 <= axis_extent.x1 + 1.0, "the cover overruns the right edge of its axis"
+
+
+class TestTheConsensusAlignmentBlock:
+    """How the consensus transcript was aligned, and how much to trust its timings."""
+
+    def test_it_reports_the_stored_provenance_and_word_uncertainty(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """Every figure the block prints is read straight off the seeded store, not recomputed."""
+        from senselab.audio.workflows.triage.nodes.figure import consensus_alignment_lines
+
+        seed_preprocess_store(
+            store,
+            words=[
+                {"text": "hello"},
+                {"text": "world", "timings": {"asr_crisperwhisper": (3.0, 3.5), "asr_qwen": (3.0, 3.5)}},
+            ],
+        )
+        measurement = next(
+            e for e in store.entities("measurement") if e.attributes.get("name") == "consensus_transcript"
+        )
+        attrs = measurement.attributes
+
+        lines = consensus_alignment_lines(store)
+
+        assert lines[0] == "CONSENSUS ALIGNMENT"
+        assert (
+            lines[1] == f"  {attrs['algorithm']} · {attrs['n_sources']} sources · reference {attrs['reference_source']}"
+        )
+        for row, line in zip(attrs["sources"], lines[2 : 2 + len(attrs["sources"])]):
+            assert line == f"    {row['name']}: {row['n_words']} words ({row['timestamp_source']})"
+        outcomes = attrs["outcomes"]
+        offset = 2 + len(attrs["sources"])
+        assert lines[offset] == (
+            f"  outcomes: agreement {outcomes['agreement']} (100%)"
+            f"  variant {outcomes['variant']} (0%)"
+            f"  insertion {outcomes['insertion']} (0%)"
+            f"  of {attrs['n_words']}"
+        )
+        assert lines[offset + 1] == (
+            f"  time fit: {attrs['n_words_time_shifted']} words shifted, "
+            f"max shift {float(attrs['max_time_shift_s']):.2f}s"
+        )
+        # "hello" reads identically at its own extent on both sources (overlaps); "world" is timed
+        # at 3.0-3.5s by both sources while its derived extent lands near 0.9-1.2s (off-source).
+        assert lines[offset + 2] == "  uncertainty: sum 2.30s · median 1.15s · >1s 1 words · off-source extent 1/2"
+
+    def test_it_states_absence_when_no_consensus_reached_the_store(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """A single-recognizer run raises before any consensus_transcript reaches the store."""
+        from senselab.audio.workflows.triage.nodes.figure import consensus_alignment_lines
+
+        seed_preprocess_store(store, yamnet_labels=[["Speech"]])
+
+        lines = consensus_alignment_lines(store)
+
+        assert lines[0] == "CONSENSUS ALIGNMENT"
+        assert lines[1].startswith("  absent:"), "an absent consensus must be stated, not silenced"
+        assert "0" not in lines[1], "an absence is not the same fact as a zero count"
+
+    def test_a_word_off_its_own_sources_is_counted_and_one_on_them_is_not(
+        self, store: ProvStore, seed_preprocess_store: Callable[..., None]
+    ) -> None:
+        """The fit can place a word where none of its own recognizers put it; count only that one."""
+        from senselab.audio.workflows.triage.nodes.figure import _consensus_word_stats
+
+        seed_preprocess_store(
+            store,
+            words=[
+                {"text": "inside"},
+                {"text": "outside", "timings": {"asr_crisperwhisper": (3.0, 3.5), "asr_qwen": (3.0, 3.5)}},
+            ],
+        )
+
+        stats = _consensus_word_stats(store)
+
+        assert stats is not None
+        assert stats["n_words"] == 2
+        assert stats["n_off_source"] == 1, "exactly the word timed far from its own sources is counted"
