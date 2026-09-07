@@ -19,10 +19,11 @@ import senselab.audio.tasks.speech_to_text.crisperwhisper as cw
 from senselab.audio.data_structures import Audio
 from senselab.audio.tasks.preprocessing import downmix_audios_to_mono, resample_audios
 from senselab.utils.data_structures import HFModel
+from senselab.utils.subprocess_venv import provisioned_venv_dirs
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 FIXTURE_WAV = REPO_ROOT / "src" / "tests" / "data_for_testing" / "audio_48khz_mono_16bits.wav"
-CRISPER_VENV = Path.home() / ".cache" / "senselab" / "venvs" / "crisperwhisper"
+CRISPER_VENVS = provisioned_venv_dirs("crisperwhisper")
 
 
 def test_worker_output_maps_to_scriptlines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,7 +116,7 @@ def test_backend_selection_is_platform_appropriate() -> None:
         assert cw._CRISPER_BACKEND == "transformers"
 
 
-@pytest.mark.skipif(not CRISPER_VENV.exists(), reason=f"crisperwhisper venv not provisioned at {CRISPER_VENV}")
+@pytest.mark.skipif(not CRISPER_VENVS, reason="crisperwhisper venv not provisioned for this host's device key")
 def test_crisperwhisper_transcribes_when_venv_present() -> None:
     """Integration: real model yields verbatim text + word-level chunks (shape only)."""
     audio = Audio(filepath=str(FIXTURE_WAV))

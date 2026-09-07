@@ -123,6 +123,26 @@ def _cache_dir_path() -> Path:
     return Path(os.environ.get("SENSELAB_VENV_CACHE", str(_DEFAULT_CACHE_DIR)))
 
 
+def provisioned_venv_dirs(name: str) -> list[Path]:
+    """Every completed venv for one backend, across whatever device keys exist.
+
+    A backend whose install depends on the device lives at ``<name>-<tag>``, so a caller asking
+    whether it is provisioned cannot name the directory in advance. Only directories carrying the
+    completion marker count; a half-built tree is not provisioned.
+
+    Args:
+        name: The backend's venv name, as passed to :func:`ensure_venv`.
+
+    Returns:
+        The matching directories, sorted, empty when the backend has never been built here.
+    """
+    cache = _cache_dir_path()
+    if not cache.is_dir():
+        return []
+    candidates = [cache / name, *sorted(cache.glob(f"{name}-*"))]
+    return [directory for directory in candidates if (directory / ".senselab-installed").is_file()]
+
+
 def _cache_dir() -> Path:
     """Return the directory for cached subprocess venvs, creating it if missing."""
     cache = _cache_dir_path()
