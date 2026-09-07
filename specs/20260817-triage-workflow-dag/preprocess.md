@@ -226,6 +226,47 @@ reads it and each recognizer's own transcript; [`REDACT`](redact.md) reads it an
   nothing here invents, extends or merges words across recognizers beyond what the alignment
   produces.
 
+### Three token normalisers, not one
+
+Three functions each fold a raw token to a comparison key, and they deliberately disagree on
+brackets and internal hyphens. None of the three is a stand-in for another; do not consolidate
+them.
+
+| function | job | keeps `[]` | keeps internal `-` | `[UM]` → | `d-` → | `a-b` → |
+| --- | --- | --- | --- | --- | --- | --- |
+| `harmonize.normalise_token` | the alignment key that `align_sources` groups a column's members by (`consensus.py:285`) | no | no | `um` | `d` | `ab` |
+| `consensus.vocabulary_key` | the onomatopoeic lookup: normalises both a raw token and every `words.onomatopoeic_tokens` config entry before comparing them (`consensus.py:177`, `preprocess.py:1448`) | yes | yes | `[um]` | `d-` | `a-b` |
+| `speech._norm_token` | the PII haystack key `_locate` compares a finding's tokens against the scanned text's tokens with (`speech.py:183-190`) | no | yes | `um` | `d-` | `a-b` |
+
+Each difference is load-bearing:
+
+- **`normalise_token` drops brackets** so `[COUGH]` and `cough` land in the same alignment column
+  — the mechanism the bracket-override count (`bracket_overrides_n`) depends on, above. Collapsing
+  this into `vocabulary_key` or `_norm_token` would not change their own call sites, but reusing
+  either of *them* here would stop `[COUGH]`/`cough` from aligning at all.
+- **`normalise_token` drops internal hyphens** so a truncated recognizer fragment (`d-`, a real
+  stammer — see "The consensus transcript" above) has the same alignment key as a bare `d`:
+  `normalise_token("d-") == normalise_token("d") == "d"`. A source that renders the same disfluency
+  without the trailing marker lands in the same column as one that keeps it, instead of opening a
+  spurious insertion.
+- **`vocabulary_key` keeps both `[]` and internal `-`** because its whole job is normalising a raw
+  token and a `words.onomatopoeic_tokens` config entry onto the *same* key by stripping only edge
+  punctuation (its docstring's own scope), nothing internal — a hyphenated entry such as
+  `uh-huh-huh` (the onomatopoeic example above) keeps its shape rather than being folded into
+  whatever `normalise_token` would make of it elsewhere. It never actually receives a bracketed
+  token in the current call path (`bracketed_form` checks `is_bracketed` first and only reaches
+  `vocabulary_key` on the branch that failed it), so the bracket column is inert today, not
+  exercised — collapsing it into `normalise_token` regardless would still be wrong the day a second
+  caller reaches `vocabulary_key` without that guard.
+- **`_norm_token` drops brackets, like `normalise_token`,** so a bracketed marker in the transcript
+  (`[UM]`) still matches an unbracketed PII finding (`um`) — the mechanism §6.3 of
+  `consensus-asr-redesign.md` (`:855`) documents for the redaction scan.
+- **`_norm_token` keeps internal hyphens, unlike `normalise_token`,** because it is comparing a
+  detector's finding text against the transcript token-for-token to relocate it, not deciding
+  whether two recognizers meant the same word. It has no need for `normalise_token`'s
+  cross-recognizer tolerance and every reason not to import it: folding a hyphenated token onto its
+  unhyphenated form here would match it against a token the finding never named.
+
 ## `residual` — background residual and its classification (off by default)
 
 `residual.enabled` (default `false`; ~22 s of GPU work per recording): `FRCRN_SE_16K`
