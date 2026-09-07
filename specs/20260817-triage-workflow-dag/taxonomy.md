@@ -28,7 +28,7 @@ classification that called itself a prediction would invite being scored as one.
 | `yamnet_windows` | PREPROCESS | speech-family and airway-family labels in the window sets |
 | `ast_windows` | PREPROCESS | the same families, on AST's 10.24 s grid |
 | `hear_windows` | PREPROCESS | cough and breath windows |
-| `consensus_transcript`, `word` elements | PREPROCESS | lexical evidence for the speech kind |
+| `consensus_transcript`, its lexical `word` elements | PREPROCESS | lexical evidence for the speech kind |
 | `phonation_spans` | PREPROCESS | sustained-phonation and glide spans with their `duration_s` |
 
 **Hints are not an input.** TAXONOMY classifies from PREPROCESS's stored evidence alone. A hint may force a branch to run
@@ -51,7 +51,7 @@ Two evidence lines, both read from the store:
 | line | evidence |
 | --- | --- |
 | acoustic | a window whose set contains a member of `taxonomy.speech_labels`, from `yamnet_windows` or `ast_windows` |
-| lexical | `word` entities from the consensus transcript. **Bracketed and onomatopoeic events are not words** and carry no lexical evidence — see [`preprocess.md`](preprocess.md) |
+| lexical | the consensus transcript's `word` entities with `bracketed: false`. **A bracketed word carries no lexical evidence** — see [`preprocess.md`](preprocess.md) |
 
 The consensus transcript is the authoritative ASR product. When its lexical line is available, speech
 is present when its word count reaches the lexical floor and absent when it does not. The acoustic line

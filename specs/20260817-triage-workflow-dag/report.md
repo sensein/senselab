@@ -43,10 +43,10 @@ On a single shared time axis, one row each:
 | `phonation_spans` and glides, with `duration_s` and production mode | PREPROCESS |
 | YAMNet as a fixed-row top-K raster of thresholded decision scores; HeAR as a fixed eight-row raster of every raw independent presence probability over its native 2 s grid. AST is a raster only when its stored hop is under 8 s, otherwise it is a coarse-window summary in Supporting Evidence | PREPROCESS |
 | speech spans with their speaker attribution and any `nontarget` marking | SPEECH |
-| consensus ASR words — a compact multi-row token lane: one bar per fused consensus word at its own extent with the authoritative word text drawn on a light confidence-ordered fill, never as a y-tick. The colors are presentation only; the authoritative numeric confidence remains in JSON. | PREPROCESS |
+| consensus ASR words — a compact multi-row token lane: one bar per consensus word at its derived extent, in stream order, with the word's text drawn **bold when every source produced it**, as `a/b` when the sources read it differently, and bare when one source alone did, on a light fill ordered by `agreement`, never as a y-tick. The colors and weights are presentation only; `outcome`, `agreement`, every source's reading and timing remain in JSON. | PREPROCESS |
 | airway-labelled spans with their compact decision annotations, plus a separate fixed eight-row HeAR raster when AIRWAY re-evaluated a candidate span | AIRWAY |
 | voiced runs and their extents | VOICE |
-| redacted transcript words, when PII marking changed at least one consensus word — a parallel compact token lane whose placeholders show exactly what a released transcript would replace | REDACT |
+| redacted transcript words, when PII marking changed at least one consensus word — a parallel compact token lane whose placeholders show exactly what a released transcript would replace; a placeholder is never bold and takes the neutral fill | REDACT |
 | spectrogram | the conditioned stream |
 
 The waveform, the envelope and the envelope spans are three readings of one signal and share one
@@ -87,8 +87,12 @@ The final PDF page, the foot of the PNG. One block per step:
   triage axis says.
 
 **The summary distinguishes evidence from release presentation.** The consensus lane and
-`evidence.consensus_transcript_tokens` preserve PREPROCESS's authoritative words. The separate
-redacted lane and `evidence.redacted_transcript_tokens` apply the PII marking. The summary remains
+`evidence.consensus_transcript_tokens` preserve PREPROCESS's authoritative words — each token
+carries `outcome`, `sources`, `readings`, `timings`, `variants`, `agreement`, the derived `timing`
+and `temporal_uncertainty_s`. `transcript.text` is the plain join the PII scan read;
+`transcript.marked_text` is the same stream with agreement in `**bold**` and a variant as `a/b`,
+and it is what the summary pages print. The separate redacted lane and
+`evidence.redacted_transcript_tokens` apply the PII marking. The summary remains
 sensitive because its consensus text and provenance identifiers can identify the recording; it is not
 a release artifact. Both products carry element ids, which are a join key back into the store.
 

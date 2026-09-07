@@ -17,8 +17,8 @@ What it reads from the store:
 
 | element | author | used for |
 | --- | --- | --- |
-| `consensus_transcript` and its `word` elements | PREPROCESS | the transcript, its edges, the agreement behind each word, and **the only text the PII scan reads** |
-| `asr_crisperwhisper`, `asr_qwen` words | PREPROCESS | the per-recognizer evidence the consensus was fused from |
+| `consensus_transcript` and its `word` elements | PREPROCESS | the transcript, its edges, the outcome behind each word, and the first text the PII scan reads |
+| the `asr_hypothesis` measurements (`asr_crisperwhisper`, `asr_qwen`) | PREPROCESS | the per-recognizer evidence the consensus was aligned from; each transcript is a PII haystack of its own |
 | `yamnet_windows` | PREPROCESS | `Speech` corroboration per span |
 | `squim` | PREPROCESS | per-span quality and the speech test |
 | `energy_envelope`, `silence` | PREPROCESS | the local floor |
@@ -64,17 +64,28 @@ conditioned on what AIRWAY found.
 ## 1. Transcript
 
 - **The consensus transcript is the transcript.** PREPROCESS produced it with
-  `fuse_consensus_words`; this branch reads it and does not re-fuse, re-clean or re-decode.
-- **Per-word agreement** between the recognizers is the word's confidence. It bounds confidence from
-  above and is reported as agreement, never as correctness.
-- **Edges** are the consensus word timings. Their temporal confidence and timing-source count travel
-  with the word; this branch does not replace them with a second aligner.
-- **Bracketed and onomatopoeic events are not words.** PREPROCESS wrote them as `event` elements, so
-  nothing here counts them toward word totals, span extents, or the PII scan's subject.
+  `triage.consensus.align_sources`; this branch reads it and does not re-fuse, re-clean or re-decode.
+- **Per-word `outcome` and `agreement`** are the record of what the recognizers did: `agreement`
+  when every source produced the word, `variant` when they read it differently, `insertion` when
+  only some produced it. Agreement is a count ratio, never correctness.
+- **Edges** are the derived consensus word timings; each source's own timing and the word's
+  `temporal_uncertainty_s` travel with it. This branch does not replace them with a second aligner.
+- **Bracketed words are not lexical.** `[COUGH]`, `[UM]` are in the stream with `bracketed: true`;
+  nothing here counts them toward word totals or span extents. They stay in the PII haystack so
+  that a finding's position in the scanned text maps back to the right entity.
 
-**A word carried by one recognizer alone is not a consensus word**, and a single-recognizer word is
-the fabrication evidence this branch records — a shared hallucination across two independent
-recognizers is a different and much rarer event. Each word carries which recognizers produced it.
+**A word carried by one recognizer alone is an insertion, not a consensus word**, and a lexical
+insertion is the fabrication evidence this branch records — a shared hallucination across two
+independent recognizers is a different and much rarer event. Each word carries which sources
+produced it.
+
+**The PII scan reads several texts in one call**: the consensus text (the plain join of every
+word's `text`) and each recognizer's own transcript from its `asr_hypothesis` measurement. A name
+only one recognizer heard — the reading a variant does not display, or an insertion — is located
+against that source's `readings` in stream order and marks the consensus word it lands on. The
+finding's extent is the hull of the covered words' per-source timings, so the cut covers every
+place a recognizer heard the name; a `(category, first, last)` raised by two haystacks is one
+finding.
 
 A recording whose non-lexical content is a sustained production reaches [`VOICE`](branch-voice.md)
 through [`routing.md`](routing.md); this branch does not defend against it with an energy test.
@@ -85,7 +96,8 @@ PII scan is written on that path, no REDACT step runs, and the file's release ax
 
 ## 2. Speech spans
 
-Consensus words are grouped into spans by their timings. A span is the extent of a run of words.
+Lexical consensus words are grouped into spans by their derived timings. A span is the extent of a
+run of words; a bracketed word does not extend one.
 
 ## 3. Corroboration
 

@@ -199,7 +199,8 @@ output rather than computing its own.
 
 ASR spans -- owner-directed this session, the fourth and lowest-priority source. Unlike the three
 above, this one measures nothing and needs no floor or gate: the consensus transcript's own word
-timings (fuse_consensus_words, see ``_consensus`` below) are the evidence directly -- a recognizer
+timings (the lexical words of ``consensus_transcript``; a bracketed word proposes nothing) are the
+evidence directly -- a recognizer
 transcribing a stretch as speech already says something an envelope or a spectral-shape measure
 would otherwise have to infer from the acoustics. Consecutive consensus words are grouped into runs
 by speech.word_gap_ms, the identical mechanism and the identical config key SPEECH already uses for
@@ -535,8 +536,9 @@ Word-level vocabularies read off the consensus transcript.
 words.onomatopoeic_tokens -- the vocabulary of cough- and breath-like renderings a recognizer emits
 as ordinary words ("khh", "ahem", "uh-huh-huh"). Null: it is owed the corpus it was drawn from, and
 seeding it from three remembered examples would be a vocabulary nobody fitted. While null, only
-already-bracketed tokens become events, and an onomatopoeic rendering is counted as a word -- which
-is the honest state, not a safe default.
+already-bracketed tokens become bracketed words, and an onomatopoeic rendering is counted as a
+lexical word -- which is the honest state, not a safe default. A token in the vocabulary becomes a
+bracketed word (`khh` -> `[KHH]`) with the raw token kept in the word's `readings`.
 
 ## routing
 
