@@ -123,3 +123,14 @@ The `times` comprehension in `harmonize_transcripts` once read a bare `i` that r
 the enclosing loop had left behind, so every model reported the last member's span. The lattice
 still looked like a lattice while placing one word in two columns and losing another. The test
 `test_each_model_reports_its_own_span_in_a_slot` holds this.
+
+## `normalise_token` decides agreement, never surface
+
+`normalise_token` (casefold; keep alphanumerics and the apostrophe) is the key two readings are
+compared on, and nothing else. Models differ in casing and punctuation convention — `Is,` against
+`is`, `[UM]` against `um` — and those differences are not transcription disputes, so the key drops
+them. What a model actually said stays on the slot (`TranscriptSlot.words`) and, in the triage
+consensus, in `ConsensusWord.readings`; the key never replaces it. The function was `_normalise_token`
+and private to `harmonize.py` until the triage consensus (`triage/consensus.py`) needed the same key
+for its column classification; it is public so that the aligner and the consensus cannot drift apart
+on what counts as the same token.
