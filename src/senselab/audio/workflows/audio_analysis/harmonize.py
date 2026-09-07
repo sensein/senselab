@@ -35,6 +35,7 @@ __all__ = [
     "TranscriptHarmonization",
     "TranscriptSlot",
     "harmonize_transcripts",
+    "normalise_token",
     "SpeakerHarmonization",
     "centroid_assignment",
     "harmonize_from_diarization",
@@ -365,12 +366,15 @@ def harmonize_from_diarization(
 # ── H3: a common word space across ASR models ────────────────────────────────
 
 
-def _normalise_token(text: str) -> str:
-    """Casefold and strip punctuation, for deciding *agreement* only.
+def normalise_token(text: str) -> str:
+    """The key two readings are compared on: casefolded, keeping alphanumerics and the apostrophe.
 
-    Models differ in casing and punctuation convention, and those differences are not
-    transcription disputes. Normalisation therefore decides whether two readings agree; it never
-    replaces what a model actually said, which stays on the slot.
+    Args:
+        text: A token as a recognizer produced it.
+
+    Returns:
+        The key. Brackets and punctuation drop, so ``[UM]``, ``um`` and ``Um.`` share one key; a
+        token of punctuation alone yields ``""``.
     """
     return "".join(ch for ch in str(text).casefold() if ch.isalnum() or ch == "'")
 
@@ -512,7 +516,7 @@ def harmonize_transcripts(
         return TranscriptHarmonization(slots=[], gap_rate={}, insertion_rate={}, reference=None)
 
     words = {m: [(float(s), float(e), str(t)) for s, e, t in by_model[m]] for m in models}
-    tokens = {m: [_normalise_token(t) for _, _, t in words[m]] for m in models}
+    tokens = {m: [normalise_token(t) for _, _, t in words[m]] for m in models}
 
     # Median token count, so neither the longest nor the shortest transcript anchors the space.
     ordered = sorted(models, key=lambda m: len(tokens[m]))
