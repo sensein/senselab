@@ -1,5 +1,6 @@
 """PREPROCESS v2: every whole-file model here, sets not winners, phonation spans, bracket-aware words."""
 
+import json
 from pathlib import Path
 from typing import Any, Callable
 
@@ -796,6 +797,9 @@ class TestThePackagedConfigStillRunsEveryClassifier:
             "ast_windows",
             "hear_windows",
             "phonation_tracks",
+            "residual",
+            "residual_yamnet",
+            "residual_ast",
         }
         for name in ("span_hear", "span_yamnet"):
             windows = find_measurements(store, name)
@@ -1451,3 +1455,385 @@ class TestAnUnexpectedBlockFailureIsNotAbsorbed:
         # `gammatone` does not touch the spectrogram at all.
         assert live_entities(store, "span")
         assert find_measurement(store, "gammatone") is not None
+
+
+def _absent_map(store: ProvStore) -> dict[str, str]:
+    """PREPROCESS's own verdict, as the ``absent`` name -> reason mapping it recorded."""
+    entity = next(
+        e for e in store.entities("verdict") if e.attributes["node"] == "PREPROCESS" and not store.is_invalidated(e.id)
+    )
+    return dict(entity.attributes["absent"])
+
+
+def _fake_enhance(scale: float, noise_scale: float = 0.0, seed: int = 0) -> Callable[..., list]:
+    """A stand-in FRCRN: ``scale * plain`` plus optional independent noise, carrying clearvoice provenance."""
+
+    def _enhance(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+        x = audios[0].waveform
+        y = x * scale
+        if noise_scale:
+            rng = np.random.default_rng(seed)
+            noise = rng.standard_normal(x.shape[-1]) * noise_scale
+            y = y + torch.as_tensor(noise, dtype=y.dtype).unsqueeze(0)
+        enhanced = Audio(waveform=y, sampling_rate=audios[0].sampling_rate)
+        enhanced.metadata["clearvoice"] = {"model": "alibabasglab/FRCRN_SE_16K", "commit": "b" * 40}
+        return [enhanced]
+
+    return _enhance
+
+
+class TestResidualAlignmentAndGain:
+    """The sign conventions the residual subtraction and its gates depend on, pinned synthetically."""
+
+    def test_lag_and_gain_cancel_a_delayed_scaled_copy(self) -> None:
+        """A signal that is purely a delayed, scaled copy of the reference cancels to ~zero."""
+        sr = 16000
+        n = sr * 2
+        rng = np.random.default_rng(0)
+        ref = rng.standard_normal(n)
+        true_lag = 37
+        true_scale = 0.6
+        sig = np.zeros(n)
+        sig[true_lag:] = true_scale * ref[: n - true_lag]
+
+        lag = preprocess_module._find_lag(ref, sig, sr, max_lag_ms=200.0)
+        assert lag == true_lag
+
+        ref_aligned, sig_aligned = preprocess_module._align(ref, sig, lag)
+        gain = preprocess_module._fit_gain(ref_aligned, sig_aligned)
+        assert gain == pytest.approx(1.0 / true_scale, rel=1e-6)
+
+        residual = ref_aligned - gain * sig_aligned
+        assert np.abs(residual).max() < 1e-8
+
+    def test_lag_sign_flips_when_the_arguments_are_swapped(self) -> None:
+        """``sig`` arriving later than ``ref`` is the positive convention; swapping negates it."""
+        sr = 16000
+        n = sr * 2
+        rng = np.random.default_rng(1)
+        ref = rng.standard_normal(n)
+        sig = np.zeros(n)
+        sig[25:] = 0.8 * ref[: n - 25]
+
+        forward = preprocess_module._find_lag(ref, sig, sr, max_lag_ms=200.0)
+        backward = preprocess_module._find_lag(sig, ref, sr, max_lag_ms=200.0)
+        assert forward == 25
+        assert backward == -forward
+
+    def test_align_drops_the_signals_prefix_on_a_positive_lag(self) -> None:
+        """A positive lag trims ``sig``'s head, not ``ref``'s."""
+        ref = np.arange(10.0)
+        sig = np.arange(10.0) + 100.0
+        aligned_ref, aligned_sig = preprocess_module._align(ref, sig, 3)
+        assert list(aligned_sig) == list(sig[3:])
+        assert list(aligned_ref) == list(ref[: len(aligned_sig)])
+
+    def test_align_drops_the_references_prefix_on_a_negative_lag(self) -> None:
+        """A negative lag trims ``ref``'s head, not ``sig``'s."""
+        ref = np.arange(10.0)
+        sig = np.arange(10.0) + 100.0
+        aligned_ref, aligned_sig = preprocess_module._align(ref, sig, -3)
+        assert list(aligned_ref) == list(ref[3:])
+        assert list(aligned_sig) == list(sig[: len(aligned_ref)])
+
+    def test_fit_gain_recovers_a_known_scale(self) -> None:
+        """``g = <ref, sig> / <sig, sig>`` recovers the exact scale on a noiseless pair."""
+        rng = np.random.default_rng(2)
+        sig = rng.standard_normal(1000)
+        ref = 0.25 * sig
+        assert preprocess_module._fit_gain(ref, sig) == pytest.approx(0.25, rel=1e-9)
+
+    def test_fit_gain_is_zero_when_sig_carries_no_energy(self) -> None:
+        """A silent ``sig`` cannot be fit a gain against; the denominator is guarded, not divided by."""
+        assert preprocess_module._fit_gain(np.array([1.0, 2.0, 3.0]), np.zeros(3)) == 0.0
+
+
+class TestResidualBandsAndSpeechOverlap:
+    """The band split, interval union and speech-overlap math the residual's summaries depend on."""
+
+    def test_band_fractions_sum_to_one_and_locate_a_pure_tone(self) -> None:
+        """A 300 Hz tone's energy lands almost entirely in the 200-1000 Hz band."""
+        sr = 16000
+        t = np.arange(sr * 2) / sr
+        x = np.sin(2 * np.pi * 300.0 * t)
+        bands = [(0.0, 200.0), (200.0, 1000.0), (1000.0, 4000.0), (4000.0, 8000.0)]
+        fractions = preprocess_module._band_energy_fractions(x, sr, bands)
+        assert sum(fractions.values()) == pytest.approx(1.0, abs=1e-6)
+        assert fractions["200_1000"] > 0.99
+
+    def test_band_fractions_of_an_empty_signal_are_zero(self) -> None:
+        """A zero-length signal reports zero in every band rather than dividing by zero."""
+        assert preprocess_module._band_energy_fractions(np.array([]), 16000, [(0.0, 200.0)]) == {"0_200": 0.0}
+
+    def test_merge_intervals_unions_overlapping_spans(self) -> None:
+        """Two overlapping intervals merge into one; a disjoint one stays separate."""
+        merged = preprocess_module._merge_intervals([(0.0, 1.0), (0.5, 1.5), (2.0, 3.0)])
+        assert merged == [(0.0, 1.5), (2.0, 3.0)]
+
+    def test_merge_intervals_drops_degenerate_spans(self) -> None:
+        """A span whose end does not exceed its start names nothing and is dropped."""
+        assert preprocess_module._merge_intervals([(1.0, 1.0), (2.0, 1.5)]) == []
+
+    def test_merge_intervals_of_nothing_is_nothing(self) -> None:
+        """An empty input merges to an empty output."""
+        assert preprocess_module._merge_intervals([]) == []
+
+    def test_a_window_fully_inside_a_region_is_full_overlap(self) -> None:
+        """A window wholly contained in one region has overlap 1.0."""
+        assert preprocess_module._interval_overlap_fraction(2.0, 3.0, [(0.0, 10.0)]) == pytest.approx(1.0)
+
+    def test_a_window_partly_inside_a_region_is_partial_overlap(self) -> None:
+        """A window half inside, half outside a region has overlap 0.5."""
+        assert preprocess_module._interval_overlap_fraction(2.0, 3.0, [(2.5, 10.0)]) == pytest.approx(0.5)
+
+    def test_a_window_outside_every_region_is_zero_overlap(self) -> None:
+        """A window touching no region has overlap 0.0."""
+        assert preprocess_module._interval_overlap_fraction(0.0, 1.0, [(5.0, 6.0)]) == 0.0
+
+    def test_a_zero_duration_window_is_zero_overlap(self) -> None:
+        """A degenerate window is zero overlap rather than a division by zero."""
+        assert preprocess_module._interval_overlap_fraction(1.0, 1.0, [(0.0, 10.0)]) == 0.0
+
+    def test_pooled_label_scores_report_mean_max_and_count(self) -> None:
+        """The mean, max and window count pool correctly over two windows sharing one label."""
+        windows = [window(0.0, 1.0, {"Buzz": 0.2}), window(1.0, 2.0, {"Buzz": 0.6})]
+        pooled = preprocess_module._pooled_label_scores(windows)
+        assert pooled["Buzz"]["mean_score"] == pytest.approx(0.4)
+        assert pooled["Buzz"]["max_score"] == pytest.approx(0.6)
+        assert pooled["Buzz"]["n_windows"] == 2
+
+
+class TestResidualStep:
+    """PREPROCESS's background-residual block: off by default, gated on retained energy, classified."""
+
+    def test_disabled_by_default_is_absent_and_harmless(
+        self,
+        store: ProvStore,
+        config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The packaged config never runs FRCRN, and every other derivative is untouched by that."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch)
+        result = preprocess(store, _audio(tmp_path), config, run_dir=tmp_path)
+        assert {"residual", "residual_yamnet", "residual_ast"} <= set(result.absent)
+        assert find_measurement(store, "residual") is None
+        assert find_measurement(store, "residual_yamnet_scores") is None
+        assert find_measurement(store, "level") is not None
+        assert _absent_map(store)["residual"] == "ValueError: residual.enabled is false"
+
+    def test_a_silent_enhancement_output_gates_absent_on_the_primary_gate(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FRCRN nulling its input trips the enhanced-output-energy gate, not the residual-energy one.
+
+        A silent enhancement output would also leave the residual carrying ~100% of the input's
+        energy, but ``residual-without-speech-2026-09-08.md`` found the residual-energy bound alone
+        misses most of the nulled cases it measured, so the primary gate on the enhanced output's
+        own energy is checked -- and must fire -- first.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.0))
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        reason = _absent_map(store)["residual"]
+        assert "nulled its input" in reason
+        assert "above the configured maximum" not in reason
+        assert find_measurement(store, "residual") is None
+
+    def test_an_uncorrelated_enhancement_output_gates_absent_on_the_secondary_maximum(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An enhanced output that carries real energy but explains none of the input still gates.
+
+        Above the primary gate's floor (``enhanced_energy_fraction`` >= 0.50) but uncorrelated with
+        the input, so the least-squares fit cannot cancel it: the residual keeps ~100% of the
+        input's own energy, and it is the secondary bound that catches this case.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+
+        def _uncorrelated_enhance(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+            x = audios[0].waveform
+            rng = np.random.default_rng(7)
+            noise = rng.standard_normal(x.shape[-1])
+            input_energy = float(torch.sum(x**2))
+            scale = float(np.sqrt(0.6 * input_energy / float(np.sum(noise**2))))
+            y = torch.as_tensor(noise * scale, dtype=x.dtype).unsqueeze(0)
+            enhanced = Audio(waveform=y, sampling_rate=audios[0].sampling_rate)
+            enhanced.metadata["clearvoice"] = {"model": "alibabasglab/FRCRN_SE_16K", "commit": "b" * 40}
+            return [enhanced]
+
+        _stub_models(monkeypatch, enhance=_uncorrelated_enhance)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        reason = _absent_map(store)["residual"]
+        assert "above the configured maximum" in reason
+        assert find_measurement(store, "residual") is None
+
+    def test_an_identical_enhancement_output_gates_absent_below_the_minimum(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FRCRN reproducing the input exactly absorbs everything: nothing left to measure."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(1.0))
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        reason = _absent_map(store)["residual"]
+        assert "below the configured minimum" in reason
+        assert find_measurement(store, "residual") is None
+
+    def test_frcrn_raising_gates_absent_rather_than_failing_the_node(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An unavailable model is a gate PREPROCESS survives, not a hard failure."""
+        _seed_admit(store, tmp_path, wav_writer)
+
+        def _broken(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+            raise RuntimeError("worker timed out")
+
+        _stub_models(monkeypatch, enhance=_broken)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        reason = _absent_map(store)["residual"]
+        assert "FRCRN enhancement unavailable" in reason
+        assert "RuntimeError" in reason
+        assert find_measurement(store, "residual") is None
+
+    def test_a_partial_residual_writes_the_stream_measurement_and_both_summaries(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A residual within the configured bounds is written, classified, and its windows tagged.
+
+        Excluding the speech-overlapping windows is the check for the enhancement model's own
+        speech-shaped artefact: ``Speech`` only ever appears where speech overlapped, and the
+        genuinely background ``Buzz`` label's mean score rises once those windows are excluded.
+        """
+        _seed_admit(store, tmp_path, wav_writer)
+        yamnet_windows = [
+            window(0.0, 0.96, {"Speech": 0.9, "Buzz": 0.05}),
+            window(0.48, 1.44, {"Speech": 0.8, "Buzz": 0.05}),
+            window(2.0, 2.96, {"Buzz": 0.6}),
+        ]
+        _stub_models(
+            monkeypatch,
+            yamnet=yamnet_windows,
+            crisper=_line("hello world"),
+            qwen=_line("hello world"),
+            enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
+        )
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+
+        residual_stream = next(
+            e
+            for e in store.entities("stream")
+            if e.attributes.get("name") == "residual" and not store.is_invalidated(e.id)
+        )
+        assert (tmp_path / residual_stream.attributes["path"]).exists()
+
+        measurement = find_measurement(store, "residual")
+        assert measurement is not None
+        attrs = measurement.attributes
+        assert attrs["model_id"] == "alibabasglab/FRCRN_SE_16K"
+        assert attrs["commit_sha"] == "b" * 40
+        assert attrs["lag_samples"] == 0
+        assert attrs["enhanced_energy_fraction"] >= 0.50
+        assert 0.005 <= attrs["energy_fraction"] <= 0.90
+        assert sum(attrs["bands"].values()) == pytest.approx(1.0, abs=1e-4)
+        assert attrs["speech_present"] is True
+        assert attrs["n_consensus_words"] == 2
+        assert attrs["speech_coverage_fraction"] is not None
+        assert attrs["speech_coverage_fraction"] > 0.0
+
+        scores = find_measurement(store, "residual_yamnet_scores")
+        assert scores is not None
+        assert scores.attributes["speech_overlap_source"] == "consensus_transcript"
+        windows = json.loads((tmp_path / scores.attributes["path"]).read_text())
+        assert windows[0]["speech_overlap"] > 0.0
+        assert windows[1]["speech_overlap"] > 0.0
+        assert windows[2]["speech_overlap"] == 0.0
+
+        all_summary = find_measurement(store, "residual_yamnet_summary_all")
+        free_summary = find_measurement(store, "residual_yamnet_summary_speech_free")
+        assert all_summary is not None
+        assert free_summary is not None
+        assert all_summary.attributes["n_windows"] == 3
+        assert free_summary.attributes["n_windows"] == 1
+        assert "Speech" in all_summary.attributes["labels"]
+        assert "Speech" not in free_summary.attributes["labels"]
+        buzz_all = all_summary.attributes["labels"]["Buzz"]["mean_score"]
+        buzz_free = free_summary.attributes["labels"]["Buzz"]["mean_score"]
+        assert buzz_free > buzz_all
+
+    def test_speech_present_is_false_and_unmeasured_without_any_consensus(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No recognizer at all leaves the precondition unmeasured, not falsely zero."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(monkeypatch, enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1))
+
+        def _broken_transcribe(audios: list, model: Any, **kwargs: Any) -> list:  # noqa: ANN401
+            raise LookupError("no recognizer available")
+
+        monkeypatch.setattr(preprocess_module, "transcribe_audios", _broken_transcribe)
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        absent = _absent_map(store)
+        assert "consensus_transcript" in absent
+        measurement = find_measurement(store, "residual")
+        assert measurement is not None
+        assert measurement.attributes["speech_present"] is False
+        assert measurement.attributes["n_consensus_words"] is None
+        assert measurement.attributes["speech_coverage_fraction"] is None
+        scores = find_measurement(store, "residual_yamnet_scores")
+        assert scores is not None
+        assert scores.attributes["speech_overlap_source"] == "amplitude_spans"
+
+    def test_speech_present_is_false_but_measured_when_consensus_has_no_lexical_words(
+        self,
+        store: ProvStore,
+        residual_config: TriageConfig,
+        tmp_path: Path,
+        wav_writer: Callable[..., Path],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A cough-only consensus is a measured 0, not the same absence as no consensus at all."""
+        _seed_admit(store, tmp_path, wav_writer)
+        _stub_models(
+            monkeypatch,
+            crisper=_line("[cough]"),
+            qwen=_line("[cough]"),
+            enhance=_fake_enhance(0.5, noise_scale=0.05, seed=1),
+        )
+        preprocess(store, _audio(tmp_path), residual_config, run_dir=tmp_path)
+        measurement = find_measurement(store, "residual")
+        assert measurement is not None
+        assert measurement.attributes["speech_present"] is False
+        assert measurement.attributes["n_consensus_words"] == 0
+        assert measurement.attributes["speech_coverage_fraction"] == pytest.approx(0.0)

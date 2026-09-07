@@ -79,6 +79,7 @@ def _stub_models(
     crisper: ScriptLine | None = None,
     qwen: ScriptLine | None = None,
     record: dict[str, Any] | None = None,
+    enhance: Callable[..., list] | None = None,
 ) -> None:
     """Replace every model call PREPROCESS makes, on the node module, and record each one's kwargs."""
     seen = record if record is not None else {}
@@ -110,6 +111,9 @@ def _stub_models(
     monkeypatch.setattr(preprocess_module, "detect_health_acoustic_events", fake_hear)
     monkeypatch.setattr(preprocess_module, "transcribe_audios", fake_transcribe)
     monkeypatch.setattr(preprocess_module, "extract_objective_quality_features_from_audios", fake_squim)
+    if enhance is not None:
+        monkeypatch.setattr(preprocess_module, "_frcrn_model", lambda: _FakeModel("alibabasglab/FRCRN_SE_16K"))
+        monkeypatch.setattr(preprocess_module, "enhance_audios", enhance)
 
 
 @pytest.fixture
@@ -171,6 +175,14 @@ def windows_config(tmp_path: Path) -> TriageConfig:
         "    default_threshold: 0.5\n"
         "    label_thresholds: {}\n"
     )
+    return load_triage_config(override)
+
+
+@pytest.fixture
+def residual_config(tmp_path: Path) -> TriageConfig:
+    """The packaged configuration with the residual PREPROCESS block turned on."""
+    override = tmp_path / "residual.yaml"
+    override.write_text("residual:\n  enabled: true\n")
     return load_triage_config(override)
 
 
