@@ -1083,13 +1083,15 @@ class TestTheConsensusTranscript:
         assert consensus is not None
         assert consensus.attributes["text"] == "and the and the d- the"
         words = sorted(live_entities(store, "word"), key=lambda w: int(w.attributes["index"]))
+        # The seeded chunks put Qwen's "and"/"the" exactly on the first of each repeated pair, so
+        # those are the copies the alignment pairs and the later copies are the insertions.
         assert [w.attributes["outcome"] for w in words] == [
-            "insertion",
-            "insertion",
+            "agreement",
             "agreement",
             "insertion",
             "insertion",
-            "agreement",
+            "insertion",
+            "insertion",
         ]
         onsets = [w.extent[0] for w in words if w.extent is not None]
         assert onsets == sorted(onsets)

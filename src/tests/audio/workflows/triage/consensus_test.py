@@ -119,11 +119,11 @@ class TestTheRepetitionFinding:
     """Test 4: the columns are emitted verbatim; nothing collapses or re-sorts a repeated token."""
 
     def test_and_the_and_the_d_the_is_six_words_in_column_order(self) -> None:
-        """4a: six words, in column order, the duplicates real."""
+        """4a: six words, in column order, the duplicates real; b's words sit on a's first copies in time."""
         consensus = _align(_source("a", "and the and the d- the"), _source("b", "and the"))
         assert _texts(consensus) == ["and", "the", "and", "the", "d-", "the"]
-        assert _outcomes(consensus) == ["insertion", "insertion", "agreement", "insertion", "insertion", "agreement"]
-        assert render_transcript(consensus.words) == "and the **and** the d- **the**"
+        assert _outcomes(consensus) == ["agreement", "agreement", "insertion", "insertion", "insertion", "insertion"]
+        assert render_transcript(consensus.words) == "**and** **the** and the d- the"
         assert render_transcript(consensus.words, strong=("", "")) == "and the and the d- the"
 
     def test_conflicting_times_keep_stream_order_and_derive_monotone_times(self) -> None:
@@ -138,22 +138,23 @@ class TestTheRepetitionFinding:
         assert boy.timings["b"] == (1.10, 1.70)
         assert consensus.provenance["n_words_time_shifted"] == 0
 
-    def test_the_gets_case_pools_onto_a_member_reading(self) -> None:
-        """4c: the median of {9.60, 9.88, 9.99} is 9.88, so a- keeps its own span and gets moves onto it."""
+    def test_the_gets_case_pairs_the_coincident_copy_and_nothing_pools(self) -> None:
+        """4c: b's gets@9.60-9.84 overlaps a's first copy, so the tie goes there and the fit has nothing to move."""
         a = _timed("a", [("gets", 9.66, 9.74), ("a-", 9.88, 9.99), ("gets", 9.99, 10.10)])
         b = _timed("b", [("gets", 9.60, 9.84)])
         consensus = _align(a, b)
         assert _texts(consensus) == ["gets", "a-", "gets"]
-        assert _outcomes(consensus) == ["insertion", "insertion", "agreement"]
+        assert _outcomes(consensus) == ["agreement", "insertion", "insertion"]
+        assert consensus.words[0].extent == pytest.approx((9.63, 9.79))
+        assert consensus.words[0].temporal_uncertainty_s == pytest.approx(0.10)
         assert consensus.words[1].extent == (9.88, 9.99)
-        assert consensus.words[2].extent == pytest.approx((9.88, 9.99))
-        assert consensus.words[2].temporal_uncertainty_s == pytest.approx(0.39)
-        assert consensus.words[1].temporal_uncertainty_s == 0.0
-        assert consensus.provenance["n_words_time_shifted"] == 2
-        assert consensus.provenance["max_time_shift_s"] == pytest.approx(0.085)
+        assert consensus.words[2].extent == (9.99, 10.10)
+        assert consensus.words[1].temporal_uncertainty_s == 0.0 == consensus.words[2].temporal_uncertainty_s
+        assert consensus.provenance["n_words_time_shifted"] == 0
+        assert consensus.provenance["max_time_shift_s"] == 0.0
 
-    def test_the_four_second_conflict_stays_aligned_and_carries_its_uncertainty(self) -> None:
-        """4d: R-5's case; the pairing is kept and the 4.1 s spread is the record."""
+    def test_the_four_second_case_is_an_equal_cost_tie_that_time_breaks(self) -> None:
+        """4d: R-5's case; both pairings of b's the@31.20 cost 6, so it pairs with The@31.30, not the@35.30."""
         a = _timed(
             "a",
             [
@@ -166,13 +167,23 @@ class TestTheRepetitionFinding:
         )
         b = _timed("b", [("the", 31.20, 31.84), ("little", 35.28, 35.60), ("boy", 35.60, 36.16)])
         consensus = _align(a, b)
-        assert _outcomes(consensus) == ["insertion", "insertion", "agreement", "agreement", "agreement"]
-        the = consensus.words[2]
+        assert _outcomes(consensus) == ["agreement", "insertion", "insertion", "agreement", "agreement"]
+        the = consensus.words[0]
+        assert the.extent == pytest.approx((31.25, 31.68))
+        assert the.temporal_uncertainty_s == pytest.approx(0.32)
+        assert consensus.words[2].extent == (35.30, 35.36) and consensus.words[2].temporal_uncertainty_s == 0.0
+        assert consensus.provenance["n_words_time_shifted"] == 0
+
+    def test_a_conflict_the_cost_model_holds_stays_aligned_and_carries_its_uncertainty(self) -> None:
+        """4d': R-5 rule 4 with no tie to break; one ``the`` per source 4.1 s apart stays paired."""
+        a = _timed("a", [("the", 35.30, 35.36), ("little", 35.36, 35.58), ("boy", 35.58, 36.06)])
+        b = _timed("b", [("the", 31.20, 31.84), ("little", 35.28, 35.60), ("boy", 35.60, 36.16)])
+        consensus = _align(a, b)
+        assert _outcomes(consensus) == ["agreement", "agreement", "agreement"]
+        the = consensus.words[0]
         assert the.extent[0] == pytest.approx(33.25)
         assert the.temporal_uncertainty_s == pytest.approx(4.10)
         assert consensus.provenance["n_words_time_shifted"] == 0
-        assert consensus.words[0].temporal_uncertainty_s == 0.0
-        assert consensus.words[1].temporal_uncertainty_s == 0.0
 
     def test_derived_times_are_monotone_and_bounded_by_the_uncertainty(self) -> None:
         """4e: the property, over a long random pair with jittered times."""

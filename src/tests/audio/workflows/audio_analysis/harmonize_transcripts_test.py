@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from senselab.audio.workflows.audio_analysis.harmonize import TranscriptSlot, harmonize_transcripts
+from senselab.audio.workflows.audio_analysis.harmonize import TranscriptSlot, _align_pair, harmonize_transcripts
 
 
 def _w(pairs: list[tuple[float, float, str]]) -> list[tuple[float, float, str]]:
@@ -237,3 +237,86 @@ def test_a_repetition_against_one_token_aligns_its_last_copy() -> None:
     mirrored = harmonize_transcripts({"cw": qwen, "qwen": cw}).slots
     assert _shape(mirrored) == [(None, "the"), (None, "the"), ("the", "the")]
     assert mirrored[2].indices == {"cw": 0, "qwen": 2}
+
+
+def test_without_timings_a_repetition_still_aligns_its_last_copy() -> None:
+    """``_align_pair`` with no timings is the untouched rule: last copy, earlier token on a substitution tie."""
+    assert _align_pair(["the", "the", "the"], ["the"]) == [(0, None), (1, None), (2, 0)]
+    assert _align_pair(["the"], ["the", "the", "the"]) == [(None, 0), (None, 1), (0, 2)]
+    assert _align_pair(["i", "uh", "think"], ["i", "thing"]) == [(0, 0), (1, 1), (2, None)]
+
+
+def test_the_gets_case_pairs_the_temporally_coincident_first_copy() -> None:
+    """CW "gets a- gets" against Qwen "gets", with the recording's timings: Qwen pairs with the first copy.
+
+    Both pairings cost 6; Qwen's ``gets``@9.60-9.84 overlaps CW's first copy at 9.66-9.74 and sits
+    0.15 s from the second, so time breaks the tie toward the first.
+    """
+    cw = _w([(9.66, 9.74, "gets"), (9.88, 9.99, "a-"), (9.99, 10.10, "gets")])
+    qwen = _w([(9.60, 9.84, "gets")])
+    slots = harmonize_transcripts({"cw": cw, "qwen": qwen}).slots
+
+    assert _shape(slots) == [("gets", "gets"), ("a-", None), ("gets", None)]
+    assert slots[0].indices == {"cw": 0, "qwen": 0}
+
+    mirrored = harmonize_transcripts({"cw": qwen, "qwen": cw}).slots
+    assert _shape(mirrored) == [("gets", "gets"), (None, "a-"), (None, "gets")]
+    assert mirrored[0].indices == {"cw": 0, "qwen": 0}
+
+
+def test_time_picks_whichever_copy_coincides_and_falls_back_to_the_last_when_it_cannot() -> None:
+    """The copy chosen follows the single token's span, so it is time being read, not a fixed position."""
+    cw = _w([(0.0, 0.2, "the"), (0.3, 0.5, "the"), (0.6, 0.8, "the")])
+
+    last = harmonize_transcripts({"cw": cw, "qwen": _w([(0.62, 0.78, "the")])}).slots
+    assert [s.indices["qwen"] for s in last] == [None, None, 0]
+
+    middle = harmonize_transcripts({"cw": cw, "qwen": _w([(0.32, 0.48, "the")])}).slots
+    assert [s.indices["qwen"] for s in middle] == [None, 0, None]
+
+    # A span covering every copy separates none of them: the untimed rule stands and the last copy is taken.
+    covering = harmonize_transcripts({"cw": cw, "qwen": _w([(0.0, 0.8, "the")])}).slots
+    assert [s.indices["qwen"] for s in covering] == [None, None, 0]
+
+    # Nearest wins by interval distance when no copy overlaps: 0.51-0.55 is 10 ms past the middle
+    # copy's end and 50 ms short of the last copy's start, so the middle copy is taken.
+    between = harmonize_transcripts({"cw": cw, "qwen": _w([(0.51, 0.55, "the")])}).slots
+    assert [s.indices["qwen"] for s in between] == [None, 0, None]
+    nearer_last = harmonize_transcripts({"cw": cw, "qwen": _w([(0.57, 0.59, "the")])}).slots
+    assert [s.indices["qwen"] for s in nearer_last] == [None, None, 0]
+    nearer_first = harmonize_transcripts({"cw": cw, "qwen": _w([(0.21, 0.24, "the")])}).slots
+    assert [s.indices["qwen"] for s in nearer_first] == [0, None, None]
+
+
+def test_time_never_buys_a_costlier_path() -> None:
+    """``the the`` at 0 s and 5 s against ``the cat`` at 5 s: cost pairs the first ``the`` 4.6 s away.
+
+    ``match + substitution`` costs 4; the time-preferred ``deletion + match + insertion`` costs 6, so
+    the cheaper path wins although its pairing is the more distant one.
+    """
+    a, a_times = ["the", "the"], [(0.0, 0.4), (5.0, 5.4)]
+    b, b_times = ["the", "cat"], [(5.0, 5.4), (5.5, 5.9)]
+    timed = _align_pair(a, b, a_times, b_times)
+    assert timed == [(0, 0), (1, 1)] == _align_pair(a, b)
+    assert _align_pair(a, b, a_times, b_times) == timed, "deterministic on repeat"
+
+
+def test_time_breaks_a_substitution_position_tie_when_the_spans_separate_the_tokens() -> None:
+    """CW "I uh think" against Qwen "I thing": the substitution lands on the token ``thing`` overlaps.
+
+    Placed over ``think`` it pairs with ``think``; placed over ``uh`` it pairs with ``uh``; spanning
+    both, the untimed earlier-token rule stands.
+    """
+    cw = _w([(0.0, 0.2, "I"), (0.25, 0.45, "uh"), (0.5, 0.9, "think")])
+    over_think = harmonize_transcripts({"cw": cw, "qwen": _w([(0.0, 0.2, "I"), (0.55, 0.9, "thing")])}).slots
+    assert _shape(over_think) == [("I", "I"), ("uh", None), ("think", "thing")]
+    over_uh = harmonize_transcripts({"cw": cw, "qwen": _w([(0.0, 0.2, "I"), (0.25, 0.45, "thing")])}).slots
+    assert _shape(over_uh) == [("I", "I"), ("uh", "thing"), ("think", None)]
+    spanning = harmonize_transcripts({"cw": cw, "qwen": _w([(0.0, 0.2, "I"), (0.3, 0.9, "thing")])}).slots
+    assert _shape(spanning) == [("I", "I"), ("uh", "thing"), ("think", None)]
+
+
+def test_timings_must_be_one_span_per_token() -> None:
+    """A timing list of the wrong length is refused rather than silently misread."""
+    with pytest.raises(ValueError, match="one span per token"):
+        _align_pair(["a", "b"], ["a"], [(0.0, 0.1)], [(0.0, 0.1)])
