@@ -140,3 +140,46 @@ consensus, in `ConsensusWord.readings`; the key never replaces it. The function 
 and private to `harmonize.py` until the triage consensus (`triage/consensus.py`) needed the same key
 for its column classification; it is public so that the aligner and the consensus cannot drift apart
 on what counts as the same token.
+
+## The tie-break: the sources' own times, among equal-cost paths only
+
+sclite's weights leave many paths tied. The backtrace resolved them by a fixed preference order —
+matching diagonal, deletion, insertion, mismatched diagonal — so a run of identical tokens against
+a single token always paired its **last** copy. Nothing chose that; it fell out of the traversal.
+
+On real data it is usually the wrong copy. CrisperWhisper reads `gets`@9.66, `a-`@9.88,
+`gets`@9.99 where Qwen reads one `gets`@9.60. Pairing the last copy puts the agreed word 0.39 s
+from Qwen's reading and forces the isotonic fit to pool two positions to keep the stream monotone.
+Pairing the first costs exactly the same in edit distance and needs no fit at all.
+
+`_align_pair` therefore minimises `(edit cost, summed pair gap)` lexicographically. **Edit cost
+still decides**; the gap only separates paths of equal cost, so a time-preferred pairing can never
+buy a costlier alignment. The gap of one paired column is the interval distance between the two
+tokens' spans in whole milliseconds, zero when they overlap or touch. Milliseconds rather than
+floats so that two paths whose gaps differ by less than a millisecond stay tied and fall back to
+the traversal order, which keeps the result deterministic. With no spans supplied every gap is
+zero, the comparison collapses to cost alone, and the path is byte-identical to the untimed one.
+
+This is R-5 rule 1 holding: the sequence decides, and time is admitted only where the sequence
+evidence is genuinely indifferent. It never rejects an alignment.
+
+### Measured effect
+
+On `sub-1f4ea26f…task-Story-recall-(v2)`, 226 words and the 209 / 3 / 14 outcome split unchanged —
+the structure is identical, only which copy of a repetition pairs:
+
+| | untimed | timed |
+| --- | --- | --- |
+| positions the isotonic fit had to move | 8 | 2 |
+| max time shift | 0.200 s | 0.030 s |
+| derived extents overlapping no source | 7 | 4 |
+| summed temporal uncertainty | 24.56 s | 19.52 s |
+
+Two cases resolve outright. `gets` pairs its first copy, so `a-` and the second copy keep their own
+spans at zero uncertainty. And the 4.1 s `the` — CrisperWhisper's `the`@35.30 paired with Qwen's
+`the`@31.20 across an intervening `[UM]` — now pairs Qwen@31.20 with `The`@31.30, 0.10 s away; the
+4.10 s uncertainty is gone, and CW's `the`@35.30 is an insertion on its own span.
+
+What remains at 4 extents overlapping no source is a different shape: `out.`, `loses`, `the`@150
+and `he`@219 are words the two recognizers place 0.4–1.3 s apart with no repetition to choose
+between, so the fit averages them and the uncertainty is the honest report of that disagreement.
