@@ -424,6 +424,20 @@ def ensure_venv(
                 "url": torch_index.url,
                 "source": torch_index.source,
             }
+        # A takeover elsewhere overwrote this lock's identity without contacting this
+        # process, so `venv_dir` may already have a second builder treating it as its own --
+        # certifying completion here would be exactly the "importable-looking venv missing
+        # a shared object" corruption from a concurrent build. Refuse and rebuild instead.
+        if not lock.owns():
+            logger.error(
+                "Lock for venv '%s' was taken over by another process during this build; "
+                "declining to mark %s complete and removing it for a clean rebuild.",
+                name,
+                venv_dir,
+            )
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            raise RuntimeError(f"Venv '{name}' lost its lock to a concurrent process during build; retry.")
+
         # Strictly before the marker write: a hard kill (OOM, CI timeout) between chmod and
         # the marker would otherwise leave `.senselab-installed` present with the chmod pass
         # incomplete. Every later ensure_venv call takes the reuse fast path on seeing the

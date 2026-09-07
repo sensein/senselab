@@ -301,6 +301,33 @@ def test_marker_with_different_torch_index_triggers_rebuild(
     assert written["torch_index"]["url"] == force_cu128.url
 
 
+def test_a_takeover_during_build_refuses_to_certify_the_venv(
+    fake_cache_dir: Path,
+    fake_uv: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If this build's lock was taken over mid-way, the marker must not be written.
+
+    Otherwise a build that lost its lock to a concurrent takeover -- which may already
+    be mutating the same ``venv_dir`` -- would still declare itself complete, exactly
+    the "importable-looking venv missing a shared object" corruption reported in
+    specs/20260817-triage-workflow-dag/benchmarks/orcd-scheduling-2026-09-08.md.
+    """
+    from senselab.utils.file_lock import SharedFileLock
+
+    name = "t-lost-lock"
+    venv_dir = fake_cache_dir / name
+
+    recorder = _SubprocessRecorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    monkeypatch.setattr(SharedFileLock, "owns", lambda self: False)
+
+    with pytest.raises(RuntimeError, match="lost its lock"):
+        ensure_venv(name, ["some-pure-python-pkg==1.0"], python_version="3.12")
+
+    assert not venv_dir.exists(), "a venv that lost its lock must be removed, not left half-certified"
+
+
 # ── Install argv routing ───────────────────────────────────────────
 
 
