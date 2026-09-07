@@ -41,6 +41,7 @@ from senselab.audio.workflows.triage.nodes.common import (
     live_entities,
     resolve_stream,
     software_agent,
+    word_hull,
     write_verdict,
 )
 from senselab.audio.workflows.triage.vocabulary import Outcome
@@ -275,7 +276,8 @@ def _matches_surviving(word: Entity, category: str, planned: list[RedactionExten
     """
     if category not in marked or word.extent is None:
         return False
-    return not any(_overlaps(word.extent, (extent.start, extent.end)) for extent in planned)
+    hull = word_hull(word)
+    return not any(_overlaps(hull, (extent.start, extent.end)) for extent in planned)
 
 
 def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[str, int]:
@@ -302,7 +304,8 @@ def _transcript(words: list[Entity], planned: list[RedactionExtent]) -> tuple[st
             unplaced += 1
             tokens.append(_UNPLACED_PLACEHOLDER)
             continue
-        index = next((i for i, p in enumerate(planned) if _overlaps(word.extent, (p.start, p.end))), None)
+        hull = word_hull(word)
+        index = next((i for i, p in enumerate(planned) if _overlaps(hull, (p.start, p.end))), None)
         if index is None:
             tokens.append(str(word.attributes.get("text") or ""))
         elif index not in emitted:
@@ -401,8 +404,9 @@ def redact(
                 marks = marked.get(word.id, {})
                 if word.extent is None or not _matches_surviving(word, category, planned, marks):
                     continue
-                extents.append(RedactionExtent(start=word.extent[0], end=word.extent[1], category=category))
-                widened.append((word.extent, marks[category]))
+                hull = word_hull(word)
+                extents.append(RedactionExtent(start=hull[0], end=hull[1], category=category))
+                widened.append((hull, marks[category]))
         planned = plan_redactions(extents, padding_ms=padding_ms)
         transcript_text, unplaced_n = _transcript(words, planned)
         checked = _verify(transcript_text, required_detectors)

@@ -246,6 +246,24 @@ def lexical_words(store: ProvStore) -> list[Entity]:
     return [word for word in consensus_words(store) if not word.attributes["bracketed"]]
 
 
+def word_hull(word: Entity) -> tuple[float, float]:
+    """The hull of a word's per-source timings — every recognizer's placement of it.
+
+    The derived extent is a fitted estimate and can fall outside every source's own reading, so a
+    consumer that must not miss the word reads this instead.
+
+    Args:
+        word: A consensus ``word`` entity.
+
+    Returns:
+        ``(min member start, max member end)``, or the derived extent when no source timed it.
+    """
+    spans = list((word.attributes.get("timings") or {}).values())
+    if not spans:
+        return word.extent if word.extent is not None else (0.0, 0.0)
+    return min(float(span[0]) for span in spans), max(float(span[1]) for span in spans)
+
+
 def resolve_stream(store: ProvStore, run_dir: Path, name: str) -> tuple[str, Audio]:
     """Load a stream the graph wrote earlier, by its name.
 

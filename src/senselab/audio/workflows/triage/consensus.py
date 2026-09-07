@@ -296,6 +296,8 @@ def align_sources(sources: Sequence[SourceHypothesis], *, onomatopoeic: set[str]
 
     onsets, onset_pooled = isotonic_median_fit([[m.start for m in column] for column in columns])
     offsets, offset_pooled = isotonic_median_fit([[m.end for m in column] for column in columns])
+    # Onsets and offsets are fitted independently, so the pair is clamped rather than assumed.
+    offsets = [max(offset, onset) for onset, offset in zip(onsets, offsets)]
 
     words: list[ConsensusWord] = []
     outcomes = {"agreement": 0, "variant": 0, "insertion": 0}
