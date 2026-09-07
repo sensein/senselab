@@ -771,6 +771,43 @@ consistent with the closed form, but no fixture in this tree reproduces it). Tha
 presentation choice too, and equally unfitted -- matching the extent's RMS instead would change
 how loud a released artifact's redactions are without anyone having measured which is preferable.
 
+## residual
+
+The background-residual PREPROCESS block: `plain` minus a lag-aligned, gain-fitted FRCRN_SE_16K
+enhancement, classified. See `preprocess.md`'s own section for the algorithm and
+`benchmarks/residual-without-speech-2026-09-08.md` for the measurement behind every threshold below.
+
+residual.enabled false. Off by default: ~22 s of GPU work per recording, and the residual is not
+wired into any branch or decision yet -- the owner has not taken that decision -- so it would cost
+every run without being read by anything.
+
+residual.max_lag_ms 200.0. The cross-correlation search half-window FRCRN's output is aligned to
+`plain` within. Not fitted: 200 ms is generously wider than any lag observed (0 ms on every
+recording measured, both in the buzz-separation comparison and the no-speech benchmark), so it is a
+safety margin rather than a value read off data.
+
+residual.min_enhanced_energy_fraction 0.50, provisional. The primary gate, derived in
+`residual-without-speech-2026-09-08.md`: FRCRN's enhanced output, before any gain fit, retained
+94-98% of a passed-through recording's energy and 0.01-6.7% of a nulled one, an 87-point gap with
+nothing observed inside it. 0.50 sits in the middle of that gap; any value between roughly 7% and
+94% separates the two groups measured there with the same result.
+
+residual.max_energy_fraction 0.90 and residual.min_energy_fraction 0.005, provisional and
+secondary. `max_energy_fraction` is not, by itself, a reliable check for a nulled input: the same
+benchmark found four of five nulled non-speech recordings sitting between 50% and 84% residual
+energy, comfortably under the 0.90 ceiling -- it is kept as a secondary check, not presented as
+protective on its own. `min_energy_fraction` catches the opposite failure, the model absorbing
+everything (measured 1.57% on the buzz-separation reference recording, comfortably above 0.005).
+
+residual.bands_hz `[[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]`. The same four-band split
+`subtract.py`'s own reporting uses in the buzz-separation comparison, reused rather than refitted so
+the residual's band report reads against that comparison's own numbers directly.
+
+The `speech_present`, `n_consensus_words` and `speech_coverage_fraction` fields this block writes on
+the `residual` measurement carry no config key of their own: `speech_present` is
+`n_consensus_words > 0`, an identity rather than a fitted threshold, matching the "no new threshold"
+rule the `speech_overlap == 0.0` windows split already follows.
+
 ## report
 
 The presentation form the summary is written in.

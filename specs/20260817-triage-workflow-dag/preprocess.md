@@ -75,6 +75,9 @@ recording (as supplied) --> resample-+
 | `spectrogram_wb` | 5 ms window, 5 ms hop | pre-emph | onsets, transients, glottal pulses |
 | `spectrogram_nb` | 20 ms window, 5 ms hop | pre-emph | harmonics, F0 by spacing, rendering |
 | `gammatone` | 40 ERB channels, 80–7800 Hz, 5 ms hop | pre-emph | short-transient detection |
+| `residual` | `plain - g·FRCRN_SE_16K(plain)`, lag-aligned, gain-fitted | residual | none — off by default, not wired into any branch |
+| `residual_yamnet_scores`, `residual_ast_scores` | whole-file classifier windows over `residual`, each carrying `speech_overlap` | residual | none — off by default |
+| `residual_yamnet_summary_all`/`_speech_free`, `residual_ast_summary_all`/`_speech_free` | per-label mean/max/window-count, over every window and over speech-free windows only | residual | none — off by default |
 
 A derivative is admitted when it is written to the store with provenance. It does not need a
 declared consumer — see [`store.md`](store.md).
@@ -222,6 +225,89 @@ reads it and each recognizer's own transcript; [`REDACT`](redact.md) reads it an
 - **Word entities remain bounded to the decode.** A word exists where a recognizer decoded one;
   nothing here invents, extends or merges words across recognizers beyond what the alignment
   produces.
+
+## `residual` — background residual and its classification (off by default)
+
+`residual.enabled` (default `false`; ~22 s of GPU work per recording): `FRCRN_SE_16K`
+(`alibabasglab/FRCRN_SE_16K`) runs on `plain` through the existing ClearerVoice enhancement path
+(`senselab.audio.tasks.speech_enhancement.enhance_audios`; the pip package's importable class is
+`ClearVoice`, not `ClearerVoice`, which is only the project's name). Its output is
+cross-correlation aligned to `plain` (`residual.max_lag_ms` search, both directions), then
+least-squares gain-fitted (`g = <plain, enhanced> / <enhanced, enhanced>`) before subtraction:
+
+```
+residual = plain - g * enhanced_aligned
+```
+
+The lag (samples and ms) and the gain (linear and dB) are recorded on the `residual` measurement
+alongside the model id and its resolved commit. `residual` is written as a stream, alongside
+`plain`/`preemphasised`/`normalized`.
+
+### Two gates, neither sufficient alone
+
+See `benchmarks/residual-without-speech-2026-09-08.md` for the measurement behind both.
+
+- **Primary — `enhanced_energy_fraction` below `residual.min_enhanced_energy_fraction`
+  (0.50, provisional).** FRCRN's own output energy as a fraction of the input's, before any gain
+  fit. On non-speech recordings FRCRN's behaviour is bimodal and not predictable from the task: it
+  either passes the input through (kept energy 94–98%) or nulls it outright (kept energy
+  0.01–6.7%); nothing measured landed between 7% and 94%. A nulled input's "residual" would be the
+  nulled content itself, not the background, so this gate is checked first.
+- **Secondary — the residual's own retained-energy fraction outside `[residual.min_energy_fraction,
+  residual.max_energy_fraction]`** (0.005 / 0.90, provisional). This bound alone missed four of the
+  five nulled non-speech cases the benchmark measured (50–84% residual-energy retained, all under
+  the 0.90 ceiling), which is why it is secondary and not presented as protective on its own.
+
+FRCRN unavailable or raising is also gated absent, with the exception recorded as the reason.
+
+The `residual` measurement carries: `model_id`, `commit_sha`, `lag_samples`, `lag_ms`, `gain`,
+`gain_db`, `enhanced_energy_fraction`, `energy_fraction`, `peak_dbfs`, `rms_dbfs`, and `bands` — the
+energy fraction in 0–200 / 200–1000 / 1000–4000 / 4000–8000 Hz (`residual.bands_hz`).
+
+### The speech-presence precondition
+
+`FRCRN_SE_16K` is a speech-enhancement model: `plain - g·enhanced` means "the noise that was
+removed" only where there was speech for the model to separate from noise. **The residual is
+produced and stored regardless of whether speech is present** — it is measured on cough/breath-only
+recordings by design, not refused — but its meaning as *background* is conditional, not automatic,
+and no downstream consumer may read it without checking this precondition first. The `residual`
+measurement carries:
+
+- `speech_present`: a boolean reading as a warning rather than a verdict.
+- `n_consensus_words`: the count of the consensus's non-bracketed (lexical) words.
+- `speech_coverage_fraction`: the union of those words' per-source `timings`, divided by duration.
+
+`speech_present` is `n_consensus_words > 0`. When the consensus transcript is entirely absent (not
+merely empty of lexical words), `n_consensus_words` and `speech_coverage_fraction` are `null` —
+unmeasured, a different fact from a measured 0 — and `speech_present` is `false`.
+
+**This is a recorded precondition, not a gate.** It never prevents the residual from being written
+and is independent of the two energy gates above: a consumer testing whether the residual means
+background checks `speech_present`; a consumer explaining why no residual exists at all checks the
+gates. The two must not be confused — "the subtraction did not work" and "the subtraction worked
+but does not mean background here" are different facts.
+
+### Classification
+
+YAMNet and AST both run over `residual` exactly as `yamnet_scores`/`ast_scores` run over `plain`:
+`residual_yamnet_scores`, `residual_ast_scores`. Each window additionally carries `speech_overlap` —
+the fraction of that window covered by the union of speech regions, derived from the consensus's
+lexical words' per-source `timings` (`speech_overlap_source: "consensus_transcript"`), or, when no
+consensus transcript exists at all, from this pass's own amplitude-source spans
+(`speech_overlap_source: "amplitude_spans"`).
+
+Each classifier's label summary is produced **twice**: `residual_<classifier>_summary_all` over
+every window, and `residual_<classifier>_summary_speech_free` over only the windows with
+`speech_overlap == 0.0` — exactly zero, no new threshold introduced. Each summary carries, per
+label, the mean score, the max score and the window count. Comparing the two is the check for the
+enhancement model's own speech-shaped artefact where the speech was: a label whose peak collapses
+once the speech-overlapping windows are excluded was the distortion talking, not the background.
+
+### Scope
+
+This step produces the stream and the measurements only. It is not wired into
+`consensus_taxonomy`, TAXONOMY's decisions, or any branch — a separate decision the owner has not
+taken.
 
 ## Working rate
 

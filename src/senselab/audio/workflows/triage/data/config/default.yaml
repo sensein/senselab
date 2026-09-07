@@ -202,6 +202,16 @@ redaction:
   fill: null                           # what replaces redacted audio: silence, noise or bleep
   bleep_hz: 1000.0                     # tone frequency when fill is bleep
 
+# Background residual: FRCRN_SE_16K's enhancement, lag-aligned and gain-fitted, subtracted from
+# `plain`, then classified. Off by default -- ~22 s of GPU work per recording.
+residual:
+  enabled: false                       # whether this PREPROCESS block runs at all
+  max_lag_ms: 200.0                    # cross-correlation search half-window against the enhanced output
+  min_enhanced_energy_fraction: 0.50   # primary gate; provisional -- see benchmarks/residual-without-speech-2026-09-08.md
+  max_energy_fraction: 0.90            # secondary, not sufficient alone -- see the same benchmark
+  min_energy_fraction: 0.005           # secondary; below this the model absorbed everything
+  bands_hz: [[0, 200], [200, 1000], [1000, 4000], [4000, 8000]]  # band split the residual is reported over
+
 # The presentation form the summary is written in.
 report:
   format: pdf                          # pdf or png
