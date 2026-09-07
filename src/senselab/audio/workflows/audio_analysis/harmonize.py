@@ -436,24 +436,51 @@ _SUBSTITUTION_COST = 4
 _INDEL_COST = 3
 
 
-def _align_pair(a: Sequence[str], b: Sequence[str]) -> list[tuple[Optional[int], Optional[int]]]:
+def _span_gap_ms(a_span: tuple[float, float], b_span: tuple[float, float]) -> int:
+    """The interval distance between two spans in whole milliseconds; 0 when they overlap or touch."""
+    gap_s = max(a_span[0], b_span[0]) - min(a_span[1], b_span[1])
+    return max(0, int(round(gap_s * 1000.0)))
+
+
+def _align_pair(
+    a: Sequence[str],
+    b: Sequence[str],
+    a_times: Optional[Sequence[tuple[float, float]]] = None,
+    b_times: Optional[Sequence[tuple[float, float]]] = None,
+) -> list[tuple[Optional[int], Optional[int]]]:
     """Weighted Levenshtein alignment path between two token sequences.
 
-    Edit costs are sclite's: a match costs 0, a substitution 4, an insertion or deletion 3. Among
-    paths of equal cost the backtrace prefers, at each cell, a matching diagonal, then a deletion
-    from ``a``, then an insertion from ``b``, then a mismatched diagonal. A run of identical tokens
-    against a single token therefore aligns its **last** copy. See
+    Edit costs are sclite's: a match costs 0, a substitution 4, an insertion or deletion 3. The
+    path of least edit cost wins. Among paths of equal edit cost, when both ``a_times`` and
+    ``b_times`` are given, the path whose paired tokens are closest in time wins: each paired
+    column (match or substitution) contributes the interval distance between the two tokens' spans
+    in whole milliseconds — 0 when the spans overlap or touch — and the path with the smallest sum
+    is taken. A time-informed choice never selects a path of higher edit cost. Where time does not
+    separate the candidates, or when no timings are given, the backtrace prefers, at each cell, a
+    matching diagonal, then a deletion from ``a``, then an insertion from ``b``, then a mismatched
+    diagonal; a run of identical tokens against a single token then aligns its **last** copy. See
     ``specs/20260817-triage-workflow-dag/transcript-alignment.md``.
 
     Args:
         a: Token sequence on the reference side.
         b: Token sequence on the model side.
+        a_times: ``(start_s, end_s)`` per token of ``a``, or ``None``.
+        b_times: ``(start_s, end_s)`` per token of ``b``, or ``None``.
 
     Returns:
         ``(i, j)`` pairs in sequence order; ``i`` or ``j`` is ``None`` where that side has a gap.
     """
     n, m = len(a), len(b)
+    if a_times is not None and b_times is not None and (len(a_times) != n or len(b_times) != m):
+        raise ValueError(f"timings must be one span per token: got {len(a_times)}/{n} and {len(b_times)}/{m}")
+
+    def pair_gap(i: int, j: int) -> int:
+        if a_times is None or b_times is None:
+            return 0
+        return _span_gap_ms(a_times[i], b_times[j])
+
     cost = [[0] * (m + 1) for _ in range(n + 1)]
+    gap = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(1, n + 1):
         cost[i][0] = i * _INDEL_COST
     for j in range(1, m + 1):
@@ -461,22 +488,28 @@ def _align_pair(a: Sequence[str], b: Sequence[str]) -> list[tuple[Optional[int],
     for i in range(1, n + 1):
         a_i = a[i - 1]
         row, prev = cost[i], cost[i - 1]
+        gap_row, gap_prev = gap[i], gap[i - 1]
         for j in range(1, m + 1):
             diagonal = prev[j - 1] + (_MATCH_COST if a_i == b[j - 1] else _SUBSTITUTION_COST)
-            row[j] = min(diagonal, prev[j] + _INDEL_COST, row[j - 1] + _INDEL_COST)
+            best = min(
+                (diagonal, gap_prev[j - 1] + pair_gap(i - 1, j - 1)),
+                (prev[j] + _INDEL_COST, gap_prev[j]),
+                (row[j - 1] + _INDEL_COST, gap_row[j - 1]),
+            )
+            row[j], gap_row[j] = best
 
     path: list[tuple[Optional[int], Optional[int]]] = []
     i, j = n, m
     while i > 0 or j > 0:
-        here = cost[i][j]
+        here = (cost[i][j], gap[i][j])
         matched = i > 0 and j > 0 and a[i - 1] == b[j - 1]
-        if matched and here == cost[i - 1][j - 1] + _MATCH_COST:
+        if matched and here == (cost[i - 1][j - 1] + _MATCH_COST, gap[i - 1][j - 1] + pair_gap(i - 1, j - 1)):
             path.append((i - 1, j - 1))
             i, j = i - 1, j - 1
-        elif i > 0 and here == cost[i - 1][j] + _INDEL_COST:
+        elif i > 0 and here == (cost[i - 1][j] + _INDEL_COST, gap[i - 1][j]):
             path.append((i - 1, None))
             i -= 1
-        elif j > 0 and here == cost[i][j - 1] + _INDEL_COST:
+        elif j > 0 and here == (cost[i][j - 1] + _INDEL_COST, gap[i][j - 1]):
             path.append((None, j - 1))
             j -= 1
         else:
@@ -503,6 +536,9 @@ def harmonize_transcripts(
     become the frame everything else is measured against. This is an approximation — a full
     multiple-sequence alignment would not privilege any model — and the reference is reported so a
     consumer can see which one was privileged.
+
+    Each pairwise alignment is decided by edit cost; each model's own spans break ties among paths
+    of equal cost toward the pairing closest in time (see :func:`_align_pair`).
 
     Args:
         by_model: ``{model → [(start_s, end_s, text), ...]}`` in time order.
@@ -533,7 +569,13 @@ def harmonize_transcripts(
             continue
         pending = 0
         last_ref = -1
-        for r_idx, m_idx in _align_pair(tokens[reference], tokens[model]):
+        path = _align_pair(
+            tokens[reference],
+            tokens[model],
+            [(s, e) for s, e, _ in words[reference]],
+            [(s, e) for s, e, _ in words[model]],
+        )
+        for r_idx, m_idx in path:
             if r_idx is not None and m_idx is not None:
                 slot_members.setdefault((float(r_idx), 0.0), {})[model] = m_idx
                 last_ref, pending = r_idx, 0
