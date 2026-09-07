@@ -57,3 +57,27 @@ tokens end up adjacent, so a genuine repetition is displayed as a stutter the sp
 produce.
 
 The repetitions are real and are preserved verbatim. Nothing collapses a repeated token.
+
+## R-4. Consensus emits words with time and stops; slots and spans are downstream consumers
+
+Consensus does emit time — each word carries an onset and an offset, set from its sources after
+alignment (R-3). What consensus does **not** do is produce slots or spans, and no slot or span
+concern reaches back into it.
+
+The boundary:
+
+- **Consensus produces** an ordered list of words. Each carries its text, which sources produced
+  it, each source's own reading and timing, and the onset/offset derived from those. Column order,
+  verbatim. Nothing else.
+- **Downstream consumes** that list. The `asr` span source in PREPROCESS's `_spans`, SPEECH's
+  speech spans, the figure's lanes and the report's token panel each build whatever grouping they
+  need *from* the words. None of them is built inside the consensus, and none of them influences
+  how it matched or ordered anything.
+
+The retired `fuse_word_streams` conflated these: its "slot" was simultaneously the grouping unit
+for matching, the ordering unit for output, and the extent handed downstream. That is why a
+downstream concern — the averaged member time a span consumer wanted — was able to reorder the
+transcript itself.
+
+A consequence worth stating: a span consumer that wants a different grouping is free to compute it,
+and doing so cannot change the transcript.
