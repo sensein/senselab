@@ -33,6 +33,7 @@ from matplotlib.text import Text
 
 from senselab.audio.workflows.triage.config import TriageConfig
 from senselab.audio.workflows.triage.nodes.common import (
+    consensus_words,
     find_measurement,
     find_measurements,
     live_entities,
@@ -106,8 +107,11 @@ class FigureStyle:
         cmap_yamnet: YAMNet raster colormap.
         cmap_hear: HeAR raster colormap.
         cmap_squim: SQUIM raster colormap.
-        word_fill: The consensus-word bar fill.
-        word_text_colour: The consensus-word text colour.
+        word_source_colours: One fill per ASR source, cycled in the consensus's source order; each
+            source draws in its own sub-band of a word's row.
+        word_span_alpha: The alpha of a source's own span.
+        word_extent_linewidth: The outline drawn over the word's derived extent.
+        word_text_colour: The consensus-word text colour and the derived-extent outline.
         title_fontsize: Panel title size.
         tick_fontsize: Axis tick-label size.
         cell_fontsize: Score text drawn inside a raster cell.
@@ -167,13 +171,14 @@ class FigureStyle:
     cmap_yamnet: str = "BuGn"
     cmap_hear: str = "OrRd"
     cmap_squim: str = "Purples"
-    word_fill: str = "#fdd0a2"
+    word_source_colours: tuple[str, ...] = ("#fdae6b", "#6baed6")
+    word_span_alpha: float = 0.9
+    word_extent_linewidth: float = 0.6
     word_text_colour: str = "black"
     title_fontsize: float = 9.0
     tick_fontsize: float = 6.0
     cell_fontsize: float = 5.0
     asr_fontsize: float = 6.0
-    asr_fontweight: str = "bold"
     marker_size: float = 260.0
     text_fontsize: float = 7.5
     absent_fontsize: float = 7.0
@@ -466,20 +471,51 @@ def _raster_rows(
     return [label for label in sorted(rows, key=lambda label: (-peaks.get(label, 0.0), label))]
 
 
-def _words(store: ProvStore) -> list[dict[str, Any]]:
-    """Every live consensus word with an extent.
+def _words(store: ProvStore) -> tuple[list[dict[str, Any]], list[str]]:
+    """The consensus stream in ``index`` order, and the consensus's source order.
 
     Args:
         store: The provenance store.
 
     Returns:
-        One dict per word.
+        One dict per word with an extent — ``index, extent, text, outcome, variants, readings,
+        timings, sources, bracketed`` — and the source names from the ``consensus_transcript``
+        measurement, in its order.
     """
-    return [
-        {"extent": entity.extent, "text": str(entity.attributes.get("text") or "")}
-        for entity in live_entities(store, "word")
+    words = [
+        {
+            "index": int(entity.attributes["index"]),
+            "extent": entity.extent,
+            "text": str(entity.attributes.get("text") or ""),
+            "outcome": entity.attributes.get("outcome"),
+            "variants": list(entity.attributes.get("variants") or []),
+            "readings": dict(entity.attributes.get("readings") or {}),
+            "timings": {
+                str(source): (float(span[0]), float(span[1]))
+                for source, span in (entity.attributes.get("timings") or {}).items()
+            },
+            "sources": list(entity.attributes.get("sources") or []),
+            "bracketed": bool(entity.attributes.get("bracketed")),
+        }
+        for entity in consensus_words(store)
         if entity.extent is not None
     ]
+    consensus = find_measurement(store, "consensus_transcript")
+    sources = [str(row["name"]) for row in (consensus.attributes.get("sources") or [])] if consensus else []
+    return words, sources
+
+
+def _word_hull(word: dict[str, Any]) -> tuple[float, float]:
+    """The span every reading of a word and its derived extent fall inside.
+
+    Args:
+        word: One of :func:`_words`' dicts.
+
+    Returns:
+        ``(min start, max end)`` over the word's ``timings`` and ``extent``.
+    """
+    spans = [word["extent"], *word["timings"].values()]
+    return min(start for start, _ in spans), max(end for _, end in spans)
 
 
 def _squim_by_span(store: ProvStore) -> dict[str, dict[str, float | None]]:
@@ -1224,13 +1260,24 @@ def _fit_cell_text(
 
 
 def _asr_lane_panel(
-    axis: Axes, words: list[dict[str, Any]], window: tuple[float, float], style: FigureStyle, absent_note: str
+    axis: Axes,
+    words: list[dict[str, Any]],
+    sources: list[str],
+    window: tuple[float, float],
+    style: FigureStyle,
+    absent_note: str,
 ) -> None:
-    """One bar per consensus word with its text drawn on the bar.
+    """Each source's own span for every consensus word, one sub-band per source, under the derived extent.
+
+    A word draws on row ``index mod asr_rows``. Within the row, source ``k`` always fills band ``k``
+    at that source's own ``[start, end]``; a thin outline over the full row height marks the derived
+    extent; the text sits at the derived onset, bold when the word is an agreement. The title names
+    each source with its colour.
 
     Args:
         axis: The panel.
-        words: :func:`_words`' result.
+        words: :func:`_words`' words.
+        sources: :func:`_words`' source order.
         window: The page's ``(start, end)``.
         style: The drawing configuration.
         absent_note: What to print when no consensus transcript reached the store.
@@ -1238,35 +1285,65 @@ def _asr_lane_panel(
     from matplotlib.patches import Rectangle
 
     t0, t1 = window
-    axis.set_title("consensus ASR", fontsize=style.title_fontsize)
+    colours = {name: style.word_source_colours[k % len(style.word_source_colours)] for k, name in enumerate(sources)}
+    legend = ", ".join(f"{name}: {colour}" for name, colour in colours.items())
+    axis.set_title("consensus ASR" + (f" — {legend}" if legend else ""), fontsize=style.title_fontsize)
     axis.set_xlim(t0, t1)
     if not words:
         _absent_panel(axis, window, absent_note, style)
         return
     half = style.asr_row_height / 2.0
+    band = style.asr_row_height / max(len(sources), 1)
     axis.set_ylim(-0.5, style.asr_rows - 0.5)
     axis.set_yticks([])
-    here = [word for word in words if word["extent"][1] >= t0 and word["extent"][0] <= t1]
-    for index, word in enumerate(here):
-        start, end = word["extent"]
-        row = index % style.asr_rows
-        axis.add_patch(
-            Rectangle(
-                (max(start, t0), row - half),
-                max(min(end, t1) - max(start, t0), 0.01),
-                style.asr_row_height,
-                facecolor=style.word_fill,
-                edgecolor="none",
-                linewidth=0.0,
-                alpha=0.8,
+    here = [word for word in words if _word_hull(word)[1] >= t0 and _word_hull(word)[0] <= t1]
+    for word in here:
+        row = int(word["index"]) % style.asr_rows
+        anchors: list[float] = []
+        for k, name in enumerate(sources):
+            span = word["timings"].get(name)
+            if span is None or span[1] < t0 or span[0] > t1:
+                continue
+            start, end = max(span[0], t0), min(span[1], t1)
+            anchors.append(start)
+            axis.add_patch(
+                Rectangle(
+                    (start, row - half + k * band),
+                    max(end - start, 0.01),
+                    band,
+                    facecolor=colours[name],
+                    edgecolor="none",
+                    linewidth=0.0,
+                    alpha=style.word_span_alpha,
+                )
             )
+        onset, offset = word["extent"]
+        if offset >= t0 and onset <= t1:
+            start, end = max(onset, t0), min(offset, t1)
+            anchors.insert(0, start)
+            axis.add_patch(
+                Rectangle(
+                    (start, row - half),
+                    max(end - start, 0.01),
+                    style.asr_row_height,
+                    facecolor="none",
+                    edgecolor=style.word_text_colour,
+                    linewidth=style.word_extent_linewidth,
+                )
+            )
+        if not anchors:
+            continue
+        label = (
+            "/".join(str(variant["text"]) for variant in word["variants"])
+            if word["outcome"] == "variant"
+            else word["text"]
         )
         axis.text(
-            max(start, t0),
+            anchors[0],
             row,
-            word["text"],
+            label,
             fontsize=style.asr_fontsize,
-            fontweight=style.asr_fontweight,
+            fontweight="bold" if word["outcome"] == "agreement" else "normal",
             ha="left",
             va="center",
             color=style.word_text_colour,
@@ -1467,7 +1544,7 @@ def preprocess_figure(
     clips = _clip_extents(store)
     yamnet = _span_scores(store, "span_yamnet")
     hear = _span_scores(store, "span_hear")
-    words = _words(store)
+    words, word_sources = _words(store)
     squim = _squim_by_span(store)
     summary_lines = taxonomy_summary_lines(store, style)
     panel_lines = summary_panel_lines(store, style)
@@ -1596,6 +1673,7 @@ def preprocess_figure(
         _asr_lane_panel(
             axis_asr,
             words,
+            word_sources,
             window,
             style,
             absent.get("consensus_transcript", "no consensus word in the store"),
